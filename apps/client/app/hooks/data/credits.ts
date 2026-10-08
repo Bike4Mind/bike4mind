@@ -7,9 +7,11 @@ export interface CreditsBalance {
   expiringSoon: { amount: number; expiresAt: string }[];
 }
 
+export const CREDITS_BALANCE_KEY = ['credits-balance'] as const;
+
 export function useGetCreditsBalance(options: { enabled?: boolean } = {}) {
   return useQuery<CreditsBalance>({
-    queryKey: ['credits-balance'],
+    queryKey: CREDITS_BALANCE_KEY,
     queryFn: async () => {
       const response = await api.get('/api/credits/balance');
       return response.data;

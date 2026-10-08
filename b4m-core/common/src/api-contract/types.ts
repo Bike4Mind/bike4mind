@@ -201,14 +201,6 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * query params yet, matching its existing `pathParams` gap.
    */
   queryParams?: z.ZodObject<z.ZodRawShape>;
-  /**
-   * Optional OpenAPI-representable projection of `request`, used ONLY for the
-   * generated spec. Needed when `request` carries wrappers zod-to-openapi cannot
-   * introspect (`.catch()`, `.transform()`, `.pipe()`). Its INPUT shape must
-   * match `request` exactly, so it is a doc projection, not a second contract.
-   * Defaults to `request` when omitted.
-   */
-  requestDoc?: z.ZodTypeAny;
   requestExample?: unknown;
   responses: Record<number, ResponseSpec>;
   /** SSE endpoint: skips JSON response-body docs and gets streaming code samples. */

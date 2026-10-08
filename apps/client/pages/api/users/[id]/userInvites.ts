@@ -14,6 +14,9 @@ const paginationSchema = z.object({
 });
 
 const handler = baseApi().get(async (req, res) => {
+  // Response depends on who asks, so a shared CDN cache must never store it.
+  res.setHeader('Cache-Control', 'private, no-store');
+
   const currentUser = req.user;
   const id = req.query.id! as string;
   const { limit, page } = paginationSchema.parse(req.query);

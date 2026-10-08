@@ -82,7 +82,7 @@ import { getFabFileByIdFromServer } from '@client/app/utils/filesAPICalls';
 import { StreamedChatCompletionAction, type IMessageDataToClient } from '@bike4mind/common';
 import { z } from 'zod';
 import XLSXViewer from './XLSXViewer';
-import { toast } from 'react-hot-toast';
+import { toast } from 'sonner';
 import DownloadMenu, { downloadFile, copyToClipboard } from '../common/DownloadMenu';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import ShareIcon from '@mui/icons-material/Share';

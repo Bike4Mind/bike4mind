@@ -67,7 +67,7 @@ function renderConnectedCard() {
   get.mockImplementation((url: string) => {
     if (url !== CONNECTION_URL) return never();
     connectionReads += 1;
-    return connectionReads === 1 ? Promise.resolve({ data: { connection: connected } }) : never();
+    return connectionReads === 1 ? Promise.resolve({ data: { connection: connected, canManage: true } }) : never();
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(

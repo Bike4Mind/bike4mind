@@ -1,6 +1,6 @@
 import type { IModelPrice, IModelPriceTier } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { describePriceRows, planPriceWrites, type PricePlanInput } from './pricePlan';
+import { classifyPriceRow, describePriceRows, planPriceWrites, type PricePlanInput } from './pricePlan';
 import type { DiscoveredModel, DiscoveredPrice, SourceContribution } from './types';
 
 const RUN_AT = new Date('2026-07-26T10:00:00Z');
@@ -1140,5 +1140,124 @@ describe('planPriceWrites idempotence and carry-forward', () => {
 
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0].pricing['0'].cache_read).toBe(0.25e-6);
+  });
+});
+
+describe('planPriceWrites adapter literal rows', () => {
+  const LITERAL: IModelPriceTier = { input: 3e-6, output: 15e-6, cache_read: 0.3e-6 };
+  const ladders = new Map([['gpt-6', { '0': LITERAL }]]);
+
+  it('records the literal as the first row of a model no source priced and no row holds', () => {
+    const result = plan({ adapterLadders: ladders });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({
+      modelId: 'gpt-6',
+      unit: 'per_token',
+      pricing: { '0': LITERAL },
+      effectiveFrom: RUN_AT,
+      note: `discovery:adapter-literal@${RUN_AT.toISOString()}`,
+      repricedBy: 'model-discovery',
+    });
+  });
+
+  it('writes the whole ladder, because the read path replaces the pricing map wholesale', () => {
+    const upper: IModelPriceTier = { input: 6e-6, output: 22.5e-6, cache_read: 0.6e-6 };
+    const result = plan({ adapterLadders: new Map([['gpt-6', { '0': LITERAL, '200000': upper }]]) });
+
+    expect(result.rows[0].pricing).toEqual({ '0': LITERAL, '200000': upper });
+  });
+
+  it('classifies the row as automation-owned and labels its source adapter-literal', () => {
+    const [row] = plan({ adapterLadders: ladders }).rows;
+
+    expect(classifyPriceRow(row)).toBe('automation');
+    expect(describePriceRows([row])[0].sources).toEqual(['adapter-literal']);
+  });
+
+  it('leaves a model that already has a row in force alone, whoever wrote it', () => {
+    for (const note of ['adapter-seed', 'discovery:openai@2026-01-01T00:00:00.000Z', 'invoice 4411']) {
+      const result = plan({
+        adapterLadders: ladders,
+        rowsInForce: [inForce({ '0': FIVE_AND_TWENTY_FIVE }, note)],
+      });
+
+      expect(result.rows, note).toEqual([]);
+    }
+  });
+
+  it('yields to a source that priced the model this run, which keeps its own row', () => {
+    const result = plan({
+      adapterLadders: ladders,
+      contributions: [provider({ inputPerMTok: 2, outputPerMTok: 8 })],
+    });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].note).toBe(`discovery:openai@${RUN_AT.toISOString()}`);
+  });
+
+  it('still records the literal when a lone aggregator quote was refused', () => {
+    const result = plan({
+      adapterLadders: ladders,
+      contributions: [litellm({ inputPerMTok: 2, outputPerMTok: 8 })],
+    });
+
+    expect(result.flags.map(flag => flag.kind)).toEqual(['single-source-untrusted']);
+    expect(result.rows.map(row => row.pricing['0'])).toEqual([LITERAL]);
+  });
+
+  it('skips a model the catalog does not cover, which append would otherwise price blind', () => {
+    const result = plan({ adapterLadders: ladders, knownModelIds: new Set(['other-model']) });
+
+    expect(result.rows).toEqual([]);
+  });
+
+  it('converges: a second pass over the row it wrote appends nothing', () => {
+    const first = plan({ adapterLadders: ladders });
+    const written: IModelPrice = {
+      ...inForce(first.rows[0].pricing, first.rows[0].note),
+      effectiveFrom: RUN_AT,
+    };
+
+    expect(plan({ adapterLadders: ladders, rowsInForce: [written] }).rows).toEqual([]);
+  });
+
+  it('rewrites its own row when the build ladder has moved on, so billing tracks the build', () => {
+    const stale = inForce(
+      { '0': { input: 2e-6, output: 10e-6 } },
+      'discovery:adapter-literal@2026-01-01T00:00:00.000Z'
+    );
+
+    const result = plan({ adapterLadders: ladders, rowsInForce: [stale] });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].pricing).toEqual({ '0': LITERAL });
+  });
+
+  it('rewrites its own row when a tier was added to the ladder', () => {
+    const upper: IModelPriceTier = { input: 6e-6, output: 22.5e-6 };
+    const held = inForce({ '0': LITERAL }, 'discovery:adapter-literal@2026-01-01T00:00:00.000Z');
+
+    const result = plan({
+      adapterLadders: new Map([['gpt-6', { '0': LITERAL, '200000': upper }]]),
+      rowsInForce: [held],
+    });
+
+    expect(Object.keys(result.rows[0].pricing)).toEqual(['0', '200000']);
+  });
+
+  it('never rewrites a row someone else wrote, however far it is from the literal', () => {
+    for (const note of ['adapter-seed', 'discovery:openai@2026-01-01T00:00:00.000Z', 'invoice 4411']) {
+      const result = plan({
+        adapterLadders: ladders,
+        rowsInForce: [inForce({ '0': { input: 1e-6, output: 2e-6 } }, note)],
+      });
+
+      expect(result.rows, note).toEqual([]);
+    }
+  });
+
+  it('writes nothing when no ladders are supplied, which is every caller that predates it', () => {
+    expect(plan().rows).toEqual([]);
   });
 });

@@ -484,6 +484,23 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/projects/p%201');
   });
 
+  it('creates a project, forwarding name, description and non-empty id lists', async () => {
+    mockPost.mockResolvedValue({ id: 'p1' });
+    await client.createProject({ name: 'Apollo', description: 'Moon', sessionIds: ['s1'], fileIds: ['f1'] });
+    expect(mockPost).toHaveBeenCalledWith('/api/projects', {
+      name: 'Apollo',
+      description: 'Moon',
+      sessionIds: ['s1'],
+      fileIds: ['f1'],
+    });
+  });
+
+  it('omits empty id lists when creating a project', async () => {
+    mockPost.mockResolvedValue({ id: 'p1' });
+    await client.createProject({ name: 'Apollo', description: 'Moon', sessionIds: [], fileIds: [] });
+    expect(mockPost).toHaveBeenCalledWith('/api/projects', { name: 'Apollo', description: 'Moon' });
+  });
+
   it('lists artifacts with flat limit/offset params and normalizes the envelope', async () => {
     mockGet.mockResolvedValue({
       artifacts: [{ id: 'artifact_a_1', title: 'A' }],

@@ -11,7 +11,14 @@ import {
   type GeneratedAudioResponse,
   type TTSRequest,
 } from '@bike4mind/common';
-import { B4mApiClient, mapApiError, type QuestResponse, type RawDataLake, type RawNotebook } from './b4mApiClient.js';
+import {
+  B4mApiClient,
+  mapApiError,
+  type QuestResponse,
+  type RawDataLake,
+  type RawNotebook,
+  type RawProject,
+} from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
 export interface ToolMeta {
@@ -41,6 +48,25 @@ export const TOOL_META: ToolMeta[] = [
     description:
       'Create a new notebook, optionally inside a project or grounded in a data lake (dataLakeId, see list_lakes). Defaults the name to "New Notebook" when omitted.',
     scope: 'notebooks:write',
+  },
+  {
+    name: 'list_projects',
+    title: 'List projects',
+    description: 'List the Bike4Mind projects the caller can access, including ones shared with them.',
+    scope: 'projects:read',
+  },
+  {
+    name: 'get_project',
+    title: 'Get project',
+    description: 'Fetch a single project by id.',
+    scope: 'projects:read',
+  },
+  {
+    name: 'create_project',
+    title: 'Create project',
+    description:
+      'Create a new project. Pass the returned id as projectId to create_notebook to create notebooks inside it.',
+    scope: 'projects:write',
   },
   {
     name: 'send_message',
@@ -111,6 +137,23 @@ const createNotebookShape = {
     .string()
     .optional()
     .describe("Data lake id or slug to ground the notebook in (see list_lakes); seeds the lake's retrieval defaults"),
+};
+
+const listProjectsShape = {
+  search: z.string().optional().describe('Filter projects by name'),
+  limit: z.number().int().min(1).max(100).default(25).describe('Maximum projects to return'),
+  page: z.number().int().min(1).default(1).describe('1-based page number; request the next page when hasMore is true'),
+};
+
+const getProjectShape = {
+  projectId: z.string().describe('The project id'),
+};
+
+const createProjectShape = {
+  name: z.string().min(1).describe('Name for the new project; must be unique among your projects'),
+  description: z.string().min(1).describe('Short description of the project'),
+  sessionIds: z.array(z.string()).optional().describe('Notebook (session) ids to add to the project'),
+  fileIds: z.array(z.string()).optional().describe('File ids to add to the project'),
 };
 
 const sendMessageShape = {
@@ -195,6 +238,10 @@ function notebookSummary(n: RawNotebook) {
   };
 }
 
+function projectSummary(p: RawProject) {
+  return { id: p.id, name: p.name, createdAt: p.createdAt };
+}
+
 function lakeSummary(l: RawDataLake) {
   return {
     id: l.id,
@@ -223,6 +270,22 @@ export async function createNotebook(
   // POST /api/sessions/create hard-requires a name; default to the web app's
   // convention when the caller omits one so a nameless create still succeeds.
   return client.createNotebook({ ...args, name: args.name ?? 'New Notebook' });
+}
+
+export async function listProjects(client: B4mApiClient, args: { search?: string; limit: number; page?: number }) {
+  const { data, hasMore } = await client.listProjects(args);
+  return { projects: data.map(projectSummary), hasMore };
+}
+
+export async function getProject(client: B4mApiClient, args: { projectId: string }) {
+  return client.getProject(args.projectId);
+}
+
+export async function createProject(
+  client: B4mApiClient,
+  args: { name: string; description: string; sessionIds?: string[]; fileIds?: string[] }
+) {
+  return projectSummary(await client.createProject(args));
 }
 
 export async function sendMessage(
@@ -527,6 +590,32 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       inputSchema: createNotebookShape,
     },
     args => run('notebooks:write', () => createNotebook(client, args))
+  );
+
+  server.registerTool(
+    'list_projects',
+    {
+      title: meta('list_projects').title,
+      description: meta('list_projects').description,
+      inputSchema: listProjectsShape,
+    },
+    args => run('projects:read', () => listProjects(client, args))
+  );
+
+  server.registerTool(
+    'get_project',
+    { title: meta('get_project').title, description: meta('get_project').description, inputSchema: getProjectShape },
+    args => run('projects:read', () => getProject(client, args))
+  );
+
+  server.registerTool(
+    'create_project',
+    {
+      title: meta('create_project').title,
+      description: meta('create_project').description,
+      inputSchema: createProjectShape,
+    },
+    args => run('projects:write', () => createProject(client, args))
   );
 
   server.registerTool(

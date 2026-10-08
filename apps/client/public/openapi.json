@@ -346,105 +346,326 @@
         }
       },
       "sendChatMessageResponse200": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "message_received": {
-            "type": "boolean"
-          },
-          "timestamp": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "sessionId": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "message",
-              "oob",
-              "error",
-              "system",
-              "voice_transcript"
-            ]
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
-              "insufficient_credits",
-              "spend_cap_exceeded"
-            ]
-          },
-          "tools": {
+        "anyOf": [
+          {
             "type": "object",
             "properties": {
-              "toolMode": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "message_received": {
+                "type": "boolean"
+              },
+              "timestamp": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "type": {
                 "type": "string",
                 "enum": [
-                  "fast",
-                  "smart"
+                  "message",
+                  "oob",
+                  "error",
+                  "system",
+                  "voice_transcript"
                 ]
               },
-              "autoSelectedTools": {
+              "errorCode": {
+                "type": "string",
+                "enum": [
+                  "insufficient_credits",
+                  "spend_cap_exceeded"
+                ]
+              },
+              "tools": {
+                "type": "object",
+                "properties": {
+                  "toolMode": {
+                    "type": "string",
+                    "enum": [
+                      "fast",
+                      "smart"
+                    ]
+                  },
+                  "autoSelectedTools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "effectiveTools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "unrecognizedTools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "effectiveTools"
+                ]
+              },
+              "tracking_info": {
+                "type": "object",
+                "properties": {
+                  "quest_id": {
+                    "type": "string"
+                  },
+                  "check_status_url": {
+                    "type": "string"
+                  },
+                  "poll_url": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "quest_id",
+                  "check_status_url"
+                ]
+              },
+              "response": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "responses": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 }
               },
-              "effectiveTools": {
+              "toolPayloads": {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "payload": {}
+                  },
+                  "required": [
+                    "type"
+                  ]
                 }
               },
-              "unrecognizedTools": {
+              "createdAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                ]
+              },
+              "promptDetails": {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "hardcoded",
+                        "admin",
+                        "user",
+                        "project",
+                        "session",
+                        "org",
+                        "caller"
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "tokenCount": {
+                      "type": "number"
+                    },
+                    "wasIncluded": {
+                      "type": "boolean"
+                    },
+                    "exclusionReason": {
+                      "type": "string",
+                      "enum": [
+                        "duplicate",
+                        "disabled",
+                        "token_limit"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "name",
+                    "tokenCount",
+                    "wasIncluded"
+                  ]
                 }
+              },
+              "promptText": {
+                "type": "string"
+              },
+              "performance": {
+                "type": "object",
+                "properties": {
+                  "total_ms": {
+                    "type": "number"
+                  },
+                  "phases": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "number"
+                    }
+                  },
+                  "pipeline_phases": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "total_ms",
+                  "phases"
+                ]
               }
             },
             "required": [
-              "effectiveTools"
+              "id",
+              "status",
+              "message_received",
+              "timestamp",
+              "model",
+              "type",
+              "tracking_info",
+              "response",
+              "responses",
+              "toolPayloads",
+              "createdAt",
+              "performance"
             ]
           },
-          "tracking_info": {
+          {
             "type": "object",
             "properties": {
-              "quest_id": {
+              "id": {
                 "type": "string"
               },
-              "check_status_url": {
+              "status": {
                 "type": "string"
               },
-              "poll_url": {
+              "message_received": {
+                "type": "boolean"
+              },
+              "timestamp": {
                 "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "message",
+                  "oob",
+                  "error",
+                  "system",
+                  "voice_transcript"
+                ]
+              },
+              "errorCode": {
+                "type": "string",
+                "enum": [
+                  "insufficient_credits",
+                  "spend_cap_exceeded"
+                ]
+              },
+              "tools": {
+                "type": "object",
+                "properties": {
+                  "toolMode": {
+                    "type": "string",
+                    "enum": [
+                      "fast",
+                      "smart"
+                    ]
+                  },
+                  "autoSelectedTools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "effectiveTools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "unrecognizedTools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "effectiveTools"
+                ]
+              },
+              "tracking_info": {
+                "type": "object",
+                "properties": {
+                  "quest_id": {
+                    "type": "string"
+                  },
+                  "check_status_url": {
+                    "type": "string"
+                  },
+                  "poll_url": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "quest_id",
+                  "check_status_url"
+                ]
               }
             },
             "required": [
-              "quest_id",
-              "check_status_url"
+              "id",
+              "status",
+              "message_received",
+              "timestamp",
+              "model",
+              "tracking_info"
             ]
           }
-        },
-        "required": [
-          "id",
-          "status",
-          "message_received",
-          "timestamp",
-          "model",
-          "tracking_info"
         ]
       },
       "ScopeForbiddenResponse": {
@@ -6408,7 +6629,7 @@
         },
         "responses": {
           "200": {
-            "description": "Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` schema). With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up. A turn that FAILS still resolves with `200`, never a 4xx, on both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose explaining why lands in `reply`/`response` like any other answer, so the reply text alone cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it unconditionally, so match on `type: \"error\"` first - it covers credit exhaustion, a provider timeout or overload, and an in-process aborted turn; a real answer carries the turn's actual completion type instead (`\"message\"` for an ordinary reply). Two related states do NOT set `type: \"error\"`: a user-cancelled turn resolves as `status: \"stopped\"` with `type` left at `\"message\"`, and a recovered stuck quest that still has renderable content resolves as a success (`status: \"done\"`, no error) by design, to avoid destroying content to report a failure. `errorCode` then names the failure reason, but only for the billing failures that have one - `\"insufficient_credits\"` today; it is absent on every other `type: \"error\"` turn, so never use its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` body. The body also carries `sessionId`, the notebook the turn was recorded in - for an API-key caller that sent none (or any caller sending `newConversation: true`), that is the freshly created notebook's id; pass it back as the request's `sessionId` to continue. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary.",
+            "description": "Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose explaining why lands in `reply`/`response` like any other answer, so the reply text alone cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it unconditionally, so match on `type: \"error\"` first - it covers credit exhaustion, a provider timeout or overload, and an in-process aborted turn; a real answer carries the turn's actual completion type instead (`\"message\"` for an ordinary reply). Two related states do NOT set `type: \"error\"`: a user-cancelled turn resolves as `status: \"stopped\"` with `type` left at `\"message\"`, and a recovered stuck quest that still has renderable content resolves as a success (`status: \"done\"`, no error) by design, to avoid destroying content to report a failure. `errorCode` then names the failure reason, but only for the billing failures that have one - `\"insufficient_credits\"` today; it is absent on every other `type: \"error\"` turn, so never use its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` body. The body also carries `sessionId`, the notebook the turn was recorded in - for an API-key caller that sent none (or any caller sending `newConversation: true`), that is the freshly created notebook's id; pass it back as the request's `sessionId` to continue. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8687,6 +8908,24 @@
           },
           "401": {
             "description": "Missing or invalid JWT (an API key is rejected here).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Valid JWT, but the account is suspended or has a dispute pending.",
             "content": {
               "application/json": {
                 "schema": {

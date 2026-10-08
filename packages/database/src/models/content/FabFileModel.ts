@@ -25,6 +25,7 @@ import {
   UNCATEGORIZED_TAG_SUFFIX,
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
+  type FabFileTypeFilter,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -851,7 +852,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+      type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[];

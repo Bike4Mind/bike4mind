@@ -89,6 +89,7 @@ export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
 export * from './utils/deepLinks';
 export * from './utils/requireEnv';
+export * from './utils/bedrockCredentials';
 export * from './utils/internalStaffDomains';
 export * from './utils/countCodePoints';
 export * from './utils/capForParse';

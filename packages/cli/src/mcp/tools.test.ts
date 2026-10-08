@@ -12,6 +12,9 @@ import {
   listFiles,
   listLakes,
   createNotebook,
+  listProjects,
+  getProject,
+  createProject,
   sendMessage,
   searchKnowledgeBase,
   generateSoundEffect,
@@ -28,6 +31,9 @@ describe('TOOL_NAMES', () => {
       'list_notebooks',
       'get_notebook',
       'create_notebook',
+      'list_projects',
+      'get_project',
+      'create_project',
       'send_message',
       'search_knowledge_base',
       'list_lakes',
@@ -100,6 +106,39 @@ describe('tool handlers', () => {
     await createNotebook(client, { dataLakeId: 'lake-1' });
 
     expect(create).toHaveBeenCalledWith({ name: 'New Notebook', dataLakeId: 'lake-1' });
+  });
+
+  it('list_projects projects each project to a summary and forwards search and page', async () => {
+    const list = vi.fn().mockResolvedValue({
+      data: [{ id: 'p1', name: 'Apollo', description: 'Moon', createdAt: 'c', updatedAt: 'u' }],
+      hasMore: true,
+    });
+    const client = mockClient({ listProjects: list });
+
+    const result = await listProjects(client, { search: 'apo', limit: 25, page: 2 });
+
+    expect(list).toHaveBeenCalledWith({ search: 'apo', limit: 25, page: 2 });
+    expect(result).toEqual({ projects: [{ id: 'p1', name: 'Apollo', createdAt: 'c' }], hasMore: true });
+  });
+
+  it('get_project returns the raw project document', async () => {
+    const doc = { id: 'p1', name: 'Apollo', description: 'Moon', sessionIds: ['s1'] };
+    const get = vi.fn().mockResolvedValue(doc);
+    const client = mockClient({ getProject: get });
+
+    expect(await getProject(client, { projectId: 'p1' })).toEqual(doc);
+    expect(get).toHaveBeenCalledWith('p1');
+  });
+
+  it('create_project forwards its fields and returns a summary', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'p1', name: 'Apollo', description: 'Moon', createdAt: 'c' });
+    const client = mockClient({ createProject: create });
+
+    const args = { name: 'Apollo', description: 'Moon', sessionIds: ['s1'] };
+    const result = await createProject(client, args);
+
+    expect(create).toHaveBeenCalledWith(args);
+    expect(result).toEqual({ id: 'p1', name: 'Apollo', createdAt: 'c' });
   });
 
   it('list_lakes projects each lake to a summary and passes the cursor through', async () => {
@@ -702,6 +741,18 @@ describe('registerTools', () => {
     expect(z.object(shape).parse({ name: 'n', dataLakeId: 'l1' })).toEqual({ name: 'n', dataLakeId: 'l1' });
   });
 
+  it('create_project input schema requires name and description and keeps id lists', () => {
+    const shape = z.object(collectTools(mockClient({})).schemas.get('create_project')!);
+    expect(shape.safeParse({ name: 'n' }).success).toBe(false);
+    expect(shape.safeParse({ name: '', description: 'd' }).success).toBe(false);
+    expect(shape.parse({ name: 'n', description: 'd', sessionIds: ['s1'], fileIds: ['f1'] })).toEqual({
+      name: 'n',
+      description: 'd',
+      sessionIds: ['s1'],
+      fileIds: ['f1'],
+    });
+  });
+
   it('list_lakes input schema keeps cursor and defaults limit to 25', () => {
     const shape = collectTools(mockClient({})).schemas.get('list_lakes')!;
     expect(z.object(shape).parse({ cursor: 'c1' })).toEqual({ cursor: 'c1', limit: 25 });
@@ -789,6 +840,29 @@ describe('registerTools', () => {
     expect(result.content[0]).toMatchObject({
       type: 'text',
       text: "API key forbidden: check the key's scopes and account access (recommended scope: datalake:read)",
+    });
+  });
+
+  it.each([
+    ['list_projects', 'listProjects', { limit: 25 }, 'projects:read'],
+    ['get_project', 'getProject', { projectId: 'p1' }, 'projects:read'],
+    ['create_project', 'createProject', { name: 'n', description: 'd' }, 'projects:write'],
+  ] as const)('%s maps a 403 to a structured isError naming its scope', async (tool, method, args, scope) => {
+    const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: {},
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ [method]: vi.fn().mockRejectedValue(forbidden) }));
+
+    const result = await tools.get(tool)!(args);
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: `API key forbidden: check the key's scopes and account access (recommended scope: ${scope})`,
     });
   });
 

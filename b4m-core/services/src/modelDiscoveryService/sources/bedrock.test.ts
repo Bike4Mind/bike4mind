@@ -178,10 +178,10 @@ describe('bedrock normalization', () => {
 });
 
 describe('bedrock source fetch', () => {
-  it('is configured on IAM alone, and refused when self-host makes those credentials local', () => {
+  it('is configured exactly when Bedrock credentials are reachable (IAM on hosted, BEDROCK_AWS_* on self-host)', () => {
     const source = createBedrockSource({ client: fakeClient() });
-    expect(source.isConfigured({ awsIam: true } as never, {})).toBe(true);
-    expect(source.isConfigured({ awsIam: false } as never, {})).toBe(false);
+    expect(source.isConfigured({ bedrock: true } as never, {})).toBe(true);
+    expect(source.isConfigured({ bedrock: false } as never, {})).toBe(false);
   });
 
   it('claims authority for the bedrock backend', async () => {

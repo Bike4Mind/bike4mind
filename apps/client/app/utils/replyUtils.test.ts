@@ -22,6 +22,20 @@ describe('extractReplies', () => {
     expect(extractReplies({ replies: [reasoning, 'Here is the full answer.'] })).toEqual(['Here is the full answer.']);
   });
 
+  it('separates slots so one slot never runs into the next', () => {
+    expect(extractReplies({ replies: ['Let me race it.', 'Assumptions: x'] })).toEqual([
+      'Let me race it.\n\nAssumptions: x',
+    ]);
+    expect(extractReplies({ replies: ['line\n', 'next'] })).toEqual(['line\nnext']);
+  });
+
+  it('never leaves an earlier slot choices fence unclosed before the next slot', () => {
+    const options = '{"options":[{"label":"A","description":"a"},{"label":"B","description":"b"}]}';
+    const [combined] = extractReplies({ replies: [`x\n\`\`\`choices\n${options}\n\`\`\``, '**Result**'] });
+    expect(combined).toBe('x\n\n**Result**');
+    expect(combined).not.toContain('```');
+  });
+
   it('renders a terminal-recovery reply written next to an empty replies array', () => {
     // Exactly the shape the settle pass leaves behind on a dispatch-time quest.
     expect(extractReplies({ reply: ABANDONED_REPLY, replies: [] })).toEqual([ABANDONED_REPLY]);
