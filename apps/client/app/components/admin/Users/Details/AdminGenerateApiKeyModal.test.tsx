@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
-import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
+import { GENERIC_MODAL_API_KEY_SCOPES, genericApiKeyScopesFor } from '@client/app/constants/apiKeyScopes';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({
@@ -18,7 +18,10 @@ const h = vi.hoisted(() => ({
   // Records who the list was scoped to, so a regression back to the caller-scoped hook is caught
   // here rather than as a 400 at mint time (#2945).
   askedForUserId: undefined as string | undefined,
+  hasOptiAccess: true,
 }));
+
+vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetPreauthorizableDataLakes: (userId: string) => {
@@ -56,6 +59,7 @@ beforeEach(() => {
   h.lakesLoading = false;
   h.lakesError = false;
   h.askedForUserId = undefined;
+  h.hasOptiAccess = true;
   h.refetchLakes.mockClear();
   h.mutate.mockClear();
 });
@@ -181,5 +185,27 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
     fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
     fireEvent.click(scopeInput(GENERIC));
     expect(submitScopes()).toEqual([GENERIC]);
+  });
+});
+
+describe('AdminGenerateApiKeyModal - premium scopes', () => {
+  const PREMIUM = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];
+  const scopeRow = (value: string) => screen.queryByTestId(`admin-generate-key-scope-${value}`);
+
+  it('hides the premium scopes, and keeps Select All from granting them, without Opti access', () => {
+    h.hasOptiAccess = false;
+    renderModal();
+    for (const scope of PREMIUM) expect(scopeRow(scope)).toBeNull();
+
+    fireEvent.click(screen.getByText('Select All'));
+    const offered = genericApiKeyScopesFor(false).length;
+    expect(screen.getByTestId('admin-generate-key-scopes-count').textContent).toContain(
+      `(${offered}/${offered} selected)`
+    );
+  });
+
+  it('offers the premium scopes with Opti access', () => {
+    renderModal();
+    for (const scope of PREMIUM) expect(scopeRow(scope)).not.toBeNull();
   });
 });

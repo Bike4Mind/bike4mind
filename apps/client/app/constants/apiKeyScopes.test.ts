@@ -7,6 +7,8 @@ import {
   DEDICATED_FLOW_SCOPES,
   ADMIN_ONLY_API_KEY_SCOPES,
   NON_MINTABLE_API_KEY_SCOPES,
+  OPTI_API_KEY_SCOPES,
+  genericApiKeyScopesFor,
 } from './apiKeyScopes';
 
 describe('apiKeyScopes catalog', () => {
@@ -147,5 +149,23 @@ describe('apiKeyScopes vs the shared CONFINED_API_KEY_SCOPES', () => {
     // (never confined) yet may never be minted from any surface here.
     expect(CONFINED_API_KEY_SCOPES).not.toContain(ApiKeyScope.ADMIN);
     expect(NON_MINTABLE_API_KEY_SCOPES.has(ApiKeyScope.ADMIN)).toBe(true);
+  });
+});
+
+describe('genericApiKeyScopesFor', () => {
+  it('returns every generic scope with Opti access', () => {
+    expect(genericApiKeyScopesFor(true)).toBe(GENERIC_MODAL_API_KEY_SCOPES);
+  });
+
+  it('drops only the premium scopes without Opti access', () => {
+    const values = genericApiKeyScopesFor(false).map(s => s.value);
+    for (const scope of OPTI_API_KEY_SCOPES) expect(values).not.toContain(scope);
+    expect(values).toHaveLength(GENERIC_MODAL_API_KEY_SCOPES.length - OPTI_API_KEY_SCOPES.size);
+  });
+
+  it('names no premium route paths in the premium scope docs', () => {
+    for (const scope of USER_API_KEY_SCOPES.filter(s => OPTI_API_KEY_SCOPES.has(s.value))) {
+      for (const endpoint of scope.endpoints) expect(endpoint).not.toMatch(/\/api\//);
+    }
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GENERIC_MODAL_API_KEY_SCOPES, DEDICATED_FLOW_SCOPES } from '@client/app/constants/apiKeyScopes';
 import { getApiReferenceContent, renderScopeTableRows } from './apiReferenceContent';
 
-const API_REFERENCE_CONTENT = getApiReferenceContent('https://b4m.test');
+const API_REFERENCE_CONTENT = getApiReferenceContent('https://b4m.test', GENERIC_MODAL_API_KEY_SCOPES);
 
 const scopesSection = (): string => {
   const start = API_REFERENCE_CONTENT.indexOf('### Scopes');
@@ -42,7 +42,7 @@ describe('API reference scopes table', () => {
   });
 
   it('escapes pipes so a description cannot split its table row', () => {
-    for (const row of renderScopeTableRows().split('\n')) {
+    for (const row of renderScopeTableRows(GENERIC_MODAL_API_KEY_SCOPES).split('\n')) {
       expect(row.replaceAll('\\|', '').split('|')).toHaveLength(4);
     }
   });

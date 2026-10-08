@@ -1,17 +1,18 @@
 // brand externalized
 import { getBrandName } from '@client/config/general';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
-import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
+import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
 
 // Generated from the same catalog the New-Key modals offer, so the table can't drift from
 // what a user can actually select. A literal `|` would split a GFM table cell.
-export const renderScopeTableRows = (): string =>
-  GENERIC_MODAL_API_KEY_SCOPES.map(
-    scope => `| \`${scope.value}\` | ${scope.description.replaceAll('|', '\\|')} |`
-  ).join('\n');
+export const renderScopeTableRows = (scopes: ApiKeyScopeOption[]): string =>
+  scopes.map(scope => `| \`${scope.value}\` | ${scope.description.replaceAll('|', '\\|')} |`).join('\n');
 
-/** `baseUrl` is the deployment's origin, so the examples are runnable as copied. */
-export const getApiReferenceContent = (baseUrl: string): string => `
+/**
+ * `baseUrl` is the deployment's origin, so the examples are runnable as copied. `scopes` is the
+ * viewer's generic scope list (useGenericApiKeyScopes), so premium scopes stay entitlement-gated.
+ */
+export const getApiReferenceContent = (baseUrl: string, scopes: ApiKeyScopeOption[]): string => `
 # ${getBrandName()} API Reference
 
 Complete API documentation for ${getBrandName()}, a cognitive workbench platform. All endpoints are served from \`${baseUrl}\`.
@@ -74,7 +75,7 @@ API keys can be scoped to limit access. Available scopes:
 
 | Scope | Description |
 |-------|-------------|
-${renderScopeTableRows()}
+${renderScopeTableRows(scopes)}
 | \`admin:*\` | Full admin access (superuser only; provisioned out of band, not selectable when creating a key) |
 
 An API-key caller can't escalate through key management: creating a key via

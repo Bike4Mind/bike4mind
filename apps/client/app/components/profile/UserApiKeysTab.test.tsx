@@ -51,7 +51,10 @@ const h = vi.hoisted(() => ({
     callbackSigningSecret: 'whsec_rotated999',
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
+  hasOptiAccess: false,
 }));
+
+vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
   useGetUserApiKeys: () => ({ data: h.keys, isLoading: false, error: null, refetch: vi.fn() }),
@@ -274,5 +277,32 @@ describe('UserApiKeysTab - API docs links', () => {
     fireEvent.click(screen.getByText('API Documentation'));
 
     expectSameOriginDocsLink(screen.getByTestId('api-keys-docs-reference-link'));
+  });
+});
+
+describe('UserApiKeysTab - premium scopes', () => {
+  const PREMIUM = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];
+  const openScopeDocs = () => {
+    renderTab();
+    fireEvent.click(screen.getByText('API Documentation'));
+    fireEvent.click(screen.getByText('Scopes'));
+    // Anchors the negative case: the scope list itself rendered.
+    expect(screen.getByText(ApiKeyScope.AI_CHAT)).toBeInTheDocument();
+  };
+
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+  });
+
+  it('leaves the premium scopes out of the scope docs without Opti access', () => {
+    openScopeDocs();
+    for (const scope of PREMIUM) expect(screen.queryByText(scope)).toBeNull();
+  });
+
+  it('documents the premium scopes with Opti access', () => {
+    h.hasOptiAccess = true;
+    openScopeDocs();
+    for (const scope of PREMIUM) expect(screen.getByText(scope)).toBeInTheDocument();
   });
 });

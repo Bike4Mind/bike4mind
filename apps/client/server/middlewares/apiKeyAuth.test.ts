@@ -31,7 +31,7 @@ const makeReq = () =>
   ({
     headers: { 'x-api-key': KEY },
     method: 'GET',
-    originalUrl: '/api/premium-optihashi/quantum/runs',
+    originalUrl: '/api/premium-optihashi/runs',
     logger: { warn: vi.fn(), info: vi.fn() },
   }) as unknown as Request & { logger: { warn: ReturnType<typeof vi.fn> } };
 

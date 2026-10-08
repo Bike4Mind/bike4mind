@@ -1,9 +1,13 @@
 import React from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { ApiKeyScope } from '@bike4mind/common';
 import ApiReferenceTab from './ApiReferenceTab';
+
+const h = vi.hoisted(() => ({ hasOptiAccess: false }));
+vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -11,6 +15,20 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 );
 
 describe('ApiReferenceTab', () => {
+  beforeEach(() => {
+    h.hasOptiAccess = false;
+  });
+
+  it('lists the premium scopes in the scopes table only with Opti access', () => {
+    const { unmount } = render(<ApiReferenceTab />, { wrapper: TestWrapper });
+    expect(screen.queryByText(ApiKeyScope.OPTIHASHI_READ)).toBeNull();
+    unmount();
+
+    h.hasOptiAccess = true;
+    render(<ApiReferenceTab />, { wrapper: TestWrapper });
+    expect(screen.getByText(ApiKeyScope.OPTIHASHI_READ)).toBeInTheDocument();
+  });
+
   it('links to the interactive docs at /api/v1/docs in a new tab', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
     const link = screen.getByTestId('api-reference-open-docs-btn');

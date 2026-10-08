@@ -126,20 +126,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.OPTIHASHI_READ,
     label: 'OptiHashi: Read',
     description: 'Inspect OptiHashi problems, runs, and run artifacts without commissioning any compute',
-    endpoints: [
-      'GET /api/premium-optihashi/quantum/runs',
-      'GET /api/premium-optihashi/quantum/runs/:id',
-      'GET /api/premium-optihashi/quantum/problems',
-    ],
+    endpoints: ['OptiHashi run and problem read endpoints'],
   },
   {
     value: ApiKeyScope.OPTIHASHI_COMPUTE,
     label: 'OptiHashi: Compute',
     description: 'Submit OptiHashi compute runs and cancel them. Spends credits - grant only to keys that must solve',
-    endpoints: [
-      'POST /api/premium-optihashi/quantum/qwork/submit',
-      'POST /api/premium-optihashi/quantum/runs/:id/cancel',
-    ],
+    endpoints: ['OptiHashi run submit and cancel endpoints'],
   },
   {
     value: ApiKeyScope.DATALAKE_READ,
@@ -220,6 +213,22 @@ export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScope> = new Set(
 export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
   s => !DEDICATED_FLOW_SCOPES.has(s.value)
 );
+
+/**
+ * Premium scopes that only exist when the OptiHashi overlay is mounted. Every surface that
+ * lists GENERIC_MODAL_API_KEY_SCOPES must go through genericApiKeyScopesFor (or the
+ * useGenericApiKeyScopes hook) so they stay hidden from users without OptiHashi access.
+ */
+export const OPTI_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
+  ApiKeyScope.OPTIHASHI_READ,
+  ApiKeyScope.OPTIHASHI_COMPUTE,
+]);
+
+const GENERIC_SCOPES_WITHOUT_OPTI = GENERIC_MODAL_API_KEY_SCOPES.filter(s => !OPTI_API_KEY_SCOPES.has(s.value));
+
+/** The generic scopes a viewer may see; `hasOptiAccess` is the useOptiAccess verdict. Returns a stable reference. */
+export const genericApiKeyScopesFor = (hasOptiAccess: boolean): ApiKeyScopeOption[] =>
+  hasOptiAccess ? GENERIC_MODAL_API_KEY_SCOPES : GENERIC_SCOPES_WITHOUT_OPTI;
 
 /**
  * Scopes no mint route may ever issue: they are granted by a flow of their own

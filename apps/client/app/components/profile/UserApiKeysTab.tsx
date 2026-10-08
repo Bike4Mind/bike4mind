@@ -56,12 +56,13 @@ import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
-import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
+import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
 import { toast } from 'sonner';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -88,8 +89,8 @@ const StyledTab = styled(Tab)(({ theme }) => ({
   },
 }));
 
-// Scope presentation model for the New-Key modal, derived from
-// GENERIC_MODAL_API_KEY_SCOPES by parsing the resource:action convention, so new
+// Scope presentation model for the New-Key modal, derived from the viewer's
+// generic scopes (useGenericApiKeyScopes) by parsing the resource:action convention, so new
 // generic-flow scopes surface here automatically (embed:chat is excluded - see below).
 
 const RESOURCE_LABELS: Record<string, string> = {
@@ -127,14 +128,19 @@ interface ScopeGroup {
   }[];
 }
 
-// The New-Key modal offers only generic-flow scopes; embed:chat is minted via
-// the dedicated embed flow (epic #41 Phase E), so it is excluded from selection
-// here (and from the Scopes docs tab below - see scopeDescriptions).
-const MODAL_SCOPE_VALUES = GENERIC_MODAL_API_KEY_SCOPES.map(s => s.value);
+type PresetId = 'read' | 'readwrite' | 'full';
 
-const SCOPE_GROUPS: ScopeGroup[] = (() => {
+interface ScopeModel {
+  scopeValues: ApiKeyScope[];
+  groups: ScopeGroup[];
+  presetScopes: Record<PresetId, ApiKeyScope[]>;
+}
+
+// Built from the viewer's generic-flow scopes, not a module constant, so the "full"
+// preset can never grant a premium scope the viewer is not entitled to see.
+const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
   const groups = new Map<string, ScopeGroup>();
-  for (const scope of GENERIC_MODAL_API_KEY_SCOPES) {
+  for (const scope of scopes) {
     const [resource, action = ''] = scope.value.split(':');
     if (!groups.has(resource)) {
       groups.set(resource, {
@@ -150,18 +156,15 @@ const SCOPE_GROUPS: ScopeGroup[] = (() => {
       isMutating: action !== 'read',
     });
   }
-  return [...groups.values()];
-})();
 
-const READ_SCOPES = GENERIC_MODAL_API_KEY_SCOPES.filter(s => s.value.endsWith(':read')).map(s => s.value);
-const WRITE_SCOPES = GENERIC_MODAL_API_KEY_SCOPES.filter(s => s.value.endsWith(':write')).map(s => s.value);
-
-type PresetId = 'read' | 'readwrite' | 'full';
-
-const PRESET_SCOPES: Record<PresetId, ApiKeyScope[]> = {
-  read: READ_SCOPES,
-  readwrite: [...READ_SCOPES, ...WRITE_SCOPES],
-  full: [...MODAL_SCOPE_VALUES],
+  const scopeValues = scopes.map(s => s.value);
+  const readScopes = scopeValues.filter(value => value.endsWith(':read'));
+  const writeScopes = scopeValues.filter(value => value.endsWith(':write'));
+  return {
+    scopeValues,
+    groups: [...groups.values()],
+    presetScopes: { read: readScopes, readwrite: [...readScopes, ...writeScopes], full: [...scopeValues] },
+  };
 };
 
 const PRESETS: { id: PresetId; label: string; description: string }[] = [
@@ -179,9 +182,11 @@ interface NewKeyModalProps {
 }
 
 function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
+  const genericScopes = useGenericApiKeyScopes();
+  const scopeModel = useMemo(() => buildScopeModel(genericScopes), [genericScopes]);
   const [formData, setFormData] = useState<CreateUserApiKeyRequest>({
     name: '',
-    scopes: [...READ_SCOPES],
+    scopes: [...scopeModel.presetScopes.read],
     rateLimit: {
       requestsPerMinute: 60,
       requestsPerDay: 1000,
@@ -203,7 +208,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   const resetForm = () => {
     setFormData({
       name: '',
-      scopes: [...READ_SCOPES],
+      scopes: [...scopeModel.presetScopes.read],
       rateLimit: {
         requestsPerMinute: 60,
         requestsPerDay: 1000,
@@ -220,10 +225,10 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
     createMutation.mutate(submitData);
   };
 
-  const activePreset = PRESETS.find(p => sameScopeSet(formData.scopes, PRESET_SCOPES[p.id]))?.id;
+  const activePreset = PRESETS.find(p => sameScopeSet(formData.scopes, scopeModel.presetScopes[p.id]))?.id;
   const isCustom = !activePreset;
 
-  const applyPreset = (id: PresetId) => setFormData(fd => ({ ...fd, scopes: [...PRESET_SCOPES[id]] }));
+  const applyPreset = (id: PresetId) => setFormData(fd => ({ ...fd, scopes: [...scopeModel.presetScopes[id]] }));
 
   const toggleScope = (value: ApiKeyScope) =>
     setFormData(fd => ({
@@ -319,11 +324,11 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography level="title-sm">Permissions</Typography>
               <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                {formData.scopes.length} of {MODAL_SCOPE_VALUES.length} enabled
+                {formData.scopes.length} of {scopeModel.scopeValues.length} enabled
               </Typography>
             </Box>
             <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'hidden' }}>
-              {SCOPE_GROUPS.map((group, i) => (
+              {scopeModel.groups.map((group, i) => (
                 <Box
                   key={group.resource}
                   sx={{
@@ -877,8 +882,8 @@ ai_response = response.json()`,
 
   // Docs tab shows only generic-flow scopes; dedicated-flow scopes (embed:chat) are
   // hidden until their mint flow ships (epic #41 Phase E) so we don't advertise a
-  // scope/endpoint a user cannot use yet.
-  const scopeDescriptions = GENERIC_MODAL_API_KEY_SCOPES;
+  // scope/endpoint a user cannot use yet. Premium scopes need Opti access.
+  const scopeDescriptions = useGenericApiKeyScopes();
 
   const copyCode = (code: string) => {
     handleCopyToClipboard(code);

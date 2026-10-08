@@ -3,11 +3,8 @@ import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-import {
-  ADMIN_ONLY_API_KEY_SCOPES,
-  type ApiKeyScopeOption,
-  GENERIC_MODAL_API_KEY_SCOPES,
-} from '@client/app/constants/apiKeyScopes';
+import { ADMIN_ONLY_API_KEY_SCOPES, type ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import WarningIcon from '@mui/icons-material/Warning';
 import {
@@ -36,10 +33,6 @@ interface AdminGenerateApiKeyModalProps {
   user: AdminUserListItem;
 }
 
-// Embed keys are minted through the dedicated embed flow (epic #41 Phase E), not
-// this generic modal, so embed:chat is excluded from the offered scopes.
-const scopeOptions = GENERIC_MODAL_API_KEY_SCOPES;
-const scopeValues = scopeOptions.map(s => s.value);
 // overwatch-ingest:write is left out: createUserApiKey requires a productId for it, which
 // this admin path never collects, so offering it would only buy a 400.
 const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE);
@@ -48,6 +41,9 @@ const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== Api
 const confinedScopeValues = new Set<ApiKeyScope>(CONFINED_API_KEY_SCOPES);
 
 export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminGenerateApiKeyModalProps) {
+  // Embed keys are minted through the dedicated embed flow (epic #41 Phase E), not
+  // this generic modal, so embed:chat is excluded from the offered scopes.
+  const scopeOptions = useGenericApiKeyScopes();
   const [formData, setFormData] = useState<AdminCreateUserApiKeyRequest>({
     name: '',
     scopes: [],
@@ -136,7 +132,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   );
 
   const toggleAllScopes = () => {
-    setFormData({ ...formData, scopes: allScopesSelected ? [] : [...scopeValues] });
+    setFormData({ ...formData, scopes: allScopesSelected ? [] : scopeOptions.map(s => s.value) });
   };
 
   if (generatedKey) {
