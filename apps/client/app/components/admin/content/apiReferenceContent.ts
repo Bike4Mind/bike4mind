@@ -162,14 +162,14 @@ Nested keys use bracket syntax (parsed with \`qs\`), for example \`pagination[pa
 | filters[curated] | boolean | Curated notebook files |
 | filters[projectId] | string | Only files in this project |
 | filters[ids] | string[] | Only these file ids |
-| pagination[page] | number | Page number (default 1); send together with \`pagination[limit]\` |
+| pagination[page] | number | Page number (default 1) |
 | pagination[limit] | number | Items per page (default 20) |
 | order[by] | string | \`createdAt\`, \`fileName\` or \`fileSize\` (default \`fileName\`) |
-| order[direction] | string | \`asc\` or \`desc\` (default \`asc\`); send together with \`order[by]\` |
+| order[direction] | string | \`asc\` or \`desc\` (default \`asc\`) |
 | options[textSearch] | boolean | Use text search for \`search\` |
 | options[excludeContent] | boolean | Omit file content from the results |
 
-**Query-parameter gotchas.** \`pagination\` and \`order\` are all-or-nothing: send every key of a nested object or omit the object entirely, or the request is a 422 (the documented defaults apply only when you omit the object). Boolean params are coerced, so any non-empty value - including \`false\` - enables them; omit the key to disable. Array params need a repeated key or the \`[]\` suffix (\`filters[tags][]=a\`); a single bare value is rejected.
+**Query-parameter gotchas.** \`pagination\` and \`order\` are all-or-nothing: send every key of a nested object or omit the object entirely, or the request is a 422 (the documented defaults apply only when you omit the object). Boolean params are coerced, so any non-empty value - including \`false\` - enables them; omit the key to disable. Array params take a repeated key (\`filters[tags]=a&filters[tags]=b\`); the \`[]\` suffix works too, but a list longer than 20 turns into an object (\`qs\` arrayLimit) that the schema rejects. A single bare value is rejected.
 
 The response is \`{ data, hasMore, total }\`, where \`data\` is the page of files.
 
