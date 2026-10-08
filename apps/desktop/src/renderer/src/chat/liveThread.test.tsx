@@ -30,6 +30,11 @@ function Harness() {
   );
 }
 
+function PhaseProbe() {
+  const { phase } = useConversation(SESSION, () => undefined);
+  return <output data-testid="chat-phase-probe">{phase ? JSON.stringify(phase) : 'none'}</output>;
+}
+
 describe('the live thread, driven by stream events', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -77,6 +82,30 @@ describe('the live thread, driven by stream events', () => {
     await act(async () => root.render(<Harness />));
     await act(async () => undefined);
   }
+
+  it('holds the phase main reports until the call arrives or the turn ends', async () => {
+    await act(async () => root.render(<PhaseProbe />));
+    await act(async () => undefined);
+    const shown = () => container.querySelector('[data-testid="chat-phase-probe"]')?.textContent;
+    const phase = (value: Extract<ChatStreamEvent, { type: 'phase' }>['phase'], sessionId = SESSION) =>
+      emit({ type: 'phase', sessionId, messageId: MESSAGE, phase: value });
+
+    emit({ type: 'start', sessionId: SESSION, messageId: MESSAGE });
+    phase({ kind: 'writing-tool', name: 'file_edit' });
+    expect(shown()).toBe('{"kind":"writing-tool","name":"file_edit"}');
+
+    // Another conversation's stream must not repaint this one's status.
+    phase({ kind: 'responding' }, 'other');
+    expect(shown()).toBe('{"kind":"writing-tool","name":"file_edit"}');
+
+    // Once the call has arrived the tool's own status takes over; nothing stale is left behind.
+    emit({ type: 'tool-start', sessionId: SESSION, messageId: MESSAGE, call: call('a', 'file_edit') });
+    expect(shown()).toBe('none');
+
+    phase({ kind: 'thinking' });
+    emit({ type: 'done', sessionId: SESSION, messageId: MESSAGE, content: '' });
+    expect(shown()).toBe('none');
+  });
 
   const text = (delta: string): ChatStreamEvent => ({
     type: 'delta',
