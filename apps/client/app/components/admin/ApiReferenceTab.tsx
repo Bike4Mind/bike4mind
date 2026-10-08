@@ -62,12 +62,20 @@ const markdownStyles = {
   },
 };
 
+type View = 'docs' | 'full' | 'quickstart';
+
+const VIEWS: { value: View; label: string }[] = [
+  { value: 'docs', label: 'Interactive Docs' },
+  { value: 'full', label: 'Hand-written Reference' },
+  { value: 'quickstart', label: 'Claude Code Quickstart' },
+];
+
 const ApiReferenceTab = () => {
-  const [view, setView] = useState<'full' | 'quickstart'>('full');
+  const [view, setView] = useState<View>('docs');
   const scopes = useGenericApiKeyScopes();
 
   return (
-    <Box sx={{ p: 3, height: '100%', overflow: 'auto' }}>
+    <Box sx={{ p: 3, height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
         <Typography level="h3">API Reference</Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -81,7 +89,7 @@ const ApiReferenceTab = () => {
             size="sm"
             data-testid="api-reference-open-docs-btn"
           >
-            Interactive Docs
+            Open in New Tab
           </Button>
           <Button
             component="a"
@@ -96,36 +104,25 @@ const ApiReferenceTab = () => {
             Download OpenAPI Spec
           </Button>
           <Divider orientation="vertical" />
-          <Sheet
-            variant={view === 'full' ? 'solid' : 'outlined'}
-            color={view === 'full' ? 'primary' : 'neutral'}
-            sx={{
-              px: 2,
-              py: 0.75,
-              borderRadius: 'md',
-              cursor: 'pointer',
-              fontWeight: view === 'full' ? 600 : 400,
-              fontSize: '0.875rem',
-            }}
-            onClick={() => setView('full')}
-          >
-            Full API Reference
-          </Sheet>
-          <Sheet
-            variant={view === 'quickstart' ? 'solid' : 'outlined'}
-            color={view === 'quickstart' ? 'primary' : 'neutral'}
-            sx={{
-              px: 2,
-              py: 0.75,
-              borderRadius: 'md',
-              cursor: 'pointer',
-              fontWeight: view === 'quickstart' ? 600 : 400,
-              fontSize: '0.875rem',
-            }}
-            onClick={() => setView('quickstart')}
-          >
-            Claude Code Quickstart
-          </Sheet>
+          {VIEWS.map(({ value, label }) => (
+            <Sheet
+              key={value}
+              variant={view === value ? 'solid' : 'outlined'}
+              color={view === value ? 'primary' : 'neutral'}
+              sx={{
+                px: 2,
+                py: 0.75,
+                borderRadius: 'md',
+                cursor: 'pointer',
+                fontWeight: view === value ? 600 : 400,
+                fontSize: '0.875rem',
+              }}
+              onClick={() => setView(value)}
+              data-testid={`api-reference-view-${value}-toggle`}
+            >
+              {label}
+            </Sheet>
+          ))}
         </Box>
       </Box>
       {view === 'full' && (
@@ -148,13 +145,32 @@ const ApiReferenceTab = () => {
           </Typography>
         </Alert>
       )}
-      <Sheet variant="outlined" sx={{ p: 3, borderRadius: 'lg', ...markdownStyles }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {view === 'full'
-            ? getApiReferenceContent(window.location.origin, scopes)
-            : getQuickstartContent(window.location.origin)}
-        </ReactMarkdown>
-      </Sheet>
+      {view === 'docs' ? (
+        // Same-origin frame of the Scalar page, which ships its own CSP (pages/api/v1/docs.ts).
+        // Mounted only while active so its bundle loads on demand.
+        <Box
+          component="iframe"
+          src={ExternalLinks.apiDocs}
+          title="API reference"
+          data-testid="api-reference-docs-iframe"
+          sx={{
+            flex: 1,
+            minHeight: '75vh',
+            width: '100%',
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: 'lg',
+          }}
+        />
+      ) : (
+        <Sheet variant="outlined" sx={{ p: 3, borderRadius: 'lg', ...markdownStyles }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {view === 'full'
+              ? getApiReferenceContent(window.location.origin, scopes)
+              : getQuickstartContent(window.location.origin)}
+          </ReactMarkdown>
+        </Sheet>
+      )}
     </Box>
   );
 };
