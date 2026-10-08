@@ -319,7 +319,7 @@ const ModalManager: React.FC = () => {
       dispatch({ type: 'AUTO_TRIGGER_WHATS_NEW', payload: { regularModals, newBanners } });
 
       // Trigger the slider
-      triggerModalByTag('whats-new', 'WhatsNewSlider');
+      triggerModalByTag('whats-new', 'WhatsNewSlider', 'auto');
       return; // Exit early
     }
 

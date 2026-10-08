@@ -2,11 +2,20 @@ import { releaseNoteRepository, type IReleaseNoteDocument } from '@bike4mind/dat
 import { listWhatsNewContract, type PublicReleaseNote } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
+import {
+  decodeCursor,
+  decodeTimeIdCursor,
+  encodeCursor,
+  encodeTimeIdCursor,
+  type TimeIdKeyset,
+} from '@server/utils/cursorPagination';
 import { findDeniedInNote, loadReleaseNotesConfig } from '@server/releaseNotes/adminReleaseNotes';
 import { fetchUpstreamFeed, getWhatsNewFeedUrl } from '@server/releaseNotes/upstreamFeed';
 
 const CURSOR_SCOPE = 'v1.whats-new';
+// The upstream is usually another deployment of this route, so its raw cursor would decode here as a local
+// one; wrapping it in its own scope keeps the two apart.
+const UPSTREAM_CURSOR_SCOPE = 'v1.whats-new.upstream';
 // Seconds. Bounds how long a hidden note stays visible at the CDN (s-maxage + stale-while-revalidate).
 const CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=600';
 const FALLBACK_CACHE_CONTROL = 'public, s-maxage=30, stale-while-revalidate=30';
@@ -20,11 +29,24 @@ const toPublicReleaseNote = (note: IReleaseNoteDocument): PublicReleaseNote => (
   items: note.items.map(({ category, text, importance }) => ({ category, text, importance })),
 });
 
+type PageCursor = { kind: 'upstream'; cursor: string } | { kind: 'local'; after: TimeIdKeyset };
+
+/** Throws a 422 for a cursor that is neither a wrapped upstream cursor nor a local one. */
+function parsePageCursor(cursor: string | undefined): PageCursor | undefined {
+  if (cursor === undefined) return undefined;
+  try {
+    return { kind: 'upstream', cursor: decodeCursor(cursor, UPSTREAM_CURSOR_SCOPE) };
+  } catch {
+    return { kind: 'local', after: decodeTimeIdCursor(cursor, CURSOR_SCOPE) };
+  }
+}
+
 const handler = nextRouteForContract(listWhatsNewContract, {
   // No user on a public route, so the limiter keys on the client IP.
   rateLimit: rateLimit({ limit: 60, windowMs: 60_000, bucket: 'GET /api/v1/whats-new' }),
 }).get(async (req, res) => {
   const { limit, cursor } = req.validatedQuery;
+  const page = parsePageCursor(cursor);
   // A malformed config is served as disabled (loadReleaseNotesConfig logs it).
   const { config, malformed } = await loadReleaseNotesConfig(req.logger);
   const withholdDenied = (note: Parameters<typeof findDeniedInNote>[0] & { id: string }) => {
@@ -34,30 +56,27 @@ const handler = nextRouteForContract(listWhatsNewContract, {
   };
 
   // Setting WHATS_NEW_FEED_URL is the operator's opt-in, so the upstream is served even while local
-  // release notes are disabled. Its cursor is passed through untouched.
+  // release notes are disabled - but not while the config is malformed, whose defaults carry an empty
+  // denylist. A local cursor keeps paging locally, so a list begun on fallback stays consistent.
   const usingUpstream = getWhatsNewFeedUrl() !== undefined;
-  if (usingUpstream) {
-    const upstream = await fetchUpstreamFeed({ limit, cursor }, req.logger);
+  if (usingUpstream && !malformed && page?.kind !== 'local') {
+    const upstream = await fetchUpstreamFeed(
+      { limit, cursor: page?.kind === 'upstream' ? page.cursor : undefined },
+      req.logger
+    );
     if (upstream) {
       res.setHeader('Cache-Control', CACHE_CONTROL);
-      return res.json({ data: upstream.data.filter(withholdDenied), next_cursor: upstream.next_cursor });
-    }
-  }
-
-  let after: ReturnType<typeof decodeTimeIdCursor> | undefined;
-  if (cursor !== undefined) {
-    try {
-      after = decodeTimeIdCursor(cursor, CURSOR_SCOPE);
-    } catch (error) {
-      // An upstream-issued cursor means nothing to the local fallback, so it ends the list instead of erroring.
-      if (!usingUpstream) throw error;
-      res.setHeader('Cache-Control', FALLBACK_CACHE_CONTROL);
-      return res.json({ data: [], next_cursor: null });
+      return res.json({
+        data: upstream.data.slice(0, limit).filter(withholdDenied),
+        next_cursor: upstream.next_cursor ? encodeCursor(UPSTREAM_CURSOR_SCOPE, upstream.next_cursor) : null,
+      });
     }
   }
 
   let body: { data: PublicReleaseNote[]; next_cursor: string | null } = { data: [], next_cursor: null };
-  if (!malformed && config.enabled) {
+  // An upstream cursor that can no longer be served upstream ends the list.
+  if (!malformed && config.enabled && page?.kind !== 'upstream') {
+    const after = page?.kind === 'local' ? page.after : undefined;
     const { items, hasMore } = await releaseNoteRepository.listPublished({
       now: new Date(),
       after: after && { publishAt: after.at, id: after.id },

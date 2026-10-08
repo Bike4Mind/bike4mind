@@ -54,8 +54,19 @@ describe('fetchUpstreamFeed', () => {
     expect(mockSafeFetch).not.toHaveBeenCalled();
   });
 
-  it('rejects a URL pointing at this deployment', async () => {
-    vi.stubEnv('WHATS_NEW_FEED_URL', 'https://SELF.example.com/api/v1/whats-new');
+  it.each([
+    ['the bare SERVER_DOMAIN', 'self.example.com', 'self.example.com', ''],
+    ['the app host the deployment is actually served on', 'APP.self.example.com', 'self.example.com', ''],
+    [
+      'the APP_URL host on a preview with an empty SERVER_DOMAIN',
+      'pr-12.preview.example.com',
+      '',
+      'https://pr-12.preview.example.com',
+    ],
+  ])('rejects a URL pointing at %s', async (_label, host, serverDomain, appUrl) => {
+    vi.stubEnv('SERVER_DOMAIN', serverDomain);
+    vi.stubEnv('APP_URL', appUrl);
+    vi.stubEnv('WHATS_NEW_FEED_URL', `https://${host}/api/v1/whats-new`);
     expect(await fetchOnce()).toBeNull();
     expect(mockSafeFetch).not.toHaveBeenCalled();
   });
@@ -101,7 +112,15 @@ describe('fetchUpstreamFeed', () => {
     expect(await pending).toBeNull();
   });
 
-  it('caches a page, then refetches after it expires', async () => {
+  it('times out even when safeFetch hangs before it reaches fetch (DNS)', async () => {
+    vi.useFakeTimers();
+    mockSafeFetch.mockImplementation(() => new Promise(() => {}));
+    const pending = fetchOnce();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(await pending).toBeNull();
+  });
+
+  it('caches a first page, then refetches after it expires', async () => {
     vi.useFakeTimers();
     mockSafeFetch.mockImplementation(async () => json(PAGE));
     await fetchOnce();
@@ -112,14 +131,31 @@ describe('fetchUpstreamFeed', () => {
     expect(mockSafeFetch).toHaveBeenCalledTimes(2);
   });
 
-  it('caches a failure for a shorter window', async () => {
+  it('keeps the cached first page however many distinct cursors are requested', async () => {
+    mockSafeFetch.mockImplementation(async () => json(PAGE));
+    await fetchOnce();
+    for (let i = 0; i < 60; i++) await fetchOnce({ limit: 5, cursor: `c${i}` });
+    expect(mockSafeFetch).toHaveBeenCalledTimes(61);
+    await fetchOnce();
+    expect(mockSafeFetch).toHaveBeenCalledTimes(61);
+  });
+
+  it('skips the upstream for every query, any cursor included, during an outage window', async () => {
     vi.useFakeTimers();
     mockSafeFetch.mockImplementation(async () => json({}, 500));
     await fetchOnce();
-    await fetchOnce();
+    expect(await fetchOnce({ limit: 5, cursor: 'fresh-1' })).toBeNull();
+    expect(await fetchOnce({ limit: 7 })).toBeNull();
     expect(mockSafeFetch).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(30_001);
     await fetchOnce();
+    expect(mockSafeFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not open an outage window on a 4xx caused by the request', async () => {
+    mockSafeFetch.mockResolvedValueOnce(json({}, 422)).mockResolvedValue(json(PAGE));
+    expect(await fetchOnce({ limit: 5, cursor: 'bad' })).toBeNull();
+    expect(await fetchOnce()).toEqual(PAGE);
     expect(mockSafeFetch).toHaveBeenCalledTimes(2);
   });
 });

@@ -8,9 +8,10 @@ import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
 
 type ModalType = 'WhatsNewSlider';
+type TriggerSource = 'manual' | 'auto';
 
 interface ModalTriggerContextType {
-  triggerModalByTag: (tag: string, modalType?: ModalType) => void;
+  triggerModalByTag: (tag: string, modalType?: ModalType, source?: TriggerSource) => void;
   resetTrigger: () => void;
   tagToTrigger: string | null;
   triggerCounter: number;
@@ -31,6 +32,7 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
   const [tagToTrigger, setTagToTrigger] = useState<string | null>(null);
   const [triggerCounter, setTriggerCounter] = useState<number>(0);
   const [modalType, setModalType] = useState<ModalType | undefined>(undefined);
+  const [triggerSource, setTriggerSource] = useState<TriggerSource>('manual');
 
   // Access modal data and counters for threshold checking
   const currentUser = useUser(s => s.currentUser);
@@ -40,9 +42,10 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
   // Get refetch function to refresh modal data when tab becomes visible
   const refetchModals = modals.refetch;
 
-  const triggerModalByTag = useCallback((tag: string, modalType?: ModalType) => {
+  const triggerModalByTag = useCallback((tag: string, modalType?: ModalType, source: TriggerSource = 'manual') => {
     console.log('triggerModalByTag inside of TriggerContext:', tag);
     setModalType(modalType);
+    setTriggerSource(source);
     setTagToTrigger(tag);
     setTriggerCounter(prevCounter => prevCounter + 1);
   }, []);
@@ -136,7 +139,7 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
                 return;
               }
 
-              triggerModalByTag('whats-new', 'WhatsNewSlider');
+              triggerModalByTag('whats-new', 'WhatsNewSlider', 'auto');
               localStorage.setItem('whats_new_last_auto_trigger', Date.now().toString());
             } catch (error) {
               console.error('ModalTriggerContext: Failed to refetch modals', error);
@@ -176,7 +179,11 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
   return (
     <ModalTriggerContext.Provider value={contextValue}>
       {tagToTrigger && modalType === 'WhatsNewSlider' && (
-        <WhatsNewSliderModal tagToTrigger={tagToTrigger} key={triggerCounter} />
+        <WhatsNewSliderModal
+          tagToTrigger={tagToTrigger}
+          autoTriggered={triggerSource === 'auto'}
+          key={triggerCounter}
+        />
       )}
       {children}
     </ModalTriggerContext.Provider>

@@ -3,7 +3,7 @@ import { useModalsWithReleaseNotes } from '@client/app/hooks/data/modalsWithRele
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { IModalDocument, ModalEvents, IUserActivityCounterDocument } from '@bike4mind/common';
-import { filterModals, modalStorage } from './modalHelpers';
+import { filterWhatsNewSlides, modalStorage } from './modalHelpers';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import Modal from '@mui/joy/Modal';
@@ -54,9 +54,10 @@ const navButtonSx = {
 
 interface WhatsNewSliderModalProps {
   tagToTrigger: string;
+  autoTriggered?: boolean;
 }
 
-const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger }) => {
+const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger, autoTriggered = false }) => {
   const { currentUser } = useUser();
   const modals = useModalsWithReleaseNotes();
   const counters = useGetUserActivityCounters(currentUser?.id);
@@ -213,7 +214,13 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger 
     if (!modals.data || !currentUser || counters.isPending || !counters.data) return [];
 
     // Pass actual counter data to filterModals for proper threshold checking
-    const whatsNewModal = filterModals(modals.data, currentUser, counters.data ?? [], [tagToTrigger]);
+    const whatsNewModal = filterWhatsNewSlides(
+      modals.data,
+      currentUser,
+      counters.data ?? [],
+      tagToTrigger,
+      autoTriggered
+    );
     // Type assertion is safe: filterModals() returns IModal[] but runtime data
     // from MongoDB includes createdAt/updatedAt fields (IModalDocument).
     // This allows us to sort by createdAt which exists on all persisted modals.
@@ -242,7 +249,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger 
         // Tertiary sort: _id for stable ordering (prevents random reordering on re-renders)
         return (b._id || '').localeCompare(a._id || '');
       });
-  }, [modals.data, currentUser, counters.data, counters.isPending, tagToTrigger]);
+  }, [modals.data, currentUser, counters.data, counters.isPending, tagToTrigger, autoTriggered]);
 
   useEffect(() => {
     // Only proceed if all data is fully loaded (prevent opening before filtering completes)

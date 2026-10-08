@@ -34,7 +34,11 @@ export function releaseNoteToHighlightsEntry(note: IReleaseNoteDocument): ModalF
   };
 }
 
-export type HighlightsReleaseNotes = { kind: 'disabled' } | { kind: 'ok'; entries: ModalForHighlights[] };
+// Bounds the highlights prompt; a busier range is summarized from its newest notes only.
+export const HIGHLIGHTS_NOTE_LIMIT = 50;
+
+export type HighlightsReleaseNotes =
+  { kind: 'disabled' } | { kind: 'ok'; entries: ModalForHighlights[]; truncated: boolean };
 
 /**
  * The local release notes a highlights run summarizes. A disabled or malformed config and denylisted notes
@@ -47,13 +51,21 @@ export async function loadHighlightsReleaseNotes(
   const { config, malformed } = await loadReleaseNotesConfig(logger);
   if (malformed || !config.enabled) return { kind: 'disabled' };
 
-  const notes = await releaseNoteRepository.findPublishedBetween(start, end, now);
-  const entries = notes
+  // One past the limit, so a range that overflows it is reported rather than silently cut.
+  const found = await releaseNoteRepository.findPublishedBetween(start, end, now, HIGHLIGHTS_NOTE_LIMIT + 1);
+  const truncated = found.length > HIGHLIGHTS_NOTE_LIMIT;
+  if (truncated) {
+    logger.warn('[whats-new-highlights] range holds more release notes than one run summarizes', {
+      limit: HIGHLIGHTS_NOTE_LIMIT,
+    });
+  }
+  const entries = found
+    .slice(0, HIGHLIGHTS_NOTE_LIMIT)
     .filter(note => {
       if (!findDeniedInNote(note, config.denylist)) return true;
       logger.warn('[whats-new-highlights] withholding a release note that matches the denylist', { id: note.id });
       return false;
     })
     .map(releaseNoteToHighlightsEntry);
-  return { kind: 'ok', entries };
+  return { kind: 'ok', entries, truncated };
 }

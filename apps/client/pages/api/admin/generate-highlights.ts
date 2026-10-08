@@ -98,7 +98,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           message:
             releaseNotes.kind === 'disabled'
               ? 'Dry run complete: release notes are disabled, so generation would be skipped'
-              : `Dry run complete: found ${entries.length} release notes`,
+              : releaseNotes.truncated
+                ? `Dry run complete: the range holds more than ${entries.length} release notes; only the newest ${entries.length} would be summarized`
+                : `Dry run complete: found ${entries.length} release notes`,
+          truncated: releaseNotes.kind === 'ok' && releaseNotes.truncated,
           dateRange: { startDate: startDateStr, endDate: endDateStr },
           modalCount: entries.length,
           modals: entries.map(entry => ({
