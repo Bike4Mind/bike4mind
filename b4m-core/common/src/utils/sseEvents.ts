@@ -105,8 +105,8 @@ export interface CompletionInfo {
   stopReason?: string;
   /**
    * Set when this chunk is NOT the assistant's prose reply - reasoning, or a raw tool
-   * artifact. Public surfaces drop the text of such a frame; first-party surfaces ignore
-   * the field and keep receiving it. See {@link StreamChannel}.
+   * artifact. buildSSEEvent drops the text of a reasoning frame; buildPublicSSEEvent also
+   * drops tool-artifact text. See {@link StreamChannel}.
    */
   channel?: StreamChannel;
 }
@@ -116,8 +116,9 @@ export interface CompletionInfo {
  * @param text - Sparse array indexed by the provider's content-block/choice index (may
  *   contain null/undefined/holes). NOT [thinking, response] - see
  *   {@link resolveResponseText} for the real shape. This positional read is kept for
- *   first-party surfaces that already depend on it; public callers use
- *   {@link buildPublicSSEEvent}, which resolves the whole array.
+ *   the authenticated API/CLI streams that already depend on it; anonymous callers use
+ *   {@link buildPublicSSEEvent}, which resolves the whole array. Either way the text of a
+ *   reasoning-tagged frame is dropped.
  * @param info - Completion metadata (tools, usage)
  * @returns SSE event object
  */

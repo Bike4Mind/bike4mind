@@ -133,6 +133,7 @@ describe('buildSSEEvent', () => {
       thinking: [{ type: 'thinking', thinking: 'x', signature: 's' }] as never,
     });
     expect(e.text).toBe('');
+    expect(buildSSEEvent(['', '<think>'], { channel: 'reasoning' }).text).toBe('');
     expect(e.usage?.outputTokens).toBe(7);
     expect(e.thinking).toHaveLength(1);
   });

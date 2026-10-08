@@ -175,8 +175,8 @@ export type ReasoningChannel = 'never' | 'opt-in' | 'always';
  *
  * Set by the adapter at the emit site, where the distinction is still known; downstream the
  * frames are indistinguishable strings. Purely additive - adapters emit exactly what they
- * always did, and first-party surfaces that want reasoning or artifact frames keep getting
- * them. Only {@link buildPublicSSEEvent} acts on it.
+ * always did. buildSSEEvent drops reasoning text (none of its callers shows reasoning);
+ * buildPublicSSEEvent also drops tool-artifact text.
  */
 export type StreamChannel =
   /** A thinking/reasoning block, including the marker chunks that bracket it. */

@@ -113,6 +113,26 @@ describe('AnthropicBackend tags reasoning frames', () => {
 
     expect(publicStreamText(frames)).toBe(PROSE);
   });
+
+  it('tags the synthetic close when the stream ends inside a thinking block', async () => {
+    // No content_block_stop / message_stop: the adapter closes the block itself.
+    const backend = build(thinkingThenTextEvents().slice(0, 3));
+    const { frames, cb } = captureCb();
+
+    await backend
+      .complete(
+        'claude-sonnet-4-5-20250929',
+        [{ role: 'user', content: 'weather in Paris?' }],
+        { stream: true, tools: [] },
+        cb
+      )
+      .catch(() => {});
+
+    const closes = frames.filter(f => frameText(f).includes('</think>'));
+    expect(closes).toHaveLength(1);
+    expect(closes[0].info?.channel).toBe('reasoning');
+    expect(publicStreamText(frames)).not.toContain(THINKING_TEXT);
+  });
 });
 
 describe('AnthropicBedrockBackend tags reasoning frames', () => {

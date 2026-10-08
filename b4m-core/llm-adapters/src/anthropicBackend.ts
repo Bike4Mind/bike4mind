@@ -1577,7 +1577,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   isInThinkingBlock = false;
                   const closing: string[] = [];
                   closing[thinkingBlockIndex] = reasoningEscaper.flush() + '</think>';
-                  await cb(closing, { toolsUsed });
+                  await cb(closing, { toolsUsed, channel: 'reasoning' });
                 }
                 if (options.abortSignal?.aborted) {
                   this.logger.info('[AnthropicBackend] Stream ended before message_stop after abort', { model });
