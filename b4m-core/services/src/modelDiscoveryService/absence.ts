@@ -1,6 +1,7 @@
 import { ModelBackend, bedrockFoundationIdOf } from '@bike4mind/common';
 import type { IModelDiscoveryStateRepository } from '@bike4mind/common';
 import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
+import { isTerminal } from './lifecyclePlan';
 
 export interface AbsencePlan {
   /** Models a successful authoritative source listed this run. */
@@ -14,7 +15,10 @@ export interface AbsencePlan {
    * "everything from that provider vanished".
    */
   frozenBackends: string[];
-  /** Bedrock profile ids whose foundation id a covered listing omitted: neither sighted nor missed. */
+  /**
+   * Live Bedrock profile ids whose foundation id a covered listing omitted: neither sighted nor
+   * missed. Deprecated/retired ones are left out.
+   */
   frozenProfileIds: string[];
 }
 
@@ -56,7 +60,8 @@ export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceI
     const foundationId = backend === ModelBackend.Bedrock ? bedrockFoundationIdOf(modelId) : null;
     if (foundationId !== null) {
       if (sightedModelIds.has(foundationId)) sighted.push(modelId);
-      else if (coveredBackends.has(ModelBackend.Bedrock)) frozenProfileIds.push(modelId);
+      // An already-sunset profile id is not a maintenance gap, so it would only bury the real ones.
+      else if (coveredBackends.has(ModelBackend.Bedrock) && !isTerminal(resolved)) frozenProfileIds.push(modelId);
       continue;
     }
     // Absence is only evidence when someone successfully listed that backend.

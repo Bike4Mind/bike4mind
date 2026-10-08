@@ -129,6 +129,28 @@ describe('planAbsence', () => {
     expect(plan.frozenProfileIds).toEqual([]);
   });
 
+  it('does not report a profile id the catalog already holds as deprecated or retired', () => {
+    const retired = 'us.anthropic.claude-3-sonnet-20240229-v1:0';
+    const plan = planAbsence({
+      coveredBackends: new Set([ModelBackend.Bedrock]),
+      sightedModelIds: new Set(),
+      base: new Map([
+        ...bedrockBase,
+        [
+          retired,
+          {
+            modelId: retired,
+            record: { id: retired, backend: ModelBackend.Bedrock, lifecycle: { status: 'retired' } },
+            ownedGroups: ['identity'],
+          },
+        ],
+      ]),
+    });
+
+    expect(plan.frozenProfileIds).toEqual(['global.anthropic.claude-sonnet-4-6']);
+    expect(plan.missed).not.toContain(retired);
+  });
+
   it('still misses a bare Bedrock id the listing did not report', () => {
     const plan = planAbsence({
       coveredBackends: new Set([ModelBackend.Bedrock]),
