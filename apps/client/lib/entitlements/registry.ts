@@ -535,10 +535,13 @@ export function resolveEntitlements(input: {
 
 /**
  * Every entitlement key any grant source can confer - derived from the row
- * VALUES (tag remaps, domain grants, price grants), not a separately
- * maintained list. Admin Product Access panel uses this to enumerate every
- * product it should show, so a new product row here is picked up
- * automatically with no second list to update.
+ * VALUES (tag remaps, domain grants, price grants, implied `alsoGrant` keys),
+ * not a separately maintained list. Admin Product Access panel uses this to
+ * enumerate every product it should show, so a new product row here is picked up
+ * automatically with no second list to update. The implied keys are included so
+ * a key that is only ever implied (no tag/price/domain row of its own) is still
+ * enforced, shown in Product Access, and accepted at the partner-rule write
+ * boundary.
  */
 export function allKnownEntitlementKeys(): EntitlementKey[] {
   const keys = new Set<EntitlementKey>();
@@ -549,6 +552,9 @@ export function allKnownEntitlementKeys(): EntitlementKey[] {
     for (const key of grantedKeys) keys.add(key);
   }
   for (const grantedKeys of PRICE_ENTITLEMENTS.values()) {
+    for (const key of grantedKeys) keys.add(key);
+  }
+  for (const grantedKeys of IMPLIED_ENTITLEMENTS.values()) {
     for (const key of grantedKeys) keys.add(key);
   }
   return [...keys];
