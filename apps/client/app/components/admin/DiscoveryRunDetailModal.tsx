@@ -149,6 +149,7 @@ interface RunDetail {
   /** Absent per array (and, on an older run document, entirely) when nothing was cut. */
   detailTotals?: DetailTotals;
   unmatchedIds: string[];
+  frozenProfileIds: string[];
   droppedRecords: Array<{ source: string; modelId: string; reason: string }>;
 }
 
@@ -729,6 +730,17 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
                 {run.unmatchedIds.length > 0 && (
                   <Typography level="body-xs" color="neutral" sx={{ mt: 0.5 }} data-testid="discovery-run-unmatched">
                     Unmatched by every aggregator ({run.unmatchedIds.length}): {list(run.unmatchedIds)}
+                  </Typography>
+                )}
+                {run.frozenProfileIds.length > 0 && (
+                  <Typography
+                    level="body-xs"
+                    color="neutral"
+                    sx={{ mt: 0.5 }}
+                    data-testid="discovery-run-frozen-profiles"
+                  >
+                    Bedrock profiles frozen, foundation id not listed ({run.frozenProfileIds.length}):{' '}
+                    {list(run.frozenProfileIds)}
                   </Typography>
                 )}
                 {run.droppedRecords.length > 0 && (

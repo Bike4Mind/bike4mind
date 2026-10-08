@@ -824,6 +824,8 @@ export const ModelDiscoveryRun = z.object({
   joinCoverage: z.array(DiscoveryJoinCoverage).optional(),
   /** Ids no aggregator matched: a work item, not a log line. */
   unmatchedIds: z.array(z.string()).optional(),
+  /** Bedrock profile ids whose foundation id a covered listing omitted: neither sighted nor missed. */
+  frozenProfileIds: z.array(z.string()).optional(),
   changes: DiscoveryRunChanges.optional(),
   /** Convergence passes the run made; the cap being hit is worth seeing. */
   passes: z.number().int().nonnegative().optional(),
