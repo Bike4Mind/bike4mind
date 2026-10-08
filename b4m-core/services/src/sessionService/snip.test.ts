@@ -83,6 +83,33 @@ describe('snipSession', () => {
     );
   });
 
+  // Create-only (not in SessionUpdateRequestSchema), so a snip that drops them can never get them back.
+  it('carries the source session tool lists and systemPromptId onto the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      enabledTools: ['web_search'],
+      disabledTools: ['image_generation'],
+      disableUserIntegrations: true,
+      systemPromptId: 'triage_router',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabledTools: ['web_search'],
+        disabledTools: ['image_generation'],
+        disableUserIntegrations: true,
+        systemPromptId: 'triage_router',
+      })
+    );
+  });
+
   /**
    * Pins `knowledgeIdsFromSourceSession`: the snip must copy the source's knowledgeIds without
    * re-running the access filter, which would drop a teammate-authored organization-lake file the

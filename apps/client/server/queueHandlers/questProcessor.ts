@@ -57,6 +57,8 @@ import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -211,6 +213,15 @@ const autoNameSessionAdapter = async (sessionId: string, logger: Logger): Promis
 };
 
 /**
+ * API-key turns must not start billed video jobs: that would bypass the video-generations contract's
+ * scope check and rate limit, so only session-authenticated turns are offered the tool.
+ */
+export const getVideoToolConfigResolver = (apiKeyId: string | undefined, userId: string) =>
+  apiKeyId
+    ? undefined
+    : () => buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() });
+
+/**
  * Quest Processor - shared processing core.
  *
  * Runs a single chat-completion quest end-to-end (load user/session, assemble
@@ -332,6 +343,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     body: requestBody,
     logger,
     externalTools,
+    videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
   });
 
   return;

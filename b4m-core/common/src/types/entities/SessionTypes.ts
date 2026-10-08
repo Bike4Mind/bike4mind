@@ -194,6 +194,9 @@ export interface IChatHistoryItem {
   /** Path to the video in the storage bucket */
   videos?: string[];
 
+  /** Ids of the video generation jobs this quest started */
+  videoJobIds?: string[];
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;

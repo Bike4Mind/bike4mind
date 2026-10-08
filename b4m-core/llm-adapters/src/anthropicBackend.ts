@@ -17,7 +17,7 @@ import {
   REFUSAL_FALLBACK_MODELS,
   type ModelInfo,
 } from '@bike4mind/common';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -1171,6 +1171,8 @@ export class AnthropicBackend implements ICompletionBackend {
             cache_creation_input_tokens?: number;
           }
         | undefined;
+      // This round's answer text, for shouldEndTurnAfterTools.
+      let streamedRoundText = '';
       if (options.stream) {
         // Promise wrapper around the stream API
         await new Promise<void>((resolve, reject) => {
@@ -1426,6 +1428,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
+                      streamedRoundText += event.delta.text;
                       checkDegenerate(event.delta.text);
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
@@ -2045,6 +2048,30 @@ export class AnthropicBackend implements ICompletionBackend {
               }
             }
 
+            if (shouldEndTurnAfterTools(toolCallNames, options.tools, streamedRoundText)) {
+              this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+                model,
+                toolsExecuted: toolCallNames,
+              });
+              // Same terminal shape as the no-tool end of turn, carrying the whole chain's usage.
+              await (artifactGuard?.callback ?? cb)([], {
+                toolsUsed,
+                inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
+                outputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
+                cacheReadInputTokens: totalCacheTokens(
+                  accumCacheReadTokens,
+                  streamingTurnUsage?.cache_read_input_tokens
+                ),
+                cacheCreationInputTokens: totalCacheTokens(
+                  accumCacheWriteTokens,
+                  streamingTurnUsage?.cache_creation_input_tokens
+                ),
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // Add newline separator before recursive call to ensure proper markdown rendering
             await cb(['\n\n'], { toolsUsed });
 
@@ -2451,6 +2478,27 @@ export class AnthropicBackend implements ICompletionBackend {
                   observation
                 );
               }
+            }
+
+            if (shouldEndTurnAfterTools(toolCallNames, options.tools, streamedText.join(''))) {
+              this.logger.info('[Tool Execution] Ending turn: answer already sent, only end-of-turn tools ran', {
+                model,
+                toolsExecuted: toolCallNames,
+              });
+              // The cb above emitted 0 tokens for this tool turn, so this is the terminal total.
+              await (artifactGuard?.callback ?? cb)([], {
+                toolsUsed,
+                inputTokens: accumInputTokens + (usage?.input_tokens || 0),
+                outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
+                cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
+                cacheCreationInputTokens: totalCacheTokens(
+                  accumCacheWriteTokens,
+                  usageWithCacheNS?.cache_creation_input_tokens
+                ),
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
             }
 
             // Log before recursive call
