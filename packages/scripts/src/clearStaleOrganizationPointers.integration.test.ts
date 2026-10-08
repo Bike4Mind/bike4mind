@@ -109,20 +109,27 @@ describe('clearStaleOrganizationPointers', () => {
 
     const reportPath = join(mkdtempSync(join(tmpdir(), 'stale-pointers-')), 'report.json');
 
-    const result = await clearStaleOrganizationPointers({ reportPath, log: silent });
+    // Pin the umask so the mode assertion tests the explicit 0600 rather than passing on a 077 host,
+    // where a write with no mode would land on the same bits.
+    const previousUmask = process.umask(0o022);
+    try {
+      const result = await clearStaleOrganizationPointers({ reportPath, log: silent });
 
-    expect(result.byReason).toEqual({ 'org-missing': 4, 'not-member': 4 });
-    expect(result.cleared).toBe(0);
-    const live = result.orgs.find(o => o.organizationId === String(s.liveOrg));
-    expect(live?.reason).toBe('not-member');
-    expect(live?.userIds.sort()).toEqual([s.noPermRow, s.removed, s.removedString, s.manager].map(String).sort());
-    expect(String(await pointerOf(s.removed))).toBe(String(s.liveOrg));
-    expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toEqual({ apply: false, orgs: result.orgs });
-    expect(statSync(reportPath).mode & 0o777).toBe(0o600);
-    await expect(clearStaleOrganizationPointers({ reportPath, log: silent })).rejects.toThrow(/EEXIST/);
+      expect(result.byReason).toEqual({ 'org-missing': 4, 'not-member': 4 });
+      expect(result.cleared).toBe(0);
+      const live = result.orgs.find(o => o.organizationId === String(s.liveOrg));
+      expect(live?.reason).toBe('not-member');
+      expect(live?.userIds.sort()).toEqual([s.noPermRow, s.removed, s.removedString, s.manager].map(String).sort());
+      expect(String(await pointerOf(s.removed))).toBe(String(s.liveOrg));
+      expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toEqual({ apply: false, orgs: result.orgs });
+      expect(statSync(reportPath).mode & 0o777).toBe(0o600);
+      await expect(clearStaleOrganizationPointers({ reportPath, log: silent })).rejects.toThrow(/EEXIST/);
+    } finally {
+      process.umask(previousUmask);
+    }
   });
 
-  it('apply records exactly the nulled ids in the report', async () => {
+  it('apply nulls and records the reported ids when nothing changes mid-run', async () => {
     await seed();
     const reportPath = join(mkdtempSync(join(tmpdir(), 'stale-pointers-')), 'report.json');
 
@@ -170,6 +177,31 @@ describe('clearStaleOrganizationPointers', () => {
     expect(String(await pointerOf(s.removed))).toBe(String(s.liveOrg));
     expect(await pointerOf(s.manager)).toBeNull();
     expect(result.cleared).toBe(7);
+  });
+
+  it('apply neither nulls nor reports a user who becomes stale between the report and the write', async () => {
+    const s = await seed();
+    const reportPath = join(mkdtempSync(join(tmpdir(), 'stale-pointers-')), 'report.json');
+    const findMemberUserIds = organizationRepository.findMemberUserIds.bind(organizationRepository);
+    let liveOrgCalls = 0;
+    vi.spyOn(organizationRepository, 'findMemberUserIds').mockImplementation(async organizationId => {
+      if (organizationId === String(s.liveOrg) && ++liveOrgCalls === 2) {
+        await Organization.collection.updateOne({ _id: s.liveOrg }, {
+          $pull: { users: { userId: String(s.member) } },
+        } as never);
+      }
+      return findMemberUserIds(organizationId);
+    });
+
+    const result = await clearStaleOrganizationPointers({ apply: true, reportPath, log: silent });
+
+    // s.member was a member when the report was written, so it is absent from the report; the
+    // re-grade now calls it stale, and the report filter is what keeps it pointing at the org.
+    expect(String(await pointerOf(s.member))).toBe(String(s.liveOrg));
+    const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+    const reportedIds = report.orgs.flatMap((o: { userIds: string[] }) => o.userIds);
+    expect(reportedIds).not.toContain(String(s.member));
+    expect(result.cleared).toBe(8);
   });
 
   it('apply nulls only the stale pointers and a second run finds nothing', async () => {
@@ -226,6 +258,17 @@ describe('parseRepairArgs', () => {
       apply: true,
       reportPath: '/tmp/r.json',
     });
+  });
+
+  it('honours the --report=<path> form', () => {
+    expect(parseRepairArgs(['node', 'script', '--apply', '--report=/tmp/r.json'])).toEqual({
+      apply: true,
+      reportPath: '/tmp/r.json',
+    });
+  });
+
+  it('rejects an empty --report= value', () => {
+    expect(() => parseRepairArgs(['node', 'script', '--report='])).toThrow('--report needs a file path');
   });
 
   it('rejects --report with no value or a flag as its value', () => {
