@@ -98,6 +98,7 @@ export enum AdminTab {
   PrReport = 59,
   RetrievalRate = 60,
   ApiKeyScopePreflight = 61,
+  ReleaseNotes = 62,
 }
 
 /**
@@ -289,6 +290,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       },
       { Icon: WidgetsIcon, tab: AdminTab.Modals, label: 'Modals' },
       { Icon: NewspaperIcon, tab: AdminTab.WhatsNewModals, label: "What's New" },
+      { Icon: SummarizeIcon, tab: AdminTab.ReleaseNotes, label: 'Release notes', testid: 'admin-release-notes-btn' },
       { Icon: LanguageIcon, tab: AdminTab.WorldTime, label: 'World Time' },
     ],
   },

@@ -10,7 +10,7 @@
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getImageGeneration } from '@server/imageGenerations/imageGeneration';
-import { generateImageContract, GenerateImageIvokeParams } from '@bike4mind/common';
+import { generateImageContract, GenerateImageIvokeParams, redactSessionForClient } from '@bike4mind/common';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
@@ -157,7 +157,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
 
     const response = {
       quest,
-      session,
+      session: redactSessionForClient(session),
       originalPrompt,
       enhancedPrompt: effectivePrompt,
       promptWasEnhanced,

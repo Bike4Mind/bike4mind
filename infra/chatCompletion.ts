@@ -1,8 +1,9 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, TEST_VIDEO_PROVIDER_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { generationJobQueue } from './queues';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
 import { searxngUrl } from './searxng';
 import { allSecrets, secrets } from './secrets';
@@ -94,6 +95,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     mcpHandler,
     eventBus,
     imageProcessor,
+    generationJobQueue,
   ],
   permissions: [
     { actions: ['bedrock:*'], resources: ['*'] },
@@ -124,6 +126,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     // External instance-service, consumed by a premium overlay tool that reads these as
     // plain env (linking alone only exposes SST_RESOURCE_*). URL + bearer resolve from

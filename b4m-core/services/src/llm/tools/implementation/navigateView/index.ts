@@ -11,6 +11,9 @@ interface NavigateViewParams {
 export const navigateViewTool: ToolDefinition = {
   name: 'navigate_view',
   implementation: context => ({
+    // The buttons reach the user via onNavigationIntents before this result returns, so a
+    // follow-up model round would only restate the answer (see shouldEndTurnAfterTools).
+    endsTurnAfterText: true,
     toolFn: async value => {
       const params = value as NavigateViewParams;
       const { suggestions } = params;
@@ -50,13 +53,16 @@ export const navigateViewTool: ToolDefinition = {
       return JSON.stringify({
         __navigationIntents: true,
         intents,
-        message: `Suggested ${intents.length} navigation option(s): ${intents.map(i => i.label).join(', ')}`,
+        message:
+          `Navigation buttons shown to the user: ${intents.map(i => i.label).join(', ')}. ` +
+          'Your answer text is already visible above them, so do not write any more text or repeat it. ' +
+          'Only if you have not answered yet, answer now.',
       });
     },
     toolSchema: {
       name: 'navigate_view',
       description:
-        'Suggest navigation to relevant app views. Returns inline action buttons the user can click. ALWAYS use this tool when your response discusses a topic that has a matching view (e.g., scheduling → opti.scheduling, user management → admin.users). Call this tool alongside your text answer — answer the question AND suggest where to go.',
+        'Suggest navigation to relevant app views as inline action buttons the user can click. ALWAYS use this tool when your response discusses a topic that has a matching view (e.g., scheduling -> opti.scheduling, user management -> admin.users). Call it in the same response as your answer, never followed by more prose.',
       parameters: {
         type: 'object',
         properties: {

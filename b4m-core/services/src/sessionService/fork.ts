@@ -81,6 +81,10 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       corpusGroundingMode: session.corpusGroundingMode,
       retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
       retrievalVectorizedOnly: session.retrievalVectorizedOnly,
+      enabledTools: session.enabledTools,
+      disabledTools: session.disabledTools,
+      disableUserIntegrations: session.disableUserIntegrations,
+      systemPromptId: session.systemPromptId,
     },
     adapters,
     { knowledgeIdsFromSourceSession: true }

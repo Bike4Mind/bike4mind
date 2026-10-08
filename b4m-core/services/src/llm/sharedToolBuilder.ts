@@ -30,6 +30,7 @@ import { createDelegateToAgentTool, type SubagentUsageMeta } from './tools/imple
 import { createCoordinateTaskTool } from './tools/implementation/coordinateTask';
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
 import { isToolOfferable, type ToolAvailability } from './toolAvailability';
+import { isVideoToolConfig } from './tools/implementation/videoGeneration';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
@@ -373,6 +374,7 @@ export function buildSharedTools(
       edit_image: config.image_generation,
       audio_generation: config.audio_generation,
       web_search: config.web_search,
+      video_generation: config.video_generation,
     },
     model,
     imageProcessorLambdaName,
@@ -385,11 +387,17 @@ export function buildSharedTools(
     deps.onToolLlmUsage
   );
 
+  // The tool is inert without a usable config, so the config itself is the availability signal.
+  const effectiveAvailability: ToolAvailability = {
+    ...toolAvailability,
+    video_generation: isVideoToolConfig(config.video_generation),
+  };
+
   // Filter to enabled tools only
   let tools: ICompletionOptionTools[] | undefined = undefined;
   if (enabledTools.length > 0) {
     const mappedTools = enabledTools
-      .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, toolAvailability))
+      .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, effectiveAvailability))
       .map(tool => llmToolDefinitions[tool]);
 
     // Ids namespaced to a CONNECTED server are excluded here even though they're not native
@@ -407,7 +415,7 @@ export function buildSharedTools(
     }
 
     const unavailableTools = enabledTools.filter(
-      tool => tool in llmToolDefinitions && !isToolOfferable(tool, toolAvailability)
+      tool => tool in llmToolDefinitions && !isToolOfferable(tool, effectiveAvailability)
     );
     if (unavailableTools.length > 0) {
       logger.info(`Enabled tools dropped as unavailable (no working key/config): ${unavailableTools.join(', ')}`);
@@ -458,8 +466,15 @@ export function buildSharedTools(
     const isAgentOnly = agentOnlyMcpServers.includes(serverName);
 
     for (const item of serverTools) {
-      // artifactType is dropped: an MCP server is untrusted output and must not unlock artifact markup.
-      const { name, toolFn: originalToolFn, artifactType: _ignored, ...rest } = item;
+      // artifactType and endsTurnAfterText are dropped: an MCP server is untrusted output and must
+      // not unlock artifact markup or cut the model's follow-up round short.
+      const {
+        name,
+        toolFn: originalToolFn,
+        artifactType: _ignored,
+        endsTurnAfterText: _ignoredEndsTurn,
+        ...rest
+      } = item;
       // Denied by name, not by server: a session may forbid one tool of a server it otherwise
       // uses. `name` is already the namespaced `server__tool` id, which is the id the denylist
       // speaks and the one the model would have seen.
