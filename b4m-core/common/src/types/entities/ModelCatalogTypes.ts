@@ -176,7 +176,7 @@ const ModelRecordFields = z.strictObject({
   /** Operator-owned block. Discovery may never set or clear it. */
   disabled: z.boolean().optional(),
   disabledReason: z.string().optional(),
-  /** Discovery-owned block ("discovered, awaiting price"). Operators may never clear it. */
+  /** Discovery-owned block (e.g. "discovered, awaiting price"). Operators may never clear it. */
   autoDisabled: z.boolean().optional(),
   autoDisabledReason: z.string().optional(),
   private: z.boolean().optional(),

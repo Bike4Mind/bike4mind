@@ -218,7 +218,7 @@ export function useAgentExecutionSubscriptions(): void {
   // alone: the dispatcher's identity is memoised over `sendJsonMessage`, which
   // churns whenever the access token refreshes, and holding it in the deps would
   // re-send the whole sweep each time it did. Same guard, same reason, as the
-  // mount-time caller in `ActiveAgentExecutions`.
+  // mount-time caller in `useSessionReconnectProbe`.
   const reconnectRef = useRef(reconnect);
   useEffect(() => {
     reconnectRef.current = reconnect;

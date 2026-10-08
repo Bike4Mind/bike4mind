@@ -1,6 +1,6 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { EmbeddingModelInfo, EmbeddingModelProvider, EmbeddingService } from '../EmbeddingService';
-import { BedrockEmbeddingModel } from '@bike4mind/common';
+import { BedrockEmbeddingModel, bedrockClientConfig } from '@bike4mind/common';
 
 export const BEDROCK_EMBEDDING_MODEL_MAP: Record<BedrockEmbeddingModel, EmbeddingModelInfo<BedrockEmbeddingModel>> = {
   [BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2]: {
@@ -22,7 +22,7 @@ export class BedrockEmbeddingService implements EmbeddingService {
   private model: BedrockEmbeddingModel;
 
   constructor(model: BedrockEmbeddingModel = BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2) {
-    this.client = new BedrockRuntimeClient();
+    this.client = new BedrockRuntimeClient(bedrockClientConfig());
     this.validateModel(model);
     this.model = model;
   }

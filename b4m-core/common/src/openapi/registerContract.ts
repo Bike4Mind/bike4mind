@@ -107,8 +107,7 @@ function withAccurateCoercedParams<T extends z.ZodObject<z.ZodRawShape>>(objectS
  *
  * This is the ONLY place a contract's schemas meet `.openapi()` - safe here
  * because this module imports ./registry, which runs `extendZodWithOpenApi`.
- * Runs at generate time only. The request body uses `requestDoc` when present
- * (the OpenAPI-representable projection) and falls back to `request`.
+ * Runs at generate time only.
  */
 export function registerContract(contract: EndpointContract): void {
   const security =
@@ -235,7 +234,7 @@ export function registerContract(contract: EndpointContract): void {
     };
   }
 
-  const requestSchema = contract.requestDoc ?? contract.request;
+  const requestSchema = contract.request;
   // No `.openapi(name)` here: zod-to-openapi always inlines `request.params`/
   // `request.query` into the operation's `parameters` array rather than a
   // referenceable component, so a name would never appear in the output - passing

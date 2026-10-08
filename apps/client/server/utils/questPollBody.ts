@@ -14,7 +14,7 @@ import { toGeneratedFiles } from '@server/utils/generatedFiles';
  * fields. The chat pipeline streams into `replies[]` and leaves `quest.reply` null on an ordinary
  * success (or a stale rapid-reply prefix), so the scalar is derived here from the slots, matching
  * what setErrorReply in ChatCompletionProcess writes. stripChoicesFromReplies strips a choices block
- * only from the last visible slot, so one followed by a separate notice slot passes through. Paths
+ * from every visible slot, so one followed by a separate notice slot cannot leak. Paths
  * that write only `reply` (pre-flight invoke error, empty recovery) have no visible slots, so the
  * stored scalar is the fallback.
  */

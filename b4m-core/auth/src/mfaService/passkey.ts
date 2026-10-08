@@ -228,7 +228,7 @@ export async function finishPasskeyAuthentication(
 
   await credentials.recordUse(stored.id, verification.authenticationInfo.newCounter);
 
-  const updatedMFA = clearFailedAttempts(user);
+  const updatedMFA = clearFailedAttempts(user.mfa);
   updatedMFA.lastUsedAt = new Date();
   const updatedUser = await users.update({ id: user.id, mfa: updatedMFA, updatedAt: new Date() });
   if (!updatedUser) {

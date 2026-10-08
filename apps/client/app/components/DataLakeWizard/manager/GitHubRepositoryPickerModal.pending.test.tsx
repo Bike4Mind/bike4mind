@@ -90,7 +90,7 @@ describe('GitHubRepositoryPickerModal - pending state on a successful connect', 
       if (url !== CONNECTION_URL) return never();
       connectionReads += 1;
       // Not connected on first load; every read after the connect hangs.
-      return connectionReads === 1 ? Promise.resolve({ data: { connection: null } }) : never();
+      return connectionReads === 1 ? Promise.resolve({ data: { connection: null, canManage: true } }) : never();
     });
     post.mockResolvedValue({ status: 201, data: { connection: bound } });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

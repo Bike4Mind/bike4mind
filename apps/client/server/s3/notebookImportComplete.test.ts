@@ -67,7 +67,7 @@ vi.mock('@bike4mind/services', () => ({
     },
   },
 }));
-vi.mock('@bike4mind/services/llm', () => ({
+vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({
   moderateImageOrThrow: vi.fn(),
 }));
 vi.mock('@bike4mind/common', () => ({ InboxType: { COMMON: 'common' }, isImageServeable: () => true }));

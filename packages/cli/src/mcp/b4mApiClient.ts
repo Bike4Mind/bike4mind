@@ -120,6 +120,8 @@ export interface RawDataLake {
 export interface RawProject {
   id: string;
   name?: string;
+  createdAt?: string;
+  updatedAt?: string;
   [key: string]: unknown;
 }
 
@@ -368,6 +370,20 @@ export class B4mApiClient {
 
   async getProject(projectId: string): Promise<RawProject> {
     return this.client.get<RawProject>(`/api/projects/${encodeURIComponent(projectId)}`);
+  }
+
+  async createProject(args: {
+    name: string;
+    description: string;
+    sessionIds?: string[];
+    fileIds?: string[];
+  }): Promise<RawProject> {
+    return this.client.post<RawProject>('/api/projects', {
+      name: args.name,
+      description: args.description,
+      ...(args.sessionIds?.length ? { sessionIds: args.sessionIds } : {}),
+      ...(args.fileIds?.length ? { fileIds: args.fileIds } : {}),
+    });
   }
 
   /**

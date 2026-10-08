@@ -149,11 +149,8 @@ import { MongoAbility } from '@casl/ability';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { GetEffectiveApiKeyAdapters } from '@bike4mind/auth/apiKeyService';
-import {
-  ChatCompletionProcess,
-  DEFAULT_VERBATIM_WINDOW_FRACTION,
-  SYSTEM_PROMPT_RESERVE_TOKENS,
-} from './ChatCompletionProcess';
+import type { ChatCompletionProcess } from './ChatCompletionProcess';
+import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { QuestStartBodySchema } from './questStartBody';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';

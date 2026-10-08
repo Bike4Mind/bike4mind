@@ -58,6 +58,7 @@ import {
   getSettingByName,
   getSettingsMap,
   getSettingsValue,
+  HTTPError,
   NotFoundError,
   ForbiddenError,
   TooManyRequestsError,
@@ -169,6 +170,7 @@ import {
 import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
+import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
@@ -339,27 +341,6 @@ const CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC = 0;
  */
 export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 
-/**
- * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
- * non-history overhead reserved below) kept as VERBATIM conversation history
- * before older turns are folded into contextSummary. The fraction tunes the
- * verbatim/summary split of whatever room is left after overhead; it is NOT a
- * fraction of the raw window. Overridable per-deploy via the
- * ContextVerbatimWindowFraction admin setting.
- */
-export const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
-
-/**
- * Non-history input competes with the verbatim window for the same safe-input
- * budget: system prompts, tool schemas, the injected contextSummary, and the
- * current prompt. The verbatim budget must reserve room for these or the window
- * grows until history ALONE nears safe input while total input has already
- * overflowed - the turn then hits the hard overflow guard (which throws before
- * the reactive summarizer's onComplete can run) instead of compacting. These are
- * conservative floors used only to pick the summary boundary; the exact tokenizer
- * still enforces the real budget downstream in buildAndSortMessages.
- */
-export const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
 const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
 
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
@@ -581,6 +562,29 @@ export function isAbortError(error: unknown): boolean {
 
 export function isStreamIdleTimeoutError(error: Error): boolean {
   return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
+}
+
+/**
+ * True when a completion failure is a service fault worth counting on the operator
+ * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
+ * (billing, abort, request/stream timeout, tool pairing, overloaded, context overflow), which
+ * resolve the quest without rethrowing and so never reached /process's failure path. It is not an
+ * exact mirror: the handler matches timeouts case-sensitively and rethrows 4xx HTTPErrors (so
+ * /process counts them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and
+ * embed routes call this; /process does not.
+ */
+export function isOperatorFault(error: unknown): boolean {
+  if (resolveQuestErrorCode(error)) return false;
+  if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
+  if (!(error instanceof Error)) return true;
+  return !(
+    isAbortError(error) ||
+    isRequestTimeoutError(error) ||
+    isStreamIdleTimeoutError(error) ||
+    isToolPairingError(error) ||
+    isOverloadedError(error) ||
+    error.message.startsWith('Your request is too large for')
+  );
 }
 
 /**

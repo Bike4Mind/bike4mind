@@ -33,6 +33,7 @@ import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { createCompletionContract } from '@bike4mind/common';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@server/utils/config';
+import { emitProcessingFailed } from '../processingFailedMetric';
 import { createMethodGuard } from '@server/utils/allowedMethods';
 import { z } from 'zod';
 
@@ -45,8 +46,8 @@ import { z } from 'zod';
  *
  * Why the always-on service: no cold start, and no 15-minute Lambda ceiling on the steady-state
  * path (a long stream is bounded only by client/idle limits, not a hard function timeout).
- * Trade-off: a deploy/scale-in SIGTERM drains for up to 120s (DRAIN_TIMEOUT_MS in server.ts)
- * before SIGKILL, so a completion still streaming across a deploy is cut off - the old Lambda
+ * Trade-off: a deploy/scale-in SIGTERM drains for up to DRAIN_TIMEOUT_MS (server.ts) before
+ * SIGKILL, so a completion still streaming across a deploy is cut off - the old Lambda
  * allowed up to 15 minutes regardless.
  */
 
@@ -260,6 +261,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       logger.error('[CLI_LLM] Handler error', { error: error instanceof Error ? error.message : String(error) });
+      track(emitProcessingFailed('cli-sse', error));
 
       if (userId && body) {
         await logCompletionAnalytics({

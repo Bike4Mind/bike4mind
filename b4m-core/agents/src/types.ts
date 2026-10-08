@@ -27,8 +27,7 @@ export interface AgentStep {
     /** Name of the tool being used (for action steps) */
     toolName?: string;
     /** Input provided to the tool (for action steps) */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolInput?: any;
+    toolInput?: unknown;
     /** Timestamp when this step occurred */
     timestamp: number;
     /**

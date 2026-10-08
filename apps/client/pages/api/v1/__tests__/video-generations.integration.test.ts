@@ -68,6 +68,28 @@ describe('POST /api/v1/video-generations', () => {
     expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 
+  it('labels a session (studio) caller studio and keeps its Idempotency-Key apart from API keys', async () => {
+    h.createVideoJob.mockResolvedValue({
+      ok: true,
+      job: videoJob({ requestedBy: 'jwt-user', source: 'studio' }),
+      created: true,
+    });
+    const { req, res } = fire({
+      method: 'POST',
+      url: '/api/v1/video-generations',
+      apiKey: null,
+      body: { model: 'gemini-omni-1.1-flash', prompt: 'a lighthouse' },
+      headers: { 'idempotency-key': 'ui-1' },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toMatchObject({ source: 'studio' });
+    expect(h.createVideoJob.mock.calls[0][0]).toMatchObject({
+      source: 'studio',
+      idempotencyKey: 'studio:jwt-user:ui-1',
+    });
+  });
+
   it('accepts a JWT caller and fills catalog defaults (202)', async () => {
     h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob({ requestedBy: 'jwt-user' }), created: true });
     const { req, res } = fire({
@@ -82,7 +104,7 @@ describe('POST /api/v1/video-generations', () => {
     expect(h.createVideoJob).toHaveBeenCalledWith(
       {
         user: { id: 'jwt-user', organizationId: null },
-        source: 'api',
+        source: 'studio',
         request: {
           model: 'gemini-omni-1.1-flash',
           mode: 'text_to_video',
@@ -111,6 +133,7 @@ describe('POST /api/v1/video-generations', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(202);
     expect(h.createVideoJob.mock.calls[0][0].idempotencyKey).toBe('api:user-1:retry-1');
+    expect(h.createVideoJob.mock.calls[0][0].source).toBe('api');
   });
 
   it('the same Idempotency-Key from two org members reaches the domain under different keys', async () => {
