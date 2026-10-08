@@ -114,6 +114,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions[/{id}]\`
 - Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`
+- Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
 - Files and data lakes: \`/api/v1/files\`, \`/api/v1/files/{id}\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
@@ -267,29 +268,6 @@ The response is \`{ data, hasMore, total }\`, where \`data\` is the page of proj
 | DELETE | /api/projects/[id]/systemPrompts | Remove system prompt files from a project (\`fileIds\`, or legacy single \`fileId\`, in the body) |
 | POST | /api/projects/[id]/systemPrompts/toggle | Toggle system prompt |
 | DELETE | /api/projects/removeNonExistintFiles | Clean up orphan file references |
-
----
-
-### Agents
-
-Custom AI agents with configurable personas, system prompts, and tool access.
-
-\`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\` or
-\`updatedAt\`) and \`orderDirection\`.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/agents | List agents |
-| POST | /api/agents | Create an agent |
-| GET | /api/agents/[id] | Get agent details |
-| PUT | /api/agents/[id] | Update agent |
-| DELETE | /api/agents/[id] | Delete agent |
-| POST | /api/agents/[id]/generate-avatar | AI-generate agent avatar |
-| POST | /api/agents/[id]/generate-description | AI-generate agent description |
-| POST | /api/agents/[id]/generate-system-prompt | AI-generate system prompt |
-| POST | /api/agents/[id]/enhance-field | AI-enhance a specific field |
-| POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
-| POST | /api/agents/create-from-context | Create agent from conversation context |
 
 ---
 
