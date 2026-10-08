@@ -143,6 +143,7 @@ import {
   toGitHubLakeConnectionResponse,
   GITHUB_LAKE_STATE_OPTIONS,
   REVOKE_PURGE_SLICE_SIZE,
+  requireGitHubLakeAppConfig,
 } from './githubLakeConnection';
 import { CLAIM_GRACE_MS } from '@server/dataLakes/assertLakeConnectorFree';
 import type {
@@ -1174,5 +1175,22 @@ describe('GitHub connection enable helpers', () => {
     expect(h.ghConnSetEnabledForLake).toHaveBeenLastCalledWith('lake1', false);
     await expect(enableGitHubConnectionForLake('lake1')).resolves.toBe(true);
     expect(h.ghConnSetEnabledForLake).toHaveBeenLastCalledWith('lake1', true);
+  });
+});
+
+describe('requireGitHubLakeAppConfig', () => {
+  it('returns a configured App unchanged', () => {
+    const config = { appId: '1', slug: 's', privateKey: 'k', clientId: 'c', clientSecret: 'x' };
+    expect(requireGitHubLakeAppConfig(config)).toBe(config);
+  });
+
+  it('throws an expected 503 naming the missing App when unconfigured', () => {
+    expect(() => requireGitHubLakeAppConfig(null)).toThrow(
+      expect.objectContaining({
+        statusCode: 503,
+        expected: true,
+        message: expect.stringMatching(/^GitHub App not configured/),
+      })
+    );
   });
 });

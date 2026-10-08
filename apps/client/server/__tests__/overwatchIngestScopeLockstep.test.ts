@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { ApiKeyScope } from '@bike4mind/common';
+import { stripComments } from './scopeCoverageHelpers';
 
 /**
  * The Overwatch ingest route names its scope twice on purpose: once as the `baseApi`
@@ -20,18 +21,10 @@ import { ApiKeyScope } from '@bike4mind/common';
  */
 const EVENTS_ROUTE = path.join(__dirname, '..', '..', 'pages', 'api', 'overwatch', 'v1', 'events.ts');
 
-/**
- * Comments are stripped before scanning because events.ts's `requiredScopes` prose sits
- * directly above the declaration it describes - without this, a comment naming a scope
- * would read as a second declaration and the scan would stop meaning anything. Truncates
- * a `//` inside a string literal too, which is harmless for the two patterns below.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-}
-
 /** Bodies of each `requiredScopes: [...]` array literal. More than one is itself a finding. */
 function declaredScopeBlocks(source: string): string[] {
+  // events.ts's requiredScopes prose sits right above the declaration, so a comment naming a scope would
+  // otherwise read as a second declaration.
   return [...stripComments(source).matchAll(/requiredScopes\s*:\s*\[([^\]]*)\]/g)].map(m => m[1]);
 }
 
