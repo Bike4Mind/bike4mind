@@ -30,7 +30,7 @@ interface DeleteAdapters {
   db: {
     organizations: IOrganizationRepository;
     groups: Pick<IGroupRepository, 'findByOrganization' | 'delete'>;
-    users: Pick<IUserRepository, 'removeGroupsFromAllUsers'>;
+    users: Pick<IUserRepository, 'removeGroupsFromAllUsers' | 'clearOrganizationPointer'>;
   };
   /**
    * Optional validation service to determine if organization can be deleted
@@ -48,7 +48,7 @@ interface DeleteAdapters {
  * @throws {Error} If organization cannot be deleted based on validation, includes reason if provided
  *
  * Caller MUST wrap this in withTransaction (see the route): the member purge, the group
- * soft-deletes, and the org delete have to commit together, or a partial failure leaves either
+ * soft-deletes, the members' organizationId reset, and the org delete have to commit together, or a partial failure leaves either
  * dangling group access or an org that never actually deletes.
  */
 export async function deleteOrganization(
@@ -101,6 +101,9 @@ export async function deleteOrganization(
       await adapters.db.groups.delete(groupId);
     }
   }
+
+  // Members would otherwise keep an active-org pointer to a deleted org and stay org-scoped.
+  await adapters.db.users.clearOrganizationPointer(id);
 
   // The inherited `delete` (softDeletePlugin) now joins the caller's transaction via ALS (#1228),
   // so this soft-delete rolls back with the surrounding writes instead of committing immediately.

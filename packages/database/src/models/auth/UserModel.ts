@@ -256,6 +256,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
   }
 
+  /** Null the active-org pointer of every user on the org (org delete). */
+  async clearOrganizationPointer(organizationId: string): Promise<void> {
+    await this.model.updateMany({ organizationId }, { $set: { organizationId: null } });
+  }
+
   /** Add one group id to one user (idempotent via $addToSet). */
   async addGroupToUser(userId: string, groupId: string): Promise<void> {
     await this.model.updateOne({ _id: userId }, { $addToSet: { groups: groupId } });

@@ -42,6 +42,7 @@ describe('organizationService - delete', () => {
         },
         users: {
           removeGroupsFromAllUsers: vi.fn(),
+          clearOrganizationPointer: vi.fn(),
         },
       },
     };
@@ -158,6 +159,7 @@ describe('organizationService - delete', () => {
       );
 
       expect(mockAdapters.db.organizations.delete).not.toHaveBeenCalled();
+      expect(mockAdapters.db.users.clearOrganizationPointer).not.toHaveBeenCalled();
       // The gate precedes the subscription check, so a caller without authority cannot read the
       // org's billing state out of the validation reason.
       expect(mockAdapters.validation.canDeleteOrganization).not.toHaveBeenCalled();
@@ -238,7 +240,7 @@ describe('organizationService - delete', () => {
       expect(mockAdapters.db.users.removeGroupsFromAllUsers).toHaveBeenCalledWith(['stale-group']);
     });
 
-    it('purges membership BEFORE soft-deleting the groups (fail-safe ordering)', async () => {
+    it('purges membership BEFORE soft-deleting the groups and clears pointers before the org delete', async () => {
       const callOrder: string[] = [];
       mockAdapters.db.groups.findByOrganization.mockResolvedValue([{ id: 'group-a', type: 'sales' }]);
       mockAdapters.db.users.removeGroupsFromAllUsers.mockImplementation(async () => {
@@ -247,13 +249,22 @@ describe('organizationService - delete', () => {
       mockAdapters.db.groups.delete.mockImplementation(async () => {
         callOrder.push('groups.delete');
       });
+      mockAdapters.db.users.clearOrganizationPointer.mockImplementation(async () => {
+        callOrder.push('clearOrganizationPointer');
+      });
       mockAdapters.db.organizations.delete.mockImplementation(async () => {
         callOrder.push('organizations.delete');
       });
 
       await deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
-      expect(callOrder).toEqual(['removeGroupsFromAllUsers', 'groups.delete', 'organizations.delete']);
+      expect(mockAdapters.db.users.clearOrganizationPointer).toHaveBeenCalledWith('org1');
+      expect(callOrder).toEqual([
+        'removeGroupsFromAllUsers',
+        'groups.delete',
+        'clearOrganizationPointer',
+        'organizations.delete',
+      ]);
     });
 
     it('does not call the purge or soft-delete when the org has no live groups', async () => {
@@ -264,6 +275,7 @@ describe('organizationService - delete', () => {
 
       expect(mockAdapters.db.users.removeGroupsFromAllUsers).not.toHaveBeenCalled();
       expect(mockAdapters.db.groups.delete).not.toHaveBeenCalled();
+      expect(mockAdapters.db.users.clearOrganizationPointer).toHaveBeenCalledWith('org1');
       expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
     });
 
@@ -280,6 +292,7 @@ describe('organizationService - delete', () => {
       expect(mockAdapters.db.groups.findByOrganization).not.toHaveBeenCalled();
       expect(mockAdapters.db.users.removeGroupsFromAllUsers).not.toHaveBeenCalled();
       expect(mockAdapters.db.groups.delete).not.toHaveBeenCalled();
+      expect(mockAdapters.db.users.clearOrganizationPointer).not.toHaveBeenCalled();
     });
   });
 });
