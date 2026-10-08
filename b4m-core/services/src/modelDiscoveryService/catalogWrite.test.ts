@@ -365,7 +365,7 @@ describe('planCatalogWrites', () => {
     );
     const result = plan({
       base,
-      contributions: [{ name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: {} }] }],
+      contributions: [{ name: 'models.dev', kind: 'aggregator', records: [gpt6()] }],
     });
 
     // The aggregators keep retired ids forever; treating one as evidence the
@@ -987,14 +987,24 @@ describe('planCatalogWrites', () => {
       expect(second.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting admin approval' });
     });
 
-    it('drops the wording once an aggregator ran and still quoted nothing', () => {
+    it('drops the wording once an aggregator listing the model ran and still quoted nothing', () => {
       const second = plan({
         resolveDispatch: dispatchable,
-        contributions: [provider, { ...lone, records: [] }],
+        contributions: [provider, { ...lone, records: [gpt6()] }],
         base: asBase(afterLoneQuote().rows),
       });
 
       expect(second.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
+    });
+
+    it('keeps the wording when an aggregator that does not list the model ran', () => {
+      const second = plan({
+        resolveDispatch: dispatchable,
+        contributions: [provider, { name: 'litellm', kind: 'aggregator' as const, records: [] }],
+        base: asBase(afterLoneQuote().rows),
+      });
+
+      expect(second.rows).toEqual([]);
     });
   });
 

@@ -603,14 +603,16 @@ function planOne(
     // The uncorroborated wording is read off this run's aggregator fetches, and a
     // run where every aggregator was skipped for the interval guard or failed would
     // otherwise flip it back to plain "awaiting price" and append a catalog row for
-    // the wording alone. The wording in force stands only when no aggregator
-    // contributed at all: one that ran and quoted nothing is a real change.
+    // the wording alone. The wording in force stands unless an aggregator that lists
+    // this model contributed: one that lists it and quoted nothing is a real change.
     const reasonInForce = base.autoDisabledReason;
     const keepReasonInForce =
       !decision.promote &&
       decision.autoDisabledReason === AWAITING_PRICE_REASON &&
       reasonInForce === UNCORROBORATED_PRICE_REASON &&
-      !input.contributions.some(contribution => contribution.kind === 'aggregator');
+      !input.contributions.some(
+        contribution => contribution.kind === 'aggregator' && candidate.sourceNames.includes(contribution.name)
+      );
     record = decision.promote
       ? { ...withoutReason, lifecycle: { ...record.lifecycle, status: 'active' }, autoDisabled: false }
       : {
