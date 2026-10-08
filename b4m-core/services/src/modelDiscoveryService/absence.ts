@@ -14,6 +14,8 @@ export interface AbsencePlan {
    * "everything from that provider vanished".
    */
   frozenBackends: string[];
+  /** Bedrock profile ids whose foundation id a covered listing omitted: neither sighted nor missed. */
+  frozenProfileIds: string[];
 }
 
 export interface AbsenceInput {
@@ -41,6 +43,7 @@ export interface AbsenceInput {
 export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceInput): AbsencePlan {
   const sighted: string[] = [];
   const missed: string[] = [];
+  const frozenProfileIds: string[] = [];
   const seenBackends = new Set<string>();
 
   for (const [modelId, resolved] of base) {
@@ -53,6 +56,7 @@ export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceI
     const foundationId = backend === ModelBackend.Bedrock ? bedrockFoundationIdOf(modelId) : null;
     if (foundationId !== null) {
       if (sightedModelIds.has(foundationId)) sighted.push(modelId);
+      else if (coveredBackends.has(ModelBackend.Bedrock)) frozenProfileIds.push(modelId);
       continue;
     }
     // Absence is only evidence when someone successfully listed that backend.
@@ -66,7 +70,7 @@ export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceI
   }
 
   const frozenBackends = [...seenBackends].filter(backend => !coveredBackends.has(backend)).sort();
-  return { sighted: sighted.sort(), missed: missed.sort(), frozenBackends };
+  return { sighted: sighted.sort(), missed: missed.sort(), frozenBackends, frozenProfileIds: frozenProfileIds.sort() };
 }
 
 export async function applyAbsence(
