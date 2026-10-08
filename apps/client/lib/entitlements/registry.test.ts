@@ -10,6 +10,7 @@ import {
   normalizeTag,
   resolveEntitlements,
   signupCreditsForEmail,
+  signupCreditsForKeys,
   KNOWN_ENTITLEMENT_KEYS,
   unknownEntitlementKeys,
   BYPASS_EXEMPT_ENTITLEMENTS,
@@ -181,6 +182,60 @@ describe('questmaster-pro grant tag', () => {
       expect(applyImpliedEntitlements(entitlementsForTags([tag]))).not.toContain('questmaster:pro');
     }
     expect(__registryRows.tagGrantRows.map(row => normalizeTag(row.tag))).not.toContain('questmaster');
+  });
+});
+
+describe('questmaster-pro grant tag', () => {
+  it('keeps its hyphen through normalization and grants questmaster:pro', () => {
+    expect(normalizeTag('questmaster-pro')).toBe('questmaster-pro');
+    expect(grantTagForEntitlement('questmaster:pro')).toBe('questmaster-pro');
+    expect(entitlementsForTags(['QuestMaster-Pro'])).toContain('questmaster:pro');
+  });
+
+  it('does NOT grant questmaster:pro from the existing QuestMaster cohort tag, in any casing', () => {
+    for (const tag of ['QuestMaster', 'questmaster', ' QUESTMASTER ']) {
+      expect(applyImpliedEntitlements(entitlementsForTags([tag]))).not.toContain('questmaster:pro');
+    }
+    expect(__registryRows.tagGrantRows.map(row => normalizeTag(row.tag))).not.toContain('questmaster');
+  });
+});
+
+describe('signupCreditsForKeys (pinned amounts)', () => {
+  it('pays 250,000 for optihashi:pro alone', () => {
+    expect(signupCreditsForKeys(['optihashi:pro'])).toBe(250_000);
+  });
+
+  it('pays 250,000 for questmaster:pro alone', () => {
+    expect(signupCreditsForKeys(['questmaster:pro'])).toBe(250_000);
+  });
+
+  it('pays 250,000 (not 500,000) when optihashi:pro and the questmaster:pro it implies are both held', () => {
+    expect(signupCreditsForKeys(['optihashi:pro', 'questmaster:pro'])).toBe(250_000);
+    expect(signupCreditsForKeys(['questmaster:pro', 'OptiHashi:Pro', 'optihashi:pro'])).toBe(250_000);
+  });
+
+  it('still sums two unrelated products', () => {
+    // No unrelated paying pair exists in today's rows, so pin the rule with a fixture map.
+    const credits = new Map([
+      ['optihashi:pro', 250_000],
+      ['unrelated:pro', 100_000],
+    ]);
+    expect(signupCreditsForKeys(['optihashi:pro', 'unrelated:pro'], credits)).toBe(350_000);
+    expect(signupCreditsForKeys(['optihashi:pro', 'questmaster:pro', 'unrelated:pro'], credits)).toBe(350_000);
+  });
+
+  it('counts a key implied through a chain as zero', () => {
+    const credits = new Map([
+      ['a', 10],
+      ['b', 20],
+      ['c', 40],
+    ]);
+    const chain = new Map([
+      ['a', ['b']],
+      ['b', ['c']],
+    ]);
+    expect(signupCreditsForKeys(['c', 'a'], credits, chain)).toBe(10);
+    expect(signupCreditsForKeys(['b', 'c'], credits, chain)).toBe(20);
   });
 });
 

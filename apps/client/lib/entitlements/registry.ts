@@ -269,7 +269,8 @@ const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
 /**
  * Per-entitlement one-time signup credit grant. A domain-grant user (see
  * DOMAIN_GRANT_ROWS) receives the SUM of these amounts for every entitlement
- * key their verified email confers, granted ONCE at email verification
+ * key their verified email confers (an implied key never paying twice - see
+ * `signupCreditsForKeys`), granted ONCE at email verification
  * (apps/client/pages/api/email/verify.ts) - ADDITIVE on top of the flat
  * `defaultFreeCredits` open-registration grant, and with NO cap.
  *
@@ -280,7 +281,8 @@ const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
  *
  * Summed over the keys the domain confers DIRECTLY - implied entitlements
  * (IMPLIED_ENTITLEMENT_ROWS) are not expanded here, so an implication never
- * adds signup credits on its own.
+ * adds signup credits on its own; and a directly conferred key that another
+ * held key implies counts zero, so {optihashi:pro, questmaster:pro} pays once.
  *
  * [DELETION-FOOTPRINT] Each entry leaves with its product on extraction.
  */
@@ -478,14 +480,29 @@ export function signupCreditsForEmail(
 
 /**
  * Sum of the one-time signup credits for an already-resolved set of entitlement
- * keys (keys with no configured amount contribute 0). Lets a caller that already
- * holds the resolved keys (e.g. the email-verify handler, which also needs the
- * key set for cache invalidation) avoid re-resolving the email a second time.
+ * keys (normalized and de-duplicated; keys with no configured amount contribute 0).
+ * A key that ANOTHER key in the same set implies (IMPLIED_ENTITLEMENTS, through
+ * chains) counts zero, so a bundle never pays twice: {optihashi:pro,
+ * questmaster:pro} pays 250,000, the same as either alone. Unrelated products
+ * still sum. Lets a caller that already holds the resolved keys (e.g. the
+ * email-verify handler, which also needs the key set for cache invalidation)
+ * avoid re-resolving the email a second time.
  */
-export function signupCreditsForKeys(keys: Iterable<EntitlementKey>): number {
+export function signupCreditsForKeys(
+  keys: Iterable<EntitlementKey>,
+  credits: ReadonlyMap<EntitlementKey, number> = SIGNUP_CREDITS,
+  implications: ReadonlyMap<EntitlementKey, readonly EntitlementKey[]> = IMPLIED_ENTITLEMENTS
+): number {
+  // An empty implication map makes this a pure normalize + de-duplicate.
+  const held = applyImpliedEntitlements(keys, new Map());
+  const impliedByAnother = new Set<EntitlementKey>();
+  for (const key of held) {
+    // slice(1) drops `key` itself; the rest is everything it implies through chains.
+    for (const implied of applyImpliedEntitlements([key], implications).slice(1)) impliedByAnother.add(implied);
+  }
   let total = 0;
-  for (const key of keys) {
-    total += SIGNUP_CREDITS.get(key) ?? 0;
+  for (const key of held) {
+    if (!impliedByAnother.has(key)) total += credits.get(key) ?? 0;
   }
   return total;
 }

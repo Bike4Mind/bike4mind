@@ -66,7 +66,9 @@ import handler from '@pages/api/email/verify';
 // one-product grant, not two.)
 const DOMAIN_EMAIL = 'staff@bike4mind.com';
 const NON_DOMAIN_EMAIL = 'nobody@example.com';
-const EXPECTED_DOMAIN_CREDITS = signupCreditsForEmail(DOMAIN_EMAIL, true);
+// Pinned literal (not derived from the registry, which would make the assertions circular):
+// the optihashi:pro grant pays 250,000, and the questmaster:pro it implies never pays again.
+const EXPECTED_DOMAIN_CREDITS = 250_000;
 
 function makeReqRes() {
   const { req, res } = createMocks({ method: 'POST' });
@@ -106,7 +108,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     // Guards the rest of the suite: if bike4mind.com ever stops conferring the
     // product, these assertions would silently pass on 0 credits. Single-product
     // (optihashi:pro) since the Q/Work tier fold; was 500_000 (two products).
-    expect(EXPECTED_DOMAIN_CREDITS).toBe(250_000);
+    expect(signupCreditsForEmail(DOMAIN_EMAIL, true)).toBe(EXPECTED_DOMAIN_CREDITS);
   });
 
   it('grants domain-grant signup credits to a verified domain user with NO pending-free-credits tag', async () => {
@@ -122,7 +124,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
       expect.objectContaining({
         ownerId: 'user-1',
         ownerType: CreditHolderType.User,
-        credits: EXPECTED_DOMAIN_CREDITS,
+        credits: 250_000,
         type: 'generic_add',
         transactionId: 'domain-grant-credits:user-1',
       })
