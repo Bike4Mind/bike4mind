@@ -8,6 +8,7 @@ import {
   Image as ImageIcon,
   MusicNote as MusicIcon,
   GraphicEq as AudioIcon,
+  Videocam as VideoIcon,
   Calculate as MathIcon,
   Schema as MermaidIcon,
   Search as SearchIcon,
@@ -1069,6 +1070,28 @@ const ToolsSection = ({
                 onChange={() => handleToggleTool('audio_generation')}
                 checked={displayTools.includes('audio_generation')}
                 data-testid="tool-toggle-audio-generation"
+              />
+            </ToolContainer>
+          </Grid>
+          {/* Video Generation */}
+          <Grid xs={12} className="tool-item tool-item-video-generation">
+            <ToolContainer sx={toolContainerSx} toolId="video_generation">
+              <Box
+                className="tool-content"
+                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+              >
+                <VideoIcon
+                  sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                />
+                <ToolLabel
+                  name={getToolDisplayName('video_generation')}
+                  description={getToolDescription('video_generation')}
+                />
+              </Box>
+              <SquareSlideToggle
+                onChange={() => handleToggleTool('video_generation')}
+                checked={displayTools.includes('video_generation')}
+                data-testid="tool-toggle-video-generation"
               />
             </ToolContainer>
           </Grid>

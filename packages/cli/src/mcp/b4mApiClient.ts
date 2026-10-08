@@ -7,14 +7,33 @@ import type { ZodType, output } from 'zod';
 import {
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
+  type IBriefcasePrompt,
   ttsBase64ResponseSchema,
   type CitableSourceSchema,
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
   type ChatHistoryItemType,
+  type GeneratedFile,
+  type GenerateImageResponse,
+  type ImagePromptResolution,
+  type PromptBatchQueryType,
   type QuestErrorCode,
+  type SessionDeleteResponse,
   type TTSRequest,
 } from '@bike4mind/common';
+
+export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
+
+/**
+ * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
+ * notebook the caller owns, so write paths refuse anything that is not an ObjectId before any request.
+ */
+function notebookPath(notebookId: string): string {
+  if (!NOTEBOOK_ID_PATTERN.test(notebookId)) {
+    throw new Error(`Invalid notebook id: ${JSON.stringify(notebookId)}`);
+  }
+  return `/api/sessions/${notebookId}`;
+}
 
 /**
  * A Bike4Mind notebook (session) as returned by the REST API. Only the fields the
@@ -38,22 +57,15 @@ interface ListEnvelope<T> {
   total?: number;
 }
 
-export interface ChatWaitResponse {
+/** The `wait: false` chat ACK: the turn is queued, its outcome arrives on the quest poll. */
+export interface ChatAckResponse {
   id: string;
   status: string;
+  // The requested model; the quest poll carries no model field.
   model?: string;
   // The notebook the turn was recorded in. An API-key caller that sent no `sessionId` (and any
   // caller sending `newConversation: true`) gets a freshly created notebook's id here.
   sessionId?: string;
-  // `response` is the visible answer text; `responses` is the raw reply slots. Older servers left
-  // `response` null on the wait path.
-  response?: string | null;
-  responses?: string[];
-  // Failure classifier. A failed turn still resolves 200 with the explanation in the reply
-  // text, so `type: 'error'` is the only reliable failure signal; `errorCode` names the reason
-  // only for the billing failures that have one and its absence never means success.
-  type?: ChatHistoryItemType;
-  errorCode?: QuestErrorCode;
   [key: string]: unknown;
 }
 
@@ -61,11 +73,19 @@ export interface QuestResponse {
   id: string;
   status: string;
   sessionId: string;
-  reply?: string;
-  // Same classifier as ChatWaitResponse, on the polled surface - both carry it, so one branch
-  // reads either.
+  // `reply` is the visible answer text, `replies` the raw reply slots. Both are persisted while the
+  // turn streams, so a running quest may already carry partial text.
+  reply?: string | null;
+  replies?: string[];
+  // A failed turn still finishes `status: 'done'` with the explanation in the reply text, so
+  // `type: 'error'` is the only reliable failure signal; `errorCode` names the reason only for the
+  // billing failures that have one and its absence never means success.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
+  // Generated-file basenames, and `files` resolves each to a ready-to-use URL (empty when the
+  // server has no CDN configured).
+  images?: string[];
+  files?: GeneratedFile[];
   // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).
   promptMeta?: { citables?: RawCitable[]; [key: string]: unknown } | null;
   [key: string]: unknown;
@@ -117,6 +137,16 @@ export interface RawDataLake {
   [key: string]: unknown;
 }
 
+/** Arguments for POST /api/ai/generate-image; a subset of `GenerateImageRequestBodySchema`. */
+export interface GenerateImageArgs {
+  prompt: string;
+  model: string;
+  size?: string;
+  notebookId?: string;
+  projectId?: string;
+  promptResolution?: ImagePromptResolution;
+}
+
 export interface RawProject {
   id: string;
   name?: string;
@@ -146,6 +176,17 @@ export interface ArtifactWithContent {
   artifact: RawArtifact;
   content?: unknown;
 }
+
+/**
+ * A Briefcase prompt. Catalog entries are metadata only; `promptText` ships only
+ * on the by-id fetch. Name/description are picked from the stored
+ * `IBriefcasePrompt` so an upstream rename is a compile error here, not a silent
+ * passthrough.
+ */
+export type RawBriefcasePrompt = Pick<IBriefcasePrompt, 'name' | 'description'> & {
+  id: string;
+  promptText?: string;
+};
 
 /**
  * Typed wrapper over {@link ApiClient} exposing exactly the Bike4Mind REST
@@ -195,6 +236,19 @@ export class B4mApiClient {
     });
   }
 
+  async renameNotebook(notebookId: string, name: string): Promise<RawNotebook> {
+    return this.client.put<RawNotebook>(notebookPath(notebookId), { name });
+  }
+
+  /** Returns the new (cloned) notebook. */
+  async cloneNotebook(notebookId: string): Promise<RawNotebook> {
+    return this.client.post<RawNotebook>(`${notebookPath(notebookId)}/clone`, {});
+  }
+
+  async deleteNotebook(notebookId: string): Promise<SessionDeleteResponse> {
+    return this.client.delete<SessionDeleteResponse>(notebookPath(notebookId), { maxRedirects: 0 });
+  }
+
   /**
    * GET /api/v1/data-lakes is cursor-paginated (flat `limit`/`cursor` params,
    * `{ data, next_cursor }` body), so `toList` does not apply.
@@ -214,8 +268,8 @@ export class B4mApiClient {
     message: string;
     model?: string;
     systemPrompt?: string;
-  }): Promise<ChatWaitResponse> {
-    return this.client.post<ChatWaitResponse>('/api/chat', {
+  }): Promise<ChatAckResponse> {
+    return this.client.post<ChatAckResponse>('/api/chat', {
       // No notebookId means "start a fresh conversation": without newConversation a JWT caller
       // would post into the user's last-opened notebook (the very context bleed this endpoint was
       // fixed to remove for API keys). The new notebook's id comes back in the response.
@@ -223,7 +277,9 @@ export class B4mApiClient {
       message: args.message,
       ...(args.model ? { model: args.model } : {}),
       ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),
-      wait: true,
+      // Queue the turn and poll its quest rather than hold one request open for the whole
+      // completion, so the tool can report progress and honour cancellation while it waits.
+      wait: false,
     });
   }
 
@@ -297,6 +353,17 @@ export class B4mApiClient {
       }
       throw error;
     }
+  }
+
+  async generateImage(args: GenerateImageArgs): Promise<GenerateImageResponse> {
+    return this.client.post<GenerateImageResponse>('/api/ai/generate-image', {
+      prompt: args.prompt,
+      model: args.model,
+      ...(args.size ? { size: args.size } : {}),
+      ...(args.notebookId ? { sessionId: args.notebookId } : {}),
+      ...(args.projectId ? { projectId: args.projectId } : {}),
+      ...(args.promptResolution ? { prompt_resolution: args.promptResolution } : {}),
+    });
   }
 
   /**
@@ -400,6 +467,32 @@ export class B4mApiClient {
       params: { includeContent: 'true' },
     });
   }
+
+  /**
+   * POST /api/briefcase/catalog: a key -> prompts map, one entry per query key.
+   *
+   * The route runs csrfProtection, which exempts API-key requests but rejects a
+   * login (JWT bearer) request that carries no Origin - and Node sends none. CSRF
+   * defends browsers, so a non-browser client naming the backend's own origin is
+   * the intended pass, not a bypass.
+   */
+  async getBriefcaseCatalog(
+    queries: readonly PromptBatchQueryType[]
+  ): Promise<Record<string, RawBriefcasePrompt[] | undefined>> {
+    const result = await this.client.post<{ catalog: Record<string, RawBriefcasePrompt[]> }>(
+      '/api/briefcase/catalog',
+      { queries },
+      { headers: { Origin: new URL(this.baseURL).origin } }
+    );
+    return result.catalog;
+  }
+
+  async getBriefcasePrompt(promptId: string): Promise<RawBriefcasePrompt> {
+    const result = await this.client.get<{ prompt: RawBriefcasePrompt }>(
+      `/api/briefcase/prompts/${encodeURIComponent(promptId)}`
+    );
+    return result.prompt;
+  }
 }
 
 /**
@@ -428,6 +521,13 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       if ((error.response?.data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
         return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
       }
+      // csrfProtection answers 403 when no Origin matches the deployment's APP_URL and
+      // names the expected origin in the body - the actual fix for a login (JWT) caller,
+      // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
+      // The match is wording-based: must stay in sync with the ForbiddenError messages in
+      // apps/client/server/middlewares/csrfProtection.ts.
+      const csrfMessage = extractServerMessage(error.response?.data);
+      if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
       const base = "API key forbidden: check the key's scopes and account access";
       return scope ? `${base} (recommended scope: ${scope})` : base;
     }
@@ -494,7 +594,7 @@ function decodeArrayBufferErrorBody(error: unknown): unknown {
  * to a whole, non-negative number of seconds. Returns undefined when the header is
  * absent or parses as neither, so callers can omit the retry hint entirely.
  */
-function parseRetryAfterSeconds(value: unknown): number | undefined {
+export function parseRetryAfterSeconds(value: unknown): number | undefined {
   if (value === undefined || value === null) return undefined;
   const raw = String(value).trim();
   if (/^\d+$/.test(raw)) return Number(raw);

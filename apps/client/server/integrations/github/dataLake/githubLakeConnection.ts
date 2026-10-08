@@ -43,7 +43,8 @@ import {
   BadRequestError,
   ConflictError,
   ForbiddenError,
-  InternalServerError,
+  HTTPError,
+  HttpStatus,
   NotFoundError,
 } from '@server/utils/errors';
 import { Resource } from 'sst';
@@ -72,7 +73,7 @@ export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state'
 /** Files purged per revoke-queue receive (revoke and disconnect alike), sized to finish well inside its 10-minute timeout (infra/queues.ts). */
 export const REVOKE_PURGE_SLICE_SIZE = 1000;
 
-/** The githubLakeRevokeQueue message (queueHandlers/githubLakeRevoke.ts parses the same shape). */
+/** The githubLakeRevokeQueue message (apps/workers/src/queueHandlers/githubLakeRevoke.ts parses the same shape). */
 export type GitHubLakeRevokeMessage = { connectionId: string; installationId: number };
 
 type GitHubLakeStatePayload = BaseStatePayload & { userId: string; dataLakeId: string };
@@ -120,7 +121,14 @@ export function toGitHubLakeConnectionResponse(
 
 export function requireGitHubLakeAppConfig(config: GitHubLakeAppConfig | null): GitHubLakeAppConfig {
   if (!config) {
-    throw new InternalServerError('The data-lake GitHub App is not configured on this deployment');
+    // 503 + expected: an unprovisioned App is a deployment state to fix, not a server fault to page
+    // on; the message reaches the connect UI's toast verbatim.
+    const error = new HTTPError(
+      HttpStatus.ServiceUnavailable,
+      'GitHub App not configured: the data-lake GitHub App credentials are not set on this deployment.'
+    );
+    error.expected = true;
+    throw error;
   }
   return config;
 }

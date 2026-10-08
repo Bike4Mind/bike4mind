@@ -1,10 +1,11 @@
-import { Alert, Box, Button, Divider, Link, Sheet, Typography } from '@mui/joy';
+import { Alert, Box, Button, Divider, Link, Sheet, ToggleButtonGroup, Typography } from '@mui/joy';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useState } from 'react';
 import { getApiReferenceContent } from './content/apiReferenceContent';
 import { getQuickstartContent } from './content/quickstartContent';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 
 const markdownStyles = {
   '& h1': { fontSize: '1.8rem', fontWeight: 700, mt: 3, mb: 2 },
@@ -61,14 +62,25 @@ const markdownStyles = {
   },
 };
 
+type View = 'docs' | 'full' | 'quickstart';
+
+const VIEWS: { value: View; label: string }[] = [
+  { value: 'docs', label: 'Interactive Docs' },
+  { value: 'full', label: 'Auth & Unmigrated Endpoints' },
+  { value: 'quickstart', label: 'Claude Code Quickstart' },
+];
+
 const ApiReferenceTab = () => {
-  const [view, setView] = useState<'full' | 'quickstart'>('full');
+  const [view, setView] = useState<View>('docs');
+  const scopes = useGenericApiKeyScopes();
 
   return (
-    <Box sx={{ p: 3, height: '100%', overflow: 'auto' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+    <Box sx={{ p: 3, height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+      <Box
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 3 }}
+      >
         <Typography level="h3">API Reference</Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
           <Button
             component="a"
             href={ExternalLinks.apiDocs}
@@ -79,7 +91,7 @@ const ApiReferenceTab = () => {
             size="sm"
             data-testid="api-reference-open-docs-btn"
           >
-            Interactive Docs
+            Open in New Tab
           </Button>
           <Button
             component="a"
@@ -94,65 +106,62 @@ const ApiReferenceTab = () => {
             Download OpenAPI Spec
           </Button>
           <Divider orientation="vertical" />
-          <Sheet
-            variant={view === 'full' ? 'solid' : 'outlined'}
-            color={view === 'full' ? 'primary' : 'neutral'}
-            sx={{
-              px: 2,
-              py: 0.75,
-              borderRadius: 'md',
-              cursor: 'pointer',
-              fontWeight: view === 'full' ? 600 : 400,
-              fontSize: '0.875rem',
-            }}
-            onClick={() => setView('full')}
-          >
-            Full API Reference
-          </Sheet>
-          <Sheet
-            variant={view === 'quickstart' ? 'solid' : 'outlined'}
-            color={view === 'quickstart' ? 'primary' : 'neutral'}
-            sx={{
-              px: 2,
-              py: 0.75,
-              borderRadius: 'md',
-              cursor: 'pointer',
-              fontWeight: view === 'quickstart' ? 600 : 400,
-              fontSize: '0.875rem',
-            }}
-            onClick={() => setView('quickstart')}
-          >
-            Claude Code Quickstart
-          </Sheet>
+          <ToggleButtonGroup size="sm" value={view} onChange={(_e, v) => v && setView(v as View)}>
+            {VIEWS.map(({ value, label }) => (
+              <Button key={value} value={value} data-testid={`api-reference-view-${value}-toggle`}>
+                {label}
+              </Button>
+            ))}
+          </ToggleButtonGroup>
         </Box>
       </Box>
       {view === 'full' && (
         // This reference is hand-maintained (apiReferenceContent.ts) and is not
         // generated from the code, so it can lag reality. Point readers at the
-        // generated, drift-gated spec for endpoints that have one. Removed as the
-        // hand-written surface is migrated onto the contract pattern.
+        // generated, drift-gated spec (the Interactive Docs view) for endpoints that
+        // have one. Removed as the hand-written surface is migrated onto contracts.
         <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-reference-drift-banner">
           <Typography level="body-sm">
-            This reference is hand-maintained and may lag the code. Where an endpoint has a contract, the{' '}
+            This reference is hand-maintained and may lag the code. Where an endpoint has a contract, the Interactive
+            Docs view (
             <Link
               href={ExternalLinks.apiDocs}
               target="_blank"
               rel="noopener noreferrer"
               data-testid="api-reference-drift-docs-link"
             >
-              generated interactive API docs
-            </Link>{' '}
-            are authoritative; this page covers the endpoints that do not have one yet.
+              open in a new tab
+            </Link>
+            ) is authoritative; this page covers the endpoints that do not have one yet.
           </Typography>
         </Alert>
       )}
-      <Sheet variant="outlined" sx={{ p: 3, borderRadius: 'lg', ...markdownStyles }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {view === 'full'
-            ? getApiReferenceContent(window.location.origin)
-            : getQuickstartContent(window.location.origin)}
-        </ReactMarkdown>
-      </Sheet>
+      {view === 'docs' ? (
+        // Same-origin frame of the Scalar page, which ships its own CSP (pages/api/v1/docs.ts).
+        // Mounted only while active so its bundle loads on demand.
+        <Box
+          component="iframe"
+          src={ExternalLinks.apiDocs}
+          title="API reference"
+          data-testid="api-reference-docs-iframe"
+          sx={{
+            flex: 1,
+            minHeight: 480,
+            width: '100%',
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: 'lg',
+          }}
+        />
+      ) : (
+        <Sheet variant="outlined" sx={{ p: 3, borderRadius: 'lg', ...markdownStyles }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {view === 'full'
+              ? getApiReferenceContent(window.location.origin, scopes)
+              : getQuickstartContent(window.location.origin)}
+          </ReactMarkdown>
+        </Sheet>
+      )}
     </Box>
   );
 };

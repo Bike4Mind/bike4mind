@@ -373,6 +373,7 @@ export const StreamedChatCompletionAction = z.object({
       replies: z.array(z.string()).optional(),
       images: z.array(z.string()).optional(),
       videos: z.array(z.string()).optional(),
+      videoJobIds: z.array(z.string()).optional(),
       // Derived from CHAT_HISTORY_ITEM_TYPES so the WebSocket payload cannot publish a
       // narrower quest-type vocabulary than the REST surfaces (schemas/chat.ts) do.
       type: z.enum(CHAT_HISTORY_ITEM_TYPES),
@@ -1509,6 +1510,10 @@ export const ReconnectResultAction = z.object({
   action: z.literal('reconnect_result'),
   found: z.boolean(),
   executionId: z.string().optional(),
+  // The session the found run belongs to, so the client stamps it from the
+  // response rather than correlating responses with requests. Absent on
+  // `found: false`, and on frames from servers that predate the echo.
+  sessionId: z.string().optional(),
   // Same enum reasoning as `ChildExecutionSnapshotSchema.status` - a free
   // string forced the client to re-narrow on every read. `.optional()` because
   // a `found: false` frame omits it.

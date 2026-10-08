@@ -350,7 +350,7 @@ const imageGenerationQueue = new sst.aws.Queue('imageGenerationQueue', {
 });
 const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/imageGeneration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/imageGeneration.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -401,7 +401,7 @@ const imageEditQueue = new sst.aws.Queue('imageEditQueue', {
 });
 const imageEditQueueSubscription = imageEditQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/imageEdit.dispatch',
+    handler: 'apps/workers/src/queueHandlers/imageEdit.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -777,7 +777,7 @@ const questExportQueue = new sst.aws.Queue('questExportQueue', {
 });
 const questExportQueueSubscription = questExportQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/questExport.dispatch',
+    handler: 'apps/workers/src/queueHandlers/questExport.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     memory: '1024 MB',
@@ -931,7 +931,7 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
 
 const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/driveLakeIngest.dispatch',
+    handler: 'apps/workers/src/queueHandlers/driveLakeIngest.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -981,7 +981,7 @@ const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscrib
 
 const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/githubLakeIngest.dispatch',
+    handler: 'apps/workers/src/queueHandlers/githubLakeIngest.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -999,7 +999,7 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
 
 const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/githubLakeRevoke.dispatch',
+    handler: 'apps/workers/src/queueHandlers/githubLakeRevoke.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,

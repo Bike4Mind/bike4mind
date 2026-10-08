@@ -36,6 +36,8 @@ export type VideoModelCapabilities = {
   aspectRatios: readonly AspectRatio[];
   resolutions: readonly ResolutionTier[];
   defaults: { durationSeconds: number; aspectRatio: AspectRatio; resolution: ResolutionTier };
+  // Rough wall-clock render time, only used to set the agent's expectation. Not part of the public API.
+  typicalRenderSeconds: number;
   audio: 'always' | 'optional' | 'none';
   pricing: VideoPricing;
   // Admin setting `videoGeneration.enabledModels[id]` overrides this.

@@ -181,8 +181,8 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
   // because this ledger belief WINS the union de-dup against its memento twin (mergeStores keeps the
   // first store's belief and only borrows fields it is missing), a stale vector here shadows the
   // twin's freshly re-embedded one. Dropping it is what lets the fresh memento vector through.
-  // The ledger cannot be re-embedded in place - it is append-only - so this gate is permanent, not a
-  // migration shim.
+  // Permanent, not a migration shim: the ledger backfill (migrateLedgerVectorsForPrincipal) only
+  // repairs what an operator has run it over.
   const embedding =
     dek && d.embeddingCipher && d.embeddingIv && d.embeddingTag && d.embeddingModel === MEMENTO_EMBEDDING_ID
       ? (decryptVector(dek, { cipher: d.embeddingCipher, iv: d.embeddingIv, tag: d.embeddingTag }) ?? undefined)
@@ -222,7 +222,7 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
  * this fetch small.
  *
  * A vector from another embedding model is skipped for the same reason the memento read path skips one:
- * cosine across two models' spaces is noise, and the ledger cannot be re-embedded in place.
+ * cosine across two models' spaces is noise, until `migrateLedgerVectorsForPrincipal` rewrites it.
  */
 async function attachEmbeddings(
   deps: { ledger: Pick<LedgerRepo, 'listEmbeddings'>; ownerUserId: string },

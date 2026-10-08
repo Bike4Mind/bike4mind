@@ -65,6 +65,26 @@ vi.mock('@bike4mind/database', async () => {
 
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 
+vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({
+  buildVideoToolConfig: vi.fn(async () => ({ usableModels: ['test-video'], createJob: vi.fn() })),
+}));
+
+describe('questProcessor getVideoToolConfigResolver', () => {
+  it('offers no video resolver on an API-key turn', async () => {
+    const { getVideoToolConfigResolver } = await import('./questProcessor');
+    expect(getVideoToolConfigResolver('key-1', 'u1')).toBeUndefined();
+  }, 120_000);
+
+  it('offers a video resolver on a session turn', async () => {
+    const { getVideoToolConfigResolver } = await import('./questProcessor');
+    const { buildVideoToolConfig } = await import('@server/videoGenerations/buildVideoToolConfig');
+    const resolver = getVideoToolConfigResolver(undefined, 'u1');
+    expect(resolver).toBeTypeOf('function');
+    await resolver?.();
+    expect(buildVideoToolConfig).toHaveBeenCalledWith('u1', expect.anything());
+  }, 120_000);
+});
+
 describe('questProcessor getStaticOptions', () => {
   it('wires the save_content_to_data_lake audit adapters', async () => {
     // The handler's transitive import graph (services + database + slack) is heavy enough

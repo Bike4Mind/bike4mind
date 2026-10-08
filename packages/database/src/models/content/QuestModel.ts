@@ -582,6 +582,7 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     },
     images: { type: [String], required: false },
     videos: { type: [String], required: false },
+    videoJobIds: { type: [String], default: undefined },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -1120,6 +1121,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           replies: 1,
           images: 1,
           videos: 1,
+          videoJobIds: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1216,6 +1218,17 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     await this.model.updateOne({ agentExecutionId }, { $addToSet: { images: { $each: images } } });
   }
 
+  /**
+   * Append video job ids to a chat Quest the moment each job is created. `$addToSet` makes a
+   * replayed tool call a no-op. Whole-quest saves keep the id because the caller merges it into the
+   * in-memory quest first (see ToolBuilder's onStatusUpdate); only a save already in flight can
+   * briefly drop a second id, and the next save restores it. No-op if no Quest matches.
+   */
+  async addVideoJobIds(questId: string, jobIds: string[]): Promise<void> {
+    if (!jobIds.length) return;
+    await this.model.updateOne({ _id: convertId(questId) }, { $addToSet: { videoJobIds: { $each: jobIds } } });
+  }
+
   // Cheap existence check (Mongo `exists` returns just the `_id` of the first
   // match). The voice proxy uses this to decide whether to emit an ElevenLabs
   // buffer chunk on the very first turn of a fresh session (no prior quests).
@@ -1269,6 +1282,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           replies: 1,
           images: 1,
           videos: 1,
+          videoJobIds: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1552,7 +1566,7 @@ export const questRepository = new QuestRepository(Quest);
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
 >;
 
 /**
@@ -1566,5 +1580,5 @@ export type UnfinishedQuestView = { id: string } & Pick<
  */
 export type StaleRunningQuestView = { id: string; updatedAt: Date } & Pick<
   IChatHistoryItem,
-  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
 >;

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { GENERIC_MODAL_API_KEY_SCOPES, DEDICATED_FLOW_SCOPES } from '@client/app/constants/apiKeyScopes';
+import {
+  GENERIC_MODAL_API_KEY_SCOPES,
+  DEDICATED_FLOW_SCOPES,
+  genericApiKeyScopesFor,
+} from '@client/app/constants/apiKeyScopes';
 import { getApiReferenceContent, renderScopeTableRows } from './apiReferenceContent';
 
-const API_REFERENCE_CONTENT = getApiReferenceContent('https://b4m.test');
+const API_REFERENCE_CONTENT = getApiReferenceContent('https://b4m.test', GENERIC_MODAL_API_KEY_SCOPES);
 
 const scopesSection = (): string => {
   const start = API_REFERENCE_CONTENT.indexOf('### Scopes');
@@ -24,11 +28,17 @@ describe('API reference scopes table', () => {
   it('documents every scope an endpoint section says it requires', () => {
     const listed = tableScopes();
     const requiredLines = API_REFERENCE_CONTENT.split('\n').filter(line =>
-      line.startsWith('**Required API-key scope:**')
+      /^\*\*Required API-key scope\b[^*]*:\*\*/.test(line)
     );
-    const required = requiredLines.flatMap(line => [...line.matchAll(/`([^`]+)`/g)].map(match => match[1]));
+    // Only the tokens after the label: the "scope for refineText" form names an endpoint, not a scope.
+    const required = requiredLines.flatMap(line =>
+      [...line.slice(line.indexOf(':**')).matchAll(/`([^`]+)`/g)].map(match => match[1])
+    );
 
-    expect(required).toContain('me:read');
+    // Pin both label forms (plain and "scope for X"); the tokens alone would not catch a dropped line.
+    expect(requiredLines).toHaveLength(2);
+    expect(requiredLines.some(line => line.includes('for `refineText`'))).toBe(true);
+    expect(required).toContain('notebooks:read');
     for (const scope of required) {
       expect(listed).toContain(scope);
     }
@@ -41,8 +51,12 @@ describe('API reference scopes table', () => {
     }
   });
 
+  it('names no premium scope when built from the list offered without Opti access', () => {
+    expect(getApiReferenceContent('https://b4m.test', genericApiKeyScopesFor(false))).not.toContain('optihashi:');
+  });
+
   it('escapes pipes so a description cannot split its table row', () => {
-    for (const row of renderScopeTableRows().split('\n')) {
+    for (const row of renderScopeTableRows(GENERIC_MODAL_API_KEY_SCOPES).split('\n')) {
       expect(row.replaceAll('\\|', '').split('|')).toHaveLength(4);
     }
   });

@@ -23,10 +23,11 @@ describe('ModelDiscoveryRunRepository', () => {
   });
 
   it('round-trips a run report', async () => {
-    await ModelDiscoveryRun.create(run({ unmatchedIds: ['grok-z'] }));
+    await ModelDiscoveryRun.create(run({ unmatchedIds: ['grok-z'], frozenProfileIds: ['us.anthropic.claude-x-v1:0'] }));
 
     const latest = await modelDiscoveryRunRepository.latestRun();
     expect(latest).toMatchObject({ trigger: 'cron', host: 'hosted', status: 'ok', unmatchedIds: ['grok-z'] });
+    expect(latest?.frozenProfileIds).toEqual(['us.anthropic.claude-x-v1:0']);
     expect(latest?.sources?.[0]).toMatchObject({ name: 'anthropic', ok: true, durationMs: 120 });
     // The parser-shift guard compares against this on the next run, so a report
     // that loses it silently disables the guard.
@@ -37,11 +38,12 @@ describe('ModelDiscoveryRunRepository', () => {
   it('separates the newest run from the newest successful one, per host', async () => {
     await ModelDiscoveryRun.create(run({ startedAt: new Date('2026-07-01T00:00:00Z'), status: 'ok' }));
     await ModelDiscoveryRun.create(run({ startedAt: new Date('2026-07-02T00:00:00Z'), status: 'failed' }));
+    await ModelDiscoveryRun.create(run({ startedAt: new Date('2026-07-02T12:00:00Z'), status: 'partial' }));
     await ModelDiscoveryRun.create(
       run({ startedAt: new Date('2026-07-03T00:00:00Z'), status: 'ok', host: 'selfhost' })
     );
 
-    expect((await modelDiscoveryRunRepository.latestRun('hosted'))?.status).toBe('failed');
+    expect((await modelDiscoveryRunRepository.latestRun('hosted'))?.status).toBe('partial');
     expect((await modelDiscoveryRunRepository.lastSuccessfulRun('hosted'))?.startedAt).toEqual(
       new Date('2026-07-01T00:00:00Z')
     );
@@ -90,6 +92,7 @@ describe('ModelDiscoveryRunRepository', () => {
         lifecycleTransitions: [
           { modelId: 'claude-x', from: 'active', to: 'deprecated', signal: 'absence', autoApplied: false },
         ],
+        frozenProfileIds: ['us.anthropic.claude-x-v1:0'],
         catalogDiff: [
           {
             modelId: 'claude-y',
@@ -131,6 +134,7 @@ describe('ModelDiscoveryRunRepository', () => {
     // overlaps on their own.
     expect(stored?.changes?.flagged).toEqual(['gpt-5.6-luna', 'claude-y']);
     expect(stored?.changes?.operatorConflicts).toEqual(['claude-y']);
+    expect(stored?.frozenProfileIds).toEqual(['us.anthropic.claude-x-v1:0']);
     expect(stored?.id).toBe(created.id);
     // The list carries counts, not bodies: six bounded detail arrays per run over
     // twenty runs is megabytes on an endpoint the status card polls.
@@ -138,6 +142,7 @@ describe('ModelDiscoveryRunRepository', () => {
     expect(listed.priceFlags).toBeUndefined();
     expect(listed.priceOverrides).toBeUndefined();
     expect(listed.catalogDiff).toBeUndefined();
+    expect(listed.frozenProfileIds).toBeUndefined();
     expect(listed.changes?.flagged).toEqual(['gpt-5.6-luna', 'claude-y']);
   });
 

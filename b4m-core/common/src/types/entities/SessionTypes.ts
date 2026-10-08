@@ -194,6 +194,9 @@ export interface IChatHistoryItem {
   /** Path to the video in the storage bucket */
   videos?: string[];
 
+  /** Ids of the video generation jobs this quest started */
+  videoJobIds?: string[];
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
@@ -706,6 +709,12 @@ export interface ISession {
    * attaching a lake file does not silently re-scope a session the user scoped by hand.
    */
   lakeScopeExplicit?: boolean;
+  /**
+   * Whether a lake-scoped chat also grounds on the user's own library (owned, shared and group
+   * files) alongside the lake. Unset falls back to "only when no lake is named", which is the
+   * pre-existing behavior; resolve it through effectiveIncludeLibraryFiles, never read it raw.
+   */
+  includeLibraryFiles?: boolean;
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
    * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its

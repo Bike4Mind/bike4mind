@@ -1,7 +1,8 @@
+import { IRapidReplyMapping, IRapidReplyMappingRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 interface RapidReplyMappingCacheEntry {
-  data: any; // RapidReplyMapping type
+  data: IRapidReplyMapping | null;
   timestamp: number;
   ttl: number;
 }
@@ -109,7 +110,10 @@ export class RapidReplyMappingsCache {
   /**
    * Get rapid reply mapping for a model with caching
    */
-  async getRapidReplyMapping(primaryModel: string, db: any): Promise<any> {
+  async getRapidReplyMapping(
+    primaryModel: string,
+    db: { rapidReply: { mappings: Pick<IRapidReplyMappingRepository, 'findByMainModel'> } }
+  ): Promise<IRapidReplyMapping | null> {
     const cacheKey = `rapidmapping:${primaryModel}`;
     const cached = this.cache.get(cacheKey);
 

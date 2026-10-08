@@ -23,7 +23,7 @@ import { Ollama, Message as OllamaMessage, ModelResponse, Options as OllamaOptio
 import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -444,6 +444,30 @@ export class OllamaBackend implements ICompletionBackend {
       // than issuing up to maxToolCalls more model calls and tool executions.
       if (options.abortSignal?.aborted) {
         await (artifactGuard?.callback ?? callback)([''], { inputTokens, outputTokens, toolsUsed: executedToolsUsed });
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+        return;
+      }
+
+      // Content is only the answer when the calls were native; a parsed call IS the content (JSON).
+      // Tool rounds buffer content, so unlike streaming adapters it is delivered here.
+      if (
+        round.toolCalls.length > 0 &&
+        shouldEndTurnAfterTools(
+          toolCalls.map(tc => tc.name),
+          options.tools,
+          round.content
+        )
+      ) {
+        this._logger.info('[Tool Execution] Ending turn: answer already produced, only end-of-turn tools ran', {
+          model,
+          toolsExecuted: toolCalls.map(tc => tc.name),
+        });
+        await (artifactGuard?.callback ?? callback)([round.content], {
+          inputTokens,
+          outputTokens,
+          toolsUsed: executedToolsUsed,
+          stopReason: 'tool_use',
+        });
         if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
         return;
       }

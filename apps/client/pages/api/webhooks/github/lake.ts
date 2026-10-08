@@ -12,7 +12,7 @@
  *   stages and in self-host, and only while its admin flag is on. Elsewhere the next push or a manual
  *   Sync picks it up.
  * - `installation.deleted` / `installation_repositories.removed`: the App lost access, so each
- *   affected connection is queued on githubLakeRevokeQueue for purge (queueHandlers/githubLakeRevoke.ts).
+ *   affected connection is queued on githubLakeRevokeQueue for purge (apps/workers/src/queueHandlers/githubLakeRevoke.ts).
  *   It only enqueues: GitHub never redelivers on its own and a live sync makes the purge 409, so the
  *   queue owns the retries. The affected connections are pinned per delivery id, so a redelivery
  *   re-sends the same revokes and never reaches a connection made after the original event.

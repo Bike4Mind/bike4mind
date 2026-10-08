@@ -105,8 +105,8 @@ export interface CompletionInfo {
   stopReason?: string;
   /**
    * Set when this chunk is NOT the assistant's prose reply - reasoning, or a raw tool
-   * artifact. Public surfaces drop the text of such a frame; first-party surfaces ignore
-   * the field and keep receiving it. See {@link StreamChannel}.
+   * artifact. buildSSEEvent drops the text of a reasoning frame; buildPublicSSEEvent also
+   * drops tool-artifact text. See {@link StreamChannel}.
    */
   channel?: StreamChannel;
 }
@@ -116,13 +116,18 @@ export interface CompletionInfo {
  * @param text - Sparse array indexed by the provider's content-block/choice index (may
  *   contain null/undefined/holes). NOT [thinking, response] - see
  *   {@link resolveResponseText} for the real shape. This positional read is kept for
- *   first-party surfaces that already depend on it; public callers use
- *   {@link buildPublicSSEEvent}, which resolves the whole array.
+ *   the authenticated API/CLI streams that already depend on it; anonymous callers use
+ *   {@link buildPublicSSEEvent}, which resolves the whole array. Either way the text of a
+ *   reasoning-tagged frame is dropped.
  * @param info - Completion metadata (tools, usage)
  * @returns SSE event object
  */
 export function buildSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  const textContent = text[1] || text[0] || '';
+  // A reasoning-tagged frame is never reply prose, and no caller of this builder (the public
+  // completions API, its WebSocket twin, the CLI) shows it: blank its text so tagged reasoning
+  // never reaches an API consumer. Usage, tools and thinking blocks still ride the frame. Families
+  // that inline reasoning untagged (inlinesReasoningIntoText) are not covered by this.
+  const textContent = info?.channel === 'reasoning' ? '' : text[1] || text[0] || '';
 
   const event: SSEContentEvent = {
     type: info?.toolsUsed && info.toolsUsed.length > 0 ? 'tool_use' : 'content',

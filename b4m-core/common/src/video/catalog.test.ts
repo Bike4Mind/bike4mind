@@ -62,6 +62,7 @@ describe('gemini-omni-1.1-flash', () => {
       aspectRatios: ['16:9', '9:16'],
       resolutions: ['720p'],
       defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '720p' },
+      typicalRenderSeconds: 90,
       audio: 'always',
       pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1014 } },
       defaultEnabled: false,
@@ -110,6 +111,7 @@ describe('grok-imagine-video-1.5', () => {
       aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'],
       resolutions: ['480p', '720p'],
       defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '480p' },
+      typicalRenderSeconds: 60,
       audio: 'always',
       pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.14 } },
       defaultEnabled: true,
@@ -172,6 +174,7 @@ describe('veo-3.1-fast-generate-preview', () => {
       aspectRatios: ['16:9', '9:16'],
       resolutions: ['720p'],
       defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
+      typicalRenderSeconds: 90,
       audio: 'always',
       pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
       defaultEnabled: true,
@@ -199,4 +202,10 @@ describe('veo-3.1-fast-generate-preview', () => {
       code: 'unsupported_aspect_ratio',
     });
   });
+});
+
+it('gives every model a positive typical render time', () => {
+  for (const id of VIDEO_MODEL_IDS) {
+    expect(VIDEO_MODEL_CATALOG[id].typicalRenderSeconds).toBeGreaterThan(0);
+  }
 });

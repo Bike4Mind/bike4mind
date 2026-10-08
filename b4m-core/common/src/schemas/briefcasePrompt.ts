@@ -101,4 +101,18 @@ export const BriefcaseBatchRequestSchema = z.object({
 });
 export type BriefcaseBatchRequestType = z.infer<typeof BriefcaseBatchRequestSchema>;
 
+/**
+ * The default catalog layout: one group per seeded system category (the `type`
+ * discriminator set by the briefcase seed migration) plus the caller's personal
+ * prompts. Shared by the web launcher panel and the CLI's MCP prompts surface so
+ * both list the same catalog. `as const` lets a consumer derive the key union
+ * (e.g. for a label map) instead of restating it.
+ */
+export const BRIEFCASE_CATALOG_QUERIES = [
+  { key: 'general', type: 'general' },
+  { key: 'writing', type: 'writing' },
+  { key: 'learning', type: 'learning' },
+  { key: 'personal', personal: true },
+] as const satisfies readonly PromptBatchQueryType[];
+
 export { VISIBILITY_SCOPES_MAX };
