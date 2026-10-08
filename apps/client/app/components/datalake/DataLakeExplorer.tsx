@@ -20,6 +20,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
+import useSetIncludeLibraryFiles from '@client/app/hooks/useSetIncludeLibraryFiles';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
 import useSessionLayout, { openFileInChatViewer, setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
@@ -274,6 +275,8 @@ export default function DataLakeExplorer({
     isError: lakesError,
     refetch: refetchLakes,
   } = useGetDataLakesWithRetrievability(currentSessionId);
+  const lakeFileTagPrefixes = useMemo(() => lakes?.map(l => l.fileTagPrefix) ?? [], [lakes]);
+  const libraryFiles = useSetIncludeLibraryFiles(lakeFileTagPrefixes);
   const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
   const currentUserId = useUser(s => s.currentUser?.id);
   const canDeleteFile = useCallback((file: IFabFileDocument) => resolveManageableLake(file, lakes) != null, [lakes]);
@@ -685,17 +688,28 @@ export default function DataLakeExplorer({
                 onCreate={onCreateLake}
                 onDiscover={onDiscover}
               />
-              {soleSelectedLake && <SelectedLakeHeader lake={soleSelectedLake} />}
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
-                  tree cannot report, since it stays browsable so the user can get back out. */}
-              {(selectedLakes.length > 1 || isNoLakeScope) && (
+                  tree cannot report, since it stays browsable so the user can get back out. The
+                  all-lakes scope shows it once a session exists, so its My files choice is visible. */}
+              {(selectedLakes.length > 0 || isNoLakeScope || currentSession) && (
                 <ActiveLakeScopeStrip
                   lakes={selectedLakes}
+                  allLakes={selectedLakes.length === 0 && !isNoLakeScope}
                   onClear={() => handleSelectLakes([])}
                   // From the resolved lakes, not the raw ids, so a stale id is dropped on the way.
                   onRemove={lakeId => handleSelectLakes(selectedLakes.filter(l => l.id !== lakeId).map(l => l.id))}
+                  library={
+                    currentSession
+                      ? {
+                          included: libraryFiles.included,
+                          pending: libraryFiles.isPending,
+                          onToggle: libraryFiles.toggle,
+                        }
+                      : undefined
+                  }
                 />
               )}
+              {soleSelectedLake && <SelectedLakeHeader lake={soleSelectedLake} />}
             </>
           }
           emptySlot={
