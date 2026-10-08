@@ -5,3 +5,4 @@ export * from './grade';
 export * from './provision';
 export * from './auth';
 export * from './run';
+export * from './report';
