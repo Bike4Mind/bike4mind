@@ -11,8 +11,8 @@ export const listWhatsNewContract = defineEndpoint({
   summary: 'List release notes',
   description:
     'Lists published release notes, newest first. Public: no credentials are needed, and the response ' +
-    'is cacheable for a few minutes, so a newly published or withdrawn note can take that long to ' +
-    'show. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until ' +
+    'is cacheable for up to about 15 minutes (5 fresh plus 10 stale-while-revalidate), so a newly ' +
+    'published or withdrawn note can take that long to show. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until ' +
     'it is `null`. Rate limited per client IP.',
   tags: ['Release notes'],
   auth: 'public',

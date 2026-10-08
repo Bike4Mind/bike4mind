@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ConflictError, NotFoundError } from '@server/utils/errors';
 
 export const RELEASE_NOTES_SETTING = 'releaseNotesConfig';
 
@@ -61,4 +61,16 @@ export async function loadReleaseNotesConfig(
   if (parsed.success) return { config: parsed.data, malformed: false };
   logger.warn(`[admin/release-notes] ${RELEASE_NOTES_SETTING} is malformed`, { issues: parsed.error.issues });
   return { config: ReleaseNotesConfigSchema.parse({}), malformed: true };
+}
+
+/**
+ * The current denylist for a route that is about to put text in front of customers. Refuses with 409
+ * while the stored config is malformed, since its defaults carry an empty denylist that would pass anything.
+ */
+export async function loadDenylistOrThrow(logger: Logger): Promise<string[]> {
+  const { config, malformed } = await loadReleaseNotesConfig(logger);
+  if (malformed) {
+    throw new ConflictError('Release notes settings are malformed; save them in admin settings first');
+  }
+  return config.denylist.map(term => term.trim().toLowerCase()).filter(Boolean);
 }

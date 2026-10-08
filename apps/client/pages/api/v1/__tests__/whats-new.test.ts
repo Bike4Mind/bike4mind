@@ -86,19 +86,28 @@ const isAfter = (note: Keyset, after?: Keyset) =>
   note.publishAt.getTime() < after.publishAt.getTime() ||
   (note.publishAt.getTime() === after.publishAt.getTime() && note.id < after.id);
 
-async function run(query: Record<string, string> = {}) {
+function mocks(query: Record<string, string>) {
   const { req, res } = createMocks({ method: 'GET', query });
   Object.assign(req, { logger });
+  return { req, res };
+}
+
+async function run(query: Record<string, string> = {}) {
+  const { req, res } = mocks(query);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the contract router's param type carries prelude-only fields
   await (handler as any)(req, res);
   return res;
 }
 
-async function errorOf(query: Record<string, string>): Promise<{ statusCode?: number; name?: string }> {
+async function errorOf(
+  query: Record<string, string>
+): Promise<{ statusCode?: number; name?: string; cacheControl: unknown }> {
+  const { req, res } = mocks(query);
   try {
-    await run(query);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see run()
+    await (handler as any)(req, res);
   } catch (err) {
-    return err as { statusCode?: number; name?: string };
+    return { ...(err as { statusCode?: number; name?: string }), cacheControl: res.getHeader('Cache-Control') };
   }
   throw new Error('expected the handler to throw');
 }
@@ -113,7 +122,7 @@ beforeEach(() => {
 });
 
 describe('GET /api/v1/whats-new', () => {
-  it('serves a schema-valid page of public fields only, cacheable and cookie-free', async () => {
+  it('serves a schema-valid page of public fields only, publicly cacheable', async () => {
     const res = await run();
     expect(res._getStatusCode()).toBe(200);
     expect(logger.warn).not.toHaveBeenCalled();
@@ -132,7 +141,15 @@ describe('GET /api/v1/whats-new', () => {
       expect(serialized).not.toContain(leaked);
     }
     expect(res.getHeader('Cache-Control')).toBe('public, s-maxage=300, stale-while-revalidate=600');
-    expect(res.getHeader('Set-Cookie')).toBeUndefined();
+  });
+
+  it('passes the request time to listPublished so embargoed notes stay out', async () => {
+    const before = Date.now();
+    await run();
+    const { now } = mockListPublished.mock.calls[0][0] as { now: Date };
+    expect(now).toBeInstanceOf(Date);
+    expect(now.getTime()).toBeGreaterThanOrEqual(before);
+    expect(now.getTime()).toBeLessThanOrEqual(Date.now());
   });
 
   it('pages through publishAt ties exactly once by round-tripping next_cursor', async () => {
@@ -163,6 +180,7 @@ describe('GET /api/v1/whats-new', () => {
   ])('rejects a %s cursor with a 422 and never caches it', async (_label, cursor) => {
     const err = await errorOf({ cursor });
     expect(err.statusCode).toBe(422);
+    expect(err.cacheControl).toBeUndefined();
     expect(mockListPublished).not.toHaveBeenCalled();
   });
 

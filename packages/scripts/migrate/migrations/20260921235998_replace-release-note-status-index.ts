@@ -1,15 +1,15 @@
 import { ReleaseNote } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
-const OLD_INDEX = 'status_1_publishAt_-1';
-const INDEX_NOT_FOUND = 27;
+const OLD_INDEX_KEY = { status: 1, publishAt: -1 };
 
 /**
  * Swap release_notes' { status, publishAt } index for the named { status, publishAt, _id } one the
  * keyset-paged reader and admin lists sort on. Neither autoIndex nor createIndexes drops an index the
  * schema stopped declaring, so the old one is dropped explicitly.
  *
- * Idempotent: a missing old index is ignored and createIndexes is a no-op for existing indexes.
+ * The old index is found by key pattern, not by its auto-derived name, which can differ on DocumentDB.
+ * Idempotent: a missing collection or old index is skipped and createIndexes is a no-op for existing indexes.
  * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), which must stay last.
  */
 const migration: MigrationFile = {
@@ -17,10 +17,16 @@ const migration: MigrationFile = {
   name: 'replace release note status index',
 
   up: async () => {
-    try {
-      await ReleaseNote.collection.dropIndex(OLD_INDEX);
-    } catch (err) {
-      if ((err as { code?: unknown }).code !== INDEX_NOT_FOUND) throw err;
+    const db = ReleaseNote.db.db;
+    if (!db) throw new Error('No active MongoDB connection - cannot check release_notes collection state');
+
+    const collectionExists =
+      (await db.listCollections({ name: ReleaseNote.collection.collectionName }).toArray()).length === 1;
+    if (collectionExists) {
+      const oldIndex = (await ReleaseNote.collection.indexes()).find(
+        index => JSON.stringify(index.key) === JSON.stringify(OLD_INDEX_KEY)
+      );
+      if (oldIndex?.name) await ReleaseNote.collection.dropIndex(oldIndex.name);
     }
     await ReleaseNote.createIndexes();
   },

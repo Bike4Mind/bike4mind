@@ -2,11 +2,13 @@ import { ApiKeyScope, ReleaseNotesConfigSchema } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ConflictError, ForbiddenError } from '@server/utils/errors';
 import { loadReleaseNotesConfig, RELEASE_NOTES_SETTING } from '@server/releaseNotes/adminReleaseNotes';
 
 // Validates only the keys sent; omitted keys keep their stored value (see the merge in PUT).
 const ConfigPatchSchema = ReleaseNotesConfigSchema.partial().strict();
+
+const REQUIRED_KEYS = ['enabled', 'modelId', 'embargoHours', 'denylist'];
 
 const requireAdmin = (user: { isAdmin?: boolean } | undefined) => {
   if (!user?.isAdmin) {
@@ -28,9 +30,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       );
     }
 
-    const { config: stored } = await loadReleaseNotesConfig(req.logger);
+    const { config: stored, malformed } = await loadReleaseNotesConfig(req.logger);
     // Zod still applies .default() under .partial(), so keep only the keys the caller actually sent.
     const sent = new Set(Object.keys(req.body as object));
+    // Merging a partial patch onto the malformed value's defaults would silently empty the denylist.
+    if (malformed && REQUIRED_KEYS.some(key => !sent.has(key))) {
+      throw new ConflictError(`Stored settings are malformed; send the full config (${REQUIRED_KEYS.join(', ')})`);
+    }
     const definedPatch = Object.fromEntries(Object.entries(patch.data).filter(([key]) => sent.has(key)));
     const merged = ReleaseNotesConfigSchema.strict().parse({ ...stored, ...definedPatch });
 

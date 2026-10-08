@@ -4,7 +4,7 @@ import { ApiKeyScope, findDenied, ReleaseNoteItemSchema, scrubCustomerText } fro
 import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { loadReleaseNotesConfig, noteOrThrow, toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
+import { loadDenylistOrThrow, noteOrThrow, toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
 
 const EditSchema = z
   .object({
@@ -30,8 +30,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(async (re
 
   // Same scrub and denylist the generator applies (workers releaseNotes/finalize.ts), so an edit cannot
   // put a PR ref or a denylisted name in front of customers.
-  const { config: notesConfig } = await loadReleaseNotesConfig(req.logger);
-  const denylist = notesConfig.denylist.map(term => term.trim().toLowerCase()).filter(Boolean);
+  const denylist = await loadDenylistOrThrow(req.logger);
   const clean = (field: string, value: string, allowEmpty = false): string => {
     const text = scrubCustomerText(value);
     if (!text && !allowEmpty) throw new BadRequestError(`${field} is empty after removing internal references`);

@@ -191,9 +191,22 @@ describe('ReleaseNoteRepository admin mutations', () => {
   it('unhide restores scheduled with the original publishAt', async () => {
     const publishAt = new Date(NOW.getTime() + HOUR);
     const note = await seed('v1', publishAt, { status: 'hidden' });
-    const result = await releaseNoteRepository.unhide(note.id);
+    const result = await releaseNoteRepository.unhide(note.id, NOW);
     expect(result.kind === 'ok' && result.note.status).toBe('scheduled');
     expect(result.kind === 'ok' && result.note.publishAt.toISOString()).toBe(publishAt.toISOString());
+  });
+
+  it('unhide moves a note whose publishAt passed while hidden to now', async () => {
+    const note = await seed('v1', new Date(NOW.getTime() - 5 * HOUR), { status: 'hidden' });
+    const result = await releaseNoteRepository.unhide(note.id, NOW);
+    expect(result.kind === 'ok' && result.note.publishAt.toISOString()).toBe(NOW.toISOString());
+  });
+
+  it('publishNow moves a hidden note with a past publishAt to now', async () => {
+    const note = await seed('v1', new Date(NOW.getTime() - 5 * HOUR), { status: 'hidden' });
+    const result = await releaseNoteRepository.publishNow(note.id, NOW);
+    expect(result.kind === 'ok' && result.note.status).toBe('scheduled');
+    expect(result.kind === 'ok' && result.note.publishAt.toISOString()).toBe(NOW.toISOString());
   });
 
   it('publishNow pulls a scheduled note forward to now', async () => {

@@ -12,6 +12,7 @@ const m = vi.hoisted(() => ({
   hide: vi.fn(),
   unhide: vi.fn(),
   publishNow: vi.fn(),
+  findById: vi.fn(),
   getSettings: vi.fn(),
   invalidate: vi.fn(),
   upsert: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock('@bike4mind/database', () => ({
     hide: m.hide,
     unhide: m.unhide,
     publishNow: m.publishNow,
+    findById: m.findById,
   },
 }));
 vi.mock('@bike4mind/database/infra', () => ({ AdminSettings: { findOneAndUpdate: m.upsert } }));
@@ -84,7 +86,10 @@ async function call(
 beforeEach(() => {
   vi.clearAllMocks();
   m.getSettings.mockResolvedValue({ releaseNotesConfig: { enabled: true, denylist: ['Acme Corp'], embargoHours: 6 } });
+  m.findById.mockResolvedValue(note());
 });
+
+const MALFORMED = { releaseNotesConfig: '{not json' };
 
 describe('admin guard', () => {
   it.each([
@@ -126,10 +131,10 @@ describe('GET /api/admin/release-notes', () => {
   });
 
   it.each([{ status: 'live' }, { limit: '0' }, { limit: '101' }, { limit: 'abc' }])(
-    'rejects %o with 400',
+    'rejects %o with 422, the same status as a bad cursor',
     async query => {
       const { error } = await call(listHandler, { method: 'GET', query });
-      expect(error?.statusCode).toBe(400);
+      expect(error?.statusCode).toBe(422);
     }
   );
 });
@@ -166,6 +171,17 @@ describe('PATCH /api/admin/release-notes/[id]', () => {
     expect(m.edit).not.toHaveBeenCalled();
   });
 
+  it('refuses with 409 while the stored config is malformed, since its default denylist is empty', async () => {
+    m.getSettings.mockResolvedValueOnce(MALFORMED);
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { summary: 'Built for Acme Corp.' },
+    });
+    expect(error?.statusCode).toBe(409);
+    expect(m.edit).not.toHaveBeenCalled();
+  });
+
   it('rejects a bad id with 400 and maps notFound to 404 and emptyItems to 400', async () => {
     expect(
       (await call(editHandler, { method: 'PATCH', query: { id: 'nope' }, body: { headline: 'x' } })).error?.statusCode
@@ -191,6 +207,32 @@ describe('POST /api/admin/release-notes/[id]/status', () => {
     const { body } = await call(statusHandler, { method: 'POST', query: { id: ID }, body: { action } });
     expect(fn).toHaveBeenCalledWith(ID);
     expect(body.state).toBe(action === 'hide' ? 'hidden' : 'scheduled');
+  });
+
+  it.each([
+    ['unhide', m.unhide],
+    ['publishNow', m.publishNow],
+  ])('%s refuses a note whose text hits the current denylist', async (action, fn) => {
+    m.findById.mockResolvedValueOnce(
+      note({
+        status: 'hidden',
+        items: [{ category: 'new', text: 'Built for ACME corp', importance: 1, sourcePrs: [] }],
+      })
+    );
+    const { error } = await call(statusHandler, { method: 'POST', query: { id: ID }, body: { action } });
+    expect(error?.statusCode).toBe(400);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('refuses to make a note live while the stored config is malformed, but still hides', async () => {
+    m.getSettings.mockResolvedValue(MALFORMED);
+    const live = await call(statusHandler, { method: 'POST', query: { id: ID }, body: { action: 'publishNow' } });
+    expect(live.error?.statusCode).toBe(409);
+    expect(m.publishNow).not.toHaveBeenCalled();
+
+    m.hide.mockResolvedValueOnce({ kind: 'ok', note: note({ status: 'hidden' }) });
+    const hidden = await call(statusHandler, { method: 'POST', query: { id: ID }, body: { action: 'hide' } });
+    expect(hidden.error).toBeUndefined();
   });
 
   it('answers 400 when unhiding a note with no items, 404 when missing, 400 for an unknown action', async () => {
@@ -233,6 +275,17 @@ describe('/api/admin/release-notes/config', () => {
     );
     expect(m.invalidate).toHaveBeenCalledWith('releaseNotesConfig');
     expect(body.config).toEqual(saved);
+  });
+
+  it('a partial PUT over a malformed stored config is refused rather than wiping the denylist', async () => {
+    m.getSettings.mockResolvedValue(MALFORMED);
+    const { error } = await call(configHandler, { method: 'PUT', body: { enabled: false } });
+    expect(error?.statusCode).toBe(409);
+    expect(m.upsert).not.toHaveBeenCalled();
+
+    const full = { enabled: false, modelId: 'gpt-4o-mini', embargoHours: 6, denylist: ['Acme Corp'] };
+    const { body } = await call(configHandler, { method: 'PUT', body: full });
+    expect(body).toEqual({ config: full, malformed: false });
   });
 
   it.each([{ embargoHours: 169 }, { embargoHours: -1 }, { denylist: 'x' }, { surprise: true }])(

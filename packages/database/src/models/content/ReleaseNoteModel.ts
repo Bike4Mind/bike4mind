@@ -174,24 +174,34 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
     return note ? { kind: 'ok', note } : { kind: 'notFound' };
   }
 
-  /** Back to scheduled with its original publishAt; a note with no items is refused. */
-  async unhide(id: string): Promise<ReleaseNoteMutationResult> {
+  /**
+   * Back to scheduled with its original publishAt, or `now` if that has passed, so an unhidden note
+   * never goes live behind cursors readers already hold. A note with no items is refused.
+   */
+  async unhide(id: string, now = new Date()): Promise<ReleaseNoteMutationResult> {
     const note = await this.model.findOneAndUpdate(
       { _id: id, 'items.0': { $exists: true } },
-      { $set: { status: 'scheduled', editedAt: new Date() } },
+      { $set: { status: 'scheduled', editedAt: now }, $max: { publishAt: now } },
       { new: true, runValidators: true }
     );
     return note ? { kind: 'ok', note } : this.notFoundOrEmptyItems(id);
   }
 
   /**
-   * Makes the note live at `now`. $min never moves publishAt later, so an already-live note keeps
-   * its position and existing reader cursors stay valid.
+   * Makes the note live at `now`. An already-live note keeps its publishAt, so its feed position and
+   * existing reader cursors stay valid; a hidden or future one moves to `now`, the top of the feed.
    */
   async publishNow(id: string, now = new Date()): Promise<ReleaseNoteMutationResult> {
+    const hasItems = { 'items.0': { $exists: true } };
+    const live = await this.model.findOneAndUpdate(
+      { _id: id, ...hasItems, status: 'scheduled', publishAt: { $lte: now } },
+      { $set: { editedAt: now } },
+      { new: true, runValidators: true }
+    );
+    if (live) return { kind: 'ok', note: live };
     const note = await this.model.findOneAndUpdate(
-      { _id: id, 'items.0': { $exists: true } },
-      { $set: { status: 'scheduled', editedAt: now }, $min: { publishAt: now } },
+      { _id: id, ...hasItems },
+      { $set: { status: 'scheduled', publishAt: now, editedAt: now } },
       { new: true, runValidators: true }
     );
     return note ? { kind: 'ok', note } : this.notFoundOrEmptyItems(id);

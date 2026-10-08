@@ -3,7 +3,7 @@ import { releaseNoteRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError, UnprocessableEntityError } from '@server/utils/errors';
 import { toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
 
 const QuerySchema = z.object({
@@ -19,7 +19,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
 
   const query = QuerySchema.safeParse(req.query);
   if (!query.success) {
-    throw new BadRequestError(query.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '));
+    throw new UnprocessableEntityError(
+      query.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')
+    );
   }
   const { status, cursor, limit } = query.data;
   // Scoped per status, so a cursor from one filter is refused by another.
