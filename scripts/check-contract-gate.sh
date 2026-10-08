@@ -24,7 +24,9 @@ fi
 
 # v1 files that do not call nextRouteForContract(...).
 # Matching the call (with the open paren) rather than the bare identifier means a
-# comment like "// TODO: port to nextRouteForContract" does not satisfy the check.
+# "// TODO: port to nextRouteForContract" comment does not satisfy the check.
+# Known limit: nextRouteForContract( inside a string literal also satisfies it.
+# Under-enforcement rather than over-enforcement; acceptable for this gate.
 # -Z/-0: null-delimit filenames so spaces or quotes in paths cannot confuse xargs.
 # || true: grep -rLZ exits 1 when every file matches (fully compliant = goal state).
 violators=$(
