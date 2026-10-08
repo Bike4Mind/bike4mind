@@ -198,6 +198,15 @@ export const CompletionApiUsageTransaction = BaseCreditTransaction.extend({
   outputTokens: z.number(),
 });
 
+/** Synchronous POST /api/v1/decisions call. Quest-less; one row per call that charged >= 1 credit. */
+export const DecisionUsageTransaction = BaseCreditTransaction.extend({
+  type: z.literal('decision_usage'),
+  model: z.string(),
+  apiKeyId: z.string().optional(), // Optional - present for API key auth, undefined for JWT
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+});
+
 export const SpeechToTextUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('speech_to_text_usage'),
   model: z.string(),
@@ -253,6 +262,7 @@ export const CreditTransaction = z.discriminatedUnion('type', [
   RealtimeVoiceUsageTransaction,
   ToolUsageTransaction,
   CompletionApiUsageTransaction,
+  DecisionUsageTransaction,
   SpeechToTextUsageTransaction,
   TextToSpeechUsageTransaction,
   SoundEffectsUsageTransaction,
@@ -280,6 +290,7 @@ export type IVideoGenerationUsageTransaction = z.infer<typeof VideoGenerationUsa
 export type IRealtimeVoiceUsageTransaction = z.infer<typeof RealtimeVoiceUsageTransaction>;
 export type IToolUsageTransaction = z.infer<typeof ToolUsageTransaction>;
 export type ICompletionApiUsageTransaction = z.infer<typeof CompletionApiUsageTransaction>;
+export type IDecisionUsageTransaction = z.infer<typeof DecisionUsageTransaction>;
 export type ISpeechToTextUsageTransaction = z.infer<typeof SpeechToTextUsageTransaction>;
 export type ITextToSpeechUsageTransaction = z.infer<typeof TextToSpeechUsageTransaction>;
 export type ISoundEffectsUsageTransaction = z.infer<typeof SoundEffectsUsageTransaction>;
@@ -313,6 +324,7 @@ export const CREDIT_DEDUCT_TRANSACTION_TYPES: CreditTransactionType[] = [
   'realtime_voice_usage',
   'tool_usage',
   'completion_api_usage',
+  'decision_usage',
   'speech_to_text_usage',
   'text_to_speech_usage',
   'sound_effects_usage',

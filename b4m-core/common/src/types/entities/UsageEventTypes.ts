@@ -27,6 +27,8 @@ export const USAGE_EVENT_FEATURES = [
   'operations',
   // Query-embedding spend (e.g. every search_knowledge_base semantic search).
   'embedding',
+  // Synchronous POST /api/v1/decisions calls.
+  'decision',
 ] as const;
 
 export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];
