@@ -12,7 +12,7 @@ const { rows, deleteMany, findFilters, fakeModel } = vi.hoisted(() => {
       findFilters.push(filter);
       return { lean: async () => rows[which] };
     },
-    deleteMany: (filter: Filter, opts: Filter) => deleteMany[which](filter, opts),
+    deleteMany: (...args: unknown[]) => deleteMany[which](...args),
   });
   return { rows, deleteMany, findFilters, fakeModel };
 });
@@ -38,7 +38,7 @@ describe('unset-stored-default-forced-retrieval-floor', () => {
     expect(isStoredDefault(v)).toBe(false);
   });
 
-  it('hard-deletes only the stored-75 rows for this key, platform and overlay', async () => {
+  it('removes only the stored-75 rows for this key, platform hard and overlay soft', async () => {
     rows.admin = [{ _id: 'a1', settingValue: 75 }];
     rows.scoped = [
       { _id: 's1', settingValue: '75' },
@@ -53,7 +53,8 @@ describe('unset-stored-default-forced-retrieval-floor', () => {
       { settingName: 'forcedRetrievalMinSimilarityPct' },
     ]);
     expect(deleteMany.admin).toHaveBeenCalledWith({ _id: { $in: ['a1'] } }, { hardDelete: true });
-    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['s1', 's3'] } }, { hardDelete: true });
+    // Scoped rows soft-delete (no options), so the override audit trail survives.
+    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['s1', 's3'] } });
   });
 
   it('deletes nothing when no row holds 75, so a re-run is a no-op', async () => {
