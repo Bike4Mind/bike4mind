@@ -7,6 +7,8 @@ Compose builds MinIO and its `mc` client directly from unmodified upstream sourc
 | MinIO     | RELEASE.2025-10-15T17-29-55Z | 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a | 1.24.8       |
 | mc        | RELEASE.2025-08-13T08-35-41Z | 7394ce0dd2a80935aded936b09fa12cbb3cb8096 | 1.23.10      |
 
+Both upstream repositories are archived, and these pins are their final releases, so no upstream security fixes will follow. The long-term path is a maintained fork or another S3-compatible store.
+
 The Dockerfiles verify the fetched release's exact commit before compiling, use upstream metadata generation, and preserve the upstream MinIO entrypoint. The table names the source release inputs. Upstream metadata generation labels these source-built binaries `DEVELOPMENT` with the pinned timestamp and commit; they are not relabeled as vendor `RELEASE` binaries. Official Go and Debian base images are pinned to multi-platform digests supporting amd64 and arm64. Debian package installation and Go module downloads still require public network access. Package repositories are not snapshotted, so builds are not guaranteed to be byte-identical.
 
 Both projects are licensed under AGPL-3.0. Each runtime image includes its upstream `LICENSE` and `README.md` in `/licenses`. Corresponding source and upstream documentation are available at:

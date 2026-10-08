@@ -119,7 +119,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost build minio cre
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d minio createbuckets
 ```
 
-For updates, record the current checkout commit with `git rev-parse HEAD`, back up the `minio-data` volume, update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services.
+For updates, record the current checkout commit with `git rev-parse HEAD`, back up the `minio-data` volume, update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
 
 To roll back the container code, restore the previous checkout commit and repeat the same build and start commands. Keep the data volume. Before downgrading across MinIO versions, check upstream storage-format compatibility; restoring the corresponding backup may be necessary. Do not use `docker compose down -v` for an update or rollback.
 
