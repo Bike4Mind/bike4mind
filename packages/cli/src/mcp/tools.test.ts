@@ -554,6 +554,52 @@ describe('sendMessage', () => {
     expect(result.reply).toBe('Not enough credits');
   });
 
+  it('settles on a failed dispatch, which leaves the quest running with type error', async () => {
+    // The second read only arrives if the first did not settle, so a regression fails here, not by spinning.
+    const getQuest = vi
+      .fn()
+      .mockResolvedValueOnce({ id: 'q1', status: 'running', type: 'error', reply: 'ChatCompletion dispatch failed' })
+      .mockResolvedValue(doneQuest);
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
+
+    expect(getQuest).toHaveBeenCalledTimes(1);
+    expect(result.reply).toBe('ChatCompletion dispatch failed');
+  });
+
+  it('hides reasoning, strips the choices block and joins the slots without a separator', async () => {
+    const choices = '```choices\n[{"label":"A","description":"a"},{"label":"B","description":"b"}]\n```';
+    const getQuest = vi.fn().mockResolvedValue({
+      ...doneQuest,
+      reply: null,
+      replies: ['<think>private plan</think>Checking the docs. ', `The answer is 42.\n\n${choices}`],
+    });
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
+
+    expect(result.reply).toBe('Checking the docs. The answer is 42.');
+  });
+
+  it('polls every interval for the first 30s, then backs off to 5s', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const sleep = vi.fn(async (ms: number) => {
+        vi.setSystemTime(Date.now() + ms);
+      });
+      const getQuest = vi.fn();
+      for (let i = 0; i < 17; i++) getQuest.mockResolvedValueOnce({ id: 'q1', status: 'running' });
+      getQuest.mockResolvedValueOnce(doneQuest);
+
+      await sendMessage(chatClient(getQuest), { message: 'hi' }, { sleep });
+
+      const waits = sleep.mock.calls.map(([ms]) => ms);
+      expect(waits.slice(0, 15)).toEqual(Array(15).fill(2000));
+      expect(waits.slice(15)).toEqual([5000, 5000]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('treats a stopped quest as finished', async () => {
     const getQuest = vi
       .fn()
@@ -677,6 +723,20 @@ describe('generateImage', () => {
     await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
       'insufficient credits'
     );
+  });
+
+  it('rejects a failed dispatch, which leaves the quest running with type error', async () => {
+    // The second read only arrives if the first did not settle, so a regression fails here, not by spinning.
+    const getQuest = vi
+      .fn()
+      .mockResolvedValueOnce({ id: 'q1', status: 'running', type: 'error', reply: 'ChatCompletion dispatch failed' })
+      .mockResolvedValue(doneQuest);
+    const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
+
+    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
+      'ChatCompletion dispatch failed'
+    );
+    expect(getQuest).toHaveBeenCalledTimes(1);
   });
 
   it('reports a stopped quest as stopped rather than echoing its reply', async () => {

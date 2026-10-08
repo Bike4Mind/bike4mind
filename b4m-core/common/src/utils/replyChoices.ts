@@ -179,6 +179,22 @@ export function stripChoicesFromReplies(replies: readonly string[]): {
   return { replies: stripped, choices, found, outcome };
 }
 
+/**
+ * The visible answer text of a quest: the scalar `reply` of the quest poll body and `response` of
+ * POST /api/chat `wait: true`, and the CLI's send_message reply. The chat pipeline streams into
+ * `replies[]` and leaves `quest.reply` null on an ordinary success (or a stale rapid-reply prefix),
+ * so the scalar is derived from the slots, matching what setErrorReply in ChatCompletionProcess
+ * writes. Slots join with no separator because they are one streamed answer split at tool calls.
+ * Paths that write only `reply` (pre-flight invoke error, empty recovery) have no visible slots,
+ * so the stored scalar is the fallback.
+ */
+export function questReplyText(quest: { reply?: string | null; replies?: readonly string[] | null }): string | null {
+  const visible = stripChoicesFromReplies(quest.replies ?? [])
+    .replies.map(slot => visibleReplyText(slot))
+    .join('');
+  return visible || (quest.reply ?? null);
+}
+
 type ParsedOptions = { options: ChoiceOption[] } | { reason: ReplyChoicesInvalidReason };
 
 function parseChoiceOptions(body: string): ParsedOptions {

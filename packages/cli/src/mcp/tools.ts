@@ -8,9 +8,8 @@ import {
   ImageModels,
   ImagePromptResolutionSchema,
   PROMPT_TEXT_MAX,
-  stripChoicesFromReplies,
+  questReplyText,
   ttsRequestSchema,
-  visibleReplyText,
   type GeneratedAudioResponse,
   type TTSRequest,
 } from '@bike4mind/common';
@@ -297,8 +296,8 @@ export async function createProject(
 }
 
 /**
- * Queue a chat turn and poll its quest to completion. A failed turn still finishes `status: 'done'`
- * with its explanation as the reply (`type: 'error'`), which is returned as-is like any other reply.
+ * Queue a chat turn and poll its quest to completion. A failed turn ends `type: 'error'` with its
+ * explanation as the reply, which is returned as-is like any other reply.
  */
 export async function sendMessage(
   client: B4mApiClient,
@@ -316,7 +315,7 @@ export async function sendMessage(
       scope: 'ai:chat',
       isFinished: isSettled,
     },
-    { intervalMs, timeoutMs, ...poll }
+    { ...poll, timeoutMs, interval: elapsedMs => chatPollInterval(elapsedMs, intervalMs) }
   );
 
   const notebookId = args.notebookId ?? ack.sessionId ?? quest.sessionId;
@@ -329,7 +328,7 @@ export async function sendMessage(
     description: c.description,
   }));
 
-  return { notebookId, questId, reply: questReplyText(quest), model: ack.model, citables };
+  return { notebookId, questId, reply: replyText(quest), model: ack.model, citables };
 }
 
 export async function searchKnowledgeBase(
@@ -382,6 +381,11 @@ const IMAGE_POLL_INTERVAL_MS = 2000;
 // holding the tool call open indefinitely.
 const IMAGE_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const CHAT_POLL_INTERVAL_MS = 2000;
+// Most replies land inside the fast window. Past it the poll slows down, because the quest GET
+// counts against the key's per-minute limit (only the daily one exempts it) and a few long turns
+// polled in parallel at 2s would 429 the key's next /api/chat POST.
+const CHAT_POLL_FAST_WINDOW_MS = 30 * 1000;
+const CHAT_POLL_SLOW_INTERVAL_MS = 5000;
 // A turn with tool rounds or a slow reasoning model can run for minutes, so this cap sits well
 // above the image one; it too only stops a wedged quest from holding the call open.
 const CHAT_POLL_TIMEOUT_MS = 15 * 60 * 1000;
@@ -391,20 +395,20 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
 const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
+const chatPollInterval = (elapsedMs: number, intervalMs: number) =>
+  elapsedMs < CHAT_POLL_FAST_WINDOW_MS ? intervalMs : Math.max(intervalMs, CHAT_POLL_SLOW_INTERVAL_MS);
+
+// A failed dispatch (ChatCompletionInvoke) writes `type: 'error'` without touching `status`, which
+// stays 'running', so the type check is what ends the poll on it.
 const isSettled = (q: QuestResponse) => q.status === 'done' || q.status === 'stopped' || q.type === 'error';
 
 // `status` is optional on the poll response; a render that already carries its images is
 // finished whatever its status says.
 const isImageSettled = (q: QuestResponse) => isSettled(q) || (!q.status && !!q.images?.length);
 
-// Must stay in sync with questReplyText in apps/client/server/utils/questPollBody.ts. Derived here
-// rather than read from the poll's `reply` because older servers return the stored scalar, which
-// can be a stale rapid-reply prefix of the streamed slots.
-const questReplyText = (q: QuestResponse) =>
-  stripChoicesFromReplies(q.replies ?? [])
-    .replies.map(slot => visibleReplyText(slot))
-    .join('') ||
-  (q.reply ?? '');
+// Derived here rather than read from the poll's `reply` because older servers return the stored
+// scalar, which can be a stale rapid-reply prefix of the streamed slots.
+const replyText = (q: QuestResponse) => questReplyText(q) ?? '';
 
 const questRef = (questId: string, notebookId?: string) =>
   `quest ${questId}${notebookId ? `, notebook ${notebookId}` : ''}`;
@@ -432,13 +436,13 @@ async function pollQuest(
   client: B4mApiClient,
   { questId, ref, task, scope, isFinished }: QuestPoll,
   {
-    intervalMs,
+    interval,
     timeoutMs,
     sleep = defaultSleep,
     signal,
     onProgress,
     baseURL = '',
-  }: PollOptions & { intervalMs: number; timeoutMs: number }
+  }: Omit<PollOptions, 'intervalMs'> & { interval: (elapsedMs: number) => number; timeoutMs: number }
 ): Promise<QuestResponse> {
   const started = Date.now();
   let failures = 0;
@@ -474,6 +478,7 @@ async function pollQuest(
       // Progress is advisory: a lost notification must not fail a quest that is still running.
       logger.warn(`mcp: progress notification failed (${ref}): ${err instanceof Error ? err.message : String(err)}`);
     }
+    const intervalMs = interval(elapsed);
     await sleep(Math.min(Math.max(intervalMs, retryAfterMs), Math.max(timeoutMs - elapsed, intervalMs)));
     retryAfterMs = 0;
   }
@@ -497,7 +502,7 @@ export async function generateImage(
   const quest = await pollQuest(
     client,
     { questId, ref, task: 'image generation', scope: 'ai:generate', isFinished: isImageSettled },
-    { intervalMs, timeoutMs, ...poll }
+    { ...poll, timeoutMs, interval: () => intervalMs }
   );
 
   if (quest.status === 'stopped') {
@@ -651,7 +656,7 @@ function progressReporter(
 // "still producing" signal rather than a live count.
 function chatProgress(quest?: QuestResponse): string {
   if (quest?.status !== 'running') return 'waiting for the reply to start';
-  const characters = questReplyText(quest).length;
+  const characters = replyText(quest).length;
   return characters > 0 ? `generating reply (${characters} characters so far)` : 'generating reply';
 }
 
