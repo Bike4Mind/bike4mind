@@ -426,6 +426,15 @@ function matchClient(client?: string) {
   return client ? JWT_RATE_LIMIT_BY_CLIENT.find(entry => entry.pattern.test(client)) : undefined;
 }
 
+/**
+ * The client signal `checkRateLimit` matches against `JWT_RATE_LIMIT_BY_CLIENT`. Every HTTP
+ * completions route that rate-limits a JWT caller must pass this, or a per-client cap silently
+ * falls back to the default. WebSocket-frame handlers carry no request headers and don't apply.
+ */
+export function resolveRateLimitClient(headers: Record<string, string | undefined>): string | undefined {
+  return headers['user-agent'] ?? headers['x-b4m-client'];
+}
+
 function getJwtRateLimit(source?: CompletionSource): number {
   if (!source) return JWT_RATE_LIMIT_DEFAULT;
   return JWT_RATE_LIMIT_BY_SOURCE[source] ?? JWT_RATE_LIMIT_DEFAULT;
