@@ -164,6 +164,25 @@ describe('seekSequence', () => {
     expect(seekSequence(['say \u201Chi\u201D'], ['say "hi"'], 0)?.level).toBe('unicode');
   });
 
+  it('matches through typographic quotes, dashes, minus signs and unusual spaces', () => {
+    const file = [
+      'const a = \u201Chi\u201D;',
+      'it(\u2018x\u2019, () => {',
+      '// a \u2014 b\u00A0c\u2003d',
+      'n = 1 \u2212 2;',
+      'wait\u2026',
+    ];
+    for (const [line, at] of [
+      ['const a = "hi";', 0],
+      ["it('x', () => {", 1],
+      ['// a - b c d', 2],
+      ['n = 1 - 2;', 3],
+      ['wait...', 4],
+    ] as const) {
+      expect(seekSequence(file, [line], 0), line).toEqual({ index: at, level: 'unicode' });
+    }
+  });
+
   it('prefers an exact match later in the file over a looser one earlier', () => {
     expect(seekSequence(['  x', 'x'], ['x'], 0)).toEqual({ index: 1, level: 'exact' });
   });
@@ -316,6 +335,60 @@ describe('applyChunks', () => {
         { display: 'b.tsx', lines },
       ]);
       expect(two.failures[0].message).not.toContain('did you mean');
+    });
+
+    it('never reads "..." as a wildcard: an abbreviated line misses, says so, and points at the range', () => {
+      const file = [
+        'const responses = {};',
+        '  // returns 422 on validation failure. Body validation: both adapters guarantee it',
+        '  // (each adapter rejects a bad body with a 422).',
+        '  if (contract.request) {',
+        "    responses['422'] = {};",
+        '  }',
+      ];
+      const chunks = updateChunks(
+        '@@',
+        '-  // returns 422 on validation failure...',
+        '-  if (contract.request) {',
+        '+  if (contract.request || contract.query) {'
+      );
+      const result = applyChunks(file, chunks);
+
+      expect(result.failures).toHaveLength(1);
+      const message = result.failures[0].message;
+      expect(message).toContain('Line 1 of the hunk stands "..." in for text the file has');
+      expect(message).toContain('"..." is never a wildcard');
+      expect(message).toContain('Read lines 1-6 with file_read');
+    });
+
+    it('names the abbreviated line when the lines before it matched', () => {
+      const file = [
+        '// Any contract with a body',
+        '// returns 422 on validation failure. Body validation too',
+        'go();',
+      ];
+      const result = applyChunks(
+        file,
+        updateChunks('@@', '-// Any contract with a body', '-// returns 422 on validation failure...', '-go();')
+      );
+      expect(result.failures[0].message).toContain('Line 2 of the hunk stands "..."');
+      expect(result.failures[0].message).toContain('then differs at line 2');
+    });
+
+    it('does not let a bare "..." line stand in for the lines it skips', () => {
+      const file = ['function a() {', '  one();', '  two();', '  three();', '}'];
+      const result = applyChunks(file, updateChunks('@@', ' function a() {', ' ...', '-  three();', '+  four();'));
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0].message).toContain('Line 2 of the hunk stands "..."');
+      expect(() => updateChunks('@@', ' function a() {', '...', '-  three();')).toThrow(
+        'A hunk cannot skip lines with "..."'
+      );
+    });
+
+    it('does not call an ordinary differing line an abbreviation', () => {
+      const result = applyChunks(['alpha', 'beta'], updateChunks('@@', ' alpha', '-gamma', '+delta'));
+      expect(result.failures[0].message).not.toContain('wildcard');
+      expect(result.failures[0].message).toContain('Read lines 1-');
     });
 
     it('names a missing anchor', () => {

@@ -7,7 +7,7 @@
  * touches disk, so the whole patch can be validated before anything is written.
  */
 
-const BEGIN = '*** Begin Patch';
+export const PATCH_BEGIN = '*** Begin Patch';
 const END = '*** End Patch';
 const END_OF_FILE = '*** End of File';
 const ADD = '*** Add File:';
@@ -53,8 +53,8 @@ const isHeader = (line: string): boolean => line.startsWith('***');
 
 export function parsePatch(patchText: string): PatchOp[] {
   const lines = stripHeredoc(patchText.replace(/\r\n/g, '\n').trim()).split('\n');
-  const begin = lines.findIndex(line => line.trim() === BEGIN);
-  if (begin === -1) throw new PatchParseError(`The patch must start with a "${BEGIN}" line.`);
+  const begin = lines.findIndex(line => line.trim() === PATCH_BEGIN);
+  if (begin === -1) throw new PatchParseError(`The patch must start with a "${PATCH_BEGIN}" line.`);
   const end = lines.findIndex((line, index) => index > begin && line.trim() === END);
   if (end === -1) throw new PatchParseError(`The patch must finish with a "${END}" line.`);
 
@@ -158,8 +158,11 @@ function parseChunks(
         chunk.newLines.push(line.slice(1));
         chunk.body.push({ mark: ' ', text: line.slice(1) });
       } else {
+        const skip = line.trim().startsWith('...')
+          ? ' A hunk cannot skip lines with "..."; quote every line between its first and last.'
+          : '';
         throw new PatchParseError(
-          `Line ${at - begin}: a hunk line must start with " " (context), "-" or "+", got: ${show(line)}`
+          `Line ${at - begin}: a hunk line must start with " " (context), "-" or "+", got: ${show(line)}.${skip}`
         );
       }
       at += 1;
@@ -183,21 +186,37 @@ export type MatchLevel = 'exact' | 'trimEnd' | 'trim' | 'unicode';
 
 const LEVELS: readonly MatchLevel[] = ['exact', 'trimEnd', 'trim', 'unicode'];
 
-// Typographic punctuation a model normalises to ASCII when it copies a line.
+// Typographic punctuation and spacing a model normalises to ASCII when it copies a line. The
+// ellipsis maps to three literal dots: "..." is text to match, never a wildcard.
 function normalizeUnicode(text: string): string {
   return text
     .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
     .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
-    .replace(/[\u2010-\u2015]/g, '-')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
     .replace(/\u2026/g, '...')
-    .replace(/\u00A0/g, ' ');
+    .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, ' ');
 }
 
-const COMPARE: Record<MatchLevel, (a: string, b: string) => boolean> = {
+/** A line as the loosest comparison sees it. */
+export const foldLine = (line: string): string => normalizeUnicode(line.trim());
+
+// Folded once per file rather than once per comparison: the unicode pass and the miss
+// diagnostics scan every line, and a 5k-line file is searched once per hunk.
+const foldCache = new WeakMap<readonly string[], string[]>();
+
+function foldedLines(lines: readonly string[]): string[] {
+  let folded = foldCache.get(lines);
+  if (!folded) {
+    folded = lines.map(foldLine);
+    foldCache.set(lines, folded);
+  }
+  return folded;
+}
+
+const COMPARE: Record<Exclude<MatchLevel, 'unicode'>, (a: string, b: string) => boolean> = {
   exact: (a, b) => a === b,
   trimEnd: (a, b) => a.trimEnd() === b.trimEnd(),
   trim: (a, b) => a.trim() === b.trim(),
-  unicode: (a, b) => normalizeUnicode(a.trim()) === normalizeUnicode(b.trim()),
 };
 
 function matchesAt(
@@ -224,13 +243,16 @@ export function seekSequence(
 ): { index: number; level: MatchLevel } | null {
   if (pattern.length === 0) return null;
   for (const level of LEVELS) {
-    const same = COMPARE[level];
+    const loose = level === 'unicode';
+    const hay = loose ? foldedLines(lines) : lines;
+    const needle = loose ? pattern.map(foldLine) : pattern;
+    const same = level === 'unicode' ? COMPARE.exact : COMPARE[level];
     if (endOfFile) {
-      const last = lines.length - pattern.length;
-      if (last >= from && matchesAt(lines, pattern, last, same)) return { index: last, level };
+      const last = hay.length - needle.length;
+      if (last >= from && matchesAt(hay, needle, last, same)) return { index: last, level };
     }
-    for (let at = from; at <= lines.length - pattern.length; at += 1) {
-      if (matchesAt(lines, pattern, at, same)) return { index: at, level };
+    for (let at = from; at <= hay.length - needle.length; at += 1) {
+      if (matchesAt(hay, needle, at, same)) return { index: at, level };
     }
   }
   return null;
@@ -260,13 +282,11 @@ function quote(lines: readonly string[]): string {
   return shown.join('\n');
 }
 
-const fold = (line: string): string => normalizeUnicode(line.trim());
-
 function lineNumbers(lines: readonly string[], needle: string): number[] {
-  const wanted = fold(needle);
+  const wanted = foldLine(needle);
   const found: number[] = [];
-  lines.forEach((line, index) => {
-    if (fold(line) === wanted) found.push(index);
+  foldedLines(lines).forEach((line, index) => {
+    if (line === wanted) found.push(index);
   });
   return found;
 }
@@ -326,11 +346,12 @@ function longestPrefixMatch(
   from: number
 ): { at: number; agrees: number } | undefined {
   if (expected[0]?.trim() === '') return undefined;
-  const same = COMPARE.unicode;
+  const hay = foldedLines(lines);
+  const needle = expected.map(foldLine);
   let best: { at: number; agrees: number } | undefined;
-  for (let at = from; at < lines.length; at += 1) {
+  for (let at = from; at < hay.length; at += 1) {
     let agrees = 0;
-    while (agrees < expected.length && at + agrees < lines.length && same(lines[at + agrees], expected[agrees])) {
+    while (agrees < needle.length && at + agrees < hay.length && hay[at + agrees] === needle[agrees]) {
       agrees += 1;
     }
     if (agrees > 0 && (!best || agrees > best.agrees)) best = { at, agrees };
@@ -358,7 +379,41 @@ function describeMismatch(
     `${start}, then differs at line ${row + 1}:\n` +
     `  patch expects: "${clip(expected[agrees])}"\n` +
     `  file has:      "${clip(lines[row])}"\n` +
-    `The file around there:\n${excerpt(lines, from, row + MISMATCH_CONTEXT + 1 - from)}`
+    `The file around there:\n${excerpt(lines, from, row + MISMATCH_CONTEXT + 1 - from)}\n` +
+    rereadAdvice(lines, at, expected.length)
+  );
+}
+
+// Shorter stems prove nothing: "// ..." would "abbreviate" every comment in the file.
+const MIN_ELIDED_STEM = 8;
+
+/**
+ * The first hunk line that is a file line cut short with "...", or a bare "..." standing in for
+ * lines, as 1-based hunk line. Said outright because the model meant it as a wildcard, and a
+ * plain "differs" sends it back to quote the same abbreviation again.
+ */
+function elidedLine(lines: readonly string[], expected: readonly string[]): number | undefined {
+  const folded = foldedLines(lines);
+  for (const [offset, line] of expected.entries()) {
+    const wanted = foldLine(line);
+    const stem = wanted.replace(/(?:\.\.\.)+$/, '').trimEnd();
+    if (stem === wanted) continue;
+    if (stem === '' || stem === '//' || stem === '#' || stem === '*') return offset + 1;
+    if (stem.length >= MIN_ELIDED_STEM && folded.some(text => text !== wanted && text.startsWith(stem))) {
+      return offset + 1;
+    }
+  }
+  return undefined;
+}
+
+// Lines past the hunk's own length, since an abbreviated hunk is shorter than what it stands for.
+const REREAD_MARGIN = 5;
+
+function rereadAdvice(lines: readonly string[], at: number, hunkLength: number): string {
+  const last = Math.min(lines.length, at + hunkLength + REREAD_MARGIN);
+  return (
+    `Read lines ${at + 1}-${last} with file_read and copy this hunk's lines from that output, ` +
+    'not from memory or a summary.'
   );
 }
 
@@ -370,7 +425,13 @@ function describeMiss(
   others: readonly OtherFile[] = []
 ): string {
   const searched = from > 0 ? ` at or after line ${from + 1}` : '';
-  const header = `could not find these lines${searched}:\n${quote(expected)}`;
+  const elided = elidedLine(lines, expected);
+  const header =
+    `could not find these lines${searched}:\n${quote(expected)}` +
+    (elided === undefined
+      ? ''
+      : `\nLine ${elided} of the hunk stands "..." in for text the file has. Hunks are matched line by line ` +
+        'in full and "..." is never a wildcard, so quote every line whole, including any it stood in for.');
 
   const nearest = longestPrefixMatch(lines, expected, from);
   if (nearest) {
@@ -391,7 +452,9 @@ function describeMiss(
       const homeHint = home ? `\nThese lines are in ${home}; did you mean to patch that file?` : '';
       return (
         `${header}\nThe nearest match is ${first ? 'its first line' : `its line ${offset + 1}`} at line ${ahead + 1}, ` +
-        `but the lines around it differ. The file has:\n${excerpt(lines, Math.max(0, ahead - offset), Math.min(expected.length, MAX_QUOTED_LINES))}${homeHint}`
+        `but the lines around it differ. The file has:\n${excerpt(lines, Math.max(0, ahead - offset), Math.min(expected.length, MAX_QUOTED_LINES))}${homeHint}\n` +
+        // Back as well as forward: lines the hunk skipped may sit before the one that matched.
+        rereadAdvice(lines, Math.max(0, ahead - offset - REREAD_MARGIN), expected.length + REREAD_MARGIN)
       );
     }
   }

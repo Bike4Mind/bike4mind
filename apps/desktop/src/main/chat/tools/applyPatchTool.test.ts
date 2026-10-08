@@ -69,6 +69,32 @@ describe('apply_patch', () => {
     return (caught as Error).message;
   };
 
+  describe('where the patch arrives', () => {
+    const edit = wrap('*** Update File: a.ts', '@@', '-two', '+2');
+
+    it('takes it from another argument when patchText is missing, as GPT models send it', async () => {
+      await applyPatch.run({ patch: edit }, context);
+      expect(await read('a.ts')).toBe('one\n2\nthree\n');
+      await applyPatch.run({ input: wrap('*** Update File: a.ts', '@@', '-2', '+II') }, context);
+      expect(await read('a.ts')).toBe('one\nII\nthree\n');
+    });
+
+    it('prefers patchText, and refuses to guess between two envelopes', async () => {
+      await applyPatch.run({ patchText: edit, patch: wrap('*** Delete File: a.ts') }, context);
+      expect(await read('a.ts')).toBe('one\n2\nthree\n');
+
+      const caught = await applyPatch.run({ patch: edit, diff: edit }, context).catch((error: Error) => error);
+      expect((caught as Error).message).toContain('This call sent only "patch", "diff".');
+    });
+
+    it('names what it got when nothing holds a patch', async () => {
+      const caught = await applyPatch.run({ patch: 'change two to 2' }, context).catch((error: Error) => error);
+      expect((caught as Error).message).toContain('"patchText" argument is required');
+      expect((caught as Error).message).toContain('This call sent only "patch".');
+      expect(await read('a.ts')).toBe('one\ntwo\nthree\n');
+    });
+  });
+
   describe('misplaced hunks', () => {
     const hunk = (path: string) =>
       wrap(
@@ -93,6 +119,16 @@ describe('apply_patch', () => {
       expect(await failure(hunk('Chat.tsx'))).toContain(
         'These lines are in Explorer.tsx; did you mean to patch that file?'
       );
+    });
+
+    it('looks past the six most recent files to every one the session recorded', async () => {
+      context = { ...context, sessionId: 'hint-session-many' };
+      await fileRead.run({ path: file('Explorer.tsx') }, context);
+      for (let index = 0; index < 8; index += 1) {
+        await writeFile(file(`later${index}.ts`), `later ${index}\n`);
+        await fileRead.run({ path: file(`later${index}.ts`) }, context);
+      }
+      expect(await failure(hunk('Chat.tsx'))).toContain('These lines are in Explorer.tsx');
     });
 
     it('stays quiet about files the session never touched', async () => {
@@ -214,6 +250,34 @@ describe('apply_patch', () => {
       expect(message).toContain('b.ts, hunk 1 of 1: could not find these lines:\nred\ngreenish');
       expect(message).toContain('starts at line 1 and agrees for 1 line, then differs at line 2');
       expect(message).not.toContain('a.ts,');
+    });
+
+    it('writes nothing for an abbreviated hunk, and asks for a re-read rather than a retry from memory', async () => {
+      await writeFile(file('c.ts'), '// first part of a long comment that goes on\n// and on\ncode();\n');
+      const message = await failure(
+        wrap(
+          '*** Update File: a.ts',
+          '@@',
+          '-one',
+          '+1',
+          '*** Update File: c.ts',
+          '@@',
+          '-// first part of a long comment...',
+          '-code();',
+          '+run();'
+        )
+      );
+
+      expect(await read('a.ts')).toBe('one\ntwo\nthree\n');
+      expect(await read('c.ts')).toBe('// first part of a long comment that goes on\n// and on\ncode();\n');
+      expect(diffs).toEqual([]);
+      expect(message).toContain('never a wildcard');
+      expect(message).toContain('Read lines 1-3 with file_read');
+      expect(message).toContain('Before retrying, read each range named above with file_read');
+    });
+
+    it('adds no re-read advice to a failure that is not a missed hunk', async () => {
+      expect(await failure(wrap('*** Delete File: missing.ts'))).not.toContain('Before retrying');
     });
 
     it('names every failing hunk across files in one error', async () => {
