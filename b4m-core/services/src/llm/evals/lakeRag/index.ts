@@ -3,3 +3,4 @@
 export * from './bank';
 export * from './grade';
 export * from './provision';
+export * from './auth';
