@@ -28,7 +28,7 @@ export type {
 export const MAX_PASSKEYS_PER_USER = 10;
 /** Browser-side ceremony timeout (ms). Must stay under PASSKEY_CHALLENGE_TTL_MS in the database package. */
 const CEREMONY_TIMEOUT_MS = 2 * 60 * 1000;
-// Pinned rather than the library default, which probes for experimental post-quantum support
+// Pinned rather than the library default, which probes for experimental PQC algorithm support
 // at runtime and logs a Node ExperimentalWarning on every ceremony.
 const SUPPORTED_ALGORITHM_IDS = [COSEALG.EdDSA, COSEALG.ES256, COSEALG.RS256];
 
