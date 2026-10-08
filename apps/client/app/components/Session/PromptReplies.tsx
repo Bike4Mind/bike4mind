@@ -51,6 +51,7 @@ import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
+import { z } from 'zod';
 import { useConfig } from '@client/app/hooks/data/settings';
 import {
   hasCompleteOpeningTag,
@@ -727,8 +728,33 @@ interface PendingActionButtonsProps {
   sessionId?: string;
 }
 
-export const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
-  const storageKey = messageId ? `mcp-confirm-${messageId}` : null;
+const pendingActionErrorSchema = z.object({
+  error: z.string().optional(),
+  errorCode: z.string().optional(),
+});
+
+function getPendingActionError(error: unknown, fallbackMessage: string): { message: string; isReplaced: boolean } {
+  if (isAxiosError(error)) {
+    const parsedResponse = pendingActionErrorSchema.safeParse(error.response?.data);
+    const responseData = parsedResponse.success ? parsedResponse.data : undefined;
+    return {
+      message: responseData?.error || error.message,
+      isReplaced: error.response?.status === 409 && responseData?.errorCode === 'action_replaced',
+    };
+  }
+
+  return {
+    message: error instanceof Error ? error.message : fallbackMessage,
+    isReplaced: false,
+  };
+}
+
+export const PendingActionButtons: FC<PendingActionButtonsProps> = props => (
+  <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
+);
+
+const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
+  const storageKey = messageId ? `mcp-confirm-${messageId}-${pendingAction.ts}` : null;
   const storedData = storageKey && typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) : null;
   const parsedData = storedData ? JSON.parse(storedData) : null;
 
@@ -764,12 +790,8 @@ export const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAct
         sessionStorage.setItem(storageKey, JSON.stringify(dataToStore));
       }
     } catch (error: unknown) {
-      const message = isAxiosError(error)
-        ? error.response?.data?.error || error.message
-        : error instanceof Error
-          ? error.message
-          : 'Failed to execute action';
-      if (isAxiosError(error) && error.response?.status === 409 && message.includes('replaced by a newer one')) {
+      const { message, isReplaced } = getPendingActionError(error, 'Failed to execute action');
+      if (isReplaced) {
         setIsReplaced(true);
       }
       setResult({
@@ -799,12 +821,8 @@ export const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAct
         sessionStorage.setItem(storageKey, JSON.stringify(dataToStore));
       }
     } catch (error: unknown) {
-      const message = isAxiosError(error)
-        ? error.response?.data?.error || error.message
-        : error instanceof Error
-          ? error.message
-          : 'Failed to cancel action';
-      if (isAxiosError(error) && error.response?.status === 409 && message.includes('replaced by a newer one')) {
+      const { message, isReplaced } = getPendingActionError(error, 'Failed to cancel action');
+      if (isReplaced) {
         setIsReplaced(true);
       }
       setResult({

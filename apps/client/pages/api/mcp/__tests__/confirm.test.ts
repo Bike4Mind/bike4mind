@@ -186,7 +186,10 @@ describe('POST /api/mcp/confirm', () => {
     });
 
     expect(res._getStatusCode()).toBe(409);
-    expect(res._getJSONData().error).toContain('replaced by a newer one');
+    expect(res._getJSONData()).toMatchObject({
+      error: expect.stringContaining('replaced by a newer one'),
+      errorCode: 'action_replaced',
+    });
     expect(claimPendingAction).not.toHaveBeenCalled();
   });
 });

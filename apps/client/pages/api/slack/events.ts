@@ -30,7 +30,6 @@ import {
   type SlackEventData,
   CommandHandler,
   createLoadingBar,
-  buildConfirmationButtons,
   buildAttachmentDownloadButtons,
   formatPreviewFromParams,
   AttachmentDownloadInfo,
@@ -58,6 +57,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { getGeneratedImageStorage } from '@server/utils/storage';
+import { buildPendingActionButtons } from '@server/integrations/slack/pendingActionButtons';
 
 // Slack event schemas
 const SlackEventSchema = z.object({
@@ -989,7 +989,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     // (skip image_generation - handled separately below with model picker)
     if (questWithPendingAction?.pendingAction && questWithPendingAction.pendingAction.tool !== 'image_generation') {
       const questId = questWithPendingAction._id.toString();
-      const { tool, params, ts: pendingActionTs } = questWithPendingAction.pendingAction;
+      const { tool, params } = questWithPendingAction.pendingAction;
       logger.debug('🔐 [CONFIRMATION] Found pendingAction on Quest, adding buttons', {
         questId,
         tool,
@@ -1001,7 +1001,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // Rebuild response blocks with the formatted preview
       formatted = formatAgentResponse(commandHandler.parsedCommand.agentName || 'agent', formattedPreview, undefined);
 
-      const confirmButtons = buildConfirmationButtons(questId, pendingActionTs);
+      const confirmButtons = buildPendingActionButtons(questWithPendingAction);
       formatted.blocks = [...formatted.blocks, ...confirmButtons];
       logger.debug('🔐 [CONFIRMATION] Added formatted preview and confirmation buttons');
     }

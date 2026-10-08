@@ -92,7 +92,10 @@ const handler = baseApi().post(async (req, res) => {
   // Checked before Cancel and expiry too, so a stale card can neither run nor clear a newer action.
   if (pendingActionTs !== undefined && pendingActionTs !== pendingAction.ts) {
     logger.warn('[Web MCP Confirm] Pending action replaced since it was displayed', { questId });
-    return res.status(409).json({ error: 'This action was replaced by a newer one. Please review it again.' });
+    return res.status(409).json({
+      error: 'This action was replaced by a newer one. Please review it again.',
+      errorCode: 'action_replaced',
+    });
   }
 
   if (pendingAction.ts && Date.now() - pendingAction.ts > TOKEN_EXPIRATION_MS) {

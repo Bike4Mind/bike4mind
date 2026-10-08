@@ -124,21 +124,24 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     );
   });
 
-  it('keeps a lost Cancel claim unresolved and shows the 409 error', async () => {
-    postMock.mockRejectedValue({
-      isAxiosError: true,
-      message: 'Request failed with status code 409',
-      response: { status: 409, data: { error: 'This action has already been processed.' } },
-    });
-    renderCard();
+  it.each(['mcp-confirm-btn', 'mcp-cancel-btn'])(
+    'keeps a lost claim unresolved and shows the 409 error after %s',
+    async button => {
+      postMock.mockRejectedValue({
+        isAxiosError: true,
+        message: 'Request failed with status code 409',
+        response: { status: 409, data: { error: 'This action has already been processed.' } },
+      });
+      renderCard();
 
-    fireEvent.click(screen.getByTestId('mcp-cancel-btn'));
+      fireEvent.click(screen.getByTestId(button));
 
-    const error = await screen.findByTestId('mcp-confirm-error');
-    expect(error.textContent).toContain('This action has already been processed.');
-    expect(screen.queryByTestId('mcp-confirm-result')).toBeNull();
-    expect(screen.getByTestId('mcp-cancel-btn')).toBeTruthy();
-  });
+      const error = await screen.findByTestId('mcp-confirm-error');
+      expect(error.textContent).toContain('This action has already been processed.');
+      expect(screen.queryByTestId('mcp-confirm-result')).toBeNull();
+      expect(screen.getByTestId(button)).toBeTruthy();
+    }
+  );
 
   it.each(['mcp-confirm-btn', 'mcp-cancel-btn'])(
     'ends the stale card after %s receives a replaced 409',
@@ -146,7 +149,10 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
       postMock.mockRejectedValue({
         isAxiosError: true,
         message: 'Request failed with status code 409',
-        response: { status: 409, data: { error: 'This action was replaced by a newer one.' } },
+        response: {
+          status: 409,
+          data: { error: 'This action was replaced by a newer one.', errorCode: 'action_replaced' },
+        },
       });
       renderCard();
 
@@ -158,6 +164,32 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
       expect(screen.queryByTestId('mcp-cancel-btn')).toBeNull();
     }
   );
+
+  it('shows a newly replaced action on the same mounted card', async () => {
+    postMock.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 409',
+      response: {
+        status: 409,
+        data: { error: 'This action was replaced by a newer one.', errorCode: 'action_replaced' },
+      },
+    });
+    const { rerender } = renderCard();
+
+    fireEvent.click(screen.getByTestId('mcp-confirm-btn'));
+    await screen.findByTestId('mcp-confirm-result');
+
+    const nextAction = { ...pendingAction, ts: pendingAction.ts + 1 };
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <PendingActionButtons pendingAction={nextAction} messageId="quest-1" sessionId="session-1" />
+      </CssVarsProvider>
+    );
+
+    expect(screen.getByTestId('mcp-confirm-btn')).toBeTruthy();
+    expect(screen.queryByTestId('mcp-confirm-result')).toBeNull();
+    expect(screen.queryByTestId('mcp-confirm-error')).toBeNull();
+  });
 
   it('keeps the card open for a retry when a pre-execution check rejects with a 400', async () => {
     postMock.mockRejectedValue({

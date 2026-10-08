@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { Readable } from 'node:stream';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
@@ -44,18 +44,19 @@ vi.mock('@bike4mind/slack', async () => {
 import { User } from '@bike4mind/database';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
 import { cancelPendingActionOnQuest, executePendingAction } from '@server/utils/pendingActionExecutor';
-import handler from '../../../pages/api/slack/interactive';
+import handler from '../interactive';
 
 const QUEST_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const PENDING_ACTION_TS = 1_700_000_000_000;
 const routeHandler = handler as unknown as (request: NextApiRequest, response: NextApiResponse) => Promise<void>;
 
-async function postAction(actionId: 'confirm_action' | 'cancel_action', value: string) {
+async function postAction(actionId: 'confirm_action' | 'cancel_action', value: string, responseUrl?: string) {
   const payload = {
     type: 'block_actions',
     user: { id: 'U123' },
     team: { id: 'T123', domain: 'test-workspace' },
     actions: [{ action_id: actionId, value }],
+    ...(responseUrl ? { response_url: responseUrl } : {}),
   };
   const rawBody = new URLSearchParams({ payload: JSON.stringify(payload) }).toString();
   const request = Readable.from([Buffer.from(rawBody)]) as unknown as NextApiRequest;
@@ -68,8 +69,11 @@ async function postAction(actionId: 'confirm_action' | 'cancel_action', value: s
 }
 
 describe('POST /api/slack/interactive confirmation buttons', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
     vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
       select: () =>
@@ -83,6 +87,33 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
     vi.mocked(executePendingAction).mockResolvedValue({ success: true, message: 'Created' });
     vi.mocked(cancelPendingActionOnQuest).mockResolvedValue({ success: true, message: 'Cancelled' });
   });
+
+  it.each(['confirm_action', 'cancel_action'] as const)(
+    'passes the displayed timestamp through the response_url path for %s',
+    async actionId => {
+      const responseUrl = 'https://hooks.slack.test/x';
+      const response = await postAction(actionId, `${QUEST_ID}:${PENDING_ACTION_TS}`, responseUrl);
+
+      expect(response._getStatusCode()).toBe(200);
+      expect(response._getJSONData()).toEqual({});
+      if (actionId === 'confirm_action') {
+        expect(executePendingAction).toHaveBeenCalledWith(
+          QUEST_ID,
+          expect.objectContaining({ id: 'user-1' }),
+          expect.anything(),
+          PENDING_ACTION_TS
+        );
+        expect(cancelPendingActionOnQuest).not.toHaveBeenCalled();
+      } else {
+        expect(cancelPendingActionOnQuest).toHaveBeenCalledWith(QUEST_ID, expect.anything(), PENDING_ACTION_TS);
+        expect(executePendingAction).not.toHaveBeenCalled();
+      }
+      expect(fetch).toHaveBeenCalledWith(
+        responseUrl,
+        expect.objectContaining({ method: 'POST', body: expect.any(String) })
+      );
+    }
+  );
 
   it.each(['confirm_action', 'cancel_action'] as const)('passes the displayed timestamp through %s', async actionId => {
     const response = await postAction(actionId, `${QUEST_ID}:${PENDING_ACTION_TS}`);
