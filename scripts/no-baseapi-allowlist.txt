@@ -41,6 +41,7 @@ apps/client/pages/api/agent-quest/__tests__/manifest.test.ts # Test file for the
 # Slack — authenticated via HMAC-SHA256 signature (Slack signing secret)
 apps/client/pages/api/slack/commands.ts                 # verifySlackRequest() HMAC check
 apps/client/pages/api/slack/interactive.ts              # verifySlackRequest() HMAC check
+apps/client/pages/api/slack/__tests__/interactive.confirm.test.ts # Test file for the handler above (script greps by path, not export)
 
 # SRE workflow callback — authenticated via encrypted bearer token
 apps/client/pages/api/sre/workflow-callback.ts          # crypto.timingSafeEqual() bearer token

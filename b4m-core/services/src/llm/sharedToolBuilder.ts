@@ -34,6 +34,7 @@ import { isVideoToolConfig } from './tools/implementation/videoGeneration';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
+import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -190,7 +191,7 @@ export interface ToolBuilderCallbacks {
   }) => void;
 
   /** Called when an MCP tool emits a _confirmToken (decoded pendingAction) */
-  onPendingAction?: (action: { tool: string; params: Record<string, unknown>; ts: number }) => Promise<void>;
+  onPendingAction?: (action: McpPendingAction) => Promise<void>;
 
   /** Called when an MCP tool emits _attachmentList */
   onAttachmentList?: (attachmentList: {
@@ -777,68 +778,25 @@ function createMcpToolWrapper(
   return async (args: unknown) => {
     const result = await originalToolFn(args);
 
-    // Extract _confirmToken from tool result
     if (callbacks.onPendingAction) {
-      try {
-        if (typeof result === 'string' && result.includes('_confirmToken')) {
-          const parsed = JSON.parse(result);
-          if (parsed._confirmToken) {
-            const decoded = JSON.parse(Buffer.from(parsed._confirmToken, 'base64').toString('utf-8'));
-
-            if (
-              typeof decoded.tool !== 'string' ||
-              typeof decoded.ts !== 'number' ||
-              decoded.params === null ||
-              typeof decoded.params !== 'object'
-            ) {
-              logger.warn(`[MCP] Malformed _confirmToken payload from tool ${name}`, {
-                decodedKeys: Object.keys(decoded),
-              });
-              delete parsed._confirmToken;
-              return JSON.stringify(parsed, null, 2);
-            }
-
-            logger.debug(`[MCP] Extracted pendingAction from tool ${name}:`, {
-              tool: decoded.tool,
-              ts: decoded.ts,
-            });
-
-            try {
-              await callbacks.onPendingAction({
-                tool: decoded.tool as string,
-                params: decoded.params as Record<string, unknown>,
-                ts: decoded.ts as number,
-              });
-            } catch (saveErr) {
-              logger.error(`[MCP] Failed to persist pendingAction from tool ${name}`, {
-                error: saveErr instanceof Error ? saveErr.message : String(saveErr),
-              });
-            }
-
-            // Strip _confirmToken from result before AI sees it
-            delete parsed._confirmToken;
-            if (parsed.next_step) {
-              parsed.next_step = 'Click the Confirm or Cancel button below to proceed.';
-            }
-            return JSON.stringify(parsed, null, 2);
-          }
-        }
-      } catch (err) {
-        logger.warn(`[MCP] Failed to extract _confirmToken from tool ${name}`, {
-          error: err instanceof Error ? err.message : String(err),
-          resultSnippet: typeof result === 'string' ? result.slice(0, 200) : typeof result,
+      const extraction = extractMcpPendingAction(name, result);
+      if (extraction.kind === 'rejected') {
+        logger.warn(`[MCP] Ignored _confirmToken from tool ${name}`, { reason: extraction.reason });
+        return extraction.result;
+      }
+      if (extraction.kind === 'accepted') {
+        logger.debug(`[MCP] Extracted pendingAction from tool ${name}:`, {
+          tool: extraction.action.tool,
+          ts: extraction.action.ts,
         });
-        // SECURITY: Strip _confirmToken even on decode failure
-        if (typeof result === 'string') {
-          try {
-            const fallbackParsed = JSON.parse(result);
-            delete fallbackParsed._confirmToken;
-            return JSON.stringify(fallbackParsed, null, 2);
-          } catch {
-            logger.error(`[MCP] SECURITY: Fallback _confirmToken strip failed for tool ${name}`);
-            return JSON.stringify({ error: `Tool ${name} returned an unparseable result. Please try again.` });
-          }
+        try {
+          await callbacks.onPendingAction(extraction.action);
+        } catch (saveErr) {
+          logger.error(`[MCP] Failed to persist pendingAction from tool ${name}`, {
+            error: saveErr instanceof Error ? saveErr.message : String(saveErr),
+          });
         }
+        return extraction.result;
       }
     }
 
