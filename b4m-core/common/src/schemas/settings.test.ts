@@ -648,8 +648,12 @@ describe('isBlankSettingValue', () => {
   it('pins the settings whose blank save deletes the platform row', () => {
     // The clearDeletesRow gate is what makes "clear the field" mean unset for this one key. A second
     // key opting in silently would change that key's clear semantics, so pin the set here.
-    const clearing = (Object.keys(settingsMap) as SettingKey[]).filter(key => settingsMap[key].clearDeletesRow === true);
+    const clearing = (Object.keys(settingsMap) as SettingKey[]).filter(
+      key => settingsMap[key].clearDeletesRow === true
+    );
     expect(clearing).toEqual(['forcedRetrievalMinSimilarityPct']);
+    // update.ts returns before materializing the public settings artifact on a row delete.
+    expect(clearing.filter(key => settingsMap[key].publicSafe)).toEqual([]);
   });
 });
 
