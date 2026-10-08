@@ -2,7 +2,13 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
-import { extractRequiredScopesGate, methodBlocks, stripComments, tsFiles } from './scopeCoverageHelpers';
+import {
+  blankStringLiterals,
+  extractRequiredScopesGate,
+  methodBlocks,
+  stripComments,
+  tsFiles,
+} from './scopeCoverageHelpers';
 
 /**
  * Every `/api/projects` and `/api/agents` door gates API keys on that family's scope
@@ -63,16 +69,15 @@ const FAMILIES: Family[] = [
 // `baseApi(...)` next to an ungated exported handler from passing.
 const GATE_CALL = 'const handler = baseApi\\(';
 
-const withoutStringLiterals = (source: string): string =>
-  source.replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\$]|\\.)*`/g, "''");
-
 /**
  * True when `body` calls `assertName(req` before its first `await`, so no repository or service
  * call can run for a key that lacks the scope. String literals are blanked first so a quoted
- * mention cannot stand in for the call.
+ * mention cannot stand in for the call; a body that ends inside an unterminated string or comment
+ * fails closed.
  */
 function assertsBeforeFirstAwait(body: string, assertName: string): boolean {
-  const code = withoutStringLiterals(body);
+  const { code, terminated } = blankStringLiterals(body);
+  if (!terminated) return false;
   const callIndex = code.search(new RegExp(`\\b${assertName}\\(req\\b`));
   if (callIndex === -1) return false;
   const awaitIndex = code.search(/\bawait\b/);
@@ -187,6 +192,27 @@ describe('the gate regex actually rejects a bad door', () => {
 
   it('does not count an assert that only appears inside a string literal', () => {
     const body = ".get(async (req, res) => { const note = 'assertAgentsReadScope(req)'; return res.json({}); })";
+    expect(assertsBeforeFirstAwait(body, 'assertAgentsReadScope')).toBe(false);
+  });
+
+  it('keeps scanning past a // inside a string literal before the first await', () => {
+    const body =
+      ".put(async (req, res) => { const url = 'http://x'; await repo.update(); assertAgentsWriteScope(req); })";
+    expect(assertsBeforeFirstAwait(body, 'assertAgentsWriteScope')).toBe(false);
+  });
+
+  it('does not count an assert that only appears as text in a template literal with an interpolation', () => {
+    const body = '.get(async (req, res) => { const note = `assertAgentsReadScope(req) ${id}`; return res.json({}); })';
+    expect(assertsBeforeFirstAwait(body, 'assertAgentsReadScope')).toBe(false);
+  });
+
+  it('treats an await inside a template interpolation as real code', () => {
+    const body = '.put(async (req, res) => { const v = `${await repo.get()}`; assertAgentsWriteScope(req); })';
+    expect(assertsBeforeFirstAwait(body, 'assertAgentsWriteScope')).toBe(false);
+  });
+
+  it('fails closed when the body ends inside an unterminated string', () => {
+    const body = ".get(async (req, res) => { assertAgentsReadScope(req); const s = 'oops; })";
     expect(assertsBeforeFirstAwait(body, 'assertAgentsReadScope')).toBe(false);
   });
 

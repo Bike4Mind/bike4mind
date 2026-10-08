@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 type Handler = (req: unknown, res: unknown) => unknown;
@@ -37,23 +37,32 @@ vi.mock('@server/deepAgent/store', () => ({ MongoDeepAgentStore: class MongoDeep
 const runMissionFirstWake = vi.hoisted(() => vi.fn());
 vi.mock('@server/deepAgent/firstWake', () => ({ runMissionFirstWake }));
 
-const assertAgentsReadScope = vi.hoisted(() => vi.fn());
-const assertAgentsWriteScope = vi.hoisted(() => vi.fn());
-vi.mock('@server/agents/agentScopes', () => ({
-  AGENTS_READ_OR_WRITE_SCOPES: [],
-  assertAgentsReadScope,
-  assertAgentsWriteScope,
-}));
+vi.mock('@server/agents/agentScopes', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/agents/agentScopes')>();
+  return {
+    ...actual,
+    assertAgentsReadScope: vi.fn(actual.assertAgentsReadScope),
+    assertAgentsWriteScope: vi.fn(actual.assertAgentsWriteScope),
+  };
+});
 
 import '@pages/api/agents/[id]/missions';
+import { ApiKeyScope } from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/utils';
+import { assertAgentsReadScope, assertAgentsWriteScope } from '@server/agents/agentScopes';
 
 const SHARED_AGENT = { id: 'a1', userId: 'owner', users: [{ userId: 'u1' }] };
 const OWNED_AGENT = { id: 'a1', userId: 'u1', users: [] };
 const NOT_FOUND_BODY = { error: 'Agent not found' };
 
-function invoke(method: 'GET' | 'POST', user: Record<string, unknown>, query: Record<string, unknown> = { id: 'a1' }) {
+function invoke(
+  method: 'GET' | 'POST',
+  user: Record<string, unknown>,
+  query: Record<string, unknown> = { id: 'a1' },
+  extra: Record<string, unknown> = {}
+) {
   const { req, res } = createMocks({ method, query, body: { goal: 'ship it' } });
-  Object.assign(req, { user });
+  Object.assign(req, { user, ...extra });
   const handler = method === 'GET' ? mockRefs.getHandler! : mockRefs.postHandler!;
   return { req, res, run: () => handler(req, res) };
 }
@@ -112,9 +121,40 @@ describe('GET /api/agents/[id]/missions', () => {
 });
 
 describe('POST /api/agents/[id]/missions', () => {
+  const originalStaging = process.env.API_KEY_SCOPE_STAGING;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.API_KEY_SCOPE_STAGING;
     agentFindById.mockResolvedValue(OWNED_AGENT);
+  });
+
+  afterEach(() => {
+    if (originalStaging === undefined) delete process.env.API_KEY_SCOPE_STAGING;
+    else process.env.API_KEY_SCOPE_STAGING = originalStaging;
+  });
+
+  it('refuses a key holding only agents:read before any repository read', async () => {
+    const { run } = invoke('POST', developer, { id: 'a1' }, { apiKeyInfo: { scopes: [ApiKeyScope.READ_AGENTS] } });
+    await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(agentFindById).not.toHaveBeenCalled();
+    expect(enrollMissionForAgent).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin create a mission on an agent shared with others and passes the admin flag on', async () => {
+    agentFindById.mockResolvedValue(SHARED_AGENT);
+    enrollMissionForAgent.mockResolvedValue({ missionId: 'm1' });
+    runMissionFirstWake.mockResolvedValue({
+      episode: { id: 'e1', policyDecision: 'ok', actionsTaken: [], reflection: '', scopeLocks: [], tokensSpent: 0 },
+      handoff: { wakeCount: 1, nextIntendedAction: 'next' },
+    });
+    const { res, run } = invoke('POST', { id: 'admin', isAdmin: true });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(enrollMissionForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ callerIsAdmin: true }),
+      expect.anything()
+    );
   });
 
   it('asserts the agents:write scope with the request', async () => {
@@ -144,6 +184,7 @@ describe('POST /api/agents/[id]/missions', () => {
     const { res, run } = invoke('POST', developer);
     await run();
     expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toEqual({ error: "You don't have permission to create missions for this agent" });
     expect(enrollMissionForAgent).not.toHaveBeenCalled();
   });
 

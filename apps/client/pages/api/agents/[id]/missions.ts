@@ -16,7 +16,7 @@ import { runMissionFirstWake } from '@server/deepAgent/firstWake';
 /**
  * /api/agents/[id]/missions - Missions of an existing B4M Agent.
  *
- * GET  -> mission roster for the agent (owner-or-admin).
+ * GET  -> mission roster for the agent (owner, shared user, or admin).
  * POST -> create a mission (goal + options) and run its FIRST wake inline,
  *        inheriting the agent's persona + tool policy. Admin/dev gated while
  *        the feature matures (same gate as /api/deep-agent/spin); credit
@@ -35,9 +35,8 @@ const AGENT_NOT_FOUND_MESSAGE = 'Agent not found';
 
 type AccessDenial = 'not-found' | 'forbidden';
 
-// Not `assertAgentAccess` alone: its thrown NotFoundError renders with extra envelope fields, and a
-// missing id must stay byte-identical to a hidden one on these hand-written responses. Admins see any
-// agent that exists.
+// Maps the throwing `assertAgentAccess` to a value so a missing and a hidden agent share one 404 body.
+// Admins see any agent that exists.
 function agentAccessDenial(
   agent: AgentAccessShape | null | undefined,
   userId: string,
@@ -145,6 +144,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
         },
       });
     } catch (error) {
+      // Backstop for a delete/ownership race between the pre-check and enrollMissionForAgent; also wraps runMissionFirstWake.
       const message = (error as Error).message;
       if (/not your agent|no agent /.test(message)) return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
       logger.error('mission create failed', error as Error);

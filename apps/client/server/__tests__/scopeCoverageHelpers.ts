@@ -10,12 +10,120 @@ export function tsFiles(dir: string): string[] {
   });
 }
 
+type ScanResult = { code: string; terminated: boolean };
+
+/**
+ * Walks `source` once, tracking string and template-literal state (including `${...}` nesting) so a
+ * comment marker inside a string is never read as a comment. Comments are always dropped; with
+ * `blankStrings`, quoted contents and template text are dropped too while `${...}` interpolation
+ * stays as code. `terminated` is false when the source ends inside a string, template or block
+ * comment, so a caller can fail closed rather than trust a half-scanned file.
+ */
+function scanSource(source: string, blankStrings: boolean): ScanResult {
+  type Context = 'template' | 'interpolation' | 'brace';
+  const contexts: Context[] = [];
+  let code = '';
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    const context = contexts[contexts.length - 1];
+
+    if (context === 'template') {
+      if (ch === '\\') {
+        if (!blankStrings) code += source.slice(i, i + 2);
+        i += 2;
+      } else if (ch === '`') {
+        contexts.pop();
+        code += ch;
+        i++;
+      } else if (ch === '$' && next === '{') {
+        contexts.push('interpolation');
+        code += '${';
+        i += 2;
+      } else {
+        if (!blankStrings) code += ch;
+        i++;
+      }
+      continue;
+    }
+
+    if (ch === '/' && next === '/') {
+      const end = source.indexOf('\n', i);
+      i = end === -1 ? source.length : end;
+    } else if (ch === '/' && next === '*') {
+      const end = source.indexOf('*/', i + 2);
+      if (end === -1) return { code, terminated: false };
+      i = end + 2;
+    } else if (ch === '/' && startsRegexLiteral(code)) {
+      const end = findRegexEnd(source, i);
+      if (end === -1) return { code, terminated: false };
+      code += source.slice(i, end + 1);
+      i = end + 1;
+    } else if (ch === "'" || ch === '"') {
+      const end = findClosingQuote(source, i);
+      if (end === -1) return { code, terminated: false };
+      code += blankStrings ? ch + ch : source.slice(i, end + 1);
+      i = end + 1;
+    } else if (ch === '`') {
+      contexts.push('template');
+      code += ch;
+      i++;
+    } else {
+      if (contexts.length > 0 && ch === '{') contexts.push('brace');
+      else if (contexts.length > 0 && ch === '}') contexts.pop();
+      code += ch;
+      i++;
+    }
+  }
+  return { code, terminated: contexts.length === 0 };
+}
+
+/** True when a `/` after `code` opens a regex literal (an operand is expected), not a division. */
+function startsRegexLiteral(code: string): boolean {
+  const previous = code.trimEnd().slice(-1);
+  return previous === '' || '(,=:[!&|?{};+-*%<>~^'.includes(previous) || /(?:^|\W)return$/.test(code.trimEnd());
+}
+
+/** Index of the `/` closing the regex literal opening at `start` (`/` inside a class does not close it), or -1. */
+function findRegexEnd(source: string, start: number): number {
+  let inClass = false;
+  for (let i = start + 1; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '\\') i++;
+    else if (ch === '\n') return -1;
+    else if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    else if (ch === '/' && !inClass) return i;
+  }
+  return -1;
+}
+
+/** Index of the quote closing the single-line string opening at `start`, or -1 if it never closes. */
+function findClosingQuote(source: string, start: number): number {
+  for (let i = start + 1; i < source.length; i++) {
+    if (source[i] === '\\') i++;
+    else if (source[i] === source[start]) return i;
+    else if (source[i] === '\n') return -1;
+  }
+  return -1;
+}
+
 /**
  * Strips both comment forms so a commented-out `requiredScopes` mention never counts as a real
- * gate. Truncates a `//` inside a string literal too, which is harmless for the scans here.
+ * gate. String contents are kept intact, and a `//` inside one is not a comment.
  */
 export function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  return scanSource(source, false).code;
+}
+
+/**
+ * Drops comments and the text of string and template literals (`${...}` interpolation stays as
+ * code), so a quoted mention cannot stand in for a call. `terminated` is false when the source
+ * ends inside a string, template or block comment.
+ */
+export function blankStringLiterals(source: string): ScanResult {
+  return scanSource(source, true);
 }
 
 /**
