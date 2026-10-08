@@ -436,6 +436,12 @@ PUT /api/sessions/[id]
 | GET | /api/sessions/semantic-search | Semantic search across sessions |
 | GET | /api/sessions/recent-proactive-messages | Recent proactive messages |
 
+#### Release Notes
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/v1/whats-new | Published release notes, newest first (public, cursor-paginated, cached) |
+
 ---
 
 ### Projects

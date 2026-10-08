@@ -110,12 +110,9 @@ function withAccurateCoercedParams<T extends z.ZodObject<z.ZodRawShape>>(objectS
  * Runs at generate time only.
  */
 export function registerContract(contract: EndpointContract): void {
+  // A public operation gets an explicit empty list: omitting `security` fails redocly's security-defined rule.
   const security =
-    contract.auth === 'jwtOnly'
-      ? JWT_SECURITY_REQUIREMENT
-      : contract.auth === 'public'
-        ? undefined
-        : SECURITY_REQUIREMENT;
+    contract.auth === 'jwtOnly' ? JWT_SECURITY_REQUIREMENT : contract.auth === 'public' ? [] : SECURITY_REQUIREMENT;
 
   // Error bodies reuse the single shared ErrorResponse (or, for a declared scope 403,
   // ScopeForbiddenResponse) component ($ref) instead of
