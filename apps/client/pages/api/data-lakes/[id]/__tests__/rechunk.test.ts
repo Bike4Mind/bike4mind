@@ -192,6 +192,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     await invoke('POST');
     // By id only: a slug skips a deleted lake and would resolve the next lake sharing it.
     expect(h.assertLakeRebuildAccess.mock.calls[0][3]).toEqual({ idOnly: true });
+    expect(h.assertLakeRebuildAccess.mock.calls[1][3]).toEqual({ idOnly: true });
   });
 
   it('still resets but does not touch when the lake is a fallback lake with no Mongo doc', async () => {

@@ -344,7 +344,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // the lake doc and the retry re-reads live grants. The `update` below is itself a lake-doc write,
     // so no separate `touchIfStable` is needed. Nothing external runs in the callback (it re-runs on retry).
     const stored = await withTransaction(async () => {
-      await dataLakeService.assertLakeWriteAccess(lake.id, ctx, gateDeps);
+      await dataLakeService.assertLakeWriteAccess(lake.id, ctx, gateDeps, { idOnly: true });
       const { failed } = await dataLakeService.recordLakeFindings(
         lake.id,
         allFindings,
