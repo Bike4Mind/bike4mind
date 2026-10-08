@@ -354,7 +354,8 @@ export interface ResolvedDefaultChatModel {
  * reachable via IAM, so return it directly with zero extra work.
  *
  * Self-host: Bedrock needs the opt-in BEDROCK_AWS_* pair, so the schema default maps to its
- * direct-API Anthropic twin (an admin's explicit Bedrock pick is kept when that pair is set) - but a local-only box may have no ANTHROPIC_API_KEY at all. Probe
+ * direct-API Anthropic twin (an admin's explicit Bedrock pick is kept when that pair is set).
+ * But a local-only box may have no ANTHROPIC_API_KEY at all. Probe
  * the effective keys and the live model list, then keep the configured default when
  * its provider key is usable, else fall back to the first local Ollama chat model
  * (needs no key; embedding models are skipped), else return the (unusable) default so

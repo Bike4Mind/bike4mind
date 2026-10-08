@@ -54,8 +54,8 @@ export class OperationsModelService {
    * Background tasks (auto-naming, summaries, research) need a text model even
    * when no cloud key is set. The generic "any text model" fallback would pick a
    * Bedrock model first when one is listed (getAvailableModels enumerates Bedrock
-   * ahead of Ollama; on self-host only once BEDROCK_AWS_* is set), keeping background
-   * work off the local model the operator set up. Prefer the
+   * ahead of Ollama; on self-host only once BEDROCK_AWS_* is set), which would pull
+   * background work off the local model the operator set up. Prefer the
    * operator's primary pull (first token of OLLAMA_PULL_MODELS) so the chat model
    * is chosen over the embedder, else the first available Ollama text model.
    *
