@@ -167,7 +167,10 @@ export async function provisionLakeRagLakes(
     const left = await teardown();
     if (left.length === 0) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new AggregateError([err, ...left.map(m => new Error(m))], `${message}; teardown left ${left.length} lake(s)`);
+    throw new AggregateError(
+      [err, ...left.map(m => new Error(m))],
+      `${message}; teardown left ${left.length} failed delete(s)`
+    );
   }
   return { lakes, teardown };
 }
