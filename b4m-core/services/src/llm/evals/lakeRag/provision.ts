@@ -3,12 +3,17 @@
  * subject, every document uploaded, attached and polled to `ready`. Fetch-injected and fs-free so
  * the subpath stays importable anywhere; `corpus.ts` is the node:fs half.
  */
-import { call, pollUntil, resolved, stringField } from './http';
+import { call, pollUntil, resolved, stringField, type LakeRagCredential } from './http';
+
+export type { LakeRagCredential } from './http';
 
 export type LakeRagApi = {
   baseUrl: string;
-  /** Full header value, `Bearer b4m_live_...` or `Bearer <jwt>`. Never echoed into errors. */
-  authorization: string;
+  /**
+   * Full header value (`Bearer b4m_live_...`), or a credential that renews an expiring JWT and is
+   * retried once on a 401. Never echoed into errors.
+   */
+  authorization: string | LakeRagCredential;
   fetch?: typeof fetch;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
@@ -37,8 +42,8 @@ export type LakeRagProvision = {
   teardown(): Promise<string[]>;
 };
 
-// The presign is ContentType-bound to what resolveSupportedMimeType gives '.md', so the PUT must
-// send this exact value (apps/client/server/files/createPresignedUpload.ts).
+// The presign is not ContentType-bound (apps/client/server/files/createPresignedUpload.ts); the PUT
+// sends the type the file was created with so the stored object matches its record.
 const MARKDOWN_MIME = 'text/markdown';
 const RUN_ID = /^[a-z0-9]{1,12}$/;
 

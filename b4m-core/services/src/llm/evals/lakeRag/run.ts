@@ -69,7 +69,7 @@ export type LakeRagRunOptions = {
   arms?: readonly LakeRagArm[];
 };
 
-/** A 401 aborts the whole run: the JWT fallback has no refresh, so every later turn would fail too. */
+/** A 401 that survives a token renewal aborts the whole run: every later turn would fail too. */
 export class LakeRagUnauthorizedError extends Error {
   constructor(cause: LakeRagHttpError) {
     super(`lake RAG eval aborted: the credential was rejected (401). Mint a fresh one and rerun. ${cause.message}`);

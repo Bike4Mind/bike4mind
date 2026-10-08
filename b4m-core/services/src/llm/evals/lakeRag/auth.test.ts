@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { resolveLakeRagAuth } from './auth';
+import { jwtExpiryMs, resolveLakeRagAuth } from './auth';
+import { call, LakeRagHttpError, type LakeRagCredential } from './http';
 
 type Call = { method: string; url: URL; headers: Record<string, string>; body?: string };
 
@@ -53,7 +54,8 @@ describe('resolveLakeRagAuth', () => {
       fetch: fetchImpl,
       now: () => 1700000000000,
     });
-    expect(auth).toMatchObject({ authorization: 'Bearer jwt-abc', source: 'e2e-user' });
+    expect(auth.source).toBe('e2e-user');
+    expect(await (auth.authorization as LakeRagCredential).header()).toBe('Bearer jwt-abc');
 
     const create = calls[0];
     expect(create.method).toBe('POST');
@@ -99,10 +101,109 @@ describe('resolveLakeRagAuth', () => {
     expect(String(err)).not.toContain('s3cret');
   });
 
-  it('throws when create-user returns no accessToken', async () => {
-    const { fetchImpl } = fakeServer(201, { user: {} });
+  it.each([
+    ['no accessToken', { user: {}, refreshToken: 'r' }, /no accessToken/],
+    ['no refreshToken', { user: {}, accessToken: 'jwt-abc' }, /no refreshToken/],
+    ['an unparseable body', '<html>', /no accessToken/],
+  ])('sweeps the created user when create-user returns %s', async (_label, body, message) => {
+    const { calls, fetchImpl } = fakeServer(201, body);
     await expect(resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl })).rejects.toThrow(
-      /no accessToken/
+      message
     );
+    expect(calls.map(c => c.url.pathname)).toEqual(['/api/test/create-user', '/api/test/cleanup']);
+  });
+
+  it.each(['http://app.example.com', 'ftp://app.example.com'])('refuses base URL %s', async baseUrl => {
+    const { calls, fetchImpl } = fakeServer();
+    await expect(resolveLakeRagAuth({ baseUrl, e2eCleanupSecret: 's3cret', fetch: fetchImpl })).rejects.toThrow(
+      /https/
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+function jwt(expSeconds: number): string {
+  const enc = (v: unknown) => btoa(JSON.stringify(v)).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return `${enc({ alg: 'HS256' })}.${enc({ sub: 'u', exp: expSeconds })}.sig`;
+}
+
+describe('e2e credential renewal', () => {
+  const T0 = 1_700_000_000_000;
+  const first = jwt(T0 / 1000 + 30 * 60);
+  const second = jwt(T0 / 1000 + 60 * 60);
+
+  function renewingServer(opts: { refreshStatus?: number; liveTokens?: string[] } = {}) {
+    const live = new Set(opts.liveTokens ?? [first, second]);
+    const calls: Call[] = [];
+    let refreshes = 0;
+    const fetchImpl = (async (input: URL | string, init: RequestInit = {}) => {
+      const url = new URL(String(input));
+      const headers = { ...(init.headers as Record<string, string>) };
+      calls.push({ method: init.method ?? 'GET', url, headers, body: init.body as string | undefined });
+      if (url.pathname === '/api/test/create-user')
+        return new Response(JSON.stringify({ accessToken: first, refreshToken: 'refresh-1' }), { status: 201 });
+      if (url.pathname === '/api/auth/refreshToken') {
+        refreshes++;
+        if (opts.refreshStatus) return new Response('{}', { status: opts.refreshStatus });
+        return new Response(JSON.stringify({ accessToken: second, refreshToken: `refresh-${refreshes + 1}` }), {
+          status: 200,
+        });
+      }
+      const token = headers.Authorization?.replace(/^Bearer /, '');
+      return token && live.has(token)
+        ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+        : new Response('{"error":"expired"}', { status: 401 });
+    }) as typeof fetch;
+    return { calls, fetchImpl };
+  }
+
+  async function resolveAt(fetchImpl: typeof fetch, clock: { t: number }) {
+    const auth = await resolveLakeRagAuth({
+      baseUrl: base,
+      e2eCleanupSecret: 's3cret',
+      fetch: fetchImpl,
+      now: () => clock.t,
+    });
+    return { baseUrl: base, authorization: auth.authorization, fetch: fetchImpl };
+  }
+
+  it('reads the expiry from the JWT and falls back to the 30-minute TTL', () => {
+    expect(jwtExpiryMs(first, 0)).toBe(T0 + 30 * 60 * 1000);
+    expect(jwtExpiryMs('opaque', 5)).toBe(5 + 30 * 60 * 1000);
+  });
+
+  it('renews on a 401 with the refresh token create-user issued, then retries once', async () => {
+    const { calls, fetchImpl } = renewingServer({ liveTokens: [second] });
+    const api = await resolveAt(fetchImpl, { t: T0 });
+    await expect(call(api, 'GET', '/api/v1/files/f1')).resolves.toEqual({ ok: true });
+
+    const paths = calls.map(c => c.url.pathname);
+    expect(paths).toEqual(['/api/test/create-user', '/api/v1/files/f1', '/api/auth/refreshToken', '/api/v1/files/f1']);
+    expect(JSON.parse(calls[2].body!)).toEqual({ refreshToken: 'refresh-1' });
+    expect(calls[2].headers.Authorization).toBeUndefined();
+    expect(calls[3].headers.Authorization).toBe(`Bearer ${second}`);
+  });
+
+  it('renews before expiry and presents the rotated refresh token next time', async () => {
+    const { calls, fetchImpl } = renewingServer();
+    const clock = { t: T0 };
+    const api = await resolveAt(fetchImpl, clock);
+    await call(api, 'GET', '/a');
+    expect(calls.filter(c => c.url.pathname === '/api/auth/refreshToken')).toHaveLength(0);
+
+    clock.t = T0 + 26 * 60 * 1000;
+    await call(api, 'GET', '/b');
+    clock.t = T0 + 56 * 60 * 1000;
+    await call(api, 'GET', '/c');
+    const refreshes = calls.filter(c => c.url.pathname === '/api/auth/refreshToken');
+    expect(refreshes.map(r => JSON.parse(r.body!).refreshToken)).toEqual(['refresh-1', 'refresh-2']);
+  });
+
+  it('surfaces the 401 when renewal is refused', async () => {
+    const { fetchImpl } = renewingServer({ refreshStatus: 401, liveTokens: [] });
+    const api = await resolveAt(fetchImpl, { t: T0 });
+    const err = await call(api, 'GET', '/api/v1/files/f1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LakeRagHttpError);
+    expect((err as LakeRagHttpError).status).toBe(401);
   });
 });

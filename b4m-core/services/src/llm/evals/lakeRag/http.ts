@@ -1,6 +1,14 @@
 // Shared HTTP plumbing for the lake-RAG live driver. Internal: not re-exported from index.ts.
 import type { LakeRagApi } from './provision';
 
+/** A renewable credential, for the e2e-user JWT that expires mid-run. */
+export type LakeRagCredential = {
+  /** The current header value; renews first when the token is about to expire. */
+  header(): Promise<string>;
+  /** After a 401 sent with `rejected`: true when a newer header is now available. */
+  renew(rejected: string): Promise<boolean>;
+};
+
 /** A non-2xx response. The message carries method, path, status and a body excerpt, never the auth header. */
 export class LakeRagHttpError extends Error {
   constructor(
@@ -14,6 +22,28 @@ export class LakeRagHttpError extends Error {
 
 export type Json = Record<string, unknown>;
 
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** Resolves `path` against the base URL, refusing plain http anywhere but localhost. */
+export function lakeRagUrl(baseUrl: string, path: string): URL {
+  const url = new URL(path, baseUrl);
+  if (url.protocol === 'https:' || (url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname))) return url;
+  throw new Error(`LakeRag: base URL must use https (http only for localhost), got ${url.protocol}//${url.hostname}`);
+}
+
+const MAX_EXCERPT = 200;
+
+/** A server body made safe for errors, stdout and the JSON report: one line, token-shaped runs redacted, capped. */
+export function bodyExcerpt(text: string): string {
+  const flat = text
+    .replace(/b4m_live_[A-Za-z0-9_-]+/g, 'b4m_live_[redacted]')
+    .replace(/eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[jwt redacted]')
+    // eslint-disable-next-line no-control-regex -- stripping control bytes is the point
+    .replace(/[\x00-\x1f\x7f\s]+/g, ' ')
+    .trim();
+  return flat.length > MAX_EXCERPT ? `${flat.slice(0, MAX_EXCERPT)}...` : flat;
+}
+
 export function resolved(api: LakeRagApi) {
   return {
     fetch: api.fetch ?? fetch,
@@ -26,16 +56,25 @@ export function resolved(api: LakeRagApi) {
 }
 
 export async function call(api: LakeRagApi, method: string, path: string, body?: unknown): Promise<Json> {
-  const res = await resolved(api).fetch(new URL(path, api.baseUrl), {
-    method,
-    headers: {
-      Authorization: api.authorization,
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new LakeRagHttpError(`${method} ${path} -> ${res.status}: ${text.slice(0, 300)}`, res.status);
+  const url = lakeRagUrl(api.baseUrl, path);
+  const send = (authorization: string) =>
+    resolved(api).fetch(url, {
+      method,
+      headers: {
+        Authorization: authorization,
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const credential = api.authorization;
+  const header = typeof credential === 'string' ? credential : await credential.header();
+  let res = await send(header);
+  let text = await res.text();
+  if (res.status === 401 && typeof credential !== 'string' && (await credential.renew(header))) {
+    res = await send(await credential.header());
+    text = await res.text();
+  }
+  if (!res.ok) throw new LakeRagHttpError(`${method} ${path} -> ${res.status}: ${bodyExcerpt(text)}`, res.status);
   return text ? (JSON.parse(text) as Json) : {};
 }
 
