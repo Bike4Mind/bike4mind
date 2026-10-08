@@ -281,8 +281,11 @@ async function resolveAll<K extends SettingKey>(
     if (source !== SettingScopeLevel.Platform) {
       logger?.debug?.(`[scopedSettings] '${key}' resolved from ${source} scope`);
     }
-    // An unparseable platform row resolves to the coded default above, so it counts as not stored.
-    const stored = !!won || (key in platformRecord && def.schema.safeParse(platformRecord[key]).success);
+    // An unparseable platform row resolves to the coded default above, so it counts as not stored. So
+    // does a blank one: a number schema's preprocess turns '' into the prefaulted default, not a choice.
+    const raw = platformRecord[key];
+    const blank = typeof raw === 'string' && raw.trim() === '';
+    const stored = !!won || (key in platformRecord && !blank && def.schema.safeParse(raw).success);
     result.set(key, {
       value: value as SettingValue<K>,
       source,

@@ -290,6 +290,11 @@ describe('resolveScopedSettingEntries (stored)', () => {
     expect(await storedFor({ [KEY]: 'not-a-number' })).toMatchObject({ stored: false });
   });
 
+  it('is false for a blank platform row, which the schema would preprocess into the default', async () => {
+    expect(await storedFor({ [KEY]: '' })).toMatchObject({ stored: false });
+    expect(await storedFor({ [KEY]: '  ' })).toMatchObject({ stored: false });
+  });
+
   it('is true when an override wins over no platform row', async () => {
     expect(await storedFor({}, [override(SettingScopeLevel.Organization, 'o1', '2000')])).toMatchObject({
       value: 2000,

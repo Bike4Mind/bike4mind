@@ -2699,10 +2699,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       db.adminSettings.findBySettingName('forcedRetrievalMinSimilarityPct'),
       db.adminSettings.getSettingsValue('forcedRetrievalSpreadFloorPct'),
     ]);
+    // A blank row is unset too: the schema would preprocess it into the same manufactured 75.
+    const raw = absoluteRow?.settingValue;
     const parsed =
-      absoluteRow?.settingValue == null
+      raw == null || (typeof raw === 'string' && raw.trim() === '')
         ? undefined
-        : settingsMap.forcedRetrievalMinSimilarityPct.schema.safeParse(absoluteRow.settingValue);
+        : settingsMap.forcedRetrievalMinSimilarityPct.schema.safeParse(raw);
     return { charBudget, relative, absolute: parsed?.success ? parsed.data : undefined, spread };
   }
 

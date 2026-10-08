@@ -3351,16 +3351,22 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
   // relative floor is off so only the absolute floor decides.
   const smallSpace = { defaultEmbeddingModel: 'text-embedding-3-small', forcedRetrievalRelativeFloorPct: '0' };
 
-  it('an unparseable stored absolute floor resolves as unset, per embedding space', async () => {
-    const { injected } = await run(
-      makeCtx({
-        scores: [0.9, 0.7, 0.6],
-        platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '2000' },
-        withScopedOverlay: false,
-      })
+  // A blank row would otherwise preprocess into the schema's prefaulted 75 and read as explicit.
+  for (const withScopedOverlay of [true, false]) {
+    it.each(['2000', '', '  '])(
+      `an unparseable or blank stored absolute floor (%j) resolves as unset, per embedding space (overlay: ${withScopedOverlay})`,
+      async stored => {
+        const { injected } = await run(
+          makeCtx({
+            scores: [0.9, 0.7, 0.6],
+            platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: stored },
+            withScopedOverlay,
+          })
+        );
+        expect(injected).toEqual([0, 1, 2]);
+      }
     );
-    expect(injected).toEqual([0, 1, 2]);
-  });
+  }
 
   it('an unset absolute floor resolves per embedding space and logs which', async () => {
     const ctx = makeCtx({ scores: [0.9, 0.7, 0.6], platform: smallSpace });
