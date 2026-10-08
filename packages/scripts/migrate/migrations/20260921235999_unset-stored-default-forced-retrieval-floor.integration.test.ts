@@ -106,4 +106,15 @@ describe('unset-stored-default-forced-retrieval-floor migration (real DB)', () =
     const live = await raw('scopedsettings').find({ settingName: KEY, deletedAt: null }).toArray();
     expect(live.map(r => r.scopeId).sort()).toEqual(['org-a', 'user-a']);
   });
+
+  it('ignores a soft-deleted org row when deciding whether to keep an owner 75', async () => {
+    await raw('scopedsettings').insertMany([
+      { ...scopedRow(KEY, '60', 'org-gone'), deletedAt: new Date() },
+      scopedRow(KEY, '75', 'user-a', 'owner'),
+    ]);
+
+    await migration.up();
+
+    expect(await raw('scopedsettings').countDocuments({ settingName: KEY, deletedAt: null })).toBe(0);
+  });
 });

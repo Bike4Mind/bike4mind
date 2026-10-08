@@ -1,17 +1,20 @@
-import { isBlankSettingValue, SettingScopeLevel } from '@bike4mind/common';
+import { isBlankSettingValue, SettingScopeLevel, settingsMap } from '@bike4mind/common';
 import { AdminSettings, ScopedSetting } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 const LOG = '[unset-stored-default-forced-retrieval-floor]';
-const SETTING_NAME = 'forcedRetrievalMinSimilarityPct';
+const SETTING_NAME = 'forcedRetrievalMinSimilarityPct' as const;
 
 /** A stored 75 in any spelling (75, '75', ' 75', '75.0'). Exported for the sibling test. */
 export const isStoredDefault = (value: unknown): boolean =>
   (typeof value === 'number' || typeof value === 'string') && String(value).trim() !== '' && Number(value) === 75;
 
-/** A wider value that leaves the floor per space: unset, blank, unparseable, or itself a stored 75. */
+/**
+ * A wider value that leaves the floor per space: blank, schema-invalid (the resolver reads that as
+ * unset, e.g. a legacy 0 or a 150), or itself a stored 75. Blank first: the schema parses it into 75.
+ */
 const isNeutral = (value: unknown): boolean =>
-  isBlankSettingValue(value) || Number.isNaN(Number(value)) || isStoredDefault(value);
+  isBlankSettingValue(value) || !settingsMap[SETTING_NAME].schema.safeParse(value).success || isStoredDefault(value);
 
 type Row = { _id: unknown; settingValue?: unknown };
 type ScopedRow = Row & { scopeLevel?: unknown; scopeId?: unknown };
@@ -64,8 +67,11 @@ const migration: MigrationFile = {
       platform ?? (row.scopeLevel === SettingScopeLevel.Owner ? org : undefined);
 
     const scopedIds: unknown[] = [];
-    for (const row of scopedRows.filter(r => isStoredDefault(r.settingValue))) {
-      const wider = shadowed(row);
+    // A blank overlay row parses to the prefaulted 75 and wins, so it is a stored 75 in effect.
+    for (const row of scopedRows.filter(r => isStoredDefault(r.settingValue) || isBlankSettingValue(r.settingValue))) {
+      // Only org/owner rungs are settableAt for this key; any other row is inert, so removing it is moot.
+      const live = row.scopeLevel === SettingScopeLevel.Organization || row.scopeLevel === SettingScopeLevel.Owner;
+      const wider = live ? shadowed(row) : undefined;
       if (!wider) {
         scopedIds.push(row._id);
         continue;

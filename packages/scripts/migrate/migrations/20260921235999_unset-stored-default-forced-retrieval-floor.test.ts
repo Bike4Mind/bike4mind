@@ -119,4 +119,35 @@ describe('unset-stored-default-forced-retrieval-floor', () => {
     expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['org-75'] } });
     expect(logs().some(l => l.includes('kept owner:u1') && l.includes('60'))).toBe(true);
   });
+
+  it.each([
+    ['0', '0'],
+    ['150', 150],
+  ])('treats a schema-invalid platform %s as unset and removes the scoped 75', async (_label, value) => {
+    rows.admin = [{ _id: 'a1', settingValue: value }];
+    rows.scoped = [org('org-x', '75'), owner('u1', '75')];
+
+    await migration.up();
+
+    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['org-x', 'u1'] } });
+  });
+
+  it('removes an inert lake-rung 75 without logging it as kept', async () => {
+    rows.admin = [{ _id: 'a1', settingValue: 80 }];
+    rows.scoped = [{ _id: 'lake-1', settingValue: '75', scopeLevel: 'lake', scopeId: 'lake-1' }];
+
+    await migration.up();
+
+    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['lake-1'] } });
+    expect(logs().some(l => l.includes('kept'))).toBe(false);
+  });
+
+  it('applies the stored-75 rule to a blank overlay row, which parses to 75', async () => {
+    rows.admin = [];
+    rows.scoped = [org('org-blank', ' ')];
+
+    await migration.up();
+
+    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['org-blank'] } });
+  });
 });
