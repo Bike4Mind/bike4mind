@@ -1,3 +1,4 @@
+import type { AbsencePlan } from './absence';
 import type {
   DiscoveryRunHost,
   DiscoveryRunMode,
@@ -493,12 +494,7 @@ export interface ModelDiscoveryRunResult {
   diff: CatalogDiffEntry[];
   droppedRecords: DroppedSourceRecord[];
   /** Bookkeeping this run applied (or would have applied, in report mode). */
-  absence: {
-    sighted: string[];
-    missed: string[];
-    /** Backends no successful source listed: their counters are frozen this run. */
-    frozenBackends: string[];
-  };
+  absence: AbsencePlan;
   /** The price plan, reported identically in both modes; only writes differ. */
   prices: {
     rows: PlannedPriceRow[];
