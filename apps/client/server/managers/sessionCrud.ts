@@ -132,6 +132,23 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
   let session: ISessionDocument | null;
   let wasCreated = false;
 
+  // Shared by the create and attach paths below.
+  const lakeAdapters = {
+    // Imported at CALL time: the resolver's graph reaches the entitlement and Mongoose layers,
+    // and it is only needed when files are actually attached.
+    // Lets the lake-tag derivation see lake-membership files - an ownership/share reader cannot
+    // follow the creator-identity widening an organization lake uses. Request-free variant: this
+    // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
+    resolveLakeAccess: async () =>
+      (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, { logger }),
+    // The attachment door's lake arms, so a supplied lake file passes the access check.
+    resolveAttachmentLakeAccess: async () =>
+      (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
+        user,
+        logger
+      )(),
+  };
+
   if (reqSessionId) {
     // Resolve an existing session through an access-scoped lookup, never a bare findById -
     // otherwise any authenticated user could read/continue another user's session by id.
@@ -167,16 +184,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
               caches: cacheRepository,
             },
             logger,
-            // Request-free variants, as in the create branch below.
-            resolveLakeAccess: async () =>
-              (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, {
-                logger,
-              }),
-            resolveAttachmentLakeAccess: async () =>
-              (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
-                user,
-                logger
-              )(),
+            ...lakeAdapters,
             storage: getFilesStorage(),
           }
         );
@@ -200,21 +208,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           fabFiles: fabFileRepository,
           agents: agentRepository,
         },
-        // Imported at CALL time: the resolver's graph reaches the entitlement and Mongoose layers,
-        // and it is only needed when files are actually attached.
-        // Lets the lake-tag derivation see lake-membership files - an ownership/share reader cannot
-        // follow the creator-identity widening an organization lake uses. Request-free variant: this
-        // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
-        resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, {
-            logger,
-          }),
-        // The attachment door's lake arms, so a supplied lake file passes the access check.
-        resolveAttachmentLakeAccess: async () =>
-          (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
-            user,
-            logger
-          )(),
+        ...lakeAdapters,
       },
       { origin }
     );
