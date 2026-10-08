@@ -10,7 +10,8 @@ import {
 } from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { getSettingsMap } from '@bike4mind/utils';
-import { OMITTED_QUALITY_TIER } from './imageCostCalculator/OpenAIImageCostCalculator';
+import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './imageCostCalculator/OpenAIImageCostCalculator';
+import { estimateImageCredits } from '../imageCost';
 import type { Logger } from '@bike4mind/observability';
 import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
 import { getSettingsValue } from '@bike4mind/utils';
@@ -874,6 +875,42 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
   });
 });
 
+describe('ImageGenerationService.validateUserCredits input images', () => {
+  const user = { id: 'user1', currentCredits: 1_000_000 } as any;
+  const logger = { ...silentLogger, updateMetadata: vi.fn() } as unknown as Logger;
+  const validate = (modelInfo: ModelInfo, n: number, input: Record<string, unknown>) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (new ImageGenerationService({ db: {} } as any) as any).validateUserCredits(
+      user,
+      modelInfo,
+      n,
+      input,
+      logger,
+      null
+    ) as Promise<{ requiredCredits: number; usdCost: number }>;
+
+  it('adds a GPT model input term once, not per output image, matching estimateImageCredits', async () => {
+    const modelInfo = { id: ImageModels.GPT_IMAGE_2 } as ModelInfo;
+    const input = { model: ImageModels.GPT_IMAGE_2, quality: 'high', size: '1024x1024', inputImageCount: 2 };
+    const calculator = new OpenAIImageCostCalculator();
+
+    const held = await validate(modelInfo, 3, input);
+
+    expect(held.usdCost).toBeCloseTo(
+      3 * calculator.getCost(input as never) + calculator.getInputImageCost(input as never),
+      10
+    );
+    expect(held).toEqual(estimateImageCredits(modelInfo, 3, input as never));
+  });
+
+  it('adds no input term for a non-GPT model', async () => {
+    const modelInfo = { id: ImageModels.FLUX_PRO_1_1 } as ModelInfo;
+    expect(await validate(modelInfo, 1, { model: modelInfo.id, inputImageCount: 4 })).toMatchObject(
+      await validate(modelInfo, 1, { model: modelInfo.id })
+    );
+  });
+});
+
 describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
   // GROK image quality has a flat usdCost, so requiredCredits is deterministic here.
   const modelInfo = { id: ImageModels.GROK_IMAGINE_IMAGE_QUALITY } as ModelInfo;
@@ -1017,7 +1054,12 @@ describe('ImageGenerationService.process (size normalization)', () => {
     } as any);
   };
 
-  const generateWith = async (model: ImageModels, backend: ModelBackend, size?: string) => {
+  const generateWith = async (
+    model: ImageModels,
+    backend: ModelBackend,
+    size?: string,
+    bodyExtra: Record<string, unknown> = {}
+  ) => {
     vi.mocked(getAvailableModels).mockResolvedValue([
       {
         id: model,
@@ -1048,13 +1090,14 @@ describe('ImageGenerationService.process (size normalization)', () => {
         prompt: 'a red bicycle',
         model,
         ...(size ? { size } : {}),
+        ...bodyExtra,
       } as any,
       logger: silentLogger,
     });
 
     return {
       rendered: mockGeminiGenerate.mock.calls[0]?.[1],
-      billed: validateUserCredits.mock.calls[0]?.[3] as { size?: string } | undefined,
+      billed: validateUserCredits.mock.calls[0]?.[3] as { size?: string; inputImageCount?: number } | undefined,
     };
   };
 
@@ -1113,6 +1156,18 @@ describe('ImageGenerationService.process (size normalization)', () => {
     const { rendered, billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI, '5000x5000');
     expect(rendered).toMatchObject({ size: '1024x1024' });
     expect(billed).toMatchObject({ size: '1024x1024' });
+  });
+
+  it('holds each unique reference image as an input image', async () => {
+    const { billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI, undefined, {
+      referenceImageFabFileIds: ['a', 'a', 'b'],
+    });
+    expect(billed?.inputImageCount).toBe(2);
+  });
+
+  it('holds no input images for a plain text-to-image request', async () => {
+    const { billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI);
+    expect(billed?.inputImageCount).toBe(0);
   });
 
   it('leaves an absent GPT-Image size absent so the renderer picks the tier default', async () => {

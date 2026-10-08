@@ -49,7 +49,7 @@ export const generateImageContract = defineEndpoint({
     'binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send ' +
     '`prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart ' +
     "from truncation to the model's prompt limit). " +
-    '`referenceImageFabFileIds` passes up to 4 already-uploaded images as style anchors, after the input ' +
+    '`referenceImageFabFileIds` passes up to 16 already-uploaded images as style anchors, after the input ' +
     'image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is ' +
     'rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours ' +
     '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +

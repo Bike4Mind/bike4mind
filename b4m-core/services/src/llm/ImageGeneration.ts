@@ -493,10 +493,13 @@ export class ImageGenerationService {
     }
 
     let usdCost = 0;
+    // Input images are billed once per request, outside the `* n` (see getInputImageCost).
+    let inputUsd = 0;
 
     if (isGPTImageModel(modelInfo.id)) {
       const openAiCostCalculator = new OpenAIImageCostCalculator();
       usdCost = openAiCostCalculator.getCost(input as OpenAICostInput);
+      inputUsd = openAiCostCalculator.getInputImageCost(input as OpenAICostInput);
     } else if (
       modelInfo.id === ImageModels.FLUX_PRO_ULTRA ||
       modelInfo.id === ImageModels.FLUX_PRO_1_1 ||
@@ -521,7 +524,7 @@ export class ImageGenerationService {
       throw new BadRequestError(`Model not supported: "${modelInfo.id}"`);
     }
 
-    const requiredCredits = usdToCredits(usdCost * n);
+    const requiredCredits = usdToCredits(usdCost * n + inputUsd);
 
     if (!Number.isFinite(requiredCredits)) {
       throw new InternalServerError(`Unable to compute credit cost for model "${modelInfo.id}" (got ${usdCost}).`);
@@ -544,7 +547,7 @@ export class ImageGenerationService {
     }
 
     // usdCost returned only for usage-event analytics; billing still uses requiredCredits.
-    return { requiredCredits, usdCost: usdCost * n };
+    return { requiredCredits, usdCost: usdCost * n + inputUsd };
   }
 
   private addStatusToQuest(quest: IChatHistoryItemDocument, status: string, userId: string) {
@@ -893,6 +896,9 @@ export class ImageGenerationService {
             model,
             size: effectiveSize,
             quality: mapQualityForModel(model, quality),
+            // The primary image is picked after this hold (workbench or history), so only the
+            // references are billed; resolveReferenceImages de-dupes them the same way.
+            inputImageCount: new Set(referenceImageFabFileIds ?? []).size,
           },
           logger,
           organization
