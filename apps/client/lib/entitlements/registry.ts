@@ -14,7 +14,7 @@
  * import constants from a product namespace into this file (wrong dependency
  * direction); keep the literals inline.
  */
-import type { DomainGrantRow, EntitlementKey, PriceEntitlementRow, TagGrantRow } from './types';
+import type { DomainGrantRow, EntitlementKey, ImpliedEntitlementRow, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '@client/lib/subscriptions/constants';
 import { parseInternalStaffDomains, DATA_LAKE_SLUG_REGEX, MAX_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
 
@@ -172,6 +172,11 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // of by writing a tag straight into the user document, and so the partner-rules write
   // boundary stops rejecting it as unknown. Removed when the overlay is extracted.
   { tag: 'meetings', entitlements: ['meetings:pro'] },
+  // [DELETION-FOOTPRINT] Questmaster comp grant: the `questmaster` tag bridges to
+  // `questmaster:pro`. No Stripe price; granted-only. Listing it here puts the key in
+  // KNOWN_ENTITLEMENT_KEYS (admin Product Access + the partner-rules write boundary).
+  // Holders of `optihashi:pro` also get it via IMPLIED_ENTITLEMENT_ROWS below.
+  { tag: 'questmaster', entitlements: ['questmaster:pro'] },
   // Embed white-label: the `embed-whitelabel` tag bridges to `embed:whitelabel`,
   // which gates hiding the "Powered by" branding on the public embed widget
   // (epic #41 Phase D). Checked against the KEY OWNER (org billing owner), not
@@ -270,11 +275,57 @@ const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
  * (250,000, ~$250 at the ~$0.001/credit package rate). Future product rows
  * inherit this automatically by adding a key here.
  *
- * [DELETION-FOOTPRINT] The entry leaves with its product on extraction.
+ * Summed over the keys the domain confers DIRECTLY - implied entitlements
+ * (IMPLIED_ENTITLEMENT_ROWS) are not expanded here, so an implication never
+ * adds signup credits on its own.
+ *
+ * [DELETION-FOOTPRINT] Each entry leaves with its product on extraction.
  */
 const SIGNUP_CREDIT_ROWS: ReadonlyArray<{ key: EntitlementKey; credits: number }> = [
   { key: 'optihashi:pro', credits: 250_000 },
+  { key: 'questmaster:pro', credits: 250_000 },
 ];
+
+/**
+ * Implied entitlements: holding `ifHeld` also grants `alsoGrant`, whatever source
+ * granted `ifHeld` (subscription, tag, env domain, DB partner rule). Applied once in
+ * `getUserEntitlements` after every source has resolved, so `/api/entitlements`, the
+ * SPA gate and the server gates all agree; the admin Product Access resolver reports
+ * the result as an `implied` source.
+ *
+ * [DELETION-FOOTPRINT] Each row leaves with its product on extraction.
+ */
+const IMPLIED_ENTITLEMENT_ROWS: ImpliedEntitlementRow[] = [{ ifHeld: 'optihashi:pro', alsoGrant: ['questmaster:pro'] }];
+
+export const IMPLIED_ENTITLEMENTS: ReadonlyMap<EntitlementKey, readonly EntitlementKey[]> = new Map(
+  IMPLIED_ENTITLEMENT_ROWS.map(row => [normalizeTag(row.ifHeld), row.alsoGrant.map(normalizeTag)])
+);
+
+/**
+ * `keys` (normalized, de-duplicated, input order kept) followed by every key they
+ * imply via IMPLIED_ENTITLEMENTS, appended in first-discovered order. One linear walk
+ * over a growing list: an implied key is itself checked for implications, so a chain
+ * added later resolves fully, and a cycle terminates because each key is visited once.
+ * Deterministic for a given input order.
+ */
+export function applyImpliedEntitlements(
+  keys: Iterable<EntitlementKey>,
+  implications: ReadonlyMap<EntitlementKey, readonly EntitlementKey[]> = IMPLIED_ENTITLEMENTS
+): EntitlementKey[] {
+  const seen = new Set<EntitlementKey>();
+  const ordered: EntitlementKey[] = [];
+  const add = (key: EntitlementKey) => {
+    const normalized = normalizeTag(key);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    ordered.push(normalized);
+  };
+  for (const key of keys) add(key);
+  for (let i = 0; i < ordered.length; i++) {
+    for (const implied of implications.get(ordered[i]) ?? []) add(implied);
+  }
+  return ordered;
+}
 
 export const SIGNUP_CREDITS: ReadonlyMap<EntitlementKey, number> = new Map(
   SIGNUP_CREDIT_ROWS.map(row => [normalizeTag(row.key), row.credits])
@@ -498,4 +549,5 @@ export const __registryRows = {
   tagGrantRows: TAG_GRANT_ROWS as readonly TagGrantRow[],
   domainGrantRows: DOMAIN_GRANT_ROWS as readonly DomainGrantRow[],
   signupCreditRows: SIGNUP_CREDIT_ROWS,
+  impliedRows: IMPLIED_ENTITLEMENT_ROWS as readonly ImpliedEntitlementRow[],
 };

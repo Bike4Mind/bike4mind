@@ -15,6 +15,7 @@ const SOURCE_LABEL: Record<EntitlementSourceType, string> = {
   tag: 'Tag',
   domain: 'Email domain',
   subscription: 'Subscription',
+  implied: 'Implied',
   'admin-bypass': 'Super Admin',
   'developer-bypass': 'Developer tag',
 };
@@ -23,7 +24,7 @@ const SOURCE_LABEL: Record<EntitlementSourceType, string> = {
  * Per-user "why does this person have (or lack) product access" panel - the
  * fix for phantom-access visibility (admin-roles-product-access-redesign
  * M2+M4). Shows every known product entitlement with EVERY contributing
- * source (tag / domain / subscription / bypass), and lets an admin grant or
+ * source (tag / domain / subscription / implied / bypass), and lets an admin grant or
  * revoke the tag-based grant.
  *
  * Single source of truth for `tags`: grant/revoke stages into the shared
@@ -31,7 +32,7 @@ const SOURCE_LABEL: Record<EntitlementSourceType, string> = {
  * committed by the card's one "Update" button. Deriving the tag state from the
  * live `user` (formState) prop - NOT a separate immediate mutation - avoids the
  * split-brain where two independent writers to `tags` clobber each other or a
- * pending Role edit. The read-only source chips (domain / subscription /
+ * pending Role edit. The read-only source chips (domain / subscription / implied /
  * admin- or developer-bypass) come from the server resolver, which reflects
  * SAVED state - those axes are not editable here (domain grant is env/DB config;
  * a subscription is managed in the Subscription section; bypass follows Role).

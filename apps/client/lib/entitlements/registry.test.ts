@@ -15,6 +15,8 @@ import {
   BYPASS_EXEMPT_ENTITLEMENTS,
   isBypassExemptEntitlement,
   EMBED_WHITELABEL_ENTITLEMENT_KEY,
+  IMPLIED_ENTITLEMENTS,
+  applyImpliedEntitlements,
 } from './registry';
 
 // Behavior tests are table-driven over the real registry rows (no product
@@ -106,6 +108,64 @@ describe('registry invariants', () => {
       expect(Number.isInteger(row.credits), `signup credit for '${row.key}' must be an integer`).toBe(true);
       expect(row.credits, `signup credit for '${row.key}' must be positive`).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('implied-entitlement invariants', () => {
+  it('every implied row is in canonical form and implies at least one key', () => {
+    for (const row of __registryRows.impliedRows) {
+      expect(row.ifHeld).toBe(normalizeTag(row.ifHeld));
+      expect(row.alsoGrant.length, `'${row.ifHeld}' implies nothing`).toBeGreaterThan(0);
+      for (const key of row.alsoGrant) expect(key).toBe(normalizeTag(key));
+    }
+  });
+
+  it('has no duplicate ifHeld rows (Map build would silently drop the earlier one)', () => {
+    const heads = __registryRows.impliedRows.map(r => normalizeTag(r.ifHeld));
+    expect(new Set(heads).size).toBe(heads.length);
+  });
+
+  it('only implies between known grantable keys, never a key from itself', () => {
+    const known = new Set(KNOWN_ENTITLEMENT_KEYS);
+    for (const row of __registryRows.impliedRows) {
+      expect(known.has(row.ifHeld), `'${row.ifHeld}' is not a known key`).toBe(true);
+      for (const key of row.alsoGrant) {
+        expect(known.has(key), `'${key}' is not a known key`).toBe(true);
+        expect(key).not.toBe(row.ifHeld);
+      }
+    }
+  });
+});
+
+describe('applyImpliedEntitlements', () => {
+  it('adds every implied key for each real row, after the input keys', () => {
+    for (const row of __registryRows.impliedRows) {
+      expect(applyImpliedEntitlements(['other', row.ifHeld.toUpperCase()])).toEqual([
+        'other',
+        row.ifHeld,
+        ...row.alsoGrant.filter(key => key !== 'other'),
+      ]);
+    }
+  });
+
+  it('leaves a set with no implying key unchanged (normalized, de-duplicated, order kept)', () => {
+    expect(applyImpliedEntitlements(['B', 'a', 'b', ' '])).toEqual(['b', 'a']);
+  });
+
+  it('does not duplicate an implied key that is already held', () => {
+    const [ifHeld, alsoGrant] = [...IMPLIED_ENTITLEMENTS.entries()][0] ?? [];
+    if (!ifHeld || !alsoGrant) return;
+    expect(applyImpliedEntitlements([...alsoGrant, ifHeld])).toEqual([...alsoGrant, ifHeld]);
+  });
+
+  it('resolves a chain fully and terminates on a cycle, deterministically', () => {
+    const chain = new Map([
+      ['a', ['b']],
+      ['b', ['c', 'a']],
+      ['c', ['d']],
+    ]);
+    expect(applyImpliedEntitlements(['a'], chain)).toEqual(['a', 'b', 'c', 'd']);
+    expect(applyImpliedEntitlements(['c', 'a'], chain)).toEqual(['c', 'a', 'd', 'b']);
   });
 });
 
