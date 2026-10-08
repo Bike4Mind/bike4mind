@@ -115,7 +115,7 @@ const secretRotationNotifierCron = new sst.aws.Cron('secretRotationNotifier', {
       retention: '3 days',
     },
   },
-  enabled: modelDiscoveryCronEnabled,
+  enabled: ['production', 'dev'].includes($app.stage),
 });
 
 // [DELETION-FOOTPRINT] Team Metrics Refresh cron moved to @bike4mind/premium-pi
@@ -618,7 +618,7 @@ const modelDiscoveryCron = new sst.aws.Cron('modelDiscoveryCron', {
   job: modelDiscoveryFunction.arn,
   event: { trigger: 'cron' },
   // Preview stages never hammer providers.
-  enabled: ['production', 'dev'].includes($app.stage),
+  enabled: modelDiscoveryCronEnabled,
 });
 
 /**

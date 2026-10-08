@@ -33,6 +33,9 @@ describe('modelDiscoveryNoSuccessfulRun alarm', () => {
   });
 
   it('shares the flag with the cron it watches', () => {
-    expect(CRON_SOURCE).toMatch(/enabled: modelDiscoveryCronEnabled,/);
+    const cronBlock = CRON_SOURCE.match(/new sst\.aws\.Cron\('modelDiscoveryCron', \{[\s\S]*?\n\}\);/)?.[0];
+    expect(cronBlock).toMatch(/enabled: modelDiscoveryCronEnabled,/);
+    // Read before the declaration would throw at deploy (TDZ), so this is its only reader.
+    expect(CRON_SOURCE.match(/enabled: modelDiscoveryCronEnabled,/g)).toHaveLength(1);
   });
 });
