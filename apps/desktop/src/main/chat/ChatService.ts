@@ -92,6 +92,7 @@ import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistr
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { DoomLoopTracker } from './tools/doomLoop';
+import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import { spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
@@ -496,8 +497,10 @@ export class ChatService {
    * composer, so a send racing it either loses the message or sends a copy of text that is
    * already back in the input. Instead the message is taken OUT of the queue and the reply
    * aborted in one synchronous step - there is no moment at which the stop path can see it -
-   * and settleQueue sends it once that reply actually ends. Everything the interrupted turn
-   * had already produced stays in the transcript, exactly as for an ordinary stop.
+   * and settleQueue sends it once that reply has unwound. A tool still running does not hold
+   * that up: runTools stops waiting on it shortly after the abort and records it as interrupted
+   * (see untilStopped), unless it is mid-write. Everything the interrupted turn had already
+   * produced stays in the transcript, exactly as for an ordinary stop.
    */
   sendQueuedNow(sessionId: string, queuedId: string): void {
     const queue = this.deps.queue;
@@ -2150,8 +2153,14 @@ export class ChatService {
         const diffs: ChatDiff[] = [];
         let detail: ChatToolDetail | undefined;
         let moved = false;
+        // Set once the turn has stopped waiting on this call. Its work may still be running, and
+        // nothing it reports from then on may reach the renderer or the next request.
+        let abandoned = false;
+        let writing = false;
         const report: ToolReporter = {
-          progress: text => this.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text }),
+          progress: text => {
+            if (!abandoned) this.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text });
+          },
           media: item => attachments.push(item),
           notice: value => {
             notice = value;
@@ -2166,6 +2175,7 @@ export class ChatService {
             detail = value;
           },
           image: (bytes, mimeType) => {
+            if (abandoned) return;
             const images = this.pendingImages.get(call.id) ?? [];
             images.push({ mediaType: mimeType, data: bytes.toString('base64') });
             this.pendingImages.set(call.id, images);
@@ -2196,6 +2206,10 @@ export class ChatService {
           roots,
           workingDirectory,
           signal,
+          beginWrite: () => {
+            if (signal.aborted) throw new Error(STOPPED_BEFORE_CHANGE);
+            writing = true;
+          },
           protectedPaths: this.deps.protectedPaths,
           sessionId,
           callId: call.id,
@@ -2221,17 +2235,24 @@ export class ChatService {
         startedAt = Date.now();
         this.emit({ type: 'tool-start', sessionId, messageId, call });
 
+        // Raced against the stop rather than awaited outright: a tool that ignores the signal would
+        // otherwise hold Stop and "send now" until it finished. See untilStopped.
+        const outcome = await untilStopped((async () => tool.run(call.input, context))(), signal, () => writing);
         let settled: ChatToolCall;
-        try {
-          const result = await tool.run(call.input, context);
+        if (outcome.kind === 'abandoned') {
+          abandoned = true;
+          this.deps.logger.debug(`CHAT: stopped waiting on ${request.name}; anything it returns now is dropped`);
+          settled = decorate({ ...call, status: 'error', error: INTERRUPTED_MESSAGE });
+        } else if (outcome.kind === 'returned') {
           settled = decorate({
             ...call,
             // 'moved' is not a quieter 'done': the command is still running in the task panel,
             // and a green row would tell the reader it had finished here.
             status: moved ? 'moved' : 'done',
-            preview: capOutput(result, outputCapFor(request.name)),
+            preview: capOutput(outcome.value, outputCapFor(request.name)),
           });
-        } catch (err) {
+        } else {
+          const err = outcome.error;
           const message = err instanceof Error ? err.message : String(err);
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
           settled = decorate({

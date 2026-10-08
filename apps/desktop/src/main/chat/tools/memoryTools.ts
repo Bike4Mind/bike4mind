@@ -103,6 +103,7 @@ async function apply(plan: () => Promise<MemoryPlan>, context: ToolContext): Pro
   return withPathLock(`memory\u0000${store.directory}`, async () => {
     const fresh = await plan();
     if (context.signal.aborted) throw new Error('The turn was stopped before this memory was written.');
+    context.beginWrite?.();
     await applyMemoryPlan(fresh);
     for (const diff of diffsFor(fresh)) context.report?.diff(diff);
     return fresh;

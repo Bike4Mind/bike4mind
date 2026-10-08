@@ -27,11 +27,35 @@ import { CLICK_REF, FILL_REF, pageCall, SNAPSHOT_PAGE, type ElementOutcome, type
 const PARTITION = 'persist:b4m-agent-browser';
 const VIEWPORT = { width: 1280, height: 800 };
 const NAVIGATION_TIMEOUT_MS = 30_000;
+/** How long a page script (snapshot, click, fill, evaluate) may take before the load holding it is stopped. */
+const SCRIPT_TIMEOUT_MS = 15_000;
+/** A user's own `browser_evaluate` may await real work, such as an API call, so it gets longer. */
+const EVALUATE_TIMEOUT_MS = 30_000;
+/** How long a script held by a load gets to run once that load is stopped. Measured at under 10ms. */
+const STOP_RELEASE_MS = 2_000;
+const CAPTURE_TIMEOUT_MS = 15_000;
 /** Network idle has to hold this long to count; a SPA fires its next request right after load. */
 const QUIET_MS = 400;
 const MAX_BUFFERED_EVENTS = 200;
 
 type ConsoleArgs = [unknown, ...unknown[]];
+
+const TIMED_OUT = Symbol('timed out');
+
+/** `work`, or TIMED_OUT once `ms` pass first. `work` keeps running; nothing stops it here. */
+async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<typeof TIMED_OUT>(resolve => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const seconds = (ms: number) => `${Math.round(ms / 1000)} seconds`;
 
 /** Whether a page has been anywhere yet. A blank one would paint white over the pane's empty state. */
 function hasContent(url: string): boolean {
@@ -74,6 +98,8 @@ class ElectronPage implements BrowserPage {
   private readonly events: string[] = [];
   private lastStatus: number | undefined;
   private lastError = '';
+  /** Main-frame navigations committed so far; tells a load that showed nothing from one that showed a page. */
+  private commits = 0;
   inflight = 0;
   lastNetworkAt = 0;
 
@@ -109,6 +135,7 @@ class ElectronPage implements BrowserPage {
       return { action: 'deny' };
     });
     contents.on('did-navigate', (_event, url, status) => {
+      this.commits += 1;
       this.lastStatus = status;
       this.lastError = '';
       this.record(`navigated to ${url}${status ? ` (HTTP ${status})` : ''}`);
@@ -215,24 +242,60 @@ class ElectronPage implements BrowserPage {
     else history.goForward();
   }
 
-  async navigate(url: string): Promise<{ url: string; title: string; status?: number }> {
+  async navigate(url: string): Promise<{ url: string; title: string; status?: number; stillLoading?: boolean }> {
     this.lastStatus = undefined;
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`${url} did not finish loading in 30 seconds.`)),
-        NAVIGATION_TIMEOUT_MS
-      );
-    });
+    const commitsBefore = this.commits;
+    let loaded: unknown;
     try {
-      await Promise.race([this.contents.loadURL(url), timeout]);
+      loaded = await within(this.contents.loadURL(url), NAVIGATION_TIMEOUT_MS);
     } catch (err) {
       // A redirect aborts the first load but still lands somewhere; only fail if it landed nowhere.
-      if (!this.currentUrl() || this.currentUrl() === 'about:blank') throw err;
-    } finally {
-      clearTimeout(timer);
+      if (!hasContent(this.currentUrl())) throw err;
+    }
+    if (loaded === TIMED_OUT) {
+      // Stopped rather than left running: Electron holds every page script until the main frame
+      // stops loading, so the snapshot after this would wait on it forever. See script().
+      this.stop();
+      if (this.commits === commitsBefore) {
+        const still = hasContent(this.currentUrl()) ? `The browser is still on ${this.currentUrl()}.` : '';
+        throw new Error(
+          `${url} did not respond within ${seconds(NAVIGATION_TIMEOUT_MS)}, so loading was stopped. ${still}`.trim()
+        );
+      }
+      return { url: this.currentUrl(), title: this.contents.getTitle(), status: this.lastStatus, stillLoading: true };
     }
     return { url: this.currentUrl(), title: this.contents.getTitle(), status: this.lastStatus };
+  }
+
+  stop(): void {
+    if (!this.view.webContents.isDestroyed()) this.view.webContents.stop();
+  }
+
+  /**
+   * Run a page script, bounded.
+   *
+   * Electron does not run executeJavaScript until the main frame stops loading, so one request
+   * that never finishes would hold every snapshot and click forever. Past the deadline a load
+   * still running is stopped, which releases the script at once; a script that still does not
+   * answer is a renderer busy in its own code. An action given up on that way may still land if
+   * the page recovers, which the error says.
+   */
+  private async script<T>(code: string, what: string, userGesture = false, timeoutMs = SCRIPT_TIMEOUT_MS): Promise<T> {
+    const contents = this.contents;
+    const run = contents.executeJavaScript(code, userGesture) as Promise<T>;
+    const first = await within(run, timeoutMs);
+    if (first !== TIMED_OUT) return first;
+    if (!contents.isDestroyed() && contents.isLoadingMainFrame()) {
+      this.record(`stopped loading ${this.currentUrl()}: still loading after ${seconds(timeoutMs)}`);
+      contents.stop();
+      const released = await within(run, STOP_RELEASE_MS);
+      if (released !== TIMED_OUT) return released;
+    }
+    throw new Error(
+      `${what} did not finish within ${seconds(timeoutMs)}: the page is not responding, most likely busy ` +
+        'running its own scripts. If this was an action it may still happen once the page recovers. ' +
+        'Load the page again with browser_navigate, or try a different one.'
+    );
   }
 
   async back(): Promise<void> {
@@ -242,17 +305,17 @@ class ElectronPage implements BrowserPage {
   }
 
   async snapshot(maxChars: number): Promise<SnapshotResult> {
-    return (await this.contents.executeJavaScript(pageCall(SNAPSHOT_PAGE, maxChars))) as SnapshotResult;
+    return this.script<SnapshotResult>(pageCall(SNAPSHOT_PAGE, maxChars), 'Reading the page');
   }
 
   async click(ref: string): Promise<string> {
-    const outcome = (await this.contents.executeJavaScript(pageCall(CLICK_REF, ref), true)) as ElementOutcome;
+    const outcome = await this.script<ElementOutcome>(pageCall(CLICK_REF, ref), 'The click', true);
     if (!outcome.ok) throw new Error(outcome.error);
     return outcome.description;
   }
 
   async fill(ref: string, text: string): Promise<string> {
-    const outcome = (await this.contents.executeJavaScript(pageCall(FILL_REF, ref, text), true)) as ElementOutcome;
+    const outcome = await this.script<ElementOutcome>(pageCall(FILL_REF, ref, text), 'Filling the field', true);
     if (!outcome.ok) throw new Error(outcome.error);
     return outcome.description;
   }
@@ -261,9 +324,10 @@ class ElectronPage implements BrowserPage {
     const contents = this.contents;
     // A parked page holds no OS focus, so Enter would not reach a form: submit it directly.
     if (key === 'Enter') {
-      const submitted = (await contents.executeJavaScript(
-        `(() => { const el = document.activeElement; const form = el && el.form; if (form && el.tagName !== 'TEXTAREA') { form.requestSubmit(); return true; } return false; })()`
-      )) as boolean;
+      const submitted = await this.script<boolean>(
+        `(() => { const el = document.activeElement; const form = el && el.form; if (form && el.tagName !== 'TEXTAREA') { form.requestSubmit(); return true; } return false; })()`,
+        'Pressing Enter'
+      );
       if (submitted) return;
     }
     contents.focus();
@@ -273,7 +337,12 @@ class ElectronPage implements BrowserPage {
   }
 
   async screenshot(): Promise<Buffer> {
-    const image = await this.contents.capturePage();
+    const image = await within(this.contents.capturePage(), CAPTURE_TIMEOUT_MS);
+    if (image === TIMED_OUT) {
+      throw new Error(
+        `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
+      );
+    }
     if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
     // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
     const { width } = image.getSize();
@@ -292,7 +361,7 @@ class ElectronPage implements BrowserPage {
     const script =
       `(async () => { ${body} })().then(value => { try { return JSON.parse(JSON.stringify(value ?? null)); } ` +
       `catch { return String(value); } })`;
-    return this.contents.executeJavaScript(script, true);
+    return this.script<unknown>(script, 'The script', true, EVALUATE_TIMEOUT_MS);
   }
 
   drainEvents(): string[] {

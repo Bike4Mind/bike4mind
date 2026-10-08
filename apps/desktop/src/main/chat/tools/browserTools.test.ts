@@ -30,6 +30,7 @@ function fakePage(start = ''): BrowserPage & { url: string; events: string[] } {
     drainEvents: () => page.events.splice(0),
     settle: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
+    stop: vi.fn(),
   };
   return page;
 }
@@ -215,5 +216,46 @@ describe('browser tools', () => {
     await expect(
       browserNavigate.run({ url: 'localhost:3000' }, { roots: [], signal: new AbortController().signal })
     ).rejects.toThrow(/not available/);
+  });
+});
+
+describe('browser tools at a stop or a deadline', () => {
+  it('says when a page was cut off still loading, and still returns what arrived', async () => {
+    const page = fakePage();
+    vi.mocked(page.navigate).mockResolvedValueOnce({
+      url: 'http://localhost:3080/',
+      title: 'Home',
+      status: 200,
+      stillLoading: true,
+    });
+    const { context } = contextFor(page);
+
+    const result = await browserNavigate.run({ url: 'localhost:3080' }, context);
+    expect(result).toContain('Loaded http://localhost:3080/ (HTTP 200), but it was still loading at the time limit');
+    expect(result).toContain('[1] button "Add"');
+  });
+
+  it('stops the page loading and ends the step when the turn is stopped', async () => {
+    const page = fakePage('http://localhost:3080/');
+    vi.mocked(page.navigate).mockReturnValueOnce(new Promise(() => undefined));
+    const controller = new AbortController();
+    const { context } = contextFor(page);
+
+    const running = browserNavigate.run({ url: 'localhost:3080/slow' }, { ...context, signal: controller.signal });
+    await vi.waitFor(() => expect(page.navigate).toHaveBeenCalled());
+    controller.abort();
+
+    await expect(running).rejects.toThrow(/^Stopped: the turn was interrupted/);
+    expect(page.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to start a step once the turn is already stopped', async () => {
+    const page = fakePage('http://localhost:3080/');
+    const controller = new AbortController();
+    controller.abort();
+    const { context } = contextFor(page);
+
+    await expect(browserSnapshot.run({}, { ...context, signal: controller.signal })).rejects.toThrow(/^Stopped/);
+    expect(page.snapshot).not.toHaveBeenCalled();
   });
 });

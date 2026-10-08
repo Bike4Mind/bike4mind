@@ -200,6 +200,7 @@ export const sessionSpawn: ToolDefinition = {
     const placement: SpawnPlacement =
       input.placement === 'worktree' && branch ? { kind: 'worktree', branch } : { kind: 'local' };
 
+    context.beginWrite?.();
     const outcome = await host.spawn(prompt, title, placement);
     if (!outcome.ok) throw new Error(outcome.message);
     return [
@@ -259,6 +260,7 @@ export const sessionSend: ToolDefinition = {
     const sessionId = requireString(input, 'session_id');
     const message = requireString(input, 'message');
 
+    context.beginWrite?.();
     const outcome = await host.sendTo(sessionId, message);
     if (!outcome.ok) throw new Error(outcome.message);
 
@@ -306,6 +308,7 @@ export const sessionArchive: ToolDefinition = {
     const host = requireHost(context);
     const sessionId = requireString(input, 'session_id');
     const archived = input.archived !== false;
+    context.beginWrite?.();
     const updated = await host.setArchived(sessionId, archived);
     if (!updated) return 'No conversation with that id in this project.';
     return `${archived ? 'Archived' : 'Restored'} "${updated.title}".`;
@@ -344,6 +347,7 @@ export const sessionDelete: ToolDefinition = {
     // Refused here rather than relying on the caps: a conversation deleting itself would leave
     // this turn writing its reply into a file that no longer exists.
     if (sessionId === context.sessionId) throw new Error('A conversation cannot delete itself.');
+    context.beginWrite?.();
     const deleted = await host.deleteSession(sessionId);
     if (!deleted) return 'No conversation with that id in this project.';
     return 'Deleted it.';

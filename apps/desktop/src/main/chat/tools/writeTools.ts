@@ -886,6 +886,7 @@ async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string>
   }
   assertUnchanged(plan.key, plan.target, fingerprint(plan.state.exists, plan.state.content));
   if (context.signal.aborted) throw new Error('The turn was stopped before this change was written.');
+  context.beginWrite?.();
 
   // Recursive, but the target is already proven to sit inside a granted root, so every parent
   // this creates is inside it too.

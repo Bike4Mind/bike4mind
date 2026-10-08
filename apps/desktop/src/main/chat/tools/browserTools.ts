@@ -16,6 +16,34 @@ function requireBrowser(context: ToolContext): BrowserContext {
   return context.browser;
 }
 
+const STOPPED = 'Stopped: the turn was interrupted before this browser step finished.';
+
+/**
+ * Run one tool's steps on the session's page, ending them at a stop.
+ *
+ * The stop also halts whatever the page is loading, so Chromium is not left fetching for a turn
+ * that has moved on - and since Electron holds page scripts until a load ends, that is also what
+ * frees a step still waiting inside. The page's own deadlines live in BrowserManager.
+ */
+async function onPage<T>(context: ToolContext, steps: (page: BrowserPage) => Promise<T>): Promise<T> {
+  const page = await requireBrowser(context).page();
+  const { signal } = context;
+  if (signal.aborted) throw new Error(STOPPED);
+  let onAbort: () => void = () => undefined;
+  const stopped = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      page.stop();
+      reject(new Error(STOPPED));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([steps(page), stopped]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
 /** Acting on whatever page is open is free on a local dev server and asked per origin elsewhere. */
 async function actsOnLocalPage(context: ToolContext): Promise<boolean> {
   const current = (await requireBrowser(context).page()).currentUrl();
@@ -152,11 +180,16 @@ export const browserNavigate: ToolDefinition = {
   },
   async run(input, context) {
     const url = normalizeUrl(requireString(input, 'url'));
-    const page = await requireBrowser(context).page();
-    context.report?.label(`Opened ${url}`);
-    const loaded = await page.navigate(url);
-    const status = loaded.status ? ` (HTTP ${loaded.status})` : '';
-    return describePage(page, SNAPSHOT_CHARS, `Loaded ${loaded.url}${status}.`);
+    return onPage(context, async page => {
+      context.report?.label(`Opened ${url}`);
+      const loaded = await page.navigate(url);
+      const status = loaded.status ? ` (HTTP ${loaded.status})` : '';
+      const lead = loaded.stillLoading
+        ? `Loaded ${loaded.url}${status}, but it was still loading at the time limit, so loading was stopped ` +
+          'there. Parts of the page may be missing.'
+        : `Loaded ${loaded.url}${status}.`;
+      return describePage(page, SNAPSHOT_CHARS, lead);
+    });
   },
 };
 
@@ -169,9 +202,10 @@ export const browserSnapshot: ToolDefinition = {
     parameters: { type: 'object', properties: {} },
   },
   async run(_input, context) {
-    const page = await requireBrowser(context).page();
-    if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
-    return describePage(page, SNAPSHOT_CHARS, 'Current page.');
+    return onPage(context, async page => {
+      if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
+      return describePage(page, SNAPSHOT_CHARS, 'Current page.');
+    });
   },
 };
 
@@ -191,10 +225,11 @@ export const browserClick: ToolDefinition = {
   async run(input, context) {
     const ref = String(input.ref ?? '').replace(/^\[|\]$/g, '');
     if (!ref) throw new Error('The "ref" argument is required.');
-    const page = await requireBrowser(context).page();
-    const clicked = await page.click(ref);
-    context.report?.label(`Clicked ${clicked}`);
-    return describePage(page, ACTION_SNAPSHOT_CHARS, `Clicked [${ref}] ${clicked}.`);
+    return onPage(context, async page => {
+      const clicked = await page.click(ref);
+      context.report?.label(`Clicked ${clicked}`);
+      return describePage(page, ACTION_SNAPSHOT_CHARS, `Clicked [${ref}] ${clicked}.`);
+    });
   },
 };
 
@@ -219,15 +254,16 @@ export const browserType: ToolDefinition = {
     const ref = String(input.ref ?? '').replace(/^\[|\]$/g, '');
     if (!ref) throw new Error('The "ref" argument is required.');
     const text = typeof input.text === 'string' ? input.text : String(input.text ?? '');
-    const page = await requireBrowser(context).page();
-    const filled = await page.fill(ref, text);
-    if (input.submit === true) await page.press('Enter');
-    context.report?.label(`Typed into [${ref}]`);
-    return describePage(
-      page,
-      ACTION_SNAPSHOT_CHARS,
-      `[${ref}] ${filled}${input.submit === true ? ', then pressed Enter' : ''}.`
-    );
+    return onPage(context, async page => {
+      const filled = await page.fill(ref, text);
+      if (input.submit === true) await page.press('Enter');
+      context.report?.label(`Typed into [${ref}]`);
+      return describePage(
+        page,
+        ACTION_SNAPSHOT_CHARS,
+        `[${ref}] ${filled}${input.submit === true ? ', then pressed Enter' : ''}.`
+      );
+    });
   },
 };
 
@@ -245,9 +281,10 @@ export const browserPress: ToolDefinition = {
   ...gatedAction('Press a key'),
   async run(input, context) {
     const key = requireString(input, 'key');
-    const page = await requireBrowser(context).page();
-    await page.press(key);
-    return describePage(page, ACTION_SNAPSHOT_CHARS, `Pressed ${key}.`);
+    return onPage(context, async page => {
+      await page.press(key);
+      return describePage(page, ACTION_SNAPSHOT_CHARS, `Pressed ${key}.`);
+    });
   },
 };
 
@@ -258,9 +295,10 @@ export const browserBack: ToolDefinition = {
     parameters: { type: 'object', properties: {} },
   },
   async run(_input, context) {
-    const page = await requireBrowser(context).page();
-    await page.back();
-    return describePage(page, ACTION_SNAPSHOT_CHARS, 'Went back.');
+    return onPage(context, async page => {
+      await page.back();
+      return describePage(page, ACTION_SNAPSHOT_CHARS, 'Went back.');
+    });
   },
 };
 
@@ -278,16 +316,17 @@ export const browserScreenshot: ToolDefinition = {
   },
   async run(input, context) {
     const browser = requireBrowser(context);
-    const page = await browser.page();
-    const url = page.currentUrl();
-    if (!url) throw new Error('No page is open yet. Call browser_navigate first.');
-    await page.settle(SETTLE_MS);
-    const bytes = await page.screenshot();
-    const caption = typeof input.caption === 'string' && input.caption.trim() ? input.caption.trim() : url;
-    const kept = await browser.keepScreenshot(bytes, caption);
-    if (kept) context.report?.media(kept);
-    context.report?.image(bytes, 'image/png');
-    return `Captured a screenshot of ${url}. It is attached below this result.`;
+    return onPage(context, async page => {
+      const url = page.currentUrl();
+      if (!url) throw new Error('No page is open yet. Call browser_navigate first.');
+      await page.settle(SETTLE_MS);
+      const bytes = await page.screenshot();
+      const caption = typeof input.caption === 'string' && input.caption.trim() ? input.caption.trim() : url;
+      const kept = await browser.keepScreenshot(bytes, caption);
+      if (kept) context.report?.media(kept);
+      context.report?.image(bytes, 'image/png');
+      return `Captured a screenshot of ${url}. It is attached below this result.`;
+    });
   },
 };
 
@@ -307,11 +346,12 @@ export const browserEvaluate: ToolDefinition = {
   ...gatedScript,
   async run(input, context) {
     const expression = requireString(input, 'expression');
-    const page = await requireBrowser(context).page();
-    if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
-    const value = await page.evaluate(expression);
-    const rendered = value === undefined ? 'undefined' : JSON.stringify(value, null, 1);
-    return capOutput(`${rendered ?? String(value)}${eventsSection(page)}`);
+    return onPage(context, async page => {
+      if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
+      const value = await page.evaluate(expression);
+      const rendered = value === undefined ? 'undefined' : JSON.stringify(value, null, 1);
+      return capOutput(`${rendered ?? String(value)}${eventsSection(page)}`);
+    });
   },
 };
 
