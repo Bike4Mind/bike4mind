@@ -8,9 +8,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { decodeTimeIdCursor, encodeCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 
-const { mockListPublished, mockGetSettings, rateLimitOptions } = vi.hoisted(() => ({
+const { mockListPublished, mockGetSettings, mockFeedUrl, mockFetchUpstream, rateLimitOptions } = vi.hoisted(() => ({
   mockListPublished: vi.fn(),
   mockGetSettings: vi.fn(),
+  mockFeedUrl: vi.fn(),
+  mockFetchUpstream: vi.fn(),
   rateLimitOptions: [] as unknown[],
 }));
 
@@ -51,6 +53,10 @@ vi.mock('@bike4mind/database', () => ({
   releaseNoteRepository: { listPublished: mockListPublished },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: mockGetSettings }));
+vi.mock('@server/releaseNotes/upstreamFeed', () => ({
+  getWhatsNewFeedUrl: mockFeedUrl,
+  fetchUpstreamFeed: mockFetchUpstream,
+}));
 
 const { default: handler } = await import('@pages/api/v1/whats-new');
 
@@ -115,6 +121,7 @@ async function errorOf(
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetSettings.mockResolvedValue({ releaseNotesConfig: JSON.stringify({ enabled: true }) });
+  mockFeedUrl.mockReturnValue(undefined);
   mockListPublished.mockImplementation(async ({ after, limit }: { after?: Keyset; limit: number }) => {
     const rest = NOTES.filter(note => isAfter(note, after));
     return { items: rest.slice(0, limit), hasMore: rest.length > limit };
@@ -222,5 +229,55 @@ describe('GET /api/v1/whats-new', () => {
 
   it('rate limits per IP on a fixed bucket', () => {
     expect(rateLimitOptions).toContainEqual({ limit: 60, windowMs: 60_000, bucket: 'GET /api/v1/whats-new' });
+  });
+
+  describe('with WHATS_NEW_FEED_URL set', () => {
+    const UPSTREAM_NOTE = {
+      id: 'up1',
+      release_tag: 'v9',
+      headline: 'Upstream',
+      summary: 'From upstream.',
+      published_at: T1.toISOString(),
+      items: [{ category: 'new', text: 'Something', importance: 1 }],
+    };
+
+    beforeEach(() => {
+      mockFeedUrl.mockReturnValue('https://upstream.example.com/api/v1/whats-new');
+    });
+
+    it('serves the upstream page with its raw cursor, even while local notes are disabled', async () => {
+      mockGetSettings.mockResolvedValue({ releaseNotesConfig: null });
+      mockFetchUpstream.mockResolvedValue({ data: [UPSTREAM_NOTE], next_cursor: 'upstream-cursor' });
+      const res = await run({ limit: '2', cursor: 'opaque-upstream' });
+      expect(res._getJSONData()).toEqual({ data: [UPSTREAM_NOTE], next_cursor: 'upstream-cursor' });
+      expect(mockFetchUpstream).toHaveBeenCalledWith({ limit: 2, cursor: 'opaque-upstream' }, logger);
+      expect(res.getHeader('Cache-Control')).toBe('public, s-maxage=300, stale-while-revalidate=600');
+      expect(mockListPublished).not.toHaveBeenCalled();
+    });
+
+    it('applies the local denylist to upstream notes', async () => {
+      mockGetSettings.mockResolvedValue({ releaseNotesConfig: { enabled: false, denylist: ['acme'] } });
+      mockFetchUpstream.mockResolvedValue({
+        data: [UPSTREAM_NOTE, { ...UPSTREAM_NOTE, id: 'up2', summary: 'Built for ACME' }],
+        next_cursor: null,
+      });
+      const body = (await run())._getJSONData();
+      expect(body.data.map((note: { id: string }) => note.id)).toEqual(['up1']);
+    });
+
+    it('falls back to local notes with a short cache when the upstream fails', async () => {
+      mockFetchUpstream.mockResolvedValue(null);
+      const res = await run({ limit: '1' });
+      expect(res._getJSONData().data.map((note: { id: string }) => note.id)).toEqual([NOTES[0].id]);
+      expect(res.getHeader('Cache-Control')).toBe('public, s-maxage=30, stale-while-revalidate=30');
+    });
+
+    it('ends the list on fallback when the cursor was issued upstream', async () => {
+      mockFetchUpstream.mockResolvedValue(null);
+      const res = await run({ cursor: 'opaque-upstream' });
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ data: [], next_cursor: null });
+      expect(mockListPublished).not.toHaveBeenCalled();
+    });
   });
 });
