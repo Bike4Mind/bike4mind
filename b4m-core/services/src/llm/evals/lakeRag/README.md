@@ -88,7 +88,7 @@ It drives a deployed stage over HTTP, so nothing runs locally but the test proce
 LAKE_RAG_EVAL_BASE_URL=https://<your-stage-host> \
 LAKE_RAG_EVAL_MODEL=<model id> \
 LAKE_RAG_EVAL_API_KEY=b4m_live_... \
-PROMPT_EVAL_REPORT_PATH=/tmp/lakerag-report.json \
+LAKE_RAG_EVAL_REPORT_PATH=/tmp/lakerag-report.json \
   pnpm --filter @bike4mind/services test lakeRag/run.live
 ```
 
@@ -99,7 +99,7 @@ PROMPT_EVAL_REPORT_PATH=/tmp/lakerag-report.json \
 | `LAKE_RAG_EVAL_API_KEY`       | A `b4m_live_` key with `datalake:write`, `files:write`, `files:read`, `notebooks:write` and `ai:chat`. The stage needs the `EnableDataLakes` admin setting on.                                                                |
 | `E2E_CLEANUP_SECRET`          | Used only when no API key is set: mints a throwaway user through `/api/test/create-user` (stages with E2E endpoints enabled) and deletes it afterwards. Its 30-minute JWT is renewed through `/api/auth/refreshToken` before expiry and on a 401; a 401 that survives renewal aborts the run. |
 | `LAKE_RAG_EVAL_SAMPLES`       | Turns per question per arm. Default 1. A value that is not a positive integer is a hard error.                                                                                                           |
-| `PROMPT_EVAL_REPORT_PATH`     | Where the JSON report is written. Overwritten, not appended, unlike the sibling evals.                                                                                                                   |
+| `LAKE_RAG_EVAL_REPORT_PATH`   | Where the JSON report is written. Overwritten, not appended, unlike the sibling evals.                                                                                                                   |
 | `LAKE_RAG_EVAL_BASELINE_PATH` | An earlier JSON report. The run compares itself against it and fails if a banded metric moved outside the noise band.                                                                                    |
 
 The suite skips unless the base URL, the model and one credential are set. It creates one lake per subject, uploads every superseded generation and waits for it to be ingested before uploading the current one, promotes each lake out of draft once its files are ready (a draft lake does not ground chat), and runs the questions one fresh session at a time. `afterAll` detaches the files and archives the lakes, and fails the suite if any delete failed, so a leftover lake is never silent. On the e2e path the user cleanup deletes the user's lakes, files, sessions and quests outright. On the API-key path the lakes are archived rather than deleted, and the uploaded files, sessions and quests stay on the key owner's account, because the public API has no file DELETE. Every request that gets a 429 is retried after the `Retry-After` header or the body's "retry in Ns" hint, at most 4 times and 180 seconds in total per request; other errors are not retried. The base URL must be https unless it is localhost.

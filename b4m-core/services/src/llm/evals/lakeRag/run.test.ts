@@ -174,6 +174,14 @@ describe('runLakeRagArms', () => {
     await expect(run).rejects.not.toThrow(/secret-token/);
   });
 
+  it.each([0, 1.5, -1])('rejects samples %s without touching the network', async samples => {
+    const { api, calls } = fakeServer();
+    await expect(runLakeRagArms(api, [SATURN], LAKES, { model: 'm', samples })).rejects.toThrow(
+      /samples must be a positive integer/
+    );
+    expect(calls).toHaveLength(0);
+  });
+
   it('refuses a lake arm for a subject with no provisioned lake', async () => {
     const { api } = fakeServer();
     await expect(runLakeRagArms(api, [SATURN], {}, { model: 'm', arms: ['lake'] })).rejects.toThrow(/planetary-moons/);

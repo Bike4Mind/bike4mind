@@ -77,6 +77,12 @@ describe('buildLakeRagReport', () => {
     expect(readLakeRagReport(path)).toEqual(report);
   });
 
+  it('names the path when the baseline is truncated JSON', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'lakerag-')), 'cut.json');
+    writeFileSync(path, '{"arms":');
+    expect(() => readLakeRagReport(path)).toThrow(`${path} is not a lake RAG eval report`);
+  });
+
   it.each([
     ['no arms', { multiLakeDrop: null }, /missing arms/],
     ['a non-numeric drop', { arms: {}, multiLakeDrop: 'x' }, /multiLakeDrop/],

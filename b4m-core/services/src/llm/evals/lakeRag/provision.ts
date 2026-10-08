@@ -116,7 +116,8 @@ async function promoteLake(api: LakeRagApi, subject: string, lakeId: string): Pr
 /**
  * Supersession ranks by `createdAt`, so every superseded generation is registered and fully
  * ingested before any current one is even created, and the lake is promoted only after both.
- * A partial failure tears down what exists and rethrows the original error. Uploaded files
+ * A partial failure tears down what exists and rethrows the original error, or an AggregateError
+ * carrying it plus whatever teardown could not delete. Uploaded files
  * outlive teardown (v1 has no file DELETE).
  */
 export async function provisionLakeRagLakes(
@@ -163,8 +164,10 @@ export async function provisionLakeRagLakes(
       await promoteLake(api, subject, lakes[subject].id);
     }
   } catch (err) {
-    await teardown();
-    throw err;
+    const left = await teardown();
+    if (left.length === 0) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AggregateError([err, ...left.map(m => new Error(m))], `${message}; teardown left ${left.length} lake(s)`);
   }
   return { lakes, teardown };
 }

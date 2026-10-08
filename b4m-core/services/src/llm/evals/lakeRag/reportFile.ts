@@ -6,7 +6,7 @@ import { LAKE_RAG_ARMS } from './run';
 
 /**
  * Overwrites `path` with the report as JSON. The harness's emitEvalReport appends text to
- * PROMPT_EVAL_REPORT_PATH, so this driver writes the file itself rather than going through it.
+ * PROMPT_EVAL_REPORT_PATH (a sibling harness), so this driver writes the file itself rather than going through it.
  */
 export function writeLakeRagReport(path: string, report: LakeRagReport): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -22,8 +22,13 @@ const hasRate = (v: unknown): boolean => isRecord(v) && isRate(v.rate);
  * so a truncated or hand-edited baseline fails here by name instead of as a TypeError mid-compare.
  */
 export function readLakeRagReport(path: string): LakeRagReport {
-  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
   const malformed = (what: string) => new Error(`${path} is not a lake RAG eval report: ${what}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    throw malformed(err instanceof Error ? err.message : String(err));
+  }
   if (!isRecord(parsed) || !isRecord(parsed.arms)) throw malformed('missing arms');
   if (!isRate(parsed.multiLakeDrop)) throw malformed('multiLakeDrop is not a number or null');
   for (const arm of LAKE_RAG_ARMS) {

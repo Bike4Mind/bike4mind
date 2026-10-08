@@ -112,6 +112,31 @@ describe('resolveLakeRagAuth', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('rejects cleanup when the cleanup route answers non-2xx', async () => {
+    const fetchImpl = (async (input: URL | string) =>
+      String(input).includes('/api/test/cleanup')
+        ? new Response('{}', { status: 403 })
+        : new Response(JSON.stringify({ user: {}, accessToken: 'jwt-abc', refreshToken: 'r' }), {
+            status: 201,
+          })) as typeof fetch;
+    const auth = await resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl });
+    await expect(auth.cleanup()).rejects.toThrow(/-> 403/);
+  });
+
+  it('sweeps the user when create-user answers 5xx, since the route commits it before issuing a session', async () => {
+    const { calls, fetchImpl } = fakeServer(500, { error: 'session issue failed' });
+    await expect(resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl })).rejects.toThrow(
+      /create-user -> 500/
+    );
+    expect(calls.map(c => c.url.pathname)).toEqual(['/api/test/create-user', '/api/test/cleanup']);
+  });
+
+  it('does not sweep on a 4xx create-user refusal', async () => {
+    const { calls, fetchImpl } = fakeServer(403, { error: 'nope' });
+    await resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl }).catch(() => {});
+    expect(calls.map(c => c.url.pathname)).toEqual(['/api/test/create-user']);
+  });
+
   it('surfaces a create-user refusal without echoing the secret', async () => {
     const { fetchImpl } = fakeServer(403, { error: 'Test user creation is only available in development/preview' });
     const err = await resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl }).catch(

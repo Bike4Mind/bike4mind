@@ -69,6 +69,14 @@ describe('call 429 backoff', () => {
     expect(sends[1].at - sends[0].at).toBe(7_000);
   });
 
+  it('backs off 5s then 10s when a 429 carries neither a header nor a body hint', async () => {
+    const { api, sends } = server([tooMany('{}'), tooMany('{}'), ok()]);
+    const pending = call(api, 'POST', '/api/x');
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(pending).resolves.toEqual({ ok: true });
+    expect(sends.slice(1).map((s, i) => s.at - sends[i].at)).toEqual([5_000, 10_000]);
+  });
+
   it('falls back to the "retry in Ns" body hint', async () => {
     const { api, sends } = server([tooMany('{"error":"Rate limited, retry in 37s"}'), ok()]);
     const pending = call(api, 'POST', '/api/x');

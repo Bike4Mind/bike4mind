@@ -107,7 +107,11 @@ export async function resolveLakeRagAuth(opts: LakeRagAuthOptions): Promise<Lake
     }),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(`LakeRag auth: create-user -> ${res.status}: ${bodyExcerpt(text)}`);
+  if (!res.ok) {
+    // The route commits the user before issuing the session, so a 5xx can leave one behind.
+    if (res.status >= 500) await cleanup().catch(() => {});
+    throw new Error(`LakeRag auth: create-user -> ${res.status}: ${bodyExcerpt(text)}`);
+  }
   const created = parseJson(text);
   let access = nonEmpty(created.accessToken);
   let refresh = nonEmpty(created.refreshToken);

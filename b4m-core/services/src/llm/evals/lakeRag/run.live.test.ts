@@ -18,7 +18,7 @@ const model = process.env.LAKE_RAG_EVAL_MODEL;
 const apiKey = process.env.LAKE_RAG_EVAL_API_KEY;
 const e2eCleanupSecret = process.env.E2E_CLEANUP_SECRET;
 const samples = Number(process.env.LAKE_RAG_EVAL_SAMPLES ?? '1');
-const reportPath = process.env.PROMPT_EVAL_REPORT_PATH;
+const reportPath = process.env.LAKE_RAG_EVAL_REPORT_PATH;
 const baselinePath = process.env.LAKE_RAG_EVAL_BASELINE_PATH;
 
 const enabled = Boolean(baseUrl && model && (apiKey || e2eCleanupSecret));
@@ -41,11 +41,16 @@ describe.skipIf(!enabled)('lake RAG eval (live deployment)', () => {
   let provision: LakeRagProvision | undefined;
 
   afterAll(async () => {
-    const errors = (await provision?.teardown()) ?? [];
-    // After the lakes: on the e2e path this deletes the user that owns them.
-    const lakesDeleted = (await auth?.cleanup()) ?? 0;
-    // The user cleanup deletes any lakes the user still owns (apps/client/pages/api/test/cleanup.ts).
-    // It reports 0 after a clean teardown, so this only waives the assertion when it swept them all.
+    let errors: string[] = [];
+    let lakesDeleted = 0;
+    try {
+      errors = (await provision?.teardown()) ?? [];
+    } finally {
+      // After the lakes: on the e2e path this deletes the user that owns them. Always runs.
+      lakesDeleted = (await auth?.cleanup()) ?? 0;
+    }
+    // The user cleanup hard-deletes every lake the user owns, archived ones included
+    // (apps/client/pages/api/test/cleanup.ts), so on the e2e path the waiver applies whenever it ran.
     const lakeCount = Object.keys(provision?.lakes ?? {}).length;
     if (auth?.source === 'e2e-user' && lakesDeleted >= lakeCount) return;
     expect(errors, 'teardown left eval lakes behind').toEqual([]);

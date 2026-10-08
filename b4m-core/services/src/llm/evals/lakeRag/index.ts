@@ -1,8 +1,4 @@
-// Entry for the '@bike4mind/services/evals/lakeRag' subpath; pure, so a live driver in another
-// workspace package can import it without the services barrel.
+// Entry for the '@bike4mind/services/evals/lakeRag' subpath: the pure bank and grader only. The
+// live driver (auth, provisioning, run) stays in this directory and is imported relatively.
 export * from './bank';
 export * from './grade';
-export * from './provision';
-export * from './auth';
-export * from './run';
-export * from './report';
