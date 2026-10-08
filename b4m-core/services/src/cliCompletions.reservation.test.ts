@@ -38,6 +38,10 @@ const OPENAI_CACHED_MODEL_INFO = {
   pricing: { 200_000: { input: 2 / 1_000_000, output: 8 / 1_000_000, cache_read: 0.5 / 1_000_000 } },
 } as unknown as ModelInfo;
 
+// A real id: write billing is keyed on it, and OpenAI publishes no cache_read here.
+const SOL_MODEL_ID = 'gpt-5.6-sol';
+const SOL_MODEL_INFO = { ...OPENAI_MODEL_INFO, id: SOL_MODEL_ID } as unknown as ModelInfo;
+
 const KIMI_CACHED_MODEL_ID = 'reservation-test-kimi-cached';
 const KIMI_CACHED_MODEL_INFO = {
   ...OPENAI_CACHED_MODEL_INFO,
@@ -111,6 +115,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
     MODEL_INFO,
     REASONING_MODEL_INFO,
     OPENAI_MODEL_INFO,
+    SOL_MODEL_INFO,
     OPENAI_CACHED_MODEL_INFO,
     KIMI_CACHED_MODEL_INFO,
     DEEPSEEK_CACHED_MODEL_INFO,
@@ -315,6 +320,26 @@ describe('executeCompletion - pre-flight reservation size', () => {
       await executeCompletion({ ...roundParams, db, messages });
 
       const expected = usdToCredits(getTextModelCost(MODEL_INFO, 30_000, OUTPUT));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('reserves a write-billing OpenAI model at the cache-write rate for its new input', async () => {
+      const { db, users } = buildDb();
+      const messages = [{ role: 'user' as const, content: text(30_000) }];
+      await executeCompletion({ ...roundParams, model: SOL_MODEL_ID, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(SOL_MODEL_INFO, 0, OUTPUT, 0, 30_000));
+      const atInputRate = usdToCredits(getTextModelCost(SOL_MODEL_INFO, 30_000, OUTPUT));
+      expect(expected).toBeGreaterThan(atInputRate);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('does not surcharge an OpenAI model that caches for free', async () => {
+      const { db, users } = buildDb();
+      const messages = [{ role: 'user' as const, content: text(30_000) }];
+      await executeCompletion({ ...roundParams, model: OPENAI_MODEL_ID, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(OPENAI_MODEL_INFO, 30_000, OUTPUT));
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 

@@ -4,6 +4,7 @@ import {
   ModelBackend,
   type ModelInfo,
   CompletionInfo,
+  billsOpenAICacheWrites,
   getTextModelCost,
   pricingTierForTokens,
   CreditHolderType,
@@ -208,7 +209,13 @@ function estimateReservationUsd(
   estimatedInputTokens: number,
   estimatedOutputTokens: number
 ): number {
-  const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
+  // A write-billing model charges the uncached tail at the cache-write rate, so reserve for that.
+  const writesBill = billsOpenAICacheWrites(modelInfo.id);
+  const inputUsd = (model: ModelInfo, tokens: number) =>
+    writesBill ? getTextModelCost(model, 0, 0, 0, tokens) : getTextModelCost(model, tokens, 0);
+  const uncachedUsd = writesBill
+    ? getTextModelCost(modelInfo, 0, estimatedOutputTokens, 0, estimatedInputTokens)
+    : getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
   if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
 
   const lastAssistantMessageIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
@@ -251,8 +258,10 @@ function estimateReservationUsd(
 
   const tieredModel =
     tier === null ? modelInfo : ({ ...modelInfo, pricing: { [tier]: modelInfo.pricing[tier] } } as ModelInfo);
-  const cachedInputUsd = getTextModelCost(tieredModel, plainTokens, 0, readTokens, writeTokens);
-  const uncachedInputUsd = getTextModelCost(tieredModel, estimatedInputTokens, 0);
+  const cachedInputUsd = writesBill
+    ? getTextModelCost(tieredModel, 0, 0, readTokens, writeTokens + plainTokens)
+    : getTextModelCost(tieredModel, plainTokens, 0, readTokens, writeTokens);
+  const uncachedInputUsd = inputUsd(tieredModel, estimatedInputTokens);
   const outputUsd = getTextModelCost(tieredModel, 0, estimatedOutputTokens);
   return Math.max(cachedInputUsd, CACHED_INPUT_RESERVATION_FLOOR * uncachedInputUsd) + outputUsd;
 }
