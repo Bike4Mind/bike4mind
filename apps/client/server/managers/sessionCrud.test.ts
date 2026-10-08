@@ -17,6 +17,7 @@ const {
   userRepoFindById,
   defineAbilitiesForSpy,
   createAttachmentLakeAccessSpy,
+  fabFileFindMetadataByIds,
 } = vi.hoisted(() => {
   const sessionSave = vi.fn().mockResolvedValue(undefined);
   // any: a Mongoose model mock that is both newable (regular function so it works with
@@ -57,6 +58,7 @@ const {
     userRepoFindById: vi.fn(),
     defineAbilitiesForSpy: vi.fn(),
     createAttachmentLakeAccessSpy: vi.fn(),
+    fabFileFindMetadataByIds: vi.fn(),
   };
 });
 
@@ -74,7 +76,7 @@ vi.mock('@bike4mind/database', () => ({
   mongoose: { Types: { ObjectId: class {} } },
   compareMongoIds: (a: unknown, b: unknown) => String(a) === String(b),
   favoriteRepository: { find: favoriteRepoFind },
-  fabFileRepository: {},
+  fabFileRepository: { findMetadataByIds: fabFileFindMetadataByIds },
   projectRepository: {},
   agentRepository: {},
   cacheRepository: {},
@@ -95,7 +97,8 @@ vi.mock('@bike4mind/database/auth', () => ({
   },
 }));
 
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  resolveAttachScope: (await importOriginal<typeof import('@bike4mind/common')>()).resolveAttachScope,
   Permission: { create: 'create', read: 'read', update: 'update', delete: 'delete' },
   // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
   NotFoundError: class NotFoundError extends Error {},
@@ -137,6 +140,13 @@ const allowAbility = mockAbility(true);
 describe('sessionCrud', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Ids starting with 'img' resolve to images, 'gone' to no file, anything else to a pdf.
+    fabFileFindMetadataByIds.mockImplementation(async (ids: string[]) => ({
+      data: ids
+        .filter(id => !id.startsWith('gone'))
+        .map(id => ({ id, mimeType: id.startsWith('img') ? 'image/png' : 'application/pdf' })),
+      hasMore: false,
+    }));
   });
 
   describe('getOrCreateSession', () => {
@@ -291,8 +301,47 @@ describe('sessionCrud', () => {
       expect(updateSessionService).toHaveBeenCalledWith(
         user,
         { id: 'owned', knowledgeIds: ['f1'], propagateToProjects: false },
-        expect.anything()
+        expect.objectContaining({
+          resolveLakeAccess: expect.any(Function),
+          resolveAttachmentLakeAccess: expect.any(Function),
+        })
       );
+    });
+
+    it('keeps images per-turn and stores a repeated id once', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
+      updateSessionService.mockResolvedValueOnce({ id: 'existing' });
+
+      await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['b', 'img-1', 'b'],
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(fabFileFindMetadataByIds).toHaveBeenCalledWith(['b', 'img-1']);
+      expect(updateSessionService.mock.calls[0][1]).toEqual({
+        id: 'existing',
+        knowledgeIds: ['a', 'b'],
+        propagateToProjects: false,
+      });
+    });
+
+    it('does not write when the new ids are only images or unknown files', async () => {
+      const existing = { id: 'existing', knowledgeIds: [] };
+      SessionModelMock.findOne.mockResolvedValueOnce(existing);
+
+      const result = await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['img-1', 'gone-1'],
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(updateSessionService).not.toHaveBeenCalled();
+      expect(result.session).toBe(existing);
     });
 
     it('keeps the resolved session when the persist fails, so the turn still runs', async () => {

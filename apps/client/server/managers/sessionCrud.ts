@@ -20,6 +20,7 @@ import {
   ISession,
   ISessionOrigin,
   IUserDocument,
+  resolveAttachScope,
   SessionListFilters,
 } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -70,7 +71,10 @@ export interface GetOrCreateSessionParams {
   ability?: Ability;
   /** Logger instance */
   logger: Logger;
-  /** Fab file IDs if session should be associated with fab files */
+  /**
+   * Fab files for this turn. A new session gets them as knowledge; on an existing session the new
+   * non-image ones are also persisted to knowledgeIds (best-effort, never propagated to projects).
+   */
   fabFileIds?: string[];
   /**
    * Agents to attach to a newly created session only; ignored for an existing one. Authorized in
@@ -165,28 +169,34 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
         })
       : await sessionRepository.findByIdAndUserId(reqSessionId, userId);
 
-    // fabFileIds means notebook scope, so persist what it adds - otherwise the file rides this turn
-    // only (later turns read session.knowledgeIds). Never propagated to projects: an automatic attach
-    // is not consent to share. Best-effort: this turn still carries the ids as per-turn session files.
+    // Persist the notebook-scope files fabFileIds adds - otherwise a file rides this turn only (later
+    // turns read session.knowledgeIds). Images stay per-turn: a notebook image is re-sent as base64
+    // every turn (see resolveAttachScope). Never propagated to projects: an automatic attach is not
+    // consent to share. Best-effort: this turn still carries every id as a per-turn session file.
     const knownIds = session?.knowledgeIds ?? [];
-    const addedIds = (fabFileIds ?? []).filter(id => !knownIds.includes(id));
+    const addedIds = [...new Set(fabFileIds ?? [])].filter(id => !knownIds.includes(id));
     if (session && addedIds.length > 0) {
       try {
-        session = await sessionService.updateSession(
-          user,
-          { id: session.id, knowledgeIds: [...knownIds, ...addedIds], propagateToProjects: false },
-          {
-            db: {
-              sessions: sessionRepository,
-              projects: projectRepository,
-              fabFiles: fabFileRepository,
-              caches: cacheRepository,
-            },
-            logger,
-            ...lakeAdapters,
-            storage: getFilesStorage(),
-          }
-        );
+        const notebookIds = (await fabFileRepository.findMetadataByIds(addedIds)).data
+          .filter(file => resolveAttachScope('auto', file.mimeType) === 'notebook')
+          .map(file => file.id);
+        if (notebookIds.length > 0) {
+          session = await sessionService.updateSession(
+            user,
+            { id: session.id, knowledgeIds: [...knownIds, ...notebookIds], propagateToProjects: false },
+            {
+              db: {
+                sessions: sessionRepository,
+                projects: projectRepository,
+                fabFiles: fabFileRepository,
+                caches: cacheRepository,
+              },
+              logger,
+              ...lakeAdapters,
+              storage: getFilesStorage(),
+            }
+          );
+        }
       } catch (error) {
         logger.warn('Failed to persist fabFileIds to session knowledge', { sessionId: session.id, error });
       }
