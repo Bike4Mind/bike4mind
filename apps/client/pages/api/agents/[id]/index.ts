@@ -2,19 +2,18 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
-import { agentRepository, User, userRepository, creditTransactionRepository } from '@bike4mind/database';
+import { agentRepository } from '@bike4mind/database';
 import {
   IAgent,
   IAgentCapabilities,
   supportedChatModels,
   supportedImageModels,
-  CreditHolderType,
   groupShareSchema,
   userShareSchema,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
-import { creditService } from '@bike4mind/services';
+import { deleteAgent } from '@server/agents/deleteAgent';
 import {
   validateToolList,
   validateMaxIterations,
@@ -369,60 +368,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     const agent = await agentRepository.findById(id as string);
     assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to delete this agent");
 
-    // Reclaim agent credits back to owning user before deletion.
-    // claimCredits atomically zeroes the agent balance and returns the claimed amount -
-    // concurrent DELETE requests will get 0 on the second call, preventing double credit grant.
-    const creditsToReclaim = await agentRepository.claimCredits(id as string);
-    if (creditsToReclaim > 0) {
-      try {
-        // Credit user first: if subsequent agent debit fails, user has extra credits (recoverable)
-        // rather than losing credits permanently (agent debited but user never credited).
-        await creditService.addCredits(
-          {
-            ownerId: req.user!.id,
-            ownerType: CreditHolderType.User,
-            credits: creditsToReclaim,
-            type: 'received_credit',
-            senderId: agent.id,
-            senderType: CreditHolderType.Agent,
-            description: 'Credits returned from deleted agent',
-          },
-          { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
-        );
-        await creditService.subtractCredits(
-          {
-            type: 'transfer_credit',
-            ownerId: agent.id,
-            ownerType: CreditHolderType.Agent,
-            credits: creditsToReclaim,
-            description: 'Agent credit reclaim on deletion',
-            recipientId: req.user!.id,
-            recipientType: CreditHolderType.User,
-          },
-          { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: agentRepository }
-        );
-      } catch (err) {
-        // Non-atomic: log for manual reconciliation but still block deletion if reclaim failed
-        console.error('Agent credit reclaim failed — manual reconciliation may be needed', {
-          agentId: agent.id,
-          userId: req.user!.id,
-          credits: creditsToReclaim,
-          err,
-        });
-        throw err;
-      }
-    }
-
-    // Delete the agent
-    await agentRepository.delete(id as string);
-
-    // Clean up any users who had this agent selected as their custom Slack agent
-    try {
-      await User.updateMany({ 'slackSettings.customAgentId': id }, { $unset: { 'slackSettings.customAgentId': '' } });
-    } catch (error) {
-      console.error('Failed to clean up agent references:', error);
-      // Don't fail the request - agent is already deleted
-    }
+    await deleteAgent(agent, req.user!.id);
 
     res.status(204).end();
   });
