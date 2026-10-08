@@ -76,10 +76,19 @@ written; every other emit sends to a product its caller fixed. Every event
 carries `metadata.attribution: 'self-reported'` so a consumer can identify and
 filter it.
 
-Treat these as a directional signal only. Do not use them for a payout, a
-contractual count, or an external report without a verified attribution signal
-the server observes for itself, such as a referrer correlated at landing and
-signed so it cannot be forged.
+This stream is directional by owner decision, and it stays directional: it is
+never upgraded into a verified one. Do not use these events, or any Overwatch
+product funnel that counts them, for a payout, a contractual count, or an
+external report, and do not give an external party access to a funnel that
+includes them. A signed or first-party referral link would stop a third party
+misattributing a signup, but not a credited product creating accounts through
+its own genuine link. So any count that money or a contract depends on must
+come from host-owned records of paid conversions instead: the subscription's
+recorded acquisition touches, reconciled against Stripe.
+
+Overwatch does not yet separate `attribution: 'self-reported'` events in its
+funnel, so a product's signup stage currently mixes them with first-party
+signups.
 
 Signup attribution is gated server-side and fails closed. The gate reads
 `b4m_consent` first and the marketing site's `b4m-consent-decision` second; only
