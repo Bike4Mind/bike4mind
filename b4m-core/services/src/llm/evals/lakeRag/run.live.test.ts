@@ -36,8 +36,8 @@ const docs = readLakeRagCorpus(join(__dirname, 'corpus'));
 const PER_INGEST_MS = 3 * 60 * 1000;
 const PER_TURN_MS = 2 * 60 * 1000;
 const TIMEOUT_MS = docs.length * PER_INGEST_MS + rows.length * LAKE_RAG_ARMS.length * samples * PER_TURN_MS;
-// Teardown is one DELETE per attachment, one per lake and the cleanup sweep, each able to spend a
-// full 429 budget; the hook must outlast all of them or vitest kills it mid-cleanup.
+// Teardown is one DELETE per attachment and per lake, each able to spend a full 429 budget, plus the
+// cleanup sweep; keep in sync with provision.ts teardown. The hook must outlast them all.
 const TEARDOWN_TIMEOUT_MS = (docs.length + new Set(docs.map(d => d.subject)).size + 1) * (MAX_429_WAIT_MS + 30_000);
 
 describe.skipIf(!enabled)('lake RAG eval (live deployment)', () => {
@@ -57,7 +57,7 @@ describe.skipIf(!enabled)('lake RAG eval (live deployment)', () => {
     // (apps/client/pages/api/test/cleanup.ts), so on the e2e path the waiver applies whenever it ran.
     const lakeCount = Object.keys(provision?.lakes ?? {}).length;
     if (auth?.source === 'e2e-user' && lakesDeleted >= lakeCount) return;
-    expect(errors, 'teardown left eval lakes behind').toEqual([]);
+    expect(errors, 'teardown had failed deletes').toEqual([]);
   }, TEARDOWN_TIMEOUT_MS);
 
   it(
