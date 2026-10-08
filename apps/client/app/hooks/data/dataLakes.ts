@@ -661,7 +661,7 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
 
 /**
  * Updates an existing data lake configuration. `notifySuccess: false` drops the success toast for a
- * write the user did not ask for directly (e.g. GitHubConnectAction undoing its own origin switch).
+ * write whose caller raises its own (e.g. DataLakeSettingsModal's follow-up write).
  */
 export function useUpdateDataLake({ notifySuccess = true }: { notifySuccess?: boolean } = {}) {
   const queryClient = useQueryClient();

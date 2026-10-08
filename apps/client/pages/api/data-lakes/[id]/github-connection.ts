@@ -22,7 +22,7 @@ import {
   toGitHubLakeConnectionResponse,
 } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { verifyOrgAccess, verifyOrgAdminRead } from '@server/utils/orgAccess';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { isLakeIngestable } from '@bike4mind/common';
 import { Request } from 'express';
 
@@ -44,7 +44,8 @@ const StartGitHubConnectBody = z.object({ ensureConnectorFed: z.boolean().option
 /**
  * Switches a curated lake to connector-fed through the same gates and audited service as PUT
  * /api/data-lakes/:id plus the connect status re-check, so the switch lands in the config history
- * like any other origin edit.
+ * like any other origin edit. Keep in sync with PUT /api/data-lakes/[id]: a gate added there must be
+ * added here.
  */
 async function switchLakeToConnectorFed(req: Request, lakeId: string) {
   const ctx = await toAccessContext(req);
@@ -117,6 +118,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
+    // An API key can never finish the connect (no browser to carry the nonce cookie back).
+    if (req.apiKeyInfo) {
+      throw new ForbiddenError('Connecting a GitHub repository requires a signed-in session, not an API key');
+    }
     const { id } = req.query as { id: string };
     // `|| {}`: a bodyless POST (the plain start) arrives as an empty string, not an object.
     const { ensureConnectorFed = false } = StartGitHubConnectBody.parse(req.body || {});

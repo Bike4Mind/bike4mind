@@ -464,6 +464,22 @@ describe('GitHubConnectAction on a lake that is not connector-fed', () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
+  it('drops the switch prompt when the handoff fails after the start was accepted', async () => {
+    h.saveHandoff.mockImplementationOnce(() => {
+      throw new Error('SecurityError');
+    });
+    openPrompt({ id: 'lake1', origin: 'curated' });
+    await clickAndSettle('github-switch-origin-confirm-btn');
+    expect(screen.queryByTestId('github-switch-origin-prompt')).not.toBeInTheDocument();
+  });
+
+  it('keeps the switch prompt when the start itself is refused', async () => {
+    h.startMutateAsync.mockRejectedValue(new Error('refused'));
+    openPrompt({ id: 'lake1', origin: 'curated' });
+    await clickAndSettle('github-switch-origin-confirm-btn');
+    expect(screen.getByTestId('github-switch-origin-prompt')).toBeInTheDocument();
+  });
+
   it('shows the confirm as loading and locks cancel while the start is pending', () => {
     const { rerender } = openPrompt({ id: 'lake1', origin: 'curated' });
     h.startPending.current = true;

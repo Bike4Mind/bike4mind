@@ -114,11 +114,10 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
   const needsSwitch = !acceptsConnectorContent(lake.origin);
-  // Once the server switch lands, the lake prop reads connector-fed and the prompt must drop with it,
-  // or a handoff failure after a successful switch leaves "Switch this lake?" over a switched lake.
+  // List-backed callers drop the prompt once the refetched lake reads connector-fed. The wizard's
+  // targetLake is a snapshot, so a handoff failure after an accepted switch clears it explicitly
+  // (onFailed with no error).
   const promptingSwitch = confirmingSwitch && needsSwitch;
-  // Once the switch lands the lake prop reads connector-fed; drop the stored prompt so a later revert
-  // to curated cannot resurrect it with Connect disabled and nothing to click.
   useEffect(() => {
     if (!needsSwitch) setSwitchPromptLakeId(null);
   }, [needsSwitch]);
@@ -177,7 +176,14 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
                 loading={connecting}
                 // The begin hook toasts a refusal. Abandoning GitHub's page keeps the switch: the user
                 // confirmed it, and the lake's origin chip shows it.
-                onClick={() => beginConnect({ ensureConnectorFed: true })}
+                onClick={() =>
+                  beginConnect({
+                    ensureConnectorFed: true,
+                    onFailed: e => {
+                      if (e === undefined) setSwitchPromptLakeId(null);
+                    },
+                  })
+                }
               >
                 Switch and connect
               </Button>

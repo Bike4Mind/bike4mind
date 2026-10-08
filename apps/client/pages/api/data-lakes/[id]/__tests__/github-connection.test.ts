@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ZodError } from 'zod';
 import { ConflictError, InternalServerError, NotFoundError } from '@server/utils/errors';
 
 // Unit test of the per-lake GitHub connection status/install/disconnect route. Repo + auth gate +
@@ -204,6 +205,18 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
     });
 
+    it('refuses an API key even with the write scope, since it cannot finish the connect', async () => {
+      const { res } = makeRes();
+      const req = makeReq('POST', {
+        apiKeyInfo: { keyId: 'key-1', scopes: ['datalake:write'] },
+        body: { ensureConnectorFed: true },
+      });
+      await expect(run(req, res)).rejects.toThrow(/signed-in session/i);
+      expect(h.resolveConnectableLake).not.toHaveBeenCalled();
+      expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
+      expect(h.updateDataLake).not.toHaveBeenCalled();
+    });
+
     it('500s when the GitHub App is not configured on this deployment', async () => {
       h.getGitHubLakeAppConfig.mockReturnValue(null);
       const { res } = makeRes();
@@ -255,7 +268,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
 
       it('rejects an unknown body key before any check runs', async () => {
         const { res } = makeRes();
-        await expect(run(makeReq('POST', { body: { foo: 1 } }), res)).rejects.toThrow();
+        await expect(run(makeReq('POST', { body: { foo: 1 } }), res)).rejects.toThrow(ZodError);
         expect(h.resolveConnectableLake).not.toHaveBeenCalled();
       });
 
@@ -344,7 +357,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
 
       it('rejects a malformed body before any check runs', async () => {
         const { res } = makeRes();
-        await expect(run(switchReq({ ensureConnectorFed: 'yes' }), res)).rejects.toThrow();
+        await expect(run(switchReq({ ensureConnectorFed: 'yes' }), res)).rejects.toThrow(ZodError);
         expect(h.resolveConnectableLake).not.toHaveBeenCalled();
       });
     });

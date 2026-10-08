@@ -152,7 +152,8 @@ export async function resolveConnectableLake(
   if (!isLakeIngestable(lake.status)) {
     throw new BadRequestError(`Cannot connect a GitHub repository to a data lake in '${lake.status}' status`);
   }
-  // Binding never flips origin: the owner declaring the lake connector-fed is the consent (drive-sync.ts).
+  // Later steps never flip origin: the owner declaring the lake connector-fed is the consent (drive-sync.ts).
+  // Only the start route's explicit switch admits a curated lake (allowCurated).
   const curated = !acceptsConnectorContent(lake.origin);
   if (curated && !allowCurated) {
     throw new BadRequestError(
