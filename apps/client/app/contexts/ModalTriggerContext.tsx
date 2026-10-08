@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import WhatsNewSliderModal from '../components/modals/WhatsNewSliderModal';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useGetModals } from '@client/app/hooks/data/modals';
+import { useModalsWithReleaseNotes } from '@client/app/hooks/data/modalsWithReleaseNotes';
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 import { filterModals } from '@client/app/components/modals/modalHelpers';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
@@ -34,7 +34,7 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
 
   // Access modal data and counters for threshold checking
   const currentUser = useUser(s => s.currentUser);
-  const modals = useGetModals();
+  const modals = useModalsWithReleaseNotes();
   const counters = useGetUserActivityCounters(currentUser?.id);
 
   // Get refetch function to refresh modal data when tab becomes visible

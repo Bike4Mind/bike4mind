@@ -1,5 +1,5 @@
 import { useUser } from '@client/app/contexts/UserContext';
-import { useGetModals } from '@client/app/hooks/data/modals';
+import { useModalsWithReleaseNotes } from '@client/app/hooks/data/modalsWithReleaseNotes';
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { IModalDocument, ModalEvents, IUserActivityCounterDocument } from '@bike4mind/common';
@@ -58,7 +58,7 @@ interface WhatsNewSliderModalProps {
 
 const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger }) => {
   const { currentUser } = useUser();
-  const modals = useGetModals();
+  const modals = useModalsWithReleaseNotes();
   const counters = useGetUserActivityCounters(currentUser?.id);
   const logEvent = useLogEvent();
   const queryClient = useQueryClient();

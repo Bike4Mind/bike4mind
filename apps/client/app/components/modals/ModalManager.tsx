@@ -3,7 +3,7 @@ import GenericModal from './GenericModal';
 import { IModal, ModalEvents } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
-import { useGetModals } from '@client/app/hooks/data/modals';
+import { useModalsWithReleaseNotes } from '@client/app/hooks/data/modalsWithReleaseNotes';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useModalTrigger } from '@client/app/contexts/ModalTriggerContext';
 import { useRouter } from '@tanstack/react-router';
@@ -114,7 +114,7 @@ const ModalManager: React.FC = () => {
   const { resetTrigger, triggerModalByTag, tagToTrigger, triggerCounter } = useModalTrigger();
   const logEvent = useLogEvent();
   const counters = useGetUserActivityCounters(currentUser?.id);
-  const modals = useGetModals();
+  const modals = useModalsWithReleaseNotes();
   const router = useRouter();
   const queryClient = useQueryClient();
 
