@@ -456,6 +456,14 @@ describe('authorizeGitHubLakeConnection', () => {
     expect(h.exchangeInstallerCode).not.toHaveBeenCalled();
   });
 
+  // allowCurated is the start route's alone: every later step must keep refusing a curated lake.
+  it('refuses a curated lake, never exchanging the code', async () => {
+    h.dlFindById.mockResolvedValue({ ...ACTIVE_LAKE, origin: 'curated' });
+    await expect(authorizeGitHubLakeConnection(params())).rejects.toThrow(/curated/i);
+    expect(h.exchangeInstallerCode).not.toHaveBeenCalled();
+    expect(h.storeGitHubLakeAuthGrant).not.toHaveBeenCalled();
+  });
+
   it('400s a failed code exchange and stores no grant', async () => {
     h.exchangeInstallerCode.mockRejectedValue(new Error('bad code'));
     await expect(authorizeGitHubLakeConnection(params())).rejects.toMatchObject({ statusCode: 400 });
@@ -509,6 +517,13 @@ describe('listGitHubLakeRepositoryChoices', () => {
   it('403s when the flow holds no live grant', async () => {
     h.readGitHubLakeUserToken.mockRejectedValue(new ForbiddenError('expired'));
     await expect(listGitHubLakeRepositoryChoices(params())).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  // allowCurated is the start route's alone: the picker must keep refusing a curated lake.
+  it('refuses a curated lake, never listing installations', async () => {
+    h.dlFindById.mockResolvedValue({ ...ACTIVE_LAKE, origin: 'curated' });
+    await expect(listGitHubLakeRepositoryChoices(params())).rejects.toThrow(/curated/i);
+    expect(h.listUserInstallations).not.toHaveBeenCalled();
   });
 
   it('403s a GitHub 401 on the held user token (listUserInstallations) with the expired-grant message', async () => {
@@ -645,6 +660,13 @@ describe('completeGitHubLakeConnection', () => {
   it('consumes the flow grant after a successful connect', async () => {
     await completeGitHubLakeConnection(params());
     expect(h.consumeGitHubLakeAuthGrant).toHaveBeenCalledWith(CONFIG, NONCE_HASH);
+  });
+
+  // allowCurated is the start route's alone: completion must keep refusing a curated lake.
+  it('refuses a curated lake, creating no connection', async () => {
+    h.dlFindById.mockResolvedValue({ ...ACTIVE_LAKE, origin: 'curated' });
+    await expect(completeGitHubLakeConnection(params())).rejects.toThrow(/curated/i);
+    expect(h.ghConnCreate).not.toHaveBeenCalled();
   });
 
   // Acceptance criterion: a caller cannot name a repository it was never shown - the server
