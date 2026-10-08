@@ -66,7 +66,7 @@ type View = 'docs' | 'full' | 'quickstart';
 
 const VIEWS: { value: View; label: string }[] = [
   { value: 'docs', label: 'Interactive Docs' },
-  { value: 'full', label: 'Hand-written Reference' },
+  { value: 'full', label: 'Auth & Unmigrated Endpoints' },
   { value: 'quickstart', label: 'Claude Code Quickstart' },
 ];
 
@@ -128,20 +128,21 @@ const ApiReferenceTab = () => {
       {view === 'full' && (
         // This reference is hand-maintained (apiReferenceContent.ts) and is not
         // generated from the code, so it can lag reality. Point readers at the
-        // generated, drift-gated spec for endpoints that have one. Removed as the
-        // hand-written surface is migrated onto the contract pattern.
+        // generated, drift-gated spec (the Interactive Docs view) for endpoints that
+        // have one. Removed as the hand-written surface is migrated onto contracts.
         <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-reference-drift-banner">
           <Typography level="body-sm">
-            This reference is hand-maintained and may lag the code. Where an endpoint has a contract, the{' '}
+            This reference is hand-maintained and may lag the code. Where an endpoint has a contract, the Interactive
+            Docs view (
             <Link
               href={ExternalLinks.apiDocs}
               target="_blank"
               rel="noopener noreferrer"
               data-testid="api-reference-drift-docs-link"
             >
-              generated interactive API docs
-            </Link>{' '}
-            are authoritative; this page covers the endpoints that do not have one yet.
+              open in a new tab
+            </Link>
+            ) is authoritative; this page covers the endpoints that do not have one yet.
           </Typography>
         </Alert>
       )}
