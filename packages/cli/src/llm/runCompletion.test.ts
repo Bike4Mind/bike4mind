@@ -91,6 +91,28 @@ describe('runCompletion', () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
+  it('does not retry a blank turn that finished at end_turn, and names the stop reason', async () => {
+    // The no-retry rule is deliberately broad: any terminal stop reason means the
+    // turn finished normally, so a retry would repeat (and re-bill) the same outcome.
+    const blankEnd: StreamEvent = { type: 'content', text: '', stopReason: 'end_turn' };
+    const { transport, callback, promise } = run([[{ emit: content('') }, { emit: blankEnd }]], policy(2));
+    await expect(promise).rejects.toThrow(/stop reason: end_turn/);
+    await expect(promise).rejects.toBeInstanceOf(NoReplyCompletionError);
+    expect(transport.attempts).toBe(1);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a blank turn whose stop reason reads as a transient network error', async () => {
+    // 'aborted' is in the transient-network pattern list, so only the
+    // NoReplyCompletionError guard stops this blank turn from being re-billed.
+    const blankAborted: StreamEvent = { type: 'content', text: '', stopReason: 'aborted' };
+    const realPolicy: RetryPolicy = { ...createTransientRetryPolicy(), backoffMs: 0 };
+    const { transport, callback, promise } = run([[{ emit: content('') }, { emit: blankAborted }]], realPolicy);
+    await expect(promise).rejects.toBeInstanceOf(NoReplyCompletionError);
+    expect(transport.attempts).toBe(1);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
   it('settles a mid-stream abort without invoking the callback', async () => {
     const controller = new AbortController();
     const { callback, promise } = run(
