@@ -114,6 +114,9 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
   const needsSwitch = !acceptsConnectorContent(lake.origin);
+  // Once the server switch lands, the lake prop reads connector-fed and the prompt must drop with it,
+  // or a handoff failure after a successful switch leaves "Switch this lake?" over a switched lake.
+  const promptingSwitch = confirmingSwitch && needsSwitch;
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="github-connection-loading" />;
@@ -146,14 +149,14 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
           variant="outlined"
           color="neutral"
           startDecorator={<GitHubIcon />}
-          loading={connecting && !confirmingSwitch}
-          disabled={confirmingSwitch}
+          loading={connecting && !promptingSwitch}
+          disabled={promptingSwitch}
           onClick={() => (needsSwitch ? setSwitchPromptLakeId(lake.id) : beginConnect())}
           sx={{ alignSelf: 'flex-start' }}
         >
           Connect GitHub
         </Button>
-        {confirmingSwitch && (
+        {promptingSwitch && (
           <Stack gap={0.5} data-testid="github-switch-origin-prompt">
             <Typography level="body-sm">Switch this lake to connector-fed to connect a repository?</Typography>
             <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
