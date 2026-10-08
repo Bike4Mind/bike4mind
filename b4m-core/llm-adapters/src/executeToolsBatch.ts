@@ -15,6 +15,14 @@ function isTerminalToolError(error: unknown): boolean {
   return error instanceof PermissionDeniedError || getQuestErrorCode(error) !== undefined;
 }
 
+/** Whether the named tool is flagged `endsTurnAfterText` in the offered tool list. */
+export function isTurnEndingTool(
+  name: string,
+  tools: readonly Pick<ICompletionOptionTools, 'toolSchema' | 'endsTurnAfterText'>[] | undefined
+): boolean {
+  return tools?.find(tool => tool.toolSchema.name === name)?.endsTurnAfterText === true;
+}
+
 /**
  * Whether the tool loop should end the turn after this round's tool batch instead of making
  * the follow-up model call. True only when the round already streamed non-empty answer text
@@ -32,7 +40,7 @@ export function shouldEndTurnAfterTools(
   // block ahead of the tool leaves an empty entry in the list.
   const names = calledToolNames.filter((name): name is string => Boolean(name));
   if (names.length === 0 || !roundText?.trim()) return false;
-  return names.every(name => tools?.find(tool => tool.toolSchema.name === name)?.endsTurnAfterText === true);
+  return names.every(name => isTurnEndingTool(name, tools));
 }
 
 /**
