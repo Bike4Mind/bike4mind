@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, readFileSync } from 'fs';
+import { mkdtempSync, readFileSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import mongoose from 'mongoose';
-import { Organization, User } from '@bike4mind/database';
+import { Organization, organizationRepository, User } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 
 vi.mock('../utils/config', () => ({ Config: {} }));
 
-import { clearPointers, clearStaleOrganizationPointers } from './clearStaleOrganizationPointers';
+import { clearPointers, clearStaleOrganizationPointers, parseRepairArgs } from './clearStaleOrganizationPointers';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -25,6 +25,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  vi.restoreAllMocks();
   await User.collection.deleteMany({});
   await Organization.collection.deleteMany({});
 });
@@ -117,6 +118,57 @@ describe('clearStaleOrganizationPointers', () => {
     expect(live?.userIds.sort()).toEqual([s.noPermRow, s.removed, s.removedString, s.manager].map(String).sort());
     expect(String(await pointerOf(s.removed))).toBe(String(s.liveOrg));
     expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toEqual({ apply: false, orgs: result.orgs });
+    expect(statSync(reportPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('apply records exactly the nulled ids in the report', async () => {
+    await seed();
+    const reportPath = join(mkdtempSync(join(tmpdir(), 'stale-pointers-')), 'report.json');
+
+    const result = await clearStaleOrganizationPointers({ apply: true, reportPath, log: silent });
+
+    const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+    expect(report).toEqual({ apply: true, orgs: result.orgs });
+    const reportedIds = report.orgs.flatMap((o: { userIds: string[] }) => o.userIds);
+    expect(reportedIds).toHaveLength(result.cleared);
+    const stillPointing = await User.collection
+      .find({
+        _id: { $in: reportedIds.map((id: string) => new mongoose.Types.ObjectId(id)) },
+        organizationId: { $ne: null },
+      })
+      .toArray();
+    expect(stillPointing).toEqual([]);
+  });
+
+  it('apply writes nothing when the report cannot be written', async () => {
+    const s = await seed();
+    const reportPath = join(tmpdir(), `missing-dir-${oid()}`, 'report.json');
+
+    await expect(clearStaleOrganizationPointers({ apply: true, reportPath, log: silent })).rejects.toThrow();
+
+    expect(String(await pointerOf(s.removed))).toBe(String(s.liveOrg));
+    expect(await pointerOf(s.onGhost)).not.toBeNull();
+  });
+
+  it('apply keeps a user who joined the org between grading and the write', async () => {
+    const s = await seed();
+    const findMemberUserIds = organizationRepository.findMemberUserIds.bind(organizationRepository);
+    let liveOrgCalls = 0;
+    vi.spyOn(organizationRepository, 'findMemberUserIds').mockImplementation(async organizationId => {
+      if (organizationId === String(s.liveOrg) && ++liveOrgCalls === 2) {
+        await Organization.collection.updateOne({ _id: s.liveOrg }, {
+          $push: { users: { userId: String(s.removed), permissions: ['read'] } },
+        } as never);
+      }
+      return findMemberUserIds(organizationId);
+    });
+
+    const result = await clearStaleOrganizationPointers({ apply: true, log: silent });
+
+    expect(result.orgs.find(o => o.organizationId === String(s.liveOrg))?.userIds).toContain(String(s.removed));
+    expect(String(await pointerOf(s.removed))).toBe(String(s.liveOrg));
+    expect(await pointerOf(s.manager)).toBeNull();
+    expect(result.cleared).toBe(7);
   });
 
   it('apply nulls only the stale pointers and a second run finds nothing', async () => {
@@ -157,5 +209,26 @@ describe('clearStaleOrganizationPointers', () => {
     expect(cleared).toBe(1);
     expect(String(await pointerOf(s.removed))).toBe(String(elsewhere));
     expect(await pointerOf(s.manager)).toBeNull();
+  });
+});
+
+describe('parseRepairArgs', () => {
+  it('defaults the report to a timestamped file in the OS temp dir, dry run', () => {
+    const { apply, reportPath } = parseRepairArgs(['node', 'script']);
+    expect(apply).toBe(false);
+    expect(reportPath.startsWith(tmpdir())).toBe(true);
+    expect(reportPath).toMatch(/stale-organization-pointers-\d+\.json$/);
+  });
+
+  it('takes an explicit --report path alongside --apply', () => {
+    expect(parseRepairArgs(['node', 'script', '--apply', '--report', '/tmp/r.json'])).toEqual({
+      apply: true,
+      reportPath: '/tmp/r.json',
+    });
+  });
+
+  it('rejects --report with no value or a flag as its value', () => {
+    expect(() => parseRepairArgs(['node', 'script', '--apply', '--report'])).toThrow('--report needs a file path');
+    expect(() => parseRepairArgs(['node', 'script', '--report', '--apply'])).toThrow('--report needs a file path');
   });
 });

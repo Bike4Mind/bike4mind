@@ -6,7 +6,7 @@
  * idempotency notes: ./clearStaleOrganizationPointers.ts.
  *
  * Dry run by default; pass --apply to write. Every run first records the stale pointers (org, reason,
- * user ids) to --report <path> (default: a timestamped JSON file in the cwd), so a nulled pointer can
+ * user ids) to --report <path> (default: a timestamped JSON file in the OS temp dir, mode 0600), so a nulled pointer can
  * be traced and restored. The deleteOrganization fix must be deployed first,
  * or org deletes keep creating new stale pointers after the run.
  *
@@ -18,13 +18,10 @@
 import { connectDB } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
-import { clearStaleOrganizationPointers } from './clearStaleOrganizationPointers';
+import { clearStaleOrganizationPointers, parseRepairArgs } from './clearStaleOrganizationPointers';
 
 async function main() {
-  const apply = process.argv.includes('--apply');
-  const reportFlag = process.argv.indexOf('--report');
-  const reportPath =
-    reportFlag === -1 ? `stale-organization-pointers-${Date.now()}.json` : process.argv[reportFlag + 1];
+  const { apply, reportPath } = parseRepairArgs(process.argv);
   const mongoURI = process.env.MONGODB_URI ?? Config.MONGODB_URI;
   await connectDB(mongoURI.replace('%STAGE%', Resource.App.stage));
 
