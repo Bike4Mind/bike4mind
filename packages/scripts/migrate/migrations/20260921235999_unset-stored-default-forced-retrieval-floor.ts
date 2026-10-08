@@ -38,7 +38,7 @@ type ScopedRow = Row & { scopeLevel?: unknown; scopeId?: unknown };
  * that 80. Such a row is kept and logged instead: it now pins 75 in every space, a change too, but it
  * is the admin's explicit value and the log lets an operator choose. An org row's wider rung is the
  * platform row. An owner row's org rung is the org row with the SAME scopeId: `scopeForCaller` (the
- * only resolver for this key, in services/src/settings/resolveScopedSetting.ts) keys an org member at
+ * only runtime reader of this key, in services/src/settings/resolveScopedSetting.ts) keys an org member at
  * `owner:<orgId>` + `organization:<orgId>`, and an org-less user at `owner:<userId>` with no org rung.
  */
 async function removeRows(

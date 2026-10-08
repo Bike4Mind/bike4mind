@@ -65,6 +65,16 @@ describe('AdminSettingsTab field default value', () => {
     expect(passedDefault('forcedRetrievalMinSimilarityPct')).toBeNull();
   });
 
+  it.each([null, '', '  '])(
+    'passes null for a clearDeletesRow setting whose stored row is blank (%j)',
+    settingValue => {
+      serverSettings = [{ settingName: 'forcedRetrievalMinSimilarityPct', settingValue }];
+      renderAiTab();
+
+      expect(passedDefault('forcedRetrievalMinSimilarityPct')).toBeNull();
+    }
+  );
+
   it('passes the stored value for a clearDeletesRow setting with a row', () => {
     serverSettings = [{ settingName: 'forcedRetrievalMinSimilarityPct', settingValue: 60 }];
     renderAiTab();
