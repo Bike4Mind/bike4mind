@@ -621,6 +621,33 @@ const modelDiscoveryCron = new sst.aws.Cron('modelDiscoveryCron', {
   enabled: modelDiscoveryCronEnabled,
 });
 
+// Independent of modelDiscoveryCron: the check must still run when discovery stops.
+const modelDiscoveryStalenessFunction = new sst.aws.Function('modelDiscoveryStalenessFunction', {
+  vpc: lambdaVpc,
+  handler: 'apps/workers/src/cron/modelDiscoveryStaleness.handler',
+  runtime: 'nodejs24.x',
+  timeout: '2 minutes',
+  link: [...allSecrets],
+  environment: {
+    ...DEFAULT_LAMBDA_ENVIRONMENT,
+  },
+  logging: {
+    retention: '1 week',
+  },
+  permissions: [
+    {
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+    },
+  ],
+});
+
+const modelDiscoveryStalenessCron = new sst.aws.Cron('modelDiscoveryStalenessCron', {
+  schedule: 'rate(15 minutes)',
+  job: modelDiscoveryStalenessFunction.arn,
+  enabled: modelDiscoveryCronEnabled,
+});
+
 /**
  * Data Lake Batch Reconcile (daily fallback)
  * Global watchdog: forces batches stuck non-terminal past the timeout to terminal via the same
@@ -1022,6 +1049,8 @@ export {
   attackSimulationCron,
   modelDiscoveryFunction,
   modelDiscoveryCron,
+  modelDiscoveryStalenessFunction,
+  modelDiscoveryStalenessCron,
   questTimeoutSweepCron,
   generationJobSweepCron,
   agentExecutionAbandonedSweepCron,

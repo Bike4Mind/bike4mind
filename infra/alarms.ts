@@ -11,7 +11,7 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryCronEnabled, modelDiscoveryFunction } from './cron';
+import { modelDiscoveryCronEnabled, modelDiscoveryFunction, modelDiscoveryStalenessFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
@@ -801,29 +801,48 @@ if (isMonitoredStage) {
   /**
    * Alarm: Model Discovery no successful run (dead-man's switch)
    *
-   * Every run publishes RunFailures (0 on success or partial, 1 on failure),
-   * so its Minimum over 24h (4x the cadence) is 0 iff some run succeeded.
-   * Missing data breaches, which is safe only because the alarm exists solely
-   * where the cron is enabled; a preview with monitoring on would otherwise
-   * sit in ALARM forever. Turning enableModelDiscovery off also trips it:
-   * a disabled run is skipped and publishes nothing.
+   * An independent check reads the last completed hosted 'ok' run every 15
+   * minutes. Partial runs do not refresh it. An independent schedule is needed
+   * because CloudWatch can reuse older healthy data beyond a missing 24h
+   * window when the watched discovery cron stops.
    *
-   * Metric emitted by: server/modelDiscovery/metrics.ts
-   * Namespace: Lumina5/ModelDiscovery / RunFailures
+   * Metric emitted by: apps/workers/src/cron/modelDiscoveryStaleness.ts
+   * Namespace: Lumina5/ModelDiscovery / NoSuccessfulRun
    */
   if (modelDiscoveryCronEnabled) {
     new aws.cloudwatch.MetricAlarm('modelDiscoveryNoSuccessfulRun', {
       name: `${$app.name}-${$app.stage}-model-discovery-no-successful-run`,
-      alarmDescription: 'No successful model discovery run in 24h - the cron stopped or enableModelDiscovery is off',
-      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      alarmDescription: 'No completed successful hosted model discovery run in 24h',
+      comparisonOperator: 'GreaterThanThreshold',
       evaluationPeriods: 1,
-      metricName: 'RunFailures',
+      metricName: 'NoSuccessfulRun',
       namespace: 'Lumina5/ModelDiscovery',
-      period: 86400, // 24 hours, 4x the run cadence
-      statistic: 'Minimum',
-      threshold: 1,
+      period: 1800, // Two independent checks per period; any stale check breaches.
+      statistic: 'Maximum',
+      threshold: 0,
       treatMissingData: 'breaching',
       dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryStalenessCheckErrors', {
+      name: `${$app.name}-${$app.stage}-model-discovery-staleness-check-errors`,
+      alarmDescription: 'Model discovery staleness check failed; watchdog data may be unavailable',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: {
+        FunctionName: modelDiscoveryStalenessFunction.name,
+      },
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'ModelDiscovery',
