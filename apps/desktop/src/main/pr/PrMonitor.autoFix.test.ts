@@ -13,8 +13,8 @@ function setup({ busy = false, accept = true } = {}) {
   const store = tempStore();
   const fake = fakeGithub(failing);
   const out = collector();
-  const started: { prompt: string; origin: ChatAutomaticOrigin; attemptsWhenStarted?: number }[] = [];
-  const state = { busy, accept };
+  const started: { prompt: string; origin: ChatAutomaticOrigin }[] = [];
+  const state = { busy, accept, refuseAsBusy: true };
   const monitor = new PrMonitor({
     store,
     github: fake.github,
@@ -22,10 +22,10 @@ function setup({ busy = false, accept = true } = {}) {
       project: async () => null,
       archive: async () => undefined,
       isBusy: () => state.busy,
-      startAutoFix: (_sessionId, prompt, origin) => {
-        if (!state.accept) return false;
+      startAutoFix: async (_sessionId, prompt, origin) => {
+        if (!state.accept) return { ok: false, busy: state.refuseAsBusy, error: 'Sign in to send a message.' };
         started.push({ prompt, origin });
-        return true;
+        return { ok: true };
       },
     },
     emit: out.emit,
@@ -82,6 +82,36 @@ describe('PrMonitor auto-fix', () => {
     expect(stored?.autoFixAttempts ?? 0).toBe(0);
     expect(stored?.autoFixHandled ?? []).toEqual([]);
     expect(out.last().autoFix.status).toBe('waiting');
+  });
+
+  it('gives the attempt back and says why when the turn is refused', async () => {
+    const { store, monitor, started, out, state } = setup({ accept: false });
+    state.refuseAsBusy = false;
+    await store.set(SESSION, bound);
+    await monitor.refresh(SESSION);
+    expect(started).toHaveLength(0);
+    expect((await store.get(SESSION))?.autoFixAttempts ?? 0).toBe(0);
+    expect(out.last().autoFix.note).toContain('Sign in to send a message.');
+  });
+
+  it('starts once when a read and a turn ending ask at the same time', async () => {
+    const { store, monitor, started, state } = setup({ busy: true });
+    await store.set(SESSION, bound);
+    await monitor.refresh(SESSION);
+    state.busy = false;
+    await Promise.all([monitor.refresh(SESSION), Promise.resolve(monitor.turnSettled(SESSION))]);
+    await settle();
+    expect(started).toHaveLength(1);
+    expect((await store.get(SESSION))?.autoFixAttempts).toBe(1);
+  });
+
+  it('keeps saying it gave up while checks run again', async () => {
+    const { store, monitor, out, fake } = setup();
+    await store.set(SESSION, { ...bound, autoFixAttempts: MAX_AUTO_FIX_ATTEMPTS });
+    await monitor.refresh(SESSION);
+    fake.answer(snapshot({ headSha: 'sha-next', checks: [check('Build', 'pending')] }));
+    await monitor.refresh(SESSION);
+    expect(out.last().autoFix.status).toBe('exhausted');
   });
 
   it('says so in the bar when it gives up', async () => {

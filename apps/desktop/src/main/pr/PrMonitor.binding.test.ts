@@ -21,7 +21,7 @@ function setup(project: { workingDirectory: string; branch: string | null } | nu
       project: async () => project,
       archive: async () => undefined,
       isBusy: () => false,
-      startAutoFix: () => false,
+      startAutoFix: async () => ({ ok: false as const, busy: true, error: 'busy' }),
     },
     emit: out.emit,
     logger: quietLogger,

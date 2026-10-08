@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PrBinding, PrReviewThread } from '@shared/pullRequest';
-import { MAX_AUTO_FIX_ATTEMPTS, autoFixRefusal, planAutoFix } from './autoFix';
+import { MAX_AUTO_FIX_ATTEMPTS, autoFixRefusal, autoFixToolRefusal, planAutoFix } from './autoFix';
 import { REF, check, snapshot } from './prTestSupport';
 
 const binding: PrBinding = { ...REF, source: 'shell', boundAt: '', autoFix: true, lastState: 'OPEN' };
@@ -111,4 +111,17 @@ describe('autoFixRefusal', () => {
       expect(autoFixRefusal(command)).toBeNull();
     }
   );
+});
+
+describe('autoFixToolRefusal', () => {
+  it('refuses handing the work to another conversation', () => {
+    expect(autoFixToolRefusal('session_spawn', { prompt: 'git push --force' })).not.toBeNull();
+    expect(autoFixToolRefusal('session_send', { text: 'merge it' })).not.toBeNull();
+  });
+
+  it('checks shell commands and leaves other tools alone', () => {
+    expect(autoFixToolRefusal('bash_execute', { command: 'git push -f' })).not.toBeNull();
+    expect(autoFixToolRefusal('bash_execute', { command: 'git push' })).toBeNull();
+    expect(autoFixToolRefusal('file_write', { path: 'a.ts' })).toBeNull();
+  });
 });

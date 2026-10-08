@@ -39,7 +39,7 @@ import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
-import { autoFixRefusal } from '../pr/autoFix';
+import { autoFixToolRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
@@ -374,6 +374,8 @@ interface RawRound {
  * token, and T4's invariant is that tokens never leave this process. Tools run here for the
  * same reason plus a second one - they touch the filesystem, which a sandboxed renderer cannot.
  */
+export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
+
 export class ChatService {
   /** The events of each reply in flight since its 'start'; see getSession. */
   private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
@@ -438,8 +440,14 @@ export class ChatService {
    */
   private readonly turnRelay = new Map<string, { hops: number; sends: number }>();
 
-  /** Sessions whose running turn auto-fix started; their shell commands go through autoFixRefusal. */
+  /** Sessions whose running turn auto-fix started; their tool calls go through autoFixToolRefusal. */
   private readonly autoFixTurns = new Set<string>();
+
+  /**
+   * Sends being accepted, per session. A send awaits the store and the model catalog before its
+   * reply is registered in `active`, and an automatic turn must not start inside that gap.
+   */
+  private readonly sending = new Map<string, number>();
 
   /** Instructions and file tree per session, frozen so the cached system prompt never moves. */
   private readonly projectContext: ProjectContextCache;
@@ -539,16 +547,29 @@ export class ChatService {
   }
 
   /**
-   * Start a turn the app decided on (auto-fix), through the same queue a typed-ahead message
-   * and a relay take. Refused while the conversation is busy: the caller waits for the turn to
-   * end rather than lining one up behind it.
+   * Start a turn the app decided on (auto-fix), through the queue a typed-ahead message and a
+   * relay take. Refused while a turn runs or is being accepted, and while the user's own
+   * messages are waiting (a failed turn holds them): the caller waits rather than lining up.
+   * Resolves once the turn is accepted or refused, so a refusal is never mistaken for a start.
    */
-  startAutomaticTurn(sessionId: string, text: string, automatic: ChatAutomaticOrigin): boolean {
+  async startAutomaticTurn(
+    sessionId: string,
+    text: string,
+    automatic: ChatAutomaticOrigin
+  ): Promise<AutomaticTurnResult> {
     const queue = this.deps.queue;
-    if (!queue || this.isBusy(sessionId)) return false;
-    queue.enqueueAutomatic(sessionId, text, automatic);
-    this.flushQueue(sessionId);
-    return true;
+    if (!queue) return { ok: false, busy: false, error: 'This conversation cannot take automatic turns.' };
+    if (this.isBusy(sessionId) || this.sending.has(sessionId) || queue.list(sessionId).length > 0) {
+      return { ok: false, busy: true, error: 'This conversation is busy.' };
+    }
+    const entry = queue.enqueueAutomatic(sessionId, text, automatic);
+    const taken = queue.take(sessionId, entry.id);
+    if (!taken) return { ok: false, busy: true, error: 'This conversation is busy.' };
+    const result = await this.send(sessionId, taken.text, [], taken);
+    if (result.ok) return { ok: true };
+    // Announces the entry gone; an automatic one is never handed to the composer.
+    queue.giveBack(sessionId, [taken], 'refused', result.error);
+    return { ok: false, busy: false, error: result.error };
   }
 
   setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
@@ -1000,6 +1021,23 @@ export class ChatService {
     sessionId: string,
     text: string,
     attachments: readonly ChatAttachment[] = [],
+    released?: ChatQueuedMessage,
+    seedHops?: number
+  ): Promise<SendMessageResult> {
+    this.sending.set(sessionId, (this.sending.get(sessionId) ?? 0) + 1);
+    try {
+      return await this.acceptTurn(sessionId, text, attachments, released, seedHops);
+    } finally {
+      const left = (this.sending.get(sessionId) ?? 1) - 1;
+      if (left > 0) this.sending.set(sessionId, left);
+      else this.sending.delete(sessionId);
+    }
+  }
+
+  private async acceptTurn(
+    sessionId: string,
+    text: string,
+    attachments: readonly ChatAttachment[],
     /**
      * Set on the flush path only: the queue entry this turn IS. It stops a message coming out
      * of the queue from falling back into it - that would move it to the tail and reorder the
@@ -2170,11 +2208,7 @@ export class ChatService {
           return unknown;
         }
 
-        const command = typeof call.input.command === 'string' ? call.input.command : '';
-        const refusal =
-          this.autoFixTurns.has(sessionId) && (request.name === 'bash_execute' || request.name === 'bash_background')
-            ? autoFixRefusal(command)
-            : null;
+        const refusal = this.autoFixTurns.has(sessionId) ? autoFixToolRefusal(request.name, call.input) : null;
         if (refusal) {
           const refused: ChatToolCall = { ...call, status: 'denied', error: refusal };
           this.emit({ type: 'tool-start', sessionId, messageId, call });

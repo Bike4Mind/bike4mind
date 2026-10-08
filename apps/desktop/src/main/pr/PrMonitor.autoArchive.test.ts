@@ -20,7 +20,7 @@ function setup() {
         archived.push(sessionId);
       },
       isBusy: () => false,
-      startAutoFix: () => false,
+      startAutoFix: async () => ({ ok: false as const, busy: true, error: 'busy' }),
     },
     emit: collector().emit,
     logger: quietLogger,

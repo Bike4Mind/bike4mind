@@ -70,7 +70,7 @@ describe('ChatService automatic turns', () => {
 
   it('marks the turn as started by auto-fix, not by the user', async () => {
     const session = await service.createSession();
-    expect(service.startAutomaticTurn(session.id, 'fix the build', origin)).toBe(true);
+    expect(await service.startAutomaticTurn(session.id, 'fix the build', origin)).toEqual({ ok: true });
     await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
 
     const messages = (await store.get(session.id))?.messages ?? [];
@@ -81,13 +81,26 @@ describe('ChatService automatic turns', () => {
     const session = await service.createSession();
     await service.send(session.id, 'go');
     await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
-    expect(service.startAutomaticTurn(session.id, 'fix the build', origin)).toBe(false);
+    expect(await service.startAutomaticTurn(session.id, 'fix the build', origin)).toMatchObject({
+      ok: false,
+      busy: true,
+    });
+  });
+
+  it('refuses to start while a send is still being accepted', async () => {
+    const session = await service.createSession();
+    const typed = service.send(session.id, 'mine');
+    expect(await service.startAutomaticTurn(session.id, 'fix the build', origin)).toMatchObject({
+      ok: false,
+      busy: true,
+    });
+    await typed;
   });
 
   it('denies a force-push inside an auto-fix turn', async () => {
     const session = await service.createSession();
     await service.setApprovalMode(session.id, 'auto');
-    service.startAutomaticTurn(session.id, 'fix the build', origin);
+    await service.startAutomaticTurn(session.id, 'fix the build', origin);
     await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
     streams[0].write(toolTurn('c1', 'bash_execute', { command: 'git push --force', cwd: root }));
     streams[0].write(frame('[DONE]'));

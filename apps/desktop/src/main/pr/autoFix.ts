@@ -152,6 +152,11 @@ export function autoFixPrompt(
   return lines.join('\n');
 }
 
+export const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash_execute', 'bash_background']);
+
+/** Tools that hand work to another conversation, where this turn's refusals would not follow it. */
+const DELEGATING_TOOLS = new Set(['session_spawn', 'session_send']);
+
 /** Commands an auto-fix turn may not run, whatever the approval mode. */
 const FORCE_PUSH = /(^|\s)(--force(-with-lease|-if-includes)?(=\S*)?|-[A-Za-z]*f[A-Za-z]*|--mirror|\+\S+)(\s|$)/;
 const MERGE = /\bgh\s+pr\s+merge\b|\/pulls\/\d+\/merge\b|\bmergePullRequest\b|\benablePullRequestAutoMerge\b/;
@@ -172,4 +177,11 @@ export function autoFixRefusal(command: string): string | null {
     if (MERGE.test(segment)) return 'An auto-fix turn may not merge the pull request; the user decides that.';
   }
   return null;
+}
+
+/** Why a tool call is refused inside an auto-fix turn, or null. */
+export function autoFixToolRefusal(name: string, input: Record<string, unknown>): string | null {
+  if (DELEGATING_TOOLS.has(name)) return 'An auto-fix turn may not hand work to another conversation; fix it here.';
+  if (!SHELL_TOOLS.has(name)) return null;
+  return autoFixRefusal(typeof input.command === 'string' ? input.command : '');
 }

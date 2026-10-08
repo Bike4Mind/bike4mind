@@ -604,6 +604,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           )}
 
           <PrStatusBar
+            // Keyed so an action error on one conversation's bar does not follow the user to the next.
+            key={activeId ?? 'none'}
             state={pullRequest}
             onDismiss={() =>
               activeId ? window.b4m.pullRequests.dismiss(activeId) : Promise.resolve({ ok: true as const })

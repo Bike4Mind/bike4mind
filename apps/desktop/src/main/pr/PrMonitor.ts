@@ -1,4 +1,5 @@
 import type { ChatAutomaticOrigin, ChatToolCall } from '@shared/chat';
+import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
   parsePullRequestUrl,
   pullRequestFromShell,
@@ -17,7 +18,7 @@ import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
 import type { PrGithub } from './github';
 import { shouldAutoArchive } from './autoArchive';
-import { MAX_AUTO_FIX_ATTEMPTS, planAutoFix } from './autoFix';
+import { MAX_AUTO_FIX_ATTEMPTS, SHELL_TOOLS, planAutoFix } from './autoFix';
 import { desktopMergeReadiness } from './autoMerge';
 import { mergeMethodFor } from './github';
 import { POLL_MS, pollDelay } from './pollSchedule';
@@ -30,8 +31,6 @@ const BRANCH_LOOKUP_TTL_MS = 10 * 60_000;
 
 /** gh processes allowed at once across every conversation, so opening many sessions cannot fork a crowd. */
 const MAX_CONCURRENT_GH = 2;
-
-const SHELL_TOOLS = new Set(['bash_execute', 'bash_background']);
 
 /** After the agent pushes to a bound PR, checks restart; read again once GitHub has noticed. */
 const AFTER_PUSH_MS = 15_000;
@@ -65,8 +64,8 @@ export interface PrChatHooks {
   archive(sessionId: string): Promise<void>;
   /** Whether a turn is running in the conversation. */
   isBusy(sessionId: string): boolean;
-  /** Start an auto-fix turn through the conversation's queue. False when it was busy after all. */
-  startAutoFix(sessionId: string, prompt: string, origin: ChatAutomaticOrigin): boolean;
+  /** Start an auto-fix turn through the conversation's queue; resolves once it is accepted or refused. */
+  startAutoFix(sessionId: string, prompt: string, origin: ChatAutomaticOrigin): Promise<AutomaticTurnResult>;
 }
 
 export interface PrMonitorLogger {
@@ -101,6 +100,8 @@ interface Live {
   /** Read sooner than the cadence says, once: after a push or a merge something is about to change. */
   nudge?: number;
   autoFix?: { status: PrAutoFixStatus; note?: string };
+  /** The auto-fix decision under way; the next one waits for it so two cannot spend one failure twice. */
+  autoFixing?: Promise<void>;
 }
 
 /**
@@ -247,6 +248,7 @@ export class PrMonitor {
     }
     const binding: PrBinding = { ...ref, source, boundAt: new Date(this.now()).toISOString() };
     await this.deps.store.set(sessionId, binding);
+    this.disarm(sessionId);
     this.live.delete(sessionId);
     this.deps.logger.debug(`PR: bound ${sessionId} to ${ref.url} (${source})`);
     await this.publish(sessionId);
@@ -328,7 +330,7 @@ export class PrMonitor {
       } catch (err) {
         return { ok: false, error: `GitHub refused auto-merge: ${this.noteGhFailure(err)}` };
       }
-      await this.deps.store.set(sessionId, { ...binding, autoMerge: true, autoMergeMode: 'github' });
+      await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: true, autoMergeMode: 'github' }));
       delete live.mergeNote;
       // Not `changing` any more: this read should reconcile, which covers GitHub having merged
       // straight away because the PR was already clean.
@@ -337,7 +339,7 @@ export class PrMonitor {
       return { ok: true };
     }
 
-    await this.deps.store.set(sessionId, { ...binding, autoMerge: true, autoMergeMode: 'desktop' });
+    await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: true, autoMergeMode: 'desktop' }));
     live.changing = false;
     await this.reconcileAutoMerge(sessionId, snapshot);
     return { ok: true };
@@ -359,7 +361,7 @@ export class PrMonitor {
         }
       }
     }
-    await this.deps.store.set(sessionId, { ...binding, autoMerge: false });
+    await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: false }));
     delete live.mergeNote;
     return { ok: true };
   }
@@ -375,7 +377,7 @@ export class PrMonitor {
     if (!binding?.autoMerge) return;
 
     if (snapshot.state !== 'OPEN') {
-      await this.deps.store.set(sessionId, { ...binding, autoMerge: false });
+      await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: false }));
       delete live.mergeNote;
       return;
     }
@@ -386,7 +388,7 @@ export class PrMonitor {
         return;
       }
       // GitHub disarms it on its own - a push from someone without write access, a base change.
-      await this.deps.store.set(sessionId, { ...binding, autoMerge: false });
+      await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: false }));
       live.mergeNote = 'GitHub turned auto-merge off for this PR.';
       return;
     }
@@ -406,7 +408,7 @@ export class PrMonitor {
     } catch (err) {
       // Disarmed rather than retried: a refused merge is GitHub saying something changed, and
       // trying again on every poll would be this app pushing at a door the user did not open.
-      await this.deps.store.set(sessionId, { ...binding, autoMerge: false });
+      await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: false }));
       live.mergeNote = `Auto-merge stopped: ${this.noteGhFailure(err)}`;
     } finally {
       live.merging = false;
@@ -428,7 +430,8 @@ export class PrMonitor {
     const live = this.live.get(sessionId);
     if (!live) return;
     if (live.autoFix?.status === 'waiting' && live.snapshot) {
-      void this.evaluateAutoFix(sessionId, live.snapshot).then(() => this.publish(sessionId));
+      const snapshot = live.snapshot;
+      void this.evaluateAutoFix(sessionId, snapshot).then(() => this.publish(sessionId));
       return;
     }
     if (live.autoFix?.status === 'started') {
@@ -562,6 +565,8 @@ export class PrMonitor {
         this.deps.github.snapshot(binding, { threads: this.wantsThreads(binding) })
       );
       this.gh = 'ok';
+      // Re-bound to another PR while gh ran: this answer is about a PR the conversation left.
+      if (!samePullRequest(await this.deps.store.get(sessionId), binding)) return;
       live.snapshot = snapshot;
       live.failures = 0;
       delete live.error;
@@ -603,34 +608,50 @@ export class PrMonitor {
   }
 
   /**
-   * Start an auto-fix turn if this read calls for one; see planAutoFix for when it does. The
-   * attempt and what it covers are recorded BEFORE the turn starts, so a crash or a relaunch
-   * can never send the same failure twice or hand back an attempt that was spent.
+   * Start an auto-fix turn if this read calls for one; see planAutoFix for when it does. One
+   * decision at a time per conversation: a read and a turn ending can both ask at once, and
+   * the second must see what the first recorded.
    */
-  private async evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {
+  private evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {
+    const live = this.entry(sessionId);
+    const next = (live.autoFixing ?? Promise.resolve()).then(() => this.decideAutoFix(sessionId, snapshot));
+    const settled = next.catch(err => this.deps.logger.warn(`PR: auto-fix failed: ${err}`));
+    live.autoFixing = settled;
+    void settled.then(() => {
+      if (live.autoFixing === settled) delete live.autoFixing;
+    });
+    return settled;
+  }
+
+  /**
+   * The attempt and what it covers are recorded BEFORE the turn starts, so a crash or a relaunch
+   * can never send the same failure twice; a start that is refused gives both back.
+   */
+  private async decideAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {
     const binding = await this.deps.store.get(sessionId);
     const live = this.entry(sessionId);
     if (!binding?.autoFix) {
       delete live.autoFix;
       return;
     }
+    const exhausted = {
+      status: 'exhausted' as const,
+      note: `Auto-fix gave up after ${MAX_AUTO_FIX_ATTEMPTS} attempts. Re-check the box to allow more.`,
+    };
     const plan = planAutoFix(binding, snapshot, this.deps.chat.isBusy(sessionId));
     if (plan.kind === 'none') {
+      if (live.autoFix?.status === 'started') return;
+      if (live.autoFix?.status === 'exhausted' && (binding.autoFixAttempts ?? 0) >= MAX_AUTO_FIX_ATTEMPTS) return;
       // The post-push note stays only while the pushed fix's checks are still running.
       const running = snapshot.checks.some(check => check.bucket === 'pending');
-      if (live.autoFix?.status !== 'started') {
-        live.autoFix = {
-          status: 'watching',
-          note: running && live.autoFix?.status === 'watching' ? live.autoFix.note : undefined,
-        };
-      }
+      live.autoFix = {
+        status: 'watching',
+        note: running && live.autoFix?.status === 'watching' ? live.autoFix.note : undefined,
+      };
       return;
     }
     if (plan.kind === 'exhausted') {
-      live.autoFix = {
-        status: 'exhausted',
-        note: `Auto-fix gave up after ${MAX_AUTO_FIX_ATTEMPTS} attempts. Re-check the box to allow more.`,
-      };
+      live.autoFix = exhausted;
       return;
     }
     if (plan.kind === 'wait') {
@@ -639,29 +660,35 @@ export class PrMonitor {
     }
 
     const attempts = (binding.autoFixAttempts ?? 0) + 1;
-    const recorded: PrBinding = {
-      ...binding,
+    await this.deps.store.update(sessionId, current => ({
+      ...current,
       autoFixAttempts: attempts,
-      autoFixHandled: [...(binding.autoFixHandled ?? []), ...plan.fingerprints],
+      autoFixHandled: [...(current.autoFixHandled ?? []), ...plan.fingerprints],
+    }));
+    live.autoFix = {
+      status: 'started',
+      note: `Fixing ${plan.summary} (attempt ${attempts} of ${MAX_AUTO_FIX_ATTEMPTS}).`,
     };
-    await this.deps.store.set(sessionId, recorded);
-    const started = this.deps.chat.startAutoFix(sessionId, plan.prompt, {
+    const started = await this.deps.chat.startAutoFix(sessionId, plan.prompt, {
       kind: 'auto-fix',
       prUrl: snapshot.url,
       prNumber: snapshot.number,
       summary: plan.summary,
     });
-    if (!started) {
-      // A turn began between the check and the start: nothing was sent, so nothing is spent.
-      await this.deps.store.set(sessionId, binding);
-      live.autoFix = { status: 'waiting', note: 'Waiting for the current turn to finish.' };
+    if (started.ok) {
+      this.deps.logger.debug(`PR: auto-fix attempt ${attempts} on #${snapshot.number} for ${sessionId}`);
       return;
     }
-    this.deps.logger.debug(`PR: auto-fix attempt ${attempts} on #${snapshot.number} for ${sessionId}`);
-    live.autoFix = {
-      status: 'started',
-      note: `Fixing ${plan.summary} (attempt ${attempts} of ${MAX_AUTO_FIX_ATTEMPTS}).`,
-    };
+    // Nothing was sent, so nothing is spent.
+    const given = new Set(plan.fingerprints);
+    await this.deps.store.update(sessionId, current => ({
+      ...current,
+      autoFixAttempts: Math.max(0, (current.autoFixAttempts ?? 0) - 1),
+      autoFixHandled: (current.autoFixHandled ?? []).filter(key => !given.has(key)),
+    }));
+    live.autoFix = started.busy
+      ? { status: 'waiting', note: 'Waiting for the current turn to finish.' }
+      : { status: 'waiting', note: `Could not start auto-fix: ${started.error} Retrying on the next check.` };
   }
 
   /** Records a missing or signed-out gh as app-wide state, and returns the line to show. */
