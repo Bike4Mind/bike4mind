@@ -21,6 +21,8 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const leaveProject = vi.hoisted(() => vi.fn());
+vi.mock('@server/projects/projectScopes', () => ({ PROJECTS_WRITE_SCOPES: [] }));
+
 vi.mock('@bike4mind/services', () => ({
   projectService: { leaveProject: (...a: unknown[]) => leaveProject(...a) },
 }));

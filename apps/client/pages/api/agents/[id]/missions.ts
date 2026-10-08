@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { agentRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { rateLimit } from '@server/middlewares/rateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel - its subtree pulls the
 // Lambda-runtime import graph, which deadlocks module init under Next dev).
@@ -27,28 +28,34 @@ const CreateMissionInputSchema = z.object({
   modelId: z.string().optional(),
 });
 
-const handler = baseApi()
+// One body for a missing agent and one the caller cannot reach, so the response never confirms the id exists.
+const AGENT_NOT_FOUND_MESSAGE = 'Agent not found';
+
+// baseApi's scope gate is per route, so it admits either agents scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
   .use(rateLimit({ limit: process.env.NODE_ENV === 'development' ? 30 : 5, windowMs: 60 * 1000 }))
   .get(async (req: Request, res: Response) => {
+    assertAgentsReadScope(req);
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'no authenticated user' });
     const b4mAgentId = String(req.query.id || '');
     if (!b4mAgentId) return res.status(400).json({ error: 'agent id required' });
 
     const agent = await agentRepository.findById(b4mAgentId);
-    if (!agent) return res.status(404).json({ error: `no agent ${b4mAgentId}` });
+    if (!agent) return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
     // Read access mirrors GET /api/agents/[id]: owner, explicitly-shared, or
     // admin. A strict `!==` (not `agent.userId &&`) means an ownerless org/
     // system agent does NOT leak its mission roster to every authenticated user.
     const isSharedWithUser = agent.users?.some((u: { userId: string }) => u.userId === userId);
     if (agent.userId !== userId && !isSharedWithUser && !req.user?.isAdmin) {
-      return res.status(403).json({ error: 'not your agent' });
+      return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
     }
 
     const missions = await listMissionsForAgent(b4mAgentId);
     return res.json({ missions });
   })
   .post(async (req: Request, res: Response) => {
+    assertAgentsWriteScope(req);
     // Authenticate (401) before authorizing (403) - consistent with the rest of
     // the API; otherwise a missing/expired session is masked as a 403.
     const userId = req.user?.id;
@@ -111,8 +118,7 @@ const handler = baseApi()
       });
     } catch (error) {
       const message = (error as Error).message;
-      if (/not your agent/.test(message)) return res.status(403).json({ error: message });
-      if (/no agent /.test(message)) return res.status(404).json({ error: message });
+      if (/not your agent|no agent /.test(message)) return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
       logger.error('mission create failed', error as Error);
       return res.status(500).json({ error: message });
     }

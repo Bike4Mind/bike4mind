@@ -1,6 +1,7 @@
 // packages/client/pages/api/agents/index.ts
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { agentRepository, userRepository, withTransaction } from '@bike4mind/database';
 import {
   IAgent,
@@ -26,8 +27,10 @@ interface IAgentWithSystemPrompt extends IAgent {
   systemPrompt?: string;
 }
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either agents scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
+    assertAgentsReadScope(req);
     const { query = '', page = '1', limit = '10', orderBy = 'updatedAt', orderDirection = 'desc' } = req.query;
 
     // Parse query parameters
@@ -54,6 +57,7 @@ const handler = baseApi()
     });
   })
   .post(async (req, res) => {
+    assertAgentsWriteScope(req);
     try {
       const agentData = req.body as Partial<IAgentWithSystemPrompt>;
 

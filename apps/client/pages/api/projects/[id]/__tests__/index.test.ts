@@ -45,6 +45,11 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/isDuplicateKeyError', () => ({ isDuplicateKeyError: () => false }));
 vi.mock('@bike4mind/common', () => ({ ProjectEvents: { UPDATE_PROJECT: 'update_project' } }));
+vi.mock('@server/projects/projectScopes', () => ({
+  PROJECTS_READ_OR_WRITE_SCOPES: [],
+  assertProjectsReadScope: vi.fn(),
+  assertProjectsWriteScope: vi.fn(),
+}));
 
 import '@pages/api/projects/[id]/index';
 import { BadRequestError } from '@bike4mind/utils';

@@ -12,7 +12,7 @@
  * one place rather than drifting between two copies.
  */
 export function methodBlocks(source: string): Array<{ method: string; body: string }> {
-  const opener = /\.(get|post|put|patch|delete)(?:<[^<>]*>)?\(/y;
+  const opener = /\.(get|post|put|patch|delete)(?=[<(])/y;
   const starts: Array<{ method: string; index: number }> = [];
   let depth = 0;
   for (let i = 0; i < source.length; i++) {
@@ -20,7 +20,9 @@ export function methodBlocks(source: string): Array<{ method: string; body: stri
     if (depth === 0 && ch === '.') {
       opener.lastIndex = i;
       const match = opener.exec(source);
-      if (match) starts.push({ method: match[1], index: i });
+      if (match && source[skipTypeArguments(source, opener.lastIndex)] === '(') {
+        starts.push({ method: match[1], index: i });
+      }
     }
     if (ch === '(' || ch === '{' || ch === '[') depth++;
     else if (ch === ')' || ch === '}' || ch === ']') depth--;
@@ -29,6 +31,24 @@ export function methodBlocks(source: string): Array<{ method: string; body: stri
     method,
     body: source.slice(index, starts[i + 1]?.index ?? source.length),
   }));
+}
+
+/**
+ * Returns the index just past a `<...>` type-argument list starting at `index`, or `index` itself
+ * when none starts there. Counts angle depth so nested generics such as
+ * `.get<Request<{}, {}, {}, { id: string }>>(` are skipped whole; the `>` of an `=>` in a function
+ * type is not a closer.
+ */
+function skipTypeArguments(source: string, index: number): number {
+  if (source[index] !== '<') return index;
+  let angleDepth = 0;
+  for (let i = index; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '<') angleDepth++;
+    else if (ch === '>' && source[i - 1] !== '=') angleDepth--;
+    if (angleDepth === 0) return i + 1;
+  }
+  return index;
 }
 
 /**

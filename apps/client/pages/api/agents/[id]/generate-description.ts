@@ -1,8 +1,9 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { agentRepository } from '@bike4mind/database';
 import { IAgent, IMessage } from '@bike4mind/common';
-import { NotFoundError, ForbiddenError } from '@bike4mind/utils';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
 // System prompt for generating agent descriptions
@@ -161,7 +162,9 @@ ${contextString}
 Generate a description that captures this agent's unique personality, personal mission, and approach to helping users. Remember: they have their own burning goals and aren't just docile assistants - they're beings with purpose!`;
 };
 
-const handler = baseApi().post<Request<{ id: string }, AgentDescriptionResponse, {}>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
+  Request<{ id: string }, AgentDescriptionResponse, {}>
+>(async (req, res) => {
   const { id } = req.query;
   const userId = req.user!.id;
 
@@ -172,14 +175,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentDescriptionResponse,
 
   // Find the agent
   const agent = await agentRepository.findById(id);
-  if (!agent) {
-    throw new NotFoundError('Agent not found');
-  }
-
-  // Check ownership
-  if (agent.userId !== userId) {
-    throw new ForbiddenError("You don't have permission to modify this agent");
-  }
+  assertAgentAccess(agent, userId, 'own');
 
   try {
     // Build the context prompt from agent metadata

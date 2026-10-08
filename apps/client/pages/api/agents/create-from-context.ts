@@ -1,5 +1,6 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import {
   agentRepository,
   agentOpsSettingsRepository,
@@ -366,7 +367,9 @@ IMPORTANT: Return ONLY valid JSON with no additional text, no markdown formattin
   return agent;
 }
 
-const handler = baseApi().post<Request<{}, CreateFromContextResponse, CreateFromContextRequest>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
+  Request<{}, CreateFromContextResponse, CreateFromContextRequest>
+>(async (req, res) => {
   const { agentName, sessionId } = req.body;
   const authenticatedUserId = req.user!.id;
 

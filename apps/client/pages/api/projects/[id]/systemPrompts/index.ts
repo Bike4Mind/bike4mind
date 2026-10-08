@@ -2,12 +2,13 @@ import { fabFileRepository, projectRepository, withTransaction } from '@bike4min
 import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents } from '@bike4mind/common';
 import { BadRequestError } from '@server/utils/errors';
 import { ProjectFilesRequestBody } from '../../../../../types/api';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES })
   .post(
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };

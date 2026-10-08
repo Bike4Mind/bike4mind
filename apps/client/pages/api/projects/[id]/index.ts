@@ -4,6 +4,11 @@ import { fabFileRepository, projectRepository, sessionRepository, userRepository
 import { projectService } from '@bike4mind/services';
 import { BadRequestError, UnprocessableEntityError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
+import {
+  assertProjectsReadScope,
+  assertProjectsWriteScope,
+  PROJECTS_READ_OR_WRITE_SCOPES,
+} from '@server/projects/projectScopes';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { logEvent } from '@server/utils/analyticsLog';
 
@@ -12,8 +17,10 @@ const updateProjectBodySchema = z.object({
   description: z.string().optional(),
 });
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either projects scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
   .get(async (req, res) => {
+    assertProjectsReadScope(req);
     const project = await projectService.get(req.user.id, req.query as any, {
       db: {
         projects: projectRepository,
@@ -23,6 +30,7 @@ const handler = baseApi()
     return res.json(project);
   })
   .put(async (req, res) => {
+    assertProjectsWriteScope(req);
     const { id } = req.query as { id?: string | string[] };
     if (typeof id !== 'string' || !id) {
       throw new BadRequestError('Invalid project id');
@@ -66,6 +74,7 @@ const handler = baseApi()
     return res.json(project);
   })
   .delete(async (req, res) => {
+    assertProjectsWriteScope(req);
     // Get project before deletion for event logging
     const project = await projectService.get(req.user.id, req.query as any, {
       db: {

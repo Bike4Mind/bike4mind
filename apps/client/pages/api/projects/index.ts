@@ -3,6 +3,11 @@ import { Permission, ProjectEvents } from '@bike4mind/common';
 import { fabFileRepository, Project, projectRepository, sessionRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
+import {
+  assertProjectsReadScope,
+  assertProjectsWriteScope,
+  PROJECTS_READ_OR_WRITE_SCOPES,
+} from '@server/projects/projectScopes';
 import qs from 'qs';
 import { accessibleBy } from '@casl/mongoose';
 import { HTTPError } from '@bike4mind/common';
@@ -16,8 +21,10 @@ const createProjectBodySchema = z.object({
   fileIds: z.array(z.string()).optional(),
 });
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either projects scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
   .get(async (req, res) => {
+    assertProjectsReadScope(req);
     const scope = !!req.ability ? accessibleBy(req.ability, Permission.read).ofType(Project) : { userId: req.user.id };
     const params = {
       ...qs.parse(req.query as Record<string, any>),
@@ -34,6 +41,7 @@ const handler = baseApi()
     return res.json(projects);
   })
   .post(async (req, res) => {
+    assertProjectsWriteScope(req);
     const body = createProjectBodySchema.parse(req.body);
     try {
       const project = await projectService.createProject(req.user, body, {
