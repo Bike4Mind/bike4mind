@@ -1,4 +1,4 @@
-import { IChatHistoryItem, resolveAttachScope, type CitableSource } from '@bike4mind/common';
+import { IChatHistoryItem, type CitableSource } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 import { CommandHandler } from '../CommandHandler';
@@ -169,8 +169,7 @@ export async function sendMessageToNotebookAndGetResponse(
     messageTs: string;
   },
   returnEarly: boolean = false, // If true, don't wait for AI - Quest Processor will handle response
-  additionalTools: string[] = [], // Extra tools to enable (e.g., confirm/cancel pending action)
-  fileMetadata: Array<{ fabFileId: string; mimeType: string }> = [] // Mime types for fabFileIds (scope split)
+  additionalTools: string[] = [] // Extra tools to enable (e.g., confirm/cancel pending action)
 ): Promise<{ text: string | null; citables?: CitableSource[] }> {
   // Update status: Saving to notebook
   if (statusCallback) await statusCallback(`${createLoadingBar(10)} Saving to notebook...`);
@@ -191,15 +190,12 @@ export async function sendMessageToNotebookAndGetResponse(
   const ability = (defineAbilitiesFor as any)(user);
   const createdQuest = await sessionManager.addMessageToSession(userId, sessionId, message, ability);
 
-  // Keep documents in the notebook for later turns; images stay on this message only, since a
-  // notebook image is re-sent as base64 every turn (see resolveAttachScope in common's attachmentScope.ts).
-  // Every id still rides this turn below, so a failed persist only costs later turns.
-  const notebookFileIds = fileMetadata
-    .filter(f => resolveAttachScope('auto', f.mimeType) === 'notebook')
-    .map(f => f.fabFileId);
-  if (notebookFileIds.length > 0) {
+  // Keep documents in the notebook for later turns; getOrCreateSession persists only the non-image
+  // ones (see sessionCrud.ts). Every id still rides this turn below, so a failed persist only costs
+  // later turns.
+  if (fabFileIds.length > 0) {
     try {
-      await sessionManager.getOrCreateSession({ sessionId, fabFileIds: notebookFileIds, user, ability, logger });
+      await sessionManager.getOrCreateSession({ sessionId, fabFileIds, user, ability, logger });
     } catch (error) {
       logger.warn('Failed to keep Slack files in the notebook', { sessionId, error });
     }

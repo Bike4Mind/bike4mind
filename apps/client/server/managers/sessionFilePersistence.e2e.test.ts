@@ -79,6 +79,20 @@ describe('file ids attached to an existing session persist across turns', () => 
     expect(await Session.findById(session.id).lean()).toEqual(before);
   });
 
+  it('an image or a repeated id from fabFileIds (the /api/ai/llm path) is not persisted', async () => {
+    const owner = await createUser('owner');
+    const session = await createSession({ userId: owner.id, name: 'nb' });
+    const pdf = await createFile(owner.id, 'application/pdf');
+    const png = await createFile(owner.id, 'image/png');
+    const ability = defineAbilitiesFor(owner);
+
+    await getOrCreateSession({ sessionId: session.id, fabFileIds: [png], user: owner, ability, logger });
+    expect(await knowledgeIds(session.id)).toEqual([]);
+
+    await getOrCreateSession({ sessionId: session.id, fabFileIds: [pdf, png, pdf], user: owner, ability, logger });
+    expect(await knowledgeIds(session.id)).toEqual([pdf]);
+  });
+
   it('Slack: a document persists to a shared notebook, an image does not, and both ride the turn', async () => {
     const owner = await createUser('owner');
     const sharee = await createUser('sharee');
@@ -99,14 +113,7 @@ describe('file ids attached to an existing session persist across turns', () => 
       logger,
       { triggerAIResponseWithContext: trigger } as never,
       undefined,
-      [pdf, png],
-      undefined,
-      false,
-      [],
-      [
-        { fabFileId: pdf, mimeType: 'application/pdf' },
-        { fabFileId: png, mimeType: 'image/png' },
-      ]
+      [pdf, png]
     );
 
     expect(result.text).toBe('ok');
@@ -134,11 +141,7 @@ describe('file ids attached to an existing session persist across turns', () => 
       logger,
       { triggerAIResponseWithContext: trigger } as never,
       undefined,
-      [foreignPdf],
-      undefined,
-      false,
-      [],
-      [{ fabFileId: foreignPdf, mimeType: 'application/pdf' }]
+      [foreignPdf]
     );
 
     expect(result.text).toBe('ok');

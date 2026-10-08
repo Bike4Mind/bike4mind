@@ -946,8 +946,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     fabFileIds,
     slackNotificationData, // Pass to store on Quest immediately after creation
     false, // Return early for large tables - Quest Processor handles response
-    pendingActionTools, // Additional tools (confirm/cancel) when pending action exists
-    fileMetadata // Lets documents persist to the notebook while images stay per-message
+    pendingActionTools // Additional tools (confirm/cancel) when pending action exists
   );
 
   // Replace thinking message with AI response
