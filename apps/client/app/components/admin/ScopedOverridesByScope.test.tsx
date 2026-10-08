@@ -89,6 +89,10 @@ describe('ScopedOverridesByScope', () => {
     expect(screen.getByTestId('scoped-overrides-by-scope-row-dataLakeSearchMaxFiles')).toHaveTextContent(
       `no override at this rung (platform: ${String(settingsMap.dataLakeSearchMaxFiles.defaultValue)})`
     );
+    // Except a clearDeletesRow setting, whose missing row means per space, not its declared 75.
+    expect(screen.getByTestId('scoped-overrides-by-scope-row-forcedRetrievalMinSimilarityPct')).toHaveTextContent(
+      'no override at this rung (platform: unset, per embedding space)'
+    );
   });
 
   // DefaultChunkSize is settableAt organization/owner only, so at the lake rung an override can

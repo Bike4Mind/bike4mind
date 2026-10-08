@@ -31,8 +31,8 @@ export const FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT = 0.75;
  * NO LONGER THE RUNTIME DEFAULT. A raw cosine is only meaningful inside one vector space, so what an
  * unset setting resolves to is now looked up per embedding space in
  * `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` (`constants/embeddingSpaceFloors.ts`), which is
- * where a new model's floor belongs. This stays as the setting's DECLARED default - the number the
- * admin UI shows and seeds with - and it still matches the resolved value while `ada-002` is the
+ * where a new model's floor belongs. This stays as the setting's DECLARED default (the admin UI
+ * shows an unset value blank, not as this number), and it still matches the resolved value while `ada-002` is the
  * configured model, which it is by default outside keyless self-host. A STORED 75 is not "unset": it
  * is honored as-is in every space (`resolveForcedRetrievalAbsoluteFloor` in ChatCompletionFeatures).
  */

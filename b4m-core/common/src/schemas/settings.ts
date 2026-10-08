@@ -3848,7 +3848,7 @@ export const settingsMap = {
       'unset the server applies the floor measured for whichever model your documents are actually ' +
       `embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
       'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
-      `applies). The ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} shown here while unset is the ada-002 value. Any value you save, ` +
+      `applies). While unset the field is blank; ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} is the ada-002 value. Any value you save, ` +
       `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} included, is used exactly, in every space, which is yours to get right: 75 ` +
       'against text-embedding-3-small sits above that band entirely and returns nothing on every ' +
       'query. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
