@@ -77,10 +77,19 @@ describe('buildLakeRagReport', () => {
     expect(readLakeRagReport(path)).toEqual(report);
   });
 
-  it('names the path when the baseline is truncated JSON', () => {
+  it('names the path when the baseline is truncated JSON, keeping the parse error as the cause', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'lakerag-')), 'cut.json');
     writeFileSync(path, '{"arms":');
-    expect(() => readLakeRagReport(path)).toThrow(`${path} is not a lake RAG eval report`);
+    const err = (() => {
+      try {
+        readLakeRagReport(path);
+        return undefined;
+      } catch (e) {
+        return e as Error;
+      }
+    })();
+    expect(String(err)).toContain(`${path} is not a lake RAG eval report`);
+    expect(err?.cause).toBeInstanceOf(SyntaxError);
   });
 
   it('reports a missing baseline as a read error, not a malformed report', () => {
