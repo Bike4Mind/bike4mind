@@ -229,6 +229,26 @@ still hand-written.
 
 ---
 
+### Projects
+
+Project create, list, get, update and delete are covered by the generated docs (see above). The routes below are
+still hand-written.
+
+**Required API-key scope:** \`projects:read\` (or \`projects:write\`) for the GET routes, \`projects:write\` for the rest.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/projects/[id]/files | List project files |
+| GET | /api/projects/[id]/sessions | List project sessions |
+| DELETE | /api/projects/[id]/members | Remove a project member (send \`userId\` in the body), or leave the project when omitted |
+| GET | /api/projects/[id]/invites | List project invites (requires share permission) |
+| POST | /api/projects/[id]/systemPrompts | Add system prompt files to a project (\`fileIds\` in the body) |
+| DELETE | /api/projects/[id]/systemPrompts | Remove system prompt files from a project (\`fileIds\`, or legacy single \`fileId\`, in the body) |
+| POST | /api/projects/[id]/systemPrompts/toggle | Toggle system prompt |
+| DELETE | /api/projects/removeNonExistintFiles | Clean up orphan file references |
+
+---
+
 ### Agents
 
 Custom AI agents with configurable personas, system prompts, and tool access.
