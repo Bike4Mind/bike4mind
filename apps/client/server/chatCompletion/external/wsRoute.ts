@@ -23,6 +23,7 @@ import { Connection } from '@bike4mind/database/social';
 import {
   verifyJwtToken,
   checkRateLimit,
+  resolveRateLimitClient,
   verifyApiKey,
   checkApiKeyRateLimitOrThrow,
   type ApiKeyInfo,
@@ -129,7 +130,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           const user = await verifyJwtToken(token);
           userId = user.id;
           logger.info('[CLI_WS_HTTP] Authenticated via JWT', { userId });
-          await checkRateLimit(userId, source);
+          await checkRateLimit(userId, source, { client: resolveRateLimitClient(headers) });
         } catch {
           res.status(401).json({ error: 'Authentication failed' });
           return;
