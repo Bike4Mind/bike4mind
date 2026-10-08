@@ -84,11 +84,7 @@ describe('performDeepResearch discovery precedence', () => {
     createFirecrawlApp.mockReturnValue(app);
     resolveWebSearchProviders.mockResolvedValue([provider, backup]);
 
-    const result = await performDeepResearch(
-      makeContext(),
-      { topic: 'quantum computing' },
-      { maxDepth: 1, duration: 1 }
-    );
+    const result = await performDeepResearch(makeContext(), { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
 
     expect(result.success).toBe(true);
     expect(app.search).toHaveBeenCalled();
@@ -110,11 +106,7 @@ describe('performDeepResearch discovery precedence', () => {
     createFirecrawlApp.mockReturnValue(null);
     resolveWebSearchProviders.mockResolvedValue([lead, backup]);
 
-    const result = await performDeepResearch(
-      makeContext(),
-      { topic: 'quantum computing' },
-      { maxDepth: 1, duration: 1 }
-    );
+    const result = await performDeepResearch(makeContext(), { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
 
     expect(result.success).toBe(true);
     expect(backup.search).toHaveBeenCalled();
@@ -134,7 +126,7 @@ describe('performDeepResearch discovery precedence', () => {
     resolveWebSearchProviders.mockResolvedValue([lead, backup]);
     const context = makeContext();
 
-    const result = await performDeepResearch(context, { topic: 'quantum computing' }, { maxDepth: 1, duration: 1 });
+    const result = await performDeepResearch(context, { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
 
     expect(result.success).toBe(true);
     expect(lead.search).toHaveBeenCalled();
@@ -152,11 +144,7 @@ describe('performDeepResearch discovery precedence', () => {
     createFirecrawlApp.mockReturnValue(null);
     resolveWebSearchProviders.mockResolvedValue([provider, null]);
 
-    const result = await performDeepResearch(
-      makeContext(),
-      { topic: 'quantum computing' },
-      { maxDepth: 1, duration: 1 }
-    );
+    const result = await performDeepResearch(makeContext(), { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
 
     expect(result.success).toBe(true);
     expect(provider.search).toHaveBeenCalledWith(expect.any(String), 3, undefined);
@@ -172,11 +160,7 @@ describe('performDeepResearch discovery precedence', () => {
     createFirecrawlApp.mockReturnValue(null);
     resolveWebSearchProviders.mockResolvedValue([provider, null]);
 
-    const result = await performDeepResearch(
-      makeContext(),
-      { topic: 'quantum computing' },
-      { maxDepth: 1, duration: 1 }
-    );
+    const result = await performDeepResearch(makeContext(), { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
 
     expect(result.success).toBe(true);
     expect(provider.search).toHaveBeenCalled();
@@ -187,11 +171,7 @@ describe('performDeepResearch discovery precedence', () => {
     createFirecrawlApp.mockReturnValue(null);
     resolveWebSearchProviders.mockResolvedValue([null, null]);
 
-    const result = await performDeepResearch(
-      makeContext(),
-      { topic: 'quantum computing' },
-      { maxDepth: 1, duration: 1 }
-    );
+    const result = await performDeepResearch(makeContext(), { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/web search provider|Firecrawl/i);
@@ -216,7 +196,7 @@ describe('performDeepResearch honors the turn abort signal', () => {
 
     const result = await performDeepResearch(
       makeContext(() => controller.signal),
-      { topic: 'quantum computing' },
+      { topic: 'marine biology' },
       { maxDepth: 3, duration: 1 }
     );
 
@@ -246,7 +226,7 @@ describe('performDeepResearch honors the turn abort signal', () => {
       }
     );
 
-    await performDeepResearch(context, { topic: 'quantum computing' }, { maxDepth: 5, duration: 1 });
+    await performDeepResearch(context, { topic: 'marine biology' }, { maxDepth: 5, duration: 1 });
 
     expect(provider.search).toHaveBeenCalledTimes(1);
   });
@@ -259,7 +239,7 @@ describe('performDeepResearch honors the turn abort signal', () => {
     const controller = new AbortController();
     const context = makeContext(() => controller.signal);
 
-    await performDeepResearch(context, { topic: 'quantum computing' }, { maxDepth: 1, duration: 1 });
+    await performDeepResearch(context, { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
 
     const complete = context.llm.complete as unknown as ReturnType<typeof vi.fn>;
     expect(complete).toHaveBeenCalled();

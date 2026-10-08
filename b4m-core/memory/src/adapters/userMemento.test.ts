@@ -12,7 +12,7 @@ describe('userMementosToProfile', () => {
     },
     {
       _id: 'm2',
-      summary: 'Erik is learning quantum.',
+      summary: 'Erik is learning astronomy.',
       tier: 'warm',
       questId: 'q9',
       sessionId: null,
