@@ -7,6 +7,7 @@ import type { ZodType, output } from 'zod';
 import {
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
+  type IBriefcasePrompt,
   ttsBase64ResponseSchema,
   type CitableSourceSchema,
   ttsResponseTooLargeSchema,
@@ -167,15 +168,14 @@ export interface ArtifactWithContent {
 
 /**
  * A Briefcase prompt. Catalog entries are metadata only; `promptText` ships only
- * on the by-id fetch.
+ * on the by-id fetch. Name/description are picked from the stored
+ * `IBriefcasePrompt` so an upstream rename is a compile error here, not a silent
+ * passthrough.
  */
-export interface RawBriefcasePrompt {
+export type RawBriefcasePrompt = Pick<IBriefcasePrompt, 'name' | 'description'> & {
   id: string;
-  name: string;
-  description?: string;
   promptText?: string;
-  [key: string]: unknown;
-}
+};
 
 /**
  * Typed wrapper over {@link ApiClient} exposing exactly the Bike4Mind REST
