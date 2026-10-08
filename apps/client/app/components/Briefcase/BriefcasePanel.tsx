@@ -5,8 +5,9 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useBriefcaseCatalog } from '@client/app/hooks/data/briefcase';
 import { BriefcaseLauncher } from './BriefcaseLauncher';
 
-// Keyed by BRIEFCASE_CATALOG_QUERIES keys.
-const GROUP_LABELS: Record<string, string> = {
+// Keyed by BRIEFCASE_CATALOG_QUERIES keys: adding a category there without a
+// label here is a type error rather than a group that renders its raw key.
+const GROUP_LABELS: Record<(typeof BRIEFCASE_CATALOG_QUERIES)[number]['key'], string> = {
   general: 'General',
   writing: 'Writing',
   learning: 'Learning',
