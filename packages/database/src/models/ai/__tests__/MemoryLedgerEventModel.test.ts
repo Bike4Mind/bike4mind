@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LAKE_MEMORY_FINDING_SOURCE_PREFIX } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
 import MemoryLedgerEventModel, { memoryLedgerRepository, type IMemoryLedgerEvent } from '../MemoryLedgerEventModel';
@@ -493,41 +493,6 @@ describe('MemoryLedgerRepository', () => {
     const at = (kind: IMemoryLedgerEvent['principalKind'], id: string, owner: string, seq = 0) =>
       sealedEvent({ principalKind: kind, principalId: id, ownerUserId: owner, seq, hash: `${kind}:${id}:${seq}` });
 
-    const repairPipeline = (
-      vectorMatch: Record<string, unknown>,
-      after?: { principalKind: string; principalId: string; ownerUserId: string }
-    ) => {
-      const match: Record<string, unknown>[] = [
-        { shredded: { $ne: true }, kind: { $in: ['assert', 'affirm'] } },
-        { $or: [{ factCipher: { $nin: [null, ''] } }, { fact: { $nin: [null, ''] } }] },
-        vectorMatch,
-      ];
-      if (after) {
-        match.push({
-          $or: [
-            { principalKind: { $gt: after.principalKind } },
-            { principalKind: after.principalKind, principalId: { $gt: after.principalId } },
-            {
-              principalKind: after.principalKind,
-              principalId: after.principalId,
-              ownerUserId: { $gt: after.ownerUserId },
-            },
-          ],
-        });
-      }
-      return [
-        { $match: { $and: match } },
-        { $project: { _id: 0, principalKind: 1, principalId: 1, ownerUserId: 1 } },
-        {
-          $group: {
-            _id: { principalKind: '$principalKind', principalId: '$principalId', ownerUserId: '$ownerUserId' },
-          },
-        },
-        { $sort: { '_id.principalKind': 1 as const, '_id.principalId': 1 as const, '_id.ownerUserId': 1 as const } },
-        { $limit: 25 },
-      ];
-    };
-
     it('finds vectorless and stale-stamped chains of every kind, distinct and sorted', async () => {
       await memoryLedgerRepository.tryInsert(at('user', 'u1', 'u1'));
       await memoryLedgerRepository.tryInsert(at('user', 'u1', 'u1', 1));
@@ -583,23 +548,26 @@ describe('MemoryLedgerRepository', () => {
     });
 
     it('uses the partial repair indexes for initial and resumed pages', async () => {
+      const fullWidthCipher = 'v'.repeat(2_732);
       await MemoryLedgerEventModel.collection.insertMany(
         Array.from({ length: 2_000 }, (_, i) => ({
           ...at('user', `done-${i}`, 'owner'),
-          embeddingCipher: 'vector',
+          embeddingCipher: fullWidthCipher,
+          embeddingIv: 'current-vector-iv',
           embeddingModel: CURRENT,
         }))
       );
       await memoryLedgerRepository.tryInsert(at('lake', 'needs-vector', 'owner'));
       await memoryLedgerRepository.tryInsert({
         ...at('user', 'stale-vector', 'owner'),
-        embeddingCipher: 'vector',
+        embeddingCipher: fullWidthCipher,
+        embeddingIv: 'stale-vector-iv',
         embeddingModel: 'space-v1',
       });
 
       const declared = new Map(MemoryLedgerEventModel.schema.indexes().map(index => [index[1]?.name, index]));
       expect(declared.get(VECTORLESS_INDEX)).toEqual([
-        { embeddingCipher: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+        { embeddingIv: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
         { name: VECTORLESS_INDEX, partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } }, background: true },
       ]);
       expect(declared.get(STALE_INDEX)).toEqual([
@@ -608,17 +576,19 @@ describe('MemoryLedgerRepository', () => {
       ]);
 
       for (const after of [undefined, { principalKind: 'lake', principalId: 'needs-vector', ownerUserId: 'owner' }]) {
-        for (const [vectorMatch, indexName] of [
-          [{ embeddingCipher: { $in: [null, ''] } }, VECTORLESS_INDEX],
-          [{ embeddingModel: { $ne: CURRENT } }, STALE_INDEX],
-        ] as const) {
-          const plan = await MemoryLedgerEventModel.collection
-            .aggregate(repairPipeline(vectorMatch, after))
-            .explain('queryPlanner');
+        const aggregate = vi.spyOn(MemoryLedgerEventModel, 'aggregate');
+        await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { after, limit: 25 });
+        expect(aggregate).toHaveBeenCalledTimes(2);
+
+        for (const [pipeline, indexName] of aggregate.mock.calls.map(
+          ([pipeline], index) => [pipeline, index === 0 ? VECTORLESS_INDEX : STALE_INDEX] as const
+        )) {
+          const plan = await MemoryLedgerEventModel.collection.aggregate(pipeline).explain('queryPlanner');
           const winning = JSON.stringify(plan);
           expect(winning).toContain(`\"indexName\":\"${indexName}\"`);
           expect(winning).not.toContain('COLLSCAN');
         }
+        aggregate.mockRestore();
       }
     });
   });

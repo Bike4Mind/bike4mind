@@ -139,7 +139,7 @@ MemoryLedgerEventSchema.index({ principalKind: 1, principalId: 1, seq: 1 }, { un
 // Owner-scoped ordered read: a caller lists only chains they own (scope isolation, no existence leak).
 MemoryLedgerEventSchema.index({ ownerUserId: 1, principalKind: 1, principalId: 1, seq: 1 });
 MemoryLedgerEventSchema.index(
-  { embeddingCipher: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+  { embeddingIv: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
   {
     name: 'memory_ledger_vectorless_candidates',
     partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } },
@@ -317,7 +317,7 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
     // DocumentDB has no $unionWith, so keep the two selective index scans separate and merge their
     // bounded pages. A row may occur in both arms and is deduplicated by the full principal key.
     const [vectorless, stale] = await Promise.all([
-      page({ embeddingCipher: { $in: [null, ''] } }),
+      page({ embeddingIv: { $in: [null, ''] }, embeddingCipher: { $in: [null, ''] } }),
       page({ embeddingModel: { $ne: currentSpaceId } }),
     ]);
     const principals = new Map<string, PrincipalCursor>();
