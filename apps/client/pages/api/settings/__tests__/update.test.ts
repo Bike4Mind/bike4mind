@@ -5,11 +5,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // settingsMap. Mock only the infra + middleware seams.
 let stored: Record<string, unknown> | null = null;
 const findOneAndUpdate = vi.fn();
+const deleteOne = vi.fn();
 
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: {
     findOne: () => ({ lean: () => Promise.resolve(stored) }),
     findOneAndUpdate: (...args: unknown[]) => findOneAndUpdate(...args),
+    deleteOne: (...args: unknown[]) => deleteOne(...args),
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
@@ -187,5 +189,32 @@ describe('settings/update sensitive value handling', () => {
       if (originalSelfHost === undefined) delete process.env.B4M_SELF_HOST;
       else process.env.B4M_SELF_HOST = originalSelfHost;
     }
+  });
+});
+
+describe('settings/update cleared forced-retrieval absolute floor', () => {
+  beforeEach(() => {
+    findOneAndUpdate.mockReset();
+    deleteOne.mockReset();
+  });
+
+  // A stored 75 is honored in every embedding space, so clearing the field must remove the row
+  // (back to per-space) rather than store the default.
+  it.each(['', '  ', null])('deletes the row instead of storing the default for %j', async value => {
+    const res = await runHandler('forcedRetrievalMinSimilarityPct', value);
+    expect(deleteOne).toHaveBeenCalledWith({ settingName: 'forcedRetrievalMinSimilarityPct' });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+    expect(res.settingValue).toBe(75);
+  });
+
+  it('still stores an explicit 75', async () => {
+    stageWriteResult('forcedRetrievalMinSimilarityPct', 75);
+    await runHandler('forcedRetrievalMinSimilarityPct', '75');
+    expect(deleteOne).not.toHaveBeenCalled();
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'forcedRetrievalMinSimilarityPct' },
+      { $set: { settingValue: 75 } },
+      expect.anything()
+    );
   });
 });

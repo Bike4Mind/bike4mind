@@ -32,6 +32,16 @@ const handler = baseApi().put(
 
     const key = SettingKeySchema.parse(req.body.key);
 
+    // A cleared forcedRetrievalMinSimilarityPct must DELETE the row, not store the default: unset
+    // resolves per embedding space, while a stored 75 is honored in every space (see
+    // readForcedRetrievalSettings in ChatCompletionFeatures). Without this the admin UI has no way back.
+    const raw = req.body.value;
+    if (key === 'forcedRetrievalMinSimilarityPct' && (raw == null || (typeof raw === 'string' && raw.trim() === ''))) {
+      await AdminSettings.deleteOne({ settingName: key });
+      invalidateSettingsCache(key);
+      return res.json({ settingName: key, settingValue: settingsMap[key].defaultValue });
+    }
+
     let value = settingsMap[key].schema.parse(req.body.value);
 
     const isSensitiveSetting = settingsMap[key].isSensitive === true;
