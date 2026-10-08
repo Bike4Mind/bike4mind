@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Context, SQSEvent } from 'aws-lambda';
 import { dispatch } from './whatsNewHighlights';
-import { AdminSettings, ModalModel, slackDevWorkspaceRepository } from '@bike4mind/database';
+import { AdminSettings, releaseNoteRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { ChatModels } from '@bike4mind/common';
 import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
+import { loadReleaseNotesConfig } from '@server/releaseNotes/adminReleaseNotes';
 
 vi.mock('@bike4mind/database', () => ({
-  ModalModel: { find: vi.fn() },
+  releaseNoteRepository: { findPublishedBetween: vi.fn() },
   AdminSettings: { findOne: vi.fn(), findOneAndUpdate: vi.fn() },
   slackDevWorkspaceRepository: { findBySlackTeamIdWithToken: vi.fn() },
   apiKeyRepository: {},
@@ -45,6 +46,12 @@ vi.mock('@server/utils/cloudwatch', () => ({
   emitModalGenerationMetrics: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Only the stored config is stubbed; the denylist matching is the real helper.
+vi.mock('@server/releaseNotes/adminReleaseNotes', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/releaseNotes/adminReleaseNotes')>();
+  return { ...actual, loadReleaseNotesConfig: vi.fn() };
+});
+
 vi.mock('@server/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => (value ? `decrypted:${value}` : null),
 }));
@@ -63,19 +70,27 @@ const basePayload = {
   slackTeamId: 'T123',
 };
 
-const modal = {
-  _id: { toString: () => 'modal-1' },
-  title: 'Faster uploads',
-  subtitle: 'Uploads resume',
-  description: 'Large uploads now resume after a dropped connection.',
-  createdAt: new Date('2026-10-01T00:00:00Z'),
+const note = {
+  id: 'note-1',
+  releaseTag: 'v2026.10.01',
+  headline: 'Faster uploads',
+  summary: 'Uploads got sturdier.',
+  items: [
+    { category: 'improved', text: 'Large uploads resume after a dropped connection', importance: 1 },
+    { category: 'fixed', text: 'Upload progress no longer stalls at 99%', importance: 2 },
+  ],
+  publishAt: new Date('2026-10-01T00:00:00Z'),
 };
 
-const mockModals = (modals: unknown[]) => {
-  const query = { sort: vi.fn(), select: vi.fn(), lean: vi.fn().mockResolvedValue(modals) };
-  query.sort.mockReturnValue(query);
-  query.select.mockReturnValue(query);
-  vi.mocked(ModalModel.find).mockReturnValue(query as unknown as ReturnType<typeof ModalModel.find>);
+const mockNotes = (notes: unknown[]) => {
+  vi.mocked(releaseNoteRepository.findPublishedBetween).mockResolvedValue(notes as never);
+};
+
+const mockReleaseNotesConfig = (config: { enabled: boolean; denylist?: string[] }, malformed = false) => {
+  vi.mocked(loadReleaseNotesConfig).mockResolvedValue({
+    config: { denylist: [], ...config },
+    malformed,
+  } as never);
 };
 
 const mockConfig = (settingValue: Record<string, unknown> | null) => {
@@ -111,6 +126,7 @@ describe('whatsNewHighlights queue handler', () => {
     });
     vi.mocked(getLlmByModel).mockReturnValue({ complete } as never);
     mockConfig(null);
+    mockReleaseNotesConfig({ enabled: true });
   });
 
   afterEach(() => {
@@ -118,13 +134,16 @@ describe('whatsNewHighlights queue handler', () => {
   });
 
   it('posts the generated highlights to Slack, attaches the markdown, and records success', async () => {
-    mockModals([modal]);
+    mockNotes([note]);
 
     await dispatch(eventFor(basePayload), context);
 
     expect(complete).toHaveBeenCalledOnce();
     expect(complete.mock.calls[0][0]).toBe(ChatModels.GPT4o_MINI);
-    expect(complete.mock.calls[0][1][0].content).toContain('Faster uploads');
+    const prompt = complete.mock.calls[0][1][0].content;
+    expect(prompt).toContain('Faster uploads');
+    expect(prompt).toContain('v2026.10.01');
+    expect(prompt).toContain('Large uploads resume after a dropped connection');
 
     const urls = fetchMock.mock.calls.map(([url]) => String(url));
     expect(urls).toEqual([
@@ -149,7 +168,7 @@ describe('whatsNewHighlights queue handler', () => {
   });
 
   it('skips the markdown snippet when attachMarkdownFile is false', async () => {
-    mockModals([modal]);
+    mockNotes([note]);
     mockConfig({ attachMarkdownFile: false });
 
     await dispatch(eventFor(basePayload), context);
@@ -159,7 +178,7 @@ describe('whatsNewHighlights queue handler', () => {
   });
 
   it('falls back to the default model when the configured one is not a known model', async () => {
-    mockModals([modal]);
+    mockNotes([note]);
     mockConfig({ llmModel: 'not-a-real-model' });
 
     await dispatch(eventFor(basePayload), context);
@@ -167,8 +186,8 @@ describe('whatsNewHighlights queue handler', () => {
     expect(complete.mock.calls[0][0]).toBe(ChatModels.GPT4o_MINI);
   });
 
-  it('records no_modals and posts a warning without calling the LLM when the range has no modals', async () => {
-    mockModals([]);
+  it('records no_modals and posts a release-notes warning without calling the LLM when none were published', async () => {
+    mockNotes([]);
 
     await dispatch(eventFor(basePayload), context);
 
@@ -176,13 +195,53 @@ describe('whatsNewHighlights queue handler', () => {
     expect(lastStatusUpdate()?.['settingValue.lastStatus']).toBe('no_modals');
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(String(fetchMock.mock.calls[0][0])).toBe('https://slack.com/api/chat.postMessage');
-    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string).text).toContain(
-      "No What's New modals found"
-    );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer decrypted:enc-token');
+    expect(JSON.parse(init.body as string).text).toContain('No release notes were published');
+  });
+
+  it('queries through the end of a date-only endDate, capped at now', async () => {
+    mockNotes([note]);
+
+    await dispatch(eventFor(basePayload), context);
+
+    const [start, end, now] = vi.mocked(releaseNoteRepository.findPublishedBetween).mock.calls[0];
+    expect(start.toISOString()).toBe('2026-09-28T00:00:00.000Z');
+    expect(end.toISOString()).toBe('2026-10-04T23:59:59.999Z');
+    expect(now).toBeInstanceOf(Date);
+  });
+
+  it.each([
+    ['disabled', { enabled: false }, false],
+    ['malformed', { enabled: true }, true],
+  ])(
+    'records skipped without querying, calling the LLM or posting when release notes are %s',
+    async (_label, config, malformed) => {
+      mockReleaseNotesConfig(config, malformed);
+      mockNotes([note]);
+
+      await dispatch(eventFor(basePayload), context);
+
+      expect(releaseNoteRepository.findPublishedBetween).not.toHaveBeenCalled();
+      expect(getLlmByModel).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(lastStatusUpdate()?.['settingValue.lastStatus']).toBe('skipped');
+    }
+  );
+
+  it('withholds a release note that matches the denylist from the prompt', async () => {
+    mockReleaseNotesConfig({ enabled: true, denylist: ['sturdier'] });
+    mockNotes([note, { ...note, id: 'note-2', releaseTag: 'v2026.10.02', headline: 'Dark mode', summary: '' }]);
+
+    await dispatch(eventFor(basePayload), context);
+
+    const prompt = complete.mock.calls[0][1][0].content;
+    expect(prompt).toContain('Dark mode');
+    expect(prompt).not.toContain('Faster uploads');
   });
 
   it('does not post to Slack when no channel is configured', async () => {
-    mockModals([modal]);
+    mockNotes([note]);
 
     await dispatch(eventFor({ correlationId: 'corr-1', environment: 'dev' }), context);
 
@@ -191,7 +250,7 @@ describe('whatsNewHighlights queue handler', () => {
   });
 
   it('records failed, emits the failure metric and rethrows so the message reaches the DLQ', async () => {
-    mockModals([modal]);
+    mockNotes([note]);
     complete.mockRejectedValue(new Error('provider down'));
 
     await expect(dispatch(eventFor(basePayload), context)).rejects.toThrow('provider down');
@@ -209,6 +268,6 @@ describe('whatsNewHighlights queue handler', () => {
   it('rejects a payload that fails schema validation', async () => {
     await expect(dispatch(eventFor({ environment: 'staging' }), context)).rejects.toThrow();
 
-    expect(ModalModel.find).not.toHaveBeenCalled();
+    expect(releaseNoteRepository.findPublishedBetween).not.toHaveBeenCalled();
   });
 });

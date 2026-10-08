@@ -3,12 +3,13 @@ import { randomUUID } from 'crypto';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { AdminSettings, ModalModel } from '@bike4mind/database';
+import { AdminSettings } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import type { WhatsNewHighlightsPayload } from '@server/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
+import { loadHighlightsReleaseNotes, parseHighlightsEndDate } from '@server/whatsNew/releaseNoteHighlights';
 
 // Rate limiting - 1 request per minute to prevent abuse
 const GENERATE_RATE_LIMIT = 1;
@@ -63,7 +64,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         }
 
         startDate = new Date(customStart + 'T00:00:00Z');
-        endDate = new Date(customEnd + 'T23:59:59Z');
+        endDate = parseHighlightsEndDate(customEnd);
 
         if (startDate > endDate) {
           return res.status(400).json({ error: 'startDate must be before endDate' });
@@ -85,29 +86,26 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       const startDateStr = startDate.toISOString().split('T')[0];
       const endDateStr = endDate.toISOString().split('T')[0];
 
-      // For dry run, query modals and return preview without dispatching
+      // For dry run, query the release notes the worker would summarize and return a preview without dispatching
       if (dryRun) {
-        const WHATS_NEW_TAG = 'whats-new';
-        const modals = await ModalModel.find({
-          tags: { $in: [WHATS_NEW_TAG, 'whatsNew'] },
-          enabled: true,
-          createdAt: { $gte: startDate, $lte: endDate },
-        })
-          .sort({ createdAt: -1 })
-          .select('title subtitle description createdAt')
-          .lean();
+        const releaseNotes = await loadHighlightsReleaseNotes({ start: startDate, end: endDate }, req.logger);
+        const entries = releaseNotes.kind === 'ok' ? releaseNotes.entries : [];
 
         return res.json({
           success: true,
           dryRun: true,
-          message: `Dry run complete: found ${modals.length} modals`,
+          skipped: releaseNotes.kind === 'disabled',
+          message:
+            releaseNotes.kind === 'disabled'
+              ? 'Dry run complete: release notes are disabled, so generation would be skipped'
+              : `Dry run complete: found ${entries.length} release notes`,
           dateRange: { startDate: startDateStr, endDate: endDateStr },
-          modalCount: modals.length,
-          modals: modals.map(m => ({
-            title: m.title,
-            subtitle: m.subtitle,
-            descriptionPreview: m.description?.substring(0, 200),
-            createdAt: m.createdAt,
+          modalCount: entries.length,
+          modals: entries.map(entry => ({
+            title: entry.title,
+            subtitle: entry.subtitle,
+            descriptionPreview: entry.description.substring(0, 200),
+            createdAt: entry.createdAt,
           })),
         });
       }

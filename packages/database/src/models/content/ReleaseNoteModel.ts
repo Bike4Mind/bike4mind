@@ -117,6 +117,15 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
     return (await this.listPublished({ now, limit })).items;
   }
 
+  /** Notes published within [start, end] and visible at `now`, newest first. */
+  async findPublishedBetween(start: Date, end: Date, now: Date, limit = 50): Promise<IReleaseNoteDocument[]> {
+    const upTo = end < now ? end : now;
+    return this.model
+      .find({ status: 'scheduled', publishAt: { $gte: start, $lte: upTo } })
+      .sort(PAGE_SORT)
+      .limit(limit);
+  }
+
   /** Keyset page of published notes, ordered (publishAt, _id) descending. */
   async listPublished({
     now,
