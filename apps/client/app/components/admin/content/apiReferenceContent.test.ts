@@ -28,7 +28,7 @@ describe('API reference scopes table', () => {
     );
     const required = requiredLines.flatMap(line => [...line.matchAll(/`([^`]+)`/g)].map(match => match[1]));
 
-    expect(required).toContain('me:read');
+    expect(required).toContain('notebooks:read');
     for (const scope of required) {
       expect(listed).toContain(scope);
     }

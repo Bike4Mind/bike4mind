@@ -16,6 +16,12 @@ export const getApiReferenceContent = (baseUrl: string): string => `
 
 Complete API documentation for ${getBrandName()}, a cognitive workbench platform. All endpoints are served from \`${baseUrl}\`.
 
+> **Scope of this page.** Internal and admin endpoints are intentionally not documented here:
+> the route handlers under \`apps/client/pages/api\` are the source of truth for them. Public
+> endpoints are documented in the generated, contract-driven docs at [/api/v1/docs](/api/v1/docs).
+> What remains below is prose with no generated counterpart plus a few endpoint sections still
+> waiting to be migrated.
+
 ---
 
 ## Authentication
@@ -35,12 +41,8 @@ Authorization: Bearer <access_token>
 | Access Token | 30 minutes | Short-lived token for API requests |
 | Refresh Token | 30 days | Used to obtain new access tokens |
 
-**Obtaining tokens:**
-
-- \`POST /api/otc/send\` — request a one-time sign-in code by email (passwordless)
-- \`POST /api/otc/verify\` — verify the code to log in or register; returns the access token
-- \`POST /api/auth/refreshToken\` — exchange a refresh token for a new access token
-- OAuth callbacks (Google, GitHub, Okta, SAML) return an access token on successful authentication
+**Obtaining tokens:** sign in through the product (passwordless email code or an OAuth provider).
+\`POST /api/auth/refreshToken\` exchanges a refresh token for a new access token.
 
 Browser clients never receive the refresh token in a response body: it is set as an
 \`HttpOnly; Secure; SameSite=Strict\` cookie scoped to \`/api\`, and \`POST /api/auth/refreshToken\`
@@ -62,6 +64,7 @@ The legacy \`X-API-Key: b4m_live_xxxxx\` and \`Authorization: ApiKey b4m_live_xx
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /api/user-api-keys | List your active API keys (add \`?includeDisabled=true\` to also return revoked ones) |
+| POST | /api/user-api-keys | Create a new API key (scopes are checked against the caller's own, see Scopes below) |
 | POST | /api/api-keys/create | Create a new API key |
 | POST | /api/user-api-keys/[id]/rotate | Rotate an existing key (an API-key caller may only rotate a key whose scopes it already holds - see Scopes below) |
 | POST | /api/user-api-keys/[id]/revoke | Revoke a key |
@@ -102,153 +105,37 @@ When rate-limited, the API returns \`429 Too Many Requests\`.
 
 ---
 
-## Core API Domains
+## Public endpoints (generated docs)
 
-### Chat / Quest (Agentic AI)
+These endpoints are defined by a contract, and their full request/response reference lives in
+the [generated API docs](/api/v1/docs) (raw spec: \`/api/v1/openapi.json\`, which a generator can
+use to build a typed client). They are deliberately not repeated here, so the two cannot disagree.
 
-The primary conversational AI interface. Messages are sent via \`/api/chat\` and processed asynchronously. Poll the quest endpoint for the AI response.
+- Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions\`
+- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`
+- Files and data lakes: \`/api/v1/files\`, \`/api/v1/data-lakes\`
+- Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
+  \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
+- Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
+- Account: \`/api/v1/me\`, \`/api/v1/credits\`
 
-#### Send a Message
-
-\`\`\`
-POST /api/chat
-\`\`\`
-
-**Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
-
-> **This endpoint is now generated from its contract.** The full request/response
-> reference — every field, its type, defaults, and validation rules — lives in the
-> [generated API docs](/api/v1/docs) under \`sendChatMessage\`, derived from the same
-> object the handler validates with. The hand-written table that used to sit here
-> drifted from the code; it is not reproduced so the two cannot disagree again.
-
-#### Poll Quest Status
-
-\`\`\`
-GET /api/v1/quests/{id}
-\`\`\`
-
-> **This endpoint is now generated from its contract.** The full request/response
-> reference - every field, its type, and the error responses - lives in the
-> [generated API docs](/api/v1/docs) under \`getQuest\`, derived from the same
-> object the handler validates with. The legacy path \`GET /api/quests/[id]\` serves
-> the same handler.
-
-**Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access - an AI scope works so the chat-to-poll flow needs a single key).
-
-Not a pure read: polling a quest whose run died without writing a terminal status settles it, so the poll that crosses the liveness threshold returns \`status: "done"\` instead of spinning on \`running\` forever. Whatever the run produced is preserved; \`type: "error"\` marks the case where it produced nothing, which is how a client machine-distinguishes a timeout from a genuine answer. Only the session owner's poll can settle a quest - a shared-session viewer reads it as-is, and a background sweep settles it instead.
-
-For file-generating quests (image generation, editing, etc.), \`images\` lists the raw generated
-file basenames and \`files\` lists each as a descriptor with a ready-to-use CDN \`url\` and an
-\`isImage\` flag (empty until \`status\` is \`done\`). Prefer \`files\` - it saves you knowing the CDN
-path convention, and \`isImage\` lets you pick out renderable images (not every generated file is
-one, e.g. a spreadsheet export).
-
-#### Get Quest Files
-
-\`\`\`
-GET /api/quests/[id]/files
-\`\`\`
-
-**Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access — an AI scope works so the chat→poll flow needs a single key).
-
-Returns files generated or referenced during quest processing.
-
-#### Stop a Reply
-
-\`\`\`
-POST /api/sessions/[id]/chat/stop-reply
-\`\`\`
-
-Cancels an in-progress streaming response.
-
-#### Chat Endpoints Summary
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/chat | Send a message to the AI |
-| GET | /api/v1/quests/{id} | Get quest status and reply |
-| GET | /api/quests/[id]/files | Get files from a quest |
-| GET | /api/quests/[id]/check-timeout | Check if quest has timed out |
-| POST | /api/quests/[id]/client-timing | Report client-side timing data |
-| POST | /api/sessions/[id]/chat/stop-reply | Cancel streaming response |
-| POST | /api/sessions/[id]/chat/[messageId]/fork | Fork conversation from a message |
-| POST | /api/sessions/[id]/chat/[messageId]/snip | Snip conversation at a message |
-| GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
-| POST | /api/infer | Raw inference endpoint |
+Image, video and chat work is asynchronous: the create call returns a quest or job, and you poll
+\`GET /api/v1/quests/{id}\` (or the job resource) until it is terminal.
 
 ---
 
-### Agent Executions (ReAct)
+## Endpoints not yet migrated
 
-The tool-using agent loop behind the product UI's Agent Mode toggle. This is a different
-pipeline from \`POST /api/chat\`: it runs several LLM iterations, calling tools between them,
-rather than producing a single completion. It used to be reachable only over the
-\`agent_execute\` WebSocket route, so an API-key caller could reproduce a chat turn but not an
-agent run.
+The sections below are still hand-written. Each row was checked against its route file, but
+treat the handler as authoritative.
 
-#### Start an Agent Run
-
-\`\`\`
-POST /api/v1/agent-executions
-\`\`\`
-
-**Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
-
-> **This endpoint is generated from its contract.** The full request/response
-> reference - every field, its type, defaults, and validation rules - lives in the
-> [generated API docs](/api/v1/docs) under \`startAgentExecution\`, derived from the same
-> object the handler validates with.
->
-> The run is asynchronous and nothing is streamed back over REST: you get a \`202\` with an
-> execution id, then poll. Omit \`agent_id\` to get whatever profile the session's own surface
-> resolves to - that is what reproduces the in-app toggle, rather than pinning one specific
-> agent. The final answer is also written to the session as a normal chat message, so it
-> appears in history.
-
-#### Poll an Agent Run
-
-\`\`\`
-GET /api/v1/agent-executions/[id]
-\`\`\`
-
-**Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
-
-> See the [generated API docs](/api/v1/docs) under \`getAgentExecution\`. Returns the run's
-> status, its reasoning trace (which grows while the run is in flight), and the final answer
-> once \`status\` is terminal. GET requests here are exempt from the per-day API-key quota, so
-> polling one run costs a single daily slot; the per-minute burst limit still applies.
-
-#### Agent Execution Endpoints Summary
+### Quest files
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | /api/v1/agent-executions | Start an agent (ReAct) run |
-| GET | /api/v1/agent-executions/[id] | Poll status, reasoning trace, and answer |
+| GET | /api/quests/[id]/files | Files generated or referenced during quest processing |
 
----
-
-### Data Lakes
-
-List and inspect the data lakes you can reach, manage which files belong to one, and run
-semantic search over a single lake. Every route answers 403 when Data Lakes are disabled on the
-deployment.
-
-**Required API-key scope:** \`datalake:read\` (or \`datalake:write\` / \`datalake:query\`) to read,
-\`datalake:write\` to change membership, \`datalake:query\` to search.
-
-> **These endpoints are generated from their contracts.** The full reference lives in the
-> [generated API docs](/api/v1/docs) under the Data Lakes tag. Adding a file does not ingest it:
-> poll the file endpoint until \`ingestion_status\` is \`ready\` before relying on it in search.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/data-lakes | List lakes (cursor-paginated) |
-| GET | /api/v1/data-lakes/[id] | Get one lake by id or slug |
-| GET | /api/v1/data-lakes/[id]/files/[file_id] | A member file's ingestion status |
-| POST | /api/v1/data-lakes/[id]/files/[file_id] | Add a file to the lake |
-| DELETE | /api/v1/data-lakes/[id]/files/[file_id] | Remove a file from the lake |
-| POST | /api/v1/data-lakes/[id]/search | Semantic search over the lake |
+**Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access).
 
 ---
 
@@ -355,86 +242,28 @@ Initiates the chunking and embedding pipeline for a file.
 | GET | /api/files/[id] | Get file details |
 | PUT | /api/files/[id] | Update file metadata |
 | DELETE | /api/files/[id] | Delete a file |
-| POST | /api/files/createFabFileURL | Get presigned upload URL |
-| POST | /api/files/createFabFile | Create file record |
 | POST | /api/files/chunk | Trigger chunking pipeline |
 | GET | /api/files/search | Full-text search across file content |
 | POST | /api/files/bulk-delete | Delete multiple files |
 | GET | /api/files/byIds | Get multiple files by ID |
-| POST | /api/files/copy-generated-image | Copy AI-generated image to files |
-| GET | /api/files/download | Download every exportable file as a zip |
 | POST | /api/files/generate-presigned-url | Generate presigned upload URL (internal; use /api/v1/files) |
-| POST | /api/files/generate-smart-name | AI-generated filename |
 | GET | /api/files/getFabFileNameById | Get filename by ID |
-| GET | /api/files/presigned-url | Get presigned download URLs by storage key |
-| GET | /api/files/tags | List all tags |
-| GET | /api/files/tags/counts | Tag usage counts |
-| POST | /api/files/tags/toggle | Toggle tag on a file |
-| PUT | /api/files/tags/[id] | Update a tag |
 
 ---
 
 ### Sessions (Notebooks)
 
-Sessions represent conversations/notebooks. They are created implicitly when sending a chat message without a sessionId, or explicitly.
-
-#### List Sessions
-
-\`\`\`
-GET /api/v1/sessions
-\`\`\`
-
-> **This endpoint is now generated from its contract.** The full request/response
-> reference - query parameters, the item shape, and validation rules - lives in the
-> [generated API docs](/api/v1/docs) under \`listSessions\`, derived from the same
-> object the handler validates with.
->
-> It lists only the sessions you own, newest first, and is cursor-paginated: pass
-> \`next_cursor\` back as \`cursor\` until it is \`null\`.
-
-#### Update a Session
-
-\`\`\`
-PUT /api/sessions/[id]
-\`\`\`
-
-> **This endpoint is now generated from its contract.** The full request/response
-> reference - every field, its type, defaults, and validation rules - lives in the
-> [generated API docs](/api/v1/docs) under \`updateSession\`, derived from the same
-> object the handler validates with.
->
-> This is also the call that turns on grounded retrieval for \`POST /api/chat\`:
-> set \`knowledgeIds\` and \`forceKnowledgeRetrieval: true\` on the session first -
-> retrieval is gated by these session fields, not by anything in the chat request.
-
-#### Session Endpoints Summary
+Listing and updating sessions is covered by the generated docs (see above). The routes below are
+still hand-written.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | /api/sessions | List sessions |
-| GET | /api/v1/sessions | List your own sessions (cursor-paginated) |
-| POST | /api/v1/sessions | Create a new session (legacy path: /api/sessions/create) |
-| GET | /api/sessions/[id] | Get session details |
-| PUT | /api/sessions/[id] | Update session |
-| DELETE | /api/sessions/[id] | Delete session |
 | POST | /api/sessions/[id]/clone | Clone a session |
-| POST | /api/sessions/[id]/auto-rename | AI-generated session title |
-| POST | /api/sessions/[id]/favorite | Toggle favorite |
-| POST | /api/sessions/[id]/tag | Add/remove tags |
 | GET | /api/sessions/[id]/files | List session files |
-| GET | /api/sessions/[id]/summary | Get session summary |
-| GET | /api/sessions/[id]/agents | List agents in session |
-| POST | /api/sessions/[id]/agents/trigger-proactive-messages | Trigger proactive agent messages |
-| GET | /api/sessions/[id]/agents/configs | Get agent configs for session |
-| PUT | /api/sessions/[id]/agents/[agentId]/config | Update agent config |
-| GET | /api/sessions/[id]/questmaster-plans | Get QuestMaster plans |
-| POST | /api/sessions/bulk | Bulk operations on sessions |
-| GET | /api/sessions/count | Get total session count |
-| GET | /api/sessions/favorites | List favorited sessions |
-| GET | /api/sessions/shared | List shared sessions |
-| GET | /api/sessions/download | Export session as file |
-| GET | /api/sessions/semantic-search | Semantic search across sessions |
-| GET | /api/sessions/recent-proactive-messages | Recent proactive messages |
+| POST | /api/sessions/semantic-search | Semantic search across sessions |
+| GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
+| PUT | /api/sessions/[id]/chat/[messageId] | Update a message |
+| DELETE | /api/sessions/[id]/chat/[messageId] | Delete a message |
 
 ---
 
@@ -490,35 +319,8 @@ GET /api/projects
 
 Custom AI agents with configurable personas, system prompts, and tool access.
 
-#### List Agents
-
-\`\`\`
-GET /api/agents
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "agents": [
-    {
-      "id": "agent_abc123",
-      "name": "Research Assistant",
-      "description": "Specialized in academic research and citation",
-      "systemPrompt": "You are a research assistant...",
-      "model": "gpt-4o",
-      "temperature": 0.3,
-      "avatarUrl": "https://...",
-      "tools": ["web-search", "web-fetch"],
-      "isPublic": false,
-      "createdAt": "2025-01-10T12:00:00Z"
-    }
-  ],
-  "total": 5
-}
-\`\`\`
-
-#### Agent Endpoints Summary
+\`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\` or
+\`updatedAt\`) and \`orderDirection\`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -536,263 +338,20 @@ GET /api/agents
 
 ---
 
-### Organizations
-
-Multi-tenant organization management with roles and integrations.
-
-#### Organization Endpoints Summary
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/organizations | List user organizations |
-| POST | /api/organizations | Create an organization (admin) |
-| GET | /api/organizations/[id] | Get organization details |
-| PUT | /api/organizations/[id] | Update organization |
-| DELETE | /api/organizations/[id] | Delete organization |
-| GET | /api/organizations/[id]/members | List members |
-| POST | /api/organizations/[id]/members | Add member |
-| PUT | /api/organizations/[id]/members/[memberId] | Update member role |
-| DELETE | /api/organizations/[id]/members/[memberId] | Remove member |
-| GET | /api/organizations/[id]/invites | List pending invites |
-| POST | /api/organizations/[id]/invites | Send invite |
-| GET | /api/organizations/stats | Organization statistics |
-| GET | /api/organizations/users | List org users |
-| POST | /api/organizations/create-dev | Create development org |
-| POST | /api/organizations/subscriptions/subscribe | Subscribe org |
-| POST | /api/organizations/subscriptions/update-seats | Update seat count |
-
-#### GitHub Integration
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/organizations/[id]/webhooks/github | List GitHub webhooks |
-| POST | /api/organizations/[id]/webhooks/github | Create webhook |
-| PUT | /api/organizations/[id]/webhooks/github/[hookId] | Update webhook |
-| DELETE | /api/organizations/[id]/webhooks/github/[hookId] | Delete webhook |
-| POST | /api/organizations/[id]/webhooks/github/rotate-secret | Rotate webhook secret |
-| POST | /api/organizations/[id]/webhooks/github/test | Test webhook delivery |
-
-#### Slack Integration
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/slack/oauth/workspaces | List connected workspaces |
-| GET | /api/slack/oauth/authorize | Start OAuth flow |
-| GET | /api/slack/workspace/[workspaceId] | Get workspace details |
-| POST | /api/slack/oauth/user-link/initiate | Link user to Slack |
-| GET | /api/slack/export/channel-info | Channel export info |
-| POST | /api/slack/export/channel | Export channel messages |
-| POST | /api/slack/export/async | Async channel export |
-| GET | /api/slack/export/status/[jobId] | Export job status |
-
----
-
-### Users & Auth
-
-#### Authentication Flows
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/otc/send | Request a one-time sign-in code (passwordless) |
-| POST | /api/otc/verify | Verify code to log in or register |
-| POST | /api/auth/refreshToken | Refresh access token |
-| GET | /api/auth/strategy | Get available auth strategies |
-
-#### OAuth Strategies
-
-| Strategy | Initiate | Callback |
-|----------|----------|----------|
-| Google | GET /api/auth/google | GET /api/auth/google/callback |
-| GitHub | GET /api/auth/github/authorize | GET /api/auth/github/callback (SSO), GET /api/auth/github/mcp-callback (MCP account linking) |
-| Okta | GET /api/auth/okta | GET /api/auth/okta/callback |
-| SAML | GET /api/auth/saml | POST /api/auth/saml/callback |
-
-#### MFA (Multi-Factor Authentication)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/auth/mfa/setup | Begin MFA setup (returns QR code) |
-| POST | /api/auth/mfa/verify-setup | Verify TOTP and activate MFA |
-| POST | /api/auth/mfa/verify | Verify TOTP during login |
-| POST | /api/auth/mfa/disable | Disable MFA |
-| GET | /api/auth/mfa/status | Check MFA status |
-| POST | /api/auth/mfa/regenerate-backup-codes | Generate new backup codes |
-| POST | /api/auth/mfa/cancel-setup | Cancel in-progress setup |
-| POST | /api/auth/mfa/force-reset | Admin force-reset user MFA |
-| POST | /api/auth/mfa/passkey/register-options | Begin passkey enrollment (WebAuthn creation options) |
-| POST | /api/auth/mfa/passkey/register | Verify and store a new passkey |
-| GET | /api/auth/mfa/passkey | List enrolled passkeys |
-| DELETE | /api/auth/mfa/passkey/:id | Remove a passkey |
-| POST | /api/auth/mfa/passkey/authenticate-options | Begin passkey MFA verification during login |
-| POST | /api/auth/mfa/passkey/authenticate | Verify a passkey during login |
-
-#### User Management
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/users | List users (admin) |
-| GET | /api/users/[id] | Get user profile |
-| PUT | /api/users/[id]/update | Update user profile |
-| DELETE | /api/users/[id]/delete | Delete user account |
-| POST | /api/users/[id]/upload-photo | Upload profile photo |
-| GET | /api/users/[id]/organizations | List user organizations |
-| GET | /api/users/[id]/organization | Get active organization (self or admin) |
-| DELETE | /api/users/[id]/organization | Clear active-organization pointer (self or admin) |
-| GET | /api/users/[id]/projects | List user projects |
-| GET | /api/users/[id]/agents | List user agents |
-| GET | /api/users/[id]/activities | User activity log |
-| GET | /api/users/[id]/friends | List friends |
-| GET | /api/users/[id]/friend-requests | Pending friend requests |
-| GET | /api/users/[id]/collections | User collections |
-| GET | /api/users/[id]/email-settings | Email preferences |
-| PUT | /api/users/[id]/email-settings | Update email preferences |
-| GET | /api/users/[id]/slack-settings | Slack notification preferences |
-| PUT | /api/users/[id]/slack-settings | Update Slack preferences |
-| GET | /api/users/[id]/ingested-emails | List ingested emails |
-| GET | /api/users/[id]/userInvites | User invites |
-| POST | /api/users/[id]/loginAs | Admin login-as user |
-| POST | /api/users/[id]/recalculate-storage | Recalculate storage usage |
-| GET | /api/users/by-email/[email] | Lookup user by email |
-| GET | /api/users/activities/recent | Recent global activities |
-| GET | /api/users/report | User report (admin) |
-| GET | /api/users/tags | User tags |
-| GET | /api/users/counterLogs | User counter logs |
-
----
-
 ### AI Services
 
-Direct access to AI capabilities outside the chat flow.
-
-#### LLM Completion
-
-\`\`\`
-POST /api/ai/llm
-\`\`\`
-
-**Required API-key scope:** \`ai:chat\`.
-
-**Request Body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| prompt | string | Yes | The prompt text |
-| model | string | No | Model identifier |
-| temperature | number | No | Sampling temperature |
-| maxTokens | number | No | Max output tokens |
-| systemPrompt | string | No | System prompt override |
-
-#### Image Generation and Editing (async)
-
-\`\`\`
-POST /api/v1/image-generations
-POST /api/v1/image-edits
-\`\`\`
-
-**Required API-key scope:** \`ai:generate\`.
-
-> **These endpoints are generated from their contracts.** The full request/response
-> reference - every field, its type, defaults, and validation rules, including the
-> \`referenceImageFabFileIds\` style anchors and the optional \`callbackUrl\` - lives in the
-> [generated API docs](/api/v1/docs) under \`generateImage\` and \`editImage\`, derived from the
-> same objects the handlers validate with.
->
-> Both are asynchronous: the call queues the render and returns a quest with no image yet.
-> Poll \`GET /api/v1/quests/{id}\` until \`status\` is \`done\` (see [Poll Quest Status](#poll-quest-status));
-> a render that failed arrives there as \`type: "error"\`, not as a 4xx. Pass \`callbackUrl\` (an https URL)
-> to receive a signed \`POST\` instead of polling (at-least-once: dedupe on \`X-Webhook-Event-ID\`).
-> \`POST /api/ai/generate-image\` and \`POST /api/ai/edit-image\` are legacy aliases of the same handlers.
-
-#### Video Generation (jobs)
-
-\`\`\`
-GET  /api/v1/video-models
-POST /api/v1/video-generations
-GET  /api/v1/video-generations
-GET  /api/v1/video-generations/{id}
-POST /api/v1/video-generations/{id}/cancel
-\`\`\`
-
-**Required API-key scope:** \`ai:generate\`.
-
-Models: \`gemini-omni-1.1-flash\` (Google), \`grok-imagine-video-1.5\` (xAI) and \`veo-3.1-fast-generate-preview\` (Google Veo). \`GET /api/v1/video-models\`
-lists the ones enabled and usable on this deployment, with their durations, aspect ratios and resolutions.
-
-> Generated from their contracts: see \`listVideoModels\`, \`createVideoGeneration\`,
-> \`getVideoGeneration\`, \`listVideoGenerations\` and \`cancelVideoGeneration\` in the
-> [generated API docs](/api/v1/docs). Create returns \`202\` with a job; poll the job until \`state\` is
-> terminal. On success, check \`output.availability\`: \`ready\` means download \`output.url\` (signed, valid
-> 15 minutes; re-read the job for a fresh URL); \`pending_scan\` means the saved file is still being scanned,
-> so keep re-reading the job (self-hosted installs can stay there for up to ~30 minutes); \`unavailable\`
-> means the file was blocked or deleted and \`output.url\` stays \`null\`, so stop polling.
-> Credits for the requested duration are held up front. A \`failed\` or \`cancelled\` job is not charged, and
-> neither is a \`blocked\` one unless the provider generated the clip before rejecting it (and billed for it):
-> that job is charged for the requested duration, shown in \`credits.settled\`.
-> Send \`Idempotency-Key\` to make retries safe. \`POST /api/ai/generate-video\` was removed and answers \`410\`.
-
-#### Voice Sessions
-
-\`\`\`
-GET  /api/v1/voice/voices
-POST /api/v1/voice/sessions
-POST /api/v1/voice/sessions/{id}/end
-\`\`\`
-
-**Required API-key scope:** \`ai:generate\`.
-
-> **These endpoints are generated from their contracts.** The full request/response
-> reference lives in the [generated API docs](/api/v1/docs) under \`listVoices\`,
-> \`createVoiceSession\`, and \`endVoiceSession\`, derived from the same objects the handlers
-> validate with. \`createVoiceSession\` reserves credits for the maximum call length (when credit enforcement is on) and returns a
-> \`clientBootstrap\` for the ElevenLabs Conversational AI SDK; call \`endVoiceSession\` when the call
-> ends to refund the unused part. \`/api/voice/v2/voices\`, \`/api/voice/v2/sessions\`, and
-> \`/api/voice/v2/sessions/{id}/end\` are legacy aliases of the same handlers and keep working.
-
-#### OpenAPI 3.1 documented endpoints
-
-A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image/video endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-generations\` (and \`/{id}\`, \`/{id}/cancel\`), \`/api/v1/video-models\`), the voice endpoints (\`/api/v1/voice/voices\`, \`/api/v1/voice/sessions\`, \`/api/v1/voice/sessions/{id}/end\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
-
-| Resource | Path | Description |
-|----------|------|-------------|
-| Interactive docs | \`/api/v1/docs\` | Browse and try the v1 endpoints in your browser |
-| OpenAPI spec | \`/api/v1/openapi.json\` | Raw OpenAPI 3.1 document (JSON) for SDK codegen |
-
-The spec is public and served with permissive CORS, and it rewrites its \`servers\` URL to the deployment you fetch it from, so a generated SDK targets the right origin. Point any OpenAPI generator (openapi-generator, openapi-typescript, and similar) at \`/api/v1/openapi.json\` to build a typed client.
-
-Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models the completion event stream in full. The audio endpoints return raw audio bytes by default, so the spec documents their \`audio/*\` media types and the \`X-B4M-Audio-*\` response headers that report where the saved copy lives. Audio too large to return inline (over ~4MB) is delivered by a time-limited signed URL instead: a 303 redirect for raw bytes, or \`delivery: 'url'\` in the \`encoding: 'base64'\` JSON body.
-
-#### AI Endpoints Summary
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | /api/ai/llm | Raw LLM completion |
 | POST | /api/ai/transcribe | Audio/video to text (Whisper) |
-| POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
-| POST | /api/ai/barkeep-chat | Tavern AI barkeep conversation |
-| POST | /api/ai/tavern-conversation | Tavern NPC conversation |
-| POST | /api/ai/optimize-input | Optimize/rewrite user input |
 | POST | /api/ai/refineText | Refine and improve text |
-| POST | /api/ai/rapid-reply | Quick contextual reply generation |
-| POST | /api/ai/test-realtime-voice | Test realtime voice session |
-| POST | /api/ai/voice-sessions | Create voice session |
 
-#### ElevenLabs Voice
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/elabs/text-to-speech | ElevenLabs TTS (legacy, use /api/ai/tts) |
-| GET | /api/elabs/ready | Check ElevenLabs availability |
-| GET | /api/elabs/voice | List available voices |
-| GET | /api/elabs/voice/[id] | Get voice details |
-| POST | /api/elabs/voice/[id]/set-active | Set active voice |
+**Required API-key scope for \`refineText\`:** \`ai:generate\`.
 
 ---
 
 ### Artifacts
 
 Versioned content artifacts generated during conversations (code, documents, diagrams).
-
-#### Artifact Endpoints Summary
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -802,183 +361,10 @@ Versioned content artifacts generated during conversations (code, documents, dia
 | PUT | /api/artifacts/[id] | Update artifact |
 | DELETE | /api/artifacts/[id] | Delete artifact |
 | GET | /api/artifacts/[id]/versions | List artifact versions |
+| POST | /api/artifacts/[id]/versions | Add an artifact version |
 | GET | /api/artifacts/[id]/versions/[version] | Get specific version |
 | GET | /api/artifacts/search | Search artifacts |
 | GET | /api/artifacts/types | List artifact types |
-| GET | /api/artifacts/questmaster | QuestMaster artifacts |
-
----
-
-### Quest Plans (QuestMaster)
-
-Structured multi-step plans created by the QuestMaster agent.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/quest-plans | List quest plans |
-| POST | /api/quest-plans | Create quest plan |
-| GET | /api/quest-plans/[id] | Get quest plan |
-| PUT | /api/quest-plans/[id] | Update quest plan |
-| DELETE | /api/quest-plans/[id] | Delete quest plan |
-| POST | /api/quest-plans/[id]/clone | Clone a plan |
-| POST | /api/quest-plans/[id]/continue | Continue plan execution |
-| GET | /api/quest-plans/[id]/export | Export plan |
-| GET | /api/quest-plans/[id]/progress | Get plan progress |
-| GET | /api/quest-master-plans/[id] | Get master plan |
-
----
-
-### Sharing & Invites
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/[type]/[id]/updateSharing | Update sharing settings (requires share permission) |
-| POST | /api/[type]/[id]/revokeSharing | Revoke sharing |
-| GET | /api/[type]/[id]/invites | List invites for resource |
-| GET | /api/invites | List all invites |
-| GET | /api/invites/[id] | Get invite details (\`[id]\` is the invite's share token) |
-| POST | /api/invites/[id]/accept | Accept invite (\`[id]\` is the invite's share token) |
-| POST | /api/invites/[id]/refuse | Refuse or revoke invite (\`[id]\` is either key) |
-
-On the two routes above that redeem a share, \`[id]\` is the invite's **share token** - the opaque value carried by the link returned as \`link\` when the invite is created - and not the invite's database id. An invite's database id is not a credential and will not resolve on those routes. Invites created before share tokens existed still resolve by their database id until they expire.
-
-\`DELETE /api/invites/[id]\` and \`POST /api/invites/[id]/refuse\` are the exceptions and take either key: declining is authorized by your own address being on the invite, and cancelling or revoking by your share permission on the underlying document - never by holding the link. The document invite list does not return the token; the \`link\` in the create response is the only place it is handed out.
-
----
-
-### Friends
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/friends | List friends |
-| POST | /api/friends | Send friend request |
-| GET | /api/friends/[id] | Get friend details |
-| DELETE | /api/friends/[id] | Remove friend |
-| POST | /api/friends/[id]/respond | Accept/decline request |
-| GET | /api/friends/by-user/[id] | Get friendship by user |
-
----
-
-### Feedback
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/feedback | List feedback (paginated; filters: page, limit, status, organization, organizationId, userId, sessionId, questId, subject, search, sort) |
-| POST | /api/feedback | Submit feedback |
-| GET | /api/feedback/[id]/read | Mark as read |
-| PUT | /api/feedback/[id]/update | Update feedback |
-| DELETE | /api/feedback/[id]/delete | Delete feedback |
-
----
-
-### Help System
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/help | Get help articles |
-| POST | /api/help/chat | Chat with help assistant |
-| POST | /api/help/chat-feedback | Rate help response |
-| POST | /api/help/feedback | Submit help feedback |
-| GET | /api/help/my-feedback | Get your feedback |
-| POST | /api/help/event | Log help event |
-
----
-
-### Account (Caller Identity)
-
-#### Get the Authenticated Caller
-
-\`\`\`
-GET /api/v1/me
-\`\`\`
-
-**Required API-key scope:** \`me:read\`.
-
-Returns the caller's own id, display name, plan tier, personal credit balance, and
-entitlement keys. It takes no user id, owner id, or impersonation parameter, and
-issues no browser session \u2014 unlike \`/api/identify\`, which does both.
-
-> **This endpoint is generated from its contract.** The full response reference lives
-> in the [generated API docs](/api/v1/docs) under \`getMe\`, derived from the same
-> object the handler validates against.
-
-#### Get the Caller's Credit Balance
-
-\`\`\`
-GET /api/v1/credits
-\`\`\`
-
-**Required API-key scope:** any one of \`me:read\`, \`ai:chat\`, \`ai:generate\`.
-
-Returns only \`balance\` - the same number as \`credits.balance\` on \`GET /api/v1/me\` -
-so a key scoped for spend can check it can afford a batch before starting one.
-
-> **This endpoint is generated from its contract.** See \`getCreditBalance\` in the
-> [generated API docs](/api/v1/docs).
-
----
-
-### Embeddings
-
-#### Create Embeddings
-
-\`\`\`
-POST /api/v1/embeddings
-\`\`\`
-
-**Required API-key scope:** \`ai:generate\`.
-
-Returns one embedding vector per input string, for integrations that keep their own vector
-index. The request and success bodies follow the OpenAI embeddings API shape (\`model\`,
-\`input\`, \`dimensions\`, \`encoding_format\`), so an OpenAI SDK client can call it with its base
-URL set to \`<your deployment>/api/v1\` and a \`b4m_live_\` key; errors use the standard B4M error
-envelope rather than OpenAI's. Billed in credits per input token.
-
-> **This endpoint is generated from its contract.** The full request and response reference
-> lives in the [generated API docs](/api/v1/docs) under \`createEmbeddings\`.
-
----
-
-### Subscriptions & Billing
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/subscriptions | List subscriptions |
-| GET | /api/subscriptions/own | Get own subscription |
-| POST | /api/subscriptions/subscribe | Subscribe to a plan |
-| PUT | /api/subscriptions/change | Change plan. Session (JWT) auth only - API keys are rejected, since this mutates a live subscription |
-| POST | /api/subscriptions/cancel | Cancel subscription. Session (JWT) auth only - API keys are rejected, since this can cancel outright and void open invoices |
-| GET | /api/subscriptions/stats | Subscription statistics |
-| GET | /api/subscriptions/[ownerType]/[ownerId] | Get subscription by owner |
-| GET | /api/credits/transactions | Credit transaction history |
-| POST | /api/stripe/start-payment | Start Stripe payment |
-| GET | /api/stripe/portal | Open Stripe customer portal |
-| GET | /api/stripe/subscription-plans | Available plans |
-
----
-
-### Inbox / Notifications
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/inbox | List inbox messages |
-| POST | /api/inbox/create | Create notification |
-| POST | /api/inbox/admin-send | Admin broadcast notification |
-| POST | /api/inbox/read | Mark messages as read |
-| DELETE | /api/inbox/[id]/delete | Delete message |
-
----
-
-### Settings & Configuration
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/settings/serverStatus | Health check / server status |
-| GET | /api/settings/serverConfig | Server configuration |
-| GET | /api/settings | Get app settings |
-| PUT | /api/settings/update | Update settings |
-| GET | /api/settings/fetch | Fetch specific setting |
-| GET | /api/settings/logo | Get organization logo |
 
 ---
 
@@ -992,528 +378,20 @@ envelope rather than OpenAI's. Billed in credits per input token.
 
 ---
 
-### Research Agents
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/research/agents | List research agents |
-| POST | /api/research/agents | Create research agent |
-| GET | /api/research/agents/[id] | Get research agent |
-| PUT | /api/research/agents/[id] | Update research agent |
-| DELETE | /api/research/agents/[id] | Delete research agent |
-| GET | /api/research/agents/[id]/files | Research agent files |
-| GET | /api/research/agents/[id]/tasks | List tasks |
-| POST | /api/research/agents/[id]/tasks | Create task |
-| GET | /api/research/agents/[id]/tasks/[taskId] | Get task |
-| POST | /api/research/agents/[id]/tasks/[taskId]/retry | Retry task |
-| GET | /api/research/data/files | Research data files |
-
----
-
-### Keep (CLI Agent)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/keep/command | Send command to Keep CLI agent |
-
----
-
-### Tavern
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/tavern/quests | Get tavern quests |
-| POST | /api/tavern/trigger-heartbeat | Trigger heartbeat |
-| POST | /api/tavern/zone-chat | Zone chat message |
-
----
-
-### App Files (Static Assets)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/app-files | List app files |
-| POST | /api/app-files/generate-presigned-url | Upload URL |
-| GET | /api/app-files/get-file-url | Download URL |
-| PUT | /api/app-files/update-tags | Update tags |
-| DELETE | /api/app-files/delete | Delete app file |
-
----
-
-## Admin Endpoints
-
-Admin endpoints require the \`admin:*\` scope or superuser role.
-
-### System Health & Monitoring
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/system-health | System health overview |
-| GET | /api/admin/system-health/test-database | Test DB connection |
-| GET | /api/admin/system-health/test-email | Test email delivery |
-| GET | /api/admin/system-health/test-oauth | Test OAuth providers |
-| GET | /api/admin/system-health/integration-health | Integration health |
-| GET | /api/admin/integration-health-dashboard | Full health dashboard |
-
-### Analytics & Metrics
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/analytics | Platform analytics |
-| GET | /api/admin/model-metrics | LLM model usage metrics |
-| GET | /api/admin/model-logs | LLM request logs |
-| GET | /api/admin/event-metrics | Event metrics |
-| GET | /api/admin/help-analytics | Help system analytics |
-| GET | /api/admin/model-prices | Model price catalog rows in force (?history=modelId for audit trail) |
-| POST | /api/admin/model-prices | Append an operator reprice or revert a model to seed pricing |
-
-### DLQ (Dead Letter Queue) Management
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/dlq/queues | List DLQ queues |
-| GET | /api/admin/dlq/messages | Get DLQ messages |
-| POST | /api/admin/dlq/replay | Replay DLQ messages |
-| GET | /api/admin/dlq/history | Replay history |
-
-### Email Campaigns
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/email/jobs | List email jobs |
-| POST | /api/admin/email/jobs | Create email job |
-| GET | /api/admin/email/jobs/[id] | Get job details |
-| PUT | /api/admin/email/jobs/[id] | Update job |
-| DELETE | /api/admin/email/jobs/[id] | Delete job |
-| POST | /api/admin/email/jobs/[id]/send | Send email job |
-| POST | /api/admin/email/jobs/[id]/start | Start email job |
-| POST | /api/admin/email/jobs/[id]/schedule | Schedule job |
-| POST | /api/admin/email/jobs/[id]/cancel | Cancel job |
-| POST | /api/admin/email/jobs/[id]/clone | Clone job |
-| GET | /api/admin/email/jobs/[id]/analytics | Job analytics |
-| GET | /api/admin/email/jobs/[id]/recipients | Job recipients |
-| GET | /api/admin/email/jobs/[id]/summary | Job summary |
-| GET | /api/admin/email/jobs/[id]/check-status | Check job status |
-| POST | /api/admin/email/jobs/[id]/preview-for-user | Preview for user |
-| POST | /api/admin/email/jobs/preview-recipients | Preview recipients |
-| GET | /api/admin/email/templates | List templates |
-| POST | /api/admin/email/templates | Create template |
-| GET | /api/admin/email/templates/[id] | Get template |
-| PUT | /api/admin/email/templates/[id] | Update template |
-| DELETE | /api/admin/email/templates/[id] | Delete template |
-| POST | /api/admin/email/templates/[id]/clone | Clone template |
-| POST | /api/admin/email/templates/[id]/test | Send test email |
-| GET | /api/admin/email/whats-new-content | What&apos;s New email content |
-| GET | /api/admin/email/attempts/[id] | Get delivery attempt |
-
-### Security Dashboard
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/security-dashboard/overview | Security overview |
-| GET | /api/admin/security-dashboard/code | Code scan results |
-| POST | /api/admin/security-dashboard/code-semgrep-ingest | Ingest Semgrep results |
-| GET | /api/admin/security-dashboard/packages | Package audit |
-| POST | /api/admin/security-dashboard/packages-ingest | Ingest package audit |
-| GET | /api/admin/security-dashboard/secrets | Secret scan results |
-| POST | /api/admin/security-dashboard/secrets-ingest | Ingest secret scan |
-| GET | /api/admin/security-dashboard/web | Web scan results |
-| POST | /api/admin/security-dashboard/web-owasp-ingest | Ingest OWASP results |
-| GET | /api/admin/security-dashboard/cloud | Cloud security |
-| POST | /api/admin/security-dashboard/ai-assessment | AI security assessment |
-| GET | /api/admin/security-scan-schedules | Scan schedules |
-| PUT | /api/admin/security-scan-schedule/[scanType] | Update scan schedule |
-
-### User Administration
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/admin/create-user | Create user |
-| POST | /api/admin/bulk-create-users | Bulk create users |
-| POST | /api/admin/users/[userId]/verify-email | Verify email |
-| POST | /api/admin/users/[userId]/unverify-email | Unverify email |
-| POST | /api/admin/users/[userId]/resend-verification | Resend verification |
-| POST | /api/admin/users/[userId]/resend-email-change | Resend email change |
-| POST | /api/admin/users/[userId]/generate-api-key | Generate API key |
-| POST | /api/admin/users/[userId]/grant-subscription | Grant subscription |
-| GET | /api/admin/users/[userId]/subscriptions | User subscriptions |
-| PUT | /api/admin/users/[userId]/subscriptions/[subId]/credits | Adjust credits |
-| DELETE | /api/admin/users/[userId]/subscriptions/[subId]/remove | Remove subscription |
-| GET | /api/admin/users/email-verification | Email verification status |
-| POST | /api/admin/emergency-login | Emergency admin login |
-| GET | /api/admin/team-members | List team members |
-| POST | /api/admin/recalculate-message-counts | Recalculate counts |
-
-### System Configuration
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/system-secrets | List system secrets |
-| POST | /api/admin/system-secrets | Create secret |
-| PUT | /api/admin/system-secrets/[id] | Update secret |
-| DELETE | /api/admin/system-secrets/[id] | Delete secret |
-| GET | /api/admin/system-secrets/tier1-status | Tier 1 secrets status |
-| GET | /api/admin/operations-model | Operations model config |
-| PUT | /api/admin/operations-model | Update operations model |
-| GET | /api/admin/llm-models/configurations | LLM model configurations |
-| GET | /api/admin/rate-limits | View rate limits |
-| PUT | /api/admin/rate-limits | Update rate limits |
-| GET | /api/admin/rate-limits/ingest | Ingest rate limit data |
-
-### System Prompts
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/system-prompts | List system prompts |
-| POST | /api/admin/system-prompts | Create system prompt |
-| GET | /api/admin/system-prompts/[promptId] | Get prompt |
-| PUT | /api/admin/system-prompts/[promptId] | Update prompt |
-| DELETE | /api/admin/system-prompts/[promptId] | Delete prompt (DB-only prompts; use reset when a code default exists) |
-| POST | /api/admin/system-prompts/[promptId]/create-version | Create version |
-| POST | /api/admin/system-prompts/[promptId]/save-version | Save version |
-| POST | /api/admin/system-prompts/[promptId]/switch-version | Switch active version |
-| POST | /api/admin/system-prompts/[promptId]/reset | Reset to default |
-| GET | /api/admin/system-prompts/[promptId]/history | Version history |
-| POST | /api/admin/system-prompts/[promptId]/test | Test prompt |
-
-### Tool Definitions
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/tool-definitions | List tool definitions |
-| POST | /api/admin/tool-definitions | Create tool definition |
-| GET | /api/admin/tool-definitions/[toolId] | Get tool definition |
-| PUT | /api/admin/tool-definitions/[toolId] | Update tool definition |
-| DELETE | /api/admin/tool-definitions/[toolId] | Delete tool definition |
-| POST | /api/admin/tools/execute | Execute a tool |
-
-### Identity Providers
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/identity-providers | List providers |
-| POST | /api/admin/identity-providers | Create provider |
-| GET | /api/admin/identity-providers/[id] | Get provider |
-| PUT | /api/admin/identity-providers/[id] | Update provider |
-| DELETE | /api/admin/identity-providers/[id] | Delete provider |
-
-### Context Telemetry
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/context-telemetry | List telemetry alerts |
-| GET | /api/admin/context-telemetry/[id] | Get alert details |
-| POST | /api/admin/context-telemetry/[id]/analyze | AI-analyze alert |
-| POST | /api/admin/context-telemetry/[id]/create-issue | Create GitHub issue |
-| GET | /api/admin/context-telemetry/integration-status | Integration status |
-| GET | /api/admin/context-telemetry/metrics | Telemetry metrics |
-
-### Retrieval Rate
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/retrieval-rate | Optional-path retrieval rate over a date window |
-
-### LiveOps Triage
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/liveops-triage-configs | List triage configs |
-| POST | /api/admin/liveops-triage-configs | Create config |
-| GET | /api/admin/liveops-triage-configs/[id] | Get config |
-| PUT | /api/admin/liveops-triage-configs/[id] | Update config |
-| DELETE | /api/admin/liveops-triage-configs/[id] | Delete config |
-| GET | /api/admin/liveops-triage-configs/[id]/health | Config health |
-| POST | /api/admin/liveops-triage-configs/[id]/trigger | Trigger triage |
-| GET | /api/admin/liveops-triage-configs/runs | Triage run history |
-| POST | /api/admin/liveops-triage/submit | Submit triage job |
-| GET | /api/admin/liveops-triage/status/[jobId] | Job status |
-| GET | /api/admin/liveops-triage-env | Triage environment info |
-
-### Rapid Reply
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/rapid-reply/prompts | List prompts |
-| POST | /api/admin/rapid-reply/prompts | Create prompt |
-| GET | /api/admin/rapid-reply/prompts/[id] | Get prompt |
-| PUT | /api/admin/rapid-reply/prompts/[id] | Update prompt |
-| DELETE | /api/admin/rapid-reply/prompts/[id] | Delete prompt |
-| POST | /api/admin/rapid-reply/prompts/[id]/activate | Activate prompt |
-| GET | /api/admin/rapid-reply/mappings | List mappings |
-| POST | /api/admin/rapid-reply/mappings | Create mapping |
-| PUT | /api/admin/rapid-reply/mappings/[id] | Update mapping |
-| DELETE | /api/admin/rapid-reply/mappings/[id] | Delete mapping |
-| POST | /api/admin/rapid-reply/mappings/bulk | Bulk update mappings |
-| GET | /api/admin/rapid-reply/metrics | Rapid reply metrics |
-| POST | /api/admin/rapid-reply/test | Test rapid reply |
-
-### Agent Ops
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/agent-ops-settings | Get agent ops settings |
-| PUT | /api/admin/agent-ops-settings | Update settings |
-| POST | /api/admin/agent-ops-settings/seed | Seed default settings |
-| POST | /api/admin/agent-ops-settings/repair | Repair settings |
-| GET | /api/admin/agent-ops-settings/versions | Version history |
-| POST | /api/admin/agent-ops-settings/versions/[version]/activate | Activate version |
-
-### What&apos;s New
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/whats-new-config | Get config |
-| PUT | /api/admin/whats-new-config | Update config |
-| GET | /api/admin/whats-new-config/history | Config history |
-| GET | /api/admin/whats-new-config/preview | Preview content |
-| POST | /api/admin/whats-new-config/restore | Restore config |
-| GET | /api/admin/whats-new/available | Available content |
-| POST | /api/admin/whats-new/sync | Sync from source |
-| POST | /api/admin/whats-new/import | Import content |
-| GET | /api/admin/whats-new/config | Alternate config endpoint |
-| POST | /api/admin/whats-new-backfill | Backfill content |
-| POST | /api/admin/generate-highlights | Generate highlights |
-| GET | /api/admin/whats-new-generation-status | Generation status |
-| GET | /api/admin/whats-new-highlights-config | Highlights config |
-| PUT | /api/admin/whats-new-highlights-config | Update highlights config |
-| GET | /api/admin/whats-new-highlights-preview | Preview highlights |
-
-### GitHub Admin
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/github/connection | Connection status |
-| POST | /api/admin/github/test | Test connection |
-| GET | /api/admin/github/repositories | List repositories |
-| GET | /api/admin/github/rate-limit | GitHub rate limit |
-| POST | /api/admin/github/rotate-key | Rotate GitHub key |
-
-### Slack Admin
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/slack-workspaces | List workspaces |
-| POST | /api/admin/slack-app/create | Create Slack app |
-| POST | /api/admin/slack-app/reconnect | Reconnect Slack |
-| GET | /api/admin/slack-app/manifest-status | Manifest status |
-| POST | /api/admin/slack-app/update-manifest | Update manifest |
-| GET | /api/admin/slack-audit-logs | Slack audit logs |
-| GET | /api/admin/integration-audit-logs | Integration audit logs |
-
-### Webhook Logs
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/admin/webhook-logs | List webhook logs |
-| GET | /api/admin/webhook-logs/[deliveryId] | Get log details |
-| GET | /api/admin/webhook-logs/stats | Webhook statistics |
-
-### Miscellaneous Admin
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/admin/modal-tool | Admin modal tool |
-| POST | /api/admin/upload-logo | Upload organization logo |
-
----
-
-## Response Shapes
-
-### Standard Paginated Response
-
-\`\`\`json
-{
-  "items": [...],
-  "total": 142,
-  "page": 1,
-  "limit": 20,
-  "hasMore": true
-}
-\`\`\`
-
-### Quest Response
-
-\`\`\`json
-{
-  "id": "quest_abc123",
-  "sessionId": "sess_xyz789",
-  "status": "completed",
-  "reply": {
-    "content": "The AI response text...",
-    "model": "gpt-4o",
-    "tokensUsed": {
-      "input": 150,
-      "output": 320
-    },
-    "sources": [
-      {
-        "fileId": "file_123",
-        "fileName": "report.pdf",
-        "chunkIndex": 3,
-        "score": 0.92,
-        "text": "Relevant excerpt..."
-      }
-    ],
-    "artifacts": [
-      {
-        "id": "art_456",
-        "type": "code",
-        "title": "analysis.py",
-        "content": "..."
-      }
-    ]
-  },
-  "createdAt": "2025-01-15T10:30:00Z",
-  "completedAt": "2025-01-15T10:30:05Z"
-}
-\`\`\`
-
-### File Response
-
-\`\`\`json
-{
-  "id": "file_abc123",
-  "name": "quarterly-report.pdf",
-  "originalName": "Q4 Report Final.pdf",
-  "size": 1048576,
-  "mimeType": "application/pdf",
-  "tags": ["reports", "Q4"],
-  "chunked": true,
-  "chunkCount": 24,
-  "embeddingModel": "text-embedding-3-small",
-  "projectId": "proj_xyz",
-  "userId": "user_123",
-  "s3Key": "files/user_123/file_abc123.pdf",
-  "createdAt": "2025-01-10T08:00:00Z",
-  "updatedAt": "2025-01-10T08:05:00Z"
-}
-\`\`\`
-
-### Agent Response
-
-\`\`\`json
-{
-  "id": "agent_abc123",
-  "name": "Research Assistant",
-  "description": "Specialized in academic research and citation management",
-  "systemPrompt": "You are a research assistant specialized in...",
-  "model": "gpt-4o",
-  "temperature": 0.3,
-  "avatarUrl": "https://cdn.your-deployment.example.com/avatars/agent_abc123.png",
-  "tools": ["web-search", "web-fetch"],
-  "isPublic": false,
-  "userId": "user_123",
-  "organizationId": "org_456",
-  "createdAt": "2025-01-10T12:00:00Z",
-  "updatedAt": "2025-01-12T09:30:00Z"
-}
-\`\`\`
-
-### Session Response
-
-\`\`\`json
-{
-  "id": "sess_abc123",
-  "title": "Quarterly Analysis Discussion",
-  "messageCount": 12,
-  "model": "gpt-4o",
-  "agentId": "agent_xyz",
-  "projectId": "proj_456",
-  "tags": ["analysis", "Q4"],
-  "isFavorite": false,
-  "isShared": false,
-  "userId": "user_123",
-  "messages": [
-    {
-      "id": "msg_001",
-      "role": "user",
-      "content": "Analyze the quarterly report",
-      "createdAt": "2025-01-15T10:00:00Z"
-    },
-    {
-      "id": "msg_002",
-      "role": "assistant",
-      "content": "Based on the quarterly report...",
-      "model": "gpt-4o",
-      "tokensUsed": { "input": 200, "output": 450 },
-      "sources": [],
-      "createdAt": "2025-01-15T10:00:05Z"
-    }
-  ],
-  "createdAt": "2025-01-15T10:00:00Z",
-  "updatedAt": "2025-01-15T11:30:00Z"
-}
-\`\`\`
-
----
-
 ## Error Handling
 
-### Standard Error Response
+Public endpoints share one JSON error envelope: a required \`error\` string, plus \`request_id\`
+(mirrors \`X-Request-ID\`) when present. Endpoint-specific detail is added alongside \`error\`;
+branch on the HTTP status (and \`errorCode\` where an endpoint returns one), not on the message.
+The shared status table (malformed JSON is 400, schema validation failure is 422, a missing or
+invalid credential is 401, a missing scope is 403, an unknown resource is 404, rate limiting is
+429) is defined in \`b4m-core/common/src/api-contract/CONVENTIONS.md\`, and each generated
+operation lists the statuses it can return. Older hand-written routes may not follow the envelope
+exactly.
 
-\`\`\`json
-{
-  "error": "Descriptive error message",
-  "code": "ERROR_CODE",
-  "details": {}
-}
-\`\`\`
-
-### Common Status Codes
-
-| Status | Meaning | Description |
-|--------|---------|-------------|
-| 200 | OK | Request succeeded |
-| 201 | Created | Resource created successfully |
-| 400 | Bad Request | Invalid request body or parameters |
-| 401 | Unauthorized | Missing or invalid authentication |
-| 403 | Forbidden | Insufficient permissions or scope |
-| 404 | Not Found | Resource does not exist |
-| 409 | Conflict | Resource already exists or version conflict |
-| 422 | Unprocessable Entity | Validation error (Zod schema failure) |
-| 429 | Too Many Requests | Rate limit exceeded |
-| 500 | Internal Server Error | Unexpected server error |
-| 503 | Service Unavailable | Service temporarily unavailable |
-
-### Validation Errors (422)
-
-\`\`\`json
-{
-  "error": "Validation failed",
-  "code": "VALIDATION_ERROR",
-  "details": {
-    "issues": [
-      {
-        "path": ["body", "message"],
-        "message": "Required",
-        "code": "invalid_type"
-      }
-    ]
-  }
-}
-\`\`\`
-
-### Authentication Errors (401)
-
-\`\`\`json
-{
-  "error": "Token expired",
-  "code": "TOKEN_EXPIRED"
-}
-\`\`\`
-
-Use the refresh token flow to obtain a new access token. Non-browser clients pass the token in
-the body; a browser sends an empty body and the HttpOnly cookie supplies it:
-
-\`\`\`
-POST /api/auth/refreshToken
-Content-Type: application/json
-
-{
-  "refreshToken": "<refresh_token>"
-}
-\`\`\`
+When an access token expires the API answers 401. Exchange the refresh token at
+\`POST /api/auth/refreshToken\`: non-browser clients pass it in the body, and a browser sends an
+empty body and the HttpOnly cookie supplies it.
 
 ---
 
@@ -1538,25 +416,19 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 ## Tips for Development
 
-1. **Always use the authenticated client.** In the B4M frontend, import \`api\` from \`@client/app/contexts/ApiContext\` rather than using \`fetch()\`. The \`api\` instance handles token refresh, request IDs, and error interceptors automatically.
+1. **Poll quests, don&apos;t block on chat.** The \`POST /api/chat\` endpoint returns immediately with a \`questId\`. Poll \`GET /api/v1/quests/{id}\` or listen on WebSocket for \`quest:completed\` to get the response.
 
-2. **Poll quests, don&apos;t block on chat.** The \`POST /api/chat\` endpoint returns immediately with a \`questId\`. Poll \`GET /api/v1/quests/{id}\` or listen on WebSocket for \`quest:completed\` to get the response.
+2. **Use streaming for better UX.** Pass \`stream: true\` in chat requests and listen for \`quest:chunk\` WebSocket events to display tokens as they arrive.
 
-3. **Use streaming for better UX.** Pass \`stream: true\` in chat requests and listen for \`quest:chunk\` WebSocket events to display tokens as they arrive.
+3. **Leverage RAG with file context.** Attach \`fileIds\` or \`projectId\` to chat requests to ground AI responses in your uploaded documents. Files must be chunked first via \`POST /api/files/chunk\`.
 
-4. **Leverage RAG with file context.** Attach \`fileIds\` or \`projectId\` to chat requests to ground AI responses in your uploaded documents. Files must be chunked first via \`POST /api/files/chunk\`.
+4. **Handle 429s gracefully.** Implement exponential backoff when you receive rate limit responses. Check \`X-RateLimit-Reset\` header for the retry timestamp.
 
-5. **Handle 429s gracefully.** Implement exponential backoff when you receive rate limit responses. Check \`X-RateLimit-Reset\` header for the retry timestamp.
+5. **Use Zod schemas for validation.** All request bodies are validated with Zod schemas on the server. Match the expected schema to avoid 422 errors. Shared schemas are in \`@bike4mind/common\`.
 
-6. **Use Zod schemas for validation.** All request bodies are validated with Zod schemas on the server. Match the expected schema to avoid 422 errors. Shared schemas are in \`@bike4mind/common\`.
+6. **Token lifecycle matters.** Access tokens expire after 30 minutes. Use the refresh token flow (\`POST /api/auth/refreshToken\`) to get new tokens without requiring re-authentication.
 
-7. **Prefer pagination over fetching all.** All list endpoints support \`page\` and \`limit\` parameters. Default page size is 20. Never fetch unbounded lists in production.
-
-8. **Token lifecycle matters.** Access tokens expire after 30 minutes. Use the refresh token flow (\`POST /api/auth/refreshToken\`) to get new tokens without requiring re-authentication.
-
-9. **Test with the server status endpoint.** Use \`GET /api/settings/serverStatus\` as a lightweight health check. It returns server version, uptime, and configuration without requiring authentication.
-
-10. **Every response carries a request ID.** The API attaches an \`X-Request-ID\` header to every response — success and error — so you can correlate a failure with our server logs. Supply your own \`X-Request-ID\` and the server echoes it back; omit it and the server generates one. Caller-supplied values are sanitized to the characters \`A-Za-z0-9._-\` and capped at 128 characters. Include this ID in support tickets.
+7. **Every response carries a request ID.** The API attaches an \`X-Request-ID\` header to every response (success and error) so you can correlate a failure with our server logs. Supply your own \`X-Request-ID\` and the server echoes it back; omit it and the server generates one. Caller-supplied values are sanitized to the characters \`A-Za-z0-9._-\` and capped at 128 characters. Include this ID in support tickets.
 
     \`\`\`bash
     # Send a correlation ID and read it back from the response headers

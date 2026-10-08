@@ -32,13 +32,11 @@ contract, because a violation fails the build.
    `defineLambdaRoute(contract, handler)`.)
 4. **Regenerate the spec:** `pnpm turbo:openapi:generate` and commit
    `apps/client/public/openapi.json`. CI drift-gates it.
-5. **Replace the endpoint's section** in the hand-written reference
-   (`apps/client/app/components/admin/content/apiReferenceContent.ts`) with a short
-   pointer to the generated docs (`/api/v1/docs`) under its `operationId` - see the
-   `sendChatMessage`/`updateSession` sections for the pattern. A bare deletion loses
-   discoverability for someone reading the hand-written page top to bottom; the
-   pointer keeps it without duplicating any schema, so the two doc systems still
-   cannot contradict each other.
+5. **Remove the endpoint's section** from the hand-written reference
+   (`apps/client/app/components/admin/content/apiReferenceContent.ts`) and add its path to
+   the "Public endpoints (generated docs)" list there, so the generated docs
+   (`/api/v1/docs`) stay the only place its schema lives and the two doc systems cannot
+   contradict each other.
 6. **Verify:** `pnpm --filter @bike4mind/common typecheck && redocly lint` +
    the handler's tests.
 
