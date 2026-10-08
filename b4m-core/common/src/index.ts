@@ -19,6 +19,7 @@ export * from './generatedAudio';
 export * from './voiceGeneration';
 export * from './voicePricing';
 export * from './video';
+export * from './decisions';
 export * from './soundGeneration';
 export * from './soundPricing';
 export * from './musicGeneration';

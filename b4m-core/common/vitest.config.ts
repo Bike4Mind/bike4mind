@@ -6,5 +6,7 @@ export default defineConfig({
     ...sharedTest,
     globals: true,
     environment: 'node',
+    // Type-level tests (`*.test-d.ts`) run through tsc here; the package tsconfig keeps test files out of `typecheck`.
+    typecheck: { enabled: true, include: ['src/**/*.test-d.ts'] },
   },
 });

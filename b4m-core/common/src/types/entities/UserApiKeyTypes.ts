@@ -7,6 +7,12 @@ export enum ApiKeyScope {
   READ_FILES = 'files:read',
   WRITE_FILES = 'files:write',
   AI_GENERATE = 'ai:generate',
+  /**
+   * Only the Decisions API (`POST /api/v1/decisions`, `GET /api/v1/decision-models`): typed questions answered
+   * with probabilities, no text generation. Lets an edge guardrail hold a key that cannot generate text.
+   * `ai:generate` also opens these routes.
+   */
+  AI_DECIDE = 'ai:decide',
   AI_CHAT = 'ai:chat',
   READ_PROJECTS = 'projects:read',
   WRITE_PROJECTS = 'projects:write',

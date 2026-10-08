@@ -39,5 +39,6 @@ export * from './imageGenerationTemplate';
 export * from './qa';
 export * from './imageApi';
 export * from './videoGenerations';
+export * from './decisions';
 export * from './voiceApi';
 export * from './generationCallback';

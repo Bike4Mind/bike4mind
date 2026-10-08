@@ -17,6 +17,7 @@ import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
 import { createFileUploadContract, getFileContract } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
+import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract } from './quest.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
@@ -72,6 +73,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createFileUploadContract,
   getFileContract,
   createEmbeddingsContract,
+  createDecisionContract,
+  listDecisionModelsContract,
   getQuestContract,
   createSessionContract,
   listSessionsContract,

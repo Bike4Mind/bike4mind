@@ -150,6 +150,16 @@
         "default": "./dist/registrableDomain.cjs"
       }
     },
+    "./decisionProviders": {
+      "import": {
+        "types": "./dist/decisionProviders/index.d.mts",
+        "default": "./dist/decisionProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/decisionProviders/index.d.cts",
+        "default": "./dist/decisionProviders/index.cjs"
+      }
+    },
     "./videoProviders": {
       "import": {
         "types": "./dist/videoProviders/index.d.mts",

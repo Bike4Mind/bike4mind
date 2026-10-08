@@ -58,7 +58,7 @@ describe('apiKeyScopes catalog', () => {
     // commissions billable work must not carry one - otherwise a "Read-only" or "Read & write" key
     // silently gains the ability to spend. Table, not one-off asserts, so a future spend scope
     // (the way `datalake:query` joined `optihashi:compute`) has to be added here to pass.
-    const spendScopes = [ApiKeyScope.OPTIHASHI_COMPUTE, ApiKeyScope.DATALAKE_QUERY];
+    const spendScopes = [ApiKeyScope.OPTIHASHI_COMPUTE, ApiKeyScope.DATALAKE_QUERY, ApiKeyScope.AI_DECIDE];
     for (const scope of spendScopes) {
       expect(scope.endsWith(':read'), `${scope} must not end in :read`).toBe(false);
       expect(scope.endsWith(':write'), `${scope} must not end in :write`).toBe(false);

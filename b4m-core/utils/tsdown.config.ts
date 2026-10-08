@@ -33,6 +33,8 @@ export default defineConfig({
     // Provider interface, registry and TestVideoProvider for the video job engine. Own entry so the barrel
     // stays light; conformance.ts (imports vitest) is not reachable from it and so never ships.
     'src/videoProviders/index.ts',
+    // Decision provider interface, registry, retry policy and adapters. Same isolation as videoProviders.
+    'src/decisionProviders/index.ts',
   ],
   format: ['esm', 'cjs'],
   dts: true,

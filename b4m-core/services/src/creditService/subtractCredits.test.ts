@@ -206,6 +206,39 @@ describe('creditService - subtractCredits', () => {
     });
   });
 
+  describe('decision_usage transactions', () => {
+    it('should write a quest-less decision_usage transaction with negative credits and token fields', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const parameters: SubtractCreditsParameters = {
+        type: 'decision_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 3,
+        model: 'claude-3-sonnet',
+        apiKeyId: 'apikey-123',
+        inputTokens: 200,
+        outputTokens: 100,
+        source: 'api',
+      };
+
+      await subtractCredits(parameters, mockAdapters);
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith('decision_usage', {
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: -3,
+        description: 'Decision',
+        metadata: undefined,
+        source: 'api',
+        model: 'claude-3-sonnet',
+        apiKeyId: 'apikey-123',
+        inputTokens: 200,
+        outputTokens: 100,
+      });
+    });
+  });
+
   describe('image_generation_usage transactions', () => {
     it('should subtract credits for image generation usage', async () => {
       mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockOrganization);
