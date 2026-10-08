@@ -17,6 +17,7 @@ function fakeServer(
     ingestion?: Record<number, string[]>;
     lakeTag?: boolean;
     failDelete?: RegExp;
+    promote?: { status: number; lakeStatus?: string };
   } = {}
 ) {
   const calls: Call[] = [];
@@ -57,6 +58,11 @@ function fakeServer(
     if (member && method === 'GET') {
       const script = opts.ingestion?.[Number(member[2])] ?? ['ready'];
       return json(200, { ingestion_status: pick(script, nextRead(path)) });
+    }
+    const lifecycle = path.match(/^\/api\/data-lakes\/([^/]+)\/lifecycle$/);
+    if (method === 'POST' && lifecycle) {
+      const { status, lakeStatus } = opts.promote ?? { status: 200 };
+      return json(status, status === 200 ? { id: lifecycle[1], status: lakeStatus ?? 'active' } : { error: 'nope' });
     }
     if (method === 'DELETE') {
       if (opts.failDelete?.test(path)) return json(500, { error: 'boom' });
@@ -109,6 +115,38 @@ describe('provisionLakeRagLakes', () => {
     expect(currentCreated).toBeGreaterThan(supersededReady);
     expect(JSON.parse(calls[seq.indexOf('POST /api/v1/files')].body!)).toMatchObject({ mime_type: 'text/markdown' });
     expect(lakes.moons).toEqual({ id: 'lake-lakerag-eval-moons-r1', datalakeTag: 'tag-lakerag-eval-moons-r1' });
+  });
+
+  it('promotes each lake once, only after every one of its files is ready', async () => {
+    const { api, calls } = fakeServer({ ingestion: { 1: ['indexing', 'ready'] } });
+    await provisionLakeRagLakes(
+      api,
+      [doc('a.md', 'superseded'), doc('a.md', 'current'), doc('b.md', 'current', 'units')],
+      { runId: 'r1' }
+    );
+    const seq = paths(calls);
+    const promoteMoons = seq.indexOf('POST /api/data-lakes/lake-lakerag-eval-moons-r1/lifecycle');
+    const promoteUnits = seq.indexOf('POST /api/data-lakes/lake-lakerag-eval-units-r1/lifecycle');
+    expect(seq.filter(p => p.endsWith('/lifecycle'))).toHaveLength(2);
+    expect(promoteMoons).toBeGreaterThan(
+      seq.lastIndexOf('GET /api/v1/data-lakes/lake-lakerag-eval-moons-r1/files/file1')
+    );
+    expect(promoteUnits).toBeGreaterThan(
+      seq.lastIndexOf('GET /api/v1/data-lakes/lake-lakerag-eval-units-r1/files/file2')
+    );
+    expect(JSON.parse(calls[promoteMoons].body!)).toEqual({ action: 'promote' });
+  });
+
+  it.each([
+    ['rejected', { status: 400 }, /lifecycle -> 400/],
+    ['left non-active', { status: 200, lakeStatus: 'archived' }, /promote lake moons: status archived/],
+  ])('tears down when the promote is %s', async (_label, promote, error) => {
+    const { api, calls } = fakeServer({ promote });
+    await expect(provisionLakeRagLakes(api, [doc('a.md', 'current')], { runId: 'r1' })).rejects.toThrow(error);
+    expect(paths(calls).filter(p => p.startsWith('DELETE'))).toEqual([
+      'DELETE /api/v1/data-lakes/lake-lakerag-eval-moons-r1/files/file0',
+      'DELETE /api/data-lakes/lake-lakerag-eval-moons-r1',
+    ]);
   });
 
   it('PUTs the bytes with the presigned content type and no Authorization header', async () => {

@@ -106,10 +106,19 @@ async function attachAndIngest(
   });
 }
 
+// A new lake starts as a draft, and a draft lake does not ground chat, so each lake is promoted
+// once all of its files are ready (lifecycle.ts -> promoteDataLake.ts; idempotent on 'active').
+async function promoteLake(api: LakeRagApi, subject: string, lakeId: string): Promise<void> {
+  const lake = await call(api, 'POST', `/api/data-lakes/${lakeId}/lifecycle`, { action: 'promote' });
+  if (lake.status !== undefined && lake.status !== 'active')
+    throw new Error(`promote lake ${subject}: status ${String(lake.status)}`);
+}
+
 /**
  * Supersession ranks by `createdAt`, so every superseded generation is registered and fully
- * ingested before any current one is even created. A partial failure tears down what exists and
- * rethrows the original error. Uploaded files outlive teardown (v1 has no file DELETE).
+ * ingested before any current one is even created, and the lake is promoted only after both.
+ * A partial failure tears down what exists and rethrows the original error. Uploaded files
+ * outlive teardown (v1 has no file DELETE).
  */
 export async function provisionLakeRagLakes(
   api: LakeRagApi,
@@ -152,6 +161,7 @@ export async function provisionLakeRagLakes(
           );
         }
       }
+      await promoteLake(api, subject, lakes[subject].id);
     }
   } catch (err) {
     await teardown();

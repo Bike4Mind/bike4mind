@@ -59,10 +59,30 @@ export function resolved(api: LakeRagApi) {
   };
 }
 
+// 429 backoff: at most MAX_429_RETRIES waits, together at most MAX_429_WAIT_MS; a 429 whose wait
+// would overrun that budget is thrown at once rather than slept on.
+export const MAX_429_RETRIES = 4;
+export const MAX_429_WAIT_MS = 180_000;
+const DEFAULT_429_WAIT_MS = 5_000;
+
+/** Wait (ms) a 429 asks for: Retry-After (seconds or HTTP date), else the "retry in Ns" body hint. */
+export function retryAfterMs(res: Response, text: string, attempt: number, nowMs: number): number {
+  const header = res.headers.get('retry-after')?.trim();
+  if (header) {
+    if (/^\d+(?:\.\d+)?$/.test(header)) return Math.ceil(Number(header) * 1000);
+    const at = Date.parse(header);
+    if (!Number.isNaN(at)) return Math.max(0, at - nowMs);
+  }
+  const hint = /(?:retry|try again) in (\d{1,5}(?:\.\d{1,3})?) ?s/i.exec(text.slice(0, MAX_SCANNED));
+  if (hint) return Math.ceil(Number(hint[1]) * 1000);
+  return DEFAULT_429_WAIT_MS * 2 ** attempt;
+}
+
 export async function call(api: LakeRagApi, method: string, path: string, body?: unknown): Promise<Json> {
   const url = lakeRagUrl(api.baseUrl, path);
+  const { fetch: fetchImpl, sleep, now } = resolved(api);
   const send = (authorization: string) =>
-    resolved(api).fetch(url, {
+    fetchImpl(url, {
       method,
       headers: {
         Authorization: authorization,
@@ -71,15 +91,34 @@ export async function call(api: LakeRagApi, method: string, path: string, body?:
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   const credential = api.authorization;
-  const header = typeof credential === 'string' ? credential : await credential.header();
-  let res = await send(header);
-  let text = await res.text();
-  if (res.status === 401 && typeof credential !== 'string' && (await credential.renew(header))) {
-    res = await send(await credential.header());
-    text = await res.text();
+  const currentHeader = () => (typeof credential === 'string' ? credential : credential.header());
+  let header = await currentHeader();
+  let renewed = false;
+  let retries = 0;
+  let waitedMs = 0;
+  // One loop, bounded: at most one 401 renewal plus MAX_429_RETRIES backoffs.
+  for (;;) {
+    const res = await send(header);
+    const text = await res.text();
+    if (res.status === 401 && !renewed && typeof credential !== 'string' && (await credential.renew(header))) {
+      renewed = true;
+      header = await credential.header();
+      continue;
+    }
+    if (res.status === 429 && retries < MAX_429_RETRIES) {
+      const waitMs = retryAfterMs(res, text, retries, now());
+      if (waitedMs + waitMs <= MAX_429_WAIT_MS) {
+        retries += 1;
+        waitedMs += waitMs;
+        await sleep(waitMs);
+        // A long wait can carry an expiring JWT past its renewal point.
+        header = await currentHeader();
+        continue;
+      }
+    }
+    if (!res.ok) throw new LakeRagHttpError(`${method} ${path} -> ${res.status}: ${bodyExcerpt(text)}`, res.status);
+    return text ? (JSON.parse(text) as Json) : {};
   }
-  if (!res.ok) throw new LakeRagHttpError(`${method} ${path} -> ${res.status}: ${bodyExcerpt(text)}`, res.status);
-  return text ? (JSON.parse(text) as Json) : {};
 }
 
 export type PollStep = { done: true } | { done: false; status: string };
