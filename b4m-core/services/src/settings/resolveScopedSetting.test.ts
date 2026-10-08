@@ -14,6 +14,7 @@ import {
   computeCandidateRefs,
   pickOverride,
   resolveScopedSetting,
+  resolveScopedSettingEntries,
   resolveScopedSettingFromOverrides,
   resolveScopedSettingValues,
   scopeForCaller,
@@ -269,6 +270,31 @@ describe('applyClamp (safety rail)', () => {
   it('is a no-op with no clamp or a non-numeric value', () => {
     expect(applyClamp(8000, fullScope, undefined)).toBe(8000);
     expect(applyClamp('str', fullScope, windowClamp)).toBe('str');
+  });
+});
+
+describe('resolveScopedSettingEntries (stored)', () => {
+  const scope = { organizationId: 'o1', owner };
+  const storedFor = async (platform: Record<string, string>, overrides: ReturnType<typeof override>[] = []) =>
+    (await resolveScopedSettingEntries([KEY], scope, makeDb(platform, overrides)))[KEY];
+
+  it('is false for a key no rung stores, even though value is the coded default', async () => {
+    expect(await storedFor({})).toMatchObject({ value: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT, stored: false });
+  });
+
+  it('is true for a parseable platform row, including one equal to the default', async () => {
+    expect(await storedFor({ [KEY]: String(DATA_LAKE_SEARCH_MAX_FILES_DEFAULT) })).toMatchObject({ stored: true });
+  });
+
+  it('is false for an unparseable platform row, which resolves to the default', async () => {
+    expect(await storedFor({ [KEY]: 'not-a-number' })).toMatchObject({ stored: false });
+  });
+
+  it('is true when an override wins over no platform row', async () => {
+    expect(await storedFor({}, [override(SettingScopeLevel.Organization, 'o1', '2000')])).toMatchObject({
+      value: 2000,
+      stored: true,
+    });
   });
 });
 
