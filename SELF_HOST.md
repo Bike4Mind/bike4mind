@@ -74,7 +74,7 @@ BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
 ```
 
-This pulls the app image and starts it alongside MongoDB, MinIO, ElasticMQ, and Mailpit. When it's healthy, open:
+This pulls the app image, builds MinIO and its `mc` client from pinned upstream source, and starts the app alongside MongoDB, MinIO, ElasticMQ, and Mailpit. The first object-storage build needs network access to public GitHub source, Go modules, Docker Hub base images, and Debian packages; no MinIO registry credentials are required. Allow several minutes for the first build. Later starts reuse the local images. When it's healthy, open:
 
 ```
 http://localhost:3000
@@ -96,7 +96,7 @@ Working from a checkout and want to run your own edits (or a freshly pulled `mai
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d --build
 ```
 
-`--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, and `worker` - before starting; the pure-image backing services (Mongo, MinIO, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+`--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, `worker`, MinIO, and its `mc` client - before starting; the pure-image backing services (Mongo, ElasticMQ, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
 
 > **Upgrading: rebuild the `ws` gateway in lockstep with the app.** The `ws` gateway is built from source (there is no published image for it), while the app is pulled by default. The browser and the gateway share a connection contract (the browser sends its realtime credential as a `?ticket=` query the gateway must forward), so a version skew between them breaks realtime for every browser silently - the socket is simply rejected. A pull-only upgrade (`docker compose ... pull && ... up -d`) refreshes the published `app` image but leaves the already-built `ws` container at its old version. When you move to a new version, `git pull` your checkout and bring the stack up with `--build` (which rebuilds `ws` too), or rebuild the gateway explicitly with `docker compose -f compose.selfhost.yaml build ws`.
 
@@ -107,6 +107,21 @@ docker compose -f compose.selfhost.yaml ps                      # services Up / 
 curl -s -o /dev/null -w '%{http_code}\n' localhost:3000         # expect 200
 docker compose -f compose.selfhost.yaml logs -f app             # follow app logs (Ctrl-C to stop)
 ```
+
+### Object-storage builds, updates, and rollback
+
+MinIO and `mc` use the unmodified upstream releases and verified source commits listed in [selfhost/minio/README.md](selfhost/minio/README.md). Their Go toolchains and Debian bases are pinned by digest for both amd64 and arm64. Debian package downloads are not frozen, so these are repeatable source builds, not a promise of byte-identical images.
+
+To build just object storage before the first start:
+
+```bash
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost build minio createbuckets
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d minio createbuckets
+```
+
+For updates, record the current checkout commit with `git rev-parse HEAD`, back up the `minio-data` volume, update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
+
+To roll back the container code, restore the previous checkout commit and repeat the same build and start commands. Keep the data volume. Before downgrading across MinIO versions, check upstream storage-format compatibility; restoring the corresponding backup may be necessary. Do not use `docker compose down -v` for an update or rollback.
 
 ### Frontend dev mode (host `next dev`)
 

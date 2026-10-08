@@ -624,7 +624,8 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       const call = (service as any).buildOptimizedFeatures.mock.calls[0];
-      expect(call[call.length - 1]).toEqual(['datalake:x']);
+      // Reader-consent tags sit just before the trailing includeLibraryFiles argument.
+      expect(call[call.length - 2]).toEqual(['datalake:x']);
     });
 
     it('forced-retrieval door: withholds retrievalTags when the acting user is not the session owner', async () => {
@@ -635,7 +636,8 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       const call = (service as any).buildOptimizedFeatures.mock.calls[0];
-      expect(call[call.length - 1]).toBeUndefined();
+      // Reader-consent tags sit just before the trailing includeLibraryFiles argument.
+      expect(call[call.length - 2]).toBeUndefined();
     });
 
     it('tool door: forwards sessionReaderConsentDatalakeTags only when the acting user owns the session', async () => {
@@ -678,6 +680,78 @@ describe('ChatCompletionProcess', () => {
 
       expect(capturedDeps.sessionReaderConsentDatalakeTags).toBeUndefined();
       buildMcpToolsSpy.mockRestore();
+    });
+  });
+
+  // The library-off flag and the attached-file allow-list must reach BOTH doors from a real turn;
+  // the feature/tool unit tests construct their own arguments and would stay green without these.
+  describe('library-off plumbing at both doors', () => {
+    const captureToolDeps = () => {
+      const originalBuildMcpTools = ToolBuilder.prototype.buildMcpTools;
+      const captured: { deps?: any } = {};
+      const spy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockImplementation(function (this: any, args: any) {
+        captured.deps = this.deps;
+        return originalBuildMcpTools.call(this, args);
+      });
+      return { captured, restore: () => spy.mockRestore() };
+    };
+
+    it('forced-retrieval door: passes the resolved library flag as the trailing argument', async () => {
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = true;
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBe(false);
+    });
+
+    it('forced-retrieval door: Data Lakes off resolves a stored false to true', async () => {
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = false;
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBe(true);
+    });
+
+    it('tool door: forwards sessionIncludeLibraryFiles and the session attachments as attachedFileIds', async () => {
+      const { captured, restore } = captureToolDeps();
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = true;
+      mockSession.knowledgeIds = ['k1'];
+      const body = { ...wireMinimalTurn(), fabFileIds: ['f1'], messageFileIds: ['m1'] };
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        expect(captured.deps.sessionIncludeLibraryFiles).toBe(false);
+        expect([...captured.deps.attachedFileIds].sort()).toEqual(['f1', 'k1', 'm1']);
+      } finally {
+        restore();
+      }
+    });
+
+    it('tool door: Data Lakes off resolves a stored false to true', async () => {
+      const { captured, restore } = captureToolDeps();
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = false;
+      const body = wireMinimalTurn();
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        expect(captured.deps.sessionIncludeLibraryFiles).toBe(true);
+      } finally {
+        restore();
+      }
     });
   });
 

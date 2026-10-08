@@ -63,6 +63,7 @@ export const CreateSessionRequestSchema = z.object({
   // Marks `retrievalTags` as a deliberate selection: an empty one then scopes the lake-memory card
   // to no lake at all instead of widening to every entitled lake (see resolveLakeMemoryScope).
   lakeScopeExplicit: z.boolean().optional(),
+  includeLibraryFiles: z.boolean().optional(),
   // Resolved from the lake by the create route (resolveLakeSessionDefaults) so the merged create
   // params carry it through to core; declared here for the shared type only. The route strips a
   // client-sent value whenever `dataLakeId` is set, leaving the lake authoritative; a session that

@@ -3,12 +3,13 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { getGeneratedImageStorage } from '@server/utils/storage';
 import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
+import { GENERATED_CONTENT_KEY_RE } from '@bike4mind/common';
 import { z } from 'zod';
 
 const refSchema = z
   .string()
   .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z]+$/i,
+    GENERATED_CONTENT_KEY_RE,
     'Invalid ref format. Expected UUID with extension (e.g. 9db8f846-08d5-47d7-9166-a039d3c3d4d7.png)'
   );
 
