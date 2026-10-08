@@ -500,9 +500,14 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * surfacing a hard refusal, the backend throws so the completion loop's existing fallback
  * machinery continues the request on Opus 5 (whose classifiers intervene far less often).
  * A refusal from any *other* model is a genuine decline and surfaces unchanged. Keep in
- * sync with the `claude-fable-5` fallback preference chain in `adminSettings/fallback.ts`.
+ * sync with the `claude-fable-5` and Bedrock Fable fallback preference chains in
+ * `adminSettings/fallback.ts`.
  */
-export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([ChatModels.CLAUDE_FABLE_5]);
+export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+]);
 
 /**
  * Bedrock-hosted Claude models that do NOT support prompt caching (`cache_control`).

@@ -256,3 +256,42 @@ describe('AnthropicBedrockBackend image content translation', () => {
     return JSON.parse(payload.body) as Record<string, unknown>;
   }
 });
+
+describe('AnthropicBedrockBackend safety-classifier refusal fallback', () => {
+  let backend: AnthropicBedrockBackend;
+  beforeEach(() => {
+    backend = new AnthropicBedrockBackend();
+  });
+
+  const refusalDelta = {
+    type: 'message_delta',
+    delta: { stop_reason: 'refusal' },
+    usage: { output_tokens: 0 },
+  };
+  const refusalResponse = {
+    id: 'msg_1',
+    type: 'message',
+    role: 'assistant',
+    content: [],
+    model: 'x',
+    stop_reason: 'refusal',
+    usage: { input_tokens: 1, output_tokens: 0 },
+  };
+
+  it('stream: throws a fallback-recognized error when Bedrock Fable refuses', () => {
+    expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_FABLE_5_BEDROCK, refusalDelta)).toThrow(
+      /safety classifier refusal/
+    );
+  });
+
+  it('non-stream: throws a fallback-recognized error when Bedrock Fable refuses', () => {
+    expect(() => backend.translateChunk(ChatModels.CLAUDE_FABLE_5_1_BEDROCK, refusalResponse)).toThrow(
+      /safety classifier refusal/
+    );
+  });
+
+  it('does not throw for a refusal from a model outside the fallback set', () => {
+    expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalDelta)).not.toThrow();
+    expect(() => backend.translateChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalResponse)).not.toThrow();
+  });
+});

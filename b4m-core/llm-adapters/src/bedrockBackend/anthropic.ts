@@ -6,6 +6,7 @@ import {
   MessageContentText,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
+  REFUSAL_FALLBACK_MODELS,
   type ModelInfo,
 } from '@bike4mind/common';
 import {
@@ -192,7 +193,7 @@ interface ClaudeChunkContentStop extends BaseClaudeChunk {
 interface ClaudeChunkMessageDelta extends BaseClaudeChunk {
   type: ClaudeChunkTypes.MESSAGE_DELTA;
   delta: {
-    stop_reason: 'tool_use' | 'end_turn';
+    stop_reason: string;
   };
   usage: { output_tokens: number };
 }
@@ -1155,6 +1156,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         );
       }
 
+      const stopReason = (response as { stop_reason?: string }).stop_reason;
+      if (stopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
+        throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+      }
+
       // Extract text content from the response
       const textContent = response.content
         .filter(item => item.type === 'text')
@@ -1222,6 +1228,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk } {
     let done = false;
+    let refused = false;
     let choice: IChoice;
 
     // Default choice with empty text
@@ -1307,6 +1314,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         // Reset thinking block state
         this.isInThinkingBlock = false;
       } else if (isMessageDelta(chunk)) {
+        refused = chunk.delta?.stop_reason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model);
         choice = {
           status: ChoiceStatus.STREAM,
           chunkText: '',
@@ -1335,6 +1343,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           choices: [choice],
         },
       };
+    }
+
+    // Thrown outside the try: the catch above swallows errors.
+    if (refused) {
+      throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
     }
 
     return {
