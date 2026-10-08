@@ -17,6 +17,7 @@ const CURSOR_SCOPE = 'v1.whats-new';
 // one; wrapping it in its own scope keeps the two apart.
 const UPSTREAM_CURSOR_SCOPE = 'v1.whats-new.upstream';
 // Seconds. Bounds how long a hidden note stays visible at the CDN (s-maxage + stale-while-revalidate).
+// This is the "about 15 minutes" in whatsNew.contract.ts and the +15 of its "about 31 minutes"; keep in sync.
 const CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=600';
 const FALLBACK_CACHE_CONTROL = 'public, s-maxage=30, stale-while-revalidate=30';
 

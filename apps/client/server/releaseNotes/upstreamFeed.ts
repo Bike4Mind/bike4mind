@@ -6,6 +6,7 @@ type Logger = { warn: (message: string, meta?: Record<string, unknown>) => void 
 
 const TIMEOUT_MS = 3_000;
 const MAX_BODY_BYTES = 1024 * 1024;
+// Must stay in sync with the "about 31 minutes" figure in whatsNew.contract.ts (this is its +1 minute).
 const OK_TTL_MS = 60_000;
 // After an upstream-wide failure every request falls back without fetching for this long, so a dead
 // upstream costs one timeout per window rather than one per request (or per distinct cursor).

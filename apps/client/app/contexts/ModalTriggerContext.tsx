@@ -10,6 +10,10 @@ import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
 type ModalType = 'WhatsNewSlider';
 type TriggerSource = 'manual' | 'auto';
 
+// 2.5 seconds for the user to settle after returning. Exported so the visibility test advances by the
+// real delay rather than a copy of it.
+export const SETTLE_DELAY = 2500;
+
 interface ModalTriggerContextType {
   triggerModalByTag: (tag: string, modalType?: ModalType, source?: TriggerSource) => void;
   resetTrigger: () => void;
@@ -59,7 +63,6 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
   // Only triggers if there are modals with 'whats-new' tag that should be shown based on their behavior settings
   useEffect(() => {
     const FIVE_MINUTES = 5 * 60 * 1000;
-    const SETTLE_DELAY = 2500; // 2.5 seconds for user to settle after returning
 
     const handleVisibilityChange = () => {
       if (document.hidden) {

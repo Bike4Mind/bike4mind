@@ -3,7 +3,7 @@ import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { releaseNoteToModal } from '../components/modals/releaseNoteSlides';
-import { ModalTriggerProvider, useModalTrigger } from './ModalTriggerContext';
+import { ModalTriggerProvider, SETTLE_DELAY, useModalTrigger } from './ModalTriggerContext';
 
 const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
@@ -62,6 +62,8 @@ describe('ModalTriggerContext whats-new trigger source', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    // Restore the document.hidden spy so a later test does not inherit the stub.
+    vi.restoreAllMocks();
   });
 
   it('renders the slider as auto-triggered for an auto call', () => {
@@ -98,10 +100,10 @@ describe('ModalTriggerContext whats-new trigger source', () => {
     localStorage.setItem('tab_last_hidden_at', String(Date.now() - 6 * 60 * 1000));
     renderProvider();
 
-    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
     document.dispatchEvent(new Event('visibilitychange'));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2600);
+      await vi.advanceTimersByTimeAsync(SETTLE_DELAY + 100);
     });
 
     expect(mocks.refetch).toHaveBeenCalled();
