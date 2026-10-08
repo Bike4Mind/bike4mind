@@ -132,6 +132,31 @@ describe('ProductAccess', () => {
     expect(screen.getByTestId('product-access-toggle-optihashi:pro')).toHaveTextContent('Grant (opti)');
   });
 
+  it('counts a 1:1 key-name tag as a live source, not only the mapped grant tag', () => {
+    // A user tagged with the key name itself (`optihashi:pro`) holds the key through the
+    // 1:1 pass-through even though the comp grant tag (`opti`) is absent; the panel must
+    // show it as held with a Tag source, and the implied row must follow from it.
+    mockProductAccess.mockReturnValue({
+      data: {
+        entitlements: [
+          { key: 'optihashi:pro', held: true, grantTag: 'opti', sources: [{ type: 'tag', detail: 'optihashi:pro' }] },
+          {
+            key: 'questmaster:pro',
+            held: true,
+            grantTag: 'questmaster-pro',
+            sources: [{ type: 'implied', detail: 'optihashi:pro' }],
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<ProductAccess user={makeUser(['optihashi:pro'])} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('product-access-source-optihashi:pro-tag')).toHaveTextContent('Tag');
+    expect(screen.getByTestId('product-access-source-questmaster:pro-implied')).toHaveTextContent('Implied');
+    expect(screen.getAllByText('Held')).toHaveLength(2);
+  });
+
   it('warns when a live tag grant is redundant with another (read-only) source', () => {
     mockProductAccess.mockReturnValue({
       data: {

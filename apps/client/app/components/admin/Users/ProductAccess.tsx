@@ -4,7 +4,7 @@ import { Alert, Button, Chip, CircularProgress, Stack, Tooltip, Typography } fro
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { IUserDocument } from '@bike4mind/common';
 import { EntitlementSourceType, useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
-import { IMPLIED_ENTITLEMENTS, applyImpliedEntitlements } from '@client/lib/entitlements/registry';
+import { IMPLIED_ENTITLEMENTS, applyImpliedEntitlements, entitlementsForTags } from '@client/lib/entitlements/registry';
 
 interface ProductAccessProps {
   /** The live-edited user (FullUsersView's formState) - tag grants are staged into it. */
@@ -70,8 +70,13 @@ const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) =>
 
   if (!data) return null;
 
+  // The tag axis is recomputed from the LIVE formState with the same registry rule the
+  // server applies (`entitlementsForTags`): a live tag confers a key either 1:1 by its own
+  // name or through a TAG_GRANTS remap. `hasLiveTag` stays scoped to the single comp tag the
+  // toggle button writes, so its Grant/Revoke label always matches what a click changes.
   const hasLiveTag = (grantTag: string | undefined) =>
     grantTag ? currentTags.some(tag => tag.toLowerCase() === grantTag.toLowerCase()) : false;
+  const liveTagsFor = (key: string) => currentTags.filter(tag => entitlementsForTags([tag]).has(key));
   // Server-reported sources minus the two axes recomputed live here: the tag (from formState)
   // and `implied` (from the live literal holds below).
   const serverSources = (row: (typeof data.entitlements)[number]) =>
@@ -80,7 +85,7 @@ const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) =>
   const liveLiteralHeld = data.entitlements
     .filter(
       row =>
-        hasLiveTag(row.grantTag) ||
+        liveTagsFor(row.key).length > 0 ||
         serverSources(row).some(source => source.type !== 'admin-bypass' && source.type !== 'developer-bypass')
     )
     .map(row => row.key);
@@ -98,13 +103,12 @@ const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) =>
         // grant immediately - the server resolver only refreshes after Save.
         const impliedSources = impliedBy(row.key).map(ifHeld => ({ type: 'implied' as const, detail: ifHeld }));
         const otherSources = [...serverSources(row), ...impliedSources];
+        const tagSources = liveTagsFor(row.key).map(detail => ({ type: 'tag' as const, detail }));
         const liveTagGranted = hasLiveTag(row.grantTag);
-        const held = liveTagGranted || otherSources.length > 0;
-        const displaySources = liveTagGranted
-          ? [...otherSources, { type: 'tag' as const, detail: row.grantTag! }]
-          : otherSources;
+        const held = tagSources.length > 0 || otherSources.length > 0;
+        const displaySources = [...otherSources, ...tagSources];
         const impliedOnly =
-          !liveTagGranted && impliedSources.length > 0 && otherSources.length === impliedSources.length;
+          tagSources.length === 0 && impliedSources.length > 0 && otherSources.length === impliedSources.length;
 
         return (
           <Stack key={row.key} spacing={0.5} sx={{ borderBottom: '1px solid', borderColor: 'divider', pb: 1 }}>
@@ -146,7 +150,7 @@ const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) =>
               </Alert>
             )}
 
-            {liveTagGranted && otherSources.length > 0 && (
+            {tagSources.length > 0 && otherSources.length > 0 && (
               <Alert size="sm" color="warning" variant="soft" startDecorator={<InfoOutlinedIcon />}>
                 Also granted via {otherSources.map(source => SOURCE_LABEL[source.type] ?? source.type).join(', ')} -
                 revoking the tag alone will not remove access.
