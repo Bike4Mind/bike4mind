@@ -471,6 +471,7 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
           getSettingsValue: vi.fn((setting: string) =>
             Promise.resolve(setting === 'forcedRetrievalCharBudget' ? overrides.charBudget : undefined)
           ),
+          findBySettingName: vi.fn().mockResolvedValue(null),
         },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
@@ -1004,6 +1005,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
           getSettingsValue: vi.fn(async (name: string) =>
             opts.settings && name in opts.settings ? opts.settings[name] : opts.defaultEmbeddingModel
           ),
+          // The absolute floor's plain-path read: a row exists only for a key the fixture sets.
+          findBySettingName: vi.fn(async (name: string) =>
+            opts.settings && name in opts.settings ? { settingName: name, settingValue: opts.settings[name] } : null
+          ),
         },
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
@@ -1473,6 +1478,37 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     // An explicit value is not an unresolved one - nothing here warrants the loud error the
     // unmeasured-space case above logs.
     expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
+  });
+
+  it('an explicit 75 is honored in a measured space, not read as "unset"', async () => {
+    // 75 is also the setting's declared default, which used to double as the "nobody chose this"
+    // signal. A stored row is a choice: the 0.707 chunk clears 3-small's 58% but not the typed 75%.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'borderline relevant content', vector: [1, 1] }],
+      settings: { forcedRetrievalMinSimilarityPct: 75 },
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('does not cover this');
+    const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
+    expect(logs).not.toContain('resolved for embedding space');
+  });
+
+  it('an explicit 75 is honored in an unmeasured space instead of dropping to relative-only', async () => {
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-large', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'weakly related content', vector: [1, 4] }],
+      settings: { forcedRetrievalMinSimilarityPct: 75 },
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('does not cover this');
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('no measured absolute floor')
+    );
   });
 
   it('a no-match over a PARTIALLY scanned library must not harden into "no coverage"', async () => {
@@ -2864,6 +2900,7 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
         // Both are served from the same opts.getSettingsValue so the two read paths cannot disagree.
         adminSettings: {
           getSettingsValue,
+          findBySettingName: vi.fn(async (name: string) => platformRows([name], opts.getSettingsValue)[0] ?? null),
           findBySettingNames: vi.fn(async (names: string[]) => platformRows(names, opts.getSettingsValue)),
           findAll: vi.fn(async () => platformRows([...FORCED_RETRIEVAL_SETTING_KEYS], opts.getSettingsValue)),
         },
@@ -3053,6 +3090,9 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
           // Serves the platform-only read path (and the char budget, which is absent from every
           // fixture here and so stays at its default).
           getSettingsValue: vi.fn(async (key: string) => platform[key]),
+          findBySettingName: vi.fn(async (name: string) =>
+            platform[name] != null ? { settingName: name, settingValue: platform[name] } : null
+          ),
           findBySettingNames: vi.fn(async (names: string[]) =>
             names
               .filter(name => platform[name] != null)
@@ -3292,18 +3332,75 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     //
     // withScopedOverlay: false to reach the direct getSettingsValue read, whose mock here returns
     // the stored string unparsed. The scoped resolver would apply the schema and hand back the
-    // default, so the guard would never be exercised.
+    // default, so the guard would never be exercised. Pinned on the relative floor: the absolute
+    // one's plain-path read now schema-parses too (see the next test).
     const ctx = makeCtx({
       scores: [1.0, 0.9, 0.8, 0.76],
-      platform: { forcedRetrievalMinSimilarityPct: '2000' },
+      platform: { forcedRetrievalRelativeFloorPct: '2000' },
       withScopedOverlay: false,
     });
     const { injected } = await run(ctx);
-    // Absolute floor back at its 75 default, so the relative floor still does the ranking.
+    // Relative floor back at its 85 default.
     expect(injected).toEqual([0, 1]);
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
-      expect.stringContaining('forcedRetrievalMinSimilarityPct')
+      expect.stringContaining('forcedRetrievalRelativeFloorPct')
     );
+  });
+
+  // 3-small's measured floor is 58%, so 0.7 and 0.6 survive it but not an explicit 75. The
+  // relative floor is off so only the absolute floor decides.
+  const smallSpace = { defaultEmbeddingModel: 'text-embedding-3-small', forcedRetrievalRelativeFloorPct: '0' };
+
+  it('an unparseable stored absolute floor resolves as unset, per embedding space', async () => {
+    const { injected } = await run(
+      makeCtx({
+        scores: [0.9, 0.7, 0.6],
+        platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '2000' },
+        withScopedOverlay: false,
+      })
+    );
+    expect(injected).toEqual([0, 1, 2]);
+  });
+
+  it('an unset absolute floor resolves per embedding space and logs which', async () => {
+    const ctx = makeCtx({ scores: [0.9, 0.7, 0.6], platform: smallSpace });
+    const { injected } = await run(ctx);
+    expect(injected).toEqual([0, 1, 2]);
+    expect((ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+      expect.stringContaining('absolute floor 58% resolved for embedding space "text-embedding-3-small"')
+    );
+  });
+
+  for (const withScopedOverlay of [true, false]) {
+    it(`a platform value of 75 is an explicit floor in every space (overlay: ${withScopedOverlay})`, async () => {
+      const { injected } = await run(
+        makeCtx({
+          scores: [0.9, 0.7, 0.6],
+          platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+          withScopedOverlay,
+        })
+      );
+      expect(injected).toEqual([0]);
+    });
+  }
+
+  it('an organization override of 75 wins over a different platform value', async () => {
+    const ctx = makeCtx({
+      scores: [0.9, 0.7, 0.6],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '20' },
+    });
+    (ctx.db as { scopedSettings: { findOverrides: ReturnType<typeof vi.fn> } }).scopedSettings.findOverrides = vi.fn(
+      async () => [
+        {
+          scopeLevel: SettingScopeLevel.Organization,
+          scopeId: 'org1',
+          settingName: 'forcedRetrievalMinSimilarityPct',
+          settingValue: '75',
+        },
+      ]
+    );
+    const { injected } = await run(ctx);
+    expect(injected).toEqual([0]);
   });
 
   it('applies platform values on a host with no scoped overlay wired', async () => {

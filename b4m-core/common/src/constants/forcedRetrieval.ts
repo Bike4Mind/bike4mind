@@ -33,7 +33,8 @@ export const FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT = 0.75;
  * `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` (`constants/embeddingSpaceFloors.ts`), which is
  * where a new model's floor belongs. This stays as the setting's DECLARED default - the number the
  * admin UI shows and seeds with - and it still matches the resolved value while `ada-002` is the
- * configured model, which it is by default outside keyless self-host.
+ * configured model, which it is by default outside keyless self-host. A STORED 75 is not "unset": it
+ * is honored as-is in every space (`resolveForcedRetrievalAbsoluteFloor` in ChatCompletionFeatures).
  */
 export const FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT = 75;
 

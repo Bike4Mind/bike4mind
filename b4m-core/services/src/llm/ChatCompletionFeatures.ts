@@ -59,6 +59,7 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_SETTING_KEYS,
+  settingsMap,
   backgroundScoreOf,
   citationTagDescription,
   compareForcedRetrievalRank,
@@ -85,7 +86,7 @@ import {
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
 import { nonNegativeIntOr, positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
-import { resolveScopedSettingValues, scopeForCaller } from '../settings/resolveScopedSetting';
+import { resolveScopedSettingEntries, scopeForCaller } from '../settings/resolveScopedSetting';
 import {
   classifyLoadedChunk,
   partitionFilesByEmbeddingModel,
@@ -1821,20 +1822,13 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
  * The absolute floor to grade THIS turn's candidates against, given what the operator configured and
  * which embedding space the scores were actually produced in.
  *
- * A configured value is honored as-is: it is a raw cosine, the operator picked it for the corpus in
- * front of them, and `forcedRetrievalMinSimilarityPct`'s whole point is that it be tunable. What
- * cannot be honored is a value nobody chose. The setting's DECLARED default is 75, fitted to
- * ada-002, and both settings read paths manufacture that 75 for a key no one has ever written - so
- * an untouched deployment that flips `defaultEmbeddingModel` would carry an ada-002 number into a
- * space whose entire band sits below it and reject every chunk on every turn.
- *
- * Neither read path can distinguish "never set" from "set to exactly the default" without a second
- * scoped query per turn, which this path deliberately does not spend (see `readForcedRetrievalSettings`
- * on why all three keys share one read). So the declared default doubles as the "nobody chose this"
- * signal: a configured value EQUAL to it resolves per embedding space instead. The one case that
- * misreads is an operator who deliberately types the default's own number for a space whose measured
- * floor differs - they get the measured floor rather than their typed one, which is more results
- * than they asked for rather than fewer, and it is logged. The opposite mistake is a silent blackout.
+ * A configured value is honored as-is, the declared default's own number included: it is a raw
+ * cosine, the operator picked it for the corpus in front of them, and `forcedRetrievalMinSimilarityPct`'s
+ * whole point is that it be tunable. What cannot be honored is a value nobody chose (`undefined`). The
+ * setting's DECLARED default is 75, fitted to ada-002 - an untouched deployment that flips
+ * `defaultEmbeddingModel` and inherited it would carry an ada-002 number into a space whose entire
+ * band sits below it and reject every chunk on every turn. So an unset value resolves per embedding
+ * space instead; `readForcedRetrievalSettings` is what tells unset apart from a stored 75.
  *
  * An unmeasured space yields 0, leaving the scale-free relative floor as the only gate. That is a
  * real loss of precision, and it beats every alternative: there is no floor that transfers across
@@ -1858,15 +1852,15 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
  * The log below therefore names the space the floor was chosen FOR, which is always right, and says
  * nothing about whether every scored chunk really lives there.
  */
-function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: string, logger: Logger): number {
-  if (configuredPct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) return configuredPct / 100;
+function resolveForcedRetrievalAbsoluteFloor(configuredPct: number | undefined, space: string, logger: Logger): number {
+  if (configuredPct !== undefined) return configuredPct / 100;
 
   const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
   if (spacePct !== undefined) {
-    if (spacePct !== configuredPct) {
+    if (spacePct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) {
       logger.log(
         `\u{1F512} Forced retrieval: absolute floor ${spacePct}% resolved for embedding space "${space}" ` +
-          `(the ${configuredPct}% default is an ada-002 value and does not transfer)`
+          `(no floor configured; the ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% ada-002 default does not transfer)`
       );
     }
     return spacePct / 100;
@@ -1878,7 +1872,7 @@ function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: strin
   // ignore the channel. Measuring a floor is the fix, and it happens offline.
   logger.warn(
     `\u{1F512} Forced retrieval: no measured absolute floor for embedding space "${space}"; gating on ` +
-      `the relative floor alone. Applying the ${configuredPct}% default here would have been an ` +
+      `the relative floor alone. Applying the declared ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% default here would have been an ` +
       `ada-002 number in a space nobody has measured - above its band that rejects every chunk on ` +
       `every turn. Measure one into FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE.`
   );
@@ -1919,7 +1913,8 @@ interface ForcedRetrievalFloors {
 interface ForcedRetrievalConfig {
   charBudget: number;
   relativeFloor: number;
-  configuredAbsolutePct: number;
+  /** `undefined` = nobody chose a value; it resolves per embedding space. */
+  configuredAbsolutePct: number | undefined;
   /** Ready to use for the same reason the relative floor is: a fraction of the turn's own span. */
   spreadFloor: number;
 }
@@ -2589,12 +2584,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // Stays a PERCENT here, unresolved: turning it into a cosine needs the embedding space,
         // which is not known until the candidate files have voted on one, mid-scan. See
         // `resolveForcedRetrievalAbsoluteFloor`.
-        configuredAbsolutePct: forcedRetrievalFloorPct(
-          absolute,
-          FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
-          'forcedRetrievalMinSimilarityPct',
-          this.logger
-        ),
+        // `undefined` = no rung stored a parseable value. Both read paths schema-parse (1..100), so
+        // the >100 guard is a backstop only.
+        configuredAbsolutePct:
+          absolute === undefined
+            ? undefined
+            : forcedRetrievalFloorPct(
+                absolute,
+                FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+                'forcedRetrievalMinSimilarityPct',
+                this.logger
+              ),
       };
     } catch (err) {
       // Names every key, because one read failure degrades all three at once and an operator
@@ -2605,16 +2605,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           `forcedRetrievalSpreadFloorPct; falling back to ` +
           `${FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT} chars, ` +
           `${FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT}% relative / ` +
-          `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% absolute / ` +
+          `per-space absolute / ` +
           `${FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT}% spread`,
         err
       );
       return {
         charBudget: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
         relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
-        // The coded default, which then resolves per embedding space like any unchosen value - so a
-        // settings outage cannot reintroduce the ada-002 floor in a space it does not belong to.
-        configuredAbsolutePct: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+        // Unset, so it resolves per embedding space - a settings outage cannot reintroduce the
+        // ada-002 floor in a space it does not belong to.
+        configuredAbsolutePct: undefined,
         spreadFloor: FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT / 100,
       };
     }
@@ -2640,7 +2640,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * already have, and the trade for it is one fewer uncached `findOne` per Data-Lake-mode turn.
    *
    * The scoped branch is wrapped defensively, NOT because production takes the fallback:
-   * `resolveScopedSettingValues` documents that it never throws and wraps both of its own reads, so
+   * `resolveScopedSettingEntries` documents that it never throws and wraps both of its own reads, so
    * the only thing the catch can realistically see is an argument-evaluation error - now including
    * the membership read below, which has its own real failure mode. The corollary is worth knowing
    * rather than assuming away - when the resolver's OWN platform read fails it resolves the coded
@@ -2668,17 +2668,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           ? await membershipOrgIdsForTurn(this.chatCompletion, user.id, db.organizations)
           : [];
         const verifiedOrgId = pointerOrgId && membershipOrgIds.includes(pointerOrgId) ? pointerOrgId : undefined;
-        const values = await resolveScopedSettingValues(
+        const entries = await resolveScopedSettingEntries(
           FORCED_RETRIEVAL_SETTING_KEYS,
           scopeForCaller({ userId: user.id, organizationId: verifiedOrgId }),
           { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
           { logger: this.logger }
         );
+        const absolute = entries.forcedRetrievalMinSimilarityPct;
         return {
-          charBudget: values.forcedRetrievalCharBudget,
-          relative: values.forcedRetrievalRelativeFloorPct,
-          absolute: values.forcedRetrievalMinSimilarityPct,
-          spread: values.forcedRetrievalSpreadFloorPct,
+          charBudget: entries.forcedRetrievalCharBudget.value,
+          relative: entries.forcedRetrievalRelativeFloorPct.value,
+          absolute: absolute.stored ? absolute.value : undefined,
+          spread: entries.forcedRetrievalSpreadFloorPct.value,
         };
       } catch (err) {
         // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
@@ -2690,13 +2691,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
       }
     }
-    const [charBudget, relative, absolute, spread] = await Promise.all([
+    const [charBudget, relative, absoluteRow, spread] = await Promise.all([
       db.adminSettings.getSettingsValue('forcedRetrievalCharBudget'),
       db.adminSettings.getSettingsValue('forcedRetrievalRelativeFloorPct'),
-      db.adminSettings.getSettingsValue('forcedRetrievalMinSimilarityPct'),
+      // Not getSettingsValue: it manufactures the declared 75 for a missing row, which would read as
+      // an explicit 75. Check presence before parsing - the schema's .default() turns undefined into 75.
+      db.adminSettings.findBySettingName('forcedRetrievalMinSimilarityPct'),
       db.adminSettings.getSettingsValue('forcedRetrievalSpreadFloorPct'),
     ]);
-    return { charBudget, relative, absolute, spread };
+    const parsed =
+      absoluteRow?.settingValue == null
+        ? undefined
+        : settingsMap.forcedRetrievalMinSimilarityPct.schema.safeParse(absoluteRow.settingValue);
+    return { charBudget, relative, absolute: parsed?.success ? parsed.data : undefined, spread };
   }
 
   private noContextMessages(finding: ForcedRetrievalNoContextFinding): IMessage[] {
