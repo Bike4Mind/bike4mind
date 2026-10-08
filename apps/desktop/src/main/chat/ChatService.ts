@@ -53,7 +53,7 @@ import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
-import { createPhaseTracker } from './modelPhase';
+import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -1754,7 +1754,7 @@ export class ChatService {
         const setPhase = createPhaseTracker(phase =>
           this.emit({ type: 'phase', sessionId, messageId: replyId, phase })
         );
-        setPhase({ kind: 'waiting' });
+        setPhase(WAITING);
         const failure = await streamRound(
           api.getAxiosInstance(),
           serverConfig.endpoint,
@@ -1779,8 +1779,8 @@ export class ChatService {
               // back as a possible partial marker; only the first is a thinking frame.
               const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
               probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
-              if (split.text) setPhase({ kind: 'responding' });
-              else if (split.reasoning || marker) setPhase({ kind: 'thinking' });
+              if (split.text) setPhase(RESPONDING);
+              else if (split.reasoning || marker) setPhase(THINKING);
               append(split);
             }
             if (event.toolStarted) {

@@ -1,5 +1,9 @@
 import type { ModelPhase } from '@shared/chat';
 
+export const WAITING: ModelPhase = { kind: 'waiting' };
+export const THINKING: ModelPhase = { kind: 'thinking' };
+export const RESPONDING: ModelPhase = { kind: 'responding' };
+
 /**
  * Publishes a round's phase only when it changes. The stream calls this on every frame, so a
  * reply of thousands of tokens costs one event per transition rather than one per token.
