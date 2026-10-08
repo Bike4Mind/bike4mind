@@ -145,12 +145,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     apply,
   } = useSessions();
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [mode, setMode] = useState<ChatSessionMode>(() => readLastSession()?.mode ?? 'chat');
+  const [remembered] = useState(readLastSession);
+  const [mode, setMode] = useState<ChatSessionMode>(remembered?.mode ?? 'chat');
   const onRestore = useCallback((session: ChatSessionSummary | null) => {
     setMode(session?.mode ?? 'chat');
     if (session) setActiveId(session.id);
   }, []);
-  const restoring = useLastSession({ loading, sessions, activeId, onRestore });
+  const restoring = useLastSession({ remembered, loading, sessions, activeId, onRestore });
   // Until this is false the shell does not know which conversation it will show, so it draws
   // none of the empty-state copy that would otherwise flash up before the real one.
   const settling = loading || restoring;

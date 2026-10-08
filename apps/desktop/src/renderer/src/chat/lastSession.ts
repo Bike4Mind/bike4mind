@@ -67,16 +67,17 @@ export function findRestorable(
  * true the shell must not pick a session itself, or it would open the most recent one first and
  * then jump.
  *
- * Read on mount only, so another window opening a conversation never moves this one.
+ * `remembered` is read once on mount, so another window opening a conversation never moves this one.
  */
 export function useLastSession(input: {
+  /** What readLastSession returned when the shell mounted. */
+  remembered: LastSession | null;
   loading: boolean;
   sessions: readonly ChatSessionSummary[];
   activeId: string | null;
   onRestore: (session: ChatSessionSummary | null) => void;
 }): boolean {
-  const { loading, sessions, activeId, onRestore } = input;
-  const [remembered] = useState(readLastSession);
+  const { remembered, loading, sessions, activeId, onRestore } = input;
   const [restoring, setRestoring] = useState(remembered !== null);
 
   useEffect(() => {

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { findRestorable, readLastSession, useLastSession, writeLastSession } from './lastSession';
+import { findRestorable, readLastSession, useLastSession, writeLastSession, type LastSession } from './lastSession';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -23,6 +23,7 @@ function summary(id: string, mode: ChatSessionMode = 'chat', archived = false): 
 }
 
 interface Props {
+  remembered?: LastSession | null;
   loading: boolean;
   sessions: ChatSessionSummary[];
   activeId: string | null;
@@ -35,7 +36,8 @@ describe('useLastSession', () => {
   let restoring: boolean[];
 
   function Harness(props: Props) {
-    restoring.push(useLastSession(props));
+    const [remembered] = useState(() => (props.remembered === undefined ? readLastSession() : props.remembered));
+    restoring.push(useLastSession({ ...props, remembered }));
     return null;
   }
 
