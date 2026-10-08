@@ -202,6 +202,13 @@ describe('ReleaseNoteRepository admin mutations', () => {
     expect(result.kind === 'ok' && result.note.publishAt.toISOString()).toBe(NOW.toISOString());
   });
 
+  it('unhide on an already-live note keeps its publishAt', async () => {
+    const publishAt = new Date(NOW.getTime() - 5 * HOUR);
+    const note = await seed('v1', publishAt);
+    const result = await releaseNoteRepository.unhide(note.id, NOW);
+    expect(result.kind === 'ok' && result.note.publishAt.toISOString()).toBe(publishAt.toISOString());
+  });
+
   it('publishNow moves a hidden note with a past publishAt to now', async () => {
     const note = await seed('v1', new Date(NOW.getTime() - 5 * HOUR), { status: 'hidden' });
     const result = await releaseNoteRepository.publishNow(note.id, NOW);

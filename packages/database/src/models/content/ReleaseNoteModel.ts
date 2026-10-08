@@ -176,11 +176,19 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
 
   /**
    * Back to scheduled with its original publishAt, or `now` if that has passed, so an unhidden note
-   * never goes live behind cursors readers already hold. A note with no items is refused.
+   * never goes live behind cursors readers already hold. A note that is not hidden keeps its publishAt.
+   * A note with no items is refused.
    */
   async unhide(id: string, now = new Date()): Promise<ReleaseNoteMutationResult> {
+    const hasItems = { 'items.0': { $exists: true } };
+    const notHidden = await this.model.findOneAndUpdate(
+      { _id: id, ...hasItems, status: 'scheduled' },
+      { $set: { editedAt: now } },
+      { new: true, runValidators: true }
+    );
+    if (notHidden) return { kind: 'ok', note: notHidden };
     const note = await this.model.findOneAndUpdate(
-      { _id: id, 'items.0': { $exists: true } },
+      { _id: id, ...hasItems },
       { $set: { status: 'scheduled', editedAt: now }, $max: { publishAt: now } },
       { new: true, runValidators: true }
     );
