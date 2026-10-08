@@ -116,6 +116,9 @@ describe('directories and modules moved into apps/workers stay moved', () => {
         'apps/workers/src/emailIngestion/emailParser.dispatch',
         'apps/workers/src/emailIngestion/emailAnalyzer.dispatch',
         'apps/workers/src/queueHandlers/sreJob.dispatch',
+        // infra/queues.ts; the Lambda Bundle Guard is path-filtered and skips infra/-only PRs.
+        'apps/workers/src/queueHandlers/imageGeneration.dispatch',
+        'apps/workers/src/queueHandlers/imageEdit.dispatch',
         // infra/emailMarketing.ts, which no other moved handler lives in.
         'apps/workers/src/queueHandlers/emailBatch.dispatch',
       ])
