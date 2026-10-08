@@ -759,7 +759,9 @@ export const getTextModelCost = (
     return cost;
   };
 
-  const tier = pricingTierForTokens(model, inputTokens);
+  // The provider sets the tier from the whole prompt; `inputTokens` is only the uncached part, so a
+  // 300K prompt that is 290K cache reads would otherwise bill at the short-context rates.
+  const tier = pricingTierForTokens(model, inputTokens + cacheReadTokens + cacheCreationTokens);
   if (tier === null) return alarmIfUnpriced(0);
 
   // Guard against a malformed or non-tiered pricing map (e.g. a flat

@@ -93,3 +93,30 @@ describe('pricingTierForTokens', () => {
     expect(pricingTierForTokens({ ...baseModel, pricing: {} } as ModelInfo, 100)).toBeNull();
   });
 });
+
+describe('getTextModelCost tier selection', () => {
+  const tiered = {
+    id: 'tiered',
+    backend: ModelBackend.OpenAI,
+    pricing: {
+      272000: { input: 0.000005, output: 0.00003 },
+      1050000: { input: 0.00001, output: 0.000045 },
+    },
+  } as unknown as ModelInfo;
+
+  it('prices a prompt that is mostly cache reads at the tier its whole size falls in', () => {
+    // 10K new + 290K cached = 300K: past the 272K threshold, so the long-context rates apply.
+    const cost = getTextModelCost(tiered, 10_000, 1_000, 290_000);
+    expect(cost).toBeCloseTo(10_000 * 0.00001 + 1_000 * 0.000045 + 290_000 * 0.000001, 9);
+  });
+
+  it('counts cache writes toward the prompt size too', () => {
+    const cost = getTextModelCost(tiered, 0, 0, 0, 300_000);
+    expect(cost).toBeCloseTo(300_000 * 0.00001 * 1.25, 9);
+  });
+
+  it('keeps the short tier when the whole prompt fits in it', () => {
+    const cost = getTextModelCost(tiered, 10_000, 1_000, 200_000);
+    expect(cost).toBeCloseTo(10_000 * 0.000005 + 1_000 * 0.00003 + 200_000 * 0.0000005, 9);
+  });
+});
