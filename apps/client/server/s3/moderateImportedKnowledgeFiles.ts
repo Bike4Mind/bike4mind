@@ -66,8 +66,9 @@ export interface ModerateImportedKnowledgeFilesArgs {
    * age floor, where a never-created object is a permanent orphan (an import whose bytes never
    * landed); releasing would re-select the same orphan every run - a poison batch that starves
    * genuinely-stranded rows. Soft-delete (a storage-cleanup outcome, not a content-policy `blocked`
-   * verdict) drains it without an un-appealable false block. The fresh-import path leaves it unset,
-   * so a young row's missing object is treated as transient and released for the sweep to retry later.
+   * verdict) drains it without an un-appealable false block. The fresh-import path leaves it unset
+   * and the self-host webhook passes false, so a young row's missing object is treated as transient
+   * and released for the sweep to retry later.
    */
   terminalOnMissingObject?: boolean;
   /**
