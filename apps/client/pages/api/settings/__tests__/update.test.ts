@@ -202,7 +202,7 @@ describe('settings/update cleared forced-retrieval absolute floor', () => {
   // (back to per-space) rather than store the default.
   it.each(['', '  ', null])('deletes the row instead of storing the default for %j', async value => {
     const res = await runHandler('forcedRetrievalMinSimilarityPct', value);
-    expect(deleteOne).toHaveBeenCalledWith({ settingName: 'forcedRetrievalMinSimilarityPct' });
+    expect(deleteOne).toHaveBeenCalledWith({ settingName: 'forcedRetrievalMinSimilarityPct' }, { hardDelete: true });
     expect(findOneAndUpdate).not.toHaveBeenCalled();
     expect(res.settingValue).toBe(75);
   });

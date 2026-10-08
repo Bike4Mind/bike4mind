@@ -35,9 +35,11 @@ const handler = baseApi().put(
     // A cleared forcedRetrievalMinSimilarityPct must DELETE the row, not store the default: unset
     // resolves per embedding space, while a stored 75 is honored in every space (see
     // readForcedRetrievalSettings in ChatCompletionFeatures). Without this the admin UI has no way back.
+    // hardDelete: a soft-deleted tombstone would swallow every later save, since the upsert below
+    // matches it without reviving it (softDeletePlugin in db-core/src/utils/mongo.ts).
     const raw = req.body.value;
     if (key === 'forcedRetrievalMinSimilarityPct' && (raw == null || (typeof raw === 'string' && raw.trim() === ''))) {
-      await AdminSettings.deleteOne({ settingName: key });
+      await AdminSettings.deleteOne({ settingName: key }, { hardDelete: true });
       invalidateSettingsCache(key);
       return res.json({ settingName: key, settingValue: settingsMap[key].defaultValue });
     }
