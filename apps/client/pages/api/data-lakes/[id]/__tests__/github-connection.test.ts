@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   updateDataLake: vi.fn(),
   inTransaction: false,
   updateDataLakeInTxn: false,
+  accessInTxn: false,
   withTransaction: vi.fn(async (fn: () => Promise<unknown>) => {
     h.inTransaction = true;
     try {
@@ -177,9 +178,14 @@ describe('/api/data-lakes/[id]/github-connection', () => {
     beforeEach(() => {
       h.getGitHubLakeAppConfig.mockReturnValue({ slug: 'test-app', clientId: 'client-1' });
       h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: false });
-      h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active' });
+      // Records whether the re-gate ran inside the transaction, so the test can pin it there.
+      h.assertLakeAccess.mockImplementation(async () => {
+        h.accessInTxn = h.inTransaction;
+        return { id: 'lake1', status: 'active' };
+      });
       h.inTransaction = false;
       h.updateDataLakeInTxn = false;
+      h.accessInTxn = false;
       // Records whether it ran inside the transaction so the test can pin the wrapper.
       h.updateDataLake.mockImplementation(async () => {
         h.updateDataLakeInTxn = h.inTransaction;
@@ -270,7 +276,8 @@ describe('/api/data-lakes/[id]/github-connection', () => {
           { origin: 'connector-fed' },
           expect.anything()
         );
-        // The write must run inside the transaction that re-gates access against live grants.
+        // The re-gate and the write must both run inside the transaction that reads live grants.
+        expect(h.accessInTxn).toBe(true);
         expect(h.updateDataLakeInTxn).toBe(true);
         expect(h.resolveConnectableLake.mock.invocationCallOrder[0]).toBeLessThan(
           h.updateDataLake.mock.invocationCallOrder[0]
