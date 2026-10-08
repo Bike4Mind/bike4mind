@@ -5,7 +5,7 @@ export type UpstreamFeedPage = { data: PublicReleaseNote[]; next_cursor: string 
 type Logger = { warn: (message: string, meta?: Record<string, unknown>) => void };
 
 const TIMEOUT_MS = 3_000;
-const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_BYTES = 1024 * 1024;
 const OK_TTL_MS = 60_000;
 // After an upstream-wide failure every request falls back without fetching for this long, so a dead
 // upstream costs one timeout per window rather than one per request (or per distinct cursor).
@@ -27,11 +27,18 @@ export function getWhatsNewFeedUrl(): string | undefined {
   return process.env.WHATS_NEW_FEED_URL?.trim() || undefined;
 }
 
+// A trailing dot names the same host, so it must not slip past the self-reference check.
+const normalizeHost = (host: string): string => {
+  let normalized = host.toLowerCase();
+  while (normalized.endsWith('.')) normalized = normalized.slice(0, -1);
+  return normalized;
+};
+
 const hostnameOf = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   try {
-    return new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`).hostname.toLowerCase();
+    return normalizeHost(new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`).hostname);
   } catch {
     return undefined;
   }
@@ -82,7 +89,7 @@ async function fetchPage(
     return down;
   }
   // Pointing the feed at this deployment would make each request fetch itself recursively.
-  if (ownHostnames().includes(url.hostname.toLowerCase())) {
+  if (ownHostnames().includes(normalizeHost(url.hostname))) {
     logger.warn('[whats-new] WHATS_NEW_FEED_URL points at this deployment; ignoring it');
     return down;
   }

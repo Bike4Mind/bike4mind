@@ -57,6 +57,8 @@ describe('fetchUpstreamFeed', () => {
   it.each([
     ['the bare SERVER_DOMAIN', 'self.example.com', 'self.example.com', ''],
     ['the app host the deployment is actually served on', 'APP.self.example.com', 'self.example.com', ''],
+    ['a trailing-dot spelling of the app host', 'app.self.example.com.', 'self.example.com', ''],
+    ['the app host with several trailing dots', 'app.self.example.com..', 'self.example.com.', ''],
     [
       'the APP_URL host on a preview with an empty SERVER_DOMAIN',
       'pr-12.preview.example.com',
@@ -88,7 +90,7 @@ describe('fetchUpstreamFeed', () => {
     ['an off-schema body', () => json({ data: [{ id: 1 }] })],
     ['a non-JSON body', () => new Response('<html>', { status: 200 })],
     ['a non-200 status', () => json(PAGE, 503)],
-    ['an oversize body', () => new Response('x'.repeat(256 * 1024 + 1), { status: 200 })],
+    ['an oversize body', () => new Response('x'.repeat(1024 * 1024 + 1), { status: 200 })],
   ])('returns null and warns on %s', async (_label, make) => {
     mockSafeFetch.mockResolvedValue(make());
     expect(await fetchOnce()).toBeNull();
@@ -153,7 +155,7 @@ describe('fetchUpstreamFeed', () => {
   });
 
   it.each([
-    ['an oversize body', () => new Response('x'.repeat(256 * 1024 + 1), { status: 200 })],
+    ['an oversize body', () => new Response('x'.repeat(1024 * 1024 + 1), { status: 200 })],
     ['an off-schema body', () => json({ data: [{ id: 1 }] })],
   ])('does not open an outage window on %s for one query', async (_label, make) => {
     mockSafeFetch.mockResolvedValueOnce(make()).mockResolvedValue(json(PAGE));

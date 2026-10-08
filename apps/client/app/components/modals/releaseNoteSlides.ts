@@ -30,7 +30,7 @@ export function releaseNoteToModal(note: PublicReleaseNote): IModalDocument {
     _id: id,
     id,
     isBanner: false,
-    title: note.headline,
+    title: note.headline.trim() || note.release_tag,
     subtitle: date ? `${date} \u00b7 ${note.release_tag}` : note.release_tag,
     description: buildDescription(note),
     tags: ['whats-new', 'release-note'],

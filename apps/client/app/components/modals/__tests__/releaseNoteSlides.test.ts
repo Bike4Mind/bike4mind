@@ -31,6 +31,10 @@ describe('releaseNoteToModal', () => {
     expect(new Date(slide.createdAt).toISOString()).toBe('2026-03-05T15:00:00.000Z');
   });
 
+  it('falls back to the release tag when the headline is blank', () => {
+    expect(releaseNoteToModal(note({ headline: '  ' })).title).toBe('v1.2.3');
+  });
+
   it('groups items by category in New/Improved/Fixed order, most important first', () => {
     const slide = releaseNoteToModal(
       note({
