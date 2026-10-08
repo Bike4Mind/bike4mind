@@ -317,7 +317,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'sessions/[id]/chat/[messageId]/snip.ts',
   'sessions/[id]/chat/index.ts',
   'sessions/[id]/chat/stop-reply.ts',
-  'sessions/[id]/clone.ts',
   'sessions/[id]/favorite.ts',
   'sessions/[id]/files.ts',
   'sessions/[id]/questmaster-plans/index.ts',
