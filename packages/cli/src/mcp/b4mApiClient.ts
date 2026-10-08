@@ -12,6 +12,9 @@ import {
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
   type ChatHistoryItemType,
+  type GeneratedFile,
+  type GenerateImageResponse,
+  type ImagePromptResolution,
   type QuestErrorCode,
   type TTSRequest,
 } from '@bike4mind/common';
@@ -69,18 +72,10 @@ export interface QuestResponse {
   // Generated-file basenames, and `files` resolves each to a ready-to-use URL (empty when the
   // server has no CDN configured).
   images?: string[];
-  files?: GeneratedQuestFile[];
+  files?: GeneratedFile[];
   // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).
   promptMeta?: { citables?: RawCitable[]; [key: string]: unknown } | null;
   [key: string]: unknown;
-}
-
-/** A tool-generated file on a polled quest; mirrors `GeneratedFileSchema` (@bike4mind/common). */
-export interface GeneratedQuestFile {
-  name: string;
-  url: string;
-  isImage: boolean;
-  isAudio: boolean;
 }
 
 export type RawCitable = z.infer<typeof CitableSourceSchema> & { [key: string]: unknown };
@@ -136,13 +131,7 @@ export interface GenerateImageArgs {
   size?: string;
   notebookId?: string;
   projectId?: string;
-}
-
-/** The generate-image ACK: the render is queued, and its outcome arrives on the quest. */
-export interface GenerateImageAck {
-  quest: { id: string; sessionId?: string; [key: string]: unknown };
-  enhancedPrompt?: string;
-  [key: string]: unknown;
+  promptResolution?: ImagePromptResolution;
 }
 
 export interface RawProject {
@@ -327,13 +316,14 @@ export class B4mApiClient {
     }
   }
 
-  async generateImage(args: GenerateImageArgs): Promise<GenerateImageAck> {
-    return this.client.post<GenerateImageAck>('/api/ai/generate-image', {
+  async generateImage(args: GenerateImageArgs): Promise<GenerateImageResponse> {
+    return this.client.post<GenerateImageResponse>('/api/ai/generate-image', {
       prompt: args.prompt,
       model: args.model,
       ...(args.size ? { size: args.size } : {}),
       ...(args.notebookId ? { sessionId: args.notebookId } : {}),
       ...(args.projectId ? { projectId: args.projectId } : {}),
+      ...(args.promptResolution ? { prompt_resolution: args.promptResolution } : {}),
     });
   }
 
@@ -532,7 +522,7 @@ function decodeArrayBufferErrorBody(error: unknown): unknown {
  * to a whole, non-negative number of seconds. Returns undefined when the header is
  * absent or parses as neither, so callers can omit the retry hint entirely.
  */
-function parseRetryAfterSeconds(value: unknown): number | undefined {
+export function parseRetryAfterSeconds(value: unknown): number | undefined {
   if (value === undefined || value === null) return undefined;
   const raw = String(value).trim();
   if (/^\d+$/.test(raw)) return Number(raw);

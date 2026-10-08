@@ -106,6 +106,18 @@ describe('B4mApiClient', () => {
     });
   });
 
+  it('sends prompt_resolution on an image generation when promptResolution is set', async () => {
+    mockPost.mockResolvedValue({ quest: { id: 'q1' } });
+
+    await client.generateImage({ prompt: 'p', model: 'gpt-image-2', promptResolution: 'literal' });
+
+    expect(mockPost).toHaveBeenCalledWith('/api/ai/generate-image', {
+      prompt: 'p',
+      model: 'gpt-image-2',
+      prompt_resolution: 'literal',
+    });
+  });
+
   it('forwards dataLakeId on create only when set', async () => {
     mockPost.mockResolvedValue({ id: 'n1' });
     await client.createNotebook({ name: 'My NB', dataLakeId: 'lake-1' });

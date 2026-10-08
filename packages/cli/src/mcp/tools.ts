@@ -6,6 +6,7 @@ import {
   DEFAULT_TTS_PROVIDER,
   GENERATED_IMAGE_EXTENSION_RE,
   ImageModels,
+  ImagePromptResolutionSchema,
   PROMPT_TEXT_MAX,
   ttsRequestSchema,
   type GeneratedAudioResponse,
@@ -14,6 +15,7 @@ import {
 import {
   B4mApiClient,
   mapApiError,
+  parseRetryAfterSeconds,
   type QuestResponse,
   type RawDataLake,
   type RawNotebook,
@@ -215,10 +217,13 @@ const generateSoundEffectShape = {
 
 const generateImageShape = {
   prompt: z.string().min(1).describe('Text description of the image to generate'),
-  model: z.string().default(ImageModels.GPT_IMAGE_1).describe('Image model id, e.g. gpt-image-1'),
+  model: z.string().default(ImageModels.GPT_IMAGE_2).describe('Image model id, e.g. gpt-image-2'),
   size: z.string().optional().describe("Image size as 'widthxheight', e.g. 1024x1024; omit for the model default"),
   notebookId: z.string().optional().describe('Notebook to add the image to; omit to create a new one'),
   projectId: z.string().optional().describe('Project for the new notebook when notebookId is omitted'),
+  promptResolution: ImagePromptResolutionSchema.optional().describe(
+    "'auto' (default) rewrites the prompt against the notebook history; 'literal' sends it as written"
+  ),
 };
 
 const textToSpeechShape = {
@@ -362,6 +367,8 @@ export interface PollOptions {
   signal?: AbortSignal;
   /** Called after each non-terminal poll, so the tool can keep the client's request alive. */
   onProgress?: (elapsedMs: number) => Promise<void> | void;
+  /** Named in poll-failure messages, e.g. an unreachable server. */
+  baseURL?: string;
 }
 
 const IMAGE_POLL_INTERVAL_MS = 2000;
@@ -379,6 +386,8 @@ const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(res
 const isTerminal = (q: QuestResponse) =>
   q.status === 'done' || q.status === 'stopped' || q.type === 'error' || (!q.status && !!q.images?.length);
 
+const isRateLimited = (err: unknown) => isAxiosError(err) && err.response?.status === 429;
+
 const isPermanentApiError = (err: unknown) => {
   const status = isAxiosError(err) ? err.response?.status : undefined;
   return status === 401 || status === 403 || status === 404;
@@ -393,13 +402,14 @@ const isPermanentApiError = (err: unknown) => {
  */
 export async function generateImage(
   client: B4mApiClient,
-  args: { prompt: string; model: string; size?: string; notebookId?: string; projectId?: string },
+  args: Parameters<B4mApiClient['generateImage']>[0],
   {
     intervalMs = IMAGE_POLL_INTERVAL_MS,
     timeoutMs = IMAGE_POLL_TIMEOUT_MS,
     sleep = defaultSleep,
     signal,
     onProgress,
+    baseURL = '',
   }: PollOptions = {}
 ) {
   const ack = await client.generateImage(args);
@@ -408,6 +418,7 @@ export async function generateImage(
 
   const started = Date.now();
   let failures = 0;
+  let retryAfterMs = 0;
   let quest: QuestResponse | undefined;
   for (;;) {
     signal?.throwIfAborted();
@@ -416,22 +427,32 @@ export async function generateImage(
       failures = 0;
       if (isTerminal(quest)) break;
     } catch (err) {
-      failures += 1;
-      if (isPermanentApiError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
+      // The per-minute key limit is shared with other calls, so a 429 says nothing about the render.
+      if (isRateLimited(err)) {
+        retryAfterMs =
+          (parseRetryAfterSeconds(isAxiosError(err) && err.response?.headers?.['retry-after']) ?? 0) * 1000;
+      } else {
+        failures += 1;
+        if (isPermanentApiError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          throw new Error(`${mapApiError(err, baseURL, 'ai:generate')} (${ref}; the render may still complete)`);
+        }
+      }
     }
     const elapsed = Date.now() - started;
     if (elapsed >= timeoutMs) {
       throw new Error(`image generation did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
     }
     await onProgress?.(elapsed);
-    await sleep(intervalMs);
+    await sleep(Math.min(Math.max(intervalMs, retryAfterMs), Math.max(timeoutMs - elapsed, intervalMs)));
+    retryAfterMs = 0;
   }
 
   if (quest.status === 'stopped') {
     throw new Error(`image generation was stopped (${ref})`);
   }
   if (quest.type === 'error') {
-    throw new Error(quest.reply || `image generation failed (${ref})`);
+    const code = quest.errorCode ? `${quest.errorCode}: ` : '';
+    throw new Error(`${code}${quest.reply || 'image generation failed'} (${ref})`);
   }
 
   const urls = new Map((quest.files ?? []).map(f => [f.name, f.url]));
@@ -439,7 +460,7 @@ export async function generateImage(
     .filter(name => GENERATED_IMAGE_EXTENSION_RE.test(name))
     .map(name => ({ fileName: name, fileUrl: urls.get(name) }));
   if (images.length === 0) {
-    throw new Error(quest.reply || `image generation finished without producing an image (${ref})`);
+    throw new Error(`${quest.reply || 'image generation finished without producing an image'} (${ref})`);
   }
 
   return {
@@ -696,6 +717,7 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       return run('ai:generate', () =>
         generateImage(client, args, {
           signal: extra.signal,
+          baseURL,
           // Progress lets a client that resets its request timeout on progress wait out a slow render.
           onProgress:
             progressToken === undefined

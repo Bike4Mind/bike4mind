@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -552,12 +552,12 @@ describe('tool handlers', () => {
   });
 });
 
-const axiosError = (status: number) =>
+const axiosError = (status: number, opts: { headers?: Record<string, string> } = {}) =>
   new AxiosError('request failed', undefined, {} as InternalAxiosRequestConfig, {}, {
     status,
     statusText: '',
     data: {},
-    headers: {},
+    headers: opts.headers ?? {},
     config: {} as InternalAxiosRequestConfig,
   } as AxiosResponse);
 
@@ -572,7 +572,7 @@ describe('generateImage', () => {
     files: [{ name: 'img1.png', url: 'https://cdn/generated/img1.png', isImage: true, isAudio: false }],
   };
 
-  it('polls the quest until done and returns each image as id + fileName + fileUrl', async () => {
+  it('polls the quest until done and returns each image as fileName + fileUrl', async () => {
     const getQuest = vi
       .fn()
       .mockResolvedValueOnce({ id: 'q1', status: 'running', sessionId: 'nb1' })
@@ -640,18 +640,54 @@ describe('generateImage', () => {
     const getQuest = vi.fn().mockRejectedValue(axiosError(502));
     const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
 
-    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toBeInstanceOf(
-      AxiosError
+    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
+      /\(quest q1; the render may still complete\)/
     );
     expect(getQuest).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not count a 429 toward the failure limit and honors Retry-After', async () => {
+    const limited = axiosError(429, { headers: { 'retry-after': '7' } });
+    const getQuest = vi
+      .fn()
+      .mockRejectedValueOnce(limited)
+      .mockRejectedValueOnce(limited)
+      .mockRejectedValueOnce(limited)
+      .mockRejectedValueOnce(limited)
+      .mockResolvedValueOnce(doneQuest);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
+
+    const result = await generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, { sleep });
+
+    expect(result.images).toHaveLength(1);
+    expect(getQuest).toHaveBeenCalledTimes(5);
+    expect(sleep).toHaveBeenCalledWith(7000);
+  });
+
+  it('includes the error code and quest ids when the render fails', async () => {
+    const client = mockClient({
+      generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1', sessionId: 'nb1' } }),
+      getQuest: vi.fn().mockResolvedValue({
+        id: 'q1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'insufficient_credits',
+        reply: 'Out of credits',
+      }),
+    });
+
+    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
+      'insufficient_credits: Out of credits (quest q1, notebook nb1)'
+    );
   });
 
   it('fails immediately on a permanent poll error', async () => {
     const getQuest = vi.fn().mockRejectedValue(axiosError(403));
     const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
 
-    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toBeInstanceOf(
-      AxiosError
+    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
+      /recommended scope: ai:generate\) \(quest q1;/
     );
     expect(getQuest).toHaveBeenCalledTimes(1);
   });
@@ -1008,6 +1044,78 @@ describe('registerTools', () => {
     expect(result.content[0]).toMatchObject({
       type: 'text',
       text: "API key forbidden: check the key's scopes and account access (recommended scope: ai:generate)",
+    });
+  });
+
+  describe('generate_image progress and cancellation', () => {
+    type ImageHandler = (a: unknown, e: unknown) => Promise<CallToolResult>;
+    const doneQuest = {
+      id: 'q1',
+      status: 'done',
+      type: 'message',
+      sessionId: 'nb1',
+      images: ['img1.png'],
+      files: [{ name: 'img1.png', url: 'https://cdn/generated/img1.png', isImage: true, isAudio: false }],
+    };
+    const imageClient = (getQuest: ReturnType<typeof vi.fn>) =>
+      mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1', sessionId: 'nb1' } }), getQuest });
+
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('sends notifications/progress while a token is supplied and returns the images', async () => {
+      const getQuest = vi.fn().mockResolvedValueOnce({ id: 'q1', status: 'running' }).mockResolvedValueOnce(doneQuest);
+      const handler = collectTools(imageClient(getQuest)).get('generate_image') as ImageHandler;
+      const sendNotification = vi.fn().mockResolvedValue(undefined);
+
+      const pending = handler(
+        { prompt: 'p', model: 'gpt-image-2' },
+        { signal: new AbortController().signal, sendNotification, _meta: { progressToken: 'tok' } }
+      );
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(sendNotification).toHaveBeenCalledTimes(1);
+      expect(sendNotification).toHaveBeenCalledWith({
+        method: 'notifications/progress',
+        params: { progressToken: 'tok', progress: expect.any(Number), message: 'rendering image' },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent).toMatchObject({ images: [{ fileName: 'img1.png' }] });
+    });
+
+    it('sends no notification without a progress token', async () => {
+      const getQuest = vi.fn().mockResolvedValueOnce({ id: 'q1', status: 'running' }).mockResolvedValueOnce(doneQuest);
+      const handler = collectTools(imageClient(getQuest)).get('generate_image') as ImageHandler;
+      const sendNotification = vi.fn();
+
+      const pending = handler(
+        { prompt: 'p', model: 'gpt-image-2' },
+        { signal: new AbortController().signal, sendNotification }
+      );
+      await vi.runAllTimersAsync();
+      await pending;
+
+      expect(sendNotification).not.toHaveBeenCalled();
+    });
+
+    it('stops polling and returns isError when the client cancels the call', async () => {
+      const controller = new AbortController();
+      const getQuest = vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return { id: 'q1', status: 'running' };
+      });
+      const handler = collectTools(imageClient(getQuest)).get('generate_image') as ImageHandler;
+
+      const pending = handler(
+        { prompt: 'p', model: 'gpt-image-2' },
+        { signal: controller.signal, sendNotification: vi.fn() }
+      );
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(result.isError).toBe(true);
+      expect(getQuest).toHaveBeenCalledTimes(1);
     });
   });
 });
