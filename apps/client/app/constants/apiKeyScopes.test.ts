@@ -157,6 +157,11 @@ describe('genericApiKeyScopesFor', () => {
     expect(genericApiKeyScopesFor(true)).toBe(GENERIC_MODAL_API_KEY_SCOPES);
   });
 
+  it('returns the same filtered list on every call without Opti access', () => {
+    // The New-Key modal re-seeds its selection on a reference change, so a fresh array per call would reset it on every render.
+    expect(genericApiKeyScopesFor(false)).toBe(genericApiKeyScopesFor(false));
+  });
+
   it('drops only the premium scopes without Opti access', () => {
     const values = genericApiKeyScopesFor(false).map(s => s.value);
     for (const scope of OPTI_API_KEY_SCOPES) expect(values).not.toContain(scope);

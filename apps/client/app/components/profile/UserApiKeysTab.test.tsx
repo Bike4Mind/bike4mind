@@ -363,6 +363,20 @@ describe('UserApiKeysTab - premium scopes', () => {
     for (const scope of PREMIUM) expect(scopes).not.toContain(scope);
   });
 
+  it('drops the premium scopes from a custom selection when Opti access is revoked', () => {
+    h.hasOptiAccess = true;
+    const view = renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    // Read-only plus one extra scope: a custom set that still holds optihashi:read.
+    fireEvent.click(screen.getByTestId(`api-key-scope-${ApiKeyScope.AI_CHAT}`).querySelector('button')!);
+    h.hasOptiAccess = false;
+    rerenderTab(view);
+
+    const scopes = submitKey('Revoked custom key');
+    expect(scopes).toContain(ApiKeyScope.AI_CHAT);
+    for (const scope of PREMIUM) expect(scopes).not.toContain(scope);
+  });
+
   it('keeps a custom selection when Opti access resolves after the user picked scopes', () => {
     const view = renderTab();
     fireEvent.click(screen.getByText('Create API Key'));

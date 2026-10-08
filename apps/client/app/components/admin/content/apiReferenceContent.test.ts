@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { GENERIC_MODAL_API_KEY_SCOPES, DEDICATED_FLOW_SCOPES } from '@client/app/constants/apiKeyScopes';
+import {
+  GENERIC_MODAL_API_KEY_SCOPES,
+  DEDICATED_FLOW_SCOPES,
+  genericApiKeyScopesFor,
+} from '@client/app/constants/apiKeyScopes';
 import { getApiReferenceContent, renderScopeTableRows } from './apiReferenceContent';
 
 const API_REFERENCE_CONTENT = getApiReferenceContent('https://b4m.test', GENERIC_MODAL_API_KEY_SCOPES);
@@ -39,6 +43,10 @@ describe('API reference scopes table', () => {
     for (const scope of DEDICATED_FLOW_SCOPES) {
       expect(listed).not.toContain(scope);
     }
+  });
+
+  it('names no premium scope when built from the list offered without Opti access', () => {
+    expect(getApiReferenceContent('https://b4m.test', genericApiKeyScopesFor(false))).not.toContain('optihashi:');
   });
 
   it('escapes pipes so a description cannot split its table row', () => {
