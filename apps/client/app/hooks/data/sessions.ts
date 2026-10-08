@@ -113,10 +113,9 @@ const filtersFromQueryKey = (queryKey: readonly unknown[]): SessionListFilters |
  * updateAllQueryData directly: without the filter check, a session that doesn't match a given
  * cached list's Content/Origin filter (sidenavFilters.ts) would still get spliced into that list's
  * first page the moment any write touches it - silently undoing the filter the user chose (e.g. an
- * API-created session appearing while viewing "Hide API"). Routing every write through one function
- * means a future call site can't reintroduce that gap by omission. Clone/fork/snip copies go
- * through writeCopiedSession instead, which applies the same filter check and also refetches the
- * lists for a copy that lives in a product surface.
+ * API-created session appearing while viewing "Hide API"). Routing every write through this one
+ * gate means a future call site can't reintroduce that gap by omission. writeCopiedSession
+ * (clone/fork/snip) is a thin wrapper over it that only adds the surface refetch.
  */
 export function updateSessionsQueryData(
   queryClient: QueryClient,
@@ -507,15 +506,13 @@ export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocu
 }
 
 /**
- * Writes a freshly copied session into the cached lists. `updateAllQueryData` inserts into EVERY
- * `['sessions', 'own', ...]` list regardless of its surface filter, so a copy that lives in a product
- * surface also refetches the lists to let the server's surface filter place it.
+ * Writes a freshly copied session into the cached lists via updateSessionsQueryData. That gate
+ * checks list filters but not surface, so it inserts into `['sessions', 'own', ...]` lists of
+ * every surface; a copy that lives in a product surface also refetches the lists to let the
+ * server's surface filter place it.
  */
 const writeCopiedSession = (queryClient: QueryClient, session: ISessionDocument) => {
-  updateAllQueryData(queryClient, 'sessions', 'write', session, {
-    keysAllowedToCreate: [['sessions', 'own']],
-    canCreateAt: (queryKey, data) => sessionMatchesListFilters(data, filtersFromQueryKey(queryKey)),
-  });
+  updateSessionsQueryData(queryClient, 'write', session);
   if (session.surface) queryClient.invalidateQueries({ queryKey: ['sessions', 'own'] });
 };
 
