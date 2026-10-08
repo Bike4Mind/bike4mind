@@ -1678,20 +1678,11 @@ export class ChatService {
         // Anthropic's shape: ONE assistant turn carrying the reasoning, any text and every
         // tool_use block, answered by ONE user turn of matching tool_result blocks. Splitting
         // them per tool would misrepresent parallel calls as a sequence.
-        wire.push({
-          role: 'assistant',
-          content: [
-            ...(turnThinking ?? []),
-            ...(turnText ? [{ type: 'text', text: turnText }] : []),
-            ...settled.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
-          ],
-        });
-        const results = settled.map(call => ({
-          type: 'tool_result',
-          tool_use_id: call.id,
-          content: toolResultContent(call),
-          ...(call.error ? { is_error: true } : {}),
-        }));
+        // Built by the same function the history rebuild uses, with the text trimmed the way a
+        // stored round is, so the next turn's request starts with these exact bytes.
+        const [assistantTurn, resultsTurn] = roundWireMessages(turnText.trim(), turnThinking, settled);
+        wire.push(assistantTurn);
+        const results = resultsTurn.content as { content: string }[];
         roundsSincePlanUpdate = settled.some(call => call.name === TODO_TOOL_NAME && call.status === 'done')
           ? 0
           : roundsSincePlanUpdate + 1;
@@ -1705,7 +1696,7 @@ export class ChatService {
         );
         const lastResult = results[results.length - 1];
         if (nudge && lastResult) lastResult.content = `${lastResult.content}\n\n${nudge}`;
-        wire.push({ role: 'user', content: results });
+        wire.push(resultsTurn);
         const shots = settled.flatMap(call => this.takeImages(call.id));
         if (shots.length > 0 && vision) {
           // Its own user turn, not blocks beside the tool results: the OpenAI conversion keeps only
@@ -3727,15 +3718,47 @@ async function toCompletionMessages(
       continue;
     }
 
-    wire.push({
+    const rounds = replayableRounds(message);
+    if (rounds) {
+      const lastWithTools = rounds.reduce((last, round, index) => (round.calls.length > 0 ? index : last), -1);
+      rounds.forEach((round, index) => {
+        if (round.calls.length === 0) {
+          if (round.text) wire.push({ role: 'assistant', content: round.text });
+          return;
+        }
+        // Only the last tool round's reasoning is kept on the message.
+        wire.push(...roundWireMessages(round.text, index === lastWithTools ? message.thinking : undefined, round.calls));
+      });
+      continue;
+    }
+
+    wire.push(...roundWireMessages(text, message.thinking, calls));
+  }
+
+  return wire;
+}
+
+/**
+ * One tool round as the pair of turns the provider expects: the assistant turn (reasoning, prose,
+ * every tool_use) and the user turn answering it with the matching tool_result blocks. The live
+ * loop and the history rebuild both build a round here, so a round's bytes cannot differ between
+ * the request that first carried it and the ones that replay it.
+ */
+function roundWireMessages(
+  text: string,
+  thinking: unknown[] | undefined,
+  calls: readonly ChatToolCall[]
+): [CompletionMessage, CompletionMessage] {
+  return [
+    {
       role: 'assistant',
       content: [
-        ...(message.thinking ?? []),
+        ...(thinking ?? []),
         ...(text ? [{ type: 'text', text }] : []),
         ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
       ],
-    });
-    wire.push({
+    },
+    {
       role: 'user',
       content: calls.map(call => ({
         type: 'tool_result',
@@ -3743,10 +3766,36 @@ async function toCompletionMessages(
         content: toolResultContent(call),
         ...(call.error ? { is_error: true } : {}),
       })),
-    });
-  }
+    },
+  ];
+}
 
-  return wire;
+/**
+ * A stored reply split into the rounds it was produced in, or null when it cannot be replayed
+ * that way. Replaying the rounds one by one is what keeps the prompt-cache prefix: the live loop
+ * sent them as alternating assistant and tool-result turns, and one flattened assistant turn
+ * differs from that at its first byte, so everything the reply added would be re-billed as new
+ * input at the start of the next turn.
+ *
+ * Null for a message stored before rounds were kept, and for one with artifacts: those are
+ * stored apart from the round that wrote them, so putting the markup back needs the whole message.
+ */
+function replayableRounds(message: ChatMessage): { text: string; calls: ChatToolCall[] }[] | null {
+  if (!message.rounds || message.rounds.length === 0 || (message.artifacts?.length ?? 0) > 0) return null;
+  const byId = new Map((message.toolCalls ?? []).map(call => [call.id, call]));
+  const placed = new Set<string>();
+  const rounds = message.rounds.map(round => ({
+    text: round.text,
+    calls: round.toolCallIds.flatMap(id => {
+      const call = byId.get(id);
+      if (!call || placed.has(id)) return [];
+      placed.add(id);
+      return [call];
+    }),
+  }));
+  const stray = (message.toolCalls ?? []).filter(call => !placed.has(call.id));
+  if (stray.length > 0) rounds.push({ text: '', calls: stray });
+  return rounds;
 }
 
 /**
