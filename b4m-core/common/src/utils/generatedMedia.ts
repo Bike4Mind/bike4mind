@@ -25,6 +25,8 @@ export const GENERATED_VIDEO_EXTENSION_RE = /\.(mp4|webm|mov)$/i;
 // GENERATED_CONTENT_KEY_RE is what /api/generated-content/[ref] serves (any generated file);
 // GENERATED_IMAGE_KEY_RE is the strict, lowercase image-only subset the image tools accept as an
 // input (see resolveOwnedGeneratedImageUrl in @bike4mind/services). Neither admits a path separator.
+// GENERATED_IMAGE_KEY_RE's extension set must stay in sync with EDITABLE_IMAGE_KEY_RE in
+// @bike4mind/utils (llm/utils.ts), which picks the keys the "Recently generated images" note offers.
 const GENERATED_KEY_UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 export const GENERATED_CONTENT_KEY_RE = new RegExp(`^${GENERATED_KEY_UUID}\\.[a-z]+$`, 'i');
 export const GENERATED_IMAGE_KEY_RE = new RegExp(`^${GENERATED_KEY_UUID}\\.(?:png|jpe?g|webp|gif)$`);
