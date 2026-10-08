@@ -805,7 +805,8 @@ if (isMonitoredStage) {
    * so its Minimum over 24h (4x the cadence) is 0 iff some run succeeded.
    * Missing data breaches, which is safe only because the alarm exists solely
    * where the cron is enabled; a preview with monitoring on would otherwise
-   * sit in ALARM forever.
+   * sit in ALARM forever. Turning enableModelDiscovery off also trips it:
+   * a disabled run is skipped and publishes nothing.
    *
    * Metric emitted by: server/modelDiscovery/metrics.ts
    * Namespace: Lumina5/ModelDiscovery / RunFailures
@@ -813,7 +814,7 @@ if (isMonitoredStage) {
   if (modelDiscoveryCronEnabled) {
     new aws.cloudwatch.MetricAlarm('modelDiscoveryNoSuccessfulRun', {
       name: `${$app.name}-${$app.stage}-model-discovery-no-successful-run`,
-      alarmDescription: 'No successful model discovery run in 24h - the cron may have stopped',
+      alarmDescription: 'No successful model discovery run in 24h - the cron stopped or enableModelDiscovery is off',
       comparisonOperator: 'GreaterThanOrEqualToThreshold',
       evaluationPeriods: 1,
       metricName: 'RunFailures',
