@@ -619,6 +619,18 @@ describe('mapApiError', () => {
     );
   });
 
+  it('surfaces the CSRF origin message on a 403 instead of the API-key fallback', () => {
+    const msg = mapApiError(
+      axiosError(403, {
+        data: { error: 'Invalid request origin. CSRF protection triggered (expected https://app.example.com).' },
+      }),
+      'http://x',
+      'files:read'
+    );
+    expect(msg).toContain('CSRF protection triggered');
+    expect(msg).not.toContain('API key forbidden');
+  });
+
   it('surfaces a numeric retry-after on 429', () => {
     const msg = mapApiError(axiosError(429, { headers: { 'retry-after': '30' } }), 'http://x');
     expect(msg).toContain('rate limit');

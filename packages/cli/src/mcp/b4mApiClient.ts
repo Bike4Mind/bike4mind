@@ -495,6 +495,11 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       if ((error.response?.data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
         return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
       }
+      // csrfProtection answers 403 when no Origin matches the deployment's APP_URL and
+      // names the expected origin in the body - the actual fix for a login (JWT) caller,
+      // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
+      const csrfMessage = extractServerMessage(error.response?.data);
+      if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
       const base = "API key forbidden: check the key's scopes and account access";
       return scope ? `${base} (recommended scope: ${scope})` : base;
     }
