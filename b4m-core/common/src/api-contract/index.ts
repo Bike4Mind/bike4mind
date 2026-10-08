@@ -38,5 +38,11 @@ export {
   listVideoModelsContract,
 } from './contracts/videoGeneration.contract';
 export { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './contracts/voice.contract';
-export { listProjectsContract, getProjectContract, createProjectContract } from './contracts/projects.contract';
+export {
+  listProjectsContract,
+  getProjectContract,
+  createProjectContract,
+  updateProjectContract,
+  deleteProjectContract,
+} from './contracts/projects.contract';
 export { CONTRACTS } from './contracts';
