@@ -47,7 +47,7 @@ export default function GitHubSyncedFilesDisclosure() {
           {row('Skipped files', rules.deniedFileNames.join(', '))}
           {row(
             'Limits',
-            `Files up to ${formatBytes(rules.maxFileBytes)}, up to ${rules.maxCandidates.toLocaleString()} files per sync`
+            `Files over ${formatBytes(rules.maxFileBytes)} (or your workspace's upload limit, if lower), symlinks and binary files are skipped. Up to ${rules.maxCandidates.toLocaleString()} files per sync`
           )}
         </Stack>
       )}

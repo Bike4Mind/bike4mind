@@ -10,6 +10,7 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
 import type { LakeSourceAvailability } from '@client/app/components/datalake/lakeSources';
 import type { CreateLakeSourceKind } from '@client/app/components/datalake/createLakeSourceKinds';
+import { createLakeOrigin } from '@client/app/components/datalake/createLakeSourceKinds';
 import {
   GITHUB_LAKE_ADMIN_FLAG,
   GITHUB_ORG_MANAGER_ONLY_REASON,
@@ -66,7 +67,7 @@ const upload: CreateLakeSource = {
   label: 'Upload files',
   hint: 'Drop files or a folder from this computer',
   Icon: CloudUploadIcon,
-  origin: 'curated',
+  origin: createLakeOrigin('upload'),
   unavailableReason: () => undefined,
 };
 
@@ -78,7 +79,7 @@ const googleDrive: CreateLakeSource = {
   // Offered in every scope: drive-sync accepts an org lake from an owner/manager and a personal lake
   // from its creator, which the caller always is here. The server stays the authority on the org
   // half, and a refusal rolls the new lake back (see useCreateLakeFromDrive).
-  origin: 'connector-fed',
+  origin: createLakeOrigin('googleDrive'),
   unavailableReason: () => undefined,
 };
 
@@ -87,7 +88,7 @@ const github: CreateLakeSource = {
   label: 'GitHub repository',
   hint: 'Sync a repository into the new lake, read-only',
   Icon: GitHubIcon,
-  origin: 'connector-fed',
+  origin: createLakeOrigin('github'),
   adminFlag: GITHUB_LAKE_ADMIN_FLAG,
   unavailableReason: scope => {
     if (!scope.organizationId) return GITHUB_CREATE_ORG_ONLY_REASON;

@@ -246,10 +246,10 @@ test.describe('Data Lake - create wizard source cards', () => {
     // The flag and the account scope decide this, and the e2e user's scope is not fixed here - so
     // assert the rule rather than one outcome: the card is either absent (flag off), disabled with
     // a reason (personal scope / non-manager), or it opens the panel.
-    if ((await dataLakePage.sourceCard('github').count()) === 0) {
-      test.info().annotations.push({ type: 'note', description: 'EnableDataLakeGitHub is off in this environment' });
-      return;
-    }
+    test.skip(
+      (await dataLakePage.sourceCard('github').count()) === 0,
+      'EnableDataLakeGitHub is off in this environment'
+    );
     if (await dataLakePage.sourceCard('github').isDisabled()) {
       await expect(dataLakePage.sourceCardReason('github')).toContainText(/organization/i);
       return;

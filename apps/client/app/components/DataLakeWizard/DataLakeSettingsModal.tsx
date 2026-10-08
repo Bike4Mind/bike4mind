@@ -656,8 +656,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             ))}
           </Select>
           <FormHelperText data-testid="datalake-settings-origin-help">
-            Connector-fed lakes accept content a connected Drive folder adds on its own; curated lakes accept only files
-            someone adds by hand. Either way, a connected folder can still remove files it previously added.
+            Connector-fed lakes accept content a connected source (a Drive folder or GitHub repository) adds on its own;
+            curated lakes accept only files someone adds by hand. Either way, a connected source can still remove files
+            it previously added.
           </FormHelperText>
         </FormControl>
       )}

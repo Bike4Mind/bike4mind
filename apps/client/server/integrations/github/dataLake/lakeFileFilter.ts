@@ -1,10 +1,6 @@
 import path from 'path';
 import { GITHUB_LAKE_FILE_RULES } from '@bike4mind/common';
 
-// Re-exported so every server consumer keeps importing the rules from the filter that applies them,
-// while the create wizard reads the same constant out of @bike4mind/common.
-export { GITHUB_LAKE_FILE_RULES };
-
 export type GitHubTreeEntry = { path?: string; mode?: string; type?: string; sha?: string; size?: number };
 export type GitHubLakeCandidate = { path: string; sha: string; size: number };
 export type TreeEntryRejection = 'not_blob' | 'symlink' | 'denied_path' | 'lockfile' | 'extension' | 'oversized';
