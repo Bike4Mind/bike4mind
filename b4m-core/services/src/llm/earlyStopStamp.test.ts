@@ -81,6 +81,7 @@ describe('buildIncompleteAnswerNotice', () => {
     visibleCharsAfterLastToolCall: 0,
     stopReason: 'end_turn',
     producedNonTextDeliverable: false,
+    endedOnAnswerTool: false,
   };
 
   it('flags a tool-loop turn with no visible text after its last tool call', () => {
@@ -94,6 +95,11 @@ describe('buildIncompleteAnswerNotice', () => {
     expect(buildIncompleteAnswerNotice({ ...unanswered, toolCallCount: 0, stopReason: TRUNCATED_FINISH_REASON })).toBe(
       TRUNCATED_ANSWER_NOTICE
     );
+  });
+
+  it('stays silent when the turn ended on a tool that follows its answer text', () => {
+    expect(buildIncompleteAnswerNotice({ ...unanswered, stopReason: 'tool_use', endedOnAnswerTool: true })).toBeNull();
+    expect(buildIncompleteAnswerNotice({ ...unanswered, stopReason: 'tool_use' })).toBe(INCOMPLETE_ANSWER_NOTICE);
   });
 
   it('stays silent when an answer was written, the turn was stopped, or no tool ran', () => {
