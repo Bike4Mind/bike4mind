@@ -33,25 +33,33 @@ describe('imageEdit dispatch', () => {
     vi.clearAllMocks();
   });
 
-  it('processes the parsed SQS body and fires the quest callback', async () => {
-    h.process.mockResolvedValue(undefined);
+  it('fires the quest callback only after process settles', async () => {
+    let settle!: () => void;
+    h.process.mockImplementation(() => new Promise<void>(resolve => (settle = resolve)));
 
-    await run();
-
+    const running = run();
     expect(h.process).toHaveBeenCalledWith({ body: BODY, logger });
+    expect(h.dispatchQuestCallback).not.toHaveBeenCalled();
+
+    settle();
+    await running;
+
     expect(h.dispatchQuestCallback).toHaveBeenCalledWith('quest-1', logger);
     expect(h.dispatchQuestCallback).toHaveBeenCalledTimes(1);
-    expect(h.process.mock.invocationCallOrder[0]).toBeLessThan(h.dispatchQuestCallback.mock.invocationCallOrder[0]);
   });
 
-  it('still fires the quest callback when process throws, and rethrows', async () => {
+  it('fires the quest callback only after process rejects, then rethrows', async () => {
     const failure = new Error('provider down');
-    h.process.mockRejectedValue(failure);
+    let fail!: () => void;
+    h.process.mockImplementation(() => new Promise<void>((_, reject) => (fail = () => reject(failure))));
 
-    await expect(run()).rejects.toBe(failure);
+    const running = run();
+    expect(h.dispatchQuestCallback).not.toHaveBeenCalled();
+
+    fail();
+    await expect(running).rejects.toBe(failure);
 
     expect(h.dispatchQuestCallback).toHaveBeenCalledWith('quest-1', logger);
     expect(h.dispatchQuestCallback).toHaveBeenCalledTimes(1);
-    expect(h.process.mock.invocationCallOrder[0]).toBeLessThan(h.dispatchQuestCallback.mock.invocationCallOrder[0]);
   });
 });
