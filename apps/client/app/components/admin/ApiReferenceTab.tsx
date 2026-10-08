@@ -155,7 +155,7 @@ const ApiReferenceTab = () => {
           data-testid="api-reference-docs-iframe"
           sx={{
             flex: 1,
-            minHeight: '75vh',
+            minHeight: 480,
             width: '100%',
             border: '1px solid',
             borderColor: 'divider',
