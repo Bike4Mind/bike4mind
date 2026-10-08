@@ -57,7 +57,7 @@ describe('GET /api/data-lakes/tag-counts', () => {
   it('scopes to a single lakeId against the server-resolved lakes', async () => {
     const { req, json } = await call({ lakeId: 'lake1' });
 
-    expect(mockQueryScopedDataLakeTagCounts).toHaveBeenCalledWith(req, LAKES, ['lake1']);
+    expect(mockQueryScopedDataLakeTagCounts).toHaveBeenCalledWith(req, [LAKES[0]]);
     expect(mockQueryDataLakeTagCounts).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ tagCounts: [{ tag: 'docs:alpha', count: 1 }] });
   });
@@ -65,13 +65,19 @@ describe('GET /api/data-lakes/tag-counts', () => {
   it('accepts a repeated lakeId', async () => {
     const { req } = await call({ lakeId: ['lake1', 'lake2'] });
 
-    expect(mockQueryScopedDataLakeTagCounts).toHaveBeenCalledWith(req, LAKES, ['lake1', 'lake2']);
+    expect(mockQueryScopedDataLakeTagCounts).toHaveBeenCalledWith(req, LAKES);
   });
 
   it('stays scoped (to nothing) for an empty or malformed lakeId rather than widening to every lake', async () => {
     const { req } = await call({ lakeId: ['', { nested: 'x' }] });
 
-    expect(mockQueryScopedDataLakeTagCounts).toHaveBeenCalledWith(req, LAKES, []);
+    expect(mockQueryScopedDataLakeTagCounts).toHaveBeenCalledWith(req, []);
     expect(mockQueryDataLakeTagCounts).not.toHaveBeenCalled();
+  });
+
+  it('drops an id the caller cannot reach, so a forged lakeId selects nothing', async () => {
+    const { req } = await call({ lakeId: ['lake1', 'someone-elses-lake'] });
+
+    expect(mockQueryScopedDataLakeTagCounts).toHaveBeenCalledWith(req, [LAKES[0]]);
   });
 });

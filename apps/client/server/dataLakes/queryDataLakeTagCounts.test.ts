@@ -237,7 +237,7 @@ describe('queryScopedDataLakeTagCounts', () => {
   const sharedPrefixLake = (i: number) => ({ ...lake(i), fileTagPrefix: 'docs:' });
 
   it("hands the counter only the selected lake's arms, restricted to its membership", async () => {
-    const result = await queryScopedDataLakeTagCounts(req, [sharedPrefixLake(0), sharedPrefixLake(1)], ['lake-0']);
+    const result = await queryScopedDataLakeTagCounts(req, [sharedPrefixLake(0)]);
 
     expect(result).toEqual({ tagCounts: [{ tag: 'docs:alpha', count: 1 }] });
     expect(h.findByDatalakeTags).toHaveBeenCalledWith(['datalake:lake-0']);
@@ -257,7 +257,7 @@ describe('queryScopedDataLakeTagCounts', () => {
   });
 
   it('runs none of the per-lake membership aggregates', async () => {
-    await queryScopedDataLakeTagCounts(req, [sharedPrefixLake(0)], ['lake-0']);
+    await queryScopedDataLakeTagCounts(req, [sharedPrefixLake(0)]);
 
     expect(h.countDataLakeUniqueFilesByPrefix).not.toHaveBeenCalled();
     expect(h.countDataLakeFilesByMembership).not.toHaveBeenCalled();
@@ -265,8 +265,8 @@ describe('queryScopedDataLakeTagCounts', () => {
     expect(h.countDistinctDataLakeFilesByMembership).not.toHaveBeenCalled();
   });
 
-  it('fails closed for an id the caller cannot reach, never widening to every lake', async () => {
-    const result = await queryScopedDataLakeTagCounts(req, [sharedPrefixLake(0)], ['someone-elses-lake']);
+  it('returns an empty tree for an empty selection, never widening to every lake', async () => {
+    const result = await queryScopedDataLakeTagCounts(req, []);
 
     expect(result).toEqual({ tagCounts: [] });
     expect(h.findByDatalakeTags).not.toHaveBeenCalled();
@@ -277,7 +277,7 @@ describe('queryScopedDataLakeTagCounts', () => {
     const registryLake = DATA_LAKES[0];
     h.findByDatalakeTags.mockResolvedValue([]);
 
-    await queryScopedDataLakeTagCounts(req, [registryLake as never, sharedPrefixLake(0)], [registryLake.id]);
+    await queryScopedDataLakeTagCounts(req, [registryLake as never]);
 
     const options = h.countDataLakeTagsByPrefix.mock.calls[0][2];
     expect(options.dataLakeTags).toEqual([registryLake.datalakeTag]);

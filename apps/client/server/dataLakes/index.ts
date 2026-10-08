@@ -433,16 +433,13 @@ export async function queryDataLakeTagCounts(
  * carries selected lake A's prefix shows under A's branch. Exact per-lake trees would need one
  * aggregate branch per lake - the fan-out countDataLakeFilesByMembership has to chunk.
  *
- * `lakeIds` only ever NARROW `lakes` (already resolved by `resolveAccessibleLakes`): an id the
- * caller cannot reach selects nothing and returns an empty tree, never every lake.
+ * `selected` must come from `narrowAccessibleLakes` over `resolveAccessibleLakes`, so a requested
+ * id only ever narrows: one the caller cannot reach selects nothing and returns an empty tree.
  */
 export async function queryScopedDataLakeTagCounts(
   req: EntitlementRequest,
-  lakes: DataLakeConfig[],
-  lakeIds: string[]
+  selected: DataLakeConfig[]
 ): Promise<{ tagCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeTagsByPrefix>> }> {
-  const wanted = new Set(lakeIds);
-  const selected = lakes.filter(lake => wanted.has(lake.id));
   if (selected.length === 0) return { tagCounts: [] };
 
   const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(selected);

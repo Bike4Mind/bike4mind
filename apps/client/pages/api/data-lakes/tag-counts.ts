@@ -2,6 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { resolveAccessibleLakes, queryDataLakeTagCounts, queryScopedDataLakeTagCounts } from '@server/dataLakes';
+import { narrowAccessibleLakes } from '@server/dataLakes/narrowAccessibleLakes';
 
 /**
  * GET /api/data-lakes/tag-counts
@@ -22,12 +23,8 @@ import { resolveAccessibleLakes, queryDataLakeTagCounts, queryScopedDataLakeTagC
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(async (req: Request, res) => {
   const lakes = await resolveAccessibleLakes(req);
-  const rawLakeIds = req.query.lakeId;
-  if (rawLakeIds !== undefined) {
-    const lakeIds = (Array.isArray(rawLakeIds) ? rawLakeIds : [rawLakeIds]).filter(
-      (id): id is string => typeof id === 'string' && id.length > 0
-    );
-    return res.json(await queryScopedDataLakeTagCounts(req, lakes, lakeIds));
+  if (req.query.lakeId !== undefined) {
+    return res.json(await queryScopedDataLakeTagCounts(req, narrowAccessibleLakes(lakes, req.query.lakeId)));
   }
   const result = await queryDataLakeTagCounts(req, lakes);
   return res.json(result);
