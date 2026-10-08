@@ -48,8 +48,8 @@ interface DeleteAdapters {
  * @throws {Error} If organization cannot be deleted based on validation, includes reason if provided
  *
  * Caller MUST wrap this in withTransaction (see the route): the member purge, the group
- * soft-deletes, the members' organizationId reset, and the org delete have to commit together, or a partial failure leaves either
- * dangling group access or an org that never actually deletes.
+ * soft-deletes, the members' organizationId reset, and the org delete have to commit together, or
+ * a partial failure leaves either dangling group access or an org that never actually deletes.
  */
 export async function deleteOrganization(
   user: IUserDocument,
