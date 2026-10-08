@@ -43,22 +43,15 @@ interface ListEnvelope<T> {
   total?: number;
 }
 
-export interface ChatWaitResponse {
+/** The `wait: false` chat ACK: the turn is queued, its outcome arrives on the quest poll. */
+export interface ChatAckResponse {
   id: string;
   status: string;
+  // The requested model; the quest poll carries no model field.
   model?: string;
   // The notebook the turn was recorded in. An API-key caller that sent no `sessionId` (and any
   // caller sending `newConversation: true`) gets a freshly created notebook's id here.
   sessionId?: string;
-  // `response` is the visible answer text; `responses` is the raw reply slots. Older servers left
-  // `response` null on the wait path.
-  response?: string | null;
-  responses?: string[];
-  // Failure classifier. A failed turn still resolves 200 with the explanation in the reply
-  // text, so `type: 'error'` is the only reliable failure signal; `errorCode` names the reason
-  // only for the billing failures that have one and its absence never means success.
-  type?: ChatHistoryItemType;
-  errorCode?: QuestErrorCode;
   [key: string]: unknown;
 }
 
@@ -66,9 +59,13 @@ export interface QuestResponse {
   id: string;
   status: string;
   sessionId: string;
-  reply?: string;
-  // Same classifier as ChatWaitResponse, on the polled surface - both carry it, so one branch
-  // reads either.
+  // `reply` is the visible answer text, `replies` the raw reply slots. Both are persisted while the
+  // turn streams, so a running quest may already carry partial text.
+  reply?: string | null;
+  replies?: string[];
+  // A failed turn still finishes `status: 'done'` with the explanation in the reply text, so
+  // `type: 'error'` is the only reliable failure signal; `errorCode` names the reason only for the
+  // billing failures that have one and its absence never means success.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
   // Generated-file basenames, and `files` resolves each to a ready-to-use URL (empty when the
@@ -244,8 +241,8 @@ export class B4mApiClient {
     message: string;
     model?: string;
     systemPrompt?: string;
-  }): Promise<ChatWaitResponse> {
-    return this.client.post<ChatWaitResponse>('/api/chat', {
+  }): Promise<ChatAckResponse> {
+    return this.client.post<ChatAckResponse>('/api/chat', {
       // No notebookId means "start a fresh conversation": without newConversation a JWT caller
       // would post into the user's last-opened notebook (the very context bleed this endpoint was
       // fixed to remove for API keys). The new notebook's id comes back in the response.
@@ -253,7 +250,9 @@ export class B4mApiClient {
       message: args.message,
       ...(args.model ? { model: args.model } : {}),
       ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),
-      wait: true,
+      // Queue the turn and poll its quest rather than hold one request open for the whole
+      // completion, so the tool can report progress and honour cancellation while it waits.
+      wait: false,
     });
   }
 

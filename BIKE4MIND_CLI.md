@@ -137,7 +137,7 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `list_projects` | List the projects you can access, including shared ones | `projects:read` |
 | `get_project` | Fetch one project by id | `projects:read` |
 | `create_project` | Create a project (`name` and `description` required; optional `sessionIds`/`fileIds`); pass its id as `projectId` to `create_notebook` | `projects:write` |
-| `send_message` | Send a chat message and wait for the reply; returns the reply's cited sources (`citables`) | `ai:chat` |
+| `send_message` | Send a chat message and wait for the reply (sends progress for a `progressToken`, stops on cancel); returns its cited sources (`citables`) | `ai:chat` |
 | `search_knowledge_base` | Semantic search across your notebooks | `notebooks:read` |
 | `list_lakes` | List the data lakes you can reach (cursor-paged via `nextCursor`) | `datalake:read` |
 | `list_files` | Search your files | `files:read` |

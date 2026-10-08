@@ -160,41 +160,41 @@ describe('B4mApiClient', () => {
     expect(result).toEqual({ data: [], nextCursor: null });
   });
 
-  it('sends a chat message with wait:true and maps notebookId to sessionId', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
+  it('sends a chat message with wait:false and maps notebookId to sessionId', async () => {
+    mockPost.mockResolvedValue({ id: 'q1', status: 'queued' });
     await client.sendChat({ notebookId: 'nb1', message: 'hi', model: 'gpt' });
     expect(mockPost).toHaveBeenCalledWith('/api/chat', {
       sessionId: 'nb1',
       message: 'hi',
       model: 'gpt',
-      wait: true,
+      wait: false,
     });
   });
 
   it('starts a new conversation when no notebookId is supplied', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'complete', sessionId: 'fresh-nb' });
+    mockPost.mockResolvedValue({ id: 'q1', status: 'queued', sessionId: 'fresh-nb' });
     await client.sendChat({ message: 'hi' });
     expect(mockPost).toHaveBeenCalledWith('/api/chat', {
       newConversation: true,
       message: 'hi',
-      wait: true,
+      wait: false,
     });
   });
 
   it('forwards a supplied systemPrompt in the chat body', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
+    mockPost.mockResolvedValue({ id: 'q1', status: 'queued' });
     await client.sendChat({ notebookId: 'nb1', message: 'hi', systemPrompt: 'Reply only in haiku.' });
     expect(mockPost).toHaveBeenCalledWith('/api/chat', {
       sessionId: 'nb1',
       message: 'hi',
       systemPrompt: 'Reply only in haiku.',
-      wait: true,
+      wait: false,
     });
   });
   it('omits systemPrompt entirely from the body when not supplied', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
+    mockPost.mockResolvedValue({ id: 'q1', status: 'queued' });
     await client.sendChat({ notebookId: 'nb1', message: 'hi' });
-    expect(mockPost).toHaveBeenCalledWith('/api/chat', { sessionId: 'nb1', message: 'hi', wait: true });
+    expect(mockPost).toHaveBeenCalledWith('/api/chat', { sessionId: 'nb1', message: 'hi', wait: false });
   });
 
   it('searches the knowledge base via semantic-search and returns scores', async () => {
