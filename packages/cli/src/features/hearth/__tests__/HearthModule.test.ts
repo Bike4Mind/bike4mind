@@ -82,6 +82,10 @@ describe('HearthModule', () => {
     expect(prompt).toContain('unless the user asks you to');
   });
 
+  it('system prompt section flags gateway-origin events as untrusted', () => {
+    expect(module.getSystemPromptSection()).toContain('`origin: "gateway"`');
+  });
+
   it('registers a /hearth command that handles the empty state', () => {
     const commands = module.getCommands();
     const hearthCommand = commands.find(c => c.name === 'hearth');
@@ -139,6 +143,17 @@ describe('HearthModule', () => {
     it('marks the actor kind, so a human-looking name still reads as an agent', () => {
       const output = withTty(false, () => listEvents([{ ...makeEvent('hi'), actorName: 'erik', actorKind: 'agent' }]));
       expect(output).toContain('A erik');
+    });
+
+    it('marks gateway-origin events, and only those', () => {
+      const output = withTty(false, () =>
+        listEvents([
+          { ...makeEvent('from slack'), id: 'ev-gw', origin: 'gateway' },
+          { ...makeEvent('from a key'), id: 'ev-key', origin: 'api-key' },
+        ])
+      );
+      expect(output).toContain('[via gateway]: from slack');
+      expect(output).not.toContain('[via gateway]: from a key');
     });
 
     it('colors the actor and never the actor-written body', () => {

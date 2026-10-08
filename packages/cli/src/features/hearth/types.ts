@@ -7,7 +7,7 @@
  * server-side from the authenticated session, never sent by the client).
  */
 import { z } from 'zod';
-import { actorKindSchema, selfClaimedActorKindSchema } from '@bike4mind/hearth';
+import { actorKindSchema, hearthEventOriginSchema, selfClaimedActorKindSchema } from '@bike4mind/hearth';
 
 export const HearthEventKindSchema = z.enum([
   'message',
@@ -58,6 +58,8 @@ export const HearthEventSchema = z.object({
   human: HearthHumanBodySchema,
   machine: HearthMachineBodySchema.optional(),
   refs: HearthEventRefsSchema.prefault({}),
+  /** Server-set provenance; 'gateway' marks untrusted third-party input. */
+  origin: hearthEventOriginSchema.optional(),
   createdAt: z.string(),
 });
 export type HearthEvent = z.infer<typeof HearthEventSchema>;
