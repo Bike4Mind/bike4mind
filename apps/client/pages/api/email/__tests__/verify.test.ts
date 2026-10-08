@@ -67,7 +67,9 @@ import handler from '@pages/api/email/verify';
 const DOMAIN_EMAIL = 'staff@bike4mind.com';
 const NON_DOMAIN_EMAIL = 'nobody@example.com';
 // Pinned literal (not derived from the registry, which would make the assertions circular):
-// the optihashi:pro grant pays 250,000, and the questmaster:pro it implies never pays again.
+// the optihashi:pro grant pays 250,000. This path resolves the literal domain keys only (no
+// implication expansion), so the implied questmaster:pro credit is not in play here - the
+// implied-key de-dup is pinned in the registry test.
 const EXPECTED_DOMAIN_CREDITS = 250_000;
 
 function makeReqRes() {
