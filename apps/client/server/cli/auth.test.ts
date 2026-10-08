@@ -49,7 +49,14 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 }));
 
 import jwt from 'jsonwebtoken';
-import { checkRateLimit, verifyApiKey, verifyJwtToken, verifyEmbedApiKey, verifyEmbedKeyById } from './auth';
+import {
+  checkRateLimit,
+  resolveRateLimitClient,
+  verifyApiKey,
+  verifyJwtToken,
+  verifyEmbedApiKey,
+  verifyEmbedKeyById,
+} from './auth';
 import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
@@ -169,6 +176,19 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
         await checkRateLimit(userId, 'api', { client: 'my-script/1.0' });
       }
       await expect(checkRateLimit(userId, 'api', { client: 'my-script/1.0' })).rejects.toThrow(/Rate limit exceeded/);
+    });
+  });
+
+  describe('resolveRateLimitClient', () => {
+    it('prefers the User-Agent over x-b4m-client', () => {
+      expect(resolveRateLimitClient({ 'user-agent': 'b4m-desktop/0.1.0', 'x-b4m-client': 'other/1' })).toBe(
+        'b4m-desktop/0.1.0'
+      );
+    });
+
+    it('falls back to x-b4m-client, and is undefined when neither is set', () => {
+      expect(resolveRateLimitClient({ 'x-b4m-client': 'b4m-desktop/0.1.0' })).toBe('b4m-desktop/0.1.0');
+      expect(resolveRateLimitClient({})).toBeUndefined();
     });
   });
 
