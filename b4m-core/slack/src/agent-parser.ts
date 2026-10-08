@@ -386,7 +386,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
         `\n\n[PENDING ACTION] A "${pa.tool}" action is awaiting confirmation.\n` +
         `Parameters: ${JSON.stringify(pa.params, null, 2)}\n` +
         `Expires in ${Math.round(expiresInMs / 60000)} minutes.\n` +
-        `Only the user can execute it, by clicking Confirm on the preview. Use cancel_pending_action to cancel.\n` +
+        `Only the user can execute it, by clicking Confirm on the preview; do not call the original tool again to execute it. Use cancel_pending_action to cancel.\n` +
         `To modify: cancel first, then re-invoke the original tool with updated parameters.`;
     }
   }

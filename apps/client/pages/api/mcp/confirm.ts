@@ -22,6 +22,8 @@ const ConfirmRequestSchema = z.object({
   questId: z.string(),
   sessionId: z.string(),
   confirmed: z.boolean(),
+  // The action the card displayed. Optional only for cards rendered before this field existed.
+  pendingActionTs: z.number().optional(),
 });
 
 /**
@@ -39,7 +41,7 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: 'Invalid request body' });
   }
 
-  const { questId, sessionId, confirmed } = parsed.data;
+  const { questId, sessionId, confirmed, pendingActionTs } = parsed.data;
   const user = req.user;
 
   if (!user) {
@@ -103,9 +105,9 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(200).json({ success: true, message: 'Action cancelled' });
   }
 
-  if (!(await claimPendingAction(questId, pendingAction.ts))) {
-    logger.warn('[Web MCP Confirm] Pending action already claimed', { questId });
-    return res.status(409).json({ error: 'This action has already been processed.' });
+  if (pendingActionTs !== undefined && pendingActionTs !== pendingAction.ts) {
+    logger.warn('[Web MCP Confirm] Pending action replaced since it was displayed', { questId });
+    return res.status(409).json({ error: 'This action was replaced by a newer one. Please review it again.' });
   }
 
   // Execute the MCP tool
@@ -234,6 +236,13 @@ const handler = baseApi().post(async (req, res) => {
       mcpName,
       selectedRepoCount: selectedRepositories?.length ?? 0,
     });
+
+    // Claimed only once every pre-execution check has passed, so a fixable failure above (e.g. a
+    // repo not yet selected) leaves the action in place for another click.
+    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+      logger.warn('[Web MCP Confirm] Pending action already claimed', { questId });
+      return res.status(409).json({ error: 'This action has already been processed.' });
+    }
 
     // Execute the tool with _executeFromButton flag for security
     const result = await invokeMcpHandler<any>({

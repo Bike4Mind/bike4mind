@@ -786,7 +786,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     workspace?.id || orgWorkspaceId // Pass workspace ID for async notification
   );
 
-  // Check for pending action to conditionally enable confirm/cancel tools for the LLM
+  // Check for pending action to conditionally enable the cancel tool for the LLM
   const questWithPending = await Quest.findOne({
     sessionId: notebookId,
     pendingAction: { $exists: true },
@@ -802,7 +802,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     if (expiresInMs > 0) {
       pendingActionTools = ['cancel_pending_action'];
 
-      logger.debug('🔐 [PENDING ACTION] Found pending action, enabling cancel tool', {
+      logger.debug('[PENDING ACTION] Found pending action, enabling cancel tool', {
         questId: questWithPending._id,
         tool: pa.tool,
         expiresInMinutes: Math.round(expiresInMs / 60000),
@@ -946,7 +946,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     fabFileIds,
     slackNotificationData, // Pass to store on Quest immediately after creation
     false, // Return early for large tables - Quest Processor handles response
-    pendingActionTools // Additional tools (confirm/cancel) when pending action exists
+    pendingActionTools // Cancel tool when a pending action exists
   );
 
   // Replace thinking message with AI response

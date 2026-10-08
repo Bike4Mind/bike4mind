@@ -135,14 +135,11 @@ export const generateTools = (
 };
 
 /**
- * Normalize MCP tool parameters for OpenAI compatibility.
- * OpenAI requires 'properties' on object schemas - MCP tools like current_user
- * return { type: 'object' } without it, causing 400 errors.
- */
-/**
  * MCP tool args only the confirm-button handlers may set. Those handlers call the MCP host
  * directly, never through these generators, so a model-originated call carrying one is forged.
- * Must stay in sync with `confirmationParams` in b4m-core/mcp/src/shared/schemas.ts.
+ * `_executeFromButton` mirrors the button-only keys of `confirmationParams` in
+ * b4m-core/mcp/src/shared/schemas.ts (pinned by github/__tests__/helpers/schemas.test.ts there);
+ * `_confirmToken` is the preview token tools return.
  */
 const SERVER_ONLY_MCP_ARG_KEYS: readonly string[] = ['_executeFromButton', '_confirmToken'];
 
@@ -154,6 +151,11 @@ function stripServerOnlyArgs(args: unknown): unknown {
   return Object.fromEntries(Object.entries(args).filter(([key]) => !SERVER_ONLY_MCP_ARG_KEYS.includes(key)));
 }
 
+/**
+ * Normalize MCP tool parameters for OpenAI compatibility.
+ * OpenAI requires 'properties' on object schemas - MCP tools like current_user
+ * return { type: 'object' } without it, causing 400 errors.
+ */
 function normalizeToolParameters(rest: Record<string, unknown>): ICompletionOptionTools['toolSchema']['parameters'] {
   const rawParameters = rest?.input_schema ?? rest?.inputSchema ?? rest?.parameters;
   if (isPlainObject(rawParameters)) {

@@ -754,6 +754,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         questId: messageId,
         sessionId,
         confirmed: true,
+        pendingActionTs: pendingAction.ts,
       });
       setIsConfirmed(true);
       setResult(response.data);
@@ -874,6 +875,11 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
           Cancel
         </Button>
       </Stack>
+      {result && !result.success && (
+        <Typography level="body-sm" sx={{ mt: 1, color: 'danger.plainColor' }} data-testid="mcp-confirm-error">
+          {result.message}
+        </Typography>
+      )}
     </Box>
   );
 };
