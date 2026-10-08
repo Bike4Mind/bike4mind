@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { spendCapExceededError } from '@bike4mind/common';
+import { questReplyText, spendCapExceededError } from '@bike4mind/common';
 import { InsufficientCreditsError } from '@bike4mind/services/llm';
 import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 
@@ -122,7 +122,6 @@ vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%ST
 
 import { createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
-import { questReplyText } from '@server/utils/questPollBody';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
 const AUTH = `Bearer ${mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;

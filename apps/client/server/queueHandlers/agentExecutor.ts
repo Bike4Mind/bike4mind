@@ -57,7 +57,7 @@ import {
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
-import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel } from '@bike4mind/common';
+import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel, libraryFlagForScope } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import {
   getLlmByModel,
@@ -705,6 +705,24 @@ export function buildInProcessCreditCapCheck(
 const AGENT_SYSTEM_PROMPT_RESERVE = 4000;
 
 /**
+ * Every file attached to a run: message files, session files and session knowledge. Shared by
+ * attachment materialization and the tool deps' attachedFileIds so the two cannot drift; mirrors
+ * ChatCompletionProcess's attachedFileIds union for a chat turn.
+ */
+export function attachedFileIdsForRun(
+  execution: { messageFileIds?: string[]; sessionFabFileIds?: string[] } | undefined,
+  sessionKnowledgeIds: string[] | undefined
+): string[] {
+  return Array.from(
+    new Set([
+      ...(execution?.messageFileIds ?? []),
+      ...(execution?.sessionFabFileIds ?? []),
+      ...(sessionKnowledgeIds ?? []),
+    ])
+  );
+}
+
+/**
  * Resolve this run's attachment ids and extract their content, using the SAME extractor the chat
  * path uses so an agent turn gets the raw-content fallback, cosine excerpting, truncation notices
  * and image blocks that a chat turn gets.
@@ -729,9 +747,7 @@ async function materializeAttachmentsForRun(args: {
 }) {
   const { execution, sessionKnowledgeIds, scope, lakeAccess, modelInfo, apiKeyTable, logger } = args;
 
-  const requestedIds = Array.from(
-    new Set([...(execution.messageFileIds ?? []), ...(execution.sessionFabFileIds ?? []), ...sessionKnowledgeIds])
-  );
+  const requestedIds = attachedFileIdsForRun(execution, sessionKnowledgeIds);
   if (requestedIds.length === 0) return undefined;
 
   // A model we cannot size gives no honest budget, and guessing one would inline against a window
@@ -1611,6 +1627,7 @@ async function processExecution(
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
+      sessionIncludeLibraryFiles: libraryFlagForScope(session),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
@@ -1622,6 +1639,7 @@ async function processExecution(
       // passthrough. Until then an agent delegated from a personal-corpus session searches the
       // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       inlinedAttachmentIds,
+      attachedFileIds: attachedFileIdsForRun(execution, session.knowledgeIds),
       fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
@@ -1655,8 +1673,13 @@ async function processExecution(
         // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
         // no-ops for every agent-mode run: context.db.sessions was undefined here, so an agent
         // session's imageCount never moved even though the tools ran and the images landed on
-        // the Quest via persistRunAsQuest.
-        sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
+        // the Quest via persistRunAsQuest. `quests` + `findAllByIds` are edit_image's owner lookup for
+        // generated-image keys (resolveOwnedGeneratedImageUrl); without them those keys are refused.
+        sessions: {
+          incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository),
+          findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
+        },
+        quests: questRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -3415,6 +3438,10 @@ async function processSubagentDispatch(
 
     // Build the full tool set - same as the top-level path. The orchestrator filters
     // these per agentDef.allowedTools/deniedTools.
+    // The parent run's message and workbench files; the child row carries none of its own.
+    const parentRun = child.parentExecutionId
+      ? await agentExecutionRepository.findById(child.parentExecutionId)
+      : undefined;
     const toolDeps: ToolBuilderDeps = {
       userId: child.userId,
       user: user as IUserDocument,
@@ -3436,6 +3463,9 @@ async function processSubagentDispatch(
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
+      sessionIncludeLibraryFiles: libraryFlagForScope(session),
+      // Without it a library-off session's delegated agent cannot open the files attached to it.
+      attachedFileIds: attachedFileIdsForRun(parentRun ?? undefined, session.knowledgeIds),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
@@ -3472,7 +3502,12 @@ async function processSubagentDispatch(
         ...lakeWriteToolDb,
         // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
         // no-ops for every image a delegated subagent generates (same gap as the top-level path).
-        sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
+        // `quests` + `findAllByIds`: edit_image's generated-image owner lookup, as on the top-level path.
+        sessions: {
+          incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository),
+          findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
+        },
+        quests: questRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),

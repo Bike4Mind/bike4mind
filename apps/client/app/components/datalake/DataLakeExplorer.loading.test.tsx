@@ -48,6 +48,9 @@ vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
 }));
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => vi.fn() }));
 vi.mock('@client/app/hooks/useSetLakeScope', () => ({ default: () => vi.fn() }));
+vi.mock('@client/app/hooks/useSetIncludeLibraryFiles', () => ({
+  default: () => ({ included: false, isPending: false, toggle: vi.fn() }),
+}));
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/layouts/Notebook', () => ({
   useNotebookLayout: (sel: (s: { openSideNav: boolean }) => unknown) => sel({ openSideNav: true }),

@@ -118,7 +118,7 @@ vi.mock('@server/utils/orgAccess', async orig => ({
   resolveBillingOrgId: (...a: unknown[]) => mockResolveBillingOrgId(...a),
 }));
 
-vi.mock('@server/queueHandlers/imageEdit', () => ({
+vi.mock('@server/imageGenerations/imageEdit', () => ({
   getImageEdit: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
 }));
 

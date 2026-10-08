@@ -72,6 +72,7 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
       name: 'New Notebook',
       retrievalTags: ['datalake:a', 'datalake:b'],
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       corpusGroundingMode: 'inline',
     });
     expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-2' });
@@ -93,6 +94,7 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
       name: 'New Notebook',
       retrievalTags: ['datalake:a', 'datalake:b'],
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       corpusGroundingMode: 'retrieve',
       preauthorizedLakeIds: ['lake-a'],
     });
@@ -113,6 +115,7 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
       name: 'New Notebook',
       retrievalTags: ['datalake:a'],
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       corpusGroundingMode: 'retrieve',
     });
   });
