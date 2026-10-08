@@ -631,6 +631,21 @@ describe('mapApiError', () => {
     expect(msg).not.toContain('API key forbidden');
   });
 
+  it('keeps the API-key scope fallback for a non-CSRF 403 that carries a server body', () => {
+    expect(mapApiError(axiosError(403, { data: { error: 'Insufficient scope' } }), 'http://x', 'files:read')).toBe(
+      "API key forbidden: check the key's scopes and account access (recommended scope: files:read)"
+    );
+  });
+
+  it.each([
+    'CSRF: APP_URL is not configured on this deployment.',
+    'CSRF: APP_URL is not a valid absolute URL on this deployment.',
+    'CSRF: APP_URL does not resolve to a usable origin on this deployment.',
+    'Invalid request origin. CSRF protection triggered (expected https://app.example.com).',
+  ])('passes a csrfProtection 403 message through unchanged: %s', message => {
+    expect(mapApiError(axiosError(403, { data: { error: message } }), 'http://x', 'files:read')).toBe(message);
+  });
+
   it('surfaces a numeric retry-after on 429', () => {
     const msg = mapApiError(axiosError(429, { headers: { 'retry-after': '30' } }), 'http://x');
     expect(msg).toContain('rate limit');
