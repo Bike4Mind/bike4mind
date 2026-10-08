@@ -1,0 +1,54 @@
+{
+  "scenario": "text-to-video.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built from the xAI docs digest (REF poll fields) and the live-probed facts (Bearer auth, request_id submit response). poll_first and the done shape are assumed. Replace with a recording (see record.ts).",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/videos/generations",
+        "body": {
+          "model": "grok-imagine-video-1.5",
+          "prompt": "A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.",
+          "duration": 2,
+          "aspect_ratio": "16:9",
+          "resolution": "480p"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "request_id": "synthetic-text-to-video" }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": { "method": "GET", "path": "/v1/videos/synthetic-text-to-video" },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "status": "pending", "progress": 20 }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": { "method": "GET", "path": "/v1/videos/synthetic-text-to-video" },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": {
+          "status": "done",
+          "progress": 100,
+          "model": "grok-imagine-video-1.5",
+          "video": {
+            "url": "https://vidgen.x.ai/synthetic/text-to-video.mp4",
+            "duration": 2,
+            "respect_moderation": true
+          },
+          "usage": { "cost_in_usd_ticks": 1600000000 }
+        }
+      }
+    }
+  ]
+}

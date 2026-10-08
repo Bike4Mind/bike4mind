@@ -15,7 +15,7 @@ import { modelDiscoveryFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
-import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
+import { isMonitoredStage as _isMonitoredStage, QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -1405,8 +1405,8 @@ if (isMonitoredStage) {
     alarmDescription: 'Quest processing (/process) is failing on the ChatCompletion service',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
-    metricName: 'ProcessingFailed',
-    namespace: 'Lumina5/Quests',
+    metricName: QUEST_METRICS.ProcessingFailed,
+    namespace: QUESTS_NAMESPACE,
     period: 300, // 5 minutes
     statistic: 'Sum',
     threshold: 5,

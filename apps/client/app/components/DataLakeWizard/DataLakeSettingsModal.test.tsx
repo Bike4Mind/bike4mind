@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
@@ -74,6 +74,7 @@ const useGetDataLakesMock = vi.fn(() => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
   useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
+  serverRefusalMessage: (e: unknown) => (e instanceof Error ? e.message : undefined),
   useDataLakeSpend: (...args: unknown[]) => useDataLakeSpendMock(...args),
   useLakeConfigHistory: (...args: unknown[]) => useLakeConfigHistoryMock(...args),
   useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
@@ -334,6 +335,8 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
       </Wrapper>
     );
 
+    // A no-change Save closes without a PUT, so make an unrelated edit to reach the request.
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -386,6 +389,80 @@ describe('DataLakeSettingsModal — public visibility', () => {
     await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
 
     expect(visibilityMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('DataLakeSettingsModal - Save beside a refused visibility change', () => {
+  beforeEach(() => {
+    visibilityMutate.mockReset();
+    updateMutate.mockClear();
+    vi.mocked(toast.success).mockClear();
+  });
+
+  const refusePublish = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole('radio', { name: 'Public' }));
+    await user.click(screen.getByTestId('datalake-publish-confirm-btn'));
+    const options = visibilityMutate.mock.calls.at(-1)[1];
+    act(() => {
+      options.onError(new Error('Clear the gate first.'));
+      options.onSettled();
+    });
+  };
+
+  it('closes a Save with nothing changed without writing or toasting', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await refusePublish(user);
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the refusal on screen and says visibility was not changed on a real save', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await refusePublish(user);
+    expect(screen.getByTestId('datalake-settings-visibility-error')).toHaveTextContent('Clear the gate first.');
+
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+    act(() => updateMutate.mock.calls[0][1].onSuccess());
+
+    expect(toast.success).toHaveBeenCalledWith('Data lake updated. Visibility was not changed.');
+  });
+
+  it('clears the refusal on the next attempt and keeps the plain toast for a normal save', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await refusePublish(user);
+    await user.click(screen.getByRole('radio', { name: 'Public' }));
+    await user.click(screen.getByTestId('datalake-publish-confirm-btn'));
+    expect(screen.queryByTestId('datalake-settings-visibility-error')).toBeNull();
+    act(() => visibilityMutate.mock.calls.at(-1)[1].onSettled());
+
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+    act(() => updateMutate.mock.calls[0][1].onSuccess());
+
+    expect(toast.success).toHaveBeenCalledWith('Data lake updated');
   });
 });
 
@@ -528,6 +605,7 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
       </Wrapper>
     );
 
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -574,6 +652,7 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
       </Wrapper>
     );
 
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -588,6 +667,7 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
       </Wrapper>
     );
 
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -607,10 +687,11 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
       </Wrapper>
     );
 
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
-    expect(updateMutate.mock.calls[0][0]).toMatchObject({ name: 'Open Lake' });
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ name: 'Open Lake renamed' });
     expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('preferredSystemPromptId');
   });
 
@@ -671,6 +752,7 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
       </Wrapper>
     );
 
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -738,6 +820,7 @@ describe('DataLakeSettingsModal \u2014 grounding mode', () => {
       </Wrapper>
     );
 
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -814,6 +897,7 @@ describe('DataLakeSettingsModal - origin', () => {
       </Wrapper>
     );
 
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -1646,6 +1730,7 @@ describe('DataLakeSettingsModal - lake memory toggle', () => {
       </Wrapper>
     );
 
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -1710,6 +1795,7 @@ describe('DataLakeSettingsModal - reader-prompt toggle (injectPromptForReaders)'
       </Wrapper>
     );
 
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);

@@ -3,6 +3,8 @@ export * from './defineEndpoint';
 export { chatContract } from './contracts/chat.contract';
 export { startAgentExecutionContract, getAgentExecutionContract } from './contracts/agentExecutions.contract';
 export { sessionUpdateContract } from './contracts/sessionUpdate.contract';
+export { sessionGetContract } from './contracts/sessionGet.contract';
+export { sessionDeleteContract } from './contracts/sessionDelete.contract';
 export { executeToolContract } from './contracts/tools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
@@ -17,6 +19,7 @@ export { createFileUploadContract, getFileContract } from './contracts/files.con
 export { createEmbeddingsContract } from './contracts/embeddings.contract';
 export { getQuestContract } from './contracts/quest.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
+export { listSessionsContract } from './contracts/sessionList.contract';
 export {
   listDataLakesContract,
   getDataLakeContract,
@@ -25,6 +28,12 @@ export {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './contracts/dataLakes.contract';
-export { generateVideoContract } from './contracts/videoGeneration.contract';
+export {
+  cancelVideoGenerationContract,
+  createVideoGenerationContract,
+  getVideoGenerationContract,
+  listVideoGenerationsContract,
+  listVideoModelsContract,
+} from './contracts/videoGeneration.contract';
 export { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './contracts/voice.contract';
 export { CONTRACTS } from './contracts';

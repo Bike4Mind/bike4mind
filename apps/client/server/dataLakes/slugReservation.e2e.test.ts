@@ -53,4 +53,26 @@ describe('deleted lake slug reservation (real mongod)', () => {
     expect(second.slug).toBe('vendor-contracts-1');
     expect(await dataLakeRepository.findById(first.id)).toMatchObject({ slug: 'vendor-contracts', status: 'deleted' });
   });
+
+  it('a deleted org-scoped lake on a registry slug falls through to the registry lake', async () => {
+    const ORG = '5f9d88b8c1d2a30017a1c444';
+    const lake = await dataLakeService.createDataLake(
+      USER,
+      { name: 'Opti Knowledge', slug: 'opti-knowledge', fileTagPrefix: 'myopti:' },
+      adapters,
+      ORG
+    );
+    expect(lake.slug).toBe('opti-knowledge');
+    // The DB lake admits its creator; the registry lake admits the `Opti` tag.
+    const ctx = { userId: USER, isAdmin: false, userTags: ['Opti'], organizationIds: [ORG] };
+
+    await expect(dataLakeService.assertLakeAccess('opti-knowledge', ctx, adapters)).resolves.toMatchObject({
+      id: lake.id,
+    });
+
+    await dataLakeRepository.update({ id: lake.id, status: 'deleted' });
+    const resolved = await dataLakeService.assertLakeAccess('opti-knowledge', ctx, adapters);
+    expect(resolved.id).toBe('opti-knowledge');
+    expect(dataLakeService.isFallbackLake(resolved)).toBe(true);
+  });
 });

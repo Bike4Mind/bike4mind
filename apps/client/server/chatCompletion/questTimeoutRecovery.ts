@@ -57,6 +57,14 @@ export const ABANDONED_REPLY =
 export const UNFINISHED_REPLY_NOTICE =
   'The response was cut off because the server stopped before it finished, so this answer is incomplete. Please try again.';
 
+/**
+ * The one ERROR-level line every stuck-quest recovery emits, whichever settle site wins (the web
+ * poll, the v1 poll, or the sweep). LiveOps' Slack channel is fed by the ERROR-level subscription
+ * on each log group (infra/logMonitor.ts), so this string is a stable filter key - keep it ASCII
+ * and greppable. The `via` field on the call names the path that recovered.
+ */
+export const STUCK_QUEST_RECOVERED_LOG = '[QuestTimeoutRecovery] Recovered stuck quest';
+
 export const TIMED_OUT_RUN = { emptyReply: TIMEOUT_REPLY, finishReason: RUN_TIMED_OUT_FINISH_REASON } as const;
 export const ABANDONED_RUN = { emptyReply: ABANDONED_REPLY, finishReason: RUN_ABANDONED_FINISH_REASON } as const;
 type DeadRunKind = typeof TIMED_OUT_RUN | typeof ABANDONED_RUN;

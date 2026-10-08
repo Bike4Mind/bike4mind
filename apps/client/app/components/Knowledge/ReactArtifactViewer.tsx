@@ -35,7 +35,7 @@ import {
 } from '@mui/icons-material';
 import { gray, whiteAlpha } from '@client/app/utils/themes/colors';
 import { ArtifactVersionDropdown } from '@client/app/components/artifacts';
-import { toast } from 'react-hot-toast';
+import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   checkArtifactExists,

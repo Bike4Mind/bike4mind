@@ -79,6 +79,21 @@ describe('userApiKeyService - updateEmbedKey', () => {
     expect(repo.update).toHaveBeenCalledWith({ id: 'key-1', allowedOrigins: [] });
   });
 
+  it('opts OAuth clients into identified sessions, deduped, and turns it off with an empty list', async () => {
+    const repo = makeRepo(embedKey());
+
+    const enabled = await updateEmbedKey(
+      'user1',
+      { keyId: 'key-1', identifiedClientIds: ['client-a', 'client-a', 'client-b'] },
+      deps(repo)
+    );
+    expect(enabled.identifiedClientIds).toEqual(['client-a', 'client-b']);
+    expect(repo.update).toHaveBeenCalledWith({ id: 'key-1', identifiedClientIds: ['client-a', 'client-b'] });
+
+    const disabled = await updateEmbedKey('user1', { keyId: 'key-1', identifiedClientIds: [] }, deps(repo));
+    expect(disabled.identifiedClientIds).toEqual([]);
+  });
+
   it('replaces the branding fields', async () => {
     const repo = makeRepo(embedKey());
 

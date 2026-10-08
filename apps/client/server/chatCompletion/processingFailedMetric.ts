@@ -1,15 +1,9 @@
 import { Resource } from 'sst';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
+import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 import { categorizeToolError } from '@bike4mind/services';
 import { isOperatorFault } from '@bike4mind/services/llm';
 import { emitMetrics } from '@server/utils/cloudwatch';
-
-/**
- * Namespace for quest-lifecycle operational metrics; must match the timeout sweep's
- * (apps/workers/src/cron/questTimeoutSweep.ts). Keep the `ProcessingFailed` metric name and its
- * `Stage` and `Surface` dimensions in sync with infra/alarms.ts.
- */
-const QUESTS_CLOUDWATCH_NAMESPACE = 'Lumina5/Quests';
 
 /** Completion entry point a failure came from: internal `/process`, the CLI SSE/WS routes, or embed chat. */
 export type ProcessingFailureSurface = '/process' | 'cli-sse' | 'cli-ws' | 'embed';
@@ -34,18 +28,18 @@ export async function emitProcessingFailed(surface: ProcessingFailureSurface, er
     if (surface !== '/process' && !isOperatorFault(error)) return;
     const stage = Resource.App.stage;
     const datum = (dimensions: Record<string, string>) => ({
-      name: 'ProcessingFailed',
+      name: QUEST_METRICS.ProcessingFailed,
       value: 1,
       dimensions,
       unit: StandardUnit.Count,
     });
     const surfaceDatum = datum({ Stage: stage, Surface: surface });
     if (surface !== '/process') {
-      await emitMetrics(QUESTS_CLOUDWATCH_NAMESPACE, [surfaceDatum]);
+      await emitMetrics(QUESTS_NAMESPACE, [surfaceDatum]);
       return;
     }
     const errorClass = categorizeToolError(error instanceof Error ? error.message : String(error));
-    await emitMetrics(QUESTS_CLOUDWATCH_NAMESPACE, [
+    await emitMetrics(QUESTS_NAMESPACE, [
       datum({ Stage: stage }),
       datum({ Stage: stage, ErrorClass: errorClass }),
       surfaceDatum,

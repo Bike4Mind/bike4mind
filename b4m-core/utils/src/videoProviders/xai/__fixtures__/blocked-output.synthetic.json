@@ -1,0 +1,48 @@
+{
+  "scenario": "blocked-output.synthetic",
+  "synthetic": true,
+  "description": "Transcribed from a live response on 2026-10-06: a blocked scenario was accepted at submit, then GET /v1/videos/{id} answered HTTP 400 with this body (usage still billed). The exchange wrapper, request id and redacted prompt are hand-built. Replace with a recording once the recorder saves it.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/videos/generations",
+        "body": {
+          "model": "grok-imagine-video-1.5",
+          "prompt": "<redacted:blocked-prompt>",
+          "duration": 2,
+          "aspect_ratio": "16:9",
+          "resolution": "480p"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "request_id": "synthetic-blocked-output" }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": { "method": "GET", "path": "/v1/videos/synthetic-blocked-output" },
+      "response": {
+        "status": 202,
+        "headers": { "content-type": "application/json" },
+        "body": { "status": "pending", "progress": 1 }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": { "method": "GET", "path": "/v1/videos/synthetic-blocked-output" },
+      "response": {
+        "status": 400,
+        "headers": { "content-type": "application/json" },
+        "body": {
+          "code": "imagine:content-moderated",
+          "error": "Generated video rejected by content moderation.",
+          "usage": { "cost_in_usd_ticks": 1600000000 }
+        }
+      }
+    }
+  ]
+}

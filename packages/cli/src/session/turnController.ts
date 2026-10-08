@@ -144,7 +144,8 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
   // Check for auto-compact before processing
   let activeSession = storeSession;
   if (config?.preferences.autoCompact !== false && activeSession.messages.length >= 6) {
-    const tokenCounter = getTokenCounter();
+    // Calibrate to the session's model so the 80% trigger matches its real tokenizer.
+    const tokenCounter = getTokenCounter().forModel(activeSession.model);
     const contextWindow = tokenCounter.getContextWindow(activeSession.model, availableModels);
 
     const systemPrompt = buildSystemPrompt(config?.preferences.promptVariant ?? 'current', {
@@ -220,6 +221,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
   const abortController = new AbortController();
   setAbortController(abortController);
 
+  let pendingAssistantId: string | undefined;
   try {
     // Check if message contains images and build multimodal message if needed.
     // any: content is either the raw string or the adapter's multimodal content
@@ -251,6 +253,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         steps: [],
       },
     };
+    pendingAssistantId = pendingAssistantMessage.id;
 
     // Add user message to session.messages (already complete)
     // Use activeSession which may have been updated by auto-compact
@@ -391,6 +394,11 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     // Auto-save session
     await sessionStore.save(updatedSession);
   } catch (error) {
+    // Read before clearing: on abort the live trace is the only record of the
+    // steps that ran, since agent.run never returned its result.steps.
+    const stepsBeforeAbort = useCliStore.getState().pendingMessages.find(m => m.id === pendingAssistantId)
+      ?.metadata?.steps;
+
     // Clear pending messages on error
     useCliStore.getState().clearPendingMessages();
 
@@ -408,6 +416,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
           timestamp: new Date().toISOString(),
           metadata: {
             cancelled: true,
+            ...(stepsBeforeAbort?.length ? { steps: stepsBeforeAbort } : {}),
           },
         };
 

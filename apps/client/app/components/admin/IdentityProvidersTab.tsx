@@ -23,7 +23,7 @@ import {
   IconButton,
 } from '@mui/joy';
 import { Add, Edit, Delete, Info, Visibility, VisibilityOff } from '@mui/icons-material';
-import toast from 'react-hot-toast';
+import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 

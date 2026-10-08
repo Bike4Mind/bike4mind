@@ -17,6 +17,11 @@ export const DataLakeResourceSchema = z.object({
   id: z.string(),
   name: z.string(),
   slug: z.string(),
+  /**
+   * The value to pass in a session's `lakeScope`. Not derivable from `slug` + `organization_id`: a
+   * lake moved into an org keeps the `datalake:<slug>` tag it was created with.
+   */
+  datalake_tag: z.string(),
   description: z.string().nullable(),
   organization_id: z.string().nullable(),
   is_public: z.boolean(),

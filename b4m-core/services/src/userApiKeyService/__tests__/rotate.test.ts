@@ -16,13 +16,15 @@ vi.mock('bcryptjs', async () => {
 function makeSyncedRepo() {
   let stored: IUserApiKeyDocument | null = null;
 
+  const storeDoc = (doc: Record<string, unknown>) => {
+    stored = { ...doc, id: 'key-1', createdAt: new Date() } as unknown as IUserApiKeyDocument;
+    return Promise.resolve(stored);
+  };
   const repo = {
     countActiveByUserId: vi.fn().mockResolvedValue(0),
     countActiveByProductId: vi.fn().mockResolvedValue(0),
-    create: vi.fn().mockImplementation((doc: Record<string, unknown>) => {
-      stored = { ...doc, id: 'key-1', createdAt: new Date() } as unknown as IUserApiKeyDocument;
-      return Promise.resolve(stored);
-    }),
+    create: vi.fn().mockImplementation(storeDoc),
+    createIfUnderCap: vi.fn().mockImplementation(storeDoc),
     // rotate.ts mutates apiKey in place then calls update - the mutation lands on `stored` too
     findByUserIdAndId: vi.fn().mockImplementation(() => Promise.resolve(stored)),
     update: vi.fn().mockResolvedValue(undefined),

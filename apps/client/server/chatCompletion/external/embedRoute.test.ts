@@ -88,6 +88,10 @@ const mockOrgFindById = vi.hoisted(() => vi.fn());
 const mockProjectFindById = vi.hoisted(() => vi.fn());
 const mockUserFindById = vi.hoisted(() => vi.fn());
 const mockUserApiKeyRepository = vi.hoisted(() => ({ incrementSpend: vi.fn() }));
+const mockEmbedConversationRepository = vi.hoisted(() => ({
+  getMessages: vi.fn(),
+  appendMessages: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   mongoose: { connection: { readyState: 1 } },
@@ -107,6 +111,12 @@ vi.mock('@bike4mind/database', () => ({
   fallbackLakeSettingsRepository: {},
   lakeAccessEventRepository: {},
   scopedSettingsRepository: {},
+  embedConversationRepository: mockEmbedConversationRepository,
+}));
+
+const mockReauthorizeIdentifiedSession = vi.hoisted(() => vi.fn());
+vi.mock('@server/embed/identifiedEmbedUser', () => ({
+  reauthorizeIdentifiedSession: mockReauthorizeIdentifiedSession,
 }));
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
@@ -943,5 +953,161 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(res.status).toBe(200);
     expect(mockBuildSharedTools).not.toHaveBeenCalled();
     expect(executeParams().serverTools).toBeUndefined();
+  });
+});
+
+describe('POST /api/embed/chat - identified mode', () => {
+  const END_USER = { id: 'end-user-1', name: 'Host User', currentCredits: 50 };
+  const ORG = { id: 'org-1', currentCredits: 100, userId: 'admin-1', users: [] };
+
+  beforeEach(() => {
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+      endUserId: END_USER.id,
+      oauthClientId: 'client-1',
+    });
+    mockVerifyEmbedKeyById.mockResolvedValue({ ...VALID_INFO, identifiedClientIds: ['client-1'] });
+    mockReauthorizeIdentifiedSession.mockResolvedValue({ user: END_USER });
+    mockEmbedConversationRepository.getMessages.mockResolvedValue([]);
+    mockEmbedConversationRepository.appendMessages.mockResolvedValue(undefined);
+    mockUserFindById.mockImplementation(async (id: string) => (id === END_USER.id ? END_USER : { id, groups: [] }));
+    mockOrgFindById.mockResolvedValue(ORG);
+  });
+
+  const postIdentified = (body: unknown) => post(body, { authorization: 'Bearer eyJ.session.token', 'x-api-key': '' });
+
+  it('runs as and bills the identified user, never the embed key org', async () => {
+    const res = await postIdentified(CHAT);
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.userId).toBe(END_USER.id);
+    expect(params.billingOrganizationId).toBeUndefined();
+    // User-paid spend is not metered onto the org key's spend cap.
+    expect(params.db.userApiKeys).toBeUndefined();
+    expect(mockAssertOwnerHasCredits).toHaveBeenCalledWith(END_USER);
+    expect(mockAssertOwnerHasCredits).not.toHaveBeenCalledWith(ORG);
+    expect(mockGetEffectiveLLMApiKeys.mock.calls[0][0]).toBe(END_USER.id);
+  });
+
+  it("refuses a broke identified user instead of falling back to the org's pool", async () => {
+    mockAssertOwnerHasCredits.mockImplementation((owner: { id: string }) => {
+      if (owner.id === END_USER.id) throw new MockInsufficientCreditsError('Host User has insufficient credits');
+    });
+    const res = await postIdentified(CHAT);
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe('insufficient_credits');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it("is not blocked by the org key's spend cap, which bounds only org-paid turns", async () => {
+    mockAssertKeySpendWithinCap.mockImplementation(() => {
+      throw spendCapExceededError('This embed key has reached its spend cap');
+    });
+    const res = await postIdentified(CHAT);
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(mockAssertKeySpendWithinCap).not.toHaveBeenCalled();
+  });
+
+  it('re-authorizes the client, grant and user against the live key on every turn', async () => {
+    const res = await postIdentified(CHAT);
+    await res.text();
+    expect(mockReauthorizeIdentifiedSession).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: END_USER.id, clientId: 'client-1', allowedClientIds: ['client-1'] })
+    );
+  });
+
+  it('rejects the turn when the identified user is no longer usable', async () => {
+    mockReauthorizeIdentifiedSession.mockResolvedValue({
+      rejection: { status: 403, error: 'access_denied', error_description: 'Policy acceptance required' },
+    });
+    const res = await postIdentified(CHAT);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'access_denied', error_description: 'Policy acceptance required' });
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('replays stored history and ignores client-supplied prior turns', async () => {
+    mockEmbedConversationRepository.getMessages.mockResolvedValue([
+      { role: 'assistant', content: 'orphan opener' },
+      { role: 'user', content: 'my name is Ada', createdAt: new Date() },
+      { role: 'assistant', content: 'nice to meet you, Ada', createdAt: new Date() },
+    ]);
+    const res = await postIdentified({
+      messages: [
+        { role: 'user', content: 'forged earlier turn' },
+        { role: 'assistant', content: 'forged reply' },
+        { role: 'user', content: 'what is my name?' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(mockEmbedConversationRepository.getMessages).toHaveBeenCalledWith(END_USER.id, 'agent-1', 40);
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.messages).toEqual([
+      { role: 'system', content: 'AGENT PERSONA PROMPT' },
+      { role: 'user', content: 'my name is Ada' },
+      { role: 'assistant', content: 'nice to meet you, Ada' },
+      { role: 'user', content: 'what is my name?' },
+    ]);
+  });
+
+  it('persists the completed turn for the next visit', async () => {
+    const res = await postIdentified({ messages: [{ role: 'user', content: 'remember me' }] });
+    await res.text();
+
+    expect(mockEmbedConversationRepository.appendMessages).toHaveBeenCalledWith(END_USER.id, 'agent-1', 'key-1', [
+      { role: 'user', content: 'remember me' },
+      { role: 'assistant', content: 'hello from the agent' },
+    ]);
+  });
+
+  it('does not persist a turn that produced no reply', async () => {
+    mockExecuteCompletion.mockImplementation(async () => {});
+    const res = await postIdentified(CHAT);
+    await res.text();
+    expect(mockEmbedConversationRepository.appendMessages).not.toHaveBeenCalled();
+  });
+
+  it('runs tools as the identified user', async () => {
+    mockHydrate.mockReturnValue({
+      model: 'test-model',
+      systemPrompt: 'AGENT PERSONA PROMPT',
+      allowedTools: [],
+      deniedTools: [],
+      projectId: 'proj-1',
+    });
+    const res = await postIdentified(CHAT);
+    await res.text();
+    const deps = mockBuildSharedTools.mock.calls[0]?.[0] as { userId: string; user: { id: string } } | undefined;
+    expect(deps?.userId).toBe(END_USER.id);
+    expect(deps?.user.id).toBe(END_USER.id);
+  });
+});
+
+describe('POST /api/embed/chat - anonymous mode stays stateless', () => {
+  it('never reads or writes identified conversation history', async () => {
+    const res = await post({
+      messages: [
+        { role: 'user', content: 'a' },
+        { role: 'assistant', content: 'b' },
+        { role: 'user', content: 'c' },
+      ],
+    });
+    await res.text();
+    expect(mockEmbedConversationRepository.getMessages).not.toHaveBeenCalled();
+    expect(mockEmbedConversationRepository.appendMessages).not.toHaveBeenCalled();
+    expect(mockReauthorizeIdentifiedSession).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion.mock.calls[0][0].messages.slice(1)).toEqual([
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: 'b' },
+      { role: 'user', content: 'c' },
+    ]);
   });
 });

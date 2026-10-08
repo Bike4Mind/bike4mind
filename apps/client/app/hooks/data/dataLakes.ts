@@ -578,23 +578,25 @@ export async function downloadLakeAccessCsv(dataLakeId: string): Promise<void> {
 }
 
 /**
- * The slug the server would mint for a new lake named `name` in the active org, `-N` suffix
- * included. The client cannot compute it: disambiguation counts lakes it cannot see, deleted ones
- * included. Advisory (create stays authoritative), and never cached, since any create or delete
- * can change the answer.
+ * The slug and tag prefix the server would mint for a new lake named `name` in the active org,
+ * `-N` suffix included. `tagPrefix` is the first free prefix starting from the given one, or from
+ * the name-derived default when it is omitted, and null when that base is unusable. The client
+ * cannot compute either: disambiguation counts lakes it cannot see (deleted, archived, gated).
+ * Advisory (create stays authoritative), and never cached, since any create or delete can change
+ * the answer.
  */
-export function useDataLakeSlugPreview(name: string, enabled = true) {
+export function useDataLakeSlugPreview(name: string, tagPrefix: string | undefined, enabled = true) {
   const orgId = activeOrgId();
   return useQuery({
-    queryKey: dataLakeKeys.slugPreview(name, orgId),
+    queryKey: dataLakeKeys.slugPreview(name, orgId, tagPrefix),
     enabled,
     retry: false,
     staleTime: 0,
     queryFn: async () => {
-      const response = await api.get<{ slug: string }>('/api/data-lakes/slug-preview', {
-        params: { name, ...(orgId ? { organizationId: orgId } : {}) },
+      const response = await api.get<{ slug: string; tagPrefix: string | null }>('/api/data-lakes/slug-preview', {
+        params: { name, ...(orgId ? { organizationId: orgId } : {}), ...(tagPrefix ? { tagPrefix } : {}) },
       });
-      return response.data.slug;
+      return response.data;
     },
   });
 }

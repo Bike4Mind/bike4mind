@@ -7,9 +7,10 @@ import {
   UnprocessableEntityError,
   redactSessionForClient,
 } from '@bike4mind/common';
-import { ChatCompletionInvoke } from '@bike4mind/services/llm';
+import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -88,6 +89,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       projectId: body.projectId,
       fabFileIds: body.fabFileIds,
       agentIds,
+      origin: resolveSessionOrigin(req),
       user: req.user,
       ability: req.ability,
       logger: req.logger,

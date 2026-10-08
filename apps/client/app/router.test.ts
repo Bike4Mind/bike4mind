@@ -77,3 +77,11 @@ describe('QA status routes', () => {
     expect(chain('/new')).toContain('/layout');
   });
 });
+
+describe('Video studio route', () => {
+  it('renders /studio/video inside the notebook layout', () => {
+    const ids = router.matchRoutes('/studio/video', {}).map(match => match.routeId);
+    expect(ids).toContain('/layout');
+    expect(ids.some(id => id.endsWith('/studio/video'))).toBe(true);
+  });
+});

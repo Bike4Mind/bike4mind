@@ -4,6 +4,7 @@ import {
   createVideoProviderRegistry,
   ProviderSubmitError,
   TestVideoProvider,
+  ProviderOutputUnavailableError,
   VideoOutputTooLargeError,
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
@@ -11,6 +12,7 @@ import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
 import { GenerationJobEngine } from '../generationJobs/engine';
 import { MAX_STEP_ATTEMPTS } from '../generationJobs/backoff';
+import { runGenerationJobSweep, SWEEP_OVERDUE_MS } from '../generationJobs/sweep';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import { createVideoJob } from './createVideoJob';
@@ -98,6 +100,7 @@ const stubProvider = (overrides: Partial<VideoProvider>): VideoProvider => {
   const base = new TestVideoProvider();
   return {
     id: base.id,
+    models: base.models,
     submit: overrides.submit ?? base.submit.bind(base),
     poll: overrides.poll ?? base.poll.bind(base),
     fetchOutput: overrides.fetchOutput ?? base.fetchOutput.bind(base),
@@ -153,7 +156,7 @@ describe('video job end to end with the test provider', () => {
     });
     expect(job.settledCredits).toBe(charged);
     expect(t.deps.recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4 })
+      expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4, status: 'ok' })
     );
   });
 
@@ -309,6 +312,74 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.recordUsage).not.toHaveBeenCalled();
   });
 
+  describe('a block the provider billed', () => {
+    const billedBlock: VideoProvider['poll'] = async () => ({
+      status: 'blocked',
+      reason: 'moderation',
+      billed: true,
+      raw: { code: 'content-moderated' },
+    });
+
+    it('stays blocked but settles the hold at the requested duration instead of releasing it', async () => {
+      const t = setup({ providers: createVideoProviderRegistry([stubProvider({ poll: billedBlock })]) });
+      const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+      await t.runToCompletion();
+      const job = t.jobOf(created);
+      const hold = job.creditHold;
+      if (!hold) throw new Error('expected a hold');
+      expect(job).toMatchObject({ state: 'blocked', error: { code: 'content_blocked' } });
+      expect(job.payload.billedBlock).toBe(true);
+      expect(settleCreditHold).toHaveBeenCalledTimes(1);
+      // test-video: the requested 4s at $0.01/s is exactly what was held.
+      const [settledHold, charged] = vi.mocked(settleCreditHold).mock.calls[0];
+      expect(settledHold).toEqual(hold);
+      expect(charged).toBe(hold.reservedCredits);
+      expect(job.settledCredits).toBe(charged);
+      expect(releaseCreditHold).not.toHaveBeenCalled();
+      // The spend is real, but no video was delivered: the row must not read as an ordinary success.
+      expect(t.deps.recordUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4, status: 'refusal' })
+      );
+    });
+
+    it('settles, not releases, when the sweep recovers it after a crash before terminal handling', async () => {
+      const t = setup({ providers: createVideoProviderRegistry([stubProvider({ poll: billedBlock })]) });
+      const claim = t.repository.claimTerminalHandling.bind(t.repository);
+      const claimTerminalHandling = vi
+        .spyOn(t.repository, 'claimTerminalHandling')
+        .mockRejectedValueOnce(new Error('worker died'))
+        .mockImplementation(claim);
+      const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+      await expect(t.runToCompletion()).rejects.toThrow('worker died');
+      expect(t.jobOf(created)).toMatchObject({ state: 'blocked', terminalHandlingClaimedAt: null });
+      expect(settleCreditHold).not.toHaveBeenCalled();
+
+      t.advance(SWEEP_OVERDUE_MS + 60_000);
+      const { requeued } = await runGenerationJobSweep(t.deps);
+      expect(requeued).toBe(1);
+      await t.runToCompletion();
+
+      const job = t.jobOf(created);
+      expect(claimTerminalHandling).toHaveBeenCalledTimes(2);
+      expect(job.terminalHandledAt).toBeTruthy();
+      expect(settleCreditHold).toHaveBeenCalledTimes(1);
+      expect(job.settledCredits).toBe(job.creditHold?.reservedCredits);
+      expect(releaseCreditHold).not.toHaveBeenCalled();
+    });
+  });
+
+  it('a block at submit time, where nothing was generated, still releases the whole hold', async () => {
+    const submitBlocked: VideoProvider['poll'] = async () => ({ status: 'blocked', reason: 'submit', raw: null });
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ poll: submitBlocked })]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    const job = t.jobOf(created);
+    expect(job).toMatchObject({ state: 'blocked', settledCredits: 0 });
+    expect(job.payload.billedBlock).toBeUndefined();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
   it('a provider failure releases the hold', async () => {
     const t = setup();
     const created = await createVideoJob({ user, request: request('a cat [fail]'), source: 'studio' }, t.deps);
@@ -334,6 +405,23 @@ describe('video job end to end with the test provider', () => {
     expect(settleCreditHold).not.toHaveBeenCalled();
   });
 
+  it('a definitive, non-retryable submit rejection fails at once and releases the whole hold', async () => {
+    const submit = vi.fn<VideoProvider['submit']>(async () => {
+      throw new ProviderSubmitError('gemini_omni_http_401', true, { error: { message: 'raw' } }, false);
+    });
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({
+      state: 'failed',
+      attempts: 0,
+      error: { code: 'provider_error', message: 'gemini_omni_http_401' },
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
   it('a non-definitive submit error is an unknown outcome: orphaned_submit', async () => {
     const t = setup({
       providers: createVideoProviderRegistry([
@@ -354,9 +442,11 @@ describe('video job end to end with the test provider', () => {
     const submit = vi.fn<VideoProvider['submit']>();
     const t = setup({
       providers: createVideoProviderRegistry([stubProvider({ submit })]),
-      resolveApiKey: async () => {
-        throw new Error('secrets store unavailable');
-      },
+      // The first answer is createVideoJob's key check; the outage hits the submit step.
+      resolveApiKey: vi
+        .fn<VideoJobDeps['resolveApiKey']>()
+        .mockResolvedValueOnce('key')
+        .mockRejectedValue(new Error('secrets store unavailable')),
     });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     await t.runToCompletion();
@@ -436,8 +526,37 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.saveToFiles).not.toHaveBeenCalled();
   });
 
-  it('fails cleanly when no API key resolves for the provider', async () => {
-    const t = setup({ resolveApiKey: async () => null });
+  it('fails once with provider_error and releases the hold when the output is gone', async () => {
+    const fetchOutput = vi.fn<VideoProvider['fetchOutput']>(async () => {
+      throw new ProviderOutputUnavailableError(404);
+    });
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ fetchOutput })]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(fetchOutput).toHaveBeenCalledTimes(1);
+    expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
+  it('passes the step signal to both saves', async () => {
+    const t = setup({
+      saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })),
+    });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'succeeded', payload: { output: { location: 'generated' } } });
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(t.deps.saveToGeneratedBucket).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+  });
+
+  it('fails cleanly when the API key is gone by the time the job runs', async () => {
+    const t = setup({
+      resolveApiKey: vi.fn<VideoJobDeps['resolveApiKey']>().mockResolvedValueOnce('key').mockResolvedValue(null),
+    });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({
@@ -449,7 +568,10 @@ describe('video job end to end with the test provider', () => {
   it('treats the expired-key sentinel as a missing key and never calls the provider', async () => {
     const submit = vi.fn<VideoProvider['submit']>();
     const t = setup({
-      resolveApiKey: async () => EXPIRED_KEY_SENTINEL,
+      resolveApiKey: vi
+        .fn<VideoJobDeps['resolveApiKey']>()
+        .mockResolvedValueOnce('key')
+        .mockResolvedValue(EXPIRED_KEY_SENTINEL),
       providers: createVideoProviderRegistry([stubProvider({ submit })]),
     });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
@@ -465,7 +587,8 @@ describe('video job end to end with the test provider', () => {
     const poll = vi.fn<VideoProvider['poll']>();
     const resolveApiKey = vi
       .fn<VideoJobDeps['resolveApiKey']>()
-      .mockResolvedValueOnce('key')
+      .mockResolvedValueOnce('key') // createVideoJob
+      .mockResolvedValueOnce('key') // submit
       .mockResolvedValue(EXPIRED_KEY_SENTINEL);
     const t = setup({ resolveApiKey, providers: createVideoProviderRegistry([stubProvider({ poll })]) });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
@@ -478,7 +601,8 @@ describe('video job end to end with the test provider', () => {
     const cancel = vi.fn<NonNullable<VideoProvider['cancel']>>(async () => undefined);
     const resolveApiKey = vi
       .fn<VideoJobDeps['resolveApiKey']>()
-      .mockResolvedValueOnce('key')
+      .mockResolvedValueOnce('key') // createVideoJob
+      .mockResolvedValueOnce('key') // submit
       .mockResolvedValue(EXPIRED_KEY_SENTINEL);
     const t = setup({ resolveApiKey, providers: createVideoProviderRegistry([stubProvider({ cancel })]) });
     const warn = vi.spyOn(t.deps.logger, 'warn');

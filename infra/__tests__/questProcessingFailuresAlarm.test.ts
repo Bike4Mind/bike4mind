@@ -30,12 +30,12 @@ describe('questProcessingFailures alarm', () => {
   });
 
   it('watches the ProcessingFailed series the emitter writes for /process', () => {
-    expect(alarm).toMatch(/metricName: 'ProcessingFailed'/);
-    expect(alarm).toMatch(/namespace: 'Lumina5\/Quests'/);
+    expect(alarm).toMatch(/metricName: QUEST_METRICS\.ProcessingFailed/);
+    expect(alarm).toMatch(/namespace: QUESTS_NAMESPACE/);
     expect(alarm).toMatch(/dimensions: \{ Stage: \$app\.stage, Surface: '\/process' \}/);
 
-    expect(EMITTER_SOURCE).toMatch(/QUESTS_CLOUDWATCH_NAMESPACE = 'Lumina5\/Quests'/);
-    expect(EMITTER_SOURCE).toMatch(/name: 'ProcessingFailed'/);
+    expect(EMITTER_SOURCE).toMatch(/emitMetrics\(QUESTS_NAMESPACE/);
+    expect(EMITTER_SOURCE).toMatch(/name: QUEST_METRICS\.ProcessingFailed/);
     expect(EMITTER_SOURCE).toMatch(/datum\(\{ Stage: stage, Surface: surface \}\)/);
   });
 
