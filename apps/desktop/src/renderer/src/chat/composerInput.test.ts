@@ -187,7 +187,7 @@ describe('composerPlaceholder', () => {
 describe('the `/` menu', () => {
   it('opens on a slash typed into an empty composer', () => {
     expect(skillQuery('/')).toBe('');
-    expect(matchCommands('').map(command => command.name)).toEqual(['clear', 'compact']);
+    expect(matchCommands('', 'code').map(command => command.name)).toEqual(['clear', 'compact', 'pr']);
   });
 
   // A slash mid-sentence is punctuation, and a path is a path. Either opening a menu would mean
@@ -197,10 +197,21 @@ describe('the `/` menu', () => {
     expect(skillQuery('see src/clear.ts')).toBeNull();
   });
 
+  it('offers /pr only in a Code session, and treats it as text elsewhere', () => {
+    expect(matchCommands('', 'chat').map(command => command.name)).toEqual(['clear', 'compact']);
+    expect(composerSubmitAction('/pr https://github.com/example-org/widgets/pull/611', 'chat')).toEqual({
+      kind: 'send',
+    });
+    expect(composerSubmitAction('/pr https://github.com/example-org/widgets/pull/611', 'code')).toMatchObject({
+      kind: 'command',
+      invocation: { command: { name: 'pr' } },
+    });
+  });
+
   it('filters as the name is typed, and empties when nothing matches', () => {
-    expect(matchCommands('com').map(command => command.name)).toEqual(['compact']);
-    expect(matchCommands('cle').map(command => command.name)).toEqual(['clear']);
-    expect(matchCommands('zz')).toEqual([]);
+    expect(matchCommands('com', 'code').map(command => command.name)).toEqual(['compact']);
+    expect(matchCommands('cle', 'code').map(command => command.name)).toEqual(['clear']);
+    expect(matchCommands('zz', 'code')).toEqual([]);
   });
 
   it('runs the highlighted row on Enter and on Tab, and walks it with the arrows', () => {
@@ -230,7 +241,7 @@ describe('the `/` menu', () => {
 
 describe('composerSubmitAction', () => {
   it('runs a command, with whatever followed its name', () => {
-    const action = composerSubmitAction('/compact focus on the auth work');
+    const action = composerSubmitAction('/compact focus on the auth work', 'chat');
     expect(action.kind).toBe('command');
     if (action.kind !== 'command') throw new Error('expected a command');
     expect(action.invocation.command.name).toBe('compact');
@@ -238,7 +249,7 @@ describe('composerSubmitAction', () => {
   });
 
   it('runs a bare command with no argument', () => {
-    const action = composerSubmitAction('/clear');
+    const action = composerSubmitAction('/clear', 'chat');
     expect(action.kind).toBe('command');
     if (action.kind !== 'command') throw new Error('expected a command');
     expect(action.invocation.args).toBe('');
@@ -252,8 +263,8 @@ describe('composerSubmitAction', () => {
   it.each(['/foo', '/etc/hosts', '/review src/x.ts', 'clear', '/ clear', 'tell me about /compact'])(
     'sends %s as an ordinary message',
     text => {
-      expect(composerSubmitAction(text)).toEqual({ kind: 'send' });
-      expect(parseCommandInvocation(text)).toBeNull();
+      expect(composerSubmitAction(text, 'code')).toEqual({ kind: 'send' });
+      expect(parseCommandInvocation(text, 'code')).toBeNull();
     }
   );
 });

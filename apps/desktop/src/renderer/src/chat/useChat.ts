@@ -620,6 +620,16 @@ export function useConversation(
       if (!sessionId) return;
       setSendError(null);
       setNotice(null);
+      if (name === 'pr') {
+        const bound = args
+          ? await window.b4m.pullRequests.bind(sessionId, args)
+          : {
+              ok: false as const,
+              error: 'Paste the PR URL after /pr, e.g. /pr https://github.com/owner/repo/pull/123',
+            };
+        if (!bound.ok) setSendError(bound.error);
+        return;
+      }
       setCommandProgress(name === 'compact' ? 'Summarising this conversation...' : null);
       try {
         const result =

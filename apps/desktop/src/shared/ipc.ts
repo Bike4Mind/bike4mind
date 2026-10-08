@@ -39,6 +39,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
+import type { PrActionResult, PrBarState, PrOption } from './pullRequest';
 import type { SkillsState } from './skills';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
@@ -209,6 +210,18 @@ export const IPC_CHANNELS = {
   devLogRecords: 'devlog:records',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
+  /**
+   * A conversation's pull request. Renderer -> main, every one of them a user's click or the
+   * conversation coming on screen; nothing the model can reach calls these. The automations
+   * (auto-merge in particular) are switched on here and nowhere else.
+   */
+  prWatch: 'pr:watch',
+  prBind: 'pr:bind',
+  prDismiss: 'pr:dismiss',
+  prRefresh: 'pr:refresh',
+  prSetOption: 'pr:set-option',
+  /** main -> renderer push; one conversation's bar changed. */
+  prStateChanged: 'pr:state-changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -580,6 +593,23 @@ export interface DesktopApi {
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
     grantAccess(): Promise<ToolAccessState>;
     revokeAccess(root: string): Promise<ToolAccessState>;
+  };
+  pullRequests: {
+    /**
+     * Say which conversation this window shows (null for none). Answers with its bar, or null
+     * when it has no PR; a read starts in main when the one in hand is missing or stale.
+     */
+    watch(sessionId: string | null): Promise<PrBarState | null>;
+    /** Bind a pasted PR URL to the conversation. */
+    bind(sessionId: string, url: string): Promise<PrActionResult>;
+    dismiss(sessionId: string): Promise<PrActionResult>;
+    refresh(sessionId: string): Promise<void>;
+    /**
+     * Switch one automation on or off for this conversation's PR. Each is consent for THAT PR
+     * only; see PrBinding.
+     */
+    setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult>;
+    onStateChanged(listener: (state: PrBarState) => void): () => void;
   };
   shell: {
     /**

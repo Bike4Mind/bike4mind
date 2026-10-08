@@ -354,3 +354,24 @@ export function SlidersIcon() {
     </Glyph>
   );
 }
+
+/** A conversation's pull request, on the bar above the composer. */
+export function PullRequestIcon() {
+  return (
+    <Glyph>
+      <circle cx="4.5" cy="3.8" r="1.6" />
+      <circle cx="4.5" cy="12.2" r="1.6" />
+      <circle cx="11.5" cy="12.2" r="1.6" />
+      <path d="M4.5 5.4v5.2M11.5 10.6V6.5a2 2 0 00-2-2H7.5M8.8 3.2 7.5 4.5l1.3 1.3" />
+    </Glyph>
+  );
+}
+
+/** Opens in the user's own browser rather than anywhere in this app. */
+export function ExternalLinkIcon() {
+  return (
+    <Glyph>
+      <path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 01-1 1H3.5a1 1 0 01-1-1V5a1 1 0 011-1h3" />
+    </Glyph>
+  );
+}

@@ -6,6 +6,7 @@ import type {
   ChatApprovalOption,
   ChatArtifact,
   ChatAttachment,
+  ChatAutomaticOrigin,
   ChatDiff,
   ChatMedia,
   ChatMessage,
@@ -38,6 +39,7 @@ import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
+import { autoFixToolRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
@@ -376,6 +378,8 @@ interface RawRound {
  * token, and T4's invariant is that tokens never leave this process. Tools run here for the
  * same reason plus a second one - they touch the filesystem, which a sandboxed renderer cannot.
  */
+export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
+
 export class ChatService {
   /** The events of each reply in flight since its 'start'; see getSession. */
   private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
@@ -439,6 +443,15 @@ export class ChatService {
    * than quietly falling back to 0 and earning a fresh chain. Dropped with the session.
    */
   private readonly turnRelay = new Map<string, { hops: number; sends: number }>();
+
+  /** Sessions whose running turn auto-fix started; their tool calls go through autoFixToolRefusal. */
+  private readonly autoFixTurns = new Set<string>();
+
+  /**
+   * Sends being accepted, per session. A send awaits the store and the model catalog before its
+   * reply is registered in `active`, and an automatic turn must not start inside that gap.
+   */
+  private readonly sending = new Map<string, number>();
 
   /** Instructions and file tree per session, frozen so the cached system prompt never moves. */
   private readonly projectContext: ProjectContextCache;
@@ -521,7 +534,7 @@ export class ChatService {
     const pending = queue.list(sessionId).find(entry => entry.id === queuedId);
     // Another conversation's words. Firing them early is not something the user asked for, and
     // the row offers no control to ask it; this is the guard behind that.
-    if (!pending || pending.relay) return;
+    if (!pending || pending.relay || pending.automatic) return;
 
     const taken = queue.take(sessionId, queuedId);
     if (!taken) return;
@@ -530,6 +543,37 @@ export class ChatService {
     // the stop button does - see ApprovalGate.request. That is an interrupt, not an answer
     // given on the user's behalf: denying ends the turn, where approving would carry it on.
     controller.abort();
+  }
+
+  /** Whether a turn (or a compaction ahead of one) is running in this conversation. */
+  isSessionBusy(sessionId: string): boolean {
+    return this.isBusy(sessionId);
+  }
+
+  /**
+   * Start a turn the app decided on (auto-fix), through the queue a typed-ahead message and a
+   * relay take. Refused while a turn runs or is being accepted, and while the user's own
+   * messages are waiting (a failed turn holds them): the caller waits rather than lining up.
+   * Resolves once the turn is accepted or refused, so a refusal is never mistaken for a start.
+   */
+  async startAutomaticTurn(
+    sessionId: string,
+    text: string,
+    automatic: ChatAutomaticOrigin
+  ): Promise<AutomaticTurnResult> {
+    const queue = this.deps.queue;
+    if (!queue) return { ok: false, busy: false, error: 'This conversation cannot take automatic turns.' };
+    if (this.isBusy(sessionId) || this.sending.has(sessionId) || queue.list(sessionId).length > 0) {
+      return { ok: false, busy: true, error: 'This conversation is busy.' };
+    }
+    const entry = queue.enqueueAutomatic(sessionId, text, automatic);
+    const taken = queue.take(sessionId, entry.id);
+    if (!taken) return { ok: false, busy: true, error: 'This conversation is busy.' };
+    const result = await this.send(sessionId, taken.text, [], taken);
+    if (result.ok) return { ok: true };
+    // Announces the entry gone; an automatic one is never handed to the composer.
+    queue.giveBack(sessionId, [taken], 'refused', result.error);
+    return { ok: false, busy: false, error: result.error };
   }
 
   setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
@@ -981,6 +1025,23 @@ export class ChatService {
     sessionId: string,
     text: string,
     attachments: readonly ChatAttachment[] = [],
+    released?: ChatQueuedMessage,
+    seedHops?: number
+  ): Promise<SendMessageResult> {
+    this.sending.set(sessionId, (this.sending.get(sessionId) ?? 0) + 1);
+    try {
+      return await this.acceptTurn(sessionId, text, attachments, released, seedHops);
+    } finally {
+      const left = (this.sending.get(sessionId) ?? 1) - 1;
+      if (left > 0) this.sending.set(sessionId, left);
+      else this.sending.delete(sessionId);
+    }
+  }
+
+  private async acceptTurn(
+    sessionId: string,
+    text: string,
+    attachments: readonly ChatAttachment[],
     /**
      * Set on the flush path only: the queue entry this turn IS. It stops a message coming out
      * of the queue from falling back into it - that would move it to the tail and reorder the
@@ -1038,7 +1099,8 @@ export class ChatService {
      * another just by sending it those eight characters. A relay is data; only this window's
      * composer invokes a skill.
      */
-    const invocation = this.deps.skills && !released?.relay ? parseSkillInvocation(prompt) : null;
+    const invocation =
+      this.deps.skills && !released?.relay && !released?.automatic ? parseSkillInvocation(prompt) : null;
     const skillCommand = invocation
       ? await this.deps.skills?.get(existing.project?.workingDirectory ?? null, invocation.name)
       : undefined;
@@ -1123,6 +1185,9 @@ export class ChatService {
       content,
       createdAt: new Date().toISOString(),
       ...(released?.relay ? { system: true, relay: released.relay } : {}),
+      ...(released?.automatic
+        ? { system: true, automatic: released.automatic, display: `Auto-fix: ${released.automatic.summary}` }
+        : {}),
       ...(attached.length > 0 ? { attachments: attached } : {}),
       ...(skill ? { skill } : {}),
     };
@@ -1146,6 +1211,8 @@ export class ChatService {
     // it: runReply emits 'start' the moment it is called.
     if (released) this.deps.queue?.sent(sessionId, released.id, userMessage);
 
+    if (released?.automatic) this.autoFixTurns.add(sessionId);
+    else this.autoFixTurns.delete(sessionId);
     const replyId = this.startReply(session, api, undefined, released?.relay?.hops ?? seedHops ?? 0);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
@@ -1392,6 +1459,7 @@ export class ChatService {
         // telling activity this reply ended would then mark a live one idle.
         if (this.active.get(sessionId) !== controller) return;
         this.active.delete(sessionId);
+        this.autoFixTurns.delete(sessionId);
         this.deps.activity?.replyEnded(sessionId);
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
@@ -2166,6 +2234,14 @@ export class ChatService {
           this.emit({ type: 'tool-start', sessionId, messageId, call });
           this.emit({ type: 'tool-end', sessionId, messageId, call: unknown });
           return unknown;
+        }
+
+        const refusal = this.autoFixTurns.has(sessionId) ? autoFixToolRefusal(request.name, call.input) : null;
+        if (refusal) {
+          const refused: ChatToolCall = { ...call, status: 'denied', error: refusal };
+          this.emit({ type: 'tool-start', sessionId, messageId, call });
+          this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+          return refused;
         }
 
         // Collected as the tool runs and folded onto the settled call. The media and the notice

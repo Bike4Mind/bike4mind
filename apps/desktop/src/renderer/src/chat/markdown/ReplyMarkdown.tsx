@@ -6,6 +6,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+import { fastRenderer } from './highlightElements';
 import { codeBlockSx, markdownSx } from './markdownSx';
 import { closeOpenFence } from './streamingMarkdown';
 import { SYNTAX_THEMES } from './syntaxTheme';
@@ -48,7 +49,14 @@ const CodeBlock = memo(function CodeBlock({
 }) {
   return (
     <Box sx={codeBlockSx} data-testid="chat-markdown-code-block" data-language={language}>
-      <SyntaxHighlighter language={language} style={SYNTAX_THEMES[mode]} PreTag="div">
+      {/* wrapLines stays off as it was: passing a renderer would otherwise switch it on. */}
+      <SyntaxHighlighter
+        language={language}
+        style={SYNTAX_THEMES[mode]}
+        PreTag="div"
+        renderer={fastRenderer}
+        wrapLines={false}
+      >
         {code}
       </SyntaxHighlighter>
     </Box>

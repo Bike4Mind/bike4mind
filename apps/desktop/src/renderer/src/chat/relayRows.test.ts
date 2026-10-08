@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { displayText, relaySummary } from './relayRows';
+import { automaticSummary, displayText, relaySummary } from './relayRows';
 
 const from = { fromSessionId: 'abc', fromTitle: 'T25', hops: 1 };
 
@@ -53,5 +53,17 @@ describe('displayText', () => {
   it('falls back to the stored content when no wording was recorded', () => {
     expect(displayText({ content: 'an older report' })).toBe('an older report');
     expect(displayText({ content: 'an older report', display: '   ' })).toBe('an older report');
+  });
+});
+
+describe('automaticSummary', () => {
+  it('names auto-fix before what the turn is about', () => {
+    const automatic = {
+      kind: 'auto-fix' as const,
+      prUrl: 'https://github.com/example-org/widgets/pull/611',
+      prNumber: 611,
+      summary: '1 failing check on #611',
+    };
+    expect(automaticSummary({ automatic })).toBe('Started by auto-fix: 1 failing check on #611');
   });
 });
