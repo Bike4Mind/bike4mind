@@ -105,6 +105,7 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
 
     const body = res._getJSONData();
     expect(body.type).toBe('FabFile');
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(body.recipients.pending).toEqual(['me@x.com']);
     expect(JSON.stringify(body)).not.toContain('other@x.com');
     expect(JSON.stringify(body)).not.toContain('third@x.com');
@@ -129,6 +130,27 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
+  it('returns 410 with no invite details for a named recipient of an expired invite', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['me@x.com'], accepted: [], refused: [] },
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(410);
+    expect(res._getJSONData()).toEqual({ message: 'Invite has expired' });
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(getInviteDetails).not.toHaveBeenCalled();
   });
 
@@ -149,8 +171,12 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     (req as any).user = { id: 'u1', email: 'a@x.com' };
     await mockRefs.getHandler!(req, res);
 
-    expect(resolveRedeemableInvite).toHaveBeenCalledWith(INVITE_TOKEN, expect.objectContaining({ db: expect.any(Object) }));
+    expect(resolveRedeemableInvite).toHaveBeenCalledWith(
+      INVITE_TOKEN,
+      expect.objectContaining({ db: expect.any(Object) })
+    );
     expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
   it('returns 404 (not 403) for a caller who is neither a recipient nor share-authorized', async () => {
@@ -167,6 +193,26 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 (not 410) to a stranger requesting an expired named invite', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+    authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
+    (req as any).user = { id: 'u1', email: 'stranger@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(getInviteDetails).not.toHaveBeenCalled();
   });
 
@@ -189,6 +235,17 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(getInviteDetails).toHaveBeenCalled();
+  });
+
+  it('keeps the no-store header when the resolver throws', async () => {
+    resolveRedeemableInvite.mockRejectedValue(new Error('db down'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('db down');
+
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 });

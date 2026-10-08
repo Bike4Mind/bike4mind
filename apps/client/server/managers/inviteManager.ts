@@ -67,26 +67,23 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
   return inviteWithDetails;
 };
 
-/**
- * Gates a single-invite GET to the same population accept/refuse already redeem for:
- * a named recipient (pending or already accepted), or a caller with share authority on
- * the underlying document (the cancelInviteById/authorizeByInviteType check). Anyone
- * else must be turned into a 404 by the caller -- a 403 would confirm the id exists.
- */
-export async function canViewInvite(user: IUserDocument, invite: IInviteDocument): Promise<boolean> {
+export type InviteViewAccess = 'allowed' | 'expired' | 'denied';
+
+/** 'allowed' | 'expired' (caller could view it but it lapsed) | 'denied'. Share-authorized callers still see expired invites. */
+export async function canViewInvite(user: IUserDocument, invite: IInviteDocument): Promise<InviteViewAccess> {
+  const expired = !!invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
   const email = user.email?.toLowerCase();
   const named = [...(invite.recipients?.pending ?? []), ...(invite.recipients?.accepted ?? [])];
-  if (email && named.some(recipient => recipient.toLowerCase() === email)) {
-    return true;
-  }
+  const isNamedRecipient = !!email && named.some(recipient => recipient.toLowerCase() === email);
+  if (isNamedRecipient && !expired) return 'allowed';
 
   // A link invite names nobody, so the recipient arm can never match and the share arm never will
   // either - the person following the link is the one being granted access, not someone who
   // already holds it. Gating it out would 404 the /share/$id landing page and leave acceptInvite's
-  // link path unreachable. Redeemability is the gate here, matching what accept already enforces.
+  // link path unreachable. Redeemability is the gate here: exhaustion denies, expiry yields 'expired'.
   if (isLinkOnlyInvite(invite)) {
-    const expired = !!invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
-    return invite.remaining > 0 && !expired;
+    if (invite.remaining <= 0) return 'denied';
+    return expired ? 'expired' : 'allowed';
   }
 
   try {
@@ -97,9 +94,9 @@ export async function canViewInvite(user: IUserDocument, invite: IInviteDocument
       organizations: organizationRepository,
       groups: Group,
     });
-    return true;
+    return 'allowed';
   } catch {
-    return false;
+    return isNamedRecipient && expired ? 'expired' : 'denied';
   }
 }
 
