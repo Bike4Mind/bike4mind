@@ -633,6 +633,7 @@ describe('completeGitHubLakeConnection', () => {
         targetDataLakeId: 'lake1',
         installationId: 42,
         accountLogin: 'acme',
+        accountId: 9001,
         repositoryId: REPO.id,
         repositoryFullName: REPO.fullName,
         connectedBy: USER.id,

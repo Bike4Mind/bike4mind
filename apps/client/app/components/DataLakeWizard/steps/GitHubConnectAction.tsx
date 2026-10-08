@@ -6,7 +6,7 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { useState } from 'react';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
-import { acceptsConnectorContent } from '@bike4mind/common';
+import { acceptsConnectorContent, isGitHubLakeAccessLost } from '@bike4mind/common';
 import {
   useDisconnectLakeGitHub,
   useLakeGitHubConnection,
@@ -17,7 +17,6 @@ import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGi
 import { useUpdateDataLake } from '@client/app/hooks/data/dataLakes';
 import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectionDisplay';
 import { getServerErrorField } from '@client/app/utils/error';
-import { isGitHubLakeAccessLost } from '@bike4mind/common';
 import GitHubAccessLostState from './GitHubAccessLostState';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import GitHubLakeSyncProgress from '@client/app/components/datalake/GitHubLakeSyncProgress';
@@ -323,31 +322,33 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
             </Button>
           </>
         ) : (
-          <Button
-            data-testid="github-disconnect-btn"
-            size="sm"
-            variant="plain"
-            color="danger"
-            startDecorator={<LinkOffIcon />}
-            // The route declines to re-queue a purge that is still progressing, so only offer a retry
-            // once it looks stalled.
-            disabled={connection.disconnecting && !connection.disconnectStalled}
-            onClick={() => setConfirmingDisconnect(true)}
-          >
-            {!connection.disconnecting
-              ? 'Disconnect'
-              : connection.disconnectStalled
-                ? 'Retry disconnect'
-                : 'Disconnecting'}
-          </Button>
+          !accessLost && (
+            <Button
+              data-testid="github-disconnect-btn"
+              size="sm"
+              variant="plain"
+              color="danger"
+              startDecorator={<LinkOffIcon />}
+              // The route declines to re-queue a purge that is still progressing, so only offer a retry
+              // once it looks stalled.
+              disabled={connection.disconnecting && !connection.disconnectStalled}
+              onClick={() => setConfirmingDisconnect(true)}
+            >
+              {!connection.disconnecting
+                ? 'Disconnect'
+                : connection.disconnectStalled
+                  ? 'Retry disconnect'
+                  : 'Disconnecting'}
+            </Button>
+          )
         )}
       </Stack>
-      {/* Replaces the raw lastError line: the Access lost state says the same thing actionably. */}
       {accessLost ? (
         <GitHubAccessLostState
           connection={connection}
           onDisconnect={() => setConfirmingDisconnect(true)}
           disconnectDisabled={confirmingDisconnect}
+          canManage={!!lake.canManage}
         />
       ) : (
         connection.lastError && (

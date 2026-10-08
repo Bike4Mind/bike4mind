@@ -299,7 +299,7 @@ describe('GitHubConnectAction', () => {
 
   it('replaces the raw error line with the Access lost state once the App lost its read', () => {
     h.connection.current = connected({ status: 'access_lost', lastError: 'The App can no longer read this.' });
-    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    wrap(<GitHubConnectAction lake={{ id: 'lake1', canManage: true }} />);
 
     expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Access lost');
     expect(screen.getByTestId('github-access-lost-state')).toBeInTheDocument();
@@ -309,13 +309,13 @@ describe('GitHubConnectAction', () => {
   // Restoring access on GitHub is only half the repair; the lake still has to re-read the repository.
   it('keeps Re-sync enabled alongside the Access lost state', () => {
     h.connection.current = connected({ status: 'access_lost' });
-    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    wrap(<GitHubConnectAction lake={{ id: 'lake1', canManage: true }} />);
     expect(screen.getByTestId('github-resync-btn')).toBeEnabled();
   });
 
   it("routes the Access lost state's Disconnect through the same confirm step, not straight to a purge", () => {
     h.connection.current = connected({ status: 'access_lost', fileCount: 9 });
-    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    wrap(<GitHubConnectAction lake={{ id: 'lake1', canManage: true }} />);
 
     fireEvent.click(screen.getByTestId('github-access-lost-disconnect-btn'));
     expect(h.disconnectMutate).not.toHaveBeenCalled();

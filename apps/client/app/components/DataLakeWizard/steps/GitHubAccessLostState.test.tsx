@@ -34,14 +34,14 @@ const accessLost = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnect
 
 describe('GitHubAccessLostState', () => {
   it('names the repository and the account the App lost access through', () => {
-    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={vi.fn()} />);
+    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={vi.fn()} canManage />);
 
     expect(screen.getByTestId('github-access-lost-title')).toHaveTextContent('Access lost to acme/docs');
     expect(screen.getByTestId('github-access-lost-detail')).toHaveTextContent(/uninstalled from acme/);
   });
 
   it('reassures that already-ingested files survive, so Disconnect is not read as the only way out', () => {
-    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={vi.fn()} />);
+    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={vi.fn()} canManage />);
 
     expect(screen.getByTestId('github-access-lost-detail')).toHaveTextContent(
       /Files already in the lake are untouched/
@@ -51,7 +51,7 @@ describe('GitHubAccessLostState', () => {
 
   // The issue's load-bearing constraint: settingsUrl 404s for anyone who does not own the account.
   it('sends Fix on GitHub to the targeted install page, never to the owner-only settings page', () => {
-    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={vi.fn()} />);
+    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={vi.fn()} canManage />);
 
     const fix = screen.getByTestId('github-access-lost-fix-btn');
     expect(fix).toHaveAttribute('href', FIX_URL);
@@ -60,7 +60,7 @@ describe('GitHubAccessLostState', () => {
   });
 
   it('opens Fix on GitHub in a new tab without handing GitHub the opener', () => {
-    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={vi.fn()} />);
+    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={vi.fn()} canManage />);
 
     const fix = screen.getByTestId('github-access-lost-fix-btn');
     expect(fix).toHaveAttribute('target', '_blank');
@@ -68,7 +68,7 @@ describe('GitHubAccessLostState', () => {
   });
 
   it('disables Fix on GitHub, with no href to follow, when the App is unconfigured', () => {
-    wrap(<GitHubAccessLostState connection={accessLost({ fixAccessUrl: null })} onDisconnect={vi.fn()} />);
+    wrap(<GitHubAccessLostState connection={accessLost({ fixAccessUrl: null })} onDisconnect={vi.fn()} canManage />);
 
     const fix = screen.getByTestId('github-access-lost-fix-btn');
     expect(fix).toBeDisabled();
@@ -77,7 +77,7 @@ describe('GitHubAccessLostState', () => {
 
   it('hands Disconnect back to the caller rather than purging anything itself', () => {
     const onDisconnect = vi.fn();
-    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={onDisconnect} />);
+    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={onDisconnect} canManage />);
 
     fireEvent.click(screen.getByTestId('github-access-lost-disconnect-btn'));
     expect(onDisconnect).toHaveBeenCalledTimes(1);
@@ -85,11 +85,19 @@ describe('GitHubAccessLostState', () => {
 
   it('disables Disconnect while the caller is already confirming one', () => {
     const onDisconnect = vi.fn();
-    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={onDisconnect} disconnectDisabled />);
+    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={onDisconnect} disconnectDisabled canManage />);
 
     const disconnect = screen.getByTestId('github-access-lost-disconnect-btn');
     expect(disconnect).toBeDisabled();
     fireEvent.click(disconnect);
     expect(onDisconnect).not.toHaveBeenCalled();
+  });
+
+  it('hides management actions and guidance from a read-only admin', () => {
+    wrap(<GitHubAccessLostState connection={accessLost()} onDisconnect={vi.fn()} canManage={false} />);
+
+    expect(screen.queryByTestId('github-access-lost-disconnect-btn')).toBeNull();
+    expect(screen.queryByTestId('github-access-lost-resync-hint')).toBeNull();
+    expect(screen.getByTestId('github-access-lost-fix-btn')).toBeInTheDocument();
   });
 });
