@@ -415,3 +415,43 @@ export async function queryDataLakeTagCounts(
     totalLakeFileCount,
   };
 }
+
+/**
+ * Tree counts for the lakes the Explorer has SELECTED, counted over their membership alone.
+ * Serves `/api/data-lakes/tag-counts?lakeId=...`.
+ *
+ * The unscoped tree above is merged by prefix, and prefixes are unique only per creator or org,
+ * so another creator's lake (or the viewer's own non-member files) carrying the same prefix would
+ * land in a selected lake's tree. `restrictToDataLake` drops the base-access arms, leaving only
+ * the selected lakes' own arms.
+ *
+ * `lakeIds` only ever NARROW `lakes` (already resolved by `resolveAccessibleLakes`): an id the
+ * caller cannot reach selects nothing and returns an empty tree, never every lake.
+ */
+export async function queryScopedDataLakeTagCounts(
+  req: EntitlementRequest,
+  lakes: DataLakeConfig[],
+  lakeIds: string[]
+): Promise<{ tagCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeTagsByPrefix>> }> {
+  const wanted = new Set(lakeIds);
+  const selected = lakes.filter(lake => wanted.has(lake.id));
+  if (selected.length === 0) return { tagCounts: [] };
+
+  const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(selected);
+  const membershipScopes = await buildLakeMembershipScopes(selected, 'data-lake-tag-counts-scoped', req.logger);
+  const user = req.user!;
+  // Every selected lake contributes a `dataLakeTags` arm, so the builder's "restrict with no
+  // arms" guard cannot fire.
+  const tagCounts = await fabFileRepository.countDataLakeTagsByPrefix(
+    user.id,
+    [...openTagPrefixes, ...scopedTagPrefixes],
+    {
+      userGroups: user.groups ?? [],
+      dataLakeTags: selected.map(dl => dl.datalakeTag),
+      dataLakeTagPrefixes: openTagPrefixes,
+      lakeMemberships: dynamicMembershipScopesFor(membershipScopes),
+      restrictToDataLake: true,
+    }
+  );
+  return { tagCounts };
+}
