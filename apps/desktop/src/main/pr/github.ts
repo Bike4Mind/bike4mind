@@ -1,0 +1,342 @@
+import type {
+  PrChangeRequest,
+  PrCheck,
+  PrCheckBucket,
+  PrMergeable,
+  PrMergeMethod,
+  PrRef,
+  PrReviewDecision,
+  PrReviewThread,
+  PrSnapshot,
+  PrState,
+} from '@shared/pullRequest';
+import { GhError, type GhRunner } from './gh';
+
+/** PRs read in one query, at most. Each brings up to 100 checks, so this keeps a query well inside GitHub's node limit. */
+export const MAX_BATCH = 20;
+
+const REPO_FIELDS =
+  'autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed viewerDefaultMergeMethod';
+
+function pullRequestFields(number: string, threads: string): string {
+  return `number title url state isDraft
+      author { login }
+      headRefName headRefOid baseRefName additions deletions
+      mergeable mergeStateStatus reviewDecision
+      autoMergeRequest { enabledAt }
+      commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+        __typename
+        ... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: ${number})
+          checkSuite { workflowRun { workflow { name } } } }
+        ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: ${number}) }
+      } } } } } }
+      reviewThreads(first: 50) @include(if: ${threads}) { nodes { id isResolved isOutdated path line
+        comments(last: 1) { nodes { databaseId author { login } authorAssociation body url } } } }
+      latestReviews(first: 20) @include(if: ${threads}) { nodes { databaseId state author { login }
+        authorAssociation body url } }`;
+}
+
+/**
+ * One query for several PRs, each under its own alias (`p0`, `p1`, ...): its repo's merge
+ * settings, the PR, its head commit's checks with whether each is required, and the viewer once.
+ * Review threads and change requests ride along per PR only while its auto-fix is on, because
+ * they are the expensive part and nothing else reads them.
+ */
+export function batchQuery(count: number): string {
+  const indexes = Array.from({ length: count }, (_, index) => index);
+  const variables = indexes.map(i => `$o${i}: String!, $n${i}: String!, $p${i}: Int!, $t${i}: Boolean!`).join(', ');
+  const parts = indexes.map(
+    i => `  p${i}: repository(owner: $o${i}, name: $n${i}) {
+    ${REPO_FIELDS}
+    pullRequest(number: $p${i}) {
+      ${pullRequestFields(`$p${i}`, `$t${i}`)}
+    }
+  }`
+  );
+  return `query(${variables}) {\n  viewer { login }\n${parts.join('\n')}\n}`;
+}
+
+export interface SnapshotRequest {
+  ref: PrRef;
+  threads: boolean;
+}
+
+type Json = Record<string, unknown>;
+
+function obj(value: unknown): Json {
+  return value && typeof value === 'object' ? (value as Json) : {};
+}
+
+function str(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function nodes(value: unknown): Json[] {
+  const list = obj(value).nodes;
+  return Array.isArray(list) ? list.map(obj) : [];
+}
+
+const FAILING_CONCLUSIONS = new Set([
+  'FAILURE',
+  'TIMED_OUT',
+  'CANCELLED',
+  'ACTION_REQUIRED',
+  'STARTUP_FAILURE',
+  'STALE',
+]);
+const SKIPPED_CONCLUSIONS = new Set(['SKIPPED', 'NEUTRAL']);
+
+/** A check run or a commit status, in the four buckets the popover counts. */
+export function checkBucket(node: Json): PrCheckBucket {
+  if (node.__typename === 'StatusContext') {
+    const state = str(node.state);
+    if (state === 'SUCCESS') return 'pass';
+    if (state === 'FAILURE' || state === 'ERROR') return 'fail';
+    return 'pending';
+  }
+  const status = str(node.status);
+  if (status !== 'COMPLETED') return 'pending';
+  const conclusion = str(node.conclusion);
+  if (conclusion === 'SUCCESS') return 'pass';
+  if (FAILING_CONCLUSIONS.has(conclusion)) return 'fail';
+  if (SKIPPED_CONCLUSIONS.has(conclusion)) return 'skipped';
+  return 'pending';
+}
+
+function toCheck(node: Json): PrCheck {
+  const status = node.__typename === 'StatusContext';
+  const url = str(status ? node.targetUrl : node.detailsUrl);
+  const workflow = str(obj(obj(obj(node.checkSuite).workflowRun).workflow).name);
+  return {
+    name: str(status ? node.context : node.name) || 'check',
+    bucket: checkBucket(node),
+    required: node.isRequired === true,
+    ...(url ? { url } : {}),
+    ...(workflow ? { workflow } : {}),
+  };
+}
+
+function toThread(node: Json): PrReviewThread | null {
+  if (node.isResolved === true) return null;
+  const latest = nodes(node.comments)[0];
+  if (!latest) return null;
+  const line = num(node.line);
+  const path = str(node.path);
+  return {
+    id: str(node.id),
+    ...(path ? { path } : {}),
+    ...(line ? { line } : {}),
+    commentId: num(latest.databaseId),
+    author: str(obj(latest.author).login),
+    association: str(latest.authorAssociation),
+    body: str(latest.body),
+    url: str(latest.url),
+    outdated: node.isOutdated === true,
+  };
+}
+
+/** Each reviewer's latest review counts only while it still requests changes; a later approval supersedes it. */
+function toChangeRequest(node: Json): PrChangeRequest | null {
+  if (node.state !== 'CHANGES_REQUESTED') return null;
+  return {
+    reviewId: num(node.databaseId),
+    author: str(obj(node.author).login),
+    association: str(node.authorAssociation),
+    body: str(node.body),
+    url: str(node.url),
+  };
+}
+
+const METHOD_ORDER: PrMergeMethod[] = ['squash', 'merge', 'rebase'];
+
+function parseState(value: unknown): PrState {
+  return value === 'MERGED' || value === 'CLOSED' ? value : 'OPEN';
+}
+
+function parseMergeable(value: unknown): PrMergeable {
+  return value === 'MERGEABLE' || value === 'CONFLICTING' ? value : 'UNKNOWN';
+}
+
+function parseReviewDecision(value: unknown): PrReviewDecision {
+  return value === 'APPROVED' || value === 'CHANGES_REQUESTED' || value === 'REVIEW_REQUIRED' ? value : null;
+}
+
+/** A single-PR response (`data.repository`), as a snapshot. Exported for tests, which feed it recorded shapes. */
+export function parseSnapshot(ref: PrRef, raw: unknown, now: number, withThreads: boolean): PrSnapshot {
+  const data = obj(obj(raw).data);
+  return parseRepository(ref, data.repository, str(obj(data.viewer).login), now, withThreads);
+}
+
+function parseRepository(
+  ref: PrRef,
+  repositoryNode: unknown,
+  viewer: string,
+  now: number,
+  withThreads: boolean
+): PrSnapshot {
+  const repository = obj(repositoryNode);
+  const pr = obj(repository.pullRequest);
+  if (!pr.number) throw new GhError('not-found', `#${ref.number} was not found in ${ref.owner}/${ref.repo}`);
+
+  const allowed = {
+    squash: repository.squashMergeAllowed === true,
+    merge: repository.mergeCommitAllowed === true,
+    rebase: repository.rebaseMergeAllowed === true,
+  };
+  const allowedMethods = METHOD_ORDER.filter(method => allowed[method]);
+  const viewerDefault = str(repository.viewerDefaultMergeMethod).toLowerCase() as PrMergeMethod;
+  const rollup = obj(obj(obj(nodes(pr.commits)[0]).commit).statusCheckRollup);
+
+  return {
+    ...ref,
+    title: str(pr.title),
+    author: str(obj(pr.author).login),
+    state: parseState(pr.state),
+    isDraft: pr.isDraft === true,
+    headRefName: str(pr.headRefName),
+    headSha: str(pr.headRefOid),
+    baseRefName: str(pr.baseRefName),
+    additions: num(pr.additions),
+    deletions: num(pr.deletions),
+    mergeable: parseMergeable(pr.mergeable),
+    mergeStateStatus: str(pr.mergeStateStatus) || 'UNKNOWN',
+    reviewDecision: parseReviewDecision(pr.reviewDecision),
+    autoMergeArmed: pr.autoMergeRequest !== null && typeof pr.autoMergeRequest === 'object',
+    checks: nodes(rollup.contexts).map(toCheck),
+    repoSettings: {
+      autoMergeAllowed: repository.autoMergeAllowed === true,
+      allowedMethods,
+      ...(allowedMethods.includes(viewerDefault) ? { defaultMethod: viewerDefault } : {}),
+    },
+    viewer,
+    ...(withThreads
+      ? {
+          threads: nodes(pr.reviewThreads).flatMap(node => toThread(node) ?? []),
+          changeRequests: nodes(pr.latestReviews).flatMap(node => toChangeRequest(node) ?? []),
+        }
+      : {}),
+    fetchedAt: now,
+  };
+}
+
+/** The first GraphQL error under `alias` (or the first of all), as GitHub worded it. */
+function graphqlError(raw: Json, alias?: string): { type: string; message: string } | undefined {
+  const errors = Array.isArray(raw.errors) ? raw.errors.map(obj) : [];
+  const match = errors.find(error => alias === undefined || (Array.isArray(error.path) && error.path[0] === alias));
+  return match ? { type: str(match.type), message: str(match.message) } : undefined;
+}
+
+/** The repo's merge method this app uses: GitHub's default for the viewer, else the first allowed. */
+export function mergeMethodFor(snapshot: Pick<PrSnapshot, 'repoSettings'>): PrMergeMethod | null {
+  return snapshot.repoSettings.defaultMethod ?? snapshot.repoSettings.allowedMethods[0] ?? null;
+}
+
+/**
+ * Everything this app asks GitHub, through `gh`. No call here passes `--admin`, and none can
+ * be made to: the arguments are fixed in each method, with only the PR reference and the
+ * repo's own merge method filled in.
+ */
+export class PrGithub {
+  constructor(
+    private readonly gh: GhRunner,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  async snapshot(ref: PrRef, options: { threads: boolean }): Promise<PrSnapshot> {
+    const [result] = await this.snapshots([{ ref, threads: options.threads }]);
+    if (result instanceof GhError) throw result;
+    return result;
+  }
+
+  /**
+   * Read up to MAX_BATCH PRs in one query, answering per PR in request order. A PR that is
+   * missing or unreadable answers with its own error and leaves the others' answers intact;
+   * a failure of the whole call (gh missing, signed out, rate limited) rejects.
+   */
+  async snapshots(requests: readonly SnapshotRequest[]): Promise<(PrSnapshot | GhError)[]> {
+    if (requests.length === 0) return [];
+    if (requests.length > MAX_BATCH) throw new Error(`At most ${MAX_BATCH} pull requests per query`);
+    const args = ['api', 'graphql', '-f', `query=${batchQuery(requests.length)}`];
+    requests.forEach(({ ref, threads }, i) => {
+      // -f, not -F, for the names: -F would turn a repo called "123" into a number.
+      args.push(
+        '-f',
+        `o${i}=${ref.owner}`,
+        '-f',
+        `n${i}=${ref.repo}`,
+        '-F',
+        `p${i}=${ref.number}`,
+        '-F',
+        `t${i}=${threads}`
+      );
+    });
+
+    let stdout: string;
+    try {
+      stdout = await this.gh(args);
+    } catch (err) {
+      // Exit 1 with a body is GraphQL reporting some PRs failed; the rest are still in `data`.
+      if (!(err instanceof GhError) || err.kind === 'rate-limited' || err.kind === 'unauthenticated' || !err.stdout) {
+        throw err;
+      }
+      stdout = err.stdout;
+    }
+    let raw: Json;
+    try {
+      raw = obj(JSON.parse(stdout));
+    } catch {
+      throw new GhError('failed', 'GitHub returned something that is not JSON');
+    }
+    const data = raw.data;
+    if (!data || typeof data !== 'object') {
+      throw new GhError('failed', graphqlError(raw)?.message || 'GitHub returned no data');
+    }
+    const viewer = str(obj(obj(data).viewer).login);
+    const now = this.now();
+    return requests.map(({ ref, threads }, i) => {
+      const failure = graphqlError(raw, `p${i}`);
+      try {
+        return parseRepository(ref, obj(data)[`p${i}`], viewer, now, threads);
+      } catch (err) {
+        if (failure) return new GhError(/not_found/i.test(failure.type) ? 'not-found' : 'failed', failure.message);
+        return err instanceof GhError ? err : new GhError('failed', String(err));
+      }
+    });
+  }
+
+  /** The open PR whose head is `branch` in the repo at `cwd`, or null. */
+  async findOpenForBranch(cwd: string, branch: string): Promise<string | null> {
+    const stdout = await this.gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--limit', '1'], {
+      cwd,
+    });
+    try {
+      const list = JSON.parse(stdout) as unknown;
+      const first = Array.isArray(list) ? obj(list[0]) : {};
+      return str(first.url) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Arm GitHub's own auto-merge, which then enforces branch protection and required reviews itself. */
+  async enableAutoMerge(ref: PrRef, method: PrMergeMethod): Promise<void> {
+    await this.gh(['pr', 'merge', ref.url, '--auto', `--${method}`]);
+  }
+
+  async disableAutoMerge(ref: PrRef): Promise<void> {
+    await this.gh(['pr', 'merge', ref.url, '--disable-auto']);
+  }
+
+  /**
+   * Merge now. `--match-head-commit` pins the merge to the commit the readiness check looked at,
+   * so a push landing between the read and this call makes GitHub refuse rather than merge
+   * code nobody evaluated.
+   */
+  async merge(ref: PrRef, method: PrMergeMethod, headSha: string): Promise<void> {
+    await this.gh(['pr', 'merge', ref.url, `--${method}`, '--match-head-commit', headSha]);
+  }
+}

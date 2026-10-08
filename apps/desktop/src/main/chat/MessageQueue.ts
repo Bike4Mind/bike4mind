@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  ChatAutomaticOrigin,
   ChatAttachment,
   ChatMessage,
   ChatQueueEvent,
@@ -78,7 +79,7 @@ export class MessageQueue {
     // The tail, and only if it is the user's own: a relay is never merged into, so typing
     // behind one starts a fresh entry rather than appending to another agent's words.
     const last = messages[messages.length - 1];
-    const pending = last && !last.relay ? last : undefined;
+    const pending = last && !last.relay && !last.automatic ? last : undefined;
     const merged: ChatQueuedMessage = pending
       ? {
           ...pending,
@@ -111,6 +112,23 @@ export class MessageQueue {
       text,
       queuedAt: new Date().toISOString(),
       relay,
+    };
+    this.replace(sessionId, [...this.list(sessionId), message]);
+    this.announce(sessionId);
+    return message;
+  }
+
+  /**
+   * Line up a turn the app starts on its own (auto-fix). Its own entry, like a relay, and for
+   * the same reason: it must not be run together with anything the user typed.
+   */
+  enqueueAutomatic(sessionId: string, text: string, automatic: ChatAutomaticOrigin): ChatQueuedMessage {
+    const message: ChatQueuedMessage = {
+      id: randomUUID(),
+      sessionId,
+      text,
+      queuedAt: new Date().toISOString(),
+      automatic,
     };
     this.replace(sessionId, [...this.list(sessionId), message]);
     this.announce(sessionId);
@@ -189,7 +207,8 @@ export class MessageQueue {
 
   /**
    * Empty the queue - the stopped and failed paths. Typed messages go back to the composer;
-   * the RELAYS are returned here for the caller to strand in the transcript instead.
+   * the RELAYS are returned here for the caller to strand in the transcript instead. An
+   * automatic entry goes nowhere: the app that queued it decides again on its next read.
    */
   releaseAll(sessionId: string, reason: ChatQueueReturnReason, detail?: string): ChatQueuedMessage[] {
     const messages = this.drain(sessionId);
@@ -244,7 +263,7 @@ export class MessageQueue {
     reason: ChatQueueReturnReason,
     detail?: string
   ): void {
-    const typed = messages.filter(message => !message.relay);
+    const typed = messages.filter(message => !message.relay && !message.automatic);
     if (typed.length === 0) {
       this.announce(sessionId);
       return;

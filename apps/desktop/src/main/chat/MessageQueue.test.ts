@@ -199,4 +199,29 @@ describe('MessageQueue', () => {
     expect(queue.list('a')).toEqual([]);
     expect(events).toEqual([]);
   });
+  describe('automatic turns', () => {
+    const origin = {
+      kind: 'auto-fix' as const,
+      prUrl: 'https://github.com/example-org/widgets/pull/611',
+      prNumber: 611,
+      summary: '1 failing check on #611',
+    };
+
+    it('keeps an automatic turn apart from what the user types', () => {
+      queue.enqueueAutomatic('a', 'fix it', origin);
+      queue.enqueue('a', 'mine');
+
+      expect(queue.list('a').map(message => message.text)).toEqual(['fix it', 'mine']);
+    });
+
+    it('never hands an automatic turn to the composer or back to the caller', () => {
+      queue.enqueueAutomatic('a', 'fix it', origin);
+      queue.enqueue('a', 'mine');
+
+      const back = queue.releaseAll('a', 'stopped');
+
+      expect(back).toEqual([]);
+      expect(events[events.length - 1].returned?.messages.map(message => message.text)).toEqual(['mine']);
+    });
+  });
 });

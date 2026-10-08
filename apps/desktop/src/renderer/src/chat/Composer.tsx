@@ -7,7 +7,7 @@ import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import type { ChatQueuedMessage } from '@shared/chat';
+import type { ChatQueuedMessage, ChatSessionMode } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
 import { matchCommands, type ComposerCommand } from './commands';
 import {
@@ -50,6 +50,7 @@ export function Composer({
   onSend,
   onStop,
   onRunCommand,
+  sessionMode = 'chat',
   queued,
   onCancelQueued,
   onSendQueuedNow,
@@ -101,6 +102,8 @@ export function Composer({
    * and nothing typed here can reach the model through it. See commands.ts.
    */
   onRunCommand?: (name: string, args: string) => void;
+  /** Decides which commands are offered: some act only on a Code session. */
+  sessionMode?: ChatSessionMode;
   /** Typed ahead of the live turn, waiting to be sent. Drawn above the input. */
   queued?: readonly ChatQueuedMessage[];
   onCancelQueued?: (queuedId: string) => void;
@@ -179,7 +182,7 @@ export function Composer({
   // A draft that names a command is sendable whatever is blocking a TURN: see submit. Without
   // this the button would sit disabled on `/clear` in exactly the conversations most in need of
   // it, while Enter ran it anyway.
-  const commandDraft = !!onRunCommand && !disabled && composerSubmitAction(text).kind === 'command';
+  const commandDraft = !!onRunCommand && !disabled && composerSubmitAction(text, sessionMode).kind === 'command';
 
   // Which of Send/Stop/Queue the one button is. See composerButtonAction, and
   // composerEscapeAction for the way to Stop that Queue takes the button away from.
@@ -197,7 +200,7 @@ export function Composer({
    */
   const submit = () => {
     const draft = text.trim();
-    const action = composerSubmitAction(draft);
+    const action = composerSubmitAction(draft, sessionMode);
     if (action.kind === 'command' && onRunCommand && !disabled) {
       setText('');
       onRunCommand(action.invocation.command.name, action.invocation.args);
@@ -233,8 +236,8 @@ export function Composer({
 
   const query = (skills || onRunCommand) && !disabled ? skillQuery(text) : null;
   const commandMatches = useMemo(
-    () => (onRunCommand && query !== null ? matchCommands(query) : []),
-    [onRunCommand, query]
+    () => (onRunCommand && query !== null ? matchCommands(query, sessionMode) : []),
+    [onRunCommand, query, sessionMode]
   );
   const matches = useMemo(() => (skills && query !== null ? matchSkills(skills.skills, query) : []), [skills, query]);
   // One list for the keyboard: commands first, then skills, which is also the order drawn.
@@ -277,8 +280,13 @@ export function Composer({
    * at all - by then the draft is no longer a bare token, so the menu has already closed.
    */
   const runCommand = (command: ComposerCommand) => {
-    setText('');
     setDismissed(null);
+    if (command.requiresArgument) {
+      setText(`/${command.name} `);
+      textareaRef.current?.focus();
+      return;
+    }
+    setText('');
     onRunCommand?.(command.name, '');
     textareaRef.current?.focus();
   };

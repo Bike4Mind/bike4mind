@@ -62,7 +62,7 @@ export function QueuedMessageList({
             noWrap
             sx={{ flexShrink: 0, alignSelf: 'flex-start', pt: 0.25, maxWidth: 160 }}
           >
-            {message.relay ? `From ${message.relay.fromTitle}` : 'Queued'}
+            {message.automatic ? 'Auto-fix' : message.relay ? `From ${message.relay.fromTitle}` : 'Queued'}
           </Typography>
 
           <Typography
@@ -90,7 +90,7 @@ export function QueuedMessageList({
 
           {/* Never on a relay: jumping the user's own turn with another conversation's words is
               not something they asked for. Main refuses it too - this is so the row agrees. */}
-          {canSendNow && onSendNow && !message.relay && (
+          {canSendNow && onSendNow && !message.relay && !message.automatic && (
             <IconButton
               size="sm"
               variant="plain"
