@@ -1,7 +1,5 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
-import { resolveDefaultLogging } from '@bike4mind/infra';
-
 export default $config({
   app(input) {
     // `production` and `shared-dev` are the permanent stages: state is retained and
@@ -69,6 +67,8 @@ export default $config({
     //    `Could not resolve "@huggingface/transformers"`.
     // (Registered before any Function is created so the transform applies to all.)
     const ALWAYS_EXTERNAL = ['isolated-vm', '@huggingface/transformers', 'onnxruntime-node'];
+    // SST rejects top-level imports in sst.config.ts, so load the helper at run() time.
+    const { resolveDefaultLogging } = await import('@bike4mind/infra');
     $transform(sst.aws.Function, args => {
       args.nodejs = $output(args.nodejs).apply(nodejs => {
         const esbuild = { ...(nodejs?.esbuild ?? {}) };
