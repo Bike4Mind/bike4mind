@@ -622,6 +622,21 @@ export class ToolBuilder {
   }
 
   /**
+   * Write new video job ids straight onto the stored quest. Otherwise only the ~10s streaming
+   * heartbeat persists them, so a chat process dying in that window leaves a running, billed
+   * job with no card in the chat. The in-memory quest already carries the ids
+   * (applyQuestStatusChanges), so later whole-quest saves keep them. A failed write is logged,
+   * never thrown: the job exists and is billed, so failing the tool call would only hide it.
+   */
+  private async persistVideoJobIds(questId: string, jobIds: string[]): Promise<void> {
+    try {
+      await this.deps.db.quests.addVideoJobIds(questId, jobIds);
+    } catch (err) {
+      this.deps.logger.error(`[videoJobIds] failed to persist ${jobIds.join(',')} on quest ${questId}:`, err);
+    }
+  }
+
+  /**
    * Reserve credits for a started image_generation/edit_image call (onToolStart). Image
    * cost is known up front from the model + n/size/quality, so it reserves at start
    * (unlike music, which reserves on delivery in settleMusicCredits). One reservation per
@@ -860,6 +875,7 @@ export class ToolBuilder {
           // images) instead of overwriting them wholesale - see
           // applyQuestStatusChanges.
           applyQuestStatusChanges(quest, changes as Partial<IChatHistoryItemDocument>, this.deps.user.id);
+          if (changes.videoJobIds?.length) await this.persistVideoJobIds(quest.id, changes.videoJobIds);
           await this.deps.sendStatusUpdate(quest, status ?? null);
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -37,6 +37,21 @@ describe('QuestModel videoJobIds persistence', () => {
     expect(readBack?.videoJobIds).toEqual(['a']);
   });
 
+  it('addVideoJobIds appends atomically and dedups a replayed id', async () => {
+    const created = await questRepository.create(makeQuest());
+    await questRepository.addVideoJobIds(created.id, ['b']);
+    await questRepository.addVideoJobIds(created.id, ['b', 'a']);
+    const readBack = await Quest.findById(created.id).lean();
+    expect(readBack?.videoJobIds).toEqual(['a', 'b']);
+  });
+
+  it('addVideoJobIds creates the array on a quest that has none', async () => {
+    const created = await questRepository.create(makeQuest({ videoJobIds: undefined }));
+    await questRepository.addVideoJobIds(created.id, ['a']);
+    const readBack = await Quest.findById(created.id).lean();
+    expect(readBack?.videoJobIds).toEqual(['a']);
+  });
+
   it('returns videoJobIds from findUnfinishedByAgentExecutionIds', async () => {
     await questRepository.create(makeQuest());
     const [view] = await questRepository.findUnfinishedByAgentExecutionIds(['exec-1']);

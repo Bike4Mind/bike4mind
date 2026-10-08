@@ -1218,6 +1218,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     await this.model.updateOne({ agentExecutionId }, { $addToSet: { images: { $each: images } } });
   }
 
+  /**
+   * Append video job ids to a chat Quest the moment each job is created. `$addToSet` makes a
+   * replayed tool call a no-op and cannot race the streaming owner's whole-quest saves (see
+   * ToolBuilder's onStatusUpdate). No-op if no Quest matches.
+   */
+  async addVideoJobIds(questId: string, jobIds: string[]): Promise<void> {
+    if (!jobIds.length) return;
+    await this.model.updateOne({ _id: questId }, { $addToSet: { videoJobIds: { $each: jobIds } } });
+  }
+
   // Cheap existence check (Mongo `exists` returns just the `_id` of the first
   // match). The voice proxy uses this to decide whether to emit an ElevenLabs
   // buffer chunk on the very first turn of a fresh session (no prior quests).

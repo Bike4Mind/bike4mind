@@ -44,6 +44,8 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   // The only server-side ownership signal for owner-less generated-image keys - see
   // userCanAccessGeneratedImage.
   findSessionIdsByImage: (image: string) => Promise<string[]>;
+  // Atomic $addToSet onto `videoJobIds`, so a chat's video card survives the chat process dying.
+  addVideoJobIds: (questId: string, jobIds: string[]) => Promise<void>;
 }
 
 /**
