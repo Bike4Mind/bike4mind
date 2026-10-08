@@ -10,7 +10,7 @@ function shellCall(command: string, preview: string, status: ChatToolCall['statu
   return { id: 'c1', name: 'bash_execute', input: { command }, status, preview };
 }
 
-function setup(project: { workingDirectory: string; branch: string | null } | null = null) {
+function setup(project: { workingDirectory: string; branch: string | null } | null = null, code = true) {
   const store = tempStore();
   const fake = fakeGithub();
   const out = collector();
@@ -18,6 +18,7 @@ function setup(project: { workingDirectory: string; branch: string | null } | nu
     store,
     github: fake.github,
     chat: {
+      isCode: async () => code,
       project: async () => project,
       archive: async () => undefined,
       isBusy: () => false,
@@ -63,6 +64,16 @@ describe('PrMonitor binding', () => {
     expect(await monitor.bindManual(SESSION, 'not a url')).toEqual({ ok: false, error: expect.any(String) });
     expect(await monitor.bindManual(SESSION, 'https://github.com/example-org/widgets/pull/700')).toEqual({ ok: true });
     expect(await store.get(SESSION)).toMatchObject({ number: 700, source: 'manual' });
+  });
+
+  it('refuses a pasted PR in a Chat conversation', async () => {
+    const { store, fake, monitor } = setup(null, false);
+    expect(await monitor.bindManual(SESSION, REF.url)).toEqual({
+      ok: false,
+      error: 'Pull requests can only be added to a Code conversation.',
+    });
+    expect(await store.get(SESSION)).toBeNull();
+    expect(fake.calls).toEqual([]);
   });
 
   it('does not let a detection replace a PR that has automation armed', async () => {

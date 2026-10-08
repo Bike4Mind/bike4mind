@@ -42,6 +42,7 @@ function setup(initial = snapshot({ checks: [check('Build', 'pending')] })) {
     store,
     github: fake.github,
     chat: {
+      isCode: async () => true,
       project: async () => null,
       archive: async () => undefined,
       isBusy: () => false,

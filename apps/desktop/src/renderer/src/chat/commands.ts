@@ -12,6 +12,8 @@
  * menu, the filtering, the keyboard, the argument - reads this list.
  */
 
+import type { ChatSessionMode } from '@shared/chat';
+
 export interface ComposerCommand {
   /** What the user types after the slash. Lower case, no spaces. */
   name: string;
@@ -21,6 +23,8 @@ export interface ComposerCommand {
   argumentHint?: string;
   /** Picking it from the menu fills in the name and waits for the argument instead of running it bare. */
   requiresArgument?: true;
+  /** Offered only in Code sessions. Elsewhere `/name` is ordinary text, like any unknown slash. */
+  codeOnly?: true;
 }
 
 export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
@@ -38,13 +42,18 @@ export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
     description: 'Show a pull request above the composer and keep its status current.',
     argumentHint: '<GitHub PR URL>',
     requiresArgument: true,
+    codeOnly: true,
   },
 ];
 
-/** The command by that exact name, or undefined. Names are matched case-insensitively. */
-export function findCommand(name: string): ComposerCommand | undefined {
+function commandsFor(mode: ChatSessionMode): ComposerCommand[] {
+  return COMPOSER_COMMANDS.filter(command => !command.codeOnly || mode === 'code');
+}
+
+/** The command by that exact name in a session of this mode, or undefined. Names are matched case-insensitively. */
+export function findCommand(name: string, mode: ChatSessionMode): ComposerCommand | undefined {
   const needle = name.trim().toLowerCase();
-  return COMPOSER_COMMANDS.find(command => command.name === needle);
+  return commandsFor(mode).find(command => command.name === needle);
 }
 
 /**
@@ -54,10 +63,11 @@ export function findCommand(name: string): ComposerCommand | undefined {
  * user would reach for. The skill menu needs that fallback because a deployment can hold thirty
  * skills whose names nobody remembers; this list is read in full at a glance.
  */
-export function matchCommands(query: string): ComposerCommand[] {
+export function matchCommands(query: string, mode: ChatSessionMode): ComposerCommand[] {
   const needle = query.trim().toLowerCase();
-  if (!needle) return [...COMPOSER_COMMANDS];
-  return COMPOSER_COMMANDS.filter(command => command.name.startsWith(needle));
+  const available = commandsFor(mode);
+  if (!needle) return available;
+  return available.filter(command => command.name.startsWith(needle));
 }
 
 export interface CommandInvocation {
@@ -74,9 +84,9 @@ export interface CommandInvocation {
  * skill, and `/notacommand` is a message the user meant to send - swallowing any of the three
  * would make the composer unpredictable in exactly the way a command surface must not be.
  */
-export function parseCommandInvocation(text: string): CommandInvocation | null {
+export function parseCommandInvocation(text: string, mode: ChatSessionMode): CommandInvocation | null {
   const match = /^\/([A-Za-z][A-Za-z0-9_-]*)(?:\s+([\s\S]*))?$/.exec(text.trim());
   if (!match) return null;
-  const command = findCommand(match[1]);
+  const command = findCommand(match[1], mode);
   return command ? { command, args: (match[2] ?? '').trim() } : null;
 }

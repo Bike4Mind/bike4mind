@@ -633,6 +633,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             onSend={text => void onSend(text)}
             onStop={conversation.stop}
             onRunCommand={(name, args) => void conversation.runCommand(name, args)}
+            sessionMode={conversation.session?.mode ?? 'chat'}
             suggestion={nextPrompt.suggestion}
             onSuggestionDismissed={nextPrompt.dismiss}
             queued={conversation.queued}

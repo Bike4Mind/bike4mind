@@ -19,6 +19,7 @@ function setup({ busy = false, accept = true } = {}) {
     store,
     github: fake.github,
     chat: {
+      isCode: async () => true,
       project: async () => null,
       archive: async () => undefined,
       isBusy: () => state.busy,

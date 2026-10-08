@@ -1,3 +1,4 @@
+import type { ChatSessionMode } from '@shared/chat';
 import { parseCommandInvocation, type CommandInvocation } from './commands';
 
 /**
@@ -87,8 +88,8 @@ export type ComposerSubmit =
  * `/etc/hosts`, `/review src/x.ts` and `/nonsense` are all messages, and sending them is this
  * function returning 'send' rather than any caller remembering to check.
  */
-export function composerSubmitAction(text: string): ComposerSubmit {
-  const invocation = parseCommandInvocation(text);
+export function composerSubmitAction(text: string, mode: ChatSessionMode): ComposerSubmit {
+  const invocation = parseCommandInvocation(text, mode);
   return invocation ? { kind: 'command', invocation } : { kind: 'send' };
 }
 

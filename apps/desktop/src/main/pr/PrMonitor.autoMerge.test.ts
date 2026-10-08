@@ -26,6 +26,7 @@ function setup(initial: PrSnapshot) {
     store,
     github: fake.github,
     chat: {
+      isCode: async () => true,
       project: async () => null,
       archive: async () => undefined,
       isBusy: () => false,

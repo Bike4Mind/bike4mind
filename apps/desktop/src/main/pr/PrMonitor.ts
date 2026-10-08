@@ -58,6 +58,8 @@ const realTimers: PrTimers = {
 };
 
 export interface PrChatHooks {
+  /** Whether the conversation is a Code session; a pasted PR binds only there. */
+  isCode(sessionId: string): Promise<boolean>;
   /** Where a Code session runs and the branch checked out there; null for anything else. */
   project(sessionId: string): Promise<{ workingDirectory: string; branch: string | null } | null>;
   /** Move the conversation to the sidebar's Archived section. */
@@ -218,6 +220,9 @@ export class PrMonitor {
 
   /** The user pasted a URL. Always replaces what was there, unless auto-merge is armed on it. */
   async bindManual(sessionId: string, url: string): Promise<PrActionResult> {
+    if (!(await this.deps.chat.isCode(sessionId))) {
+      return { ok: false, error: 'Pull requests can only be added to a Code conversation.' };
+    }
     const ref = parsePullRequestUrl(url);
     if (!ref) return { ok: false, error: 'That is not a GitHub pull request URL.' };
     const current = await this.deps.store.get(sessionId);

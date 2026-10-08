@@ -15,6 +15,7 @@ function setup() {
     store,
     github: fake.github,
     chat: {
+      isCode: async () => true,
       project: async () => null,
       archive: async sessionId => {
         archived.push(sessionId);

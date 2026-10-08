@@ -30,6 +30,7 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
     logger,
     emit: (state: PrBarState) => send(IPC_CHANNELS.prStateChanged, state),
     chat: {
+      isCode: async sessionId => (await store.get(sessionId))?.mode === 'code',
       project: async sessionId => {
         const session = await store.get(sessionId);
         const project = session?.mode === 'code' ? session.project : undefined;
