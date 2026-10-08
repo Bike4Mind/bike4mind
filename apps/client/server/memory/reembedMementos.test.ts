@@ -233,6 +233,14 @@ describe('migrateLedgerVectorsForPrincipal', () => {
     expect(stats).toMatchObject({ truncated: 1, backfilled: 1, stoppedAtLimit: true });
   });
 
+  it('does not report stoppedAtLimit when the last provider call lands exactly on the limit', async () => {
+    chain = [ev('h1'), ev('h2')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { limit: 2 });
+
+    expect(stats).toMatchObject({ backfilled: 2, stoppedAtLimit: false });
+  });
+
   it('counts a rewrite that matched nothing (e.g. shredded mid-run) as failed', async () => {
     rewriteEmbedding.mockResolvedValue(0);
     chain = [ev('h1')];
