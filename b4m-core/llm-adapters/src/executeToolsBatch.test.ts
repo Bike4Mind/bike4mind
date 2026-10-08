@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PermissionDeniedError, insufficientCreditsError } from '@bike4mind/common';
-import { executeToolsBatch, DEFAULT_MAX_PARALLEL_TOOLS } from './executeToolsBatch';
+import { executeToolsBatch, DEFAULT_MAX_PARALLEL_TOOLS, shouldEndTurnAfterTools } from './executeToolsBatch';
 
 /** Helper: create a task that resolves after a delay */
 const delayedTask = <T>(value: T, delayMs: number): (() => Promise<T>) => {
@@ -286,5 +286,40 @@ describe('executeToolsBatch', () => {
         expect(outcomes[0].result.data).toBe(42);
       }
     });
+  });
+});
+
+describe('shouldEndTurnAfterTools', () => {
+  const tool = (name: string, endsTurnAfterText?: boolean) => ({
+    toolSchema: { name, description: '', parameters: { type: 'object' as const, properties: {} } },
+    ...(endsTurnAfterText === undefined ? {} : { endsTurnAfterText }),
+  });
+  const tools = [tool('suggest_links', true), tool('other_flagged', true), tool('web_search'), tool('off', false)];
+
+  it('ends the turn when the round has text and every called tool is flagged', () => {
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, 'Here is the answer.')).toBe(true);
+    expect(shouldEndTurnAfterTools(['suggest_links', 'other_flagged'], tools, 'Answer')).toBe(true);
+  });
+
+  it('keeps recursing when the round streamed no answer text', () => {
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, '')).toBe(false);
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, ' \n\n ')).toBe(false);
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, undefined)).toBe(false);
+  });
+
+  it('keeps recursing when any called tool is unflagged, explicitly false, or unknown', () => {
+    expect(shouldEndTurnAfterTools(['suggest_links', 'web_search'], tools, 'Answer')).toBe(false);
+    expect(shouldEndTurnAfterTools(['off'], tools, 'Answer')).toBe(false);
+    expect(shouldEndTurnAfterTools(['not_registered'], tools, 'Answer')).toBe(false);
+    expect(shouldEndTurnAfterTools(['suggest_links'], undefined, 'Answer')).toBe(false);
+  });
+
+  it('keeps recursing when no tool was called', () => {
+    expect(shouldEndTurnAfterTools([], tools, 'Answer')).toBe(false);
+    expect(shouldEndTurnAfterTools([undefined, null, ''], tools, 'Answer')).toBe(false);
+  });
+
+  it('ignores nameless slots left by a text block ahead of the tool call', () => {
+    expect(shouldEndTurnAfterTools([undefined, 'suggest_links'], tools, 'Answer')).toBe(true);
   });
 });
