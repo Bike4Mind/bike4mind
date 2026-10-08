@@ -1,4 +1,5 @@
 import {
+  CHAT_MODELS,
   ChatModels,
   IMessage,
   ModelBackend,
@@ -18,6 +19,7 @@ import {
   IUserApiKeyRepository,
   IUserRepository,
   normalizeMultimodalMessages,
+  BadRequestError,
   type CompletionSource,
 } from '@bike4mind/common';
 import {
@@ -301,7 +303,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // false) and server tools (executeTools true) imply opposite loop semantics - silently
   // picking a winner could bill a server tool loop the client never asked for.
   if (params.serverTools?.length && options?.tools?.length) {
-    throw new Error(
+    throw new BadRequestError(
       '[CLI_COMPLETIONS] serverTools (server-executed) and options.tools (wire/client-executed) are mutually exclusive'
     );
   }
@@ -337,7 +339,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
       if (!actor?.isAdmin) {
-        throw new Error(
+        throw new BadRequestError(
           `[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`
         );
       }
@@ -363,7 +365,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   });
 
   if (!llm) {
-    throw new Error(`Failed to create LLM backend for model: ${model}`);
+    // Only an id outside the static catalog is caller input. A catalogued model with no backend
+    // means the platform key is missing or its model listing failed: an operator fault that must stay counted.
+    const message = `Failed to create LLM backend for model: ${model}`;
+    throw CHAT_MODELS.includes(model as ChatModels) ? new Error(message) : new BadRequestError(message);
   }
 
   llm.currentModel = model;

@@ -58,6 +58,7 @@ import {
   getSettingByName,
   getSettingsMap,
   getSettingsValue,
+  HTTPError,
   NotFoundError,
   ForbiddenError,
   TooManyRequestsError,
@@ -561,6 +562,29 @@ export function isAbortError(error: unknown): boolean {
 
 export function isStreamIdleTimeoutError(error: Error): boolean {
   return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
+}
+
+/**
+ * True when a completion failure is a service fault worth counting on the operator
+ * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
+ * (billing, abort, request/stream timeout, tool pairing, overloaded, context overflow), which
+ * resolve the quest without rethrowing and so never reached /process's failure path. It is not an
+ * exact mirror: the handler matches timeouts case-sensitively and rethrows 4xx HTTPErrors (so
+ * /process counts them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and
+ * embed routes call this; /process does not.
+ */
+export function isOperatorFault(error: unknown): boolean {
+  if (resolveQuestErrorCode(error)) return false;
+  if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
+  if (!(error instanceof Error)) return true;
+  return !(
+    isAbortError(error) ||
+    isRequestTimeoutError(error) ||
+    isStreamIdleTimeoutError(error) ||
+    isToolPairingError(error) ||
+    isOverloadedError(error) ||
+    error.message.startsWith('Your request is too large for')
+  );
 }
 
 /**

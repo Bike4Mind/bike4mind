@@ -141,6 +141,9 @@ vi.mock('./embedAgentHydration', () => ({ hydrateEmbedAgent: mockHydrate }));
 
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
+const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
+
 import { registerEmbedRoutes } from './embedRoute';
 import { spendCapExceededError } from '@bike4mind/common';
 
@@ -200,11 +203,12 @@ beforeEach(() => {
 
 afterEach(() => vi.clearAllMocks());
 
-function post(body: unknown, headers: Record<string, string> = {}) {
+function post(body: unknown, headers: Record<string, string> = {}, signal?: AbortSignal) {
   return fetch(`${baseUrl}/api/embed/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_live_embed', ...headers },
     body: JSON.stringify(body),
+    signal,
   });
 }
 
@@ -246,6 +250,7 @@ describe('POST /api/embed/chat', () => {
     const res = await post(CHAT);
     expect(res.status).toBe(401);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
   });
 
   it('rejects a body agentId that does not match the key', async () => {
@@ -519,6 +524,50 @@ describe('POST /api/embed/chat', () => {
     expect(text).toContain('"type":"error"');
     // Unclassified failure: the frame must carry no code key at all.
     expect(text).not.toContain('"code"');
+    expect(mockEmitProcessingFailed).toHaveBeenCalledWith(
+      'embed',
+      expect.objectContaining({ message: 'model backend blew up' })
+    );
+  });
+
+  it('hands a visitor-abort rejection to the metric helper, which filters it as a non-fault', async () => {
+    let rejected = false;
+    mockExecuteCompletion.mockImplementation(
+      ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        new Promise((_, reject) =>
+          abortSignal.addEventListener('abort', () => {
+            rejected = true;
+            reject(new DOMException('The operation was aborted', 'AbortError'));
+          })
+        )
+    );
+    const client = new AbortController();
+    const res = await post(CHAT, {}, client.signal);
+    await res.body?.getReader().read();
+    client.abort();
+
+    await vi.waitFor(() => expect(rejected).toBe(true));
+    await vi.waitFor(() =>
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith('embed', expect.objectContaining({ name: 'AbortError' }))
+    );
+  });
+
+  it('still hands a real fault to the metric helper when it lands after the visitor aborted', async () => {
+    mockExecuteCompletion.mockImplementation(
+      ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        new Promise((_, reject) => abortSignal.addEventListener('abort', () => reject(new Error('mongo unreachable'))))
+    );
+    const client = new AbortController();
+    const res = await post(CHAT, {}, client.signal);
+    await res.body?.getReader().read();
+    client.abort();
+
+    await vi.waitFor(() =>
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith(
+        'embed',
+        expect.objectContaining({ message: 'mongo unreachable' })
+      )
+    );
   });
 
   it('classifies a mid-stream credit-reservation failure on the SSE frame (.code carrier)', async () => {
@@ -550,6 +599,10 @@ describe('POST /api/embed/chat', () => {
     const res = await post(CHAT);
     expect(res.status).toBe(500);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockEmitProcessingFailed).toHaveBeenCalledWith(
+      'embed',
+      expect.objectContaining({ message: 'mongo unavailable' })
+    );
   });
 });
 
