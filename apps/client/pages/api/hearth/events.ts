@@ -7,7 +7,6 @@ import {
   hearthEventRefsSchema,
   hearthMachineBodySchema,
   knownMachinePayloadSchemas,
-  PRESENCE_PAYLOAD_SCHEMA_NAME,
 } from '@bike4mind/hearth';
 import { ApiKeyScope, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -94,10 +93,8 @@ const PostEventSchema = z
     // hasOwn: a caller-chosen name like 'constructor' must not hit Object.prototype.
     const payloadSchema =
       schema && Object.hasOwn(knownMachinePayloadSchemas, schema) ? knownMachinePayloadSchemas[schema] : undefined;
-    // Presence matches toPresenceProjection, which reads a null payload as {}.
-    // Delegation stays strict: it has required fields.
-    const payload = schema === PRESENCE_PAYLOAD_SCHEMA_NAME ? (b.machine?.payload ?? {}) : b.machine?.payload;
-    if (payloadSchema && !payloadSchema.safeParse(payload).success) {
+    // A registered schema owns its own null-handling (presence reads null as {}).
+    if (payloadSchema && !payloadSchema.safeParse(b.machine?.payload).success) {
       ctx.addIssue({
         code: 'custom',
         message: `machine.payload does not match ${schema}`,

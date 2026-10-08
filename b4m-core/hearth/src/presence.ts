@@ -78,3 +78,11 @@ export const presencePayloadSchema = z.object({
 });
 
 export type PresencePayload = z.infer<typeof presencePayloadSchema>;
+
+/**
+ * The payload contract above with a null/undefined payload read as `{}`, so a
+ * contentless post still refreshes lastSeen instead of being rejected. The write
+ * route and the roster projection both parse presence with THIS, so the "a null
+ * payload counts as {}" rule lives in one place and cannot drift between them.
+ */
+export const presencePayloadWithDefaults = z.preprocess(v => v ?? {}, presencePayloadSchema);

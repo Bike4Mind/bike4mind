@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  presencePayloadSchema,
+  presencePayloadWithDefaults,
   humanSessionActorName,
   sanitizeSessionLabel,
   reasonForHookEvent,
@@ -135,7 +135,7 @@ export function toPresenceProjection(args: {
   userId: string;
   payload: unknown;
 }): UpsertPresenceInput | null {
-  const parsed = presencePayloadSchema.safeParse(args.payload ?? {});
+  const parsed = presencePayloadWithDefaults.safeParse(args.payload);
   if (!parsed.success) return null;
   const { activity } = parsed.data;
 

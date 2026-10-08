@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PRESENCE_PAYLOAD_SCHEMA_NAME, presencePayloadSchema } from './presence';
+import { PRESENCE_PAYLOAD_SCHEMA_NAME, presencePayloadWithDefaults } from './presence';
 
 /** `machine.schema` for `delegation` events; the only schema that kind accepts. */
 export const DELEGATION_PAYLOAD_SCHEMA_NAME = 'hearth.delegation@1';
@@ -18,5 +18,5 @@ export const delegationPayloadSchema = z.looseObject({
  */
 export const knownMachinePayloadSchemas: Record<string, z.ZodType> = {
   [DELEGATION_PAYLOAD_SCHEMA_NAME]: delegationPayloadSchema,
-  [PRESENCE_PAYLOAD_SCHEMA_NAME]: presencePayloadSchema,
+  [PRESENCE_PAYLOAD_SCHEMA_NAME]: presencePayloadWithDefaults,
 };
