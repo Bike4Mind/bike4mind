@@ -156,6 +156,61 @@ describe('createVideoJob', () => {
     expect(holdCredits).not.toHaveBeenCalled();
   });
 
+  it('passes a generated image key to loadInputImage as a generated ref', async () => {
+    const loadInputImage = vi.fn<VideoJobDeps['loadInputImage']>(async () => ({
+      bytes: Buffer.from('img'),
+      mimeType: 'image/png',
+    }));
+    const { deps } = makeDeps({ loadInputImage });
+    const key = '86cdc650-43d2-416e-aca6-23ff4fe23081.png';
+    const request = { ...validRequest, mode: 'image_to_video', inputGeneratedImageKey: key };
+    const result = await createVideoJob({ user, request, source: 'agent' }, deps);
+    expect(result).toMatchObject({ ok: true, job: { payload: { request: { inputGeneratedImageKey: key } } } });
+    expect(loadInputImage).toHaveBeenCalledWith(user.id, { kind: 'generated', key });
+  });
+
+  it('passes a file id to loadInputImage as a file ref', async () => {
+    const loadInputImage = vi.fn<VideoJobDeps['loadInputImage']>(async () => ({
+      bytes: Buffer.from('img'),
+      mimeType: 'image/png',
+    }));
+    const { deps } = makeDeps({ loadInputImage });
+    await createVideoJob(
+      { user, request: { ...validRequest, mode: 'image_to_video', inputImageFileId: 'f1' }, source: 'api' },
+      deps
+    );
+    expect(loadInputImage).toHaveBeenCalledWith(user.id, { kind: 'file', id: 'f1' });
+  });
+
+  it('returns 404 input_image_not_found for a generated key the user cannot use', async () => {
+    const { deps } = makeDeps({ loadInputImage: async () => null });
+    const result = await createVideoJob(
+      {
+        user,
+        request: { ...validRequest, mode: 'image_to_video', inputGeneratedImageKey: 'foreign.png' },
+        source: 'agent',
+      },
+      deps
+    );
+    expect(result).toMatchObject({ ok: false, status: 404, code: 'input_image_not_found' });
+    expect(holdCredits).not.toHaveBeenCalled();
+  });
+
+  it('rejects both a file id and a generated key before loading either', async () => {
+    const loadInputImage = vi.fn<VideoJobDeps['loadInputImage']>();
+    const { deps } = makeDeps({ loadInputImage });
+    const result = await createVideoJob(
+      {
+        user,
+        request: { ...validRequest, mode: 'image_to_video', inputImageFileId: 'f1', inputGeneratedImageKey: 'k.png' },
+        source: 'agent',
+      },
+      deps
+    );
+    expect(result).toMatchObject({ ok: false, status: 422, code: 'unexpected_input_image' });
+    expect(loadInputImage).not.toHaveBeenCalled();
+  });
+
   it('maps insufficient credits to 402', async () => {
     vi.mocked(holdCredits).mockRejectedValueOnce(insufficientCreditsError('You do not have enough credits'));
     expect(await createVideoJob({ user, request: validRequest, source: 'api' }, makeDeps().deps)).toMatchObject({
