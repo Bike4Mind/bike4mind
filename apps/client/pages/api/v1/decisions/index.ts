@@ -13,6 +13,7 @@ import {
   decisionCostUsd,
   decisionRequestHasImages,
   getDecisionModelCapabilities,
+  isDecisionModelId,
   maxDecisionCostUsd,
   normalizeDecisionAnswers,
   usdToCredits,
@@ -26,6 +27,8 @@ import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   DECISION_DEADLINE_MS,
+  DecisionOverloadedError,
+  DecisionProviderError,
   decideWithRetry,
   type DecideWithRetryResult,
   type ResolvedDecisionInput,
@@ -44,49 +47,54 @@ import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSour
  */
 const DECISIONS_RATE_LIMIT_PER_MINUTE = 300;
 
+/** Inline data: URL images push bodies past baseApi's 1 MB default; 4 MB stays under Lambda's 6 MB request cap. */
+const DECISIONS_MAX_BODY_BYTES = 4 * 1024 * 1024;
+
 const countByType = (answers: readonly DecisionAnswer[]) =>
   answers.reduce<Record<string, number>>(
     (counts, answer) => ({ ...counts, [answer.type]: (counts[answer.type] ?? 0) + 1 }),
     {}
   );
 
+// What failed, without the message: it can carry vendor text and caller-supplied choice values.
+const describeFailure = (error: unknown) => {
+  const providerError = error instanceof DecisionOverloadedError ? error.providerError : error;
+  return {
+    errorName: error instanceof Error ? error.name : typeof error,
+    providerErrorKind: providerError instanceof DecisionProviderError ? providerError.kind : undefined,
+    providerStatus: providerError instanceof DecisionProviderError ? providerError.details.status : undefined,
+  };
+};
+
 const handler = nextRouteForContract(createDecisionContract, {
+  maxBodySize: DECISIONS_MAX_BODY_BYTES,
   rateLimit: rateLimit({ limit: DECISIONS_RATE_LIMIT_PER_MINUTE, windowMs: 60_000, bucket: 'POST /api/v1/decisions' }),
 }).post(async (req, res) => {
   const body = req.validated;
-  const caps = getDecisionModelCapabilities(body.model);
+  const { model } = body;
+  const provider = isDecisionModelId(model) ? getDecisionProviderRegistry().forModel(model) : undefined;
+  if (!provider || !isDecisionModelId(model)) {
+    return res
+      .status(422)
+      .json({ error: `${model} is not served by this deployment.`, errorCode: 'model_unavailable', param: 'model' });
+  }
+  const caps = getDecisionModelCapabilities(model);
   const validation = validateDecisionRequest(body, caps);
   if (!validation.ok) {
     return res.status(422).json({ error: validation.message, errorCode: validation.code, param: validation.param });
-  }
-  const provider = getDecisionProviderRegistry().forModel(body.model);
-  if (!provider) {
-    return res
-      .status(422)
-      .json({
-        error: `${body.model} is not served by this deployment.`,
-        errorCode: 'model_unavailable',
-        param: 'model',
-      });
   }
 
   const userId = req.user.id;
   const apiKey = await resolveDecisionProviderKey(userId, caps.provider, req.logger);
   if (!apiKey) {
     return res.status(503).json({
-      error: `No ${caps.provider} credential is configured for decision model ${body.model}.`,
+      error: `No ${caps.provider} credential is configured for decision model ${model}.`,
       errorCode: 'provider_not_configured',
     });
   }
 
-  let input: ResolvedDecisionInput;
-  try {
-    input = await resolveDecisionInput(req, validation.request.input, caps);
-  } catch (error) {
-    if (sendDecisionError(res, error)) return;
-    throw error;
-  }
-
+  // The hold comes before image resolution, so a caller who cannot pay cannot make us download and decode files.
+  // The worst-case cost does not depend on the images.
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
   const maxCostUsd = maxDecisionCostUsd(caps);
   const reservation = await reserveRequestCredits({
@@ -100,6 +108,14 @@ const handler = nextRouteForContract(createDecisionContract, {
   const source = resolveRequestUsageSource(req);
   const apiKeyId = req.apiKeyInfo?.keyId;
   const startedAt = Date.now();
+  // A refund that throws must not replace the error the caller is owed.
+  const releaseHold = async () => {
+    try {
+      await reservation.refund();
+    } catch (err) {
+      req.logger.error('Failed to refund decision credit hold', { decisionId, err });
+    }
+  };
   const recordUsage = (
     status: 'ok' | 'error',
     usage: { model: string; inputTokens: number; outputTokens: number; costUsd: number; creditsCharged: number }
@@ -128,13 +144,22 @@ const handler = nextRouteForContract(createDecisionContract, {
       })
       .catch(err => req.logger.warn('Failed to record decision usage event', { err }));
 
+  let input: ResolvedDecisionInput;
+  try {
+    input = await resolveDecisionInput(req, validation.request.input, caps);
+  } catch (error) {
+    await releaseHold();
+    if (sendDecisionError(res, error)) return;
+    throw error;
+  }
+
   let outcome: DecideWithRetryResult;
   let answers: DecisionAnswer[];
   try {
     outcome = await decideWithRetry({
       provider,
       request: {
-        model: body.model,
+        model,
         input,
         questions: validation.request.questions,
         safetyIdentifier: body.safety_identifier ?? toProviderEndUserId(userId),
@@ -145,14 +170,9 @@ const handler = nextRouteForContract(createDecisionContract, {
     });
     answers = normalizeDecisionAnswers(validation.request.questions, outcome.decision.answers);
   } catch (error) {
-    await reservation.refund();
-    recordUsage('error', { model: body.model, inputTokens: 0, outputTokens: 0, costUsd: 0, creditsCharged: 0 });
-    req.logger.warn('Decision call failed', {
-      decisionId,
-      model: body.model,
-      provider: caps.provider,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    await releaseHold();
+    recordUsage('error', { model, inputTokens: 0, outputTokens: 0, costUsd: 0, creditsCharged: 0 });
+    req.logger.warn('Decision call failed', { decisionId, model, provider: caps.provider, ...describeFailure(error) });
     if (sendDecisionError(res, error)) return;
     throw error;
   }
@@ -202,7 +222,7 @@ export default handler;
 export const config = {
   api: {
     externalResolver: true,
-    // Inline data: URL images push bodies past Next's 1 MB default; 4 MB stays under Lambda's 6 MB request cap.
+    // Must match DECISIONS_MAX_BODY_BYTES, which baseApi checks first.
     bodyParser: { sizeLimit: '4mb' },
   },
 };

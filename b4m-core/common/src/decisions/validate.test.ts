@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DecisionsRequestSchema, type DecisionsRequest } from '../schemas/decisions';
-import { DECISION_MODEL_CATALOG } from './catalog';
+import { DECISION_MODEL_CATALOG, isDecisionModelId } from './catalog';
 import type { DecisionModelCapabilities } from './types';
 import { validateDecisionRequest } from './validate';
 
@@ -122,7 +122,10 @@ describe('DecisionsRequestSchema platform ceilings', () => {
     expect(parsed.success).toBe(false);
   });
 
-  it('rejects an unknown model', () => {
-    expect(DecisionsRequestSchema.safeParse({ ...request(), model: 'gpt-nope' }).success).toBe(false);
+  it('takes any model id on the wire and leaves the catalog check to isDecisionModelId', () => {
+    expect(DecisionsRequestSchema.safeParse({ ...request(), model: 'gpt-nope' }).success).toBe(true);
+    expect(isDecisionModelId('gpt-nope')).toBe(false);
+    expect(isDecisionModelId('toString')).toBe(false);
+    expect(isDecisionModelId('gpt-6-luna')).toBe(true);
   });
 });

@@ -3,6 +3,7 @@ import type { Logger } from '@bike4mind/observability';
 import { NotFoundError } from '@bike4mind/utils';
 import type { ResolvedDecisionInput, ResolvedDecisionInputPart } from '@bike4mind/utils/decisionProviders';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
+import { assertFilesReadScope } from '@server/files/fileScopes';
 import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
 import { getFilesStorage } from '@server/utils/storage';
 import type { Request } from 'express';
@@ -30,7 +31,9 @@ type ImageBytes = { bytes: Buffer; mimeType: string };
 const loadFileImage = async (req: Request, fileId: string, param: string): Promise<ImageBytes> => {
   const notFound = new DecisionImageError(404, 'input_image_not_found', param, `No readable file ${fileId}`);
   if (!isValidObjectId(fileId)) throw notFound;
-  // The same ACL gate as GET /api/v1/files/{id}, so this door cannot authorize differently.
+  // The same scope and ACL gates as GET /api/v1/files/{id}, so this door cannot authorize differently: an
+  // `ai:decide` key minted without `files:read` must not be able to ask questions about the owner's files.
+  assertFilesReadScope(req);
   const fabFile = await loadAccessibleFabFile(req, fileId).catch((error: unknown) => {
     throw error instanceof NotFoundError ? notFound : error;
   });
@@ -45,7 +48,9 @@ const loadFileImage = async (req: Request, fileId: string, param: string): Promi
     );
   }
   if (!isImageServeable(fabFile)) {
-    throw new DecisionImageError(422, 'unsupported_input', param, `File ${fileId} is withheld by moderation`);
+    const reason =
+      fabFile.moderationStatus === 'blocked' ? 'is blocked by moderation' : 'is still being scanned; retry shortly';
+    throw new DecisionImageError(422, 'unsupported_input', param, `File ${fileId} ${reason}`);
   }
   if (fabFile.fileSize > MAX_DECISION_IMAGE_FILE_BYTES) {
     throw new DecisionImageError(
@@ -75,11 +80,12 @@ const toDownscaledDataUrl = async (
 ): Promise<string> => {
   const bytes = await ensureImageWithinDimensionLimit(image.bytes, caps.limits.maxImageDimension, logger);
   if (!bytes) throw new DecisionImageError(422, 'limit_exceeded', param, 'Image declares too many pixels to decode');
-  // The resize re-encodes in the source format, so the mime type is unchanged.
+  // Labelled with the declared type: the bytes are only re-encoded when a resize happens, and then in the format jimp
+  // decoded. Formats jimp cannot decode (webp) pass through unresized, and the vendor enforces its own size cap.
   return `data:${image.mimeType};base64,${bytes.toString('base64')}`;
 };
 
-/** Resolves every image to a downscaled data URL. Run after `validateDecisionRequest`, which fixes the part shapes. */
+/** Resolves every image to a data URL, downscaled where the format allows. Run after `validateDecisionRequest`, which fixes the part shapes. */
 export const resolveDecisionInput = async (
   req: Request,
   input: DecisionInput,

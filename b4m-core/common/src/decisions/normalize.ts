@@ -27,6 +27,19 @@ const assertProbability = (probability: number | undefined, where: string, key: 
   return probability;
 };
 
+/**
+ * Rescales a distribution to sum to 1, so `score` stays a true mean and `confidence` stays in range under vendor
+ * rounding. A sum further off than per-option rounding (half a hundredth each) can explain is a broken answer.
+ */
+const toDistribution = (probabilities: readonly number[], where: string): number[] => {
+  const sum = probabilities.reduce((total, probability) => total + probability, 0);
+  const tolerance = Math.max(0.02, 0.005 * probabilities.length);
+  if (Math.abs(sum - 1) > tolerance) {
+    throw new DecisionResponseMismatchError(`${where}: probabilities sum to ${sum}, not 1`);
+  }
+  return probabilities.map(probability => probability / sum);
+};
+
 // Ties go to the earliest option in request order, so the pick is deterministic.
 const argmax = (values: readonly number[]): number =>
   values.reduce((best, value, index) => (value > values[best] ? index : best), 0);
@@ -45,7 +58,10 @@ const normalizeAnswer = (question: DecisionQuestion, raw: RawDecisionAnswer, whe
       value,
       probability: assertProbability(raw.probabilities[value], where, value),
     }));
-    const distribution = probabilities.map(entry => entry.probability);
+    const distribution = toDistribution(
+      probabilities.map(entry => entry.probability),
+      where
+    );
     return {
       type: 'choice',
       name,
@@ -60,7 +76,10 @@ const normalizeAnswer = (question: DecisionQuestion, raw: RawDecisionAnswer, whe
       label,
       probability: assertProbability(raw.probabilities[index], where, index),
     }));
-    const distribution = probabilities.map(entry => entry.probability);
+    const distribution = toDistribution(
+      probabilities.map(entry => entry.probability),
+      where
+    );
     return {
       type: 'score',
       name,

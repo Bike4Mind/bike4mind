@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { ApiErrorCode } from '../apiErrorCodes';
-import { DECISION_PLATFORM_LIMITS, DecisionModelIdSchema } from '../decisions/catalog';
-import { DECISION_PROVIDER_IDS } from '../decisions/types';
+import { DECISION_PLATFORM_LIMITS } from '../decisions/catalog';
 import { ApiErrorSchema } from './chat';
 
 /**
@@ -97,7 +96,7 @@ export const DecisionQuestionSchema = z.discriminatedUnion('type', [
 ]);
 
 export const DecisionsRequestSchema = z.strictObject({
-  model: DecisionModelIdSchema,
+  model: z.string().min(1).max(128).describe('A decision model id from `GET /api/v1/decision-models`.'),
   input: DecisionInputSchema,
   questions: z.array(DecisionQuestionSchema).min(1).max(DECISION_PLATFORM_LIMITS.maxQuestions),
   safety_identifier: z
@@ -164,7 +163,8 @@ export const DecisionModelSchema = z.object({
   id: z.string(),
   object: z.literal('decision_model'),
   display_name: z.string(),
-  provider: z.enum(DECISION_PROVIDER_IDS),
+  // Open on the wire so a provider added later never fails an older client's parse.
+  provider: z.string(),
   alias_of: z.string().nullable().describe('Set on a floating alias; pin the versioned id to keep thresholds stable.'),
   supports_images: z.boolean(),
   limits: z.object({
@@ -184,7 +184,6 @@ export const ListDecisionModelsResponseSchema = z.object({ models: z.array(Decis
 
 export const DECISIONS_ERROR_CODES = [
   'insufficient_credits',
-  'spend_cap_exceeded',
   'provider_not_configured',
   'provider_rejected',
   'provider_overloaded',

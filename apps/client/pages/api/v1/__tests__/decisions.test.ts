@@ -65,10 +65,8 @@ vi.mock('@server/decisions/providers', async () => {
   const provider = {
     id: 'test',
     models: ['test-decisions'],
-    decide: (...a: Parameters<typeof real.decide>) => {
-      providerSpy(...a);
-      return real.decide(...a);
-    },
+    // A test can stage a vendor answer or failure through the spy; otherwise the real test provider answers.
+    decide: async (...a: Parameters<typeof real.decide>) => (await providerSpy(...a)) ?? real.decide(...a),
   };
   return {
     getDecisionProviderRegistry: () => ({
@@ -110,14 +108,14 @@ const QUESTIONS = [
   },
 ];
 
-const run = async (body: Record<string, unknown>) => {
+const run = async (body: Record<string, unknown>, scopes: string[] = ['ai:decide', 'files:read']) => {
   const { req, res } = createMocks({
     method: 'POST',
     body: { model: 'test-decisions', questions: QUESTIONS, ...body },
   });
   Object.assign(req, {
     user: { id: 'u1' },
-    apiKeyInfo: { keyId: 'k1' },
+    apiKeyInfo: { keyId: 'k1', scopes },
     logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   });
   await (handler as unknown as Handler)(req, res);
@@ -187,9 +185,14 @@ describe('POST /api/v1/decisions', () => {
     expect(reserve).not.toHaveBeenCalled();
   });
 
-  it('rejects an http(s) image URL and an unknown model at the schema', async () => {
+  it('rejects an http(s) image URL at the schema', async () => {
     expect((await run({ input: [{ type: 'image', image_url: 'https://example.com/a.png' }] })).status).toBe(422);
-    expect((await run({ input: 'x', model: 'gpt-nope' })).status).toBe(422);
+  });
+
+  it('answers an id outside the catalog with 422 model_unavailable', async () => {
+    const { status, body } = await run({ input: 'x', model: 'gpt-nope' });
+    expect(status).toBe(422);
+    expect(body).toMatchObject({ errorCode: 'model_unavailable', param: 'model' });
   });
 
   it('returns 422 model_unavailable for a catalog model this deployment does not serve', async () => {
@@ -225,6 +228,41 @@ describe('POST /api/v1/decisions', () => {
     expect(refund).toHaveBeenCalled();
   });
 
+  it('answers 502 provider_error and refunds once when the vendor answers the wrong questions', async () => {
+    providerSpy.mockResolvedValueOnce({
+      model: 'test-decisions',
+      answers: [],
+      usage: { inputTokens: 1, outputTokens: 0 },
+    });
+    const { status, body } = await run({ input: 'x' });
+    expect(status).toBe(502);
+    expect(body.errorCode).toBe('provider_error');
+    expect(refund).toHaveBeenCalledTimes(1);
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('refunds once and still surfaces an unexpected error when the refund itself fails', async () => {
+    providerSpy.mockRejectedValueOnce(new Error('adapter bug'));
+    refund.mockRejectedValueOnce(new Error('ledger down'));
+    const { status } = await run({ input: 'x' });
+    expect(status).toBe(500);
+    expect(refund).toHaveBeenCalledTimes(1);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+  });
+
+  it('settles a priced model at its token cost', async () => {
+    providerSpy.mockResolvedValueOnce({
+      model: 'gpt-6-luna',
+      answers: [{ type: 'predicate', probability: 0.9 }, { type: 'refusal' }, { type: 'refusal' }],
+      usage: { inputTokens: 1_000_000, outputTokens: 0 },
+    });
+    const { status } = await run({ input: 'x', model: 'gpt-6-luna' });
+
+    expect(status).toBe(200);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-6-luna', costUsd: 0.1 }));
+    expect(settle.mock.calls[0][0]).toBeGreaterThan(0);
+  });
+
   it('returns 422 insufficient_credits from the credit hold', async () => {
     reserve.mockRejectedValue(insufficientCreditsError('Not enough credits'));
     const { status } = await run({ input: 'x' });
@@ -256,7 +294,14 @@ describe('POST /api/v1/decisions', () => {
       const { status, body } = await run({ input: [{ type: 'image', file_id: FILE_ID }] });
       expect(status).toBe(404);
       expect(body).toMatchObject({ errorCode: 'input_image_not_found', param: 'input[0].file_id' });
-      expect(reserve).not.toHaveBeenCalled();
+      expect(refund).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a key without files:read before touching the file', async () => {
+      const { status } = await run({ input: [{ type: 'image', file_id: FILE_ID }] }, ['ai:decide']);
+      expect(status).toBe(403);
+      expect(loadFile).not.toHaveBeenCalled();
+      expect(refund).toHaveBeenCalledTimes(1);
     });
 
     it('refuses an image moderation has not cleared', async () => {

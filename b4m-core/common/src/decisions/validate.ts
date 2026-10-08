@@ -3,7 +3,7 @@ import { DECISION_PLATFORM_LIMITS } from './catalog';
 import type { DecisionModelCapabilities } from './types';
 
 declare const validatedBrand: unique symbol;
-/** A request checked against its model's caps. Providers accept only this, so validation cannot be skipped. */
+/** A request checked against its model's caps. Branded, so `validateDecisionRequest` is the only way to obtain one. */
 export type ValidatedDecisionRequest = DecisionsRequest & { readonly [validatedBrand]: true };
 
 export const DECISION_VALIDATION_ERROR_CODES = ['limit_exceeded', 'unsupported_input', 'invalid_request'] as const;

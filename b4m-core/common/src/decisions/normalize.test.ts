@@ -65,7 +65,33 @@ describe('normalizeDecisionAnswers', () => {
     expect(choice.type === 'choice' && choice.choice).toBe('billing');
   });
 
+  it('rescales a rounded distribution so the score stays a true mean', () => {
+    const [, , score] = normalizeDecisionAnswers(questions, [
+      { type: 'predicate', probability: 0.5 },
+      { type: 'refusal' },
+      { type: 'score', probabilities: { 0: 0.33, 1: 0.33, 2: 0.33 } },
+    ]);
+    expect(score.type === 'score' && score.score).toBeCloseTo(1, 10);
+    expect(score.type === 'score' && score.probabilities.map(entry => entry.probability)).toEqual([0.33, 0.33, 0.33]);
+  });
+
   it.each([
+    {
+      label: 'an all-zero score distribution',
+      raw: [
+        { type: 'predicate' as const, probability: 0.5 },
+        { type: 'refusal' as const },
+        { type: 'score' as const, probabilities: { 0: 0, 1: 0, 2: 0 } },
+      ],
+    },
+    {
+      label: 'a choice distribution summing well past 1',
+      raw: [
+        { type: 'predicate' as const, probability: 0.5 },
+        { type: 'choice' as const, probabilities: { billing: 0.9, technical: 0.9, sales: 0 } },
+        { type: 'refusal' as const },
+      ],
+    },
     { label: 'an answer count mismatch', raw: [{ type: 'predicate' as const, probability: 0.5 }] },
     {
       label: 'a type mismatch',

@@ -73,7 +73,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.AI_DECIDE,
     label: 'AI Decide',
-    description: 'Answer typed questions with probabilities (no text generation)',
+    description: 'Answer yes/no, pick-one and rating questions with probabilities',
     endpoints: ['POST /api/v1/decisions', 'GET /api/v1/decision-models', 'GET /api/v1/credits'],
   },
   {

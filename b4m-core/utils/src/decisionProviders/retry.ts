@@ -10,6 +10,8 @@ import {
 export const DECISION_DEADLINE_MS = { text: 10_000, images: 30_000 } as const;
 
 const RETRY_JITTER_MS = { min: 100, max: 400 } as const;
+/** A retry that would get less than this before the deadline is not worth the wait; answer 503 at once instead. */
+const MIN_RETRY_ATTEMPT_MS = 2_000;
 /** What we tell the caller to wait when the vendor gave no `retry-after` of its own. */
 const DEFAULT_RETRY_AFTER_MS = 1_000;
 
@@ -47,10 +49,9 @@ const attempt = async (options: DecideWithRetryOptions, timeoutMs: number): Prom
     return await provider.decide(request, { apiKey, logger, signal });
   } catch (error) {
     if (error instanceof DecisionProviderError) throw error;
-    // A timeout or dropped connection is the same retryable condition as a 5xx.
-    if (signal.aborted || error instanceof TypeError) {
-      throw new DecisionProviderError('overloaded', signal.aborted ? 'decision provider timed out' : String(error));
-    }
+    // A timeout is the same retryable condition as a 5xx. Dropped connections are already mapped by postJson, so
+    // anything else here is an adapter bug and must surface as a 500, not a retried 503.
+    if (signal.aborted) throw new DecisionProviderError('overloaded', 'decision provider timed out');
     throw error;
   }
 };
@@ -69,7 +70,7 @@ export const decideWithRetry = async (options: DecideWithRetryOptions): Promise<
     const jitter = RETRY_JITTER_MS.min + random() * (RETRY_JITTER_MS.max - RETRY_JITTER_MS.min);
     const delay = error.details.retryAfterMs ?? jitter;
     const retryAfterSeconds = Math.ceil((error.details.retryAfterMs ?? DEFAULT_RETRY_AFTER_MS) / 1000);
-    if (now() + delay >= deadline) throw new DecisionOverloadedError(retryAfterSeconds, 0, error);
+    if (now() + delay + MIN_RETRY_ATTEMPT_MS > deadline) throw new DecisionOverloadedError(retryAfterSeconds, 0, error);
     await sleep(delay);
     try {
       return { decision: await attempt(options, deadline - now()), retries: 1 };

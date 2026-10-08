@@ -2,8 +2,8 @@
 export const DECISION_PROVIDER_IDS = ['test', 'openai'] as const;
 export type DecisionProviderId = (typeof DECISION_PROVIDER_IDS)[number];
 
-// Adapters are keyed by wire protocol, not vendor: one protocol can front several vendors (e.g. a Jev-compatible
-// `systemOne` endpoint served by more than one host).
+// Adapters are keyed by wire protocol, not vendor: one protocol can front several vendors (e.g. one
+// vendor-compatible endpoint served by more than one host).
 export const DECISION_PROTOCOLS = ['test', 'openaiDecisions'] as const;
 export type DecisionProtocol = (typeof DECISION_PROTOCOLS)[number];
 
