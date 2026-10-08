@@ -19,8 +19,11 @@ export type LakeRagAuth = {
   /** The header for an API key; a renewing credential for the e2e user's short-lived JWT. */
   authorization: string | LakeRagCredential;
   source: 'api-key' | 'e2e-user';
-  /** Deletes the throwaway user and its data, lakes included; a no-op for an API key. Runs at most once. */
-  cleanup(): Promise<void>;
+  /**
+   * Deletes the throwaway user and its data, lakes included, and resolves to the number of lakes
+   * it deleted; a no-op resolving 0 for an API key. Runs at most once.
+   */
+  cleanup(): Promise<number>;
 };
 
 const API_KEY_PREFIX = 'b4m_live_';
@@ -64,7 +67,7 @@ export async function resolveLakeRagAuth(opts: LakeRagAuthOptions): Promise<Lake
   const apiKey = opts.apiKey?.trim();
   if (apiKey) {
     if (!apiKey.startsWith(API_KEY_PREFIX)) throw new Error(`LakeRag auth: API key must start with ${API_KEY_PREFIX}`);
-    return { authorization: `Bearer ${apiKey}`, source: 'api-key', cleanup: async () => {} };
+    return { authorization: `Bearer ${apiKey}`, source: 'api-key', cleanup: async () => 0 };
   }
 
   const secret = opts.e2eCleanupSecret?.trim();
@@ -77,13 +80,19 @@ export async function resolveLakeRagAuth(opts: LakeRagAuthOptions): Promise<Lake
   if (!TEST_ID.test(testId)) throw new Error('LakeRag auth: testId must be letters and digits only');
   const createUrl = lakeRagUrl(opts.baseUrl, '/api/test/create-user');
 
-  let cleanupRun: Promise<void> | undefined;
+  let cleanupRun: Promise<number> | undefined;
   const cleanup = () =>
     (cleanupRun ??= (async () => {
       const url = lakeRagUrl(opts.baseUrl, '/api/test/cleanup');
       url.searchParams.set('testId', testId);
       const out = await fetchImpl(url, { method: 'DELETE', headers: { [SECRET_HEADER]: secret } });
       if (!out.ok) throw new Error(`LakeRag auth: cleanup ${testId} -> ${out.status}`);
+      // The route answers 200 with zero users when the scope matched nothing, which would strand
+      // the user's lakes behind a successful-looking cleanup.
+      const cleaned = parseJson(await out.text()).cleaned as Record<string, unknown> | undefined;
+      const users = typeof cleaned?.users === 'number' ? cleaned.users : 0;
+      if (users < 1) throw new Error(`LakeRag auth: cleanup ${testId} matched no user`);
+      return typeof cleaned?.dataLakes === 'number' ? cleaned.dataLakes : 0;
     })());
 
   const handle = `lakerag-${testId}-${digits}-e2e`;

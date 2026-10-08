@@ -32,12 +32,16 @@ export function lakeRagUrl(baseUrl: string, path: string): URL {
 }
 
 const MAX_EXCERPT = 200;
+const MAX_SCANNED = 8192;
 
 /** A server body made safe for errors, stdout and the JSON report: one line, token-shaped runs redacted, capped. */
 export function bodyExcerpt(text: string): string {
+  // The JWT pattern can never fail once started, so it does not backtrack; the input cap bounds the
+  // work, and a token cut by the cap is still redacted.
   const flat = text
+    .slice(0, MAX_SCANNED)
     .replace(/b4m_live_[A-Za-z0-9_-]+/g, 'b4m_live_[redacted]')
-    .replace(/eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[jwt redacted]')
+    .replace(/eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*)*/g, '[jwt redacted]')
     // eslint-disable-next-line no-control-regex -- stripping control bytes is the point
     .replace(/[\x00-\x1f\x7f\s]+/g, ' ')
     .trim();

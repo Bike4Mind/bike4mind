@@ -4,7 +4,11 @@ import { call, LakeRagHttpError, type LakeRagCredential } from './http';
 
 type Call = { method: string; url: URL; headers: Record<string, string>; body?: string };
 
-function fakeServer(createStatus = 201, createBody: unknown = { user: {}, accessToken: 'jwt-abc', refreshToken: 'r' }) {
+function fakeServer(
+  createStatus = 201,
+  createBody: unknown = { user: {}, accessToken: 'jwt-abc', refreshToken: 'r' },
+  cleanupBody: unknown = { success: true, cleaned: { users: 1, dataLakes: 3 } }
+) {
   const calls: Call[] = [];
   const fetchImpl = (async (input: URL | string, init: RequestInit = {}) => {
     calls.push({
@@ -16,6 +20,7 @@ function fakeServer(createStatus = 201, createBody: unknown = { user: {}, access
     if (String(input).includes('/api/test/create-user')) {
       return new Response(JSON.stringify(createBody), { status: createStatus });
     }
+    if (String(input).includes('/api/test/cleanup')) return new Response(JSON.stringify(cleanupBody), { status: 200 });
     return new Response('{}', { status: 200 });
   }) as typeof fetch;
   return { calls, fetchImpl };
@@ -73,6 +78,21 @@ describe('resolveLakeRagAuth', () => {
     expect(cleanups[0].method).toBe('DELETE');
     expect(cleanups[0].url.searchParams.get('testId')).toBe('run42');
     expect(cleanups[0].headers['x-e2e-cleanup-secret']).toBe('s3cret');
+  });
+
+  it('reports the lakes the cleanup deleted', async () => {
+    const { fetchImpl } = fakeServer();
+    const auth = await resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl });
+    await expect(auth.cleanup()).resolves.toBe(3);
+  });
+
+  it.each([
+    ['zero users', { success: true, cleaned: { users: 0 }, message: 'No e2e test users found' }],
+    ['no counts', {}],
+  ])('fails a cleanup that reports %s, which would strand the lakes', async (_label, cleanupBody) => {
+    const { fetchImpl } = fakeServer(201, undefined, cleanupBody);
+    const auth = await resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl });
+    await expect(auth.cleanup()).rejects.toThrow(/matched no user/);
   });
 
   it('generates a non-empty testId when none is given', async () => {
