@@ -80,7 +80,12 @@ describe('B4mApiClient', () => {
     mockPost.mockResolvedValue({ catalog });
     const queries = [{ key: 'general', type: 'general' }];
     await expect(client.getBriefcaseCatalog(queries)).resolves.toEqual(catalog);
-    expect(mockPost).toHaveBeenCalledWith('/api/briefcase/catalog', { queries });
+    // Origin satisfies the route's csrfProtection for a login (JWT) caller.
+    expect(mockPost).toHaveBeenCalledWith(
+      '/api/briefcase/catalog',
+      { queries },
+      { headers: { Origin: 'http://localhost:3000' } }
+    );
   });
 
   it('gets a briefcase prompt by id (url-encoded) and unwraps it', async () => {

@@ -110,6 +110,14 @@ describe('registerPrompts', () => {
       expect(result.messages[0].content).toEqual({ type: 'text', text: '{{userName}} at {{organization}}: {{topic}}' });
     });
 
+    it('treats a blank argument as unsupplied, keeping its placeholder', async () => {
+      const mcpClient = await connect(withText('Hi {{userName}}'));
+
+      const result = await mcpClient.getPrompt({ name: GENERAL_ID, arguments: { userName: '' } });
+
+      expect(result.messages[0].content).toEqual({ type: 'text', text: 'Hi {{userName}}' });
+    });
+
     it('does not let an argument override a clock key', async () => {
       const mcpClient = await connect(withText('{{currentDate}}'));
 
@@ -124,6 +132,19 @@ describe('registerPrompts', () => {
 
       await expect(mcpClient.getPrompt({ name: '../catalog' })).rejects.toThrow('Prompt ../catalog not found');
       expect(getBriefcasePrompt).not.toHaveBeenCalled();
+    });
+
+    it('reports a prompt the API no longer finds as not found', async () => {
+      const notFound = new AxiosError('not found', undefined, {} as InternalAxiosRequestConfig, {}, {
+        status: 404,
+        statusText: '',
+        data: { error: 'Prompt not found' },
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      } as AxiosResponse);
+      const mcpClient = await connect(mockClient({ getBriefcasePrompt: vi.fn().mockRejectedValue(notFound) }));
+
+      await expect(mcpClient.getPrompt({ name: GENERAL_ID })).rejects.toThrow(`Prompt ${GENERAL_ID} not found`);
     });
 
     it('surfaces a mapped API error', async () => {

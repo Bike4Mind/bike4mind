@@ -30,7 +30,7 @@
         "apps/client/pages/api/briefcase/prompts/index.ts",
         "apps/client/pages/api/briefcase/prompts/[id].ts",
         "apps/client/pages/api/briefcase/__tests__/catalog.api.test.ts",
-        "apps/client/app/utils/briefcase/promptResolution.ts",
+        "b4m-core/common/src/briefcasePromptResolution.ts",
         "apps/client/app/utils/briefcase/referenceGuard.ts",
         "apps/client/app/utils/briefcase/dispatchDedup.ts",
         "apps/client/app/hooks/data/briefcase.ts",

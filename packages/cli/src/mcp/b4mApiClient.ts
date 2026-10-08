@@ -442,13 +442,22 @@ export class B4mApiClient {
     });
   }
 
-  /** POST /api/briefcase/catalog: a key -> prompts map, one entry per query key. */
+  /**
+   * POST /api/briefcase/catalog: a key -> prompts map, one entry per query key.
+   *
+   * The route runs csrfProtection, which exempts API-key requests but rejects a
+   * login (JWT bearer) request that carries no Origin - and Node sends none. CSRF
+   * defends browsers, so a non-browser client naming the backend's own origin is
+   * the intended pass, not a bypass.
+   */
   async getBriefcaseCatalog(
     queries: readonly PromptBatchQueryType[]
   ): Promise<Record<string, RawBriefcasePrompt[] | undefined>> {
-    const result = await this.client.post<{ catalog: Record<string, RawBriefcasePrompt[]> }>('/api/briefcase/catalog', {
-      queries,
-    });
+    const result = await this.client.post<{ catalog: Record<string, RawBriefcasePrompt[]> }>(
+      '/api/briefcase/catalog',
+      { queries },
+      { headers: { Origin: new URL(this.baseURL).origin } }
+    );
     return result.catalog;
   }
 

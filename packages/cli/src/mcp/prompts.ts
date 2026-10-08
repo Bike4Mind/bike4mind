@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   ErrorCode,
@@ -68,8 +69,12 @@ async function listPrompts(client: B4mApiClient): Promise<ListPromptsResult> {
   }
 }
 
+// A client may send '' for an optional field left blank; treat it as unsupplied so
+// the placeholder stays in place instead of being erased.
 function toPromptContext(args: Record<string, string> | undefined, now: Date): IPromptContext {
-  const supplied = Object.entries(args ?? {}).filter(([name]) => PROMPT_ARGUMENT_NAMES.has(name));
+  const supplied = Object.entries(args ?? {}).filter(
+    ([name, value]) => PROMPT_ARGUMENT_NAMES.has(name) && value !== ''
+  );
   return { ...buildPromptContext(null, null, now), ...Object.fromEntries(supplied) };
 }
 
@@ -80,13 +85,15 @@ async function getPrompt(
   args: Record<string, string> | undefined,
   now: Date
 ): Promise<GetPromptResult> {
+  const notFound = new McpError(ErrorCode.InvalidParams, `Prompt ${name} not found`);
   const id = BriefcasePromptIdSchema.safeParse(name);
-  if (!id.success) throw new McpError(ErrorCode.InvalidParams, `Prompt ${name} not found`);
+  if (!id.success) throw notFound;
 
   let prompt: RawBriefcasePrompt;
   try {
     prompt = await client.getBriefcasePrompt(id.data);
   } catch (err) {
+    if (isAxiosError(err) && err.response?.status === 404) throw notFound;
     throw new Error(mapApiError(err, client.baseURL));
   }
   if (!prompt.promptText) throw new Error(`Prompt ${name} has no text`);
