@@ -287,6 +287,15 @@ describe('findStaleResults with apply_patch', () => {
     );
   });
 
+  it('reads a patch the model sent under another argument, as apply_patch does', () => {
+    const misnamed = call(
+      'apply_patch',
+      { patch: '*** Begin Patch\n*** Delete File: /p/a.ts\n*** End Patch' },
+      'Applied'
+    );
+    expect(staleAfter(misnamed)).toBe(true);
+  });
+
   it('ignores a patch that failed', () => {
     const failed = { ...patch('*** Delete File: /p/a.ts'), status: 'error' as const, error: 'nope' };
     expect(staleAfter(failed)).toBe(false);

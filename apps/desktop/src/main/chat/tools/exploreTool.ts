@@ -287,11 +287,17 @@ export async function checkQuotes(
     return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : path;
   };
 
+  // Whole path names only: `index.ts` must not match inside `src/index.ts`, nor `a.ts` in `a.tsx`.
+  const pathChar = /[\w./\\-]/;
+  const bounded = (at: number, length: number): boolean =>
+    !pathChar.test(report[at - 1] ?? ' ') &&
+    !/[\w-]/.test(report[at + length] ?? ' ') &&
+    !(report[at + length] === '.' && /\w/.test(report[at + length + 1] ?? ' '));
   const mentions: { at: number; path: string }[] = [];
   for (const path of readPaths) {
     for (const name of new Set([path, shown(path)])) {
       for (let at = report.indexOf(name); at !== -1; at = report.indexOf(name, at + 1)) {
-        mentions.push({ at, path });
+        if (bounded(at, name.length)) mentions.push({ at, path });
       }
     }
   }

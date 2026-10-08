@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatUsage } from '@shared/chat';
@@ -327,6 +327,15 @@ describe('checkQuotes', () => {
     const note = await checkQuotes(report, new Set([join(root, 'a.ts'), join(root, 'b.ts')]), root);
     expect(note).toContain('b.ts: "const a = 1;"');
     expect(note).not.toContain('a.ts: "const a = 1;"');
+  });
+
+  it('matches whole path names, not a shorter name inside a longer one', async () => {
+    await mkdir(join(root, 'src'));
+    await writeFile(join(root, 'src', 'a.ts'), 'const nested = 3;\n');
+    await writeFile(join(root, 'a.tsx'), 'const x = 4;\n');
+    const read = new Set([join(root, 'a.ts'), join(root, 'src', 'a.ts'), join(root, 'a.tsx')]);
+    const report = `src/a.ts:\n${block('const nested = 3;')}\n${join(root, 'a.tsx')}:\n${block('const x = 4;')}`;
+    expect(await checkQuotes(report, read, root)).toBe('');
   });
 
   it('only opens files the explorer read', async () => {

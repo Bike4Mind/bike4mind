@@ -380,9 +380,20 @@ describe('applyChunks', () => {
       const result = applyChunks(file, updateChunks('@@', ' function a() {', ' ...', '-  three();', '+  four();'));
       expect(result.failures).toHaveLength(1);
       expect(result.failures[0].message).toContain('Line 2 of the hunk stands "..."');
-      expect(() => updateChunks('@@', ' function a() {', '...', '-  three();')).toThrow(
-        'A hunk cannot skip lines with "..."'
+      for (const skip of ['...', '\u2026']) {
+        expect(() => updateChunks('@@', ' function a() {', skip, '-  three();')).toThrow(
+          'A hunk cannot skip lines with "..."'
+        );
+      }
+    });
+
+    it('does not call a real "..." line of the file an abbreviation', () => {
+      const file = ['class P(Protocol):', '    def run(self) -> None:', '        ...', 'x = 1'];
+      const result = applyChunks(
+        file,
+        updateChunks('@@', '     def run(self) -> None:', '         ...', '-x = 2', '+x = 3')
       );
+      expect(result.failures[0].message).not.toContain('stands "..."');
     });
 
     it('does not call an ordinary differing line an abbreviation', () => {

@@ -4,6 +4,7 @@ import type { ChatDiff } from '@shared/chat';
 import { buildDiff } from './diff';
 import {
   applyChunks,
+  findPatchText,
   PATCH_BEGIN,
   parsePatch,
   PatchParseError,
@@ -137,19 +138,9 @@ function displayPath(target: string, context: ToolContext): string {
   return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? target : rel.split('\\').join('/');
 }
 
-/**
- * The patch, wherever the model put it. Function arguments are not schema-constrained (the
- * adapters send tools with strict off), and GPT models trained on Codex's freeform apply_patch
- * send it as `patch` or `input` instead of `patchText`. Another key is taken only when exactly
- * one argument holds a patch envelope, so nothing that is not a patch is ever applied.
- */
-export function patchTextOf(input: Record<string, unknown>): string {
-  const named = input.patchText;
-  if (typeof named === 'string' && named.trim() !== '') return named;
-  const envelopes = Object.entries(input).filter(
-    ([key, value]) => key !== 'patchText' && typeof value === 'string' && value.includes(PATCH_BEGIN)
-  );
-  if (envelopes.length === 1) return envelopes[0][1] as string;
+function patchTextOf(input: Record<string, unknown>): string {
+  const found = findPatchText(input);
+  if (found !== undefined) return found;
   const keys = Object.keys(input);
   throw new Error(
     'The "patchText" argument is required and must be a non-empty string holding the whole patch, from ' +

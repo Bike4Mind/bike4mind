@@ -39,6 +39,21 @@ export type PatchOp =
   | { kind: 'delete'; path: string }
   | { kind: 'update'; path: string; moveTo?: string; chunks: PatchChunk[] };
 
+/**
+ * The patch text in a tool call's arguments, wherever the model put it. Function arguments are
+ * not schema-constrained (the adapters send tools with strict off), and GPT models trained on
+ * Codex's freeform apply_patch send it as `patch` or `input` instead of `patchText`. Another key
+ * counts only when exactly one argument holds a patch envelope, so nothing else is ever applied.
+ */
+export function findPatchText(input: Record<string, unknown>): string | undefined {
+  const named = input.patchText;
+  if (typeof named === 'string' && named.trim() !== '') return named;
+  const envelopes = Object.entries(input).filter(
+    ([key, value]) => key !== 'patchText' && typeof value === 'string' && value.includes(PATCH_BEGIN)
+  );
+  return envelopes.length === 1 ? (envelopes[0][1] as string) : undefined;
+}
+
 /** Models paste the patch the way a shell would take it: `cat <<'EOF' ... EOF`. */
 function stripHeredoc(text: string): string {
   const match = /^(?:(?:cat|apply_patch)\s+)?<<-?['"]?(\w+)['"]?[ \t]*\n([\s\S]*?)\n[ \t]*\1[ \t]*$/.exec(text);
@@ -158,7 +173,7 @@ function parseChunks(
         chunk.newLines.push(line.slice(1));
         chunk.body.push({ mark: ' ', text: line.slice(1) });
       } else {
-        const skip = line.trim().startsWith('...')
+        const skip = foldLine(line).startsWith('...')
           ? ' A hunk cannot skip lines with "..."; quote every line between its first and last.'
           : '';
         throw new PatchParseError(
@@ -243,10 +258,10 @@ export function seekSequence(
 ): { index: number; level: MatchLevel } | null {
   if (pattern.length === 0) return null;
   for (const level of LEVELS) {
-    const loose = level === 'unicode';
-    const hay = loose ? foldedLines(lines) : lines;
-    const needle = loose ? pattern.map(foldLine) : pattern;
-    const same = level === 'unicode' ? COMPARE.exact : COMPARE[level];
+    const [hay, needle, same] =
+      level === 'unicode'
+        ? [foldedLines(lines), pattern.map(foldLine), COMPARE.exact]
+        : [lines, pattern, COMPARE[level]];
     if (endOfFile) {
       const last = hay.length - needle.length;
       if (last >= from && matchesAt(hay, needle, last, same)) return { index: last, level };
@@ -397,7 +412,8 @@ function elidedLine(lines: readonly string[], expected: readonly string[]): numb
   for (const [offset, line] of expected.entries()) {
     const wanted = foldLine(line);
     const stem = wanted.replace(/(?:\.\.\.)+$/, '').trimEnd();
-    if (stem === wanted) continue;
+    // A real line of the file that happens to end in "...", like a Python `...` body.
+    if (stem === wanted || folded.includes(wanted)) continue;
     if (stem === '' || stem === '//' || stem === '#' || stem === '*') return offset + 1;
     if (stem.length >= MIN_ELIDED_STEM && folded.some(text => text !== wanted && text.startsWith(stem))) {
       return offset + 1;
