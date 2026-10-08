@@ -1,0 +1,46 @@
+existingSecret: ''
+images:
+  app: ''
+  chatcompletion: ''
+  ws: ''
+  subscriberFanout: ''
+  minio: ''
+  mc: ''
+  mongo: mongo:7@sha256:1f995ad6fdb93244a1addab1b58f934a0bc2f5643c38e02f5e9d7f0c7d227a7b
+  sqs: softwaremill/elasticmq-native@sha256:e4580ab9ad1bd5cd37b4ba04911bc5ccc8cd2d9ab4de56ece65acee71c24e05c
+  mail: axllent/mailpit@sha256:b68349e3a014b90c5610bfb26b2ae36f3892d7b8cf25ee140c6c71c98d2fcf48
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+agentExecutor:
+  enabled: false
+  image: ''
+storage:
+  className: null
+  mongo: 10Gi
+  minio: 20Gi
+  sqs: 5Gi
+initializationRevision: '1'
+mongoDnsGuardSeconds: 300
+config:
+  APP_URL: http://localhost:3000
+  WEBSOCKET_URL: ws://localhost:3001
+  CHAT_COMPLETION_PUBLIC_URL: http://localhost:8788
+resources:
+  app:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: '2', memory: 2Gi }
+  chatcompletion:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: '2', memory: 2Gi }
+  worker:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: '2', memory: 2Gi }
+  ws:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: '1', memory: 256Mi }
+  subscriberFanout:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: '1', memory: 512Mi }
+  backing:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: '2', memory: 2Gi }
