@@ -6,6 +6,8 @@ import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
 import {
   IChatHistoryItemDocument,
+  IChatHistoryItemRepository,
+  ISessionRepository,
   ILatticeModel,
   IUserDocument,
   IFabFileRepository,
@@ -102,8 +104,16 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
-    /** The image tools bump the session's imageCount through this (see recordGeneratedImages). */
-    sessions?: GeneratedImageCounter;
+    /**
+     * The image tools bump the session's imageCount through this (see recordGeneratedImages).
+     * `findAllByIds` pairs with `quests` below for resolveOwnedGeneratedImageUrl.
+     */
+    sessions?: GeneratedImageCounter & Partial<Pick<ISessionRepository, 'findAllByIds'>>;
+    /**
+     * Owner lookup for generated-image keys (see resolveOwnedGeneratedImageUrl). Absent (or
+     * `sessions.findAllByIds` absent) means every generated key is refused - fail closed.
+     */
+    quests?: Pick<IChatHistoryItemRepository, 'findSessionIdsByImage'>;
     fabfilechunks?: Pick<
       IFabFileChunkRepository,
       | 'findByFabFileId'

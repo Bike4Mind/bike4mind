@@ -241,6 +241,7 @@ import {
   shouldOfferSkillTool,
 } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
+import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 import {
   ContextTelemetryAlertsSchema,
   sanitizeTelemetryError,
@@ -3522,33 +3523,12 @@ export class ChatCompletionProcess {
           : [],
         mementos: featureContextMessages['mementos'],
         project: featureContextMessages['project'],
-        // Recently generated images - gives the model a handle to edit a prior
-        // generated image ("make it cartoonish"). Generated images persist as
-        // bare storage keys in quest.images with no fabFile record, so without
-        // this note the model can't reference them and either declines or (worse)
-        // claims success without calling a tool. Gated on edit_image reaching the
-        // built tool list, like the two prompts above: the requested list agrees today
-        // only because edit_image is never auto-added, which is exactly the assumption
-        // that broke the view registry once navigate_view became auto-added.
-        recentImages:
-          editImageAvailable && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
-            ? [
-                {
-                  role: 'system' as const,
-                  content: [
-                    '# Recently generated images',
-                    '',
-                    'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
-                    '',
-                    ...cacheInfo.recentGeneratedImages!.map(
-                      img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
-                    ),
-                    '',
-                    'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
-                  ].join('\n'),
-                },
-              ]
-            : [],
+        recentImages: buildRecentGeneratedImagesNote({
+          editImageAvailable,
+          sessionOwnerId: session.userId,
+          callerId: this.user.id,
+          recentImages: cacheInfo.recentGeneratedImages,
+        }),
         urls: urlMessages,
         attachedFiles: fabMessages,
         // Caller-supplied systemPrompt, reachable from both POST /api/chat and /api/ai/llm.
