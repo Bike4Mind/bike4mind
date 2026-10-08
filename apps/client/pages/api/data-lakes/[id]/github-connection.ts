@@ -43,7 +43,8 @@ const StartGitHubConnectBody = z.object({ ensureConnectorFed: z.boolean().option
 
 /**
  * Switches a curated lake to connector-fed through the same gates and audited service as PUT
- * /api/data-lakes/:id, so the switch lands in the config history like any other origin edit.
+ * /api/data-lakes/:id plus the connect status re-check, so the switch lands in the config history
+ * like any other origin edit.
  */
 async function switchLakeToConnectorFed(req: Request, lakeId: string) {
   const ctx = await toAccessContext(req);
@@ -123,7 +124,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { lakeId, curated } = await resolveConnectableLake(req.user, id, { allowCurated: ensureConnectorFed });
     // Mint before the switch: buildGitHubLakeAuthorizeUrl can still throw (a deployment missing APP_URL
     // or JWT_SECRET), and a start that hands out no URL must leave the lake curated. A refused switch
-    // then leaves the nonce cookie it set on the error response, which is harmless.
+    // still replaces this browser's pending-flow nonce, same as any later start.
     const authorizeUrl = buildGitHubLakeAuthorizeUrl(res, config, { userId: req.user.id, dataLakeId: lakeId });
     if (curated) {
       await switchLakeToConnectorFed(req, lakeId);
