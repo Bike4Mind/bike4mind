@@ -14,6 +14,7 @@ import {
 import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
 import type { PrGithub } from './github';
+import { POLL_MS, pollDelay } from './pollSchedule';
 
 /** Branches a PR lookup is never made for: a PR "for main" is someone else's fork, not this session's work. */
 const UNOWNED_BRANCHES = new Set(['main', 'master', 'develop', 'HEAD']);
@@ -25,6 +26,31 @@ const BRANCH_LOOKUP_TTL_MS = 10 * 60_000;
 const MAX_CONCURRENT_GH = 2;
 
 const SHELL_TOOLS = new Set(['bash_execute', 'bash_background']);
+
+/** After the agent pushes to a bound PR, checks restart; read again once GitHub has noticed. */
+const AFTER_PUSH_MS = 15_000;
+
+/** A missing or signed-out gh is re-tried on opening a conversation at most this often. */
+const GH_RETRY_MS = 60_000;
+
+/** The first read of an armed PR nobody has opened is spread over this window, so a launch does not read them all at once. */
+const UNOPENED_JITTER_MS = 60_000;
+
+const PUSH_COMMAND = /(^|[\s;&|(])git\s+push\b/;
+
+export interface PrTimers {
+  set(callback: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
+
+const realTimers: PrTimers = {
+  set: (callback, ms) => {
+    const handle = setTimeout(callback, ms);
+    handle.unref?.();
+    return handle;
+  },
+  clear: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
 export interface PrChatHooks {
   /** Where a Code session runs and the branch checked out there; null for anything else. */
@@ -43,6 +69,8 @@ export interface PrMonitorDeps {
   emit(state: PrBarState): void;
   logger: PrMonitorLogger;
   now?: () => number;
+  timers?: PrTimers;
+  random?: () => number;
 }
 
 interface Live {
@@ -50,13 +78,16 @@ interface Live {
   error?: string;
   /** The read in flight, so a second ask joins it rather than starting another gh. */
   inflight: Promise<void> | null;
+  failures: number;
+  timer?: unknown;
 }
 
 /**
- * Binds conversations to pull requests and keeps what the bar draws.
+ * Binds conversations to pull requests, keeps what the bar draws, and decides when to read.
  *
- * Nothing here touches GitHub at launch. A conversation is read when it is opened and when the
- * user asks.
+ * Nothing here touches GitHub at launch. Only conversations bound to an OPEN PR are ever read
+ * on a timer, at the cadence pollDelay sets; a merged or closed PR, a dismissed bar with nothing
+ * armed, and an unopened conversation with nothing armed are never read again on their own.
  */
 export class PrMonitor {
   protected readonly live = new Map<string, Live>();
@@ -69,8 +100,27 @@ export class PrMonitor {
   private running = 0;
   private readonly waiting: (() => void)[] = [];
   protected disposed = false;
+  /** Set when GitHub reports a rate limit; every read waits until then. */
+  private pausedUntil = 0;
+  private ghFailedAt = 0;
+  private readonly timers: PrTimers;
 
-  constructor(protected readonly deps: PrMonitorDeps) {}
+  constructor(protected readonly deps: PrMonitorDeps) {
+    this.timers = deps.timers ?? realTimers;
+  }
+
+  /**
+   * Arm the slow timer for PRs that have an automation on and are not known to be finished.
+   * No read happens here: the first one is a full unopened interval away.
+   */
+  async start(): Promise<void> {
+    const all = await this.deps.store.all();
+    for (const [sessionId, binding] of all) {
+      if (binding.lastState === 'MERGED' || binding.lastState === 'CLOSED' || !this.armed(binding)) continue;
+      const jitter = Math.floor((this.deps.random ?? Math.random)() * UNOPENED_JITTER_MS);
+      this.arm(sessionId, POLL_MS.unopenedArmed + jitter);
+    }
+  }
 
   protected now(): number {
     return (this.deps.now ?? Date.now)();
@@ -79,7 +129,7 @@ export class PrMonitor {
   protected entry(sessionId: string): Live {
     let live = this.live.get(sessionId);
     if (!live) {
-      live = { snapshot: null, inflight: null };
+      live = { snapshot: null, inflight: null, failures: 0 };
       this.live.set(sessionId, live);
     }
     return live;
@@ -95,30 +145,38 @@ export class PrMonitor {
    * away, and starts a read when the one in hand is missing or stale.
    */
   async watch(viewer: number, sessionId: string | null): Promise<PrBarState | null> {
+    const previous = this.onScreen.get(viewer);
     if (sessionId) this.onScreen.set(viewer, sessionId);
     else this.onScreen.delete(viewer);
+    // The conversation that just left the screen drops to the slower cadence.
+    if (previous && previous !== sessionId) void this.schedule(previous);
     if (!sessionId) return null;
     this.opened.add(sessionId);
 
+    if (this.gh !== 'ok' && this.now() - this.ghFailedAt > GH_RETRY_MS) this.gh = 'ok';
     const binding = await this.deps.store.get(sessionId);
     if (!binding) {
       void this.lookUpBranch(sessionId);
       return null;
     }
     if (!binding.dismissed && this.wantsRead(sessionId)) void this.read(sessionId);
+    else void this.schedule(sessionId);
     return this.state(sessionId, binding);
   }
 
   /** A window closed. */
   unwatch(viewer: number): void {
+    const previous = this.onScreen.get(viewer);
     this.onScreen.delete(viewer);
+    if (previous) void this.schedule(previous);
   }
 
   /** Whether opening this conversation should start a read: nothing in hand, or it went stale. */
   protected wantsRead(sessionId: string): boolean {
+    if (this.gh !== 'ok' || this.now() < this.pausedUntil) return false;
     const live = this.live.get(sessionId);
     if (!live?.snapshot) return true;
-    return live.snapshot.state === 'OPEN' && this.now() - live.snapshot.fetchedAt > 30_000;
+    return live.snapshot.state === 'OPEN' && this.now() - live.snapshot.fetchedAt > POLL_MS.onScreenActive;
   }
 
   /**
@@ -129,7 +187,11 @@ export class PrMonitor {
     if (!SHELL_TOOLS.has(call.name) || call.status !== 'done') return;
     const command = typeof call.input.command === 'string' ? call.input.command : '';
     const ref = pullRequestFromShell(command, call.preview ?? '');
-    if (ref) void this.bind(sessionId, ref, 'shell').catch(err => this.deps.logger.warn(`PR: bind failed: ${err}`));
+    if (ref) {
+      void this.bind(sessionId, ref, 'shell').catch(err => this.deps.logger.warn(`PR: bind failed: ${err}`));
+      return;
+    }
+    if (PUSH_COMMAND.test(command) && this.live.has(sessionId)) this.arm(sessionId, AFTER_PUSH_MS);
   }
 
   /** The user pasted a URL. Always replaces what was there, unless auto-merge is armed on it. */
@@ -180,6 +242,7 @@ export class PrMonitor {
     if (!current) return { ok: true };
     if (current.autoMerge) return { ok: false, error: 'Turn off auto-merge before closing this bar.' };
     await this.deps.store.set(sessionId, { ...current, dismissed: true, autoFix: false, autoArchive: false });
+    this.disarm(sessionId);
     await this.publish(sessionId);
     return { ok: true };
   }
@@ -192,6 +255,7 @@ export class PrMonitor {
 
   /** The conversation was deleted. */
   async forget(sessionId: string): Promise<void> {
+    this.disarm(sessionId);
     this.live.delete(sessionId);
     this.branchLookups.delete(sessionId);
     await this.deps.store.set(sessionId, null);
@@ -199,6 +263,49 @@ export class PrMonitor {
 
   dispose(): void {
     this.disposed = true;
+    for (const sessionId of this.live.keys()) this.disarm(sessionId);
+  }
+
+  /** Read again in `ms`, replacing whatever timer was set. */
+  protected arm(sessionId: string, ms: number): void {
+    if (this.disposed) return;
+    const live = this.entry(sessionId);
+    if (live.timer !== undefined) this.timers.clear(live.timer);
+    const wait = Math.max(ms, this.pausedUntil - this.now());
+    live.timer = this.timers.set(() => {
+      live.timer = undefined;
+      void this.read(sessionId);
+    }, wait);
+  }
+
+  protected disarm(sessionId: string): void {
+    const live = this.live.get(sessionId);
+    if (live?.timer === undefined) return;
+    this.timers.clear(live.timer);
+    live.timer = undefined;
+  }
+
+  /** Set the next read from what is known now, or stop reading. */
+  protected async schedule(sessionId: string): Promise<void> {
+    const binding = await this.deps.store.get(sessionId);
+    const live = this.live.get(sessionId);
+    if (!binding || this.gh !== 'ok') {
+      this.disarm(sessionId);
+      return;
+    }
+    const snapshot = live?.snapshot;
+    const delay = pollDelay({
+      state: snapshot?.state ?? binding.lastState,
+      dismissed: binding.dismissed === true,
+      onScreen: this.isOnScreen(sessionId),
+      opened: this.opened.has(sessionId),
+      armed: this.armed(binding),
+      active:
+        !snapshot || snapshot.mergeable === 'UNKNOWN' || snapshot.checks.some(check => check.bucket === 'pending'),
+      failures: live?.failures ?? 0,
+    });
+    if (delay === null) this.disarm(sessionId);
+    else this.arm(sessionId, delay);
   }
 
   /**
@@ -224,13 +331,16 @@ export class PrMonitor {
 
   /** One gh process per conversation at a time, and a small cap across all of them. */
   protected async withGh<T>(work: () => Promise<T>): Promise<T> {
+    // A finished run hands its slot straight to the next waiter, so no third caller can slip
+    // in between the release and the waiter waking.
     if (this.running >= MAX_CONCURRENT_GH) await new Promise<void>(resolve => this.waiting.push(resolve));
-    this.running += 1;
+    else this.running += 1;
     try {
       return await work();
     } finally {
-      this.running -= 1;
-      this.waiting.shift()?.();
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.running -= 1;
     }
   }
 
@@ -249,18 +359,28 @@ export class PrMonitor {
     const binding = await this.deps.store.get(sessionId);
     if (!binding || this.disposed) return;
     const live = this.entry(sessionId);
+    if (this.now() < this.pausedUntil) {
+      await this.schedule(sessionId);
+      return;
+    }
     try {
       const snapshot = await this.withGh(() =>
         this.deps.github.snapshot(binding, { threads: this.wantsThreads(binding) })
       );
       this.gh = 'ok';
       live.snapshot = snapshot;
+      live.failures = 0;
       delete live.error;
       await this.afterRead(sessionId, binding, snapshot);
     } catch (err) {
       live.error = this.noteGhFailure(err);
-      await this.afterFailure(sessionId, err);
+      live.failures += 1;
+      if (err instanceof GhError && err.kind === 'rate-limited') {
+        this.pausedUntil = this.now() + POLL_MS.rateLimitPause;
+        this.deps.logger.warn('PR: GitHub rate limit hit; pausing every PR read');
+      }
     }
+    await this.schedule(sessionId);
     await this.publish(sessionId);
   }
 
@@ -274,13 +394,12 @@ export class PrMonitor {
     }
   }
 
-  protected async afterFailure(_sessionId: string, _err: unknown): Promise<void> {}
-
   /** Records a missing or signed-out gh as app-wide state, and returns the line to show. */
   protected noteGhFailure(err: unknown): string {
     if (err instanceof GhError) {
       if (err.kind === 'missing') this.gh = 'missing';
       if (err.kind === 'unauthenticated') this.gh = 'unauthenticated';
+      if (err.kind === 'missing' || err.kind === 'unauthenticated') this.ghFailedAt = this.now();
       return err.message;
     }
     return err instanceof Error ? err.message : String(err);

@@ -8,7 +8,8 @@ import Typography from '@mui/joy/Typography';
 import type { PrActionResult, PrBarState } from '@shared/pullRequest';
 import { CloseIcon, ExternalLinkIcon, PullRequestIcon, ReloadIcon } from './icons';
 import { contentColumnSx } from './layout';
-import { CI_DOT_COLOR, ciDot, ghFixLine, lifecycleLabel, middleTruncate } from './prBarModel';
+import { ghFixLine, lifecycleLabel, middleTruncate } from './prBarModel';
+import { PrCiMenu } from './PrCiMenu';
 
 const BRANCH_MAX_CHARS = 44;
 
@@ -23,17 +24,6 @@ function DiffChip({ additions, deletions }: { additions: number; deletions: numb
       <Box component="span" sx={{ color: 'success.plainColor' }}>{`+${additions}`}</Box>{' '}
       <Box component="span" sx={{ color: 'danger.plainColor' }}>{`-${deletions}`}</Box>
     </Typography>
-  );
-}
-
-export function CiDotMark({ state }: { state: PrBarState }) {
-  const dot = ciDot(state);
-  return (
-    <Box
-      aria-hidden
-      data-ci={dot}
-      sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: CI_DOT_COLOR[dot], flexShrink: 0 }}
-    />
   );
 }
 
@@ -134,7 +124,7 @@ export function PrStatusBar({
             )}
             {!snapshot && !state.error && (
               <Typography level="body-xs" textColor="text.tertiary">
-                {'Reading…'}
+                {'Reading...'}
               </Typography>
             )}
             {state.error && !fix && (
@@ -155,13 +145,13 @@ export function PrStatusBar({
 
         <Box sx={{ flex: 1 }} />
 
-        {snapshot && !fix && snapshot.state === 'OPEN' && (
-          <Tooltip title="Checks" size="sm" variant="soft">
-            <Box sx={{ display: 'flex', px: 0.5 }} data-testid="pr-bar-ci-dot">
-              <CiDotMark state={state} />
-            </Box>
-          </Tooltip>
+        {snapshot?.mergeable === 'CONFLICTING' && snapshot.state === 'OPEN' && (
+          <Chip size="sm" variant="soft" color="danger" data-testid="pr-bar-conflicts">
+            Conflicts
+          </Chip>
         )}
+
+        {snapshot && !fix && snapshot.state === 'OPEN' && <PrCiMenu state={state} />}
 
         <Tooltip title="Refresh" size="sm" variant="soft">
           <IconButton

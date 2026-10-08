@@ -38,6 +38,8 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
     },
   });
 
+  void monitor.start().catch(err => logger.warn(`PR: could not load bindings: ${err}`));
+
   ipcMain.handle(IPC_CHANNELS.prWatch, (event, sessionId: unknown) => {
     const sender = event.sender;
     // A window that goes away must stop counting as one showing its conversation.
