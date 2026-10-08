@@ -111,14 +111,16 @@ async function fetchPage(
       return { page: null, upstreamDown: !requestError };
     }
     const text = await Promise.race([readCapped(response), timeout]);
+    // An oversize or off-schema page answered promptly and can follow from this request's limit or cursor
+    // (a limit=100 page of long notes), so it must not trip the outage for every other query.
     if (text === null) {
       logger.warn('[whats-new] upstream feed body exceeded the size cap', { maxBytes: MAX_BODY_BYTES });
-      return down;
+      return { page: null, upstreamDown: false };
     }
     const parsed = pageSchema.safeParse(JSON.parse(text));
     if (!parsed.success) {
       logger.warn('[whats-new] upstream feed body did not match the public schema');
-      return down;
+      return { page: null, upstreamDown: false };
     }
     return { page: parsed.data, upstreamDown: false };
   } catch (error) {
@@ -143,11 +145,10 @@ export async function fetchUpstreamFeed(
   if (!base) return null;
 
   const now = Date.now();
-  if (outage && outage.base === base && outage.until > now) return null;
-
   const key = query.cursor === undefined ? `${base}|${query.limit}` : undefined;
   const hit = key === undefined ? undefined : cache.get(key);
   if (hit && hit.expiresAt > now) return hit.page;
+  if (outage && outage.base === base && outage.until > now) return null;
 
   const { page, upstreamDown } = await fetchPage(base, query, logger);
   if (upstreamDown) outage = { base, until: now + OUTAGE_TTL_MS };

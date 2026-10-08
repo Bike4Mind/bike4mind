@@ -152,6 +152,24 @@ describe('fetchUpstreamFeed', () => {
     expect(mockSafeFetch).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ['an oversize body', () => new Response('x'.repeat(256 * 1024 + 1), { status: 200 })],
+    ['an off-schema body', () => json({ data: [{ id: 1 }] })],
+  ])('does not open an outage window on %s for one query', async (_label, make) => {
+    mockSafeFetch.mockResolvedValueOnce(make()).mockResolvedValue(json(PAGE));
+    expect(await fetchOnce({ limit: 100 })).toBeNull();
+    expect(await fetchOnce()).toEqual(PAGE);
+    expect(mockSafeFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps serving a cached first page during an outage window', async () => {
+    mockSafeFetch.mockResolvedValueOnce(json(PAGE)).mockResolvedValue(json({}, 503));
+    await fetchOnce();
+    expect(await fetchOnce({ limit: 7 })).toBeNull();
+    expect(await fetchOnce()).toEqual(PAGE);
+    expect(mockSafeFetch).toHaveBeenCalledTimes(2);
+  });
+
   it('does not open an outage window on a 4xx caused by the request', async () => {
     mockSafeFetch.mockResolvedValueOnce(json({}, 422)).mockResolvedValue(json(PAGE));
     expect(await fetchOnce({ limit: 5, cursor: 'bad' })).toBeNull();
