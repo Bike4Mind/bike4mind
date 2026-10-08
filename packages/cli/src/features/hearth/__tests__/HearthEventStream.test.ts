@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { HearthEventStream } from '../HearthEventStream.js';
-import type { HearthEvent } from '../types.js';
+import { PostEventRequestSchema, type HearthEvent } from '../types.js';
 import type { WebSocketConnectionManager } from '../../../ws/WebSocketConnectionManager.js';
 
 type Handler = (message: unknown) => void;
@@ -44,6 +44,23 @@ describe('HearthEventStream', () => {
 
     expect(onEvent).toHaveBeenCalledTimes(1);
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ id: 'ev-1', seq: 7 }));
+  });
+
+  it('accepts an event whose stored machine body lost its empty payload', () => {
+    const { handlers, manager } = createMockWsManager();
+    stream.registerHandlers(manager);
+
+    handlers.get('hearth_event')!({ event: { ...validEvent, machine: { schema: 's@1' } } });
+
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ machine: { schema: 's@1' } }));
+  });
+
+  it('still requires machine.payload on outbound post requests', () => {
+    const request = { channelId: 'ch-1', kind: 'message', human: { text: 'hi', format: 'md' } };
+    expect(PostEventRequestSchema.safeParse({ ...request, machine: { schema: 's@1' } }).success).toBe(false);
+    expect(PostEventRequestSchema.safeParse({ ...request, machine: { schema: 's@1', payload: {} } }).success).toBe(
+      true
+    );
   });
 
   it('ignores messages with no event field', () => {

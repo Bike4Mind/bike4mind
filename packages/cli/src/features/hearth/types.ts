@@ -56,7 +56,9 @@ export const HearthEventSchema = z.object({
   actorKind: actorKindSchema.optional(),
   kind: HearthEventKindSchema,
   human: HearthHumanBodySchema,
-  machine: HearthMachineBodySchema.optional(),
+  // Read side only: Mongo's `minimize` drops an empty `{}` payload, so stored
+  // events can come back without one. Outbound requests keep it required.
+  machine: HearthMachineBodySchema.extend({ payload: z.unknown().optional() }).optional(),
   refs: HearthEventRefsSchema.prefault({}),
   /** Server-set provenance; 'gateway' marks untrusted third-party input. */
   origin: hearthEventOriginSchema.optional(),
