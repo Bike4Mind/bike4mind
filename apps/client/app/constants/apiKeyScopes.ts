@@ -126,13 +126,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.OPTIHASHI_READ,
     label: 'OptiHashi: Read',
     description: 'Inspect OptiHashi problems, runs, and run artifacts without commissioning any compute',
-    endpoints: ['OptiHashi run and problem read endpoints'],
+    endpoints: ['OptiHashi run and problem reads'],
   },
   {
     value: ApiKeyScope.OPTIHASHI_COMPUTE,
     label: 'OptiHashi: Compute',
     description: 'Submit OptiHashi compute runs and cancel them. Spends credits - grant only to keys that must solve',
-    endpoints: ['OptiHashi run submit and cancel endpoints'],
+    endpoints: ['OptiHashi run submit and cancel'],
   },
   {
     value: ApiKeyScope.DATALAKE_READ,

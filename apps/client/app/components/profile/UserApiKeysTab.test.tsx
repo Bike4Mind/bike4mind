@@ -44,6 +44,7 @@ const h = vi.hoisted(() => ({
   keys: [] as any[],
   deleteMutate: vi.fn(),
   createResult: { key: 'b4m_live_newkey123' } as Partial<CreateUserApiKeyResponse>,
+  createMutate: vi.fn(),
   signingSecretMutate: vi.fn(),
   signingSecretResult: {
     id: 'key-1',
@@ -59,7 +60,10 @@ vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAc
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
   useGetUserApiKeys: () => ({ data: h.keys, isLoading: false, error: null, refetch: vi.fn() }),
   useCreateUserApiKey: ({ onSuccess }: { onSuccess?: (result: Partial<CreateUserApiKeyResponse>) => void } = {}) => ({
-    mutate: () => onSuccess?.(h.createResult),
+    mutate: (data: unknown) => {
+      h.createMutate(data);
+      onSuccess?.(h.createResult);
+    },
     isPending: false,
   }),
   useRotateUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
@@ -293,6 +297,44 @@ describe('UserApiKeysTab - premium scopes', () => {
   beforeEach(() => {
     h.keys = [activeKey];
     h.hasOptiAccess = false;
+    h.createMutate.mockClear();
+  });
+
+  it('keeps the premium scopes out of the New-Key modal and its Full access preset without Opti access', () => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    expect(screen.getByTestId(`api-key-scope-${ApiKeyScope.AI_CHAT}`)).toBeInTheDocument();
+    for (const scope of PREMIUM) expect(screen.queryByTestId(`api-key-scope-${scope}`)).toBeNull();
+
+    // Joy puts a clickable Chip's onClick on its inner action button.
+    fireEvent.click(screen.getByTestId('api-key-preset-full').querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Full key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+
+    const { scopes } = h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] };
+    expect(scopes).toContain(ApiKeyScope.AI_CHAT);
+    for (const scope of PREMIUM) expect(scopes).not.toContain(scope);
+  });
+
+  it('re-seeds the Read-only default when Opti access resolves after mount', () => {
+    const view = renderTab();
+    h.hasOptiAccess = true;
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <UserApiKeysTab />
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Read key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+
+    const { scopes } = h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] };
+    expect(scopes).toContain(ApiKeyScope.OPTIHASHI_READ);
+    expect(scopes).not.toContain(ApiKeyScope.OPTIHASHI_COMPUTE);
   });
 
   it('leaves the premium scopes out of the scope docs without Opti access', () => {
