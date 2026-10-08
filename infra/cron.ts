@@ -115,7 +115,7 @@ const secretRotationNotifierCron = new sst.aws.Cron('secretRotationNotifier', {
       retention: '3 days',
     },
   },
-  enabled: ['production', 'dev'].includes($app.stage),
+  enabled: modelDiscoveryCronEnabled,
 });
 
 // [DELETION-FOOTPRINT] Team Metrics Refresh cron moved to @bike4mind/premium-pi
@@ -610,6 +610,9 @@ const MODEL_DISCOVERY_SCHEDULE_BY_STAGE: Record<string, `cron(${string})`> = {
   dev: 'cron(50 3,9,15,21 * * ? *)', // 03:50, 09:50, 15:50, 21:50 UTC
 };
 
+// The no-successful-run alarm in alarms.ts keys off this too; keep one source.
+const modelDiscoveryCronEnabled = ['production', 'dev'].includes($app.stage);
+
 const modelDiscoveryCron = new sst.aws.Cron('modelDiscoveryCron', {
   schedule: MODEL_DISCOVERY_SCHEDULE_BY_STAGE[$app.stage] ?? MODEL_DISCOVERY_SCHEDULE_BY_STAGE.production,
   job: modelDiscoveryFunction.arn,
@@ -995,6 +998,7 @@ const lakeInconsistencySweepCron = new sst.aws.Cron('lakeInconsistencySweep', {
 });
 
 export {
+  modelDiscoveryCronEnabled,
   dailyUserActivityReport,
   weeklyUserActivityReport,
   secretRotationNotifierCron,

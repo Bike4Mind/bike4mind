@@ -11,7 +11,7 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryFunction } from './cron';
+import { modelDiscoveryCronEnabled, modelDiscoveryFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
@@ -797,6 +797,39 @@ if (isMonitoredStage) {
       Severity: 'High',
     },
   });
+
+  /**
+   * Alarm: Model Discovery no successful run (dead-man's switch)
+   *
+   * Every run publishes RunFailures (0 on success or partial, 1 on failure),
+   * so its Minimum over 24h (4x the cadence) is 0 iff some run succeeded.
+   * Missing data breaches, which is safe only because the alarm exists solely
+   * where the cron is enabled; a preview with monitoring on would otherwise
+   * sit in ALARM forever.
+   *
+   * Metric emitted by: server/modelDiscovery/metrics.ts
+   * Namespace: Lumina5/ModelDiscovery / RunFailures
+   */
+  if (modelDiscoveryCronEnabled) {
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryNoSuccessfulRun', {
+      name: `${$app.name}-${$app.stage}-model-discovery-no-successful-run`,
+      alarmDescription: 'No successful model discovery run in 24h - the cron may have stopped',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'RunFailures',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 86400, // 24 hours, 4x the run cadence
+      statistic: 'Minimum',
+      threshold: 1,
+      treatMissingData: 'breaching',
+      dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: Model Discovery Lambda Errors
