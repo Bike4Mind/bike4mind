@@ -44,6 +44,8 @@ export interface ApiKeyInfo {
   agentId?: string;
   /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
   allowedOrigins?: string[];
+  /** OAuth clients allowed to mint identified sessions on this embed key. */
+  identifiedClientIds?: string[];
   /** White-label config for an embed key; drives the widget serve route theming. */
   branding?: IEmbedBranding;
   /** Spend ceiling in credits for an embed key. Present 0 = real cap; absent = uncapped. */
@@ -171,6 +173,7 @@ function toApiKeyInfo(v: {
   organizationId?: string;
   agentId?: string;
   allowedOrigins?: string[];
+  identifiedClientIds?: string[];
   branding?: IEmbedBranding;
   spendCap?: number;
   currentSpend?: number;
@@ -184,6 +187,7 @@ function toApiKeyInfo(v: {
     organizationId: v.organizationId,
     agentId: v.agentId,
     allowedOrigins: v.allowedOrigins,
+    identifiedClientIds: v.identifiedClientIds,
     branding: v.branding,
     spendCap: v.spendCap,
     currentSpend: v.currentSpend,
@@ -200,8 +204,8 @@ function toApiKeyInfo(v: {
  * repeating these conditions. The thrown error class is the status contract: the Function-URL
  * adapter (defineLambdaRoute) answers a ForbiddenError with 403 and every other auth throw with
  * 401, and the apiKeyOrJwt resolver (resolveContractAuth) surfaces a key's ForbiddenError when
- * the JWT fallback also fails. Not every transport forwards it, though: the Fargate SSE route
- * (sseRoute.ts) reports any auth throw as a generic failure.
+ * the JWT fallback also fails. No apiKeyOrJwt transport forwards it yet: its only caller, the
+ * Fargate SSE route (sseRoute.ts), reports any auth throw as a generic failure.
  *
  * This is the `User.findById` the consent gate above deliberately declines to pay
  * on the api-key path. Account state is not the same trade: consent can be proven

@@ -133,12 +133,16 @@ const ApiReferenceTab = () => {
         // hand-written surface is migrated onto the contract pattern.
         <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-reference-drift-banner">
           <Typography level="body-sm">
-            This reference is hand-maintained and may lag the code. For endpoints with a verified, always-current
-            contract, use the{' '}
-            <Link href={ExternalLinks.apiDocs} target="_blank" rel="noopener noreferrer">
+            This reference is hand-maintained and may lag the code. Where an endpoint has a contract, the{' '}
+            <Link
+              href={ExternalLinks.apiDocs}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="api-reference-drift-docs-link"
+            >
               generated interactive API docs
-            </Link>
-            .
+            </Link>{' '}
+            are authoritative; this page covers the endpoints that do not have one yet.
           </Typography>
         </Alert>
       )}

@@ -1,6 +1,8 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   type EndpointContract,
+  ForbiddenError,
+  HTTPError,
   type RequestBodyOf,
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
@@ -37,14 +39,10 @@ export type LambdaRateLimit = (ctx: {
 
 export type LambdaRouteOptions = { rateLimit?: LambdaRateLimit };
 
-/**
- * An auth throw that declares 403 (authenticated but forbidden, e.g. a suspended
- * account) keeps it; anything else - plain Errors included - is a 401. Duck-typed
- * rather than `instanceof HTTPError` so a second copy of @bike4mind/common in the
- * bundle can't silently turn a 403 into a 401.
- */
+/** A ForbiddenError (authenticated but forbidden, e.g. a suspended account) is a 403;
+ * any other auth throw, plain Errors included, is a 401. */
 function authFailureStatus(error: unknown): 401 | 403 {
-  return (error as { statusCode?: unknown } | null)?.statusCode === 403 ? 403 : 401;
+  return error instanceof ForbiddenError ? 403 : 401;
 }
 
 /**
@@ -158,9 +156,17 @@ export function defineLambdaRoute<C extends EndpointContract>(
       result = await handle({ validated, auth, requestId, event });
     } catch (error) {
       // A thrown handler error must not surface as an opaque API-gateway 502 -
-      // shape it into a 500 with the correlation id. Log it too, or the id in the
-      // body has nothing to correlate to in CloudWatch.
-      new Logger({ metadata: { requestId } }).error(`[${contract.operationId}] Unhandled handler error`, error);
+      // shape it with the correlation id. Log it too, or the id in the body has
+      // nothing to correlate to in CloudWatch. An HTTPError keeps its own status,
+      // logged at the same levels as errorHandler's Next transport.
+      const log = new Logger({ metadata: { requestId } });
+      if (error instanceof HTTPError) {
+        const message = `[${contract.operationId}] ${error.statusCode}: ${error.message}`;
+        if (error.statusCode >= 500 && !error.expected) log.error(message, error);
+        else log.warn(message);
+        return json(error.statusCode, { error: error.message, request_id: requestId });
+      }
+      log.error(`[${contract.operationId}] Unhandled handler error`, error);
       return json(500, {
         error: error instanceof Error ? error.message : 'Internal server error',
         request_id: requestId,

@@ -7,7 +7,7 @@ import {
   slackDevWorkspaceRepository,
 } from '@bike4mind/database';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { WhatsNewGenerationPayloadSchema, WhatsNewGenerationPayload } from '@server/queueHandlers/types';
+import { WhatsNewGenerationPayloadSchema, WhatsNewGenerationPayload } from '@server/whatsNew/whatsNewGeneration.types';
 import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
@@ -27,7 +27,7 @@ import {
   buildWhatsNewPrompt,
   extractJsonFromResponse,
   createWhatsNewModalSchema,
-} from './whatsNewGeneration.utils';
+} from '@server/whatsNew/whatsNewGeneration.utils';
 import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
 
 // Token estimation constants

@@ -6,9 +6,13 @@ import {
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { WhatsNewHighlightsPayloadSchema } from './whatsNewHighlights.types';
-import type { WhatsNewHighlightsConfig, ModalForHighlights } from './whatsNewHighlights.types';
-import { buildHighlightsPrompt, createSlackBlocks, formatHighlightsForSlack } from './whatsNewHighlights.prompt';
+import { WhatsNewHighlightsPayloadSchema } from '@server/whatsNew/whatsNewHighlights.types';
+import type { WhatsNewHighlightsConfig, ModalForHighlights } from '@server/whatsNew/whatsNewHighlights.types';
+import {
+  buildHighlightsPrompt,
+  createSlackBlocks,
+  formatHighlightsForSlack,
+} from '@server/whatsNew/whatsNewHighlights.prompt';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
