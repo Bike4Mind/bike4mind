@@ -2,6 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { LakeRagReport } from './report';
+import { LAKE_RAG_ARMS } from './run';
 
 /**
  * Overwrites `path` with the report as JSON. The harness's emitEvalReport appends text to
@@ -12,11 +13,25 @@ export function writeLakeRagReport(path: string, report: LakeRagReport): void {
   writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`);
 }
 
-/** Reads a baseline written by writeLakeRagReport; throws if it is not a report. */
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+const isRate = (v: unknown): boolean => v === null || typeof v === 'number';
+const hasRate = (v: unknown): boolean => isRecord(v) && isRate(v.rate);
+
+/**
+ * Reads a baseline written by writeLakeRagReport. Checks every field compareLakeRagReports reads,
+ * so a truncated or hand-edited baseline fails here by name instead of as a TypeError mid-compare.
+ */
 export function readLakeRagReport(path: string): LakeRagReport {
   const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-  if (typeof parsed !== 'object' || parsed === null || !('arms' in parsed) || !('multiLakeDrop' in parsed)) {
-    throw new Error(`${path} is not a lake RAG eval report`);
+  const malformed = (what: string) => new Error(`${path} is not a lake RAG eval report: ${what}`);
+  if (!isRecord(parsed) || !isRecord(parsed.arms)) throw malformed('missing arms');
+  if (!isRate(parsed.multiLakeDrop)) throw malformed('multiLakeDrop is not a number or null');
+  for (const arm of LAKE_RAG_ARMS) {
+    const report = parsed.arms[arm];
+    if (report === undefined) continue;
+    if (!isRecord(report) || !hasRate(report.pass) || !hasRate(report.retrieval)) {
+      throw malformed(`arm ${arm} lacks pass/retrieval rates`);
+    }
   }
   return parsed as LakeRagReport;
 }

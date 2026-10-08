@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -75,6 +75,16 @@ describe('buildLakeRagReport', () => {
     writeLakeRagReport(path, report);
     expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(report);
     expect(readLakeRagReport(path)).toEqual(report);
+  });
+
+  it.each([
+    ['no arms', { multiLakeDrop: null }, /missing arms/],
+    ['a non-numeric drop', { arms: {}, multiLakeDrop: 'x' }, /multiLakeDrop/],
+    ['an arm without rates', { arms: { lake: { pass: {} } }, multiLakeDrop: null }, /arm lake lacks/],
+  ])('rejects a baseline with %s by name', (_label, body, error) => {
+    const path = join(mkdtempSync(join(tmpdir(), 'lakerag-')), 'bad.json');
+    writeFileSync(path, JSON.stringify(body));
+    expect(() => readLakeRagReport(path)).toThrow(error);
   });
 });
 

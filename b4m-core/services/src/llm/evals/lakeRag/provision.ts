@@ -110,8 +110,7 @@ async function attachAndIngest(
 // once all of its files are ready (lifecycle.ts -> promoteDataLake.ts; idempotent on 'active').
 async function promoteLake(api: LakeRagApi, subject: string, lakeId: string): Promise<void> {
   const lake = await call(api, 'POST', `/api/data-lakes/${lakeId}/lifecycle`, { action: 'promote' });
-  if (lake.status !== undefined && lake.status !== 'active')
-    throw new Error(`promote lake ${subject}: status ${String(lake.status)}`);
+  if (lake.status !== 'active') throw new Error(`promote lake ${subject}: status ${String(lake.status)}`);
 }
 
 /**

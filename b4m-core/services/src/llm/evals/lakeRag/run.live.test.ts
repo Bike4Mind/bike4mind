@@ -44,8 +44,8 @@ describe.skipIf(!enabled)('lake RAG eval (live deployment)', () => {
     const errors = (await provision?.teardown()) ?? [];
     // After the lakes: on the e2e path this deletes the user that owns them.
     const lakesDeleted = (await auth?.cleanup()) ?? 0;
-    // On the e2e path the user cleanup deletes the user's lakes outright
-    // (apps/client/pages/api/test/cleanup.ts), so a failed lake DELETE is covered once it reports them.
+    // The user cleanup deletes any lakes the user still owns (apps/client/pages/api/test/cleanup.ts).
+    // It reports 0 after a clean teardown, so this only waives the assertion when it swept them all.
     const lakeCount = Object.keys(provision?.lakes ?? {}).length;
     if (auth?.source === 'e2e-user' && lakesDeleted >= lakeCount) return;
     expect(errors, 'teardown left eval lakes behind').toEqual([]);

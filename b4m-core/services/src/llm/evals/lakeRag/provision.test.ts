@@ -17,7 +17,7 @@ function fakeServer(
     ingestion?: Record<number, string[]>;
     lakeTag?: boolean;
     failDelete?: RegExp;
-    promote?: { status: number; lakeStatus?: string };
+    promote?: { status: number; lakeStatus?: string | null };
   } = {}
 ) {
   const calls: Call[] = [];
@@ -62,7 +62,12 @@ function fakeServer(
     const lifecycle = path.match(/^\/api\/data-lakes\/([^/]+)\/lifecycle$/);
     if (method === 'POST' && lifecycle) {
       const { status, lakeStatus } = opts.promote ?? { status: 200 };
-      return json(status, status === 200 ? { id: lifecycle[1], status: lakeStatus ?? 'active' } : { error: 'nope' });
+      return json(
+        status,
+        status === 200
+          ? { id: lifecycle[1], status: lakeStatus === undefined ? 'active' : lakeStatus }
+          : { error: 'nope' }
+      );
     }
     if (method === 'DELETE') {
       if (opts.failDelete?.test(path)) return json(500, { error: 'boom' });
@@ -140,6 +145,7 @@ describe('provisionLakeRagLakes', () => {
   it.each([
     ['rejected', { status: 400 }, /lifecycle -> 400/],
     ['left non-active', { status: 200, lakeStatus: 'archived' }, /promote lake moons: status archived/],
+    ['answered without a status', { status: 200, lakeStatus: null }, /promote lake moons: status null/],
   ])('tears down when the promote is %s', async (_label, promote, error) => {
     const { api, calls } = fakeServer({ promote });
     await expect(provisionLakeRagLakes(api, [doc('a.md', 'current')], { runId: 'r1' })).rejects.toThrow(error);
