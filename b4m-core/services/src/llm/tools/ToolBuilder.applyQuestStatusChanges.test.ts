@@ -8,6 +8,27 @@ function makeQuest(overrides: Partial<IChatHistoryItemDocument> = {}): IChatHist
 }
 
 describe('applyQuestStatusChanges', () => {
+  describe('videoJobIds', () => {
+    it('keeps both ids when two sequential updates each carry one job', () => {
+      const quest = makeQuest();
+      applyQuestStatusChanges(quest, { videoJobIds: ['job-a'] }, 'user-1');
+      applyQuestStatusChanges(quest, { videoJobIds: ['job-b'] }, 'user-1');
+      expect(quest.videoJobIds).toEqual(['job-a', 'job-b']);
+    });
+
+    it('dedupes already-present ids and keeps order', () => {
+      const quest = makeQuest({ videoJobIds: ['a'] });
+      applyQuestStatusChanges(quest, { videoJobIds: ['a', 'b'] }, 'user-1');
+      expect(quest.videoJobIds).toEqual(['a', 'b']);
+    });
+
+    it('initializes the field when the quest has none', () => {
+      const quest = makeQuest();
+      applyQuestStatusChanges(quest, { videoJobIds: ['b'] }, 'user-1');
+      expect(quest.videoJobIds).toEqual(['b']);
+    });
+  });
+
   describe('images (multi-image-generation persistence bug)', () => {
     it('appends images across multiple calls instead of overwriting', () => {
       // Repro of the prod bug: 4 separate image_generation tool calls, each

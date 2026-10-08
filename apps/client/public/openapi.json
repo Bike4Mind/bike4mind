@@ -3421,6 +3421,7 @@
                     "edit_image",
                     "music_generation",
                     "audio_generation",
+                    "video_generation",
                     "weather_info",
                     "web_search",
                     "web_fetch",

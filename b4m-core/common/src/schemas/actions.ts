@@ -373,6 +373,7 @@ export const StreamedChatCompletionAction = z.object({
       replies: z.array(z.string()).optional(),
       images: z.array(z.string()).optional(),
       videos: z.array(z.string()).optional(),
+      videoJobIds: z.array(z.string()).optional(),
       // Derived from CHAT_HISTORY_ITEM_TYPES so the WebSocket payload cannot publish a
       // narrower quest-type vocabulary than the REST surfaces (schemas/chat.ts) do.
       type: z.enum(CHAT_HISTORY_ITEM_TYPES),

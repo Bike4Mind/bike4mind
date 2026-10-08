@@ -12,6 +12,7 @@ const perSecond: VideoModelCapabilities = {
   aspectRatios: ['16:9'],
   resolutions: ['720p', '1080p'],
   defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
+  typicalRenderSeconds: 8,
   audio: 'none',
   pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1, '1080p': 0.25 } },
   defaultEnabled: true,
