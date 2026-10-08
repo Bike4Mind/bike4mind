@@ -216,11 +216,18 @@ const EXTERNAL_DOMAIN_GRANT_ROWS: DomainGrantRow[] = (() => {
   const raw = process.env.NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS;
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as Array<{ domain?: unknown; entitlements?: unknown }>;
-    return parsed
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return (parsed as unknown[])
+      .filter((row): row is { domain?: unknown; entitlements?: unknown } => typeof row === 'object' && row !== null)
       .map(row => ({
         domain: normalizeTag(String(row.domain ?? '')),
-        entitlements: (Array.isArray(row.entitlements) ? row.entitlements : []) as EntitlementKey[],
+        // Non-string entries are dropped (they would throw in normalizeTag on the hot path)
+        // and each key is normalized, so a mixed-case env key matches like every other source.
+        entitlements: (Array.isArray(row.entitlements) ? row.entitlements : [])
+          .filter((key): key is string => typeof key === 'string')
+          .map(normalizeTag)
+          .filter(Boolean),
       }))
       .filter(row => row.domain && row.entitlements.length > 0);
   } catch {
@@ -319,7 +326,9 @@ export function applyImpliedEntitlements(
 ): EntitlementKey[] {
   const seen = new Set<EntitlementKey>();
   const ordered: EntitlementKey[] = [];
-  const add = (key: EntitlementKey) => {
+  const add = (key: unknown) => {
+    // Defensive: a malformed source (env JSON, a DB row) must not throw on this hot path.
+    if (typeof key !== 'string') return;
     const normalized = normalizeTag(key);
     if (!normalized || seen.has(normalized)) return;
     seen.add(normalized);

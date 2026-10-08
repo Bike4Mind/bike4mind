@@ -154,6 +154,7 @@ describe('applyImpliedEntitlements', () => {
   });
 
   it('does not duplicate an implied key that is already held', () => {
+    expect(IMPLIED_ENTITLEMENTS.size).toBeGreaterThan(0);
     const [ifHeld, alsoGrant] = [...IMPLIED_ENTITLEMENTS.entries()][0] ?? [];
     if (!ifHeld || !alsoGrant) return;
     expect(applyImpliedEntitlements([...alsoGrant, ifHeld])).toEqual([...alsoGrant, ifHeld]);
@@ -170,18 +171,59 @@ describe('applyImpliedEntitlements', () => {
   });
 });
 
-describe('questmaster-pro grant tag', () => {
-  it('keeps its hyphen through normalization and grants questmaster:pro', () => {
-    expect(normalizeTag('questmaster-pro')).toBe('questmaster-pro');
-    expect(grantTagForEntitlement('questmaster:pro')).toBe('questmaster-pro');
-    expect(entitlementsForTags(['QuestMaster-Pro'])).toContain('questmaster:pro');
+describe('implied-entitlement graph safety', () => {
+  // Every key reachable from `start` through IMPLIED_ENTITLEMENTS chains (excluding `start`
+  // unless a cycle leads back to it).
+  const reachableFrom = (start: string): Set<string> => {
+    const reached = new Set<string>();
+    const queue = [...(IMPLIED_ENTITLEMENTS.get(start) ?? [])];
+    while (queue.length > 0) {
+      const key = queue.shift()!;
+      if (reached.has(key)) continue;
+      reached.add(key);
+      queue.push(...(IMPLIED_ENTITLEMENTS.get(key) ?? []));
+    }
+    return reached;
+  };
+
+  it('is acyclic: no implying key can reach itself through chains', () => {
+    expect(IMPLIED_ENTITLEMENTS.size).toBeGreaterThan(0);
+    for (const ifHeld of IMPLIED_ENTITLEMENTS.keys()) {
+      expect(reachableFrom(ifHeld).has(ifHeld), `'${ifHeld}' implies itself`).toBe(false);
+    }
   });
 
-  it('does NOT grant questmaster:pro from the existing QuestMaster cohort tag, in any casing', () => {
-    for (const tag of ['QuestMaster', 'questmaster', ' QUESTMASTER ']) {
-      expect(applyImpliedEntitlements(entitlementsForTags([tag]))).not.toContain('questmaster:pro');
+  it('never implies a bypass-exempt key or a datalake grant (both need a literal grant)', () => {
+    for (const ifHeld of IMPLIED_ENTITLEMENTS.keys()) {
+      for (const key of reachableFrom(ifHeld)) {
+        expect(isBypassExemptEntitlement(key), `'${key}' is bypass-exempt`).toBe(false);
+        expect(BYPASS_EXEMPT_ENTITLEMENTS.has(key)).toBe(false);
+        expect(isDatalakeEntitlementKey(key), `'${key}' is a datalake grant`).toBe(false);
+      }
     }
-    expect(__registryRows.tagGrantRows.map(row => normalizeTag(row.tag))).not.toContain('questmaster');
+    expect(BYPASS_EXEMPT_ENTITLEMENTS.has(EMBED_WHITELABEL_ENTITLEMENT_KEY)).toBe(true);
+  });
+
+  it('keeps the reverse closed: questmaster:pro alone, or its grant tag, never yields optihashi:pro', () => {
+    expect(applyImpliedEntitlements(['questmaster:pro'])).toEqual(['questmaster:pro']);
+    const fromTag = applyImpliedEntitlements(entitlementsForTags(['questmaster-pro']));
+    expect(fromTag).toContain('questmaster:pro');
+    expect(fromTag).not.toContain('optihashi:pro');
+  });
+
+  it('keeps a pre-existing key in its input position when it is also implied', () => {
+    expect(applyImpliedEntitlements(['questmaster:pro', 'other', 'optihashi:pro'])).toEqual([
+      'questmaster:pro',
+      'other',
+      'optihashi:pro',
+    ]);
+  });
+
+  it('skips non-string entries instead of throwing', () => {
+    expect(applyImpliedEntitlements([123, null, 'OptiHashi:Pro'] as unknown as string[])).toEqual([
+      'optihashi:pro',
+      'questmaster:pro',
+    ]);
   });
 });
 

@@ -150,6 +150,13 @@ describe('getUserEntitlements', () => {
     }
   });
 
+  it('skips a non-string key from a malformed source instead of throwing', async () => {
+    findActive.mockResolvedValue([]);
+    mockPartnerEntitlements.mockResolvedValue(new Set([123, 'Partner:Key']));
+    const keys = await getUserEntitlements({ id: 'u10', tags: [], email: 'p@partner.com', emailVerified: true });
+    expect(keys).toEqual(['partner:key', 'base']);
+  });
+
   it('returns no implied key when the implying key is not held', async () => {
     findActive.mockResolvedValue([]);
     const keys = await getUserEntitlements({ id: 'u9', tags: [] });
