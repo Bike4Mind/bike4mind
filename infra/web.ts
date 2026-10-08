@@ -227,7 +227,10 @@ export const web = new sst.aws.Nextjs(
   'frontend',
   {
     path: 'apps/client',
-    openNextVersion: '3.9.16',
+    // Coupled to the `next` version in apps/client/package.json. next >=16.3.8 keys the response
+    // cache by a scoped route-cache key; OpenNext <4.1.7 seeds and looks up the bare pathname, so
+    // every prerendered route misses and runs its handler in the Lambda (e.g. /serwist/sw.js 500s).
+    openNextVersion: '4.1.8',
 
     vpc: lambdaVpc,
     router: router ? { instance: router } : undefined,
