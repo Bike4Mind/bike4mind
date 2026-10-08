@@ -15,6 +15,14 @@ type Phase = 'authed' | 'rateLimited' | 'completionStarted';
 /** What one chunk carried, as the desktop will see it once it is an SSE frame. */
 export type ChunkKind = 'reasoningMarker' | 'reasoning' | 'text' | 'toolUse' | 'usageOnly';
 
+const FIRST_KEY: Record<ChunkKind, string> = {
+  reasoningMarker: 'first_reasoningMarker',
+  reasoning: 'first_reasoning',
+  text: 'first_text',
+  toolUse: 'first_toolUse',
+  usageOnly: 'first_usageOnly',
+};
+
 export interface CompletionTimingSummary {
   [mark: string]: number | string | undefined;
   maxGapMs: number;
@@ -54,7 +62,7 @@ export function createCompletionTiming(now: () => number = Date.now) {
       const at = now();
       chunks++;
       stamp('firstChunk', at);
-      stamp(`first_${kind}`, at);
+      stamp(FIRST_KEY[kind], at);
       // Gaps are measured from the completion's start, so the silence before the first chunk
       // counts as a gap too - that is the one the desktop's stall line sees first.
       const from = lastChunkAt ?? receivedAt + (marks.completionStarted ?? 0);

@@ -322,8 +322,8 @@ It does not touch the over-a-minute waits, which are output-bound, not input-bou
 Both are off by default. When a flag is off, the round loop and the route pay one null check per
 frame: no per-token allocation, no per-render work.
 
-- **Desktop: `B4M_DESKTOP_TURN_TIMING=1`** (`apps/desktop/src/main/chat/turnTiming.ts`,
-  `createRoundProbe`). Per round it records:
+- **Desktop: `B4M_DESKTOP_TURN_TIMING=1`** (read in `apps/desktop/src/main/chat/index.ts`,
+  passed to `ChatService` as `turnTiming`; the probe is `createRoundProbe` in `turnTiming.ts`). Per round it records:
   - desktop work before the request (first round)
   - the first meta, `<think>` marker, readable reasoning, text and `tool_use` frames
   - the longest silence and what ended it
@@ -337,6 +337,7 @@ frame: no per-token allocation, no per-render work.
   adapter's reasoning channel), the longest gap and what ended it. It logs one `[CLI_TIMING]`
   info line per request.
 
-Landing these is a separate decision from the fixes above. The server line is cheap enough to
-leave on in production: one object per request, logged once. That would make the next
+Landing these is a separate decision from the fixes above. The server side is cheap enough to
+leave on in production. Per chunk it does a classification and two comparisons, plus one string
+replace on reasoning chunks. Per request it logs one line. That would make the next
 investigation of this a `grep`.

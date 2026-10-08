@@ -3,10 +3,8 @@ import { createRoundProbe } from './turnTiming';
 
 describe('createRoundProbe', () => {
   it('measures from the request going out and reports the desktop work before it', () => {
-    let clock = 100;
+    let clock = 400;
     const probe = createRoundProbe(0, () => clock);
-    clock = 400;
-    probe.sent();
     clock = 420;
     probe.frame('meta');
     clock = 2_400;
@@ -31,7 +29,6 @@ describe('createRoundProbe', () => {
   it('keeps the first of each kind and blames the end for a silent tail', () => {
     let clock = 0;
     const probe = createRoundProbe(undefined, () => clock);
-    probe.sent();
     clock = 1_000;
     probe.frame('text');
     clock = 1_500;

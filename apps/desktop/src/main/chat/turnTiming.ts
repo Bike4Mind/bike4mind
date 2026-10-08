@@ -18,12 +18,6 @@ export function startRoundTimer(now: () => number = Date.now) {
 }
 
 /**
- * Diagnosis only. Read once so a disabled flag costs the round loop one null check per frame.
- * See apps/desktop/docs/model-wait-findings.md for what the marks answer.
- */
-export const TURN_TIMING_ENABLED = process.env.B4M_DESKTOP_TURN_TIMING === '1';
-
-/**
  * What one stream frame carried. `marker` is a frame with text in it but nothing to show: the
  * bare `<think>` / `</think>` around a thinking block whose text the provider omitted.
  */
@@ -58,12 +52,18 @@ const FIRST_KEY: Record<RoundFrameKind, FirstFrameKey> = {
 
 /**
  * Splits one round's wait into phases, so a long "Waiting for the model..." can be put down to
- * our own work, a silent provider, or tool arguments that only arrive once complete.
+ * our own work, a silent provider, or tool arguments that only arrive once complete. Created at
+ * the moment the request goes out. See apps/desktop/docs/model-wait-findings.md.
  */
 export function createRoundProbe(turnStartedAt: number | undefined, now: () => number = Date.now) {
-  let sentAt = now();
+  const sentAt = now();
   let lastFrameAt = sentAt;
-  const phases: RoundPhases = { endMs: 0, maxGapMs: 0, frames: 0 };
+  const phases: RoundPhases = {
+    endMs: 0,
+    maxGapMs: 0,
+    frames: 0,
+    ...(turnStartedAt !== undefined ? { beforeSendMs: sentAt - turnStartedAt } : {}),
+  };
   const gap = (at: number, kind: RoundFrameKind | 'end') => {
     if (at - lastFrameAt > phases.maxGapMs) {
       phases.maxGapMs = at - lastFrameAt;
@@ -71,11 +71,6 @@ export function createRoundProbe(turnStartedAt: number | undefined, now: () => n
     }
   };
   return {
-    sent(): void {
-      sentAt = now();
-      lastFrameAt = sentAt;
-      if (turnStartedAt !== undefined) phases.beforeSendMs = sentAt - turnStartedAt;
-    },
     frame(kind: RoundFrameKind): void {
       const at = now();
       phases.frames++;
