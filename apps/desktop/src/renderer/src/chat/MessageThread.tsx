@@ -224,7 +224,11 @@ const AssistantTurn = memo(function AssistantTurn({
   skipRounds?: number;
 }) {
   const toolCalls = message.toolCalls ?? [];
-  const rounds = roundsOf(skipRounds > 0 ? { ...message, rounds: message.rounds?.slice(skipRounds) } : message);
+  const rounds = roundsOf(message);
+  // Hidden from the front of the WHOLE list rather than drawn from a slice of it, so a round
+  // keeps its key as the window grows over it: re-keyed, every round would re-parse and every
+  // tool row the reader had opened would remount closed.
+  const first = skipRounds > 0 ? Math.max(0, rounds.length - ((message.rounds?.length ?? 0) - skipRounds)) : 0;
 
   return (
     <Box
@@ -239,12 +243,13 @@ const AssistantTurn = memo(function AssistantTurn({
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten
           rounds is a narrative, and every row piled up after every word is not that narrative. */}
-      {rounds.map((round, index) => {
+      {rounds.slice(first).map((round, offset) => {
+        const index = first + offset;
         const presented = presentReply(round.text, live && index === rounds.length - 1);
         return (
           // The gap lives here rather than as a blank line inside the text, so a round that ran
           // tools and said nothing does not leave an empty paragraph behind.
-          <Box key={index} sx={{ mt: index === 0 ? 0 : 1.5 }} data-testid="chat-message-round">
+          <Box key={index} sx={{ mt: offset === 0 ? 0 : 1.5 }} data-testid="chat-message-round">
             {/* Per round rather than over the whole reply, which is also what keeps a code fence
                 from leaking: a block opened in one round cannot swallow the next round's prose,
                 because the next round is a parse of its own. */}
@@ -557,13 +562,15 @@ function WindowedTurns({
     return () => observer.disconnect();
   }, [start, skip, complete, from, to, host]);
 
+  // Every commit, not only on a window change: the distance is spent by the commit that follows
+  // its measurement, so it can never be applied later against a scroll it was not taken from.
   useLayoutEffect(() => {
     const root = host.current;
     const kept = keptFromBottom.current;
     if (!root || kept === null) return;
     keptFromBottom.current = null;
     root.scrollTop = root.scrollHeight - kept;
-  }, [start, skip, host]);
+  });
 
   return (
     <>

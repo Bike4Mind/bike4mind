@@ -109,6 +109,32 @@ describe('opening a long conversation', () => {
     expect(count('chat-message-round') + count('chat-message-user')).toBe(2 * WINDOW_STEP);
   });
 
+  it('keeps a round of the reply it ends inside as the same node when the window grows over it', () => {
+    render(buildThread(LARGEST_REAL_SHAPE));
+    const round = container.querySelector('[data-testid="chat-message-round"]') as Element;
+    const text = round.textContent;
+
+    act(() => ScriptedObserver.reveal());
+
+    expect(round.isConnected).toBe(true);
+    expect(round.textContent).toBe(text);
+  });
+
+  // jsdom has no layout, so the host's heights are scripted: 100px a round, scrolled 300px down.
+  it("holds the reader's distance from the bottom while older turns mount above them", () => {
+    render(buildThread(STRESS_SHAPE));
+    const host = container.querySelector('[data-testid="chat-thread"]') as HTMLElement;
+    let scrollTop = 300;
+    Object.defineProperty(host, 'scrollHeight', { get: () => count('chat-message-round') * 100 });
+    Object.defineProperty(host, 'scrollTop', { get: () => scrollTop, set: next => (scrollTop = next) });
+    const fromBottom = host.scrollHeight - host.scrollTop;
+
+    act(() => ScriptedObserver.reveal());
+
+    expect(count('chat-message-round')).toBeGreaterThan(WINDOW_STEP);
+    expect(host.scrollHeight - host.scrollTop).toBe(fromBottom);
+  });
+
   it('reaches the compaction boundary by scrolling, and only then offers the earlier messages', () => {
     render(buildThread(STRESS_SHAPE));
     for (let step = 0; step < 100 && count('chat-thread-older-sentinel') > 0; step++)
