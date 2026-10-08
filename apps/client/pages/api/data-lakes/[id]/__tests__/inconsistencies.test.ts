@@ -544,6 +544,14 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
     expect(limit()).toBe(3);
   });
 
+  it('gates the model run by lake id only, never by slug', async () => {
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.assertLakeWriteAccess).toHaveBeenCalledTimes(1);
+    expect(h.assertLakeWriteAccess.mock.calls[0][3]).toEqual({ idOnly: true });
+  });
+
   it('also bounds spend per LAKE, which the per-caller cap cannot do', async () => {
     // The caller cap stops one person spending without limit, but the cost lands on the lake: N
     // curators with manage rights each get their own allowance, so the caller cap alone lets one lake
