@@ -12,6 +12,9 @@ import {
   listFiles,
   listLakes,
   createNotebook,
+  renameNotebook,
+  cloneNotebook,
+  deleteNotebook,
   listProjects,
   getProject,
   createProject,
@@ -31,6 +34,9 @@ describe('TOOL_NAMES', () => {
       'list_notebooks',
       'get_notebook',
       'create_notebook',
+      'rename_notebook',
+      'clone_notebook',
+      'delete_notebook',
       'list_projects',
       'get_project',
       'create_project',
@@ -47,6 +53,38 @@ describe('TOOL_NAMES', () => {
 });
 
 describe('tool handlers', () => {
+  const raw = { id: 'n2', name: 'NB', lastUsedModel: 'gpt', createdAt: 'c', updatedAt: 'u', extra: 'x' };
+  const summary = { id: 'n2', name: 'NB', model: 'gpt', createdAt: 'c', updatedAt: 'u' };
+
+  it('rename_notebook renames and returns the summary', async () => {
+    const rename = vi.fn().mockResolvedValue(raw);
+    const result = await renameNotebook(mockClient({ renameNotebook: rename }), { notebookId: 'n1', name: 'NB' });
+    expect(rename).toHaveBeenCalledWith('n1', 'NB');
+    expect(result).toEqual(summary);
+  });
+
+  it('clone_notebook returns the summary of the new notebook', async () => {
+    const clone = vi.fn().mockResolvedValue(raw);
+    const result = await cloneNotebook(mockClient({ cloneNotebook: clone }), { notebookId: 'n1' });
+    expect(clone).toHaveBeenCalledWith('n1');
+    expect(result).toEqual(summary);
+  });
+
+  it('delete_notebook deletes with confirm: true', async () => {
+    const del = vi.fn().mockResolvedValue({ newLastNotebookId: 'n9' });
+    const result = await deleteNotebook(mockClient({ deleteNotebook: del }), { notebookId: 'n1', confirm: true });
+    expect(del).toHaveBeenCalledWith('n1');
+    expect(result).toEqual({ deleted: true, notebookId: 'n1', newLastNotebookId: 'n9' });
+  });
+
+  it.each([false, undefined])('delete_notebook refuses confirm: %s without calling the API', async confirm => {
+    const del = vi.fn();
+    await expect(deleteNotebook(mockClient({ deleteNotebook: del }), { notebookId: 'n1', confirm })).rejects.toThrow(
+      'confirm: true'
+    );
+    expect(del).not.toHaveBeenCalled();
+  });
+
   it('list_notebooks projects each notebook to a summary shape', async () => {
     const client = mockClient({
       listNotebooks: vi.fn().mockResolvedValue({
@@ -952,6 +990,89 @@ describe('registerTools', () => {
   it('create_notebook input schema keeps dataLakeId', () => {
     const shape = collectTools(mockClient({})).schemas.get('create_notebook')!;
     expect(z.object(shape).parse({ name: 'n', dataLakeId: 'l1' })).toEqual({ name: 'n', dataLakeId: 'l1' });
+  });
+
+  const NB_ID = '64b7f0c2a1e4d5f6a7b8c9d0';
+
+  it('delete_notebook input schema rejects a missing or false confirm', () => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get('delete_notebook')!);
+    expect(schema.safeParse({ notebookId: NB_ID }).success).toBe(false);
+    expect(schema.safeParse({ notebookId: NB_ID, confirm: false }).success).toBe(false);
+    expect(schema.safeParse({ notebookId: NB_ID, confirm: true }).success).toBe(true);
+  });
+
+  it('rename_notebook input schema rejects an empty name', () => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get('rename_notebook')!);
+    expect(schema.safeParse({ notebookId: NB_ID, name: '' }).success).toBe(false);
+  });
+
+  // An empty or dot-segment id collapses the URL onto /api/sessions, whose DELETE wipes every notebook.
+  it.each([
+    ['get_notebook', {}],
+    ['rename_notebook', { name: 'x' }],
+    ['clone_notebook', {}],
+    ['delete_notebook', { confirm: true }],
+  ] as const)('%s input schema accepts only an ObjectId notebookId', (tool, rest) => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get(tool)!);
+    for (const bad of ['', '.', '..', 'n1', `${NB_ID}/..`, NB_ID.slice(1)]) {
+      expect(schema.safeParse({ notebookId: bad, ...rest }).success).toBe(false);
+    }
+    expect(schema.safeParse({ notebookId: NB_ID, ...rest }).success).toBe(true);
+  });
+
+  it.each([
+    ['rename_notebook', 'renameNotebook', { notebookId: NB_ID, name: 'x' }],
+    ['clone_notebook', 'cloneNotebook', { notebookId: NB_ID }],
+    ['delete_notebook', 'deleteNotebook', { notebookId: NB_ID, confirm: true }],
+  ] as const)('%s maps a 403 to an isError naming notebooks:write', async (tool, method, args) => {
+    const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: {},
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ [method]: vi.fn().mockRejectedValue(forbidden) }));
+
+    const result = await tools.get(tool)!(args);
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain('recommended scope: notebooks:write');
+  });
+
+  it.each([
+    [404, 'Session not found'],
+    [409, 'Session is being modified, retry'],
+  ])('delete_notebook surfaces the server message of a %s', async (status, message) => {
+    const err = new AxiosError('failed', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status,
+      statusText: '',
+      data: { message },
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ deleteNotebook: vi.fn().mockRejectedValue(err) }));
+
+    const result = await tools.get('delete_notebook')!({ notebookId: NB_ID, confirm: true });
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toBe(message);
+  });
+
+  it('clone_notebook surfaces a 429 with its Retry-After', async () => {
+    const err = new AxiosError('failed', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 429,
+      statusText: '',
+      data: {},
+      headers: { 'retry-after': '42' },
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ cloneNotebook: vi.fn().mockRejectedValue(err) }));
+
+    const result = await tools.get('clone_notebook')!({ notebookId: NB_ID });
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toBe('rate limit exceeded (retry after 42s)');
   });
 
   it('create_project input schema requires name and description and keeps id lists', () => {

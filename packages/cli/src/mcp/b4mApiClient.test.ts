@@ -3,11 +3,15 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
+const mockPut = vi.fn();
+const mockDelete = vi.fn();
 const mockAxiosPost = vi.fn();
 vi.mock('../auth/ApiClient', () => ({
   ApiClient: class {
     get = mockGet;
     post = mockPost;
+    put = mockPut;
+    delete = mockDelete;
     getAxiosInstance = () => ({ post: mockAxiosPost });
   },
   // Mirrors the real class identity mapApiError keys on: the mocked module and the
@@ -143,6 +147,39 @@ describe('B4mApiClient', () => {
     await client.createNotebook({ name: 'My NB', dataLakeId: 'lake-1' });
     expect(mockPost).toHaveBeenCalledWith('/api/sessions/create', { name: 'My NB', dataLakeId: 'lake-1' });
   });
+
+  const NB_ID = '64b7f0c2a1e4d5f6a7b8c9d0';
+
+  it('renames a notebook via PUT with only the name', async () => {
+    mockPut.mockResolvedValue({ id: NB_ID });
+    await client.renameNotebook(NB_ID, 'Renamed');
+    expect(mockPut).toHaveBeenCalledWith(`/api/sessions/${NB_ID}`, { name: 'Renamed' });
+  });
+
+  it('clones a notebook via POST .../clone', async () => {
+    mockPost.mockResolvedValue({ id: 'n2' });
+    await client.cloneNotebook(NB_ID);
+    expect(mockPost).toHaveBeenCalledWith(`/api/sessions/${NB_ID}/clone`, {});
+  });
+
+  it('deletes a notebook via DELETE without following redirects', async () => {
+    mockDelete.mockResolvedValue({ newLastNotebookId: null });
+    await expect(client.deleteNotebook(NB_ID)).resolves.toEqual({ newLastNotebookId: null });
+    expect(mockDelete).toHaveBeenCalledWith(`/api/sessions/${NB_ID}`, { maxRedirects: 0 });
+  });
+
+  // '' or '.' would reach DELETE /api/sessions (delete-all) after the trailing-slash redirect.
+  it.each(['', '.', '..', 'n 1', `${NB_ID}/..`])(
+    'refuses notebook id %j on every write without a request',
+    async id => {
+      await expect(client.renameNotebook(id, 'x')).rejects.toThrow('Invalid notebook id');
+      await expect(client.cloneNotebook(id)).rejects.toThrow('Invalid notebook id');
+      await expect(client.deleteNotebook(id)).rejects.toThrow('Invalid notebook id');
+      expect(mockPut).not.toHaveBeenCalled();
+      expect(mockPost).not.toHaveBeenCalled();
+      expect(mockDelete).not.toHaveBeenCalled();
+    }
+  );
 
   it('lists data lakes with flat limit/cursor params and maps next_cursor', async () => {
     mockGet.mockResolvedValue({ data: [{ id: 'l1', name: 'Lake', slug: 'lake' }], next_cursor: 'c2' });
