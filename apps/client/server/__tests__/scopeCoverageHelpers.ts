@@ -112,9 +112,15 @@ function findClosingQuote(source: string, start: number): number {
 /**
  * Strips both comment forms so a commented-out `requiredScopes` mention never counts as a real
  * gate. String contents are kept intact, and a `//` inside one is not a comment.
+ *
+ * Throws when the scan does not terminate: an unterminated string, template or block comment makes
+ * `scanSource` return a truncated prefix, and a consumer that trusted it would silently stop seeing
+ * every method after the cut. Failing closed here keeps a misread `/` from disarming the guards.
  */
 export function stripComments(source: string): string {
-  return scanSource(source, false).code;
+  const { code, terminated } = scanSource(source, false);
+  if (!terminated) throw new Error('stripComments: source ends inside a string, template or block comment');
+  return code;
 }
 
 /**

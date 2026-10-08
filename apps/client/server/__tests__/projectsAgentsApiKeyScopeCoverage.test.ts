@@ -201,6 +201,14 @@ describe('the gate regex actually rejects a bad door', () => {
     expect(assertsBeforeFirstAwait(body, 'assertAgentsWriteScope')).toBe(false);
   });
 
+  it('stripComments keeps code after a // inside a string literal', () => {
+    expect(stripComments("const u = 'http://x'; await f();")).toContain('await f()');
+  });
+
+  it('stripComments fails closed on an unterminated scan instead of truncating', () => {
+    expect(() => stripComments("const s = 'oops;")).toThrow();
+  });
+
   it('does not count an assert that only appears as text in a template literal with an interpolation', () => {
     const body = '.get(async (req, res) => { const note = `assertAgentsReadScope(req) ${id}`; return res.json({}); })';
     expect(assertsBeforeFirstAwait(body, 'assertAgentsReadScope')).toBe(false);
