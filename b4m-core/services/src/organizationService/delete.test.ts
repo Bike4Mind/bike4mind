@@ -203,6 +203,17 @@ describe('organizationService - delete', () => {
     expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
   });
 
+  it('aborts the delete when the pointer reset fails', async () => {
+    const mockAdminUser: Partial<IUserDocument> = { id: 'admin1', isAdmin: true };
+    mockAdapters.db.users.clearOrganizationPointer.mockRejectedValue(new Error('pointer reset failed'));
+
+    await expect(deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(
+      'pointer reset failed'
+    );
+
+    expect(mockAdapters.db.organizations.delete).not.toHaveBeenCalled();
+  });
+
   // Regression coverage for #1219: deleteOrganization previously had NO reference to groups or
   // users at all, so a deleted org's groups stayed live (soft-delete never applied) and every
   // member kept the group ids in user.groups - continuing to satisfy the sharing layer's

@@ -448,6 +448,28 @@ describe('adminUpdateUser - org move membership row', () => {
     });
   });
 
+  it('keeps the other members when merging the target row', async () => {
+    const { adapters } = makeAdapters(100);
+    adapters.db.organizations.findById.mockResolvedValue({
+      id: 'org-new',
+      userId: 'owner-1',
+      users: [
+        { userId: 'other-1', permissions: ['read', 'write'] },
+        { userId: TARGET_ID, permissions: ['admin'] },
+      ],
+    });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, organizationId: 'org-new' }, adapters);
+
+    expect(adapters.db.organizations.update).toHaveBeenCalledWith({
+      id: 'org-new',
+      users: [
+        { userId: 'other-1', permissions: ['read', 'write'] },
+        { userId: TARGET_ID, permissions: ['admin', 'read'] },
+      ],
+    });
+  });
+
   it('adds no row when the target owns the new org', async () => {
     const { adapters, update } = makeAdapters(100);
     adapters.db.organizations.findById.mockResolvedValue({ id: 'org-new', userId: TARGET_ID, users: [] });
