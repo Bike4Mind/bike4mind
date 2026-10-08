@@ -28,13 +28,20 @@ fi
 # Known limit: nextRouteForContract( inside a string literal also satisfies it.
 # Under-enforcement rather than over-enforcement; acceptable for this gate.
 # -Z/-0: null-delimit filenames so spaces or quotes in paths cannot confuse xargs.
-# || true: grep -rLZ exits 1 when every file matches (fully compliant = goal state).
-violators=$(
-  grep -rLZ "nextRouteForContract(" "$API_DIR" --include="*.ts" --include="*.tsx" --exclude-dir='__tests__' --exclude-dir='premium-*' \
-  | xargs -0 printf '%s\n' \
-  | sort \
-  || true
-)
+# grep -rLZ exits 1 when every file matches (fully compliant = goal state) but 2 on a real
+# error such as an unreadable directory; the latter must fail the gate rather than read as
+# "no violators". Output goes through a file because command substitution drops the NULs.
+scan_output=$(mktemp)
+trap 'rm -f "$scan_output"' EXIT
+scan_status=0
+grep -rLZ "nextRouteForContract(" "$API_DIR" --include="*.ts" --include="*.tsx" --exclude-dir='__tests__' --exclude-dir='premium-*' \
+  > "$scan_output" || scan_status=$?
+if [ "$scan_status" -gt 1 ]; then
+  echo "::error::grep failed (exit ${scan_status}) while scanning ${API_DIR}"
+  echo "ERROR: Could not scan ${API_DIR}; refusing to report a clean result."
+  exit 1
+fi
+violators=$(xargs -0 printf '%s\n' < "$scan_output" | sort)
 
 # || true: grep -v '^$' exits 1 on a header-only (empty) allowlist.
 allowed=$(grep -v '^#' "$ALLOWLIST" | grep -v '^$' | sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*$//' | sort || true)

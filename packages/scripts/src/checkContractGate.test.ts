@@ -151,6 +151,30 @@ describe('check-contract-gate.sh', () => {
       expect(r.stdout).toContain(rel);
     });
 
+    it('flags a .tsx file that lacks nextRouteForContract', () => {
+      const { dir, v1Dir } = makeTree();
+      const rel = writeHandler(v1Dir, 'bad.tsx', VIOLATING);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+    });
+
+    // chmod 000 does not stop root, so the unreadable-directory scenario cannot be built there.
+    it.skipIf(process.getuid?.() === 0)('exits 1 instead of reporting OK when part of v1 is unreadable', () => {
+      const { dir, v1Dir } = makeTree();
+      writeHandler(v1Dir, 'locked/bad.ts', VIOLATING);
+      const locked = path.join(v1Dir, 'locked');
+      fs.chmodSync(locked, 0o000);
+      try {
+        const r = runGuard(dir);
+        expect(r.status).toBe(1);
+        expect(r.stdout).toContain('::error::');
+        expect(r.stdout).not.toContain('OK');
+      } finally {
+        fs.chmodSync(locked, 0o755);
+      }
+    });
+
     it('does not flag files under __tests__/', () => {
       const { dir, v1Dir } = makeTree();
       writeHandler(v1Dir, '__tests__/bad.test.ts', VIOLATING);
@@ -187,6 +211,19 @@ describe('check-contract-gate.sh', () => {
       expect(r.status).toBe(0);
       expect(r.stdout).toContain('INFO');
       expect(r.stdout).toContain(rel);
+    });
+
+    it('reports a stale entry and still fails on a new violator in the same run', () => {
+      const { dir, v1Dir, allowlist } = makeTree();
+      const staleRel = writeHandler(v1Dir, 'now-clean.ts', EXEMPT);
+      const newRel = writeHandler(v1Dir, 'new-bad.ts', VIOLATING);
+      fs.writeFileSync(allowlist, `# header\n${staleRel}\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('INFO');
+      expect(r.stdout).toContain(staleRel);
+      expect(r.stdout).toContain('ERROR');
+      expect(r.stdout).toContain(newRel);
     });
 
     it('emits a GitHub Actions ::error:: annotation for new violators', () => {
