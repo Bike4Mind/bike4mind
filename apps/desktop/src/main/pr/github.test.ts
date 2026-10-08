@@ -167,6 +167,35 @@ describe('parseSnapshot', () => {
     ]);
   });
 
+  it("keeps each reviewer's latest review only while it requests changes", () => {
+    const raw = response({
+      latestReviews: {
+        nodes: [
+          {
+            databaseId: 5,
+            state: 'APPROVED',
+            author: { login: 'a' },
+            authorAssociation: 'MEMBER',
+            body: 'ok',
+            url: 'u5',
+          },
+          {
+            databaseId: 6,
+            state: 'CHANGES_REQUESTED',
+            author: { login: 'b' },
+            authorAssociation: 'MEMBER',
+            body: 'fix it',
+            url: 'u6',
+          },
+        ],
+      },
+    });
+    expect(parseSnapshot(REF, raw, 0, true).changeRequests).toEqual([
+      { reviewId: 6, author: 'b', association: 'MEMBER', body: 'fix it', url: 'u6' },
+    ]);
+    expect(parseSnapshot(REF, raw, 0, false).changeRequests).toBeUndefined();
+  });
+
   it('reports a PR the repo does not have as not-found', () => {
     expect(() => parseSnapshot(REF, { data: { repository: { pullRequest: null } } }, 0, false)).toThrow(GhError);
   });

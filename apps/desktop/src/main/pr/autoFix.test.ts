@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PrBinding, PrReviewThread } from '@shared/pullRequest';
+import type { PrBinding, PrChangeRequest, PrReviewThread } from '@shared/pullRequest';
 import { MAX_AUTO_FIX_ATTEMPTS, autoFixRefusal, autoFixToolRefusal, planAutoFix } from './autoFix';
 import { REF, check, snapshot } from './prTestSupport';
 
@@ -16,6 +16,17 @@ function thread(overrides: Partial<PrReviewThread> = {}): PrReviewThread {
     body: 'Please handle the empty ladder.',
     url: 'https://github.com/example-org/widgets/pull/611#discussion_r901',
     outdated: false,
+    ...overrides,
+  };
+}
+
+function changeRequest(overrides: Partial<PrChangeRequest> = {}): PrChangeRequest {
+  return {
+    reviewId: 77,
+    author: 'reviewer',
+    association: 'MEMBER',
+    body: 'Verdict: request changes. The ladder breaks on an empty list.',
+    url: 'https://github.com/example-org/widgets/pull/611#pullrequestreview-77',
     ...overrides,
   };
 }
@@ -72,6 +83,25 @@ describe('planAutoFix', () => {
     expect(plan.kind === 'start' && plan.fingerprints).toEqual(['comment:901']);
     expect(plan.kind === 'start' && plan.prompt).toContain('    > Please handle the empty ladder.');
     expect(planAutoFix({ ...binding, autoFixHandled: ['comment:901'] }, withComment, false)).toEqual({ kind: 'none' });
+  });
+
+  it('acts once on a review requesting changes with no inline comments', () => {
+    const reviewed = snapshot({ reviewDecision: 'CHANGES_REQUESTED', changeRequests: [changeRequest()] });
+    const plan = planAutoFix(binding, reviewed, false);
+    expect(plan.kind).toBe('start');
+    if (plan.kind !== 'start') return;
+    expect(plan.fingerprints).toEqual(['review:77']);
+    expect(plan.summary).toBe('1 change request on #611');
+    expect(plan.prompt).toContain('    > Verdict: request changes.');
+    expect(planAutoFix({ ...binding, autoFixHandled: ['review:77'] }, reviewed, false)).toEqual({ kind: 'none' });
+  });
+
+  it.each([
+    ['by someone without write access', changeRequest({ author: 'drive-by', association: 'NONE' })],
+    ['by the viewer', changeRequest({ author: 'octo-dev', association: 'OWNER' })],
+    ['with no body', changeRequest({ body: ' ' })],
+  ])('ignores a change request %s', (_label, ignored) => {
+    expect(planAutoFix(binding, snapshot({ changeRequests: [ignored] }), false)).toEqual({ kind: 'none' });
   });
 
   it.each([

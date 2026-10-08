@@ -1,4 +1,5 @@
 import type {
+  PrChangeRequest,
   PrCheck,
   PrCheckBucket,
   PrMergeable,
@@ -13,7 +14,7 @@ import { GhError, type GhRunner } from './gh';
 
 /**
  * One query per read: the PR, its head commit's checks (with whether each is required), the
- * repo's merge settings and the viewer. Review threads ride along only while auto-fix is on,
+ * repo's merge settings and the viewer. Review threads and change requests ride along only while auto-fix is on,
  * because they are the expensive part and nothing else reads them.
  */
 const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $number: Int!, $threads: Boolean!) {
@@ -34,6 +35,8 @@ const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $number: Int!, $t
       } } } } } }
       reviewThreads(first: 50) @include(if: $threads) { nodes { id isResolved isOutdated path line
         comments(last: 1) { nodes { databaseId author { login } authorAssociation body url } } } }
+      latestReviews(first: 20) @include(if: $threads) { nodes { databaseId state author { login }
+        authorAssociation body url } }
     }
   }
 }`;
@@ -116,6 +119,18 @@ function toThread(node: Json): PrReviewThread | null {
   };
 }
 
+/** Each reviewer's latest review counts only while it still requests changes; a later approval supersedes it. */
+function toChangeRequest(node: Json): PrChangeRequest | null {
+  if (node.state !== 'CHANGES_REQUESTED') return null;
+  return {
+    reviewId: num(node.databaseId),
+    author: str(obj(node.author).login),
+    association: str(node.authorAssociation),
+    body: str(node.body),
+    url: str(node.url),
+  };
+}
+
 const METHOD_ORDER: PrMergeMethod[] = ['squash', 'merge', 'rebase'];
 
 function parseState(value: unknown): PrState {
@@ -168,7 +183,12 @@ export function parseSnapshot(ref: PrRef, raw: unknown, now: number, withThreads
       ...(allowedMethods.includes(viewerDefault) ? { defaultMethod: viewerDefault } : {}),
     },
     viewer: str(obj(data.viewer).login),
-    ...(withThreads ? { threads: nodes(pr.reviewThreads).flatMap(node => toThread(node) ?? []) } : {}),
+    ...(withThreads
+      ? {
+          threads: nodes(pr.reviewThreads).flatMap(node => toThread(node) ?? []),
+          changeRequests: nodes(pr.latestReviews).flatMap(node => toChangeRequest(node) ?? []),
+        }
+      : {}),
     fetchedAt: now,
   };
 }

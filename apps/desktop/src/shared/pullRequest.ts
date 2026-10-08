@@ -86,6 +86,18 @@ export interface PrReviewThread {
   outdated: boolean;
 }
 
+/**
+ * A reviewer's latest review, when it requests changes. Often the whole request lives in its
+ * body with no inline threads at all. Only read while auto-fix is on.
+ */
+export interface PrChangeRequest {
+  reviewId: number;
+  author: string;
+  association: string;
+  body: string;
+  url: string;
+}
+
 /** One read of a pull request. Never stored; main holds the latest in memory. */
 export interface PrSnapshot extends PrRef {
   title: string;
@@ -107,6 +119,8 @@ export interface PrSnapshot extends PrRef {
   viewer: string;
   /** Present only when the read asked for threads, which it does only while auto-fix is on. */
   threads?: PrReviewThread[];
+  /** Read with the threads, for the same reason. */
+  changeRequests?: PrChangeRequest[];
   fetchedAt: number;
 }
 
@@ -121,7 +135,7 @@ export interface PrBarState {
   /** Null when the conversation has no PR, or the user dismissed it: no bar. */
   binding: PrBinding | null;
   /** Null until the first read lands. */
-  snapshot: Omit<PrSnapshot, 'threads'> | null;
+  snapshot: Omit<PrSnapshot, 'threads' | 'changeRequests'> | null;
   gh: PrGhStatus;
   /** The last read's failure, one line, while it is still the latest word. */
   error?: string;

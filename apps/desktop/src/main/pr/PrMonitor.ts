@@ -710,7 +710,7 @@ export class PrMonitor {
     return {
       sessionId,
       binding: binding && !binding.dismissed ? binding : null,
-      snapshot: snapshot ? withoutThreads(snapshot) : null,
+      snapshot: snapshot ? forTheBar(snapshot) : null,
       gh: this.gh,
       ...(live?.error ? { error: live.error } : {}),
       refreshing: !!live?.inflight,
@@ -733,7 +733,7 @@ export class PrMonitor {
   }
 }
 
-function withoutThreads(snapshot: PrSnapshot): Omit<PrSnapshot, 'threads'> {
-  const { threads: _threads, ...rest } = snapshot;
+function forTheBar(snapshot: PrSnapshot): Omit<PrSnapshot, 'threads' | 'changeRequests'> {
+  const { threads: _threads, changeRequests: _changeRequests, ...rest } = snapshot;
   return rest;
 }
