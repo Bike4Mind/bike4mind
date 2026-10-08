@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -16,6 +16,7 @@ import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 import { automaticSummary, displayText, relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
 import { describeReplyCost, formatCreditsSpent } from './statusLine';
+import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
@@ -77,7 +78,7 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
  * The user's own turn: a right-aligned bubble, narrower than the column so the alignment
  * reads as "mine" at a glance even when the text is long.
  */
-function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
+const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
   const attachments = message.attachments ?? [];
   const skill = message.skill;
   const [expanded, setExpanded] = useState(false);
@@ -143,7 +144,7 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
       </Sheet>
     </Stack>
   );
-}
+});
 
 /**
  * Marks the cost row for the `:hover` rule on the turn around it. A class rather than a child
@@ -196,14 +197,18 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
  *
  * The hover rule for the cost lives here rather than on the row it reveals, because CSS is what
  * keeps it free: see ReplyCost.
+ *
+ * Memoized, as every turn is: a streaming reply re-renders the thread once a frame, and only the
+ * last turn's props change on those frames.
  */
-function AssistantTurn({
+const AssistantTurn = memo(function AssistantTurn({
   message,
   onRespond,
   onMove,
   onContinue,
   status,
   live = false,
+  skipRounds = 0,
 }: {
   message: ChatMessage;
   onRespond: RespondToApproval;
@@ -215,9 +220,11 @@ function AssistantTurn({
   onContinue?: () => void;
   /** What this turn is doing, while it is the one in flight; see MessageThread. */
   status?: ReactNode;
+  /** Leading stored rounds not drawn yet, when the thread's window ends inside this reply. */
+  skipRounds?: number;
 }) {
   const toolCalls = message.toolCalls ?? [];
-  const rounds = roundsOf(message);
+  const rounds = roundsOf(skipRounds > 0 ? { ...message, rounds: message.rounds?.slice(skipRounds) } : message);
 
   return (
     <Box
@@ -274,7 +281,7 @@ function AssistantTurn({
       <ReplyCost {...(message.usage ? { usage: message.usage } : {})} />
     </Box>
   );
-}
+});
 
 /**
  * A message the app put in the thread rather than either speaker: a spawned session reporting
@@ -284,7 +291,7 @@ function AssistantTurn({
  * user bubble it would read as something the user typed, and as an assistant turn as something
  * the model said. Both would be a lie about where the text came from.
  */
-function SystemTurn({ message }: { message: ChatMessage }) {
+const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage }) {
   return (
     <Sheet
       variant="soft"
@@ -300,7 +307,7 @@ function SystemTurn({ message }: { message: ChatMessage }) {
       </Typography>
     </Sheet>
   );
-}
+});
 
 /**
  * A message another conversation sent here with session_send.
@@ -312,18 +319,18 @@ function SystemTurn({ message }: { message: ChatMessage }) {
  * behind the same left rule the tool rows use, names the sender in the summary, and keeps the
  * full text one click away.
  */
-function RelayTurn({ message }: { message: ChatMessage }) {
+const RelayTurn = memo(function RelayTurn({ message }: { message: ChatMessage }) {
   return <CollapsedTurn message={message} summary={relaySummary(message)} kind="relay" />;
-}
+});
 
 /**
  * A turn the app started on the user's standing instruction (auto-fix on a PR). Drawn like a
  * relay, and for the same reason: the user did not type it, and a bubble on their side of the
  * thread would say they had. The summary names auto-fix first so that is the first thing read.
  */
-function AutomaticTurn({ message }: { message: ChatMessage }) {
+const AutomaticTurn = memo(function AutomaticTurn({ message }: { message: ChatMessage }) {
   return <CollapsedTurn message={message} summary={automaticSummary(message)} kind="automatic" />;
-}
+});
 
 function CollapsedTurn({
   message,
@@ -393,7 +400,7 @@ function CollapsedTurn({
  * turn is built on, so what it says - and what it leaves out - is exactly what the user needs to
  * be able to read before they type again.
  */
-function BoundaryRow({ message }: { message: ChatMessage }) {
+const BoundaryRow = memo(function BoundaryRow({ message }: { message: ChatMessage }) {
   const compacted = message.boundary?.kind === 'compact';
   const automatic = compacted && message.boundary?.automatic === true;
 
@@ -428,14 +435,15 @@ function BoundaryRow({ message }: { message: ChatMessage }) {
       )}
     </Stack>
   );
-}
+});
 
 /**
  * What came before the boundary, behind a disclosure.
  *
  * Collapsed by DEFAULT and kept whole: the point of both commands is that the conversation stops
  * being in front of the model, not that it stops being the user's record of their own work.
- * Mounted only when opened, so a thousand-message history costs nothing to walk past.
+ * Mounted only when opened, so a thousand-message history costs nothing to walk past - and
+ * windowed once it is, so opening it costs one window rather than the whole history.
  */
 function EarlierMessages({ count, children }: { count: number; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -479,6 +487,91 @@ function EarlierMessages({ count, children }: { count: number; children: ReactNo
 }
 
 const PIN_THRESHOLD_PX = 48;
+
+/**
+ * How far above the viewport the next window starts mounting, so older turns are in place before
+ * a reader scrolling up reaches them rather than as they arrive.
+ */
+const REVEAL_MARGIN_PX = 1500;
+
+type RenderTurn = (message: ChatMessage, index: number, skipRounds: number) => ReactNode;
+
+/**
+ * messages[from..to), drawn from the end: the last WINDOW_STEP rounds on mount, and another
+ * step each time the reader nears the top of what is drawn. Opening a conversation therefore
+ * costs about the same whatever its length; older turns are paid for only if someone scrolls to
+ * them.
+ *
+ * Each step keeps the reader where they were by holding their distance from the BOTTOM: what
+ * mounts goes in above them, and nothing below it moves. Done by hand rather than left to the
+ * browser's scroll anchoring, which does nothing for a reader already at the very top.
+ *
+ * `above` is drawn only once the window reaches `from`, so nothing is shown next to turns that
+ * are not actually its neighbours.
+ *
+ * Without IntersectionObserver (a test DOM) nothing could ever grow the window, so it starts whole.
+ */
+function WindowedTurns({
+  messages,
+  from,
+  to,
+  host,
+  turn,
+  above,
+}: {
+  messages: ChatMessage[];
+  from: number;
+  to: number;
+  host: RefObject<HTMLDivElement | null>;
+  turn: RenderTurn;
+  above?: ReactNode;
+}) {
+  const [held, setHeld] = useState<ThreadWindow>(() =>
+    typeof IntersectionObserver === 'undefined'
+      ? { start: from, skip: 0 }
+      : initialWindow(messages, from, to, WINDOW_STEP)
+  );
+  const { start, skip } = clampWindow(held, from, to);
+  const complete = start === from && skip === 0;
+  const sentinel = useRef<HTMLDivElement>(null);
+  const keptFromBottom = useRef<number | null>(null);
+  const latest = useRef(messages);
+  latest.current = messages;
+
+  // Re-subscribed after every step: a fresh observer reports the sentinel's state at once, so a
+  // step that did not fill the margin is followed by the next without waiting for a scroll.
+  useEffect(() => {
+    const target = sentinel.current;
+    const root = host.current;
+    if (complete || !target || !root || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      entries => {
+        if (!entries.some(entry => entry.isIntersecting)) return;
+        observer.disconnect();
+        keptFromBottom.current = root.scrollHeight - root.scrollTop;
+        setHeld(current => extendWindow(latest.current, from, clampWindow(current, from, to), WINDOW_STEP));
+      },
+      { root, rootMargin: `${REVEAL_MARGIN_PX}px 0px 0px 0px` }
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [start, skip, complete, from, to, host]);
+
+  useLayoutEffect(() => {
+    const root = host.current;
+    const kept = keptFromBottom.current;
+    if (!root || kept === null) return;
+    keptFromBottom.current = null;
+    root.scrollTop = root.scrollHeight - kept;
+  }, [start, skip, host]);
+
+  return (
+    <>
+      {complete ? above : <div ref={sentinel} data-testid="chat-thread-older-sentinel" />}
+      {messages.slice(start, to).map((message, offset) => turn(message, start + offset, offset === 0 ? skip : 0))}
+    </>
+  );
+}
 
 export function MessageThread({
   messages,
@@ -535,7 +628,7 @@ export function MessageThread({
   // One function for both sides of the divider, taking each message's index in the WHOLE thread,
   // so a turn drawn inside the disclosure is the same turn with the same Continue and status
   // rules rather than a second rendering path that can drift from this one.
-  const turn = (message: ChatMessage, index: number): ReactNode => {
+  const turn: RenderTurn = (message, index, skipRounds) => {
     if (message.boundary) return <BoundaryRow key={message.id} message={message} />;
     if (message.automatic) return <AutomaticTurn key={message.id} message={message} />;
     if (message.relay) return <RelayTurn key={message.id} message={message} />;
@@ -551,6 +644,7 @@ export function MessageThread({
         // into its own message, so a Continue on an older one would edit history.
         {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
         {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
+        {...(skipRounds > 0 ? { skipRounds } : {})}
       />
     );
   };
@@ -561,8 +655,9 @@ export function MessageThread({
     if (el) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD_PX;
   };
 
-  // Keyed on the growing last message too, so the view follows tokens as they stream in.
-  useEffect(() => {
+  // Keyed on the growing last message too, so the view follows tokens as they stream in. Before
+  // paint, so an opened conversation's first frame is already its latest turn.
+  useLayoutEffect(() => {
     if (last?.role === 'user') pinned.current = true;
     if (pinned.current) bottom.current?.scrollIntoView({ block: 'end' });
   }, [messages.length, lastContent]);
@@ -600,12 +695,20 @@ export function MessageThread({
     // scrollbar in the middle of the window rather than at the edge of the pane.
     <Box ref={host} onScroll={onScroll} sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="chat-thread">
       <Stack ref={column} spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
-        {boundary > 0 && (
-          <EarlierMessages count={boundary}>
-            {messages.slice(0, boundary).map((message, index) => turn(message, index))}
-          </EarlierMessages>
-        )}
-        {messages.slice(Math.max(boundary, 0)).map((message, index) => turn(message, Math.max(boundary, 0) + index))}
+        <WindowedTurns
+          messages={messages}
+          from={Math.max(boundary, 0)}
+          to={messages.length}
+          host={host}
+          turn={turn}
+          above={
+            boundary > 0 && (
+              <EarlierMessages count={boundary}>
+                <WindowedTurns messages={messages} from={0} to={boundary} host={host} turn={turn} />
+              </EarlierMessages>
+            )
+          }
+        />
         {/* The turn line normally rides the reply, but the last message is not always that reply:
             a queued prompt or a relayed message can land after it while the turn still runs. */}
         {streaming && status && last && !(last.role === 'assistant' && !last.relay && !last.system) && (

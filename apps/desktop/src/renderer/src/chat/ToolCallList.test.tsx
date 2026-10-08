@@ -174,7 +174,8 @@ describe('ToolCallList ask_user', () => {
     expect(html).toContain('Asked: Which auth method? - OAuth (Recommended)');
   });
 
-  it('shows the settled answers from the stored call after a reload', () => {
+  // The answers themselves are drawn once the row is opened; see ToolCallList.open.test.tsx.
+  it('keeps the settled answers behind the closed row after a reload', () => {
     const html = markup([
       asked({
         status: 'done',
@@ -182,8 +183,8 @@ describe('ToolCallList ask_user', () => {
         input: { questions, outcome: { status: 'answered', answers: [{ selected: [], other: 'mTLS' }] } },
       }),
     ]);
-    expect(html).toContain('data-testid="chat-question-answer-0"');
-    expect(html).toContain('mTLS');
+    expect(html).toContain('data-testid="chat-tool-row"');
+    expect(html).not.toContain('data-testid="chat-question-answer-0"');
   });
 
   it('says so on a skipped row', () => {

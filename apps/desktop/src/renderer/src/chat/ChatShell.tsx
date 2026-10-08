@@ -158,8 +158,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
   const conversation = useConversation(activeId, apply);
   // A conversation picked before its transcript has been read would otherwise show the empty
-  // thread's "send a message" line for a frame.
-  const opening = settling || (!!activeId && !conversation.session);
+  // thread's "send a message" line for a frame - or, on a switch, the PREVIOUS conversation's
+  // transcript under this one's id until the read lands.
+  const opening = settling || (!!activeId && conversation.session?.id !== activeId);
   const background = useBackgroundProcesses(activeId);
   const skills = useSkills(activeId);
   const catalog = useModelCatalog();
@@ -522,6 +523,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             <Box sx={{ flex: 1 }} data-testid="chat-thread-opening" />
           ) : (
             <MessageThread
+              // Remounted per conversation, so its window and scroll start over and nothing it
+              // set going outlives the conversation it was for. Prefixed because PrStatusBar, a
+              // sibling, is keyed on the bare id: two siblings sharing a key leave one of them
+              // mounted in the DOM after React drops it.
+              key={`thread-${activeId ?? 'none'}`}
               messages={conversation.messages}
               sessionId={activeId}
               // What stands in for the transcript when there is no session to have one. It is the

@@ -436,9 +436,11 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
         </Box>
       </Stack>
 
-      <Box sx={{ px: 1, pb: 0.75 }}>
-        <ToolCallDetail call={call} />
-      </Box>
+      {open && (
+        <Box sx={{ px: 1, pb: 0.75 }}>
+          <ToolCallDetail call={call} />
+        </Box>
+      )}
     </Box>
   );
 }
@@ -518,12 +520,16 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
           </Box>
         </Stack>
 
-        {/* One call needs no list around it: the summary above already named it, and a second
+        {/* Mounted only while open. A closed row is a single line, and drawing its output,
+            diffs and highlighting anyway is what made a long transcript slow to open - a
+            reply with a hundred tool calls paid for a hundred hidden results.
+
+            One call needs no list around it: the summary above already named it, and a second
             copy of that label under a second chevron is the same sentence twice.
 
             No rule of its own either way: the group already sits behind one, and nesting a
             second turns an expanded row into a ladder. */}
-        {single ? (
+        {!open ? null : single ? (
           <Box sx={{ pt: 0.5, pb: 0.5 }}>
             <ToolCallDetail call={group.calls[0]} />
           </Box>
