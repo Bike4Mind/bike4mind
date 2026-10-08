@@ -210,7 +210,9 @@ describe('check-contract-gate.sh', () => {
       const { dir, v1Dir, allowlist } = makeTree();
       const rel = writeHandler(v1Dir, 'migrated.ts', EXEMPT_CONTRACT);
       fs.writeFileSync(allowlist, `# header\n${rel}\n`, 'utf8');
-      const r = runGuard(dir);
+      // Stale entries alone must not trigger --error (the new-violators branch fires first).
+      const r = runGuard(dir, ['--error']);
+      expect(r.status).toBe(0);
       expect(r.stdout).toContain('INFO');
       expect(r.stdout).toContain(rel);
     });
