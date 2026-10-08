@@ -8,7 +8,9 @@ import {
   ImageModels,
   ImagePromptResolutionSchema,
   PROMPT_TEXT_MAX,
+  stripChoicesFromReplies,
   ttsRequestSchema,
+  visibleReplyText,
   type GeneratedAudioResponse,
   type TTSRequest,
 } from '@bike4mind/common';
@@ -21,6 +23,7 @@ import {
   type RawNotebook,
   type RawProject,
 } from './b4mApiClient.js';
+import { logger } from '../utils/Logger.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
 export interface ToolMeta {
@@ -394,9 +397,14 @@ const isSettled = (q: QuestResponse) => q.status === 'done' || q.status === 'sto
 // finished whatever its status says.
 const isImageSettled = (q: QuestResponse) => isSettled(q) || (!q.status && !!q.images?.length);
 
-// The poll's `reply` is the visible answer text; older servers left it null, so fall back to the
-// raw reply slots.
-const questReplyText = (q: QuestResponse) => q.reply || (q.replies ?? []).join('\n\n');
+// Must stay in sync with questReplyText in apps/client/server/utils/questPollBody.ts. Derived here
+// rather than read from the poll's `reply` because older servers return the stored scalar, which
+// can be a stale rapid-reply prefix of the streamed slots.
+const questReplyText = (q: QuestResponse) =>
+  stripChoicesFromReplies(q.replies ?? [])
+    .replies.map(slot => visibleReplyText(slot))
+    .join('') ||
+  (q.reply ?? '');
 
 const questRef = (questId: string, notebookId?: string) =>
   `quest ${questId}${notebookId ? `, notebook ${notebookId}` : ''}`;
@@ -458,7 +466,14 @@ async function pollQuest(
     if (elapsed >= timeoutMs) {
       throw new Error(`${task} did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
     }
-    await onProgress?.(elapsed, quest);
+    // A cancel can land while getQuest is in flight; report nothing for a request the client dropped.
+    signal?.throwIfAborted();
+    try {
+      await onProgress?.(elapsed, quest);
+    } catch (err) {
+      // Progress is advisory: a lost notification must not fail a quest that is still running.
+      logger.warn(`mcp: progress notification failed (${ref}): ${err instanceof Error ? err.message : String(err)}`);
+    }
     await sleep(Math.min(Math.max(intervalMs, retryAfterMs), Math.max(timeoutMs - elapsed, intervalMs)));
     retryAfterMs = 0;
   }

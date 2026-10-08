@@ -490,20 +490,22 @@ describe('sendMessage', () => {
     ]);
   });
 
-  it('prefers the visible reply text over the raw reply slots', async () => {
-    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, reply: 'visible', replies: ['<choices/>visible'] });
+  it('derives the reply from the slots over a stale rapid-reply prefix in reply', async () => {
+    const getQuest = vi
+      .fn()
+      .mockResolvedValue({ ...doneQuest, reply: 'Let me check... ', replies: ['Let me check... the full answer'] });
 
     const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
 
-    expect(result.reply).toBe('visible');
+    expect(result.reply).toBe('Let me check... the full answer');
   });
 
-  it('joins the reply slots with a blank line when the server sent no reply text', async () => {
-    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, reply: null, replies: ['a', 'b'] });
+  it('falls back to the reply text when the quest has no reply slots', async () => {
+    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, reply: 'Model is not available', replies: [] });
 
     const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
 
-    expect(result.reply).toBe('a\n\nb');
+    expect(result.reply).toBe('Model is not available');
   });
 
   it('forwards a supplied systemPrompt through to sendChat', async () => {
@@ -544,6 +546,7 @@ describe('sendMessage', () => {
       type: 'error',
       errorCode: 'insufficient_credits',
       reply: 'Not enough credits',
+      replies: ['Not enough credits'],
     });
 
     const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
@@ -552,7 +555,9 @@ describe('sendMessage', () => {
   });
 
   it('treats a stopped quest as finished', async () => {
-    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, status: 'stopped', reply: 'Stopped by user' });
+    const getQuest = vi
+      .fn()
+      .mockResolvedValue({ ...doneQuest, status: 'stopped', reply: 'Stopped by user', replies: ['Stopped by user'] });
 
     const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
 
@@ -583,6 +588,31 @@ describe('sendMessage', () => {
       '(quest q1, notebook nb1; the chat completion may still complete)'
     );
     expect(getQuest).toHaveBeenCalledTimes(3);
+  });
+
+  it('names the ai:chat scope when the poll is forbidden', async () => {
+    const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: {},
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const getQuest = vi.fn().mockRejectedValue(forbidden);
+
+    await expect(sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep)).rejects.toThrow(
+      /recommended scope: ai:chat\).*the chat completion may still complete/
+    );
+    expect(getQuest).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps polling when a progress notification fails', async () => {
+    const getQuest = vi.fn().mockResolvedValueOnce({ id: 'q1', status: 'running' }).mockResolvedValueOnce(doneQuest);
+    const onProgress = vi.fn().mockRejectedValue(new Error('transport closed'));
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, { ...noSleep, onProgress });
+
+    expect(result.reply).toBe('hello');
   });
 
   it('gives up once the poll timeout elapses', async () => {
@@ -1139,12 +1169,17 @@ describe('registerTools', () => {
       });
       const handler = collectTools(chatClient(getQuest)).get('send_message') as ChatHandler;
 
-      const pending = handler({ message: 'hi' }, { signal: controller.signal, sendNotification: vi.fn() });
+      const sendNotification = vi.fn();
+      const pending = handler(
+        { message: 'hi' },
+        { signal: controller.signal, sendNotification, _meta: { progressToken: 'tok' } }
+      );
       await vi.runAllTimersAsync();
       const result = await pending;
 
       expect(result.isError).toBe(true);
       expect(getQuest).toHaveBeenCalledTimes(1);
+      expect(sendNotification).not.toHaveBeenCalled();
     });
   });
 
@@ -1208,15 +1243,17 @@ describe('registerTools', () => {
       });
       const handler = collectTools(imageClient(getQuest)).get('generate_image') as ImageHandler;
 
+      const sendNotification = vi.fn();
       const pending = handler(
         { prompt: 'p', model: 'gpt-image-2' },
-        { signal: controller.signal, sendNotification: vi.fn() }
+        { signal: controller.signal, sendNotification, _meta: { progressToken: 'tok' } }
       );
       await vi.runAllTimersAsync();
       const result = await pending;
 
       expect(result.isError).toBe(true);
       expect(getQuest).toHaveBeenCalledTimes(1);
+      expect(sendNotification).not.toHaveBeenCalled();
     });
   });
 });
