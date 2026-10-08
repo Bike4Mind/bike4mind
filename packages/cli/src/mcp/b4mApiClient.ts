@@ -7,6 +7,7 @@ import type { ZodType, output } from 'zod';
 import {
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
+  type IBriefcasePrompt,
   ttsBase64ResponseSchema,
   type CitableSourceSchema,
   ttsResponseTooLargeSchema,
@@ -15,6 +16,7 @@ import {
   type GeneratedFile,
   type GenerateImageResponse,
   type ImagePromptResolution,
+  type PromptBatchQueryType,
   type QuestErrorCode,
   type TTSRequest,
 } from '@bike4mind/common';
@@ -163,6 +165,17 @@ export interface ArtifactWithContent {
   artifact: RawArtifact;
   content?: unknown;
 }
+
+/**
+ * A Briefcase prompt. Catalog entries are metadata only; `promptText` ships only
+ * on the by-id fetch. Name/description are picked from the stored
+ * `IBriefcasePrompt` so an upstream rename is a compile error here, not a silent
+ * passthrough.
+ */
+export type RawBriefcasePrompt = Pick<IBriefcasePrompt, 'name' | 'description'> & {
+  id: string;
+  promptText?: string;
+};
 
 /**
  * Typed wrapper over {@link ApiClient} exposing exactly the Bike4Mind REST
@@ -428,6 +441,32 @@ export class B4mApiClient {
       params: { includeContent: 'true' },
     });
   }
+
+  /**
+   * POST /api/briefcase/catalog: a key -> prompts map, one entry per query key.
+   *
+   * The route runs csrfProtection, which exempts API-key requests but rejects a
+   * login (JWT bearer) request that carries no Origin - and Node sends none. CSRF
+   * defends browsers, so a non-browser client naming the backend's own origin is
+   * the intended pass, not a bypass.
+   */
+  async getBriefcaseCatalog(
+    queries: readonly PromptBatchQueryType[]
+  ): Promise<Record<string, RawBriefcasePrompt[] | undefined>> {
+    const result = await this.client.post<{ catalog: Record<string, RawBriefcasePrompt[]> }>(
+      '/api/briefcase/catalog',
+      { queries },
+      { headers: { Origin: new URL(this.baseURL).origin } }
+    );
+    return result.catalog;
+  }
+
+  async getBriefcasePrompt(promptId: string): Promise<RawBriefcasePrompt> {
+    const result = await this.client.get<{ prompt: RawBriefcasePrompt }>(
+      `/api/briefcase/prompts/${encodeURIComponent(promptId)}`
+    );
+    return result.prompt;
+  }
 }
 
 /**
@@ -456,6 +495,13 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       if ((error.response?.data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
         return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
       }
+      // csrfProtection answers 403 when no Origin matches the deployment's APP_URL and
+      // names the expected origin in the body - the actual fix for a login (JWT) caller,
+      // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
+      // The match is wording-based: must stay in sync with the ForbiddenError messages in
+      // apps/client/server/middlewares/csrfProtection.ts.
+      const csrfMessage = extractServerMessage(error.response?.data);
+      if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
       const base = "API key forbidden: check the key's scopes and account access";
       return scope ? `${base} (recommended scope: ${scope})` : base;
     }

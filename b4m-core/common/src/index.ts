@@ -6,6 +6,7 @@ export * from './memberCreditPeriod';
 export * from './validation';
 export * from './apikey';
 export * from './agentQuest';
+export * from './briefcasePromptResolution';
 export * from './models';
 export * from './modelPriceCatalog';
 export * from './modelCatalog';

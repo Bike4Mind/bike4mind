@@ -75,6 +75,26 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/sessions/n%201');
   });
 
+  it('posts the briefcase catalog queries and unwraps the catalog map', async () => {
+    const catalog = { general: [{ id: 'p1', name: 'Summarize' }] };
+    mockPost.mockResolvedValue({ catalog });
+    const queries = [{ key: 'general', type: 'general' }];
+    await expect(client.getBriefcaseCatalog(queries)).resolves.toEqual(catalog);
+    // Origin satisfies the route's csrfProtection for a login (JWT) caller.
+    expect(mockPost).toHaveBeenCalledWith(
+      '/api/briefcase/catalog',
+      { queries },
+      { headers: { Origin: 'http://localhost:3000' } }
+    );
+  });
+
+  it('gets a briefcase prompt by id (url-encoded) and unwraps it', async () => {
+    const prompt = { id: 'p 1', name: 'Summarize', promptText: 'Hi' };
+    mockGet.mockResolvedValue({ prompt });
+    await expect(client.getBriefcasePrompt('p 1')).resolves.toEqual(prompt);
+    expect(mockGet).toHaveBeenCalledWith('/api/briefcase/prompts/p%201');
+  });
+
   it('creates a notebook with only the provided fields', async () => {
     mockPost.mockResolvedValue({ id: 'n1' });
     await client.createNotebook({ name: 'My NB' });
@@ -597,6 +617,33 @@ describe('mapApiError', () => {
     expect(mapApiError(axiosError(403), 'http://x', 'files:read')).toBe(
       "API key forbidden: check the key's scopes and account access (recommended scope: files:read)"
     );
+  });
+
+  it('surfaces the CSRF origin message on a 403 instead of the API-key fallback', () => {
+    const msg = mapApiError(
+      axiosError(403, {
+        data: { error: 'Invalid request origin. CSRF protection triggered (expected https://app.example.com).' },
+      }),
+      'http://x',
+      'files:read'
+    );
+    expect(msg).toContain('CSRF protection triggered');
+    expect(msg).not.toContain('API key forbidden');
+  });
+
+  it('keeps the API-key scope fallback for a non-CSRF 403 that carries a server body', () => {
+    expect(mapApiError(axiosError(403, { data: { error: 'Insufficient scope' } }), 'http://x', 'files:read')).toBe(
+      "API key forbidden: check the key's scopes and account access (recommended scope: files:read)"
+    );
+  });
+
+  it.each([
+    'CSRF: APP_URL is not configured on this deployment.',
+    'CSRF: APP_URL is not a valid absolute URL on this deployment.',
+    'CSRF: APP_URL does not resolve to a usable origin on this deployment.',
+    'Invalid request origin. CSRF protection triggered (expected https://app.example.com).',
+  ])('passes a csrfProtection 403 message through unchanged: %s', message => {
+    expect(mapApiError(axiosError(403, { data: { error: message } }), 'http://x', 'files:read')).toBe(message);
   });
 
   it('surfaces a numeric retry-after on 429', () => {
