@@ -108,10 +108,12 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
         expect(cancelPendingActionOnQuest).toHaveBeenCalledWith(QUEST_ID, expect.anything(), PENDING_ACTION_TS);
         expect(executePendingAction).not.toHaveBeenCalled();
       }
-      expect(fetch).toHaveBeenCalledWith(
-        responseUrl,
-        expect.objectContaining({ method: 'POST', body: expect.any(String) })
-      );
+      const lastCall = vi.mocked(fetch).mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe(responseUrl);
+      expect(lastCall?.[1]?.method).toBe('POST');
+      const posted = JSON.parse(String(lastCall?.[1]?.body)) as { text: string; replace_original: boolean };
+      expect(posted.replace_original).toBe(true);
+      expect(posted.text).toContain(actionId === 'confirm_action' ? 'Created' : 'Cancelled');
     }
   );
 
