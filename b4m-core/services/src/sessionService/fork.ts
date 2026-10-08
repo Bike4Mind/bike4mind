@@ -76,6 +76,15 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       // copy of a lake session predating it picks up the corrected behavior; the copy then forces
       // retrieval where its source does not, until the source is itself updated.
       forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
+      // Create-only (not in SessionUpdateRequestSchema), so a copy that drops them can never get them back.
+      citationStyle: session.citationStyle,
+      corpusGroundingMode: session.corpusGroundingMode,
+      retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
+      retrievalVectorizedOnly: session.retrievalVectorizedOnly,
+      enabledTools: session.enabledTools,
+      disabledTools: session.disabledTools,
+      disableUserIntegrations: session.disableUserIntegrations,
+      systemPromptId: session.systemPromptId,
     },
     adapters,
     { knowledgeIdsFromSourceSession: true }

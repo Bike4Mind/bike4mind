@@ -48,8 +48,10 @@ export function lakeVisibilityLabelShort(lake: LakeVisibilityScope): string {
  * Mirrors the server gate (authorizeLakeDriveAccess): an org lake needs an org owner/manager, a
  * personal lake needs its CREATOR - the connection syncs on that user's own Google grant, and lake
  * membership (and the ingest's admin-actor writes) is anchored to `createdByUserId`, not the
- * effective owner, so a personal lake gates on `isCreator` rather than `isOwn`. The status route
- * 404s outside the gate, so offering it there is a control that can only fail. Every render site
+ * effective owner, so a personal lake gates on `isCreator` rather than `isOwn`. The status route 404s
+ * outside the gate, so offering it there is a control that can only fail; an appointed org admin is
+ * inside `canManage` and can read the status, but the connect/re-sync/disconnect routes still need an
+ * owner/manager, so the connect panels also key off the status response's `canManage`. Every render site
  * (SelectedLakeHeader, the wizard's SourceSelectionStep, the lakeSources registry) derives the gate here -
  * they drifted once when each held its own copy of the expression.
  *
@@ -69,4 +71,8 @@ export const DRAFT_LAKE_TOOLTIP = 'Draft - not grounding answers until published
  */
 export function isDraftLake(lake: LakeVisibilityScope & { status?: DataLakeStatus | null }): boolean {
   return lake.status === 'draft' || (!lake.status && !isBuiltInLake(lake));
+}
+
+export function lakeOwnerLabel(lake: { ownerDisplayName?: string }): string {
+  return lake.ownerDisplayName ? `Owned by ${lake.ownerDisplayName}` : 'Owned by another user';
 }

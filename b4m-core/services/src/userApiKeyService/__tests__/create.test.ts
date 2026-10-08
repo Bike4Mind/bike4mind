@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'crypto';
 import {
   createUserApiKey,
   EMBED_SPEND_CAP_MAX_CREDITS,
@@ -6,7 +7,7 @@ import {
   MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
   MAX_ACTIVE_KEYS_PER_USER,
 } from '../create';
-import { ApiKeyScope, ApiKeyStatus, BadRequestError, CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, BadRequestError, CreditHolderType, IUserApiKeyRepository } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
   const { bcryptMockFactory } = await import('./helpers/bcryptMock');
@@ -18,20 +19,17 @@ function makeRepo(
     countActiveByUserId: ReturnType<typeof vi.fn>;
     countActiveByProductId: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
+    createIfUnderCap: ReturnType<typeof vi.fn>;
     updateLastUsed: ReturnType<typeof vi.fn>;
   }> = {}
 ) {
+  const docImpl = (doc: Record<string, unknown>) => ({ ...doc, id: 'key-1', createdAt: new Date() });
   return {
     countActiveByUserId: overrides.countActiveByUserId ?? vi.fn().mockResolvedValue(0),
     countActiveByProductId: overrides.countActiveByProductId ?? vi.fn().mockResolvedValue(0),
     updateLastUsed: overrides.updateLastUsed ?? vi.fn().mockResolvedValue(undefined),
-    create:
-      overrides.create ??
-      vi.fn().mockImplementation((doc: Record<string, unknown>) => ({
-        ...doc,
-        id: 'key-1',
-        createdAt: new Date(),
-      })),
+    create: overrides.create ?? vi.fn().mockImplementation(docImpl),
+    createIfUnderCap: overrides.createIfUnderCap ?? vi.fn().mockImplementation(docImpl),
   };
 }
 
@@ -86,19 +84,18 @@ describe('createUserApiKey — overwatch ingest scope', () => {
     ).resolves.toBeDefined();
   });
 
-  it('system user bypasses per-user 10-key cap', async () => {
-    repo = makeRepo({
-      countActiveByUserId: vi.fn().mockResolvedValue(15),
-      countActiveByProductId: vi.fn().mockResolvedValue(0),
-    });
-    // systemUserId === userId, so bypass
+  it('system user bypasses per-user cap (calls create directly, not createIfUnderCap)', async () => {
+    repo = makeRepo({ countActiveByProductId: vi.fn().mockResolvedValue(0) });
+    // systemUserId === userId: create is called directly, skipping the atomic cap check.
     await expect(
       createUserApiKey('sys-1', baseParams, { db: { userApiKeys: repo as any }, systemUserId: 'sys-1' })
     ).resolves.toBeDefined();
+    expect(repo.create).toHaveBeenCalled();
+    expect(repo.createIfUnderCap).not.toHaveBeenCalled();
   });
 
   it('rogue-admin scenario: non-system user hits 10-key cap, tagged with a stable code', async () => {
-    repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(10) });
+    repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
     const error = await createUserApiKey('admin-1', baseParams, {
       db: { userApiKeys: repo as any },
       systemUserId: 'sys-1',
@@ -161,6 +158,22 @@ describe('createUserApiKey - callback signing secret', () => {
     const [document] = repo.create.mock.calls[0];
     expect(typeof document.callbackSigningSecret).toBe('string');
     expect(result.callbackSigningSecret).toMatch(/^whsec_/);
+  });
+});
+
+describe('createUserApiKey - SHA-256 key digest', () => {
+  it('persists the hex SHA-256 of the raw key alongside the bcrypt hash, and never returns either', async () => {
+    const repo = makeRepo();
+    const result = await createUserApiKey('sys-1', baseParams, {
+      db: { userApiKeys: repo as any },
+      systemUserId: 'sys-1',
+    });
+
+    const [document] = repo.create.mock.calls[0];
+    expect(document.keyDigest).toBe(createHash('sha256').update(result.key).digest('hex'));
+    expect(document.keyHash).toEqual(expect.any(String));
+    expect(result).not.toHaveProperty('keyDigest');
+    expect(result).not.toHaveProperty('keyHash');
   });
 });
 
@@ -248,11 +261,13 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
     // EmbedOriginsSchema lowercases + dedupes.
     expect(result.allowedOrigins).toEqual(['https://example.com', 'https://widgets.example.org']);
     expect(result.branding).toEqual({ displayName: 'Acme Assistant', hideBranding: true });
-    expect(repo.create).toHaveBeenCalledWith(
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: 'agent-1',
         allowedOrigins: ['https://example.com', 'https://widgets.example.org'],
-      })
+      }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
     );
   });
 
@@ -273,12 +288,14 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
     const result = await createUserApiKey('user1', embedParams, adapters());
     expect(result.billingOwnerType).toBe(CreditHolderType.Organization);
     expect(result.organizationId).toBe('org-1');
-    expect(repo.create).toHaveBeenCalledWith(
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: 'agent-1',
         billingOwnerType: CreditHolderType.Organization,
         organizationId: 'org-1',
-      })
+      }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
     );
   });
 
@@ -365,7 +382,11 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
   it('persists and echoes spendCap on an embed key', async () => {
     const result = await createUserApiKey('user1', { ...embedParams, spendCap: 5000 }, adapters());
     expect(result.spendCap).toBe(5000);
-    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ spendCap: 5000 }));
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ spendCap: 5000 }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
   });
 
   it('allows an embed key with no spendCap (uncapped)', async () => {
@@ -443,51 +464,64 @@ describe('createUserApiKey - per-user cap pools', () => {
     );
   }
 
-  it('counts an exchange mint against the oauth-exchange pool only', async () => {
+  it('routes an exchange mint through the oauth-exchange pool', async () => {
     const repo = makeRepo();
     await createUserApiKey('user-1', exchangeParams, adapters(repo));
-    expect(repo.countActiveByUserId).toHaveBeenCalledTimes(1);
-    expect(repo.countActiveByUserId).toHaveBeenCalledWith('user-1', 'oauth-exchange');
+    expect(repo.createIfUnderCap).toHaveBeenCalledTimes(1);
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1' }),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
   });
 
-  it('counts a dashboard mint against the standard pool only', async () => {
+  it('routes a dashboard mint through the standard pool', async () => {
     const repo = makeRepo();
     await createUserApiKey('user-1', dashboardParams, adapters(repo));
-    expect(repo.countActiveByUserId).toHaveBeenCalledTimes(1);
-    expect(repo.countActiveByUserId).toHaveBeenCalledWith('user-1', 'standard');
+    expect(repo.createIfUnderCap).toHaveBeenCalledTimes(1);
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1' }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
   });
 
-  it('lets an exchange mint through when the standard pool is full', async () => {
-    const repo = makeRepo({
-      countActiveByUserId: vi.fn(async (_userId: string, pool: string) =>
-        pool === 'standard' ? MAX_ACTIVE_KEYS_PER_USER : 0
-      ),
-    });
+  it('lets an exchange mint through regardless of the standard pool state', async () => {
+    const repo = makeRepo();
     await expect(createUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.anything(),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
   });
 
-  it('lets a dashboard mint through when the exchange pool is full', async () => {
-    const repo = makeRepo({
-      countActiveByUserId: vi.fn(async (_userId: string, pool: string) =>
-        pool === 'oauth-exchange' ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER : 0
-      ),
-    });
+  it('lets a dashboard mint through regardless of the exchange pool state', async () => {
+    const repo = makeRepo();
     await expect(createUserApiKey('user-1', dashboardParams, adapters(repo))).resolves.toBeDefined();
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), MAX_ACTIVE_KEYS_PER_USER, 'standard');
   });
 
-  it('refuses an exchange mint at the exchange cap, tagged with the shared cap code', async () => {
-    const repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(MAX_ACTIVE_EXCHANGE_KEYS_PER_USER) });
+  it('refuses an exchange mint when createIfUnderCap signals at_cap, tagged with the shared cap code', async () => {
+    const repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
     const error = await mintError(exchangeParams, repo);
     expect(error).toBeInstanceOf(BadRequestError);
     expect(error?.message).toBe(
       `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
     );
     expect(error?.additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
-    expect(repo.create).not.toHaveBeenCalled();
   });
 
-  it('allows an exchange mint one below the exchange cap', async () => {
-    const repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(MAX_ACTIVE_EXCHANGE_KEYS_PER_USER - 1) });
+  it('refuses a standard mint when createIfUnderCap signals at_cap, tagged with the shared cap code', async () => {
+    const repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
+    const error = await mintError(dashboardParams, repo);
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(error?.message).toBe(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`);
+    expect(error?.additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
+  });
+
+  it('succeeds when createIfUnderCap returns a document (cap not hit)', async () => {
+    const repo = makeRepo();
     await expect(createUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
   });
 
@@ -500,5 +534,254 @@ describe('createUserApiKey - per-user cap pools', () => {
     expect(error).toBeInstanceOf(BadRequestError);
     expect(error?.message).toBe('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
     expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+const chatParams = {
+  name: 'Test key',
+  scopes: [ApiKeyScope.AI_CHAT],
+  metadata: { createdFrom: 'dashboard' as const },
+};
+
+describe('userApiKeyService - createUserApiKey org billing', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo() as unknown as IUserApiKeyRepository;
+  });
+
+  it('defaults to User billing when no billing target is given', async () => {
+    const result = await createUserApiKey('user1', chatParams, { db: { userApiKeys: repo } });
+
+    expect(result.billingOwnerType).toBe(CreditHolderType.User);
+    expect(result.organizationId).toBeUndefined();
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOwnerType: CreditHolderType.User, organizationId: undefined }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
+  });
+
+  it('persists an org billing target when both fields agree', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...chatParams, billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' },
+      { db: { userApiKeys: repo } }
+    );
+
+    expect(result.billingOwnerType).toBe(CreditHolderType.Organization);
+    expect(result.organizationId).toBe('org1');
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
+  });
+
+  it('rejects Organization billing without an organizationId', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, billingOwnerType: CreditHolderType.Organization },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/organizationId must be set/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an organizationId without Organization billing', async () => {
+    await expect(
+      createUserApiKey('user1', { ...chatParams, organizationId: 'org1' }, { db: { userApiKeys: repo } })
+    ).rejects.toThrow(/organizationId must be set/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects billing an API key to an agent', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, billingOwnerType: CreditHolderType.Agent, organizationId: 'org1' },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/cannot be billed to an agent/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('userApiKeyService - createUserApiKey confined-scope mint guard', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo() as unknown as IUserApiKeyRepository;
+  });
+
+  it('rejects a confined scope (overwatch-ingest:write) minted alongside an ordinary scope', async () => {
+    // The runtime gate confines such a key anyway, so the ordinary scope is reach the
+    // key would immediately lose - refuse it at mint instead of persisting the hole.
+    await expect(
+      createUserApiKey(
+        'user1',
+        {
+          ...chatParams,
+          scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE, ApiKeyScope.READ_NOTEBOOKS],
+          productId: 'prod-1',
+        },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/confined scope/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a confined scope minted on its own', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...chatParams, scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE], productId: 'prod-1' },
+      { db: { userApiKeys: repo } }
+    );
+
+    expect(result.id).toBe('key-1');
+    expect(repo.createIfUnderCap).toHaveBeenCalled();
+  });
+
+  it('reports the confined-scope reason before the embed agentId requirement', async () => {
+    // embed:chat + an ordinary scope with no agentId: the actionable error is the
+    // single-scope rule, not the downstream missing agentId.
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, scopes: [ApiKeyScope.EMBED_CHAT, ApiKeyScope.READ_NOTEBOOKS] },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/confined scope/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('userApiKeyService - createUserApiKey preauthorizedLakeIds', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo() as unknown as IUserApiKeyRepository;
+  });
+
+  it('persists preauthorizedLakeIds without any existence or manage check at mint time', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...chatParams, preauthorizedLakeIds: ['lake1', 'lake2'] },
+      { db: { userApiKeys: repo } }
+    );
+
+    expect(result.preauthorizedLakeIds).toEqual(['lake1', 'lake2']);
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ preauthorizedLakeIds: ['lake1', 'lake2'] }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
+  });
+
+  it('leaves preauthorizedLakeIds undefined when not given', async () => {
+    const result = await createUserApiKey('user1', chatParams, { db: { userApiKeys: repo } });
+
+    expect(result.preauthorizedLakeIds).toBeUndefined();
+  });
+
+  it('rejects more than 25 pre-authorized lake ids', async () => {
+    const ids = Array.from({ length: 26 }, (_, i) => `lake${i}`);
+    await expect(
+      createUserApiKey('user1', { ...chatParams, preauthorizedLakeIds: ids }, { db: { userApiKeys: repo } })
+    ).rejects.toThrow();
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('userApiKeyService - createUserApiKey no escalation by minting', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo() as unknown as IUserApiKeyRepository;
+  });
+
+  it('refuses an API-key caller minting a scope it does not hold', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES] },
+        { db: { userApiKeys: repo }, callerScopes: [ApiKeyScope.AI_CHAT] }
+      )
+    ).rejects.toThrow(/scopes the calling key does not have/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('does not treat admin:* as a superset of other scopes', async () => {
+    await expect(
+      createUserApiKey('user1', chatParams, { db: { userApiKeys: repo }, callerScopes: [ApiKeyScope.ADMIN] })
+    ).rejects.toThrow(/scopes the calling key does not have/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('denies every mint for a caller key with no scopes', async () => {
+    await expect(
+      createUserApiKey('user1', chatParams, { db: { userApiKeys: repo }, callerScopes: [] })
+    ).rejects.toThrow(/scopes the calling key does not have/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows an API-key caller minting a subset of its own scopes', async () => {
+    await createUserApiKey('user1', chatParams, {
+      db: { userApiKeys: repo },
+      callerScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES],
+    });
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: [ApiKeyScope.AI_CHAT] }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
+  });
+
+  it('leaves a browser/JWT caller (no callerScopes) unrestricted', async () => {
+    await createUserApiKey(
+      'user1',
+      { ...chatParams, scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES] },
+      { db: { userApiKeys: repo } }
+    );
+    expect(repo.createIfUnderCap).toHaveBeenCalled();
+  });
+
+  it('refuses a non-expiring child key when the caller key expires', async () => {
+    await expect(
+      createUserApiKey('user1', chatParams, {
+        db: { userApiKeys: repo },
+        callerExpiresAt: new Date('2027-01-01'),
+      })
+    ).rejects.toThrow(/outlives the calling key/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a child key whose expiry is later than the caller key', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, expiresAt: new Date('2027-06-01') },
+        { db: { userApiKeys: repo }, callerExpiresAt: new Date('2027-01-01') }
+      )
+    ).rejects.toThrow(/outlives the calling key/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a child key whose expiry is on or before the caller key', async () => {
+    await createUserApiKey(
+      'user1',
+      { ...chatParams, expiresAt: new Date('2027-01-01') },
+      { db: { userApiKeys: repo }, callerExpiresAt: new Date('2027-01-01') }
+    );
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresAt: new Date('2027-01-01') }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
   });
 });

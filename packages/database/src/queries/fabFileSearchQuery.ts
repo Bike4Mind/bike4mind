@@ -4,6 +4,7 @@ import {
   LEGACY_CHUNK_STALL_NOTES,
   normalizeTagPrefix,
   type DataLakeMembershipScope,
+  type FabFileTypeFilter,
 } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
@@ -105,9 +106,7 @@ export const STOP_WORDS = new Set([
 export { escapeRegex };
 
 /** Map file type filter to MongoDB mimeType query condition */
-export function getMimeTypeFilter(
-  type: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio'
-): Record<string, unknown> {
+export function getMimeTypeFilter(type: FabFileTypeFilter): Record<string, unknown> {
   switch (type) {
     case 'text':
       return { mimeType: 'text/plain' };
@@ -135,6 +134,8 @@ export function getMimeTypeFilter(
       return { mimeType: { $in: CODE_FILE_MIME_TYPES } };
     case 'audio':
       return { mimeType: { $regex: '^audio/' } };
+    case 'video':
+      return { mimeType: { $regex: '^video/' } };
   }
 }
 
@@ -334,15 +335,12 @@ export function buildLakeArms(options: {
   return arms;
 }
 
-export type FabFileFilterType =
-  'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
-
 export interface FabFileSearchParams {
   userId: string;
   search: string;
   filters: {
     tags?: string[];
-    type?: FabFileFilterType;
+    type?: FabFileTypeFilter;
     shared?: boolean;
     curated?: boolean;
     fileIds?: string[];
@@ -387,11 +385,8 @@ export interface FabFileSearchParams {
     /** When true, restrict results to vectorized files only (excludes unvectorized). */
     vectorizedOnly?: boolean;
     /**
-     * Narrow to the files carrying NO tag under ANY of these lake prefixes - what the browse
-     * surfaces render as an "Uncategorized" bucket. One prefix for a single-lake browser; the
-     * whole accessible set for a MERGED tree, where a file categorized under any one lake is
-     * reachable through that lake's branch and only a file categorized under none of them is
-     * invisible.
+     * Narrow to the files carrying NO tag under ANY of these lake prefixes - what a single-lake
+     * browser renders as its "Uncategorized" bucket.
      *
      * NARROWING only, ANDed above the access arms: it never widens the scope. It must therefore
      * be paired with `restrictToDataLake`, or it returns every non-lake file the caller owns

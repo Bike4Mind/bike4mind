@@ -1,8 +1,6 @@
 import { z } from 'zod';
 import { DATA_LAKE_STATUSES } from '../types/entities/DataLakeTypes';
 import { MAX_LAKE_FILE_TAG_NAME_LENGTH, MAX_TAXONOMY_TAGS } from '../constants/dataLakes';
-import type { ApiErrorCode } from '../apiErrorCodes';
-import { ApiErrorSchema } from './chat';
 import { paginatedResponseSchema } from './pagination';
 
 /**
@@ -19,6 +17,11 @@ export const DataLakeResourceSchema = z.object({
   id: z.string(),
   name: z.string(),
   slug: z.string(),
+  /**
+   * The value to pass in a session's `lakeScope`. Not derivable from `slug` + `organization_id`: a
+   * lake moved into an org keeps the `datalake:<slug>` tag it was created with.
+   */
+  datalake_tag: z.string(),
   description: z.string().nullable(),
   organization_id: z.string().nullable(),
   is_public: z.boolean(),
@@ -106,7 +109,5 @@ export const DataLakeSearchResponseSchema = z.object({
 });
 export type DataLakeSearchResponse = z.infer<typeof DataLakeSearchResponseSchema>;
 
-/** 503 when this deployment has no usable key for the embedding provider the query needs. */
-export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
-});
+// Moved to ./chat beside the other shared error envelopes; re-exported for existing importers.
+export { ProviderNotConfiguredErrorSchema } from './chat';

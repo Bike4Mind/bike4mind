@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { DATA_LAKE_GROUNDING_MODES } from '../constants/dataLakes';
+import { SESSION_ORIGIN_CHANNELS } from '../types/entities/SessionTypes';
+import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 
 // Shared by the request and response schemas below - kept to one definition so the two
 // can't quietly diverge on what a tag looks like.
@@ -55,8 +57,8 @@ export const SessionUpdateRequestSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      'The data lakes this session grounds on, as lake tags (the `datalakeTag` of each lake from ' +
-        'GET /api/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
+      'The data lakes this session grounds on, as lake tags (the `datalake_tag` of each lake from ' +
+        'GET /api/v1/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
         'lake at all, or `null` to clear the choice so retrieval falls back to every lake you can ' +
         'reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach ' +
         'are ignored at retrieval time rather than rejected here. Narrowing the scope does not by ' +
@@ -88,8 +90,8 @@ export const SessionIdParamSchema = z.object({
 });
 
 /**
- * Practical response subset for PUT /api/sessions/{id} - the fields a caller needs to
- * confirm an update took effect. ISession (types/entities/SessionTypes.ts) carries many
+ * Practical response subset for GET and PUT /api/sessions/{id} - the fields a caller needs to
+ * read a session or confirm an update took effect. ISession (types/entities/SessionTypes.ts) carries many
  * more server-internal fields not documented as public API surface here.
  */
 export const SessionResponseSchema = z.object({
@@ -121,6 +123,43 @@ export const SessionResponseSchema = z.object({
 
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
 
+/** Query for GET /api/v1/sessions: the pagination convention plus flat filters. */
+export const ListSessionsQuerySchema = PaginationQuerySchema.extend({
+  search: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Case-insensitive substring match on the session name, its summary, or a tag name.'),
+  surface: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Lists only sessions of this product surface. When omitted, only sessions with no surface are listed.'),
+  origin: z
+    .enum(SESSION_ORIGIN_CHANNELS)
+    .optional()
+    .describe('Lists only sessions created through this channel. `web` also matches sessions with no recorded origin.'),
+});
+
+export type ListSessionsQuery = z.infer<typeof ListSessionsQuerySchema>;
+
+export const ListSessionsResponseSchema = paginatedResponseSchema(SessionResponseSchema);
+
+export type ListSessionsResponse = z.infer<typeof ListSessionsResponseSchema>;
+
+/** Response for DELETE /api/sessions/{id}. */
+export const SessionDeleteResponseSchema = z.object({
+  newLastNotebookId: z
+    .string()
+    .nullable()
+    .describe(
+      "The caller's most recently updated remaining session, which the product UI opens next; null when none remains."
+    ),
+});
+
+export type SessionDeleteResponse = z.infer<typeof SessionDeleteResponseSchema>;
+
 /**
  * Request schema for POST /api/v1/sessions. Declares every client-settable field of
  * createSessionParametersSchema (b4m-core/services/src/sessionService/create.ts), which stays the
@@ -131,7 +170,12 @@ export type SessionResponse = z.infer<typeof SessionResponseSchema>;
 export const CreateSessionRequestSchema = z.object({
   name: z.string(),
   projectId: z.string().optional().describe('Adds the new session to this project.'),
-  dataLakeId: z.string().nullish().describe('Seeds retrieval defaults from this data lake.'),
+  dataLakeId: z
+    .string()
+    .nullish()
+    .describe(
+      'Seeds retrieval defaults from this data lake and turns on forced retrieval. Get ids from `GET /api/v1/data-lakes`.'
+    ),
   // Loose on purpose: the route ignores a non-array and filters non-string entries itself, so a
   // typed array would newly reject bodies it accepts today.
   preauthorizedLakeIds: z

@@ -6,7 +6,7 @@ import { cloneSession } from './clone';
 const LAKE_FILE_ID = '507f1f77bcf86cd799439001';
 
 /**
- * Regression for cgtorniado's 4th review: `findAccessibleById` matches on ownership OR a
+ * Regression: `findAccessibleById` matches on ownership OR a
  * share grant (users[]/groups[] read/write), so a read-only share holder can clone a session
  * and become the OWNER of the copy - reading promptMeta.functionCalls[].returnValue/.error
  * unredacted through the owner branch of every route this PR added redaction to. Only the
@@ -96,6 +96,75 @@ describe('cloneSession - redaction at the copy boundary', () => {
 
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
   });
+
+  /**
+   * `citationStyle` is create-only, so a clone that drops it is stuck on the 'named' default for good
+   * and its `[N]` markers stop indexing `citables`. Outside the isOwner gate, so a share holder's copy
+   * keeps it too.
+   */
+  it.each([
+    ['owns the session', 'caller-1'],
+    ['only holds a share', 'owner-1'],
+  ])('carries the source session citationStyle onto the clone when the caller %s', async (_, ownerId) => {
+    const { db } = makeAdapters(ownerId);
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: ownerId,
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      citationStyle: 'indexed',
+      corpusGroundingMode: 'retrieve',
+      retrievalExcludeFilenameMarkers: ['draft'],
+      retrievalVectorizedOnly: true,
+      forceKnowledgeRetrieval: true,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        citationStyle: 'indexed',
+        retrievalExcludeFilenameMarkers: ['draft'],
+        retrievalVectorizedOnly: true,
+      })
+    );
+    const created = db.sessions.create.mock.calls[0][0];
+    expect(created.corpusGroundingMode).toBe(ownerId === 'caller-1' ? 'retrieve' : undefined);
+  });
+
+  // Create-only too, and outside the isOwner gate: see the comment on these fields in clone.ts.
+  it.each([
+    ['owns the session', 'caller-1'],
+    ['only holds a share', 'owner-1'],
+  ])(
+    'carries the source session tool lists and systemPromptId onto the clone when the caller %s',
+    async (_, ownerId) => {
+      const { db } = makeAdapters(ownerId);
+      db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+        id: 'session-1',
+        userId: ownerId,
+        name: 'Original',
+        knowledgeIds: [],
+        tags: [],
+        enabledTools: ['web_search'],
+        disabledTools: ['image_generation'],
+        disableUserIntegrations: true,
+        systemPromptId: 'triage_router',
+      });
+
+      await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+      expect(db.sessions.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabledTools: ['web_search'],
+          disabledTools: ['image_generation'],
+          disableUserIntegrations: true,
+          systemPromptId: 'triage_router',
+        })
+      );
+    }
+  );
 
   /**
    * `taggedAt` is the companion timestamp of `tags`, same as `summaryAt` is of `summary`. A clone

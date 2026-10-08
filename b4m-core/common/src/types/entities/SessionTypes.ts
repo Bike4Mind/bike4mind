@@ -194,6 +194,9 @@ export interface IChatHistoryItem {
   /** Path to the video in the storage bucket */
   videos?: string[];
 
+  /** Ids of the video generation jobs this quest started */
+  videoJobIds?: string[];
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
@@ -249,6 +252,14 @@ export interface IChatHistoryItem {
    * (previous answer, what the user said was wrong, corrected answer).
    */
   correctsQuestId?: string;
+
+  /**
+   * Ms from the client sending the prompt to rendering the first token, posted back by the client
+   * mid-stream (quests/[id]/client-timing). Top-level rather than under `promptMeta.performance`
+   * because the completion pipeline saves `promptMeta` whole from an in-memory copy that never has
+   * it, so the stream's final save would erase it. Older quests carry it at the promptMeta path.
+   */
+  clientFirstTokenTime?: number;
 
   /**
    * Provenance of the routing decision that produced this quest (M4).
@@ -601,6 +612,19 @@ export interface SessionListFilters {
   /** true: only sessions with generated images; false: only sessions without. */
   hasImages?: boolean;
 }
+
+/** Keyset page of a user's own sessions, newest first by id (GET /api/v1/sessions). */
+export type ListSessionsByUserQuery = {
+  userId: string;
+  /** Same semantics as searchByUserId: case-insensitive match on name, summary or tag name. */
+  search?: string;
+  /** Same semantics as searchByUserId: unset lists only sessions with no surface. */
+  surface?: string;
+  filters?: SessionListFilters;
+  /** Exclusive: only sessions whose id sorts before this one (the previous page's last id). */
+  beforeId?: string;
+  limit: number;
+};
 
 export interface ISession {
   id: string;
@@ -975,6 +999,13 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     surface?: string,
     filters?: SessionListFilters
   ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+
+  /**
+   * Cursor-paginated twin of searchByUserId: ordered by `_id` descending and bounded by `limit`,
+   * so a page boundary stays put while sessions are added or edited (lastUpdated moves, _id does
+   * not). Callers pass `limit + 1` to learn whether another page exists without a count query.
+   */
+  listByUserId: (query: ListSessionsByUserQuery) => Promise<ISessionDocument[]>;
 
   /** Atomically adds `count` generated images to the session's imageCount (one $inc). */
   incrementImageCount: (sessionId: string, count: number) => Promise<void>;

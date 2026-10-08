@@ -2,7 +2,7 @@ import { Stack } from '@mui/joy';
 import {
   useOfferedLakeSources,
   type LakeSourceKind,
-  type LakeSourceLake,
+  type LakeSourcePanelLake,
 } from '@client/app/components/datalake/lakeSources';
 import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 import { useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
@@ -13,7 +13,7 @@ import { useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
  * once a source is connected only that one is shown; until then every available source offers its
  * connect panel. Unavailable sources are omitted here - ConnectSourceMenu is where they are explained.
  */
-export default function LakeSourceConnectActions({ lake }: { lake: LakeSourceLake & { id: string } }) {
+export default function LakeSourceConnectActions({ lake }: { lake: LakeSourcePanelLake }) {
   const available = useOfferedLakeSources(lake)
     .filter(({ availability }) => availability.status === 'available')
     .map(({ source }) => source);

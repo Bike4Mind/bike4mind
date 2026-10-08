@@ -1,5 +1,15 @@
 # @bike4mind/infra
 
+## 2.0.0
+
+### Major Changes
+
+- [#3884](https://github.com/Bike4Mind/bike4mind/pull/3884) [`31d4623`](https://github.com/Bike4Mind/bike4mind/commit/31d46236619fd7e0c2be3f3bc4d34ee69314e682) Thanks [@onoya](https://github.com/onoya)! - deliver all generated audio through one shared module, by URL when oversized
+
+### Patch Changes
+
+- [#3891](https://github.com/Bike4Mind/bike4mind/pull/3891) [`c4d2bd4`](https://github.com/Bike4Mind/bike4mind/commit/c4d2bd49a6bc6bccec224924e899f89de9dca269) Thanks [@aflordelis](https://github.com/aflordelis)! - move comms and ops queue handlers into apps/workers
+
 ## 1.2.1
 
 ### Patch Changes

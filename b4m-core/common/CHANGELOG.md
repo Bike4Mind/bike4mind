@@ -1,5 +1,51 @@
 # @bike4mind/common
 
+## 13.1.0
+
+### Minor Changes
+
+- [#3899](https://github.com/Bike4Mind/bike4mind/pull/3899) [`254ae9f`](https://github.com/Bike4Mind/bike4mind/commit/254ae9ff0702b92b3a41d620d5a020c9c026afb6) Thanks [@onoya](https://github.com/onoya)! - add the generation job engine and video job foundation
+
+- [#3903](https://github.com/Bike4Mind/bike4mind/pull/3903) [`45d7c5e`](https://github.com/Bike4Mind/bike4mind/commit/45d7c5e86ce91cbffcbf1efe3bf606593af5deac) Thanks [@onoya](https://github.com/onoya)! - publish an API contract for GET /api/v1/models
+
+### Patch Changes
+
+- [#3876](https://github.com/Bike4Mind/bike4mind/pull/3876) [`9bbfd8c`](https://github.com/Bike4Mind/bike4mind/commit/9bbfd8c1d6f66da7e433bcf233d4e2a6c37637c7) Thanks [@julsanchez](https://github.com/julsanchez)! - stop resolving deleted lakes by slug and preview the real slug
+
+- [#3894](https://github.com/Bike4Mind/bike4mind/pull/3894) [`ea66cbb`](https://github.com/Bike4Mind/bike4mind/commit/ea66cbb0257bb8264c5c6e60a8a9209e9f24da9a) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - validate API keys with a SHA-256 digest instead of bcrypt
+
+## 13.0.0
+
+### Major Changes
+
+- [#3884](https://github.com/Bike4Mind/bike4mind/pull/3884) [`31d4623`](https://github.com/Bike4Mind/bike4mind/commit/31d46236619fd7e0c2be3f3bc4d34ee69314e682) Thanks [@onoya](https://github.com/onoya)! - deliver all generated audio through one shared module, by URL when oversized
+
+### Minor Changes
+
+- [#3766](https://github.com/Bike4Mind/bike4mind/pull/3766) [`99033fe`](https://github.com/Bike4Mind/bike4mind/commit/99033fe34169925190d1cad36aa45c5c7fc956a4) Thanks [@onoya](https://github.com/onoya)! - expose per-model image capabilities (sizes, limits, supported params)
+
+- [#3863](https://github.com/Bike4Mind/bike4mind/pull/3863) [`9bd1edf`](https://github.com/Bike4Mind/bike4mind/commit/9bd1edf146cbf8e6b43d413ff94b5f5f4740f311) Thanks [@onoya](https://github.com/onoya)! - show which image models support transparent backgrounds
+
+- [#3864](https://github.com/Bike4Mind/bike4mind/pull/3864) [`88587cc`](https://github.com/Bike4Mind/bike4mind/commit/88587cc0acdfc7ca0658c8d0c92b8c6852cd79d1) Thanks [@onoya](https://github.com/onoya)! - let API callers opt out of the continuation prompt rewrite
+
+- [#3866](https://github.com/Bike4Mind/bike4mind/pull/3866) [`23bd5c7`](https://github.com/Bike4Mind/bike4mind/commit/23bd5c7680423502c5033bb83f6988d9916e76c6) Thanks [@onoya](https://github.com/onoya)! - manage and show monthly member credit budgets
+
+- [#3879](https://github.com/Bike4Mind/bike4mind/pull/3879) [`a728e8c`](https://github.com/Bike4Mind/bike4mind/commit/a728e8c8a459c177cce15a978dd0418a6085129e) Thanks [@onoya](https://github.com/onoya)! - scope voice v2 routes and publish them as v1 contracts
+
+- [#3881](https://github.com/Bike4Mind/bike4mind/pull/3881) [`3942bbc`](https://github.com/Bike4Mind/bike4mind/commit/3942bbc9dbceb5356ae18f016fe8c0684f43ffef) Thanks [@onoya](https://github.com/onoya)! - filter platform endpoint traffic by source and owner type
+
+### Patch Changes
+
+- [#3841](https://github.com/Bike4Mind/bike4mind/pull/3841) [`4c46065`](https://github.com/Bike4Mind/bike4mind/commit/4c46065b22954e0f8e6afdec0e497e741de92a2d) Thanks [@jarlacut](https://github.com/jarlacut)! - show each lake's uncategorized files inside its own folder
+
+- [#3858](https://github.com/Bike4Mind/bike4mind/pull/3858) [`ad14801`](https://github.com/Bike4Mind/bike4mind/commit/ad14801acd6de3230b2dc9819586f402ae047cb4) Thanks [@juicewaa](https://github.com/juicewaa)! - derive quest reply text from replies[] on poll and wait bodies
+
+- [#3868](https://github.com/Bike4Mind/bike4mind/pull/3868) [`04d895f`](https://github.com/Bike4Mind/bike4mind/commit/04d895f7bf3053326bb8d0871ebefb389fe37dec) Thanks [@jjmarfa](https://github.com/jjmarfa)! - measure the per-lake budget bar against embedding spend only
+
+- [#3882](https://github.com/Bike4Mind/bike4mind/pull/3882) [`c8ac9ba`](https://github.com/Bike4Mind/bike4mind/commit/c8ac9ba4856dfc472f2e55d80b7013c28429f0eb) Thanks [@onoya](https://github.com/onoya)! - re-enqueue generation callbacks stuck in dispatched state
+
+- [#3891](https://github.com/Bike4Mind/bike4mind/pull/3891) [`c4d2bd4`](https://github.com/Bike4Mind/bike4mind/commit/c4d2bd49a6bc6bccec224924e899f89de9dca269) Thanks [@aflordelis](https://github.com/aflordelis)! - move comms and ops queue handlers into apps/workers
+
 ## 12.2.0
 
 ### Minor Changes

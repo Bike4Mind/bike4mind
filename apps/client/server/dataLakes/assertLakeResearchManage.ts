@@ -1,9 +1,8 @@
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeAccessGrantRepository, dataLakeRepository } from '@bike4mind/database';
-import type { IDataLakeDocument } from '@bike4mind/common';
+import type { AccessContext, IDataLakeDocument } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
 import type { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 /**
@@ -28,10 +27,9 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
  */
 export async function assertLakeResearchManage(
   req: Request,
-  lakeIdOrSlug: string
+  lakeIdOrSlug: string,
+  ctx: AccessContext
 ): Promise<{ lake: IDataLakeDocument; actor: dataLakeService.ManageActor; grants: dataLakeService.LakeGrant[] }> {
-  const ctx = await toAccessContext(req);
-
   const lake = await dataLakeService.assertLakeAccess(lakeIdOrSlug, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
   });

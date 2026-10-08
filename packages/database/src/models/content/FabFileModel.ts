@@ -25,6 +25,7 @@ import {
   UNCATEGORIZED_TAG_SUFFIX,
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
+  type FabFileTypeFilter,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -851,7 +852,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+      type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[];
@@ -1009,7 +1010,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
-   * As `findMetadataByIds`, for the files a session currently holds. Excludes
+   * As `findMetadataByIds`, for the files a session currently holds (including its
+   * tool-generated files, linked by provenance - see findToolGeneratedBySessionId). Excludes
    * soft-deleted files - see the note above on why the two differ.
    *
    * Bounded at METADATA_PAGE_CAP rows; a session with more uploads than that is
@@ -1021,7 +1023,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     cap = METADATA_PAGE_CAP
   ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }> {
     const result = await this.fabFileModel
-      .find({ sessionId, deletedAt: null }, METADATA_ONLY_PROJECTION)
+      .find(
+        {
+          $or: [{ sessionId }, { sourceType: FabFileSourceType.TOOL_GENERATED, 'sourceMetadata.sessionId': sessionId }],
+          deletedAt: null,
+        },
+        METADATA_ONLY_PROJECTION
+      )
       .sort({ createdAt: 1, _id: 1 })
       .limit(cap + 1);
     const hasMore = result.length > cap;
@@ -1166,6 +1174,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ batchId, deletedAt: null });
+    return result.map(d => d.toJSON());
+  }
+
+  async findToolGeneratedBySessionId(sessionId: string): Promise<IFabFileDocument[]> {
+    const result = await this.fabFileModel.find({
+      sourceType: FabFileSourceType.TOOL_GENERATED,
+      'sourceMetadata.sessionId': sessionId,
+      deletedAt: null,
+    });
     return result.map(d => d.toJSON());
   }
 
@@ -2731,7 +2748,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     ]);
   }
 
-  async resetChunkStateByIds(ids: string[]): Promise<string[]> {
+  async resetChunkStateByIds(ids: string[], options: { concurrency?: number } = {}): Promise<string[]> {
     if (ids.length === 0) return [];
     // The ONE reset shape for re-chunking, shared by the bulk "Rebuild passages" wave and the
     // per-file reprocess route, so the two cannot drift on which fields they clear.
@@ -2757,10 +2774,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // queues 198 of them, and on self-host - one long-lived process sharing that pool with every
     // other request - it stalls unrelated queries for the length of the wave. Purely a scheduling
     // bound: the per-document precondition and the exact returned-id set are unchanged.
+    const concurrency = Math.max(1, options.concurrency ?? RESET_CONCURRENCY);
     const results: (string | null)[] = [];
-    for (let i = 0; i < ids.length; i += RESET_CONCURRENCY) {
+    for (let i = 0; i < ids.length; i += concurrency) {
       const batch = await Promise.all(
-        ids.slice(i, i + RESET_CONCURRENCY).map(async id => {
+        ids.slice(i, i + concurrency).map(async id => {
           const doc = await this.fabFileModel.findOneAndUpdate(
             { _id: id, isChunking: { $ne: true } },
             {
@@ -2983,34 +3001,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     if (scopes.length === 0) return 0;
     return this.fabFileModel.countDocuments({
       $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
-      deletedAt: null,
-      archivedAt: null,
-      status: { $ne: 'pending' },
-    });
-  }
-
-  /**
-   * The same distinct count, narrowed to the files categorized under NONE of the caller's lake
-   * prefixes - the bucket for a MERGED tree, where a file categorized under any one lake is
-   * already reachable through that lake's branch.
-   *
-   * Deliberately not a sum of the per-lake `uncategorized` figures: those judge each lake
-   * separately, so a file uncategorized in two lakes would count twice, and one uncategorized in
-   * A but categorized in B would count despite already being reachable under B's branch.
-   *
-   * Each prefix is its own `$and` conjunct - every fragment's top-level key is `tags`, so merging
-   * them into one object would keep only the last and the count would silently widen. Prefixes
-   * are deduped and unusable ones dropped, matching the browse query this sizes.
-   */
-  async countDistinctUncategorizedDataLakeFilesByMembership(
-    scopes: DataLakeMembershipScope[],
-    tagPrefixes: string[]
-  ): Promise<number> {
-    if (scopes.length === 0) return 0;
-    const prefixes = usableTagPrefixes(tagPrefixes);
-    return this.fabFileModel.countDocuments({
-      $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
-      ...(prefixes.length > 0 ? { $and: prefixes.map(buildLacksContentPrefixTagFilter) } : {}),
       deletedAt: null,
       archivedAt: null,
       status: { $ne: 'pending' },
@@ -3627,6 +3617,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // "never failed" sorts ahead of any attempted row without a backfill.
     moderationAttempts: { type: Number, required: false },
     moderationLastAttemptAt: { type: Date, required: false },
+    // See IFabFile.storageChargedAt and server/s3/storageCharge.ts.
+    storageChargedAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -3805,6 +3797,12 @@ FabFileSchema.index(
 
 // Batch file queries
 FabFileSchema.index({ batchId: 1 });
+
+// findToolGeneratedBySessionId. Partial so only tool-generated rows carry an entry.
+FabFileSchema.index(
+  { 'sourceMetadata.sessionId': 1, deletedAt: 1 },
+  { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
+);
 
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });

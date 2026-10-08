@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CreditHolderType } from '@bike4mind/common';
+import { BadRequestError, CreditHolderType } from '@bike4mind/common';
 
 // Isolate the billing routing: stub the LLM layer, settings, and credit math so
 // the test asserts *which pool* is reserved/settled, not token accounting.
@@ -211,9 +211,9 @@ describe('executeCompletion - org billing routing', () => {
     // removed must stop drawing on that org's pool rather than fall back to personal billing.
     const { db, users, organizations } = buildDb({ org: buildOrg({ users: [{ userId: 'someone-else' }] }) });
 
-    await expect(executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' })).rejects.toThrow(
-      /no longer a member of billing organization org1/i
-    );
+    const rejection = executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
+    await expect(rejection).rejects.toThrow(/no longer a member of billing organization org1/i);
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
 
     // Nothing was reserved from either pool - the refusal precedes the credit hold.
     expect(organizations.incrementCredits).not.toHaveBeenCalled();

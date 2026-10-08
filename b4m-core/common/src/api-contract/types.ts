@@ -28,7 +28,7 @@ export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete';
  */
 export type AuthMode = 'apiKeyOrJwt' | 'jwtOnly' | 'public';
 
-export type ResponseSpec = {
+type ResponseSpecFields = {
   description: string;
   /**
    * Shape of the response body. OMIT for a raw, non-JSON body (e.g. the audio
@@ -86,9 +86,23 @@ export type ResponseSpec = {
   bespokeErrorShape?: string;
 };
 
+type BodyFields = 'schema' | 'contentType' | 'example' | 'alsoReturns';
+
+export type ResponseSpec =
+  | (ResponseSpecFields & { noBody?: never })
+  | (Omit<ResponseSpecFields, BodyFields> & {
+      /**
+       * The status carries no body at all (e.g. a `303` whose payload is the
+       * `Location` header), so the spec publishes no `content` for it; a
+       * schema-less status is otherwise documented as an opaque binary body.
+       */
+      noBody: true;
+    } & { [K in BodyFields]?: never });
+
 /** curl/JS/Python sample body for the docs (attached as x-codeSamples). */
 export type CodeSample = {
-  body: unknown;
+  /** Omit when the operation declares no request body: the samples only send one when it does. */
+  body?: unknown;
   authToken: string;
   streaming?: boolean;
 };
@@ -187,14 +201,6 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * query params yet, matching its existing `pathParams` gap.
    */
   queryParams?: z.ZodObject<z.ZodRawShape>;
-  /**
-   * Optional OpenAPI-representable projection of `request`, used ONLY for the
-   * generated spec. Needed when `request` carries wrappers zod-to-openapi cannot
-   * introspect (`.catch()`, `.transform()`, `.pipe()`). Its INPUT shape must
-   * match `request` exactly, so it is a doc projection, not a second contract.
-   * Defaults to `request` when omitted.
-   */
-  requestDoc?: z.ZodTypeAny;
   requestExample?: unknown;
   responses: Record<number, ResponseSpec>;
   /** SSE endpoint: skips JSON response-body docs and gets streaming code samples. */

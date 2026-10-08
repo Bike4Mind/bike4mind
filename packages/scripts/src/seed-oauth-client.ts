@@ -30,9 +30,9 @@
  */
 
 import crypto from 'crypto';
-import { fileURLToPath } from 'node:url';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 
 // Hand-duplicated from packages/database/src/models/auth/OAuthClientModel.ts (this
 // script has no dependency on that package). MUST STAY IN SYNC: a field added there
@@ -225,7 +225,7 @@ async function main() {
 }
 
 // Run only when executed directly (npx tsx ...), not when a test imports resolveClientType.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isDirectInvocation(import.meta.url)) {
   main().catch(err => {
     console.error(err);
     process.exit(1);

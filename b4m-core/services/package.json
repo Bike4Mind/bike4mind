@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "14.2.0",
+  "version": "15.1.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -40,6 +40,16 @@
         "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
       }
     },
+    "./evals/lakeRag": {
+      "import": {
+        "types": "./dist/llm/evals/lakeRag/index.d.mts",
+        "default": "./dist/llm/evals/lakeRag/index.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/evals/lakeRag/index.d.cts",
+        "default": "./dist/llm/evals/lakeRag/index.cjs"
+      }
+    },
     "./apiKeyService": {
       "import": {
         "types": "./dist/apiKeyService/index.d.mts",
@@ -58,6 +68,26 @@
       "require": {
         "types": "./dist/creditService/index.d.cts",
         "default": "./dist/creditService/index.cjs"
+      }
+    },
+    "./generationJobs": {
+      "import": {
+        "types": "./dist/generationJobs/index.d.mts",
+        "default": "./dist/generationJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/generationJobs/index.d.cts",
+        "default": "./dist/generationJobs/index.cjs"
+      }
+    },
+    "./videoJobs": {
+      "import": {
+        "types": "./dist/videoJobs/index.d.mts",
+        "default": "./dist/videoJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/videoJobs/index.d.cts",
+        "default": "./dist/videoJobs/index.cjs"
       }
     },
     "./agentProactiveMessagingService": {
@@ -118,6 +148,116 @@
       "require": {
         "types": "./dist/llm/toolFinishObserver.d.cts",
         "default": "./dist/llm/toolFinishObserver.cjs"
+      }
+    },
+    "./llm/ChatCompletionInvoke": {
+      "import": {
+        "types": "./dist/llm/ChatCompletionInvoke.d.mts",
+        "default": "./dist/llm/ChatCompletionInvoke.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/ChatCompletionInvoke.d.cts",
+        "default": "./dist/llm/ChatCompletionInvoke.cjs"
+      }
+    },
+    "./llm/ImageGeneration": {
+      "import": {
+        "types": "./dist/llm/ImageGeneration.d.mts",
+        "default": "./dist/llm/ImageGeneration.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/ImageGeneration.d.cts",
+        "default": "./dist/llm/ImageGeneration.cjs"
+      }
+    },
+    "./llm/ImageEdit": {
+      "import": {
+        "types": "./dist/llm/ImageEdit.d.mts",
+        "default": "./dist/llm/ImageEdit.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/ImageEdit.d.cts",
+        "default": "./dist/llm/ImageEdit.cjs"
+      }
+    },
+    "./llm/toolAvailability": {
+      "import": {
+        "types": "./dist/llm/toolAvailability.d.mts",
+        "default": "./dist/llm/toolAvailability.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/toolAvailability.d.cts",
+        "default": "./dist/llm/toolAvailability.cjs"
+      }
+    },
+    "./llm/imageModerationGate": {
+      "import": {
+        "types": "./dist/llm/imageModerationGate.d.mts",
+        "default": "./dist/llm/imageModerationGate.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/imageModerationGate.d.cts",
+        "default": "./dist/llm/imageModerationGate.cjs"
+      }
+    },
+    "./llm/SmallLLMService": {
+      "import": {
+        "types": "./dist/llm/SmallLLMService.d.mts",
+        "default": "./dist/llm/SmallLLMService.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/SmallLLMService.d.cts",
+        "default": "./dist/llm/SmallLLMService.cjs"
+      }
+    },
+    "./llm/reranker": {
+      "import": {
+        "types": "./dist/llm/reranker/index.d.mts",
+        "default": "./dist/llm/reranker/index.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/reranker/index.d.cts",
+        "default": "./dist/llm/reranker/index.cjs"
+      }
+    },
+    "./llm/intentClassifier": {
+      "import": {
+        "types": "./dist/llm/intentClassifier.d.mts",
+        "default": "./dist/llm/intentClassifier.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/intentClassifier.d.cts",
+        "default": "./dist/llm/intentClassifier.cjs"
+      }
+    },
+    "./llm/refineText": {
+      "import": {
+        "types": "./dist/llm/refineText.d.mts",
+        "default": "./dist/llm/refineText.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/refineText.d.cts",
+        "default": "./dist/llm/refineText.cjs"
+      }
+    },
+    "./llm/artifactGating": {
+      "import": {
+        "types": "./dist/llm/artifactGating.d.mts",
+        "default": "./dist/llm/artifactGating.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/artifactGating.d.cts",
+        "default": "./dist/llm/artifactGating.cjs"
+      }
+    },
+    "./llm/agents/ServerAgentStore": {
+      "import": {
+        "types": "./dist/llm/agents/ServerAgentStore.d.mts",
+        "default": "./dist/llm/agents/ServerAgentStore.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/agents/ServerAgentStore.d.cts",
+        "default": "./dist/llm/agents/ServerAgentStore.cjs"
       }
     },
     "./llm/tools": {

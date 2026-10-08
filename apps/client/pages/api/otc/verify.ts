@@ -15,6 +15,7 @@ import {
   pendingOtcTokenRepository,
   organizationRepository,
   authSessionRepository,
+  passkeyCredentialRepository,
 } from '@bike4mind/database';
 import { creditService, userService, organizationService, authSessionService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
@@ -187,8 +188,10 @@ const handler = baseApi({ auth: false })
           Config.JWT_SECRET,
           { algorithm: 'HS256', expiresIn: '10m' }
         );
+        // Lets the challenge UI offer "use a passkey" up front instead of failing after a tap.
+        const passkeyAvailable = userHasMFA && (await passkeyCredentialRepository.countByUser(existingUser.id)) > 0;
         return res.status(200).json({
-          ...(userHasMFA ? { mfaRequired: true } : { mfaSetupRequired: true }),
+          ...(userHasMFA ? { mfaRequired: true, passkeyAvailable } : { mfaSetupRequired: true }),
           userId: existingUser.id,
           accessToken: mfaAccessToken,
         });

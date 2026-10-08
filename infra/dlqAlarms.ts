@@ -41,7 +41,7 @@ import {
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
-  videoGenerationDLQ,
+  generationJobDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -52,6 +52,7 @@ import {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueueDLQ,
 } from './queues';
 import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
@@ -243,9 +244,9 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: researchEngineQueueDLQ,
   },
   {
-    label: 'whats-new-generation',
-    displayName: "What's New Generation",
-    application: 'WhatsNewGeneration',
+    label: 'release-notes',
+    displayName: 'Release Notes',
+    application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
     queue: whatsNewGenerationQueueDLQ,
   },
@@ -362,11 +363,11 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: githubLakeRevokeQueueDLQ,
   },
   {
-    label: 'video-generation',
-    displayName: 'Video Generation',
-    application: 'VideoGeneration',
-    sourceQueue: 'videoGenerationQueue',
-    queue: videoGenerationDLQ,
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
+    queue: generationJobDLQ,
   },
   {
     label: 'liveops-triage',
@@ -475,6 +476,14 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'BobIntegration',
     sourceQueue: 'bobRunQueue',
     queue: bobRunQueueDLQ,
+  },
+  // queues.ts - LibreOncology mock-oral audio render (@bike4mind/premium-libreoncology)
+  {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
+    queue: libreoncologyAudioRenderQueueDLQ,
   },
 ];
 

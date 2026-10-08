@@ -1,4 +1,5 @@
 import { PermissionDeniedError, getQuestErrorCode } from '@bike4mind/common';
+import type { ICompletionOptionTools } from './backend';
 
 /** Default concurrency cap to prevent resource exhaustion (DB pools, rate limits, memory) */
 export const DEFAULT_MAX_PARALLEL_TOOLS = 8;
@@ -12,6 +13,26 @@ export type TaskOutcome<T> = { ok: true; result: T } | { ok: false; error: unkno
  */
 function isTerminalToolError(error: unknown): boolean {
   return error instanceof PermissionDeniedError || getQuestErrorCode(error) !== undefined;
+}
+
+/**
+ * Whether the tool loop should end the turn after this round's tool batch instead of making
+ * the follow-up model call. True only when the round already streamed non-empty answer text
+ * AND every tool it called is flagged `endsTurnAfterText`: the follow-up round would only
+ * repeat the answer. A tool-only round still recurses so the model gets to answer.
+ *
+ * The single decision point for every adapter's tool loop - keep them from drifting.
+ */
+export function shouldEndTurnAfterTools(
+  calledToolNames: readonly (string | null | undefined)[],
+  tools: readonly Pick<ICompletionOptionTools, 'toolSchema' | 'endsTurnAfterText'>[] | undefined,
+  roundText: string | null | undefined
+): boolean {
+  // Nameless slots are not calls: adapters index tool calls by content-block index, so a text
+  // block ahead of the tool leaves an empty entry in the list.
+  const names = calledToolNames.filter((name): name is string => Boolean(name));
+  if (names.length === 0 || !roundText?.trim()) return false;
+  return names.every(name => tools?.find(tool => tool.toolSchema.name === name)?.endsTurnAfterText === true);
 }
 
 /**

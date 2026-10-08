@@ -2,6 +2,7 @@ import { z } from 'zod';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
+import type { ImageModelCapabilities } from './utils/imageCapabilities';
 
 /**
  * Model backends
@@ -218,9 +219,14 @@ export enum ChatModels {
   CLAUDE_4_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-5-20251101-v1:0',
   CLAUDE_4_6_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-4-6',
   CLAUDE_5_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-5',
+  CLAUDE_5_5_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-5-5',
   CLAUDE_4_6_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-6-v1',
   CLAUDE_4_7_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-7',
   CLAUDE_4_8_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-8',
+  CLAUDE_FABLE_5_BEDROCK = 'global.anthropic.claude-fable-5',
+  CLAUDE_FABLE_5_1_BEDROCK = 'global.anthropic.claude-fable-5-1',
+  CLAUDE_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-5',
+  CLAUDE_5_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-5-5',
 
   // Anthropic hosted Anthropic models
   CLAUDE_3_OPUS = 'claude-3-opus-20240229',
@@ -448,16 +454,21 @@ export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * The API will reject requests that include temperature for these models.
  */
 export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
-  // Opus 4.7+, Sonnet 5, Fable 5, and Opus 5/5.5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
+  // Opus 4.7+, Sonnet 5+, Fable 5+, and Opus 5+ remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
   ChatModels.CLAUDE_4_7_OPUS,
   ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
   ChatModels.CLAUDE_4_8_OPUS,
   ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
   ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
   // Moonshot pins temperature and top_p on every current Kimi and documents them
   // as unmodifiable: the chat API reference states only the moonshot-v1 family
   // accepts them, and the thinking guide says outright that for kimi-k2.7-code
@@ -489,9 +500,14 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * surfacing a hard refusal, the backend throws so the completion loop's existing fallback
  * machinery continues the request on Opus 5 (whose classifiers intervene far less often).
  * A refusal from any *other* model is a genuine decline and surfaces unchanged. Keep in
- * sync with the `claude-fable-5` fallback preference chain in `adminSettings/fallback.ts`.
+ * sync with the `claude-fable-5` and Bedrock Fable fallback preference chains in
+ * `adminSettings/fallback.ts`.
  */
-export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([ChatModels.CLAUDE_FABLE_5]);
+export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+]);
 
 /**
  * Bedrock-hosted Claude models that do NOT support prompt caching (`cache_control`).
@@ -525,40 +541,12 @@ export const supportedSpeechToTextModels = z.enum(SpeechToTextModels);
 export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 
 /**
- * Video Models
- */
-export enum VideoModels {
-  SORA_2 = 'sora-2',
-  SORA_2_PRO = 'sora-2-pro',
-}
-
-export const VIDEO_MODELS = Object.values(VideoModels);
-export const supportedVideoModels = z.enum(VideoModels);
-export type VideoModelName = z.infer<typeof supportedVideoModels>;
-
-/**
- * Video size constraints and options for Sora
- */
-export const VIDEO_SIZE_CONSTRAINTS = {
-  SORA: {
-    durations: [4, 8, 12] as const,
-    sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'] as const,
-    defaultDuration: 4,
-    defaultSize: '720x1280' as const,
-  },
-} as const;
-
-export type SoraDuration = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.durations)[number];
-export type SoraVideoSize = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.sizes)[number];
-
-/**
  * All supported models
  */
 export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,
   ...SpeechToTextModels,
-  ...VideoModels,
 });
 
 export type ModelName = z.infer<typeof supportedModels>;
@@ -680,6 +668,11 @@ export type ModelInfo = {
    * id tables, and reproduces today's behavior exactly when it is absent.
    */
   dispatchProfile?: ModelDispatchProfile;
+  /**
+   * Size rules and supported params of an image model. Attached by GET /api/models (see
+   * getImageModelCapabilities), not by the backends, so every image row derives it the same way.
+   */
+  image?: ImageModelCapabilities;
 };
 
 // Pricing info type. Optional cache_read / cache_write override the defaults
@@ -695,6 +688,17 @@ type PricingInfo = {
 /** Anthropic-published default multipliers for prompt cache pricing. */
 export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
+
+/** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
+export const pricingTierForTokens = (model: ModelInfo, tokens: number): number | null => {
+  const thresholds = Object.keys(model.pricing)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const threshold of thresholds) {
+    if (tokens <= threshold) return threshold;
+  }
+  return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
+};
 
 /**
  * Compute USD cost for a text model call.
@@ -727,18 +731,7 @@ export const getTextModelCost = (
     return cost;
   };
 
-  const thresholds: number[] = Object.keys(model.pricing)
-    .map(Number)
-    .sort((a, b) => a - b);
-
-  const tierForTokens = (tokens: number): number | null => {
-    for (const threshold of thresholds) {
-      if (tokens <= threshold) return threshold;
-    }
-    return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
-  };
-
-  const tier = tierForTokens(inputTokens);
+  const tier = pricingTierForTokens(model, inputTokens);
   if (tier === null) return alarmIfUnpriced(0);
 
   // Guard against a malformed or non-tiered pricing map (e.g. a flat

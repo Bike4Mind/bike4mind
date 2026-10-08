@@ -1,4 +1,5 @@
 import type {
+  DataLakePendingConnector,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
@@ -10,6 +11,7 @@ import {
   DATA_LAKES,
   MAX_DATA_LAKE_SLUG_LENGTH,
   normalizeEntitlementKey,
+  slugifyDataLakeName,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import {
@@ -106,7 +108,7 @@ function withDisambiguatingSuffix(baseSlug: string, attempt: number): string {
  * tenant's files in that registry lake.
  */
 async function disambiguateSlug(
-  db: CreateDataLakeAdapters['db'],
+  db: { dataLakes: Pick<IDataLakeRepository, 'find'> },
   baseSlug: string,
   organizationId?: string
 ): Promise<string> {
@@ -121,6 +123,19 @@ async function disambiguateSlug(
   throw new BadRequestError(
     `Could not find an available slug for "${baseSlug}" after 50 attempts — choose another name`
   );
+}
+
+/**
+ * The slug `createDataLake` would mint for `name` right now, `-N` suffix included, so the wizard
+ * can show it before create. Advisory only: a concurrent create can still take it first. Lakes in
+ * any status count as taken, including deleted ones (they keep their slug for restore).
+ */
+export async function previewDataLakeSlug(
+  db: { dataLakes: Pick<IDataLakeRepository, 'find'> },
+  name: string,
+  organizationId?: string
+): Promise<string> {
+  return disambiguateSlug(db, slugifyDataLakeName(name), organizationId);
 }
 
 /**
@@ -171,7 +186,9 @@ export const createDataLake = async (
   // it as an already-checked value and never re-derives it from the raw request body.
   organizationId?: string,
   /** Set by a route that accepts API-key auth, so a key-driven create is attributed to the key. */
-  auditPrincipal?: LakeAuditPrincipal
+  auditPrincipal?: LakeAuditPrincipal,
+  // Server-decided, never read from the request body: only a connector-first create route sets it.
+  options?: { pendingConnector?: DataLakePendingConnector }
 ): Promise<IDataLakeDocument> => {
   const params = secureParameters(parameters, CreateDataLakeRequestInput);
 
@@ -206,6 +223,7 @@ export const createDataLake = async (
       createdByUserId: userId,
       organizationId,
       status: 'draft',
+      ...(options?.pendingConnector ? { pendingConnector: options.pendingConnector } : {}),
       fileCount: 0,
       totalSizeBytes: 0,
       totalChunkedChars: 0,

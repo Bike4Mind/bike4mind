@@ -578,6 +578,30 @@ export async function downloadLakeAccessCsv(dataLakeId: string): Promise<void> {
 }
 
 /**
+ * The slug and tag prefix the server would mint for a new lake named `name` in the active org,
+ * `-N` suffix included. `tagPrefix` is the first free prefix starting from the given one, or from
+ * the name-derived default when it is omitted, and null when that base is unusable. The client
+ * cannot compute either: disambiguation counts lakes it cannot see (deleted, archived, gated).
+ * Advisory (create stays authoritative), and never cached, since any create or delete can change
+ * the answer.
+ */
+export function useDataLakeSlugPreview(name: string, tagPrefix: string | undefined, enabled = true) {
+  const orgId = activeOrgId();
+  return useQuery({
+    queryKey: dataLakeKeys.slugPreview(name, orgId, tagPrefix),
+    enabled,
+    retry: false,
+    staleTime: 0,
+    queryFn: async () => {
+      const response = await api.get<{ slug: string; tagPrefix: string | null }>('/api/data-lakes/slug-preview', {
+        params: { name, ...(orgId ? { organizationId: orgId } : {}), ...(tagPrefix ? { tagPrefix } : {}) },
+      });
+      return response.data;
+    },
+  });
+}
+
+/**
  * The data lake in the current create scope whose `fileTagPrefix` would overlap `prefix`, if any.
  *
  * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
@@ -636,9 +660,10 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
 }
 
 /**
- * Updates an existing data lake configuration.
+ * Updates an existing data lake configuration. `notifySuccess: false` drops the success toast for a
+ * write the user did not ask for directly (e.g. GitHubConnectAction undoing its own origin switch).
  */
-export function useUpdateDataLake() {
+export function useUpdateDataLake({ notifySuccess = true }: { notifySuccess?: boolean } = {}) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -658,7 +683,7 @@ export function useUpdateDataLake() {
       // so without this they keep rendering the pre-change verdict against the new policy.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(id) });
-      toast.success('Data lake updated');
+      if (notifySuccess) toast.success('Data lake updated');
     },
     onError: (error: Error) => {
       toast.error(serverRefusalMessage(error) || error.message || 'Failed to update data lake');
@@ -2084,12 +2109,6 @@ export interface DataLakeArticlesParams {
   limit?: number;
   sortBy?: 'fileName' | 'createdAt';
   sortDir?: 'asc' | 'desc';
-  /**
-   * The merged tree's Uncategorized bucket: lake members categorized under none of the caller's
-   * lake prefixes. Sized by `totalUncategorizedFileCount` on the tag-counts payload. For ONE
-   * lake's bucket use useGetDataLakeUncategorizedFiles - this route has no lake-scope parameter.
-   */
-  uncategorized?: boolean;
 }
 
 /** Response shape for the tag-counts endpoint. */
@@ -2129,12 +2148,6 @@ export interface DataLakeTagCountsResponse {
    * meta-tag contributes 0 there while its own row reads its full size.
    */
   totalLakeFileCount: number;
-  /**
-   * The merged (all-lakes) tree's bucket: distinct members categorized under NO accessible
-   * prefix. Not a sum of `uncategorizedFileCounts` - those judge each lake separately, so a file
-   * categorized in lake A but not in lake B is reachable under A's branch and must not appear.
-   */
-  totalUncategorizedFileCount: number;
 }
 
 /**

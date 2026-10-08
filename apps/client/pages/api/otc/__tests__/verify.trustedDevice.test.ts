@@ -60,6 +60,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a), count: vi.fn(), update: vi.fn() },
   pendingOtcTokenRepository: { validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a) },
   authSessionRepository: {},
+  passkeyCredentialRepository: { countByUser: vi.fn(() => Promise.resolve(0)) },
 }));
 
 const mockUserHasMFA = vi.fn();

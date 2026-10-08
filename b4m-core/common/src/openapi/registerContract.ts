@@ -11,7 +11,7 @@ import type { EndpointContract } from '../api-contract';
 type ContractSchema = z.ZodTypeAny | { type: 'string'; contentEncoding: 'binary' };
 type ContractResponse = {
   description: string;
-  content: Record<string, { schema: ContractSchema }>;
+  content?: Record<string, { schema: ContractSchema }>;
   headers?: Record<string, { description: string; schema: { type: 'string' } }>;
 };
 
@@ -107,16 +107,12 @@ function withAccurateCoercedParams<T extends z.ZodObject<z.ZodRawShape>>(objectS
  *
  * This is the ONLY place a contract's schemas meet `.openapi()` - safe here
  * because this module imports ./registry, which runs `extendZodWithOpenApi`.
- * Runs at generate time only. The request body uses `requestDoc` when present
- * (the OpenAPI-representable projection) and falls back to `request`.
+ * Runs at generate time only.
  */
 export function registerContract(contract: EndpointContract): void {
+  // A public operation gets an explicit empty list: omitting `security` fails redocly's security-defined rule.
   const security =
-    contract.auth === 'jwtOnly'
-      ? JWT_SECURITY_REQUIREMENT
-      : contract.auth === 'public'
-        ? undefined
-        : SECURITY_REQUIREMENT;
+    contract.auth === 'jwtOnly' ? JWT_SECURITY_REQUIREMENT : contract.auth === 'public' ? [] : SECURITY_REQUIREMENT;
 
   // Error bodies reuse the single shared ErrorResponse (or, for a declared scope 403,
   // ScopeForbiddenResponse) component ($ref) instead of
@@ -168,7 +164,7 @@ export function registerContract(contract: EndpointContract): void {
 
     responses[status] = {
       description: spec.description,
-      content,
+      ...(!spec.noBody && { content }),
       ...(spec.headers && {
         headers: Object.fromEntries(
           Object.entries(spec.headers).map(([name, description]) => [
@@ -235,7 +231,7 @@ export function registerContract(contract: EndpointContract): void {
     };
   }
 
-  const requestSchema = contract.requestDoc ?? contract.request;
+  const requestSchema = contract.request;
   // No `.openapi(name)` here: zod-to-openapi always inlines `request.params`/
   // `request.query` into the operation's `parameters` array rather than a
   // referenceable component, so a name would never appear in the output - passing

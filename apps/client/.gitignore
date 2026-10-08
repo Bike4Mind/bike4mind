@@ -81,8 +81,9 @@ public/core
 public/pdfjs
 public/pdfjs-express-viewer
 
-# pdf.js worker (copied from pdfjs-dist by scripts/copy-pdf-worker.mjs)
+# pdf.js worker and data files (copied from pdfjs-dist by scripts/copy-pdf-worker.mjs)
 public/pdf.worker*.mjs
+public/pdfjs-assets-*/
 
 # HiGHS solver wasm (copied from the highs package by scripts/copy-highs-wasm.mjs)
 public/highs.wasm

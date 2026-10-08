@@ -134,19 +134,25 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `list_notebooks` | List your notebooks (sessions) | `notebooks:read` |
 | `get_notebook` | Fetch one notebook by id | `notebooks:read` |
 | `create_notebook` | Create a notebook (optionally in a project, or grounded in a data lake via `dataLakeId`) | `notebooks:write` |
+| `list_projects` | List the projects you can access, including shared ones | `projects:read` |
+| `get_project` | Fetch one project by id | `projects:read` |
+| `create_project` | Create a project (`name` and `description` required; optional `sessionIds`/`fileIds`); pass its id as `projectId` to `create_notebook` | `projects:write` |
 | `send_message` | Send a chat message and wait for the reply; returns the reply's cited sources (`citables`) | `ai:chat` |
 | `search_knowledge_base` | Semantic search across your notebooks | `notebooks:read` |
 | `list_lakes` | List the data lakes you can reach (cursor-paged via `nextCursor`) | `datalake:read` |
 | `list_files` | Search your files | `files:read` |
 | `get_file` | File metadata plus a signed download URL | `files:read` |
 | `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
+| `generate_image` | Generate an image from a text prompt and return its quest id, file names, and URLs | `ai:generate` |
 | `text_to_speech` | Synthesize speech from text; return a saved file URL or inline audio | `ai:generate` |
 
 `text_to_speech` accepts `text` and optional provider, voice, model, format, and voice settings. It uses the scoped `/api/ai/tts` route and spends generation credits. Set `preview: true` to skip saving a copy. The result takes one of three shapes:
 
 - **Saved with a URL** - `saved: true` and `file: { id, fileUrl }`, the signed download URL.
 - **Inline audio** - an MCP audio block plus metadata. If a copy was saved but no URL could be signed, the metadata reports `saved: true` and `file: { id }`; if no copy was saved, it reports `saved: false` and, when the route says why (e.g. a full storage quota versus `preview: true`), a `saveSkippedReason`.
-- **Too large to inline** - no audio block; `saved: true` and `file: { id }` (with `fileUrl` when one was signed), so the billed audio is still reachable through the file.
+- **Too large to inline** - no audio block; a time-limited `url` to the audio and its `byteLength`, plus `saved` and `file` describing any saved copy (`saved: false` when none was kept, e.g. with `preview: true`).
+
+`generate_sound_effect` returns the same three shapes.
 
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 

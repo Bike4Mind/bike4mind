@@ -100,18 +100,23 @@ Voice agents are deleted via the trash icon next to each row — that removes bo
 - On call end the browser calls `POST /api/voice/v2/sessions/:id/end`, which **reconciles the hold down to the actual call duration and refunds the unused portion** (`creditsForElapsed`). The endpoint is owner-scoped and idempotent. It fires from both the user-initiated end and a natural disconnect.
 - A user may hold at most **2 concurrent voice sessions** (`MAX_CONCURRENT_VOICE_SESSIONS`), matching v1.
 
+## Public API
+
+`voices`, `sessions`, and `sessions/{id}/end` are published API endpoints, callable with an API key holding the `ai:generate` scope: `GET /api/v1/voice/voices`, `POST /api/v1/voice/sessions`, and `POST /api/v1/voice/sessions/{id}/end` (operationIds `listVoices`, `createVoiceSession`, `endVoiceSession`; see `/api/v1/docs`). The `/api/voice/v2/*` paths used throughout this page are legacy aliases of the same handlers and keep working. `/api/voice/v2/agents` also requires `ai:generate` for API keys but is not published. The LLM proxy is not an API-key endpoint.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
 | --- | --- |
 | Toolbar button missing | `voiceV2Enabled` is false, or the user's browser-cached settings are stale (reload). |
-| `POST /api/voice/v2/sessions` returns 403 | Feature disabled, or user is out of credits with `enforceCredits` on. |
+| `POST /api/voice/v2/sessions` returns 403 | Feature disabled, the API key lacks `ai:generate`, or the user already has 2 concurrent voice sessions open. |
+| `POST /api/voice/v2/sessions` returns 422 `insufficient_credits` | User is out of credits (or cannot cover the up-front reservation) with `enforceCredits` on. |
 | `POST /api/voice/v2/sessions` returns 400 "No default voice agent configured" | No voice agent is flagged as the org default. Admin → Voice Settings → edit an agent → **Set as default**. |
-| `POST /api/voice/v2/sessions` returns 500 "ElevenLabs server API key must be configured" | `elevenLabsServerApiKey` admin setting is empty. |
+| `POST /api/voice/v2/sessions` or `GET /api/voice/v2/voices` returns 503 `provider_not_configured` | `elevenLabsServerApiKey` admin setting is empty. |
 | `POST /api/admin/voice-agents` returns 502 "Failed to create ElevenLabs agent" | API key invalid/expired, ElevenLabs API down, or the request shape is rejected by ElevenLabs. Detail string echoes the upstream status + body. |
 | Proxy returns `401` "Missing/Invalid or expired b4m_session token" | The ElevenLabs agent's **Custom LLM Extra Body** override permission isn't set, so the session token never reaches the proxy. B4M-created agents have this enabled at create-time; agents created manually in the ElevenLabs dashboard need it toggled on under the agent's Security tab. A token can also expire if the call outlives `MAX_SESSION_SECONDS` + buffer. |
 | No voice agents appear in `/agents` | No admin has created any voice agents yet. Admin → Voice Settings → New voice agent. |
-| `GET /api/voice/v2/voices` returns 502 with "Failed to fetch ElevenLabs voices" | API key is invalid/expired, or the ElevenLabs API is unreachable. Check `elevenLabsServerApiKey` and tail SST logs for the upstream status code. |
+| `GET /api/voice/v2/voices` returns 502 with "Failed to fetch ElevenLabs voices" | API key is invalid/expired, or the ElevenLabs API is unreachable. Check `elevenLabsServerApiKey` and tail SST logs for the upstream status code (the response body does not carry it). |
 | Proxy logs `model not in available list` | The selected `reasoningModelId` isn't in `getAvailableModels()` for the resolved API key table — check that the relevant provider's API key is configured (per-user or admin demo). |
 | Modal stuck at "Connecting…" | Usually a CSP issue (need `https://api.elevenlabs.io` + `wss://api.elevenlabs.io` + `https://*.livekit.cloud` + `wss://*.livekit.cloud` in `connect-src`) or `Permissions-Policy` blocking `microphone` (must include `microphone=(self)`). Both are already configured in `apps/client/proxy.ts`. |
 | Browser console shows `NotAllowedError` | User denied microphone permission. Re-grant via the browser's lock icon next to the URL. |
@@ -125,7 +130,8 @@ Voice agents are deleted via the trash icon next to each row — that removes bo
 
 ## Related code
 
-- Server: `apps/client/pages/api/voice/v2/sessions.ts`, `apps/client/pages/api/voice/v2/sessions/[id]/end.ts` (credit reconciliation), `apps/client/pages/api/voice/v2/llm-proxy/chat/completions.ts`, `apps/client/pages/api/voice/v2/voices.ts`, `apps/client/pages/api/voice/v2/agents.ts`
+- Server: `apps/client/pages/api/v1/voice/sessions/index.ts`, `apps/client/pages/api/v1/voice/sessions/[id]/end.ts` (credit reconciliation), `apps/client/pages/api/v1/voice/voices.ts` (the `voice/v2` files of the same names re-export these), `apps/client/pages/api/voice/v2/llm-proxy/chat/completions.ts`, `apps/client/pages/api/voice/v2/agents.ts`
+- Contracts: `b4m-core/common/src/api-contract/contracts/voice.contract.ts`, schemas in `b4m-core/common/src/schemas/voiceApi.ts`
 - Session auth & limits: `apps/client/server/voice/voiceSessionToken.ts` (sign/verify JWT), `apps/client/server/voice/voiceSessionLimits.ts` (`MAX_SESSION_SECONDS`, `creditsForElapsed`)
 - Admin endpoints: `apps/client/pages/api/admin/voice-agents/index.ts`, `apps/client/pages/api/admin/voice-agents/[id].ts`
 - Transport: `b4m-core/voice/src/transports/elevenlabsConversational.ts`

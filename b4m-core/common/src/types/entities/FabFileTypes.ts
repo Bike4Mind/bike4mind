@@ -9,6 +9,27 @@ export type MimeType =
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
 
+// The Files type filter. getMimeTypeFilter (packages/database/src/queries/fabFileSearchQuery.ts) maps every value
+// to a query and FILE_TYPE_OPTIONS (apps/client/app/components/Files/Browser/constants.ts) labels every value.
+export const FAB_FILE_TYPE_FILTERS = [
+  'text',
+  'pdf',
+  'url',
+  'image',
+  'excel',
+  'word',
+  'json',
+  'csv',
+  'markdown',
+  'code',
+  'audio',
+  'video',
+] as const;
+export type FabFileTypeFilter = (typeof FAB_FILE_TYPE_FILTERS)[number];
+
+export const isFabFileTypeFilter = (value: unknown): value is FabFileTypeFilter =>
+  typeof value === 'string' && (FAB_FILE_TYPE_FILTERS as readonly string[]).includes(value);
+
 export enum KnowledgeType {
   /**
    * A knowledge that is from a URL.
@@ -28,6 +49,8 @@ export enum KnowledgeType {
    * excluded from every LLM-attachment and vectorization path.
    */
   AUDIO = 'AUDIO',
+  /** Generated video. Media-only like AUDIO: storable and browsable, never ingested. */
+  VIDEO = 'VIDEO',
 }
 
 // Data Lake source types
@@ -39,6 +62,12 @@ export enum FabFileSourceType {
   /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
   PROPOSAL_APPROVAL = 'proposal_approval',
   GITHUB = 'github',
+  /**
+   * Produced by an in-chat tool (image/audio/music/Excel generation). `sourceMetadata.sessionId`
+   * links it to the notebook it was made in - see persistGeneratedFileAsFabFile for why that link
+   * is not the top-level `sessionId`.
+   */
+  TOOL_GENERATED = 'tool_generated',
 }
 
 /**
@@ -432,6 +461,15 @@ export interface IFabFile {
    * write bumps). Only meaningful while `moderationStatus === 'scanning'`.
    */
   moderationClaimedAt?: Date;
+
+  /**
+   * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
+   * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
+   * handler or a notebook import charges it (apps/client/server/s3/storageCharge.ts). Imported rows
+   * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
+   * predate it.
+   */
+  storageChargedAt?: Date;
 
   /**
    * How many moderation scan attempts have been made on this row and failed without reaching a
@@ -1181,6 +1219,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
 
+  /** Every non-deleted file an in-chat tool generated in the given session (`FabFileSourceType.TOOL_GENERATED`). */
+  findToolGeneratedBySessionId(sessionId: string): Promise<IFabFileDocument[]>;
+
   /**
    * Atomic per-channel claim: appends a `dispatchedNotifications` entry for `channel` only if one
    * does not already exist, succeeding only for the FIRST caller. The redelivery-safety primitive
@@ -1204,7 +1245,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+      type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
@@ -1922,7 +1963,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * (`chunkStallReason`, `noExtractableTextAt`), which is what makes reprocess the documented way
    * back in for a file the rescue sweep has written off.
    */
-  resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  resetChunkStateByIds(ids: string[], options?: { concurrency?: number }): Promise<string[]>;
   /**
    * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
    * chunkless reasons by whether a producer actually removed its passages, and clearing the
@@ -1967,15 +2008,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "all lakes" figure sits above those per-lake rows, so the two describe one population.
    */
   countDistinctDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<number>;
-  /**
-   * The same distinct count narrowed to the files categorized under NONE of `tagPrefixes` - the
-   * bucket for a MERGED (all-lakes) tree. Not a sum of the per-lake `uncategorized` figures,
-   * which judge each lake on its own and so both double-count and over-count.
-   */
-  countDistinctUncategorizedDataLakeFilesByMembership(
-    scopes: DataLakeMembershipScope[],
-    tagPrefixes: string[]
-  ): Promise<number>;
   // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
   // to every row it flips; it records the stamp on the lake and restore passes it back as
   // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a

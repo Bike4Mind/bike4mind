@@ -1,9 +1,11 @@
+import { z } from 'zod';
 import { defineEndpoint } from '../defineEndpoint';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import {
   SimplifiedChatRequestSchema,
   ChatAckSchema,
+  ChatWaitResponseSchema,
   ChatQuestPollResultSchema,
   ApiErrorSchema,
 } from '../../schemas/chat';
@@ -58,10 +60,9 @@ export const chatContract = defineEndpoint({
       description:
         'Message accepted - NOT a completed turn. The default (async) path returns this queued ' +
         'ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` ' +
-        'schema). With `wait: true` the ' +
-        'body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, ' +
-        '`createdAt`, and `performance` timings - fields not modelled here yet; the synchronous ' +
-        'response shape is a follow-up. A turn that FAILS still resolves with `200`, never a 4xx, on ' +
+        'schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the ' +
+        'reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, ' +
+        'when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on ' +
         'both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose ' +
         'explaining why lands in `reply`/`response` like any other answer, so the reply text alone ' +
         'cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it ' +
@@ -80,7 +81,7 @@ export const chatContract = defineEndpoint({
         "freshly created notebook's id; pass it back as the request's `sessionId` to continue. " +
         'Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 ' +
         'carrying the same `errorCode` vocabulary.',
-      schema: ChatAckSchema,
+      schema: z.union([ChatWaitResponseSchema, ChatAckSchema]),
       pollResult: {
         schema: ChatQuestPollResultSchema,
         description:

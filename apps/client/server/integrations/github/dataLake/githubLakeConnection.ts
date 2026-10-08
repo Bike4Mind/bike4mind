@@ -1,11 +1,14 @@
 import type { Response } from 'express';
 import {
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
   isGitHubLakeSyncClaimLive,
   orgGitHubLakeConnectionRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import {
+  GITHUB_LAKE_PLACEHOLDER_NAME,
   acceptsConnectorContent,
   isGitHubDisconnectStalled,
   isLakeIngestable,
@@ -19,10 +22,16 @@ import {
   type IOrgGitHubLakeConnectionResponse,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { dataLakeService } from '@bike4mind/services';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
-import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
+import {
+  assertLakeConnectorFree,
+  withConnectionId,
+  withLakeConnectorClaim,
+} from '@server/dataLakes/assertLakeConnectorFree';
 import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
@@ -99,6 +108,9 @@ export function toGitHubLakeConnectionResponse(
     lastError: conn.lastError ?? null,
     defaultBranch: conn.defaultBranch ?? null,
     lastSyncedAt: conn.lastSyncedAt ?? null,
+    lastSyncedCommitSha: conn.lastSyncedCommitSha ?? null,
+    candidateCount: conn.treeCandidateCount ?? null,
+    skippedCount: conn.treeSkippedCount ?? null,
     syncStale: conn.status === 'syncing' && !isGitHubLakeSyncClaimLive(conn),
     fileCount,
     disconnecting: !!conn.disconnectRequestedAt,
@@ -139,7 +151,7 @@ export async function resolveConnectableLake(user: LakeUser, dataLakeId: string)
       `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a GitHub repository.`
     );
   }
-  await assertLakeConnectorFree(lake.id);
+  await assertLakeConnectorFree(lake.id, { includeClaim: true });
   return { lakeId: lake.id, organizationId: lake.organizationId };
 }
 
@@ -397,19 +409,22 @@ export async function completeGitHubLakeConnection(params: {
 
   let connection: IOrgGitHubLakeConnectionDocument;
   try {
-    connection = await orgGitHubLakeConnectionRepository.create({
-      organizationId,
-      targetDataLakeId: lakeId,
-      installationId,
-      accountLogin: installation.accountLogin,
-      repositoryId: repository.id,
-      repositoryFullName: repository.fullName,
-      connectedBy: user.id,
-      connectedAt: new Date(),
-    });
+    connection = await withLakeConnectorClaim(lakeId, 'github', claimedId =>
+      orgGitHubLakeConnectionRepository.create(
+        withConnectionId(claimedId, {
+          organizationId,
+          targetDataLakeId: lakeId,
+          installationId,
+          accountLogin: installation.accountLogin,
+          repositoryId: repository.id,
+          repositoryFullName: repository.fullName,
+          connectedBy: user.id,
+          connectedAt: new Date(),
+        })
+      )
+    );
   } catch (error) {
-    // Unique repositoryId / targetDataLakeId: the repository already feeds a lake, or a concurrent
-    // connect won the claim after our checks.
+    // Unique repositoryId / targetDataLakeId: the repository already feeds a lake, or another connect bound it first.
     if (isDuplicateKeyError(error)) {
       throw new ConflictError('That repository or data lake is already connected. Refresh and pick another.');
     }
@@ -417,9 +432,9 @@ export async function completeGitHubLakeConnection(params: {
   }
 
   // The binding stands without it: a stale intent only feeds the finish-connect banner, which also
-  // hides once a connection exists.
-  await dataLakeRepository.clearPendingConnector(lakeId).catch((error: unknown) =>
-    logger.warn('GitHub lake connect: could not clear the pending connector', {
+  // hides once a connection exists, and a lake left on the placeholder name can be renamed by hand.
+  await nameLakeAfterRepository(lakeId, repository.fullName, user, logger).catch((error: unknown) =>
+    logger.warn('GitHub lake connect: could not clear the pending connector or name the lake', {
       connectionId: connection.id,
       error: serializeError(error),
     })
@@ -433,6 +448,54 @@ export async function completeGitHubLakeConnection(params: {
   );
   await queueFirstIngest(connection, logger);
   return connection;
+}
+
+/**
+ * Renames a lake still carrying the connector-first placeholder (POST /api/data-lakes/github-connect)
+ * to the bound repository's owner/repo, and clears its pending connector either way. A lake the user
+ * already renamed keeps its name; one they named exactly the placeholder is renamed too.
+ */
+export async function nameLakeAfterRepository(
+  lakeId: string,
+  repositoryFullName: string,
+  user: LakeUser,
+  logger: Pick<Logger, 'warn'>
+): Promise<void> {
+  const before = await dataLakeRepository.renameIfPlaceholderAndClearPending(
+    lakeId,
+    GITHUB_LAKE_PLACEHOLDER_NAME,
+    repositoryFullName,
+    { lastUpdatedByUserId: user.id }
+  );
+  if (!before) return;
+  // Same grant set and org-admin set the route-driven lake writes resolve, so the audit rung names
+  // the grant owner or org admin that made the bind rather than collapsing to creator/system. The
+  // rename has already landed, so a failed lookup only narrows the rung and must not drop the row.
+  const orEmpty = <T>(lookup: Promise<T[]>, what: string): Promise<T[]> =>
+    lookup.catch((error: unknown) => {
+      logger.warn(`GitHub lake connect: could not load ${what} for the rename audit`, {
+        dataLakeId: lakeId,
+        error: serializeError(error),
+      });
+      return [];
+    });
+  const [grants, administeredOrgIds] = await Promise.all([
+    orEmpty(
+      dataLakeService.loadActiveLakeGrants(before, { db: { dataLakeAccessGrants: dataLakeAccessGrantRepository } }),
+      'lake grants'
+    ),
+    user.isAdmin ? Promise.resolve([]) : orEmpty(organizationRepository.findIdsWithAdminRights(user.id), 'admin orgs'),
+  ]);
+  await dataLakeService.recordLakeConfigChange(
+    {
+      actor: { userId: user.id, isAdmin: user.isAdmin, administeredOrgIds },
+      lake: before,
+      grants,
+      action: 'update',
+      changes: dataLakeService.diffLakeConfig({ name: before.name }, { name: repositoryFullName }),
+    },
+    { db: lakeConfigAuditDb, logger }
+  );
 }
 
 /**

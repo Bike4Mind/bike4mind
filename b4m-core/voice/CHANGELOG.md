@@ -1,5 +1,23 @@
 # @bike4mind/voice
 
+## 0.9.31
+
+### Patch Changes
+
+- Updated dependencies [[`9bbfd8c`](https://github.com/Bike4Mind/bike4mind/commit/9bbfd8c1d6f66da7e433bcf233d4e2a6c37637c7), [`ea66cbb`](https://github.com/Bike4Mind/bike4mind/commit/ea66cbb0257bb8264c5c6e60a8a9209e9f24da9a), [`254ae9f`](https://github.com/Bike4Mind/bike4mind/commit/254ae9ff0702b92b3a41d620d5a020c9c026afb6), [`45d7c5e`](https://github.com/Bike4Mind/bike4mind/commit/45d7c5e86ce91cbffcbf1efe3bf606593af5deac)]:
+  - @bike4mind/common@13.1.0
+  - @bike4mind/utils@6.6.0
+  - @bike4mind/llm-adapters@0.16.2
+
+## 0.9.30
+
+### Patch Changes
+
+- Updated dependencies [[`99033fe`](https://github.com/Bike4Mind/bike4mind/commit/99033fe34169925190d1cad36aa45c5c7fc956a4), [`4c46065`](https://github.com/Bike4Mind/bike4mind/commit/4c46065b22954e0f8e6afdec0e497e741de92a2d), [`ad14801`](https://github.com/Bike4Mind/bike4mind/commit/ad14801acd6de3230b2dc9819586f402ae047cb4), [`9bd1edf`](https://github.com/Bike4Mind/bike4mind/commit/9bd1edf146cbf8e6b43d413ff94b5f5f4740f311), [`88587cc`](https://github.com/Bike4Mind/bike4mind/commit/88587cc0acdfc7ca0658c8d0c92b8c6852cd79d1), [`23bd5c7`](https://github.com/Bike4Mind/bike4mind/commit/23bd5c7680423502c5033bb83f6988d9916e76c6), [`04d895f`](https://github.com/Bike4Mind/bike4mind/commit/04d895f7bf3053326bb8d0871ebefb389fe37dec), [`a728e8c`](https://github.com/Bike4Mind/bike4mind/commit/a728e8c8a459c177cce15a978dd0418a6085129e), [`3942bbc`](https://github.com/Bike4Mind/bike4mind/commit/3942bbc9dbceb5356ae18f016fe8c0684f43ffef), [`c8ac9ba`](https://github.com/Bike4Mind/bike4mind/commit/c8ac9ba4856dfc472f2e55d80b7013c28429f0eb), [`31d4623`](https://github.com/Bike4Mind/bike4mind/commit/31d46236619fd7e0c2be3f3bc4d34ee69314e682), [`c4d2bd4`](https://github.com/Bike4Mind/bike4mind/commit/c4d2bd49a6bc6bccec224924e899f89de9dca269), [`53b4bf8`](https://github.com/Bike4Mind/bike4mind/commit/53b4bf80608b99cfb16bfc58960621c332e7c0b3)]:
+  - @bike4mind/common@13.0.0
+  - @bike4mind/utils@6.5.1
+  - @bike4mind/llm-adapters@0.16.1
+
 ## 0.9.29
 
 ### Patch Changes

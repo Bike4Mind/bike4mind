@@ -57,6 +57,14 @@ export const ABANDONED_REPLY =
 export const UNFINISHED_REPLY_NOTICE =
   'The response was cut off because the server stopped before it finished, so this answer is incomplete. Please try again.';
 
+/**
+ * The one ERROR-level line every stuck-quest recovery emits, whichever settle site wins (the web
+ * poll, the v1 poll, or the sweep). LiveOps' Slack channel is fed by the ERROR-level subscription
+ * on each log group (infra/logMonitor.ts), so this string is a stable filter key - keep it ASCII
+ * and greppable. The `via` field on the call names the path that recovered.
+ */
+export const STUCK_QUEST_RECOVERED_LOG = '[QuestTimeoutRecovery] Recovered stuck quest';
+
 export const TIMED_OUT_RUN = { emptyReply: TIMEOUT_REPLY, finishReason: RUN_TIMED_OUT_FINISH_REASON } as const;
 export const ABANDONED_RUN = { emptyReply: ABANDONED_REPLY, finishReason: RUN_ABANDONED_FINISH_REASON } as const;
 type DeadRunKind = typeof TIMED_OUT_RUN | typeof ABANDONED_RUN;
@@ -64,13 +72,13 @@ type DeadRunKind = typeof TIMED_OUT_RUN | typeof ABANDONED_RUN;
 /** The subset of a quest the terminal-patch decision reads. */
 export type QuestContentView = Pick<
   IChatHistoryItem,
-  'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
 >;
 
 /**
  * `structuredReplies` / `toolResults` count as content. A tool-heavy run can
  * produce a fully renderable answer (notebook cells, tool output) while leaving
- * `reply`, `replies`, `images` and `videos` all empty, and calling that "nothing
+ * `reply`, `replies`, `images`, `videos` and `videoJobIds` all empty, and calling that "nothing
  * to show" stamps an error message next to work the user can actually see.
  *
  * Every field is tested for content rather than for presence, because the two
@@ -91,6 +99,7 @@ function hasRenderableContent(quest: QuestContentView): boolean {
     quest.replies?.some(r => visibleReplyText(r)) ||
     quest.images?.length ||
     quest.videos?.length ||
+    quest.videoJobIds?.length ||
     quest.structuredReplies?.some(sr => sr?.content?.length) ||
     quest.toolResults?.some(t => t?.content)
   );
@@ -128,7 +137,7 @@ function withUnfinishedNotice(quest: QuestContentView): Pick<NonNullable<QuestTi
 export function terminalRecoveryFor(quest: QuestContentView, run: DeadRunKind): NonNullable<QuestTimeoutRecovery> {
   // fallbackInfo is cleared with the error: no model answered a turn that settles with nothing to show.
   if (!hasRenderableContent(quest)) return { status: 'done', type: 'error', reply: run.emptyReply, fallbackInfo: null };
-  const deliveredMedia = Boolean(quest.images?.length || quest.videos?.length);
+  const deliveredMedia = Boolean(quest.images?.length || quest.videos?.length || quest.videoJobIds?.length);
   // Persisted rows cannot say whether surviving media came from the fallback hop or the failed primary,
   // so without visible text the fallback claim is dropped rather than risk a false "answered by".
   const hasVisibleText = Boolean(visibleReplyText(quest.reply) || quest.replies?.some(r => visibleReplyText(r)));

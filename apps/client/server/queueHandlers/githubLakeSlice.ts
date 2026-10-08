@@ -11,7 +11,9 @@ import {
   BATCH_NON_TERMINAL_STATUSES,
   DATALAKE_TAG_STRENGTH,
   FabFileSourceType,
+  GITHUB_LAKE_FILE_RULES,
   KnowledgeType,
+  type GitHubLakeTreeCounts,
   type IFabFileDocument,
   type IOrgGitHubLakeConnectionDocument,
   type IUserDocument,
@@ -26,7 +28,6 @@ import {
   gitHubRateLimitDelaySeconds,
 } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
-  GITHUB_LAKE_FILE_RULES,
   checkLakeFileContent,
   classifyTreeEntry,
   lakeFileMimeType,
@@ -53,6 +54,8 @@ export type GitHubLakeSliceInput = {
   user: IUserDocument;
   resumeBatchId?: string;
   remainingMs: () => number;
+  /** Persists the tree read's split for the lake's source card; the caller holds the claim it is written under. */
+  recordTreeCounts: (counts: GitHubLakeTreeCounts) => Promise<void>;
   logger: Logger;
 };
 
@@ -67,7 +70,18 @@ export type GitHubLakeSliceOutcome =
  * the wrapping queue handler to interpret.
  */
 export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<GitHubLakeSliceOutcome> {
-  const { octokit, repoFullName, commitSha, connection, lake, user, resumeBatchId, remainingMs, logger } = input;
+  const {
+    octokit,
+    repoFullName,
+    commitSha,
+    connection,
+    lake,
+    user,
+    resumeBatchId,
+    remainingMs,
+    recordTreeCounts,
+    logger,
+  } = input;
   const priorBatchId = resumeBatchId ?? null;
 
   let tree: Awaited<ReturnType<typeof getRecursiveTree>>;
@@ -92,12 +106,16 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
     getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024
   );
   const oversized: { path: string; size: number }[] = [];
+  let skippedCount = 0;
   const candidates = tree.entries.flatMap(entry => {
     const verdict = classifyTreeEntry(entry, maxFileBytes);
     if (verdict.ok) return [verdict.candidate];
+    // Directories (and submodules) are tree entries, not files the rules turned away.
+    if (verdict.reason !== 'not_blob') skippedCount += 1;
     if (verdict.reason === 'oversized' && entry.path) oversized.push({ path: entry.path, size: entry.size ?? 0 });
     return [];
   });
+  await recordTreeCounts({ candidateCount: candidates.length, skippedCount });
   if (candidates.length > GITHUB_LAKE_FILE_RULES.maxCandidates) {
     return {
       kind: 'refused',

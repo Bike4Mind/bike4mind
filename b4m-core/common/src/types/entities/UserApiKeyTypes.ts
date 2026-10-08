@@ -210,7 +210,7 @@ export const API_KEY_RATE_LIMIT_DEFAULTS: Readonly<IUserApiKeyRateLimit> = Objec
 
 /**
  * White-label config for an embed key (epic #41), rendered by the widget serve
- * route. Writes are validated by EmbedBrandingSchema (schemas/embedBranding.ts);
+ * route. Writes are validated by EmbedBrandingSchema (schemas/embedKey.ts);
  * `hideBranding` is honored only when the key owner's plan carries the
  * whitelabel entitlement - the serve route re-checks on every request.
  */
@@ -226,6 +226,13 @@ export interface IUserApiKey {
   userId: string;
   name: string; // Human-friendly name
   keyHash: string; // Hashed secret (never store plain text)
+  /**
+   * Hex SHA-256 of the raw key: the fast validation path. Keys are 128-bit random
+   * tokens, so an unkeyed digest is not brute-forceable and needs no server secret.
+   * Absent on keys minted before it existed; validate falls back to bcrypt `keyHash`
+   * and writes it back on first successful use. Never serialized (see toJSON).
+   */
+  keyDigest?: string;
   keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
   scopes: ApiKeyScope[]; // Permissions array
   status: ApiKeyStatus;
@@ -277,6 +284,12 @@ export interface IUserApiKey {
   agentId?: string;
   /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
   allowedOrigins?: string[];
+  /**
+   * OAuth client ids allowed to mint identified (user-pays) sessions on this embed key.
+   * Absent or empty = anonymous only. The opt-in binds a federated client to this key's
+   * tenant; without it any federated client could pair its users with any public key.
+   */
+  identifiedClientIds?: string[];
   /**
    * Lake ids this key is bound to for the manage-but-not-member session admission (see
    * `preauthorizedLakeIds` on the session, and its containment check at
@@ -334,6 +347,17 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Replaces both request ceilings; the enforcer picks them up on the next request. */
   setRateLimit: (id: string, rateLimit: IUserApiKeyRateLimit) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
+  /**
+   * Stores the fast-path digest for a key validated via the legacy bcrypt hash. A no-op unless
+   * `expectedKeyHash` is still the stored hash and no digest is set: a backfill that lands after a
+   * rotation must not write the old key's digest over the new one.
+   */
+  setKeyDigest: (id: string, keyDigest: string, expectedKeyHash: string) => Promise<void>;
+  /**
+   * Upgrades a legacy short prefix to the current length, under the same `expectedKeyHash` guard as
+   * setKeyDigest, so a heal racing a rotation cannot repoint the doc at the rotated-away key.
+   */
+  healKeyPrefix: (id: string, keyPrefix: string, expectedKeyHash: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**
@@ -347,6 +371,19 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    * `pool` selects which per-user cap the count feeds (see ApiKeyCapPool); defaults to 'standard'.
    */
   countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
+  /**
+   * Inserts the document then recounts active keys for the same (userId, pool).
+   * Returns the document when the count is within `cap`; revokes the just-inserted
+   * document and returns 'at_cap' when it would exceed `cap`. Deterministic
+   * tie-breaking (oldest `cap` keys survive by createdAt/id sort) prevents the
+   * both-rollback corner case that arises when two concurrent callers both insert
+   * and both naively undo their own key.
+   */
+  createIfUnderCap: (
+    doc: Parameters<IUserApiKeyRepository['create']>[0],
+    cap: number,
+    pool: ApiKeyCapPool
+  ) => Promise<IUserApiKeyDocument | 'at_cap'>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
   countActiveByProductId: (productId: string) => Promise<number>;

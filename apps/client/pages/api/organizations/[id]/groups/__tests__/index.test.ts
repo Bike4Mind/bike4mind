@@ -28,9 +28,14 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const listOrganizationGroups = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/database', () => ({ organizationRepository: {} }));
-vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
-vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
+const repos = vi.hoisted(() => ({
+  organizations: { repo: 'organizations' },
+  groups: { repo: 'groups' },
+  users: { repo: 'users' },
+}));
+vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: repos.organizations }));
+vi.mock('@bike4mind/database/social', () => ({ groupRepository: repos.groups }));
+vi.mock('@bike4mind/database/auth', () => ({ userRepository: repos.users }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { listOrganizationGroups } }));
 
 import '@pages/api/organizations/[id]/groups/index';
@@ -54,11 +59,7 @@ describe('GET /api/organizations/[id]/groups', () => {
     const { res, promise } = call(user);
     await promise;
 
-    expect(listOrganizationGroups).toHaveBeenCalledWith(
-      user,
-      { organizationId: 'org1' },
-      expect.objectContaining({ db: expect.anything() })
-    );
+    expect(listOrganizationGroups).toHaveBeenCalledWith(user, { organizationId: 'org1' }, { db: repos });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().groups).toEqual(RESULT);
   });

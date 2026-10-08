@@ -7,15 +7,16 @@ import { allSecrets } from './secrets';
 import {
   researchEngineQueue,
   agentProactiveMessageQueue,
-  whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   liveOpsTriageQueue,
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
   fabFileChunkQueue,
   driveLakeIngestQueue,
+  githubLakeIngestQueue,
   dataLakeResearchQueue,
   generationCallbackQueue,
+  generationJobQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -163,10 +164,10 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
  * Fetches latest What's New modal from production S3 and imports to local DB.
  *
  * CRITICAL: Only enabled for non-production environments (dev, staging, forks)
- * - production: DISABLED - production GENERATES modals, doesn't import them
+ * - production: DISABLED - production is the source the others import from
  * - dev/staging/forks: ENABLED - imports modals from production
  *
- * Schedule: Daily at 9am UTC (3am CST) - 2 hours after production generates at 7am UTC (1am CST)
+ * Schedule: Daily at 9am UTC (3am CST)
  * Checks autoSyncEnabled config before importing.
  */
 const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
@@ -235,49 +236,11 @@ const liveopsTriageDispatcherCron = new sst.aws.Cron('liveopsTriageDispatcherCro
 });
 
 /**
- * What's New Daily Modal Generation Cron
- * Collects merged PRs/commits from GitHub and dispatches to the generation queue.
- * Replaces the GitHub Actions workflow (generate-whats-new-modal-production.yml).
- *
- * Schedule: Daily at 7am UTC (1am CST)
- * Only runs in production environment.
- */
-const whatsNewGenerationCron = new sst.aws.Cron('whatsNewGenerationCron', {
-  schedule: 'cron(0 7 * * ? *)', // 7am UTC daily (1am CST)
-  function: {
-    handler: 'apps/workers/src/cron/whatsNewGeneration.handler',
-    vpc: lambdaVpc,
-    link: [...allSecrets, whatsNewGenerationQueue],
-    timeout: '2 minutes',
-    runtime: 'nodejs24.x',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '1 week',
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-      {
-        actions: ['sqs:SendMessage'],
-        resources: [whatsNewGenerationQueue.arn],
-      },
-    ],
-  },
-  // Only enabled in production - replaces GitHub Actions workflow
-  enabled: $app.stage === 'production',
-});
-
-/**
  * What's New Weekly Highlights Cron
  * Generates a weekly summary of What's New modals and posts to Slack.
  *
  * Schedule: Weekly on Saturday at 2am CST (8:00 UTC)
- * Runs 1 hour after the daily What's New modal generation (7am UTC)
- * Only runs in production environment.
+ * Disabled; see `enabled` below.
  *
  * Workflow:
  * 1. Fetches What's New modals from the past 7 days
@@ -285,7 +248,7 @@ const whatsNewGenerationCron = new sst.aws.Cron('whatsNewGenerationCron', {
  * 3. Posts formatted highlights to configured Slack channel
  */
 const whatsNewHighlightsCron = new sst.aws.Cron('whatsNewHighlightsCron', {
-  schedule: 'cron(0 8 ? * SAT *)', // 2am CST / 8am UTC every Saturday (1hr after modal generation)
+  schedule: 'cron(0 8 ? * SAT *)', // 2am CST / 8am UTC every Saturday
   function: {
     handler: 'apps/workers/src/cron/whatsNewHighlights.handler',
     vpc: lambdaVpc,
@@ -305,8 +268,9 @@ const whatsNewHighlightsCron = new sst.aws.Cron('whatsNewHighlightsCron', {
       },
     ],
   },
-  // Only enabled in production - fork environments should not generate highlights
-  enabled: $app.stage === 'production',
+  // Disabled: its only input was the generated What's New modals, which release notes replaced, so it
+  // would post a "no modals" warning every week.
+  enabled: false,
 });
 
 // Telemetry TTL Cleanup — GDPR Article 5(1)(e) storage limitation
@@ -736,6 +700,32 @@ const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
 });
 
 /**
+ * Generation Job Sweep
+ * Re-enqueues generation jobs whose SQS message was lost or whose worker died mid-step.
+ *
+ * Schedule: every 5 minutes
+ * Enabled: every stage, so previews and staging (where the test provider runs) get recovery too; it is a
+ * no-op when nothing is stalled.
+ * Self-host: apps/workers/src/selfhost/generationJobSweep.ts
+ */
+const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/generationJobSweep.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, generationJobQueue],
+    timeout: '2 minutes',
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+});
+
+/**
  * Agent Execution Abandoned Sweep
  * Releases agent-execution slots that the reactive in-Lambda sweep cannot
  * reach because the owning user never returns to start another execution.
@@ -808,6 +798,36 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
     // driveLakeIngestQueue: the poll enqueues each due connection onto the shared ingest handler,
     // so it needs Resource.driveLakeIngestQueue.url and the sqs:SendMessage grant the link provides.
     link: [...allSecrets, driveLakeIngestQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '3 days',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
+ * GitHub-as-Lake Reconcile
+ * Compares each connected repository's default-branch HEAD with its last synced commit and
+ * enqueues the ingest handler on a mismatch, so a missed push webhook is still picked up. Dark
+ * until the EnableDataLakes, EnableDataLakeGitHub and EnableDataLakeGitHubReconcile admin flags
+ * are all on (the handler enforces the gate).
+ *
+ * Schedule: every 15 minutes (a bounded batch of connections per run; see MAX_CHECKS_PER_RUN in the handler)
+ * Enabled: production + dev
+ */
+const githubLakeReconcileCron = new sst.aws.Cron('githubLakeReconcile', {
+  schedule: 'rate(15 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/githubLakeReconcile.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    // githubLakeIngestQueue: a changed HEAD is enqueued onto the shared ingest handler, so the
+    // cron needs Resource.githubLakeIngestQueue.url and the sqs:SendMessage grant the link provides.
+    link: [...allSecrets, githubLakeIngestQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -984,7 +1004,6 @@ export {
   emailCampaignSchedulerCron,
   whatsNewSyncCron,
   liveopsTriageDispatcherCron,
-  whatsNewGenerationCron,
   whatsNewHighlightsCron,
   cloudSecurityScanCron,
   integrationHealthCheckCron,
@@ -1000,10 +1019,12 @@ export {
   modelDiscoveryFunction,
   modelDiscoveryCron,
   questTimeoutSweepCron,
+  generationJobSweepCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
   driveLakeResyncPollCron,
+  githubLakeReconcileCron,
   helpDatalakeIngestCron,
   lakeHealthSweepCron,
   lakeInconsistencySweepCron,

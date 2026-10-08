@@ -1,309 +1,314 @@
 // @vitest-environment node
 /**
- * Integration test for POST /api/v1/video-generations (and its legacy alias
- * /api/ai/generate-video).
- *
- * Mirrors image-edits.integration.test.ts: drives the real next-connect chain
- * `nextRouteForContract` assembles to prove `generateVideoContract` reaches `apiKeyAuth` and
- * body validation - a key lacking `ai:generate` is rejected 403 and a malformed body 422,
- * both before any billable generation is enqueued; a key holding the scope, and JWT callers,
- * pass through. Also covers `callbackUrl`: a JWT caller has no per-key signing secret to
- * arm one with, so it is rejected 400 before any work is queued.
+ * Integration test for POST and GET /api/v1/video-generations through the real next-connect chain
+ * (nextRouteForContract -> apiKeyAuth -> scope check -> validation -> handler). The domain (createVideoJob)
+ * and the repository are mocked: their behaviour is covered in services and database.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { EventEmitter } from 'events';
-import { createMocks } from 'node-mocks-http';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiKeyScope } from '@bike4mind/common';
+import {
+  asUser,
+  fire,
+  h,
+  JOB_ID,
+  resetHarness,
+  validateWithScopes,
+  videoJob,
+} from '@server/videoGenerations/__test__/routeHarness';
 
-const {
-  mockValidate,
-  mockUserFindById,
-  mockRateLimit,
-  mockInvoke,
-  mockGetOrCreateSession,
-  mockResolveBillingOrgId,
-  mockAssertUrlAllowed,
-  mockFindCallbackSigningSecret,
-  mockArmCallback,
-  mockFindCallbackById,
-  mockClaimCallbackDispatch,
-} = vi.hoisted(() => ({
-  mockValidate: vi.fn(),
-  mockUserFindById: vi.fn(),
-  mockRateLimit: vi.fn(),
-  mockInvoke: vi.fn(),
-  mockGetOrCreateSession: vi.fn(),
-  mockResolveBillingOrgId: vi.fn(),
-  mockAssertUrlAllowed: vi.fn(),
-  mockFindCallbackSigningSecret: vi.fn(),
-  mockArmCallback: vi.fn(),
-  mockFindCallbackById: vi.fn(),
-  mockClaimCallbackDispatch: vi.fn(),
-}));
-
-const RATE_LIMIT_HEADERS = {
-  'X-RateLimit-Limit-Minute': '60',
-  'X-RateLimit-Remaining-Minute': '59',
-  'X-RateLimit-Reset-Minute': '0',
-  'X-RateLimit-Limit-Day': '1000',
-  'X-RateLimit-Remaining-Day': '999',
-  'X-RateLimit-Reset-Day': '0',
-};
-
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
-  // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
-  // checkApiKeyRateLimit is stubbed.
-  ...(await orig<Record<string, unknown>>()),
-  checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
-}));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-
-vi.mock('@bike4mind/services', async orig => {
-  const actual = await orig<Record<string, unknown>>();
-  return {
-    ...actual,
-    userApiKeyService: {
-      ...(actual.userApiKeyService as object),
-      validateUserApiKey: (...a: unknown[]) => mockValidate(...a),
-    },
-  };
-});
-
-vi.mock('@bike4mind/database', async orig => {
-  const actual = await orig<Record<string, unknown>>();
-  const RealUser = actual.User as Record<string, unknown>;
-  return {
-    ...actual,
-    connectDB: vi.fn().mockResolvedValue(undefined),
-    User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockUserFindById(...a) }),
-    questRepository: {
-      ...(actual.questRepository as object),
-      armCallback: (...a: unknown[]) => mockArmCallback(...a),
-      findCallbackById: (...a: unknown[]) => mockFindCallbackById(...a),
-      // Short-circuits dispatchQuestCallback (called from armGenerationCallback) so it never
-      // reaches SQS/sst - dispatch mechanics are covered by dispatchQuestCallback.test.ts.
-      claimCallbackDispatch: (...a: unknown[]) => mockClaimCallbackDispatch(...a),
-    },
-    userApiKeyRepository: {
-      ...(actual.userApiKeyRepository as object),
-      findCallbackSigningSecret: (...a: unknown[]) => mockFindCallbackSigningSecret(...a),
-    },
-  };
-});
-
-const mockGetGenerationCallbackQueueUrl = vi.fn(
-  () => 'https://sqs.example.com/generationCallbackQueue' as string | undefined
+vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
-vi.mock('@server/generationCallback/dispatchQuestCallback', async orig => ({
-  ...(await orig<Record<string, unknown>>()),
-  getGenerationCallbackQueueUrl: () => mockGetGenerationCallbackQueueUrl(),
-}));
+vi.mock('@server/middlewares/rateLimit', async () =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).rateLimitMiddlewareMock()
+);
+vi.mock('@server/utils/userRateTier', async () =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).userRateTierMock()
+);
+vi.mock('@server/utils/orgAccess', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).orgAccessMock(orig)
+);
+vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/services', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).servicesMock(orig)
+);
+vi.mock('@bike4mind/services/videoJobs', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).videoJobsServiceMock(orig)
+);
+vi.mock('@bike4mind/database', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).databaseMock(orig)
+);
+vi.mock('@server/generationJobs/wiring', async () =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).wiringMock()
+);
+vi.mock('@server/videoGenerations/signOutputUrl', async () =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).signOutputUrlMock()
+);
+vi.mock('@server/videoGenerations/listUsableVideoModels', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).listUsableVideoModelsMock(orig)
+);
+vi.mock('@server/auth/auth', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).authMock(orig)
+);
 
-vi.mock('@server/utils/ssrfProtection', async orig => ({
-  ...(await orig<Record<string, unknown>>()),
-  assertUrlAllowed: (...a: unknown[]) => mockAssertUrlAllowed(...a),
-}));
+import handler from '../video-generations/index';
 
-vi.mock('@server/managers/sessionManager', () => ({
-  getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
-}));
-vi.mock('@server/utils/orgAccess', async orig => ({
-  ...(await orig<Record<string, unknown>>()),
-  resolveBillingOrgId: (...a: unknown[]) => mockResolveBillingOrgId(...a),
-}));
+const post = (body: Record<string, unknown>, headers: Record<string, string> = {}) =>
+  fire({ method: 'POST', url: '/api/v1/video-generations', body, headers });
 
-vi.mock('@server/queueHandlers/videoGeneration', () => ({
-  getVideoGeneration: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
-}));
+describe('POST /api/v1/video-generations', () => {
+  beforeEach(resetHarness);
 
-const JWT_USER = { id: 'jwt-user', _id: 'jwt-user', isBanned: false, disputePending: false };
-vi.mock('@server/auth/auth', async orig => {
-  const actual = await orig<Record<string, unknown>>();
-  return {
-    ...actual,
-    // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
-    auth: (req: any, _res: any, next: any) => {
-      if (!req.user) req.user = JWT_USER;
-      next();
-    },
-  };
-});
-
-import handler from '../video-generations';
-import legacyHandler from '../../ai/generate-video';
-import { questRepository } from '@bike4mind/database';
-import { ApiKeyScope, ApiKeyStatus, VideoQuestSchema, NotFoundError } from '@bike4mind/common';
-
-const VALID_KEY = 'sk-test-valid-key';
-
-function fire({
-  apiKey = VALID_KEY as string | null,
-  body = {},
-}: { apiKey?: string | null; body?: Record<string, unknown> } = {}) {
-  const { req, res } = createMocks(
-    {
-      method: 'POST',
-      url: '/api/v1/video-generations',
-      body: {
-        prompt: 'a drone shot over a foggy pine forest at sunrise',
-        model: 'sora-2',
-        seconds: 4,
-        sessionId: 's1',
-        ...body,
-      },
-      headers: { ...(apiKey ? { 'x-api-key': apiKey } : {}) },
-    },
-    { eventEmitter: EventEmitter }
-  );
-  // any: node-mocks-http mocks aren't structurally the Express Request/Response types.
-  return { req: req as any, res: res as any };
-}
-
-function validateWithScopes(scopes: ApiKeyScope[] | string[]) {
-  mockValidate.mockResolvedValue({
-    isValid: true,
-    keyId: 'k1',
-    userId: 'user-1',
-    scopes,
-    rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
-  });
-}
-
-describe('POST /api/v1/video-generations (integration - contract auth + validation)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
-    mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
-    mockInvoke.mockResolvedValue({ id: 'quest-1', sessionId: 's1', type: 'message' });
-    mockGetOrCreateSession.mockResolvedValue({ session: { id: 's1' }, sessionId: 's1', asyncPromises: [] });
-    mockResolveBillingOrgId.mockImplementation(async (_req: unknown, id: string | null | undefined) => id ?? null);
-    mockAssertUrlAllowed.mockResolvedValue(undefined);
-    mockFindCallbackSigningSecret.mockResolvedValue(null);
-    mockClaimCallbackDispatch.mockResolvedValue(null);
-    mockArmCallback.mockResolvedValue(undefined);
-    mockFindCallbackById.mockResolvedValue(null);
-  });
-
-  it('rejects a key lacking ai:generate (403) before enqueuing the generation', async () => {
+  it('rejects a key lacking ai:generate (403) before creating a job', async () => {
     validateWithScopes([ApiKeyScope.READ_FILES]);
-    const { req, res } = fire();
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'a lighthouse' });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(403);
     expect(res._getJSONData().error).toMatch(/insufficient/i);
-    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 
-  it('accepts a key with ai:generate (200) and enqueues the generation', async () => {
-    validateWithScopes([ApiKeyScope.AI_GENERATE]);
-    const { req, res } = fire();
+  it('labels a session (studio) caller studio and keeps its Idempotency-Key apart from API keys', async () => {
+    h.createVideoJob.mockResolvedValue({
+      ok: true,
+      job: videoJob({ requestedBy: 'jwt-user', source: 'studio' }),
+      created: true,
+    });
+    const { req, res } = fire({
+      method: 'POST',
+      url: '/api/v1/video-generations',
+      apiKey: null,
+      body: { model: 'gemini-omni-1.1-flash', prompt: 'a lighthouse' },
+      headers: { 'idempotency-key': 'ui-1' },
+    });
     await handler(req, res);
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({ quest: { id: 'quest-1' }, session: { id: 's1' } });
-    expect(VideoQuestSchema.safeParse(res._getJSONData().quest).success).toBe(true);
-    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toMatchObject({ source: 'studio' });
+    expect(h.createVideoJob.mock.calls[0][0]).toMatchObject({
+      source: 'studio',
+      idempotencyKey: 'studio:jwt-user:ui-1',
+    });
   });
 
-  it('rejects a body that fails the contract schema (422) before enqueuing the generation', async () => {
+  it('accepts a JWT caller and fills catalog defaults (202)', async () => {
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob({ requestedBy: 'jwt-user' }), created: true });
+    const { req, res } = fire({
+      method: 'POST',
+      url: '/api/v1/video-generations',
+      apiKey: null,
+      body: { model: 'gemini-omni-1.1-flash', prompt: 'a lighthouse' },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toMatchObject({ id: JOB_ID, object: 'video_generation', state: 'pending' });
+    expect(h.createVideoJob).toHaveBeenCalledWith(
+      {
+        user: { id: 'jwt-user', organizationId: null },
+        source: 'studio',
+        request: {
+          model: 'gemini-omni-1.1-flash',
+          mode: 'text_to_video',
+          prompt: 'a lighthouse',
+          durationSeconds: 6,
+          aspectRatio: '16:9',
+          resolution: '720p',
+        },
+      },
+      expect.anything()
+    );
+  });
+
+  it('infers image_to_video from input_image_file_id', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
-    const { req, res } = fire({ body: { prompt: undefined } });
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', input_image_file_id: 'f1' });
+    await handler(req, res);
+    expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({ mode: 'image_to_video', inputImageFileId: 'f1' });
+  });
+
+  it('namespaces the Idempotency-Key per user and returns 202 on replay', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: false });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' }, { 'idempotency-key': 'retry-1' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(h.createVideoJob.mock.calls[0][0].idempotencyKey).toBe('api:user-1:retry-1');
+    expect(h.createVideoJob.mock.calls[0][0].source).toBe('api');
+  });
+
+  it('the same Idempotency-Key from two org members reaches the domain under different keys', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    for (const userId of ['member-a', 'member-b']) {
+      validateWithScopes([ApiKeyScope.AI_GENERATE], userId);
+      asUser(userId, 'org-1');
+      const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' }, { 'idempotency-key': 'shared' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(202);
+    }
+    const keys = h.createVideoJob.mock.calls.map(call => call[0].idempotencyKey);
+    expect(keys).toEqual(['api:member-a:shared', 'api:member-b:shared']);
+    expect(h.createVideoJob.mock.calls.map(call => call[0].user)).toEqual([
+      { id: 'member-a', organizationId: 'org-1' },
+      { id: 'member-b', organizationId: 'org-1' },
+    ]);
+  });
+
+  it('bills the org that resolveBillingOrgId returns', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.resolveBillingOrgId.mockResolvedValue('billing-org');
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
+    await handler(req, res);
+    expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), undefined);
+    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: 'billing-org' });
+  });
+
+  it('falls back to personal billing when the org pointer is stale', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    asUser('user-1', 'left-org');
+    h.resolveBillingOrgId.mockResolvedValue(null);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
+    await handler(req, res);
+    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
+  });
+
+  it.each(['', 'x'.repeat(256), 'bad\u0001key'])('rejects Idempotency-Key %j with 422', async key => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' }, { 'idempotency-key': key });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(422);
-    expect(res._getJSONData().error).toMatch(/prompt/);
-    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
-    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'invalid_idempotency_key' });
+    expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 
-  it('serves the legacy /api/ai/generate-video path with the same handler', () => {
-    expect(legacyHandler).toBe(handler);
+  it.each([
+    [{ status: 422, code: 'unsupported_duration' }, 422],
+    [{ status: 422, code: 'idempotency_key_reused' }, 422],
+    [{ status: 422, code: 'model_unavailable' }, 422],
+    [{ status: 402, code: 'insufficient_credits' }, 422],
+    [{ status: 403, code: 'model_disabled' }, 422],
+    [{ status: 400, code: 'invalid_request' }, 422],
+    [{ status: 404, code: 'input_image_not_found' }, 404],
+  ])('maps a %o refusal to HTTP %i with errorCode', async (refusal, expected) => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: false, message: 'refused', ...refusal });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(expected);
+    expect(res._getJSONData()).toMatchObject({ errorCode: refusal.code });
   });
 
-  it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
-    const { req, res } = fire({ apiKey: null });
+  it('refuses an unknown model as model_unavailable before the domain', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const unknown = post({ model: 'sora-2', prompt: 'p' });
+    await handler(unknown.req, unknown.res);
+    expect(unknown.res._getStatusCode()).toBe(422);
+    expect(unknown.res._getJSONData()).toMatchObject({ errorCode: 'model_unavailable' });
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it('leaves the key check to the domain, so a same-key retry replays after the key is removed', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.hasUsableKey.mockResolvedValue(false);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: false });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' }, { 'idempotency-key': 'retry-1' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toMatchObject({ id: videoJob().id });
+    expect(h.createVideoJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a body without a prompt (422) before the domain', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown key such as the removed callbackUrl (422), naming it', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({
+      model: 'gemini-omni-1.1-flash',
+      prompt: 'p',
+      callbackUrl: 'https://example.com/hook',
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ error: expect.stringContaining('Unrecognized key: "callbackUrl"') });
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects camelCase field names (422) rather than silently applying the catalog default', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', durationSeconds: 3 });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/v1/video-generations', () => {
+  beforeEach(resetHarness);
+  const id = (n: number) => `664f1c2b9a1e4d0012ab34${n.toString(16).padStart(2, '0')}`;
+  const list = (query: Record<string, string> = {}) => fire({ url: '/api/v1/video-generations', query });
+  const forgeCursor = (after: string) =>
+    Buffer.from(JSON.stringify({ v: 1, s: 'v1.video-generations', after }), 'utf8').toString('base64url');
+
+  it('pages newest first across two pages with an opaque cursor', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.listByRequester
+      .mockResolvedValueOnce([videoJob({ id: id(3) }), videoJob({ id: id(2) }), videoJob({ id: id(1) })])
+      .mockResolvedValueOnce([videoJob({ id: id(1) })]);
+
+    const first = list({ limit: '2' });
+    await handler(first.req, first.res);
+    const page1 = first.res._getJSONData();
+    expect(page1.data.map((job: { id: string }) => job.id)).toEqual([id(3), id(2)]);
+    expect(page1.next_cursor).toEqual(expect.any(String));
+    expect(h.listByRequester).toHaveBeenLastCalledWith({
+      requestedBy: 'user-1',
+      kind: 'video',
+      state: undefined,
+      source: undefined,
+      beforeId: undefined,
+      limit: 3,
+    });
+
+    const second = list({ limit: '2', cursor: page1.next_cursor });
+    await handler(second.req, second.res);
+    expect(second.res._getJSONData()).toEqual({ data: [expect.objectContaining({ id: id(1) })], next_cursor: null });
+    expect(h.listByRequester).toHaveBeenLastCalledWith(expect.objectContaining({ beforeId: id(2), limit: 3 }));
+  });
+
+  it('passes the state and source filters through', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.listByRequester.mockResolvedValue([]);
+    const { req, res } = list({ state: 'succeeded', source: 'api' });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(mockValidate).not.toHaveBeenCalled();
-    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(h.listByRequester).toHaveBeenCalledWith(expect.objectContaining({ state: 'succeeded', source: 'api' }));
   });
 
-  describe('callbackUrl', () => {
-    it('rejects a callbackUrl from a JWT caller (400) before enqueuing - no per-key signing secret to arm', async () => {
-      const { req, res } = fire({ apiKey: null, body: { callbackUrl: 'https://example.com/hook' } });
-      await handler(req, res);
-      expect(res._getStatusCode()).toBe(400);
-      expect(res._getJSONData().error).toMatch(/api key/i);
-      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
-      expect(mockInvoke).not.toHaveBeenCalled();
-    });
-
-    it('rejects a non-https callbackUrl (422) before enqueuing', async () => {
-      validateWithScopes([ApiKeyScope.AI_GENERATE]);
-      const { req, res } = fire({ body: { callbackUrl: 'http://example.com/hook' } });
+  it('422s a malformed cursor, a cursor carrying a non-ObjectId, and an unknown state', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    for (const query of [{ cursor: 'garbage' }, { cursor: forgeCursor('not-an-object-id') }, { state: 'done' }]) {
+      const { req, res } = list(query);
       await handler(req, res);
       expect(res._getStatusCode()).toBe(422);
-      expect(res._getJSONData().error).toMatch(/callbackUrl|https/i);
-      expect(mockInvoke).not.toHaveBeenCalled();
-    });
-
-    it('rejects an API-key callbackUrl with 400 on a deployment with no callback queue', async () => {
-      validateWithScopes([ApiKeyScope.AI_GENERATE]);
-      mockGetGenerationCallbackQueueUrl.mockReturnValueOnce(undefined);
-      const { req, res } = fire({ body: { callbackUrl: 'https://example.com/hook' } });
-      await handler(req, res);
-      expect(res._getStatusCode()).toBe(400);
-      expect(res._getJSONData().error).toMatch(/not supported on this deployment/);
-      expect(mockInvoke).not.toHaveBeenCalled();
-    });
-
-    it('rejects an API-key caller whose key has no callback signing secret (400) before enqueuing', async () => {
-      validateWithScopes([ApiKeyScope.AI_GENERATE]);
-      mockFindCallbackSigningSecret.mockResolvedValue(null);
-      const { req, res } = fire({ body: { callbackUrl: 'https://example.com/hook' } });
-      await handler(req, res);
-      expect(res._getStatusCode()).toBe(400);
-      expect(res._getJSONData().error).toMatch(/\/api\/user-api-keys\/k1\/callback-secret/);
-      expect(mockInvoke).not.toHaveBeenCalled();
-    });
-
-    it('arms a pending callback on the quest for an API-key caller with a signing secret (200)', async () => {
-      validateWithScopes([ApiKeyScope.AI_GENERATE]);
-      mockFindCallbackSigningSecret.mockResolvedValue({
-        secret: 'whsec_test',
-        userId: 'user-1',
-        status: ApiKeyStatus.ACTIVE,
-      });
-      mockArmCallback.mockImplementation(async (_questId: string, target: { url: string; apiKeyId: string }) => {
-        mockFindCallbackById.mockResolvedValue({ ...target, state: 'pending' });
-      });
-      const { req, res } = fire({ body: { callbackUrl: 'https://example.com/hook' } });
-
-      await handler(req, res);
-
-      expect(res._getStatusCode()).toBe(200);
-      expect(mockArmCallback).toHaveBeenCalledWith('quest-1', { url: 'https://example.com/hook', apiKeyId: 'k1' });
-      await expect(questRepository.findCallbackById('quest-1')).resolves.toEqual({
-        url: 'https://example.com/hook',
-        apiKeyId: 'k1',
-        state: 'pending',
-      });
-    });
+    }
+    expect(h.listByRequester).not.toHaveBeenCalled();
   });
 
-  describe('caller scoping', () => {
-    it('rejects an organizationId the caller is not a member of (404) before enqueuing', async () => {
-      mockResolveBillingOrgId.mockRejectedValue(new NotFoundError('Organization not found'));
-      const { req, res } = fire({ apiKey: null, body: { organizationId: 'foreign-org' } });
-      await handler(req, res);
-      expect(res._getStatusCode()).toBe(404);
-      expect(mockResolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), 'foreign-org');
-      expect(mockInvoke).not.toHaveBeenCalled();
-    });
-
-    it('rejects a sessionId the caller cannot write to (404) before enqueuing', async () => {
-      mockGetOrCreateSession.mockRejectedValue(new NotFoundError('Session not found'));
-      const { req, res } = fire({ apiKey: null, body: { sessionId: 'foreign' } });
-      await handler(req, res);
-      expect(res._getStatusCode()).toBe(404);
-      expect(mockGetOrCreateSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'foreign' }));
-      expect(mockInvoke).not.toHaveBeenCalled();
-    });
+  it("never returns another member's jobs", async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE], 'member-a');
+    asUser('member-a', 'org-1');
+    h.listByRequester.mockResolvedValue([]);
+    const { req, res } = list();
+    await handler(req, res);
+    expect(h.listByRequester).toHaveBeenCalledWith(expect.objectContaining({ requestedBy: 'member-a' }));
+    expect(h.listByRequester.mock.calls[0][0]).not.toHaveProperty('ownerId');
   });
 });

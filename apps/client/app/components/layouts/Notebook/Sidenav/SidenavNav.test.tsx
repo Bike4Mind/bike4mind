@@ -12,15 +12,18 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * page, so its row could never appear on its own. Feature FLAGS still gate, and
  * still fail closed.
  */
-const { useFeatureEnabledMock, useGearsNavSignalMock } = vi.hoisted(() => ({
+const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
   useGearsNavSignalMock: vi.fn(),
+  useVideoModelsMock: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: useFeatureEnabledMock }),
 }));
 vi.mock('@client/app/hooks/useVisibleGears', () => ({ useGearsNavSignal: useGearsNavSignalMock }));
+// The row is gated on GET /api/v1/video-models (react-query); stubbed like the other data hooks here.
+vi.mock('@client/app/hooks/data/videoGenerations', () => ({ useVideoModels: useVideoModelsMock }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
 }));
@@ -70,6 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
   useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 0 });
+  useVideoModelsMock.mockReturnValue({ data: [] });
 });
 
 describe('SidenavNav feature rows', () => {
@@ -124,5 +128,23 @@ describe('SidenavNav Gears row tag', () => {
     renderNav();
     expect(rewards()).toBeInTheDocument();
     expect(startHere()).not.toBeInTheDocument();
+  });
+});
+
+describe('SidenavNav Video Studio row', () => {
+  const videoRow = () => screen.queryByTestId('sidenav-nav-video-studio');
+
+  it('shows when at least one video model is usable', () => {
+    useVideoModelsMock.mockReturnValue({ data: [{ id: 'grok-imagine-video-1.5' }] });
+    renderNav();
+    expect(videoRow()).toHaveTextContent('Video Studio');
+  });
+
+  it('hides when no model is usable or the models have not loaded', () => {
+    renderNav();
+    expect(videoRow()).not.toBeInTheDocument();
+    useVideoModelsMock.mockReturnValue({ data: undefined });
+    renderNav();
+    expect(videoRow()).not.toBeInTheDocument();
   });
 });

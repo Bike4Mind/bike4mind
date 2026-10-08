@@ -57,6 +57,7 @@ import {
 import { ContextUsageWarning } from '../ContextUsageWarning';
 import { useAttachmentFitWarning } from '@client/app/hooks/useAttachmentFitWarning';
 import { ContextCompactionNote } from '../ContextCompactionNote';
+import { MemberCreditBudgetNote } from '../MemberCreditBudgetNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
@@ -642,6 +643,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   turns={compactedTurns}
                   onDismiss={() => setCompactionNoteDismissed(true)}
                 />
+                {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
                 {creditUi.replaceComposer ? (
                   <CreditsWarning show />
                 ) : (
