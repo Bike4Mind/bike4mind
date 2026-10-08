@@ -181,6 +181,14 @@ describe('fetchUpstreamFeed', () => {
     expect(mockSafeFetch).toHaveBeenCalledTimes(1);
   });
 
+  it.each([401, 403, 404])('does not open an outage window on a %d for a cursor page', async status => {
+    // A rejected cursor ends only that list; treating it as a misconfigured feed would black out every caller.
+    mockSafeFetch.mockResolvedValueOnce(json({}, status)).mockResolvedValue(json(PAGE));
+    expect(await fetchOnce({ limit: 5, cursor: 'c' })).toBeNull();
+    expect(await fetchOnce()).toEqual(PAGE);
+    expect(mockSafeFetch).toHaveBeenCalledTimes(2);
+  });
+
   it('does not open an outage window on a 4xx caused by the request', async () => {
     mockSafeFetch.mockResolvedValueOnce(json({}, 422)).mockResolvedValue(json(PAGE));
     expect(await fetchOnce({ limit: 5, cursor: 'bad' })).toBeNull();

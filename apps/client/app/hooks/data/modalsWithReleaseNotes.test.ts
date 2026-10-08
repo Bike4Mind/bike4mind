@@ -62,6 +62,8 @@ describe('useModalsWithReleaseNotes', () => {
 
     await waitFor(() => expect(result.current.data?.map(m => m._id)).toEqual(['m1']));
     expect(result.current.isPending).toBe(false);
+    // The slider only shows "no news" once the feed has settled, so the false state is load-bearing.
+    await waitFor(() => expect(result.current.slidesPending).toBe(false));
   });
 
   it('does not wait for a slow feed before returning the modals', async () => {
@@ -70,6 +72,8 @@ describe('useModalsWithReleaseNotes', () => {
     const { result } = renderHook(() => useModalsWithReleaseNotes(), { wrapper: createWrapper() });
 
     await waitFor(() => expect(result.current.data?.map(m => m._id)).toEqual(['m1']));
+    // While the feed is in flight the slider must withhold "no news"; a hard-coded false would show it early.
+    expect(result.current.slidesPending).toBe(true);
   });
 
   it('refetch resolves with both sources merged', async () => {

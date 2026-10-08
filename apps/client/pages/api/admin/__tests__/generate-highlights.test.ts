@@ -36,6 +36,7 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => mockSend
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
 
 import handler from '../generate-highlights';
+import { HIGHLIGHTS_NOTE_LIMIT } from '@server/whatsNew/releaseNoteHighlights';
 
 const logger = { warn: vi.fn(), log: vi.fn(), info: vi.fn(), error: vi.fn() };
 
@@ -86,5 +87,19 @@ describe('POST /api/admin/generate-highlights dry run', () => {
     expect(mockFindPublishedBetween).not.toHaveBeenCalled();
     expect(body).toMatchObject({ dryRun: true, skipped: true, modalCount: 0, modals: [] });
     expect(body.message).toContain('disabled');
+  });
+
+  it('reports a truncated range by the note limit, not the post-denylist count', async () => {
+    const notes = Array.from({ length: HIGHLIGHTS_NOTE_LIMIT + 1 }, (_, index) =>
+      note(String(index), index === 0 ? 'secret project' : `Note ${index}`)
+    );
+    mockFindPublishedBetween.mockResolvedValue(notes);
+
+    const { body } = await dryRun();
+
+    expect(body.truncated).toBe(true);
+    expect(body.message).toContain(`more than ${HIGHLIGHTS_NOTE_LIMIT}`);
+    // One of the newest notes is denylisted, so the previewed count is below the limit the message states.
+    expect(body.modalCount).toBe(HIGHLIGHTS_NOTE_LIMIT - 1);
   });
 });

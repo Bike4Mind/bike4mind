@@ -71,4 +71,16 @@ describe('WhatsNewSliderModal no-news state', () => {
     render(ui());
     expect(screen.getByTestId('no-news-ok-btn')).toBeTruthy();
   });
+
+  it('dismisses an already-showing no-news once slides arrive', () => {
+    mocks.modals = { data: [], isPending: false, slidesPending: false, refetch: vi.fn() };
+    const { rerender } = render(ui());
+    expect(screen.getByTestId('no-news-ok-btn')).toBeTruthy();
+
+    mocks.modals = { data: [slide], isPending: false, slidesPending: false, refetch: vi.fn() };
+    rerender(ui());
+
+    expect(screen.queryByTestId('no-news-ok-btn')).toBeNull();
+    expect(screen.getAllByText('Faster search').length).toBeGreaterThan(0);
+  });
 });
