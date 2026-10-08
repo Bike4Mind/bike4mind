@@ -62,9 +62,6 @@ vi.mock('@server/cli/resolveContractAuth', () => ({ resolveContractAuth: mockRes
 
 vi.mock('@server/cli/auth', () => ({
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
-  // Mirrors the real helper; its own behavior is covered in auth.test.ts.
-  resolveRateLimitClient: (headers: Record<string, string | undefined>) =>
-    headers['user-agent'] ?? headers['x-b4m-client'],
   checkApiKeyRateLimitOrThrow: vi.fn().mockResolvedValue(undefined),
 }));
 
