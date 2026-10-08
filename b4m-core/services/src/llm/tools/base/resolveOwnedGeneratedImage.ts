@@ -12,6 +12,9 @@ export type OwnedGeneratedImageContext = Pick<ToolContext, 'userId' | 'db' | 'im
  * OWN it: a quest referencing the key belongs to a session whose `userId` is the caller. Unlike
  * userCanAccessGeneratedImage (apps/client/server/utils/generatedImageAccess.ts), which also serves
  * share recipients for viewing, a share does not count here - a tool call derives new content.
+ * Caveat: this guards the bare-key route only. While the CDN serves `/generated/<key>` publicly
+ * (infra/buckets.ts), anyone holding a key can fetch it directly, so this is not yet a
+ * confidentiality boundary.
  *
  * Throws NotFoundError with one message for a malformed key, an unknown key, a key owned by someone
  * else, and a host that did not wire the lookup (fail closed), so the outcome reveals nothing about
