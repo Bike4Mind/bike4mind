@@ -113,8 +113,10 @@ async function fetchPage(
     ]);
     if (!response.ok) {
       logger.warn('[whats-new] upstream feed returned a non-200 status', { status: response.status });
-      // A 4xx (say, a bad cursor) is about this request, not the upstream, so it must not trip the outage.
-      const requestError = response.status >= 400 && response.status < 500 && response.status !== 429;
+      // Most 4xx (a bad cursor, a limit an older upstream rejects) are about this request and must not trip the
+      // outage. A 401/403/404 on the first page means the feed URL itself is wrong or refused, so it does.
+      const misconfigured = cursor === undefined && [401, 403, 404].includes(response.status);
+      const requestError = !misconfigured && response.status >= 400 && response.status < 500 && response.status !== 429;
       return { page: null, upstreamDown: !requestError };
     }
     const text = await Promise.race([readCapped(response), timeout]);

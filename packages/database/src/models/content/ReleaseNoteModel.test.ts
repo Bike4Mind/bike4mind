@@ -124,7 +124,7 @@ describe('ReleaseNoteRepository.findPublishedBetween', () => {
       makeNote({ releaseTag: 'hidden', publishAt: new Date('2026-01-03T00:00:00Z'), status: 'hidden' })
     );
 
-    const notes = await releaseNoteRepository.findPublishedBetween(start, end, new Date('2026-02-01T00:00:00Z'));
+    const notes = await releaseNoteRepository.findPublishedBetween(start, end, new Date('2026-02-01T00:00:00Z'), 50);
     expect(notes.map(n => n.releaseTag)).toEqual(['last', 'first']);
   });
 
@@ -135,7 +135,7 @@ describe('ReleaseNoteRepository.findPublishedBetween', () => {
       makeNote({ releaseTag: 'embargoed', publishAt: new Date('2026-01-06') })
     );
 
-    const notes = await releaseNoteRepository.findPublishedBetween(start, end, now);
+    const notes = await releaseNoteRepository.findPublishedBetween(start, end, now, 50);
     expect(notes.map(n => n.releaseTag)).toEqual(['live']);
   });
 

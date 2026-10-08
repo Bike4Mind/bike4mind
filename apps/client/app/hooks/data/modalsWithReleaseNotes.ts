@@ -45,5 +45,5 @@ export function useModalsWithReleaseNotes() {
     return { data: merge(freshModals.data, freshSlides.data) };
   }, [refetchModals, refetchSlides]);
 
-  return { data, isPending: modals.isPending, refetch };
+  return { data, isPending: modals.isPending, slidesPending: slides.isPending, refetch };
 }

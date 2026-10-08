@@ -9,7 +9,11 @@ import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import type { WhatsNewHighlightsPayload } from '@server/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
-import { loadHighlightsReleaseNotes, parseHighlightsEndDate } from '@server/whatsNew/releaseNoteHighlights';
+import {
+  HIGHLIGHTS_NOTE_LIMIT,
+  loadHighlightsReleaseNotes,
+  parseHighlightsEndDate,
+} from '@server/whatsNew/releaseNoteHighlights';
 
 // Rate limiting - 1 request per minute to prevent abuse
 const GENERATE_RATE_LIMIT = 1;
@@ -99,7 +103,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
             releaseNotes.kind === 'disabled'
               ? 'Dry run complete: release notes are disabled, so generation would be skipped'
               : releaseNotes.truncated
-                ? `Dry run complete: the range holds more than ${entries.length} release notes; only the newest ${entries.length} would be summarized`
+                ? `Dry run complete: the range holds more than ${HIGHLIGHTS_NOTE_LIMIT} release notes; only the newest ${HIGHLIGHTS_NOTE_LIMIT} would be summarized`
                 : `Dry run complete: found ${entries.length} release notes`,
           truncated: releaseNotes.kind === 'ok' && releaseNotes.truncated,
           dateRange: { startDate: startDateStr, endDate: endDateStr },

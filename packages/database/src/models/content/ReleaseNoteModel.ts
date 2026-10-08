@@ -118,7 +118,7 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
   }
 
   /** Notes published within [start, end] and visible at `now`, newest first. */
-  async findPublishedBetween(start: Date, end: Date, now: Date, limit = 50): Promise<IReleaseNoteDocument[]> {
+  async findPublishedBetween(start: Date, end: Date, now: Date, limit: number): Promise<IReleaseNoteDocument[]> {
     const upTo = end < now ? end : now;
     return this.model
       .find({ status: 'scheduled', publishAt: { $gte: start, $lte: upTo } })

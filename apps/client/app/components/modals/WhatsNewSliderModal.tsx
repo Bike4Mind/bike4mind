@@ -257,12 +257,13 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
 
     if (activeModals.length > 0) {
       setActiveModalList(activeModals);
+      setShowNoNewsModal(false);
       setIsOpen(true);
-    } else {
-      // Only show "no news" modal after confirming data is fully loaded
+    } else if (!modals.slidesPending) {
+      // Release-note slides can land after the modals, so "no news" waits for them rather than hiding them
       setShowNoNewsModal(true);
     }
-  }, [activeModals, counters.isPending, counters.data, modals.data, currentUser]);
+  }, [activeModals, counters.isPending, counters.data, modals.data, modals.slidesPending, currentUser]);
 
   // Telemetry: Track modal opening
   useEffect(() => {

@@ -174,9 +174,23 @@ describe('fetchUpstreamFeed', () => {
     expect(mockSafeFetch).toHaveBeenCalledTimes(2);
   });
 
+  it.each([401, 403, 404])('opens an outage window on a %d for the first page', async status => {
+    mockSafeFetch.mockResolvedValueOnce(json({}, status)).mockResolvedValue(json(PAGE));
+    expect(await fetchOnce()).toBeNull();
+    expect(await fetchOnce({ limit: 7 })).toBeNull();
+    expect(mockSafeFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('does not open an outage window on a 4xx caused by the request', async () => {
     mockSafeFetch.mockResolvedValueOnce(json({}, 422)).mockResolvedValue(json(PAGE));
     expect(await fetchOnce({ limit: 5, cursor: 'bad' })).toBeNull();
+    expect(await fetchOnce()).toEqual(PAGE);
+    expect(mockSafeFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not open an outage window on a first-page 422 for an out-of-range limit', async () => {
+    mockSafeFetch.mockResolvedValueOnce(json({}, 422)).mockResolvedValue(json(PAGE));
+    expect(await fetchOnce({ limit: 100 })).toBeNull();
     expect(await fetchOnce()).toEqual(PAGE);
     expect(mockSafeFetch).toHaveBeenCalledTimes(2);
   });

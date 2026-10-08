@@ -1,14 +1,8 @@
 import { releaseNoteRepository, type IReleaseNoteDocument } from '@bike4mind/database';
-import type { ReleaseNoteCategory } from '@bike4mind/common';
+import { groupReleaseNoteItems } from '@client/app/utils/releaseNoteItems';
 import type { Logger } from '@bike4mind/observability';
 import { findDeniedInNote, loadReleaseNotesConfig } from '@server/releaseNotes/adminReleaseNotes';
 import type { ModalForHighlights } from './whatsNewHighlights.types';
-
-const CATEGORY_HEADINGS: Array<[ReleaseNoteCategory, string]> = [
-  ['new', 'New'],
-  ['improved', 'Improved'],
-  ['fixed', 'Fixed'],
-];
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -19,10 +13,7 @@ export const parseHighlightsEndDate = (value: string): Date =>
 /** Adapts a release note into the entry the weekly highlights prompt summarizes. */
 export function releaseNoteToHighlightsEntry(note: IReleaseNoteDocument): ModalForHighlights {
   const sections = [note.summary.trim()].filter(Boolean);
-  for (const [category, heading] of CATEGORY_HEADINGS) {
-    // importance 1 is the most notable, so ascending order leads with it
-    const items = note.items.filter(item => item.category === category).sort((a, b) => a.importance - b.importance);
-    if (items.length === 0) continue;
+  for (const { heading, items } of groupReleaseNoteItems(note.items)) {
     sections.push(`${heading}:\n${items.map(item => `- ${item.text}`).join('\n')}`);
   }
   return {
