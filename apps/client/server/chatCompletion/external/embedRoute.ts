@@ -64,6 +64,7 @@ import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage
 import { hydrateEmbedAgent } from './embedAgentHydration';
 import { resolveEmbedTools } from './embedToolResolver';
 import { Config } from '@server/utils/config';
+import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
 
 /**
@@ -397,6 +398,10 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
     const write = (chunk: string) => {
       if (!res.writableEnded) res.write(chunk);
     };
+    // Aborting on client disconnect stops the backend stream AND the tool loop, so a
+    // closed embed tab cannot keep billing the owner org through the remaining turns.
+    const abortController = new AbortController();
+    res.on('close', () => abortController.abort());
 
     try {
       if (mongoose.connection.readyState !== 1) {
@@ -584,10 +589,6 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // --- Server-side tools (built pre-stream so a failure is a clean JSON 500) ---
-      // Aborting on client disconnect stops the backend stream AND the tool loop, so a
-      // closed embed tab cannot keep billing the owner org through the remaining turns.
-      const abortController = new AbortController();
-      res.on('close', () => abortController.abort());
       const serverTools = await buildEmbedServerTools({
         apiKeys: embedApiKeys,
         models: embedModels,
@@ -682,6 +683,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       logger.error('[EMBED_CHAT] Handler error', {
         error: error instanceof Error ? error.message : String(error),
       });
+      track(emitProcessingFailed('embed', error));
       if (streaming) {
         // Classify billing/policy failures so the embedding client can branch on
         // `code` instead of parsing message text.

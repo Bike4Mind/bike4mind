@@ -225,6 +225,15 @@ describe('ToolsSection complexity auto-route gating', () => {
   });
 });
 
+describe('ToolsSection video generation row', () => {
+  it('renders the video generation row and dims it when server availability reports it off', () => {
+    mocks.toolAvailability.value = { video_generation: false };
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(container.querySelector('.tool-item-video-generation')).toBeTruthy();
+    expect(gated(container, 'tool-item-video-generation')).toBeTruthy();
+  });
+});
+
 // A tool whose required API key is missing (serverConfig.toolAvailability[id] ===
 // false) must be dimmed regardless of mode - otherwise it silently returns empty
 // results. Availability that hasn't loaded yet (undefined) must NOT gate.

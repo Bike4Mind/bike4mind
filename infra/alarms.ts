@@ -1395,14 +1395,14 @@ if (isMonitoredStage) {
    * users before anyone noticed), so this alarms on the raw failure count rather than waiting for
    * a single error class to dominate.
    *
-   * Metric emitted by: apps/client/server/chatCompletion/internal/route.ts, in the
-   * processQuest(...).catch handler. Reads the Stage-only rollup datum (see the comment at that
-   * call site) - alarms match one exact dimension set, so the per-ErrorClass breakdown is a
-   * dashboard concern, not this alarm's.
+   * Metric emitted by: apps/client/server/chatCompletion/processingFailedMetric.ts, from the
+   * failure path of internal /process. The CLI SSE/WS and embed chat surfaces emit the same metric
+   * under their own Surface value but are deliberately not alarmed until a base rate exists: their
+   * failure definition differs and embed takes public traffic. Alarms match one exact dimension set.
    */
   new aws.cloudwatch.MetricAlarm('questProcessingFailures', {
     name: `${$app.name}-${$app.stage}-quest-processing-failures`,
-    alarmDescription: 'Quest processing is failing on the internal ChatCompletion /process path',
+    alarmDescription: 'Quest processing (/process) is failing on the ChatCompletion service',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
     metricName: QUEST_METRICS.ProcessingFailed,
@@ -1411,7 +1411,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 5,
     treatMissingData: 'notBreaching',
-    dimensions: { Stage: $app.stage },
+    dimensions: { Stage: $app.stage, Surface: '/process' },
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Quests',

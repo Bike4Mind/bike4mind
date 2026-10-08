@@ -58,6 +58,7 @@ import {
   getSettingByName,
   getSettingsMap,
   getSettingsValue,
+  HTTPError,
   NotFoundError,
   ForbiddenError,
   TooManyRequestsError,
@@ -145,6 +146,8 @@ import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
+import { resolveVideoToolConfigSafely } from './resolveVideoToolConfigSafely';
+import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -561,6 +564,29 @@ export function isAbortError(error: unknown): boolean {
 
 export function isStreamIdleTimeoutError(error: Error): boolean {
   return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
+}
+
+/**
+ * True when a completion failure is a service fault worth counting on the operator
+ * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
+ * (billing, abort, request/stream timeout, tool pairing, overloaded, context overflow), which
+ * resolve the quest without rethrowing and so never reached /process's failure path. It is not an
+ * exact mirror: the handler matches timeouts case-sensitively and rethrows 4xx HTTPErrors (so
+ * /process counts them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and
+ * embed routes call this; /process does not.
+ */
+export function isOperatorFault(error: unknown): boolean {
+  if (resolveQuestErrorCode(error)) return false;
+  if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
+  if (!(error instanceof Error)) return true;
+  return !(
+    isAbortError(error) ||
+    isRequestTimeoutError(error) ||
+    isStreamIdleTimeoutError(error) ||
+    isToolPairingError(error) ||
+    isOverloadedError(error) ||
+    error.message.startsWith('Your request is too large for')
+  );
 }
 
 /**
@@ -1691,6 +1717,7 @@ export class ChatCompletionProcess {
     prefetchedSession,
     prefetchedOrganization,
     externalTools,
+    videoToolConfigResolver,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -1703,6 +1730,8 @@ export class ChatCompletionProcess {
     prefetchedOrganization?: IOrganizationDocument | null;
     /** External tool definitions (e.g., Slack tools) that can't be serialized through EventBridge */
     externalTools?: Record<string, ToolDefinition>;
+    /** Resolves the video tool's capability; only invoked when video_generation is enabled. */
+    videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
@@ -3037,6 +3066,10 @@ export class ChatCompletionProcess {
         (dataSources as any).remainingUserPrompt = urlResult.remainingPrompt;
       }
 
+      const videoToolConfig = enabledTools.includes('video_generation')
+        ? await resolveVideoToolConfigSafely(videoToolConfigResolver, logger)
+        : null;
+
       let allTools = toolBuilder.buildTools({
         enabledTools,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
@@ -3062,6 +3095,7 @@ export class ChatCompletionProcess {
           edit_image: imageConfig,
           audio_generation: audioConfig,
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
+          video_generation: videoToolConfig ?? undefined,
         },
         model,
         organization,

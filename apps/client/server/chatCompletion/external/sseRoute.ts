@@ -33,6 +33,7 @@ import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { createCompletionContract } from '@bike4mind/common';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@server/utils/config';
+import { emitProcessingFailed } from '../processingFailedMetric';
 import { createMethodGuard } from '@server/utils/allowedMethods';
 import { z } from 'zod';
 
@@ -260,6 +261,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       logger.error('[CLI_LLM] Handler error', { error: error instanceof Error ? error.message : String(error) });
+      track(emitProcessingFailed('cli-sse', error));
 
       if (userId && body) {
         await logCompletionAnalytics({

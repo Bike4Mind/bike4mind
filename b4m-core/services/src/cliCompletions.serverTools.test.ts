@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BadRequestError } from '@bike4mind/common';
 
 // Captures what executeCompletion actually hands the backend, so these tests pin the
 // serverTools contract: opt-in server-side execution without disturbing the legacy
@@ -165,14 +166,14 @@ describe('executeCompletion - serverTools opt-in', () => {
     const { db, users, organizations } = buildDb();
     const wireTool = { toolSchema: { name: 'client_tool', description: 'x', parameters: { type: 'object' } } };
 
-    await expect(
-      executeCompletion({
-        ...baseParams,
-        db,
-        serverTools: [makeServerTool('search_knowledge_base')],
-        options: { tools: [wireTool as any] },
-      })
-    ).rejects.toThrow(/mutually exclusive/);
+    const rejection = executeCompletion({
+      ...baseParams,
+      db,
+      serverTools: [makeServerTool('search_knowledge_base')],
+      options: { tools: [wireTool as any] },
+    });
+    await expect(rejection).rejects.toThrow(/mutually exclusive/);
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
 
     expect(users.incrementCredits).not.toHaveBeenCalled();
     expect(organizations.incrementCredits).not.toHaveBeenCalled();

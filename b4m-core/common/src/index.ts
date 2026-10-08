@@ -47,6 +47,7 @@ export * from './constants/lakeConvergence';
 export * from './constants/convergenceProvenance';
 export * from './constants/lakeAccessAudit';
 export * from './constants/feedbackRetention';
+export * from './constants/mfaLockout';
 export * from './constants/lakeConfigAudit';
 export * from './constants/lakeMembershipChangeAudit';
 export * from './constants/forcedRetrieval';

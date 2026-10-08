@@ -21,6 +21,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     aspectRatios: ['16:9', '9:16'],
     resolutions: ['720p'],
     defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
+    typicalRenderSeconds: 8,
     audio: 'none',
     pricing: { unit: 'per_second', usdByResolution: { '720p': 0.01 } },
     defaultEnabled: true,
@@ -34,6 +35,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     aspectRatios: ['16:9', '9:16'],
     resolutions: ['720p'],
     defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '720p' },
+    typicalRenderSeconds: 90,
     audio: 'always',
     pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1014 } },
     // Off until the live provider check passes; an admin enables it per stage via videoGeneration.enabledModels.
@@ -48,6 +50,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'],
     resolutions: ['480p', '720p'],
     defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '480p' },
+    typicalRenderSeconds: 60,
     audio: 'always',
     // Measured from usage.cost_in_usd_ticks (1e10 ticks = $1) on live 2s 480p and 1s 720p clips.
     pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.14 } },
@@ -63,6 +66,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     // 1080p ($0.12/s) and 4k are documented only for 8s clips, which a per-model duration list cannot express.
     resolutions: ['720p'],
     defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
+    typicalRenderSeconds: 90,
     audio: 'always',
     pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
     defaultEnabled: true,

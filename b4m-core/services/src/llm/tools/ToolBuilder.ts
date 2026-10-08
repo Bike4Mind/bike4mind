@@ -276,7 +276,12 @@ export function applyQuestStatusChanges(
   changes: Partial<IChatHistoryItemDocument>,
   userId: string
 ): void {
-  const { promptMeta: changedPromptMeta, images: changedImages, ...otherChanges } = changes;
+  const {
+    promptMeta: changedPromptMeta,
+    images: changedImages,
+    videoJobIds: changedVideoJobIds,
+    ...otherChanges
+  } = changes;
 
   if (changedPromptMeta && quest.promptMeta) {
     const mergedCitables = [...(quest.promptMeta.citables || []), ...(changedPromptMeta.citables || [])];
@@ -350,6 +355,10 @@ export function applyQuestStatusChanges(
       }
     }
     quest.images = accumulated;
+  }
+
+  if (changedVideoJobIds) {
+    quest.videoJobIds = [...new Set([...(quest.videoJobIds ?? []), ...changedVideoJobIds])];
   }
 
   Object.assign(quest, otherChanges);
@@ -881,6 +890,7 @@ export class ToolBuilder {
             }
           }
 
+          // video_generation bills in createVideoJob, not here.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} started with data: ${JSON.stringify(data)}`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;

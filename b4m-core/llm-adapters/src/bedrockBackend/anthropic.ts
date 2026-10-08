@@ -3,6 +3,7 @@ import {
   ChatModels,
   createThinkMarkerEscaper,
   IMessage,
+  isBedrockRegionProfileId,
   MessageContentText,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
@@ -873,8 +874,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     }
 
     // Check if model ID needs to be transformed
-    const hasVendorPrefix =
-      model.includes(':') || model.startsWith('global.') || model.startsWith('us.') || model.startsWith('anthropic.');
+    const hasVendorPrefix = model.includes(':') || isBedrockRegionProfileId(model) || model.startsWith('anthropic.');
     const modelId = hasVendorPrefix ? model : `anthropic.${model}`;
 
     // Ensure maxTokens is always provided and is a number
