@@ -19,4 +19,9 @@ describe('machine payload schemas', () => {
     expect(delegationPayloadSchema.safeParse({ targetActorId: '', task: 'do it' }).success).toBe(false);
     expect(delegationPayloadSchema.safeParse({ targetActorId: 'a1', task: '' }).success).toBe(false);
   });
+
+  it('caps the delegation task at 4000 characters', () => {
+    expect(delegationPayloadSchema.safeParse({ targetActorId: 'a1', task: 'a'.repeat(4000) }).success).toBe(true);
+    expect(delegationPayloadSchema.safeParse({ targetActorId: 'a1', task: 'a'.repeat(4001) }).success).toBe(false);
+  });
 });

@@ -244,6 +244,13 @@ describe('hearthTools', () => {
     });
   });
 
+  it('hearth_delegate rejects a task over the 4000-character cap without posting', async () => {
+    await expect(
+      getTool('hearth_delegate').toolFn({ channel_id: 'ch-1', target_actor_id: 'actor-42', task: 'a'.repeat(4001) })
+    ).rejects.toThrow();
+    expect(service.postEvent).not.toHaveBeenCalled();
+  });
+
   it('hearth_delegate payload keys cannot clobber the canonical fields', async () => {
     await getTool('hearth_delegate').toolFn({
       channel_id: 'ch-1',

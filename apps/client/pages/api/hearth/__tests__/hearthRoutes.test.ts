@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
+import { ZodError } from 'zod';
+import { ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 const {
   getOwnedChannelMock,
@@ -350,6 +352,11 @@ describe('POST /api/hearth/events origin', () => {
     expect(originOf()).toBe('api-key');
   });
 
+  it('stamps api-key for an API-key caller even when the body claims session', async () => {
+    await post()(withApiKey(makeReq({ channelId: 'ch-1', human: { text: 'hi' }, origin: 'session' })), makeRes());
+    expect(originOf()).toBe('api-key');
+  });
+
   it('stamps gateway when the resolved actor is a gateway', async () => {
     ensureActorMock.mockResolvedValueOnce({ _id: { toString: () => 'gw-1' }, displayName: 'slack', kind: 'gateway' });
     await post()(
@@ -385,7 +392,7 @@ describe('POST /api/hearth/events machine payload validation', () => {
       { schema: 'hearth.delegation@1', payload: { task: 'run tests' } },
       { schema: 'hearth.delegation@1', payload: { targetActorId: 'actor-2', task: '' } },
     ]) {
-      await expect(post()(makeReq(delegation(machine)), makeRes())).rejects.toThrow();
+      await expect(post()(makeReq(delegation(machine)), makeRes())).rejects.toBeInstanceOf(ZodError);
     }
     expect(hearthLogAppendMock).not.toHaveBeenCalled();
   });
@@ -402,15 +409,18 @@ describe('POST /api/hearth/events machine payload validation', () => {
 
   it('404s a delegation whose target is not owned by the caller', async () => {
     getOwnedActorMock.mockResolvedValue(null);
-    await expect(post()(makeReq(delegation(VALID)), makeRes())).rejects.toThrow(/target actor not found/i);
+    const err = post()(makeReq(delegation(VALID)), makeRes());
+    await expect(err).rejects.toBeInstanceOf(NotFoundError);
+    await expect(err).rejects.toThrow(/target actor not found/i);
     expect(hearthLogAppendMock).not.toHaveBeenCalled();
   });
 
   it('403s a delegation from a gateway actor', async () => {
     ensureActorMock.mockResolvedValueOnce({ _id: { toString: () => 'gw-1' }, displayName: 'slack', kind: 'gateway' });
-    await expect(
-      post()(makeReq({ ...delegation(VALID), actor: { kind: 'gateway', displayName: 'slack' } }), makeRes())
-    ).rejects.toThrow(/gateway actors cannot delegate/i);
+    const err = post()(makeReq({ ...delegation(VALID), actor: { kind: 'gateway', displayName: 'slack' } }), makeRes());
+    await expect(err).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(err).rejects.toThrow(/gateway actors cannot delegate/i);
+    expect(getOwnedActorMock).not.toHaveBeenCalled();
     expect(hearthLogAppendMock).not.toHaveBeenCalled();
   });
 
@@ -427,6 +437,44 @@ describe('POST /api/hearth/events machine payload validation', () => {
       )
     ).rejects.toThrow(/does not match hearth.presence@1/);
     expect(hearthLogAppendMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a valid hearth.presence@1 event and projects it onto the roster', async () => {
+    hearthLogAppendMock.mockResolvedValue({ ...DOMAIN_EVENT, kind: 'presence' });
+    const res = makeRes();
+    await post()(
+      makeReq({
+        channelId: 'ch-1',
+        kind: 'presence',
+        human: { text: 'idle', format: 'text' },
+        machine: {
+          schema: 'hearth.presence@1',
+          payload: {
+            hook_event_name: 'Stop',
+            slug: 'amber-otter',
+            surface: 'claude-code-hook',
+            activity: { reason: 'idle' },
+          },
+        },
+      }),
+      res
+    );
+    expect(res.statusCode).toBe(201);
+    expect(upsertPresenceMock).toHaveBeenCalledWith(expect.objectContaining({ reason: 'idle', slug: 'amber-otter' }));
+  });
+
+  it('accepts a hearth.presence@1 event with a null payload, as the projection does', async () => {
+    const res = makeRes();
+    await post()(
+      makeReq({
+        channelId: 'ch-1',
+        kind: 'presence',
+        human: { text: 'x', format: 'text' },
+        machine: { schema: 'hearth.presence@1', payload: null },
+      }),
+      res
+    );
+    expect(res.statusCode).toBe(201);
   });
 
   it('treats a schema name that shadows an Object.prototype key as unknown', async () => {
