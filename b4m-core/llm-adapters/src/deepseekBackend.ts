@@ -16,7 +16,7 @@ import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -399,6 +399,32 @@ export class DeepSeekBackend implements ICompletionBackend {
               turnReasoning = undefined;
             }
 
+            const roundText = c.message.content || '';
+            const requestedToolNames = c.message.tool_calls.flatMap(toolCall =>
+              toolCall.type === 'function' ? [toolCall.function.name] : []
+            );
+            if (shouldEndTurnAfterTools(requestedToolNames, options.tools, roundText)) {
+              this.logger.info('[Tool Execution] Ending turn: only end-of-turn tools ran', {
+                model,
+                toolsExecuted: requestedToolNames,
+              });
+              // Text is not emitted before tools in this path, so it rides on the terminal frame.
+              await (artifactGuard?.callback ?? callback)(
+                [reasoningContent ? `<think>${escapeThinkMarkers(reasoningContent)}</think>${roundText}` : roundText],
+                {
+                  toolsUsed,
+                  ...splitCacheInclusiveInput(
+                    accumInputTokens + (response.usage?.prompt_tokens || 0),
+                    accumCacheReadTokens + turnCacheReadTokens
+                  ),
+                  outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                  stopReason: 'tool_use',
+                }
+              );
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             await this.complete(
               model,
               messages,
@@ -482,6 +508,8 @@ export class DeepSeekBackend implements ICompletionBackend {
     // Prose, not streamedText: the monologue is wrapped into streamedText as well,
     // so only content deltas count as an answer.
     let sawProse = false;
+    // Answer text only (not reasoning), for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
 
     for await (const chunk of response) {
       const streamedText: string[] = [];
@@ -520,6 +548,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
           sawProse = true;
+          streamedRoundText += c.delta.content;
           streamedText[c.index] =
             (streamedText[c.index] ?? '') + reasoningEscaper.flush() + '</think>' + c.delta.content;
           return;
@@ -536,6 +565,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         if (func.length > 0) return;
 
         if (c.delta.content) sawProse = true;
+        streamedRoundText += c.delta.content || '';
         streamedText[c.index] = c.delta.content || '';
       });
 
@@ -723,6 +753,23 @@ export class DeepSeekBackend implements ICompletionBackend {
             );
           }
           turnReasoning = undefined;
+        }
+
+        const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
+        if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
+          this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+            model,
+            toolsExecuted: requestedToolNames,
+          });
+          await (artifactGuard?.callback ?? callback)([], {
+            toolsUsed,
+            ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+            outputTokens: accumOutputTokens + outputTokens,
+            ...(cacheStats ? { cacheStats } : {}),
+            stopReason: 'tool_use',
+          });
+          if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+          return;
         }
 
         await this.complete(
