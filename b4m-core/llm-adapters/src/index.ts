@@ -557,6 +557,7 @@ export {
   MAX_QUEUED_PER_TENANT,
   DEFAULT_ACQUIRE_TIMEOUT_MS,
 } from './_anthropicSemaphore';
+export { isTurnEndingTool } from './executeToolsBatch';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export {

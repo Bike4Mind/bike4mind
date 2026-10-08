@@ -101,6 +101,7 @@ import {
   type ICompletionOptions,
   PipelineTimer,
   resolveDeprecatedModelId,
+  isTurnEndingTool,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -5130,6 +5131,14 @@ export class ChatCompletionProcess {
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
           producedNonTextDeliverable: producedNonTextDeliverable(),
+          // An adapter only ends a turn on 'tool_use' via shouldEndTurnAfterTools; a normal tool
+          // round recurses. Known gap, accepted as narrow: OpenAI-family backends also report a
+          // per-round 'tool_use', and stopReason is sticky, so a follow-up that reports no stop
+          // reason after a mixed round ending in a flagged tool also skips the notice.
+          endedOnAnswerTool:
+            actualTokenUsage.stopReason === 'tool_use' &&
+            echoToolsUsed.length > 0 &&
+            isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
         });
         if (incompleteAnswerNotice) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
