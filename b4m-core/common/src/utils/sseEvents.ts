@@ -122,7 +122,11 @@ export interface CompletionInfo {
  * @returns SSE event object
  */
 export function buildSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  const textContent = text[1] || text[0] || '';
+  // A reasoning-tagged frame is never reply prose, and no caller of this builder (the public
+  // completions API, its WebSocket twin, the CLI) shows it: blank its text so reasoning never
+  // reaches an API consumer. Usage, tools and thinking blocks still ride the frame. Families
+  // that inline reasoning untagged (inlinesReasoningIntoText) are not covered by this.
+  const textContent = info?.channel === 'reasoning' ? '' : text[1] || text[0] || '';
 
   const event: SSEContentEvent = {
     type: info?.toolsUsed && info.toolsUsed.length > 0 ? 'tool_use' : 'content',

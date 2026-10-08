@@ -126,6 +126,22 @@ describe('buildPublicSSEEvent', () => {
 });
 
 describe('buildSSEEvent', () => {
+  it('drops the text of a reasoning-tagged frame but keeps its accounting', () => {
+    const e = buildSSEEvent(['<think>weighing the options'], {
+      channel: 'reasoning',
+      outputTokens: 7,
+      thinking: [{ type: 'thinking', thinking: 'x', signature: 's' }] as never,
+    });
+    expect(e.text).toBe('');
+    expect(e.usage?.outputTokens).toBe(7);
+    expect(e.thinking).toHaveLength(1);
+  });
+
+  it('keeps the text of untagged and tool-artifact frames', () => {
+    expect(buildSSEEvent(['', 'the answer']).text).toBe('the answer');
+    expect(buildSSEEvent(['artifact'], { channel: 'tool-artifact' }).text).toBe('artifact');
+  });
+
   it('still forwards usdCost to authenticated first-party surfaces', () => {
     const e = buildSSEEvent(['', 'the answer'], { creditsUsed: 2, usdCost: 0.0123 });
     expect(e.credits).toMatchObject({ used: 2, usdCost: 0.0123 });
