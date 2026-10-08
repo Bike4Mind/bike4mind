@@ -8,6 +8,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { resolveLakeRagAuth, type LakeRagAuth } from './auth';
 import { loadLakeRagBank } from './bank';
 import { readLakeRagCorpus } from './corpus';
+import { MAX_429_WAIT_MS } from './http';
 import { provisionLakeRagLakes, type LakeRagApi, type LakeRagProvision } from './provision';
 import { buildLakeRagReport, compareLakeRagReports, formatLakeRagReport } from './report';
 import { readLakeRagReport, writeLakeRagReport } from './reportFile';
@@ -35,6 +36,9 @@ const docs = readLakeRagCorpus(join(__dirname, 'corpus'));
 const PER_INGEST_MS = 3 * 60 * 1000;
 const PER_TURN_MS = 2 * 60 * 1000;
 const TIMEOUT_MS = docs.length * PER_INGEST_MS + rows.length * LAKE_RAG_ARMS.length * samples * PER_TURN_MS;
+// Teardown is one DELETE per attachment, one per lake and the cleanup sweep, each able to spend a
+// full 429 budget; the hook must outlast all of them or vitest kills it mid-cleanup.
+const TEARDOWN_TIMEOUT_MS = (docs.length + new Set(docs.map(d => d.subject)).size + 1) * (MAX_429_WAIT_MS + 30_000);
 
 describe.skipIf(!enabled)('lake RAG eval (live deployment)', () => {
   let auth: LakeRagAuth | undefined;
@@ -54,7 +58,7 @@ describe.skipIf(!enabled)('lake RAG eval (live deployment)', () => {
     const lakeCount = Object.keys(provision?.lakes ?? {}).length;
     if (auth?.source === 'e2e-user' && lakesDeleted >= lakeCount) return;
     expect(errors, 'teardown left eval lakes behind').toEqual([]);
-  }, PER_INGEST_MS);
+  }, TEARDOWN_TIMEOUT_MS);
 
   it(
     'answers from the current document under the lake, multi-lake and plain arms',
