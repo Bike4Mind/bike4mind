@@ -197,7 +197,7 @@ describe('the composer command menu', () => {
     expect(rows()).toHaveLength(0);
 
     type('/');
-    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact']);
+    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'pr']);
   });
 
   it('filters as the name is typed', () => {
@@ -222,6 +222,15 @@ describe('the composer command menu', () => {
     // The draft goes with it: the command ran, so there is nothing left to send.
     expect(input().value).toBe('');
     expect(rows()).toHaveLength(0);
+  });
+
+  it('fills in a command that needs an argument instead of running it bare', () => {
+    const run = vi.fn();
+    mount({ onRunCommand: run });
+    type('/p');
+    press('Enter');
+    expect(run).not.toHaveBeenCalled();
+    expect(input().value).toBe('/pr ');
   });
 
   it('closes on Escape and leaves what was typed alone', () => {
