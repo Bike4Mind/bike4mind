@@ -1,4 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import {
+  assertProjectsReadScope,
+  assertProjectsWriteScope,
+  PROJECTS_READ_OR_WRITE_SCOPES,
+} from '@server/projects/projectScopes';
 import { inviteRepository, projectRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { omitInviteToken } from '@server/managers/inviteManager';
@@ -33,8 +38,10 @@ const createInviteBodySchema = z.object({
   available: z.number().optional(),
 });
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either projects scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
   .get(async (req, res) => {
+    assertProjectsReadScope(req);
     const result = await projectService.listInvites(req.user!, req.query as any, {
       db: {
         projects: projectRepository,
@@ -49,6 +56,7 @@ const handler = baseApi()
   })
   .post(
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
+      assertProjectsWriteScope(req);
       const { id } = req.query as { id: string };
       if (!id || typeof id !== 'string') {
         return res.status(400).json({ message: 'Invalid project ID' });
