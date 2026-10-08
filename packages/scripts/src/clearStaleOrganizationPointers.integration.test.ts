@@ -171,11 +171,38 @@ describe('clearStaleOrganizationPointers', () => {
       return findMemberUserIds(organizationId);
     });
 
-    const result = await clearStaleOrganizationPointers({ apply: true, log: silent });
+    const lines: string[] = [];
+    const result = await clearStaleOrganizationPointers({ apply: true, log: m => lines.push(m) });
 
     expect(result.orgs.find(o => o.organizationId === String(s.liveOrg))?.userIds).toContain(String(s.removed));
     expect(String(await pointerOf(s.removed))).toBe(String(s.liveOrg));
     expect(await pointerOf(s.manager)).toBeNull();
+    expect(result.cleared).toBe(7);
+    expect(lines).toContain(`org ${s.liveOrg}: nulled 3 of 4 listed pointer(s)`);
+  });
+
+  it('logs the actual nulled count when a pointer moves between the re-grade and the write', async () => {
+    const s = await seed();
+    const reportPath = join(mkdtempSync(join(tmpdir(), 'stale-pointers-')), 'report.json');
+    const findMemberUserIds = organizationRepository.findMemberUserIds.bind(organizationRepository);
+    let liveOrgCalls = 0;
+    vi.spyOn(organizationRepository, 'findMemberUserIds').mockImplementation(async organizationId => {
+      if (organizationId === String(s.liveOrg) && ++liveOrgCalls === 2) {
+        // The re-grade has already read the pointers; moving the manager now leaves it in `toClear`
+        // but outside the guarded write, so the write nulls one fewer than the report listed.
+        await User.collection.updateOne({ _id: s.manager }, { $set: { organizationId: oid() } });
+      }
+      return findMemberUserIds(organizationId);
+    });
+
+    const lines: string[] = [];
+    const result = await clearStaleOrganizationPointers({ apply: true, reportPath, log: m => lines.push(m) });
+
+    const reportedLive = JSON.parse(readFileSync(reportPath, 'utf8')).orgs.find(
+      (o: { organizationId: string }) => o.organizationId === String(s.liveOrg)
+    );
+    expect(reportedLive.userIds).toContain(String(s.manager));
+    expect(lines).toContain(`org ${s.liveOrg}: nulled 3 of 4 listed pointer(s)`);
     expect(result.cleared).toBe(7);
   });
 

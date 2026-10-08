@@ -151,12 +151,14 @@ export async function clearStaleOrganizationPointers({
       const reported = new Set(userIds);
       const { stale } = await gradeOrg(organizationId);
       const toClear = stale.filter(id => reported.has(id));
-      // The report lists the plan from the first grading pass; a membership change since then can
-      // shrink the outcome, so log it instead of letting the report silently overstate the write.
-      if (toClear.length < reported.size) {
-        log(`org ${organizationId}: nulled ${toClear.length} of ${reported.size} listed pointer(s)`);
+      // The report lists the plan from the first grading pass. A membership change since then, or a
+      // pointer that moves between the re-grade and the guarded write, can shrink the outcome, so
+      // log the count the write actually nulled rather than letting the report overstate it.
+      const nulled = await clearPointers(organizationId, toClear);
+      if (nulled < reported.size) {
+        log(`org ${organizationId}: nulled ${nulled} of ${reported.size} listed pointer(s)`);
       }
-      cleared += await clearPointers(organizationId, toClear);
+      cleared += nulled;
     }
   }
 
