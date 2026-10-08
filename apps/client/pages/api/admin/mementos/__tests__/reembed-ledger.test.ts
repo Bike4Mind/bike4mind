@@ -150,6 +150,19 @@ describe('/api/admin/mementos/reembed-ledger', () => {
     expect(data).toMatchObject({ hasMore: true, nextAfter: p('a') });
   });
 
+  it('resumes rather than passes a principal that failed on only the leftover budget', async () => {
+    listPrincipals.mockResolvedValue([p('a'), p('b'), p('c')]);
+    migrateMock
+      .mockResolvedValueOnce(stats({ backfilled: 97 }))
+      .mockResolvedValueOnce(stats({ failed: 3, stoppedAtLimit: true, errors: ['event x: 429'] }));
+
+    const data = (await post({ execute: true }))._getJSONData();
+
+    expect(migrateMock.mock.calls[1][1]).toEqual({ limit: 3 });
+    expect(migrateMock).toHaveBeenCalledTimes(2);
+    expect(data).toMatchObject({ failedPrincipals: [], hasMore: true, nextAfter: p('a') });
+  });
+
   it('records a throwing principal and keeps processing the page', async () => {
     listPrincipals.mockResolvedValue([p('a'), p('b')]);
     migrateMock.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(stats({ backfilled: 1 }));

@@ -75,10 +75,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
     processedPrincipals += 1;
     const label = `${target.principalKind}:${target.principalId}`;
+    const budget = MAX_PROVIDER_CALLS_PER_REQUEST - spent;
     try {
       const stats = await migrateLedgerVectorsForPrincipal(
         { principal: { kind: target.principalKind, id: target.principalId }, ownerUserId: target.ownerUserId },
-        execute ? { limit: MAX_PROVIDER_CALLS_PER_REQUEST - spent } : { dryRun: true }
+        execute ? { limit: budget } : { dryRun: true }
       );
       for (const key of Object.keys(totals) as Array<keyof typeof totals>) totals[key] += stats[key];
       if (execute) spent += stats.backfilled + stats.reembedded + stats.failed;
@@ -88,9 +89,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       }
 
       if (stats.stoppedAtLimit) {
-        // Made progress: resume this principal next call by leaving the cursor before it. Made none
-        // (every provider call failed): resuming would repeat the same failures forever, so pass it.
-        if (stats.backfilled + stats.reembedded + stats.truncated > 0) {
+        // Made progress, or only had the page's leftover budget: resume this principal next call (with
+        // a full budget) by leaving the cursor before it. Made none on a full budget (every provider
+        // call failed): resuming would repeat the same failures forever, so pass it.
+        if (stats.backfilled + stats.reembedded + stats.truncated > 0 || budget < MAX_PROVIDER_CALLS_PER_REQUEST) {
           cutShort = true;
           break;
         }
