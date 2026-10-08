@@ -78,6 +78,8 @@ const makeArgs = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+// getSettingsByNames caches process-wide; each test's fixture must not see the last one's rows.
+beforeEach(() => invalidateSettingsCache());
 describe('ContextSummarizationFeature', () => {
   let contextSummarizeSession: ReturnType<typeof vi.fn>;
   let feature: ContextSummarizationFeature;
@@ -471,7 +473,7 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
           getSettingsValue: vi.fn((setting: string) =>
             Promise.resolve(setting === 'forcedRetrievalCharBudget' ? overrides.charBudget : undefined)
           ),
-          findBySettingName: vi.fn().mockResolvedValue(null),
+          findAll: vi.fn().mockResolvedValue([]),
         },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
@@ -1005,9 +1007,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
           getSettingsValue: vi.fn(async (name: string) =>
             opts.settings && name in opts.settings ? opts.settings[name] : opts.defaultEmbeddingModel
           ),
-          // The absolute floor's plain-path read: a row exists only for a key the fixture sets.
-          findBySettingName: vi.fn(async (name: string) =>
-            opts.settings && name in opts.settings ? { settingName: name, settingValue: opts.settings[name] } : null
+          // The absolute floor's plain-path read (getSettingsByNames' cached path): a row exists only
+          // for a key the fixture sets.
+          findAll: vi.fn(async () =>
+            Object.entries(opts.settings ?? {}).map(([settingName, settingValue]) => ({ settingName, settingValue }))
           ),
         },
       },
@@ -2900,7 +2903,6 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
         // Both are served from the same opts.getSettingsValue so the two read paths cannot disagree.
         adminSettings: {
           getSettingsValue,
-          findBySettingName: vi.fn(async (name: string) => platformRows([name], opts.getSettingsValue)[0] ?? null),
           findBySettingNames: vi.fn(async (names: string[]) => platformRows(names, opts.getSettingsValue)),
           findAll: vi.fn(async () => platformRows([...FORCED_RETRIEVAL_SETTING_KEYS], opts.getSettingsValue)),
         },
@@ -3090,9 +3092,6 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
           // Serves the platform-only read path (and the char budget, which is absent from every
           // fixture here and so stays at its default).
           getSettingsValue: vi.fn(async (key: string) => platform[key]),
-          findBySettingName: vi.fn(async (name: string) =>
-            platform[name] != null ? { settingName: name, settingValue: platform[name] } : null
-          ),
           findBySettingNames: vi.fn(async (names: string[]) =>
             names
               .filter(name => platform[name] != null)
@@ -3493,7 +3492,7 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
       if (key === 'defaultEmbeddingModel') return 'text-embedding-3-small';
       throw new Error('settings store unavailable');
     });
-    ctx.db.adminSettings.findBySettingName = vi.fn(async () => {
+    ctx.db.adminSettings.findAll = vi.fn(async () => {
       throw new Error('settings store unavailable');
     });
     const { injected } = await run(ctx);

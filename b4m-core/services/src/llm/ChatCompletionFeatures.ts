@@ -138,6 +138,7 @@ import {
   EmbeddingFactory,
   fetchAndProcessPreviousMessages,
   getProviderFromModel,
+  getSettingsByNames,
   IQueueService,
   ITokenizer,
   normalizeId,
@@ -2716,16 +2717,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
       }
     }
-    const [charBudget, relative, absoluteRow, spread] = await Promise.all([
+    const [charBudget, relative, absoluteRaw, spread] = await Promise.all([
       db.adminSettings.getSettingsValue('forcedRetrievalCharBudget'),
       db.adminSettings.getSettingsValue('forcedRetrievalRelativeFloorPct'),
       // Not getSettingsValue: it manufactures the declared 75 for a missing row, which would read as
-      // an explicit 75. Check presence before parsing - the schema's .default() turns undefined into 75.
-      db.adminSettings.findBySettingName('forcedRetrievalMinSimilarityPct'),
+      // an explicit 75. The cached raw read yields null for a missing row instead.
+      getSettingsByNames(['forcedRetrievalMinSimilarityPct'], db, { logger: this.logger }),
       db.adminSettings.getSettingsValue('forcedRetrievalSpreadFloorPct'),
     ]);
-    // A blank row is unset too: the schema would preprocess it into the same manufactured 75.
-    const raw = absoluteRow?.settingValue;
+    // A missing or blank row is unset: the schema would preprocess either into the same manufactured 75.
+    const raw = absoluteRaw.forcedRetrievalMinSimilarityPct;
     const parsed = isBlankSettingValue(raw)
       ? undefined
       : settingsMap.forcedRetrievalMinSimilarityPct.schema.safeParse(raw);
