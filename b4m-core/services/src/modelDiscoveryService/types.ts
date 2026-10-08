@@ -51,9 +51,14 @@ export interface DiscoveryCredentials {
   /** Its own admin setting: ElevenLabs is not part of getEffectiveLLMApiKeys. */
   elevenlabs: string | null;
   /**
-   * Bedrock and the AWS backend are credential-free (IAM role). False under
-   * B4M_SELF_HOST: a self-host install's AWS_ACCESS_KEY_ID is its local MinIO
-   * credential, so listing those models offers choices that can only fail.
+   * Bedrock is reachable: the hosted IAM role, or on self-host the dedicated
+   * BEDROCK_AWS_* credentials (see bedrockClientCredentials in @bike4mind/common).
+   */
+  bedrock: boolean;
+  /**
+   * The hosted IAM role, for the AWS (Transcribe) backend. Always false under
+   * B4M_SELF_HOST: AWS_* there is the local MinIO credential, and Transcribe
+   * cannot read media stored in MinIO anyway.
    */
   awsIam: boolean;
   isSelfHost: boolean;

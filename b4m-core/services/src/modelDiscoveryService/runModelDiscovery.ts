@@ -266,6 +266,12 @@ async function executeRun(
   // A manual run is how an admin checks a key they just saved, so it reads admin
   // settings fresh; scheduled and startup runs keep the cached map.
   const credentials = await adapters.resolveCredentials({ skipCache: options.trigger === 'manual' });
+  if (credentials.isSelfHost && !credentials.bedrock) {
+    logger.info(
+      `${LOG_PREFIX} bedrock skipped: self-host has no BEDROCK_AWS_ACCESS_KEY_ID/BEDROCK_AWS_SECRET_ACCESS_KEY ` +
+        '(AWS_* are the MinIO credentials)'
+    );
+  }
   const history = await recentRunHistory(adapters, startedAt);
   const minInterval = options.minSourceIntervalMs ?? DEFAULT_MIN_SOURCE_INTERVAL_MS;
 

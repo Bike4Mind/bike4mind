@@ -35,6 +35,7 @@ import {
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import {
   ChatModels,
+  bedrockClientCredentials,
   ContextTelemetry,
   ContextTelemetryAlerts,
   IMcpServerDocument,
@@ -352,8 +353,9 @@ export interface ResolvedDefaultChatModel {
  * Hosted (B4M_SELF_HOST !== 'true'): the Bedrock-backed schema default is always
  * reachable via IAM, so return it directly with zero extra work.
  *
- * Self-host: Bedrock never works, so the schema default maps to its direct-API
- * Anthropic twin - but a local-only box may have no ANTHROPIC_API_KEY at all. Probe
+ * Self-host: Bedrock needs the opt-in BEDROCK_AWS_* pair, so the schema default maps to its
+ * direct-API Anthropic twin (an admin's explicit Bedrock pick is kept when that pair is set).
+ * But a local-only box may have no ANTHROPIC_API_KEY at all. Probe
  * the effective keys and the live model list, then keep the configured default when
  * its provider key is usable, else fall back to the first local Ollama chat model
  * (needs no key; embedding models are skipped), else return the (unusable) default so
@@ -371,8 +373,11 @@ export async function resolveDefaultChatModel(params: {
     return { model: cloudDefault };
   }
 
+  const keepExplicitBedrock = !!params.configuredModel && bedrockClientCredentials() !== null;
   const configuredDefault =
-    cloudDefault === ChatModels.CLAUDE_5_SONNET_BEDROCK ? ChatModels.CLAUDE_5_SONNET : cloudDefault;
+    cloudDefault === ChatModels.CLAUDE_5_SONNET_BEDROCK && !keepExplicitBedrock
+      ? ChatModels.CLAUDE_5_SONNET
+      : cloudDefault;
 
   const logger = params.logger ?? new Logger();
   const apiKeys = (await apiKeyService.getEffectiveLLMApiKeys(

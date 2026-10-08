@@ -407,6 +407,22 @@ describe('runModelDiscovery', () => {
     ]);
   });
 
+  it('logs the self-host Bedrock skip once per run, and only when Bedrock is unconfigured', async () => {
+    const cases = [
+      { creds: testCredentials({ isSelfHost: true, bedrock: false, awsIam: false }), lines: 1 },
+      { creds: testCredentials({ isSelfHost: true, bedrock: true, awsIam: false }), lines: 0 },
+      { creds: testCredentials(), lines: 0 },
+      { creds: testCredentials({ isSelfHost: false, bedrock: false }), lines: 0 },
+    ];
+
+    for (const { creds, lines } of cases) {
+      const bench = harness([openaiSource(), stubSource({ name: 'bedrock', configured: false })]);
+      await runModelDiscovery({ ...bench.adapters, resolveCredentials: async () => creds }, bench.options);
+
+      expect(bench.infos.filter(line => line.includes('bedrock skipped'))).toHaveLength(lines);
+    }
+  });
+
   it('skips a source with no credential without failing the run', async () => {
     const partial = harness([openaiSource(), stubSource({ name: 'xai', configured: false })]);
 

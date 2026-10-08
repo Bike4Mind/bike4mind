@@ -136,7 +136,15 @@ describe('evaluatePromotion', () => {
     const record = testRecord({ backend: ModelBackend.Bedrock, adapterFamily: 'anthropic-messages' });
 
     expect(evaluate({ record }).blockedBy).not.toContain('no-credential-for-backend');
-    expect(evaluate({ record, credentials: testCredentials({ awsIam: false }) }).blockedBy).toContain(
+    expect(evaluate({ record, credentials: testCredentials({ bedrock: false }) }).blockedBy).toContain(
+      'no-credential-for-backend'
+    );
+  });
+
+  it('gates the AWS backend on the hosted IAM role, not on Bedrock credentials', () => {
+    const record = testRecord({ backend: ModelBackend.AWS });
+
+    expect(evaluate({ record, credentials: testCredentials({ bedrock: true, awsIam: false }) }).blockedBy).toContain(
       'no-credential-for-backend'
     );
   });

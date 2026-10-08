@@ -2028,8 +2028,9 @@ export const settingsMap = {
     // which 401s where no key is configured. A reliable, tool-calling default also fixes the
     // tool-driven surfaces (OptiHashi et al.) that silently break on GPT-5 (internal tracking).
     // Opus/Fable remain an explicit opt-in.
-    // Self-host inverts the reasoning: there is no AWS IAM there (Bedrock can never work),
-    // while ANTHROPIC_API_KEY from .env.selfhost powers the Anthropic-hosted twin.
+    // Self-host inverts the reasoning: there is no AWS IAM there (Bedrock works only with the
+    // opt-in BEDROCK_AWS_* pair), while ANTHROPIC_API_KEY from .env.selfhost powers the
+    // Anthropic-hosted twin.
     // This is the authoritative default returned by getSettingsValue() when no AdminSettings override exists.
     defaultValue:
       process.env.B4M_SELF_HOST === 'true' ? ChatModels.CLAUDE_5_SONNET : ChatModels.CLAUDE_5_SONNET_BEDROCK,
