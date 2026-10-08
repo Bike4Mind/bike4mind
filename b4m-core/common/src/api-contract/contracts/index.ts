@@ -20,6 +20,7 @@ import { createEmbeddingsContract } from './embeddings.contract';
 import { getQuestContract } from './quest.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
+import { listWhatsNewContract } from './whatsNew.contract';
 import {
   listDataLakesContract,
   getDataLakeContract,
@@ -81,4 +82,5 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listVoicesContract,
   createVoiceSessionContract,
   endVoiceSessionContract,
+  listWhatsNewContract,
 ];

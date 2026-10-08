@@ -6691,6 +6691,81 @@
           "refunded": 42,
           "elapsedSeconds": 95
         }
+      },
+      "listWhatsNewResponse200": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "release_tag": {
+                  "type": "string"
+                },
+                "headline": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "published_at": {
+                  "type": "string"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "category": {
+                        "type": "string",
+                        "enum": [
+                          "new",
+                          "improved",
+                          "fixed"
+                        ]
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "importance": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3
+                      }
+                    },
+                    "required": [
+                      "category",
+                      "text",
+                      "importance"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "release_tag",
+                "headline",
+                "summary",
+                "published_at",
+                "items"
+              ]
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
       }
     },
     "parameters": {}
@@ -19930,6 +20005,137 @@
           }
         ]
       }
+    },
+    "/api/v1/whats-new": {
+      "get": {
+        "operationId": "listWhatsNew",
+        "summary": "List release notes",
+        "description": "Lists published release notes, newest first. Public: no credentials are needed, and the response is cacheable for up to about 15 minutes (5 fresh plus 10 stale-while-revalidate), so a newly published or withdrawn note can take that long to show. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Rate limited per client IP.",
+        "tags": [
+          "Release notes"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of published release notes, newest first by `published_at`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/listWhatsNewResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "webhooks": {},
@@ -19941,6 +20147,10 @@
     {
       "name": "Sessions",
       "description": "Sessions (called \"notebooks\" in the product UI) and their attached knowledge."
+    },
+    {
+      "name": "Release notes",
+      "description": "Customer-facing notes on what changed in each release. Public."
     },
     {
       "name": "Audio",

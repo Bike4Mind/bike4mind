@@ -21,6 +21,7 @@ export { createEmbeddingsContract } from './contracts/embeddings.contract';
 export { getQuestContract } from './contracts/quest.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
+export { listWhatsNewContract } from './contracts/whatsNew.contract';
 export {
   listDataLakesContract,
   getDataLakeContract,
