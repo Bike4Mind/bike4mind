@@ -18,6 +18,26 @@ describe('extractMcpPendingAction', () => {
     });
   });
 
+  it('accepts a token the atlassian server emitted for jira_create_issue', () => {
+    const jiraToken = encodeToken({ tool: 'jira_create_issue', params: { projectKey: 'P', summary: 's' }, ts: 2 });
+
+    expect(extractMcpPendingAction('atlassian__jira_create_issue', preview(jiraToken))).toMatchObject({
+      kind: 'accepted',
+      action: { tool: 'jira_create_issue', params: { projectKey: 'P', summary: 's' }, ts: 2 },
+    });
+  });
+
+  it('accepts a valid preview that has no next_step and does not add one', () => {
+    const result = JSON.stringify({ action: 'preview', _confirmToken: validToken });
+
+    const extraction = extractMcpPendingAction('github__create_issue', result);
+
+    if (extraction.kind !== 'accepted') throw new Error(`expected accepted, got ${extraction.kind}`);
+    const forModel = JSON.parse(extraction.result);
+    expect(forModel).not.toHaveProperty('_confirmToken');
+    expect(forModel).not.toHaveProperty('next_step');
+  });
+
   it('strips the token and rewrites the next step before the model sees the result', () => {
     const extraction = extractMcpPendingAction('github__create_issue', preview(validToken));
 

@@ -989,7 +989,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     // (skip image_generation - handled separately below with model picker)
     if (questWithPendingAction?.pendingAction && questWithPendingAction.pendingAction.tool !== 'image_generation') {
       const questId = questWithPendingAction._id.toString();
-      const { tool, params } = questWithPendingAction.pendingAction;
+      const { tool, params, ts: pendingActionTs } = questWithPendingAction.pendingAction;
       logger.debug('🔐 [CONFIRMATION] Found pendingAction on Quest, adding buttons', {
         questId,
         tool,
@@ -1001,7 +1001,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // Rebuild response blocks with the formatted preview
       formatted = formatAgentResponse(commandHandler.parsedCommand.agentName || 'agent', formattedPreview, undefined);
 
-      const confirmButtons = buildConfirmationButtons(questId);
+      const confirmButtons = buildConfirmationButtons(questId, pendingActionTs);
       formatted.blocks = [...formatted.blocks, ...confirmButtons];
       logger.debug('🔐 [CONFIRMATION] Added formatted preview and confirmation buttons');
     }

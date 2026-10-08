@@ -32,11 +32,14 @@ export interface PendingActionResult {
  * Execute a pending action stored on a Quest.
  * Called only from the Slack Confirm button handler (interactive.ts); model output must never
  * reach this, since executing is what the human click authorizes.
+ * `expectedTs` is the `ts` of the action the button displayed; undefined only for a button rendered
+ * before it carried one. Keep in sync with the web executor (pages/api/mcp/confirm.ts).
  */
 export async function executePendingAction(
   questId: string,
   dbUser: IUserDocument,
-  logger: Logger
+  logger: Logger,
+  expectedTs?: number
 ): Promise<PendingActionResult> {
   const questWithPending = await Quest.findById(questId);
 
@@ -46,13 +49,18 @@ export async function executePendingAction(
 
   const pendingAction = questWithPending.pendingAction;
 
+  if (expectedTs !== undefined && expectedTs !== pendingAction.ts) {
+    logger.warn('[PendingActionExecutor] Pending action replaced since it was displayed', { questId });
+    return { success: false, message: 'This action was replaced by a newer one. Please review it again.' };
+  }
+
   if (pendingAction.ts && Date.now() - pendingAction.ts > TOKEN_EXPIRATION_MS) {
     logger.warn('[PendingActionExecutor] Pending action expired', {
       questId,
       tokenAgeMs: Date.now() - pendingAction.ts,
       maxAgeMs: TOKEN_EXPIRATION_MS,
     });
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
+    await claimPendingAction(questId, pendingAction.ts);
     return { success: false, message: 'This action has expired. Please start the request again.' };
   }
 
@@ -250,8 +258,22 @@ export async function executePendingAction(
 
 /**
  * Cancel a pending action on a Quest by clearing the pendingAction field.
+ * With `expectedTs` (a Slack Cancel button) only that action is cleared, so a stale button cannot
+ * clear a newer one; without it (the model's cancel tool, a legacy button) whatever is pending goes.
  */
-export async function cancelPendingActionOnQuest(questId: string, logger: Logger): Promise<PendingActionResult> {
+export async function cancelPendingActionOnQuest(
+  questId: string,
+  logger: Logger,
+  expectedTs?: number
+): Promise<PendingActionResult> {
+  if (expectedTs !== undefined) {
+    if (!(await claimPendingAction(questId, expectedTs))) {
+      return { success: false, message: 'This action was already processed or replaced by a newer one.' };
+    }
+    logger.info('[PendingActionExecutor] Cleared pendingAction on cancel', { questId, cleared: true });
+    return { success: true, message: 'Cancelled. Let me know if you need anything else.' };
+  }
+
   try {
     const result = await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
     logger.info('[PendingActionExecutor] Cleared pendingAction on cancel', {

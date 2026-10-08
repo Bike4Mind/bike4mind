@@ -727,7 +727,7 @@ interface PendingActionButtonsProps {
   sessionId?: string;
 }
 
-const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
+export const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
   const storageKey = messageId ? `mcp-confirm-${messageId}` : null;
   const storedData = storageKey && typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) : null;
   const parsedData = storedData ? JSON.parse(storedData) : null;
@@ -785,6 +785,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         questId: messageId,
         sessionId,
         confirmed: false,
+        pendingActionTs: pendingAction.ts,
       });
       setIsCancelled(true);
       const cancelResult = { success: true, message: 'Action cancelled' };
@@ -811,7 +812,11 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
   if (isConfirmed || isCancelled) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'background.level1' }}>
-        <Typography level="body-sm" sx={{ color: result?.success ? 'success.plainColor' : 'danger.plainColor' }}>
+        <Typography
+          level="body-sm"
+          sx={{ color: result?.success ? 'success.plainColor' : 'danger.plainColor' }}
+          data-testid="mcp-confirm-result"
+        >
           {result?.message || (isConfirmed ? 'Action completed' : 'Action cancelled')}
         </Typography>
         {result?.url && (

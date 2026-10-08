@@ -1,11 +1,14 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Quest } from '@bike4mind/database';
 import { claimPendingAction } from './pendingActionExecutor';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * Single-use is the property a mocked findOneAndUpdate cannot show: two confirms that both read the
@@ -17,7 +20,7 @@ describe('claimPendingAction', () => {
   beforeAll(async () => {
     mongoServer = await createMongoServer();
     await mongoose.connect(mongoServer.getUri());
-  }, MONGO_TEST_TIMEOUT_MS);
+  });
 
   afterAll(async () => {
     await mongoose.disconnect();

@@ -70,6 +70,7 @@ describe('POST /api/mcp/confirm', () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ success: true });
     expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
@@ -110,11 +111,63 @@ describe('POST /api/mcp/confirm', () => {
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
-  it('does not claim or invoke anything on cancel', async () => {
-    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false });
+  it('claims with the stored ts when the request carries no pendingActionTs', async () => {
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true });
 
     expect(res._getStatusCode()).toBe(200);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+  });
+
+  it('returns 500 but still consumes the action when execution throws', async () => {
+    vi.mocked(invokeMcpHandler).mockRejectedValue(new Error('boom'));
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+  });
+
+  it('claims the stored action on cancel without invoking the tool', async () => {
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ success: true });
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 on cancel when the claim is lost', async () => {
+    vi.mocked(claimPendingAction).mockResolvedValue(false);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(409);
+  });
+
+  it('returns 409 without claiming when a stale card cancels', async () => {
+    const res = await post({
+      questId: QUEST_ID,
+      sessionId: SESSION_ID,
+      confirmed: false,
+      pendingActionTs: pendingActionTs - 1000,
+    });
+
+    expect(res._getStatusCode()).toBe(409);
     expect(claimPendingAction).not.toHaveBeenCalled();
+  });
+
+  it('claims the stored ts, not a bare unset, when the stored action has expired', async () => {
+    const expiredTs = Date.now() - 16 * 60 * 1000;
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: { tool: 'create_issue', params: { owner: 'o', repo: 'r', title: 't' }, ts: expiredTs },
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true });
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, expiredTs);
+    expect(Quest.findByIdAndUpdate).not.toHaveBeenCalled();
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 });

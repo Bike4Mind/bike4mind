@@ -491,13 +491,13 @@ export const handler = withEventContext(async (event, logger) => {
 
   let displayText = aiResponse;
   if (quest.pendingAction && quest.pendingAction.tool !== 'image_generation') {
-    const { tool, params: pendingParams } = quest.pendingAction;
+    const { tool, params: pendingParams, ts: pendingActionTs } = quest.pendingAction;
 
     const formattedPreview = formatPreviewFromParams(tool, pendingParams as Record<string, unknown>);
     displayText = formattedPreview;
     formatted = formatSimpleAgentResponse(formattedPreview);
 
-    const confirmButtons = buildConfirmationButtons(params.questId);
+    const confirmButtons = buildConfirmationButtons(params.questId, pendingActionTs);
     formatted.blocks = [...formatted.blocks, ...confirmButtons];
 
     await Quest.findByIdAndUpdate(params.questId, {

@@ -89,28 +89,33 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: 'No pending action found' });
   }
 
+  // Checked before Cancel and expiry too, so a stale card can neither run nor clear a newer action.
+  if (pendingActionTs !== undefined && pendingActionTs !== pendingAction.ts) {
+    logger.warn('[Web MCP Confirm] Pending action replaced since it was displayed', { questId });
+    return res.status(409).json({ error: 'This action was replaced by a newer one. Please review it again.' });
+  }
+
   if (pendingAction.ts && Date.now() - pendingAction.ts > TOKEN_EXPIRATION_MS) {
     logger.warn('[Web MCP Confirm] Pending action expired', {
       questId,
       age: Date.now() - pendingAction.ts,
       maxAge: TOKEN_EXPIRATION_MS,
     });
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
+    await claimPendingAction(questId, pendingAction.ts);
     return res.status(400).json({ error: 'This action has expired. Please request it again.' });
   }
 
   if (!confirmed) {
+    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+      logger.warn('[Web MCP Confirm] Pending action already claimed before cancel', { questId });
+      return res.status(409).json({ error: 'This action has already been processed.' });
+    }
     logger.info('[Web MCP Confirm] User cancelled action', { questId, tool: pendingAction.tool });
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
     return res.status(200).json({ success: true, message: 'Action cancelled' });
   }
 
-  if (pendingActionTs !== undefined && pendingActionTs !== pendingAction.ts) {
-    logger.warn('[Web MCP Confirm] Pending action replaced since it was displayed', { questId });
-    return res.status(409).json({ error: 'This action was replaced by a newer one. Please review it again.' });
-  }
-
-  // Execute the MCP tool
+  // Keep in sync with executePendingAction (server/utils/pendingActionExecutor.ts), the Slack
+  // executor: same server routing, repo checks, expiry and claim-before-invoke ordering.
   try {
     let resource: GitHubResource | JiraResource | ConfluenceResource;
     if (pendingAction.tool.startsWith('jira_')) {
