@@ -19540,6 +19540,7 @@
         "tags": [
           "Release notes"
         ],
+        "security": [],
         "parameters": [
           {
             "schema": {
