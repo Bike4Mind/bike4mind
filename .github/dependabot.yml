@@ -15,11 +15,6 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
-    ignore:
-      # Pinned to 1.20.1 due to OOM issue in later versions
-      # See: https://github.com/modelcontextprotocol/typescript-sdk/issues/985
-      - dependency-name: "@modelcontextprotocol/sdk"
-        versions: ["> 1.20.1"]
     groups:
       # One PR per run for all security fixes, instead of one PR per alert.
       security-updates:
