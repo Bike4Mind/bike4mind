@@ -1,6 +1,7 @@
 name: Semantic PR Title
 
-# Validates that PR titles follow the Conventional Commits format.
+# Validates that PR titles follow the Conventional Commits format, and that the PR head
+# carries the changeset the Auto Changeset workflow would generate for that title.
 # This is a blocking check — PRs cannot merge without a valid title.
 # All Claude Code sessions already produce the right format via CLAUDE.md + /create-pr skill.
 
@@ -16,6 +17,7 @@ on:
     branches: [main]
 
 permissions:
+  contents: read
   pull-requests: read
 
 jobs:
@@ -25,6 +27,7 @@ jobs:
     # the merge queue anyway). The actual title lint is gated to real PRs below.
     if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 10
     steps:
       - name: Validate PR title (Conventional Commits)
         # Enforce only on real PRs. Skip on merge_group (no title to lint),
@@ -55,3 +58,78 @@ jobs:
           # Allow ! for breaking changes: feat!: or feat(scope)!:
           subjectPattern: ^.+$
           subjectPatternError: 'PR title must have a description after the colon.'
+
+      # The changeset check runs main's scripts against the PR head, on the read-only token.
+      # Its `if:` must stay in sync with the auto-changeset job's `if:` in
+      # auto-changeset.yml: the bot and this gate must agree on which PRs need a changeset.
+      # Skipped (and so green) on merge_group, forks, dependabot and Version Packages PRs.
+      - name: Check out PR head
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.actor != 'dependabot[bot]' &&
+          !startsWith(github.head_ref, 'changeset-release/') &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify changeset matches the PR
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.actor != 'dependabot[bot]' &&
+          !startsWith(github.head_ref, 'changeset-release/') &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # A head that moved on is decided by its own validate run.
+          superseded() {
+            local live
+            live=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha 2>/dev/null || true)
+            [ -n "$live" ] && [ "$live" != "$HEAD_SHA" ]
+          }
+
+          # Verify against the live title: a re-run of an old run carries a stale title in
+          # its payload. On an API error, fall back to the payload title.
+          PR_TITLE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title 2>/dev/null || true)
+          export PR_TITLE="${PR_TITLE:-$EVENT_TITLE}"
+          if superseded; then
+            echo "::notice::The PR head has moved past $HEAD_SHA; its own validate run decides."
+            exit 0
+          fi
+
+          # Run main's copies of the changeset scripts, never the PR head's: a branch cut before
+          # they existed has none, and PR-head code stays out of the gate. The head copy is only
+          # a bootstrap for a file main does not have yet. Keep in sync with auto-changeset.yml.
+          git rev-parse --verify -q origin/main >/dev/null
+          SCRIPTS="$RUNNER_TEMP/changeset-scripts"
+          mkdir -p "$SCRIPTS"
+          for f in generate-changeset.sh verify-changeset.sh resolve-changeset-packages.sh; do
+            git show "origin/main:.github/scripts/$f" >"$SCRIPTS/$f" 2>/dev/null ||
+              cp ".github/scripts/$f" "$SCRIPTS/$f"
+          done
+
+          rc=0
+          bash "$SCRIPTS/verify-changeset.sh" || rc=$?
+          [ "$rc" -eq 1 ] || exit "$rc"
+
+          # The bot may be about to push the fix (it starts on the same event as this
+          # check), so give it a few minutes before failing.
+          for _ in $(seq 12); do
+            sleep 15
+            if superseded; then
+              echo "::notice::The PR head moved (likely the auto-changeset bot); its own validate run decides."
+              exit 0
+            fi
+          done
+
+          MSG="The PR head does not carry the changeset the Auto Changeset workflow generates for this title and diff (.changeset/pr-${PR_NUMBER}.md is missing, stale or has the wrong bump or packages). If the bot pushed a commit just now, ignore this: the new head is checked separately. Otherwise, any one of: push a commit to re-run the bot (an empty one works: git commit --allow-empty -m 'chore: regenerate changeset'); if the latest \"Auto Changeset\" run failed rather than skipped, Re-run failed jobs on it; run 'pnpm changeset' for a manual override; or delete .changeset/pr-${PR_NUMBER}.md in your own commit to opt out."
+          echo "::error::$MSG"
+          printf '### Changeset mismatch\n\n%s\n' "$MSG" >> "$GITHUB_STEP_SUMMARY"
+          exit 1

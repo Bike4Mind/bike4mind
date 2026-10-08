@@ -42,6 +42,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
+import { ReleaseNotesConfigSchema } from './releaseNotes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
@@ -302,6 +303,7 @@ export const SettingKeySchema = z.enum([
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
   'EnableDataLakeGitHub',
+  'EnableDataLakeGitHubReconcile',
   'EnforceLakeAdmission',
   'EnforceLakeOriginOnIngest',
   'EnableBriefcase',
@@ -475,6 +477,7 @@ export const SettingKeySchema = z.enum([
   'whatsNewAutomationEnabled',
   'whatsNewConfig',
   'whatsNewSyncConfig',
+  'releaseNotesConfig',
 
   // AGENT PROACTIVE MESSAGING SETTINGS
   'enableAgentProactiveMessages',
@@ -2025,8 +2028,9 @@ export const settingsMap = {
     // which 401s where no key is configured. A reliable, tool-calling default also fixes the
     // tool-driven surfaces (OptiHashi et al.) that silently break on GPT-5 (internal tracking).
     // Opus/Fable remain an explicit opt-in.
-    // Self-host inverts the reasoning: there is no AWS IAM there (Bedrock can never work),
-    // while ANTHROPIC_API_KEY from .env.selfhost powers the Anthropic-hosted twin.
+    // Self-host inverts the reasoning: there is no AWS IAM there (Bedrock works only with the
+    // opt-in BEDROCK_AWS_* pair), while ANTHROPIC_API_KEY from .env.selfhost powers the
+    // Anthropic-hosted twin.
     // This is the authoritative default returned by getSettingsValue() when no AdminSettings override exists.
     defaultValue:
       process.env.B4M_SELF_HOST === 'true' ? ChatModels.CLAUDE_5_SONNET : ChatModels.CLAUDE_5_SONNET_BEDROCK,
@@ -2269,6 +2273,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 96,
     dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeGitHubReconcile: makeBooleanSetting({
+    key: 'EnableDataLakeGitHubReconcile',
+    name: 'Data Lakes: GitHub scheduled reconcile',
+    defaultValue: false,
+    description:
+      "Server-side gate for the scheduled check that compares each connected GitHub repository's default-branch HEAD with the last synced commit and queues a sync when they differ, so a missed or dropped push webhook still reaches the lake. Off by default - pushes still sync through the webhook and the Re-sync button; turn this on to also reconcile on a schedule.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 96,
+    dependsOn: 'EnableDataLakeGitHub',
   }),
   EnforceLakeAdmission: makeBooleanSetting({
     key: 'EnforceLakeAdmission',
@@ -4349,6 +4364,16 @@ export const settingsMap = {
     category: 'Admin',
     order: 102,
     schema: WhatsNewSyncConfigSchema,
+  }),
+  releaseNotesConfig: makeObjectSetting({
+    key: 'releaseNotesConfig',
+    name: 'Release Notes Configuration',
+    defaultValue: ReleaseNotesConfigSchema.parse({}),
+    description:
+      'Customer-facing release notes generated from each production release. Disabled by default. Sets the model, the embargo before a note becomes visible, a denylist of terms that must never appear, and the Slack channel that gets the pre-publish preview.',
+    category: 'Admin',
+    order: 103,
+    schema: ReleaseNotesConfigSchema,
   }),
   enableAgentProactiveMessages: makeBooleanSetting({
     key: 'enableAgentProactiveMessages',

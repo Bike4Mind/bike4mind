@@ -15,6 +15,7 @@ import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepart
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
@@ -27,6 +28,7 @@ import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
+import { useVideoModels } from '@client/app/hooks/data/videoGenerations';
 import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
 import { gray } from '@client/app/utils/themes/colors';
 import { useNotebookLayout } from '..';
@@ -119,6 +121,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // Gears page, so its row could never appear on its own.
 
   const gearsSignal = useGearsNavSignal();
+  // Shown only when GET /api/v1/video-models lists a model this user can run, so it never dead-ends.
+  const { data: videoModels } = useVideoModels();
+  const isVideoStudioEnabled = (videoModels?.length ?? 0) > 0;
 
   const closeOnMobile = () => {
     if (isMobile) setOpenSideNav(false);
@@ -257,6 +262,20 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         navigate({ to: '/projects' });
       },
     },
+    ...(isVideoStudioEnabled
+      ? [
+          {
+            key: 'video-studio',
+            label: t('sidenav.videoStudio', 'Video Studio'),
+            icon: iconSlot(<MovieOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/studio/video'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/studio/video' });
+            },
+          },
+        ]
+      : []),
     {
       // Live Artifacts (published shares) are the product's lead-gen surface -
       // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).

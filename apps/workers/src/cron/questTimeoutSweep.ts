@@ -21,12 +21,17 @@
  */
 
 import { connectDB, questRepository } from '@bike4mind/database';
+import { QUESTS_NAMESPACE, QUEST_METRICS, type QuestMetricName } from '@bike4mind/infra';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';
-import { resolveQuestTimeoutRecovery, QUEST_TIMEOUT_THRESHOLD_MS } from '@server/chatCompletion/questTimeoutRecovery';
+import {
+  resolveQuestTimeoutRecovery,
+  QUEST_TIMEOUT_THRESHOLD_MS,
+  STUCK_QUEST_RECOVERED_LOG,
+} from '@server/chatCompletion/questTimeoutRecovery';
 import {
   dispatchQuestCallback,
   GENERATION_CALLBACK_MAX_REDISPATCHES,
@@ -36,8 +41,6 @@ import {
 } from '@server/generationCallback/dispatchQuestCallback';
 
 const logger = new Logger({ metadata: { service: 'questTimeoutSweep' } });
-
-const CLOUDWATCH_NAMESPACE = 'Lumina5/Quests';
 
 /**
  * Oldest quest a steady-state pass will touch. Without a floor the first runs
@@ -69,7 +72,7 @@ export async function handler() {
   // Ahead of the connect and the query, so a sweep that cannot reach the database
   // still reports as a run. Emitted after them, a totally broken sweep looks
   // identical to one that was never scheduled.
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'TimeoutSweepRuns', 1, { Stage: stage }, StandardUnit.Count);
+  await emitMetric(QUESTS_NAMESPACE, QUEST_METRICS.TimeoutSweepRuns, 1, { Stage: stage }, StandardUnit.Count);
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
   return runQuestTimeoutSweep();
@@ -82,8 +85,8 @@ export async function handler() {
  */
 export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
   const stage = Resource.App.stage;
-  const metric = async (name: string, value: number) => {
-    if (emitMetrics) await emitMetric(CLOUDWATCH_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
+  const metric = async (name: QuestMetricName, value: number) => {
+    if (emitMetrics) await emitMetric(QUESTS_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
   };
 
   const nowMs = Date.now();
@@ -96,7 +99,7 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
   // Candidate depth is its own metric because `recovered` cannot distinguish a
   // run that drained the backlog from one that hit the cap with more waiting -
   // the difference that matters during an incident stranding thousands of quests.
-  await metric('TimeoutSweepCandidates', staleQuests.length);
+  await metric(QUEST_METRICS.TimeoutSweepCandidates, staleQuests.length);
 
   if (staleQuests.length >= SWEEP_LIMIT) {
     logger.warn('[QuestTimeoutSweep] Hit the per-run candidate cap; more quests may be waiting', {
@@ -119,10 +122,10 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
       const applied = await questRepository.settleIfUnfinished(quest.id, recovery);
       if (applied) {
         recovered++;
-        // Error level, not warn: a stuck quest is a user-visible failure LiveOps must
-        // see in the Slack error channel, which is fed by the ERROR-level subscription
-        // on this function's log group (infra/logMonitor.ts).
-        logger.error('[QuestTimeoutSweep] Recovered stuck quest', { questId: quest.id });
+        // Error level, not warn: a stuck quest is a user-visible failure LiveOps must see in the
+        // Slack error channel. The message is the shared recovery constant so one filter covers
+        // every settle site (infra/logMonitor.ts); `via` names this one.
+        logger.error(STUCK_QUEST_RECOVERED_LOG, { questId: quest.id, via: 'sweep' });
         await dispatchQuestCallback(quest.id, logger);
       }
     } catch (err) {
@@ -140,11 +143,11 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
     callbacksRedispatched,
     staleCallbacksReenqueued,
   });
-  await metric('TimeoutSweepRecovered', recovered);
-  await metric('TimeoutSweepCallbacksRedispatched', callbacksRedispatched);
+  await metric(QUEST_METRICS.TimeoutSweepRecovered, recovered);
+  await metric(QUEST_METRICS.TimeoutSweepCallbacksRedispatched, callbacksRedispatched);
   // Its own metric: a message lost after its claim is a different failure from a claim never made,
   // and its rate is the one worth alerting on.
-  await metric('TimeoutSweepStaleCallbacksReenqueued', staleCallbacksReenqueued);
+  await metric(QUEST_METRICS.TimeoutSweepStaleCallbacksReenqueued, staleCallbacksReenqueued);
 
   return { status: 'OK', recovered };
 }

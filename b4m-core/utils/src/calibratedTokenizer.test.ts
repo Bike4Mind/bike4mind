@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ITokenizer } from './tokenCounting';
-import { withTokenEstimateMultiplier } from './calibratedTokenizer';
+import { scaleTokenEstimate, withTokenEstimateMultiplier } from './calibratedTokenizer';
 
 const createTokenizer = (rawCount: number): ITokenizer => ({
   countTokens: vi.fn(async () => rawCount),
@@ -37,5 +37,25 @@ describe('withTokenEstimateMultiplier', () => {
     const tokenizer = createTokenizer(10);
 
     expect(withTokenEstimateMultiplier(tokenizer, 1)).toBe(tokenizer);
+  });
+});
+
+describe('scaleTokenEstimate', () => {
+  it('rounds the scaled count up', () => {
+    expect(scaleTokenEstimate(1001, 1.5)).toBe(1502);
+    expect(scaleTokenEstimate(1, 1.5)).toBe(2);
+  });
+
+  it('does not round 100 * 1.09 up to 110', () => {
+    expect(scaleTokenEstimate(100, 1.09)).toBe(109);
+  });
+
+  it('is the identity for a multiplier of 1', () => {
+    expect(scaleTokenEstimate(0, 1)).toBe(0);
+    expect(scaleTokenEstimate(12_345, 1)).toBe(12_345);
+  });
+
+  it('keeps zero at zero', () => {
+    expect(scaleTokenEstimate(0, 1.5)).toBe(0);
   });
 });

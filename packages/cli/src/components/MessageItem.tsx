@@ -83,8 +83,8 @@ export const MessageItem = React.memo(function MessageItem({
         <Box paddingLeft={2} flexDirection="column" marginBottom={1}>
           {hiddenSteps > 0 && (
             <Text dimColor wrap="truncate-end">
-              {/* Deliberately does not promise the trace later: a turn the user
-                  aborts with ESC discards its steps instead of printing them. */}
+              {/* Deliberately does not promise the trace later: a turn that fails
+                  with an error discards its steps instead of printing them. */}
               {`... ${hiddenSteps} earlier ${hiddenSteps === 1 ? 'step' : 'steps'} hidden`}
             </Text>
           )}
@@ -117,7 +117,7 @@ export const MessageItem = React.memo(function MessageItem({
                         the pair to a single row; nested <Text> keeps the colours. */}
                     <Text wrap={traceWrap}>
                       <Text color="yellow">{formattedToolName}</Text>
-                      {toolInput && !hideArgs && (
+                      {!!toolInput && !hideArgs && (
                         <Text dimColor>{` • ${oneLine(truncateValue(toolInput, ACTION_ARG_LIMIT))}`}</Text>
                       )}
                     </Text>

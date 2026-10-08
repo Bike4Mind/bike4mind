@@ -16,7 +16,9 @@ const { lakes, selectedAccount, toastInfo, organizations, gitHubFlag, slugPrevie
       organizations: { current: [] as { id: string; userId: string; managerId?: string }[] },
       gitHubFlag: { current: true },
       slugPreview,
-      slugPreviewMock: vi.fn((_name: string, _enabled: boolean) => ({ data: slugPreview.current })),
+      slugPreviewMock: vi.fn((_name: string, _enabled: boolean) => ({
+        data: slugPreview.current === undefined ? undefined : { slug: slugPreview.current, tagPrefix: null },
+      })),
     };
   }
 );
@@ -24,7 +26,8 @@ const { lakes, selectedAccount, toastInfo, organizations, gitHubFlag, slugPrevie
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: lakes.current }),
   activeOrgId: () => undefined,
-  useDataLakeSlugPreview: (name: string, enabled: boolean) => slugPreviewMock(name, enabled),
+  useDataLakeSlugPreview: (name: string, _tagPrefix: string | undefined, enabled: boolean) =>
+    slugPreviewMock(name, enabled),
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: (selector: (s: { selectedAccount: unknown }) => unknown) =>

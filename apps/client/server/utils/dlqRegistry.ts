@@ -61,9 +61,9 @@ const DLQ_REGISTRY = [
     sourceQueue: 'researchEngineQueue',
   },
   {
-    label: 'whats-new-generation',
-    displayName: "What's New Generation",
-    application: 'WhatsNewGeneration',
+    label: 'release-notes',
+    displayName: 'Release Notes',
+    application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
   },
   {
@@ -107,12 +107,6 @@ const DLQ_REGISTRY = [
     displayName: 'Quest Export',
     application: 'QuestExport',
     sourceQueue: 'questExportQueue',
-  },
-  {
-    label: 'video-generation',
-    displayName: 'Video Generation',
-    application: 'VideoGeneration',
-    sourceQueue: 'videoGenerationQueue',
   },
   {
     label: 'generation-job',

@@ -35,12 +35,15 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
 // ConfigStep reads the lake list for its duplicate-name hint; stub it so this test
 // needs no QueryClientProvider.
 const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
+const prefixPreview = vi.hoisted(() => ({
+  current: undefined as { slug: string; tagPrefix: string | null } | undefined,
+}));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
   useDuplicatePrefixLake: () => prefixClash.current,
   activeOrgId: () => undefined,
-  useDataLakeSlugPreview: () => ({ data: undefined }),
+  useDataLakeSlugPreview: () => ({ data: prefixPreview.current }),
   usePromoteDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 // SourceSelectionStep renders LakeSourceConnectActions, which pulls in React Query (useConfig /
@@ -80,6 +83,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
   beforeEach(() => {
     prefixClash.current = undefined;
+    prefixPreview.current = undefined;
     toastMock.error.mockClear();
     batchUploadMutate.mockClear();
     driveCommitMutate.mockClear();
@@ -285,6 +289,30 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
   // "a:", so gating on the field's own length blocked a prefix the server accepts.
   it('leaves Start Upload enabled for a one-character prefix, which submits as a legal two', () => {
     useDataLakeWizardStore.setState(state => ({ config: { ...state.config, tagPrefix: 'a' } }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
+  });
+
+  // The overlap lookup above only sees attachable lakes; an archived or deleted one still holds
+  // its prefix, and only the server preview knows.
+  it('disables Start Upload when the server reports the typed prefix held by a lake the form cannot see', () => {
+    prefixPreview.current = { slug: 'x', tagPrefix: 'docs-1:' };
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+  });
+
+  it('leaves Start Upload enabled while the server preview has no answer', () => {
+    prefixPreview.current = { slug: 'x', tagPrefix: null };
 
     render(
       <TestWrapper>

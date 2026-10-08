@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels } from '../models';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
+import { VIDEO_MODEL_IDS } from '../video/catalog';
 import {
+  isVideoModel,
   isGPTImageModel,
   isGPTImage2Model,
   isGPTImage25Model,
@@ -315,5 +317,14 @@ describe('supportsImageEdit', () => {
     expect(supportsImageEdit(null)).toBe(false);
     expect(supportsImageEdit(undefined)).toBe(false);
     expect(supportsImageEdit('')).toBe(false);
+  });
+});
+
+describe('isVideoModel', () => {
+  it('is true for every catalog video model and false for chat, image and retired Sora ids', () => {
+    expect(VIDEO_MODEL_IDS.every(id => isVideoModel(id))).toBe(true);
+    expect(isVideoModel('gpt-4o')).toBe(false);
+    expect(isVideoModel(ImageModels.GPT_IMAGE_1)).toBe(false);
+    expect(isVideoModel('sora-2')).toBe(false);
   });
 });

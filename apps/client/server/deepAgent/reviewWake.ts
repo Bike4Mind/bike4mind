@@ -8,7 +8,7 @@ import {
   type EvidenceTier,
   type ReviewVerdict,
 } from '@bike4mind/agents';
-import { createSmallLLMService } from '@bike4mind/services/llm';
+import { createSmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import type { SmallLLMAdapters } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 

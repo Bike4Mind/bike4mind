@@ -38,6 +38,9 @@ export interface IOrgGitHubLakeConnection {
   /** The commit the last clean sync fully applied. A non-manual sync at the same HEAD is a no-op. */
   lastSyncedCommitSha?: string;
   lastSyncedAt?: Date;
+  /** The latest tree read's split under GITHUB_LAKE_FILE_RULES, re-counted by every sync slice. */
+  treeCandidateCount?: number;
+  treeSkippedCount?: number;
   // Claim fields, same contract as IOrgGoogleDriveConnection's.
   syncClaimedAt?: Date;
   activeIngestBatchId?: string;
@@ -48,6 +51,12 @@ export interface IOrgGitHubLakeConnection {
    * While set the connection stays disabled; the row is hard-deleted once the purge finishes.
    */
   disconnectRequestedAt?: Date;
+  /** When the scheduled reconcile last compared this repo's HEAD; drives its oldest-checked-first order. */
+  reconcileCheckedAt?: Date;
+  /** HEAD the reconcile last enqueued a sync for (null: access was lost before HEAD could be read). */
+  reconcileEnqueuedSha?: string | null;
+  /** When that enqueue happened; the reconcile's retry cooldown runs from here. */
+  reconcileEnqueuedAt?: Date;
 }
 
 /**
@@ -60,6 +69,13 @@ export const GITHUB_DISCONNECT_STALL_MS = 15 * 60 * 1000;
 export function isGitHubDisconnectStalled(disconnectRequestedAt: Date, now: Date = new Date()): boolean {
   return now.getTime() - new Date(disconnectRequestedAt).getTime() >= GITHUB_DISCONNECT_STALL_MS;
 }
+
+/**
+ * How a sync's tree read split under GITHUB_LAKE_FILE_RULES: files the rules admit (the sync's
+ * target, before any post-fetch content check) and files they filter out. Directories are not files
+ * and count as neither.
+ */
+export type GitHubLakeTreeCounts = { candidateCount: number; skippedCount: number };
 
 export interface IOrgGitHubLakeConnectionDocument extends IOrgGitHubLakeConnection, IMongoDocument {}
 
@@ -76,6 +92,10 @@ export interface IOrgGitHubLakeConnectionResponse {
   lastError: string | null;
   defaultBranch: string | null;
   lastSyncedAt: Date | null;
+  lastSyncedCommitSha: string | null;
+  /** From the latest tree read (GitHubLakeTreeCounts); null until a sync has read the tree. */
+  candidateCount: number | null;
+  skippedCount: number | null;
   /**
    * 'syncing' whose claim went stale (a crashed run). Nothing resets such a row on its own, but the
    * sync route admits it, so the client offers Re-sync instead of waiting on it.
@@ -191,6 +211,11 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
    * `stamp` so a concurrent DELETE that re-stamped since is left alone. Returns whether it matched.
    */
   cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean>;
+  /**
+   * Stores a sync's tree counts, compare-and-set on the live claim token like renewSyncClaim, so a run
+   * that lost its claim cannot overwrite the counts of the one that took it. Returns whether it matched.
+   */
+  recordTreeCounts(id: string, expectedToken: string, counts: GitHubLakeTreeCounts): Promise<boolean>;
   /** Refreshes a pending disconnect's stamp (each purge slice); false when none is pending. */
   touchDisconnect(id: string): Promise<boolean>;
   /**
@@ -200,4 +225,13 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
   setEnabledForLake(targetDataLakeId: string, enabled: boolean): Promise<boolean>;
   /** Best-effort visibility for a failure outside any sync claim (e.g. the connect-time enqueue). */
   recordLastError(id: string, lastError: string): Promise<boolean>;
+  /**
+   * The scheduled reconcile's batch: enabled, not disconnecting, status connected (or legacy unset) or a
+   * stale 'syncing' claim, least recently checked first. 'error' is excluded - the App cannot read it.
+   */
+  findDueForReconcile(limit: number): Promise<IOrgGitHubLakeConnectionDocument[]>;
+  /** Stamps reconcileCheckedAt without touching updatedAt. */
+  markReconcileChecked(ids: readonly string[], at: Date): Promise<void>;
+  /** Records the reconcile's enqueue target for its retry cooldown, without touching updatedAt. */
+  markReconcileEnqueued(id: string, sha: string | null, at: Date): Promise<void>;
 }

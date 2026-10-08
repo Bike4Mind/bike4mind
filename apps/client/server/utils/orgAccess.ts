@@ -4,10 +4,11 @@
  * Shared utility for verifying user access to organization resources.
  * Used by org-scoped API endpoints (webhooks, GitHub connection, etc.)
  *
- * Three tiers, widest last. State which one you mean at every call site; picking the wrong one
+ * Four tiers, widest last. State which one you mean at every call site; picking the wrong one
  * either leaks across a tenant boundary or breaks a members' screen:
  * - `verifyOrgOwner`      - owner only
  * - `verifyOrgAccess`     - owner or manager
+ * - `verifyOrgAdminRead`  - owner, manager or appointed admin (reads only)
  * - `verifyOrgMembership` - any member (shareable ACL)
  *
  * Security:
@@ -21,6 +22,15 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from './resolveActiveOrg';
 import type { Request } from 'express';
+
+/**
+ * The one owner / manager / platform-admin predicate behind `verifyOrgAccess` (the write gate) and
+ * `verifyOrgAdminRead`'s `canManage`, so the read tier's answer cannot drift from what the write
+ * routes accept.
+ */
+function canManageOrg(user: { id: string; isAdmin: boolean }, org: { userId?: string; managerId?: string | null }) {
+  return user.isAdmin || org.userId === user.id || org.managerId === user.id;
+}
 
 /**
  * Verify user has update access to the organization
@@ -37,27 +47,14 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
     throw new BadRequestError('Invalid organization ID');
   }
 
-  // Admin users have access to all organizations
-  if (user.isAdmin) {
-    const org = await organizationRepository.findById(orgId);
-    if (!org) {
-      throw new NotFoundError('Organization not found');
-    }
-    return org;
-  }
-
-  // For non-admin users, check if they are owner or manager
   const org = await organizationRepository.findById(orgId);
   if (!org) {
     throw new NotFoundError('Organization not found');
   }
 
-  // Check if user is owner or manager (has update access)
-  const isOwner = org.userId === user.id;
-  const isManager = org.managerId === user.id;
-
-  if (!isOwner && !isManager) {
-    // Return same error for not found and not authorized (prevent enumeration)
+  // Platform admins pass for every org; everyone else must be its owner or manager. Same error for
+  // not found and not authorized (prevents enumeration).
+  if (!canManageOrg(user, org)) {
     throw new NotFoundError('Organization not found');
   }
 
@@ -65,9 +62,39 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 }
 
 /**
+ * Read-tier sibling of `verifyOrgAccess` for status surfaces an appointed org admin may see but not
+ * operate: admits the owner, the manager, an appointed admin (`adminUserIds`) and a platform admin.
+ * That is the same set `findIdsWithAdminRights` and `canManageLake` resolve from the user's side, read
+ * here off the org document because the org is already in hand: an appointed admin is matched on
+ * `adminUserIds` alone, unlike `isOrgOwnerOrCurrentAdmin` (`b4m-core/common/src/constants/organization.ts`),
+ * which also requires a current `users[]` row. Never use it to guard a write - `canManage` is the
+ * `verifyOrgAccess` answer, so a caller can render the write controls only for who may use them.
+ *
+ * Non-oracular like its siblings: a missing org and an unrelated caller both answer NotFoundError.
+ */
+export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean }, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  const org = await organizationRepository.findById(orgId);
+  if (!org) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  const canManage = canManageOrg(user, org);
+  const isAppointedAdmin = (org.adminUserIds ?? []).some(adminId => String(adminId) === user.id);
+  if (!canManage && !isAppointedAdmin) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  return { org, canManage };
+}
+
+/**
  * Verify the caller OWNS the organization, returning the organization document.
  *
- * The strictest of the three tiers in this file - owner only, where `verifyOrgAccess` also admits
+ * The strictest of the four tiers in this file - owner only, where `verifyOrgAccess` also admits
  * the manager and `verifyOrgMembership` admits any member. Use it wherever only the party that
  * owns the org may act: billing writes (committing the org to a charge, or changing what it pays)
  * and org-level integration wiring (`integrations/slack/*`, where connecting or disconnecting a

@@ -361,7 +361,9 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   advanceCounters(counters, checkpoint, cumulativeCost);
 
   // Charge + analytics reflect agent AND tool spend (the customer paid for both). The
-  // iterationBilling record below stays agent-only.
+  // iterationBilling record below stays agent-only. The ledger row and usage event carry the
+  // agent model, but these token counts include tool tokens priced at the tools' own models,
+  // so read credits/costUsd - never re-price tokens x model.
   const chargedInputTokens = deltas.inputTokens + toolUsage.inputTokens;
   const chargedOutputTokens = deltas.outputTokens + toolUsage.outputTokens;
   const chargedCacheReadTokens = deltas.cacheReadTokens + toolUsage.cacheReadTokens;
@@ -411,4 +413,48 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
     timestamp: new Date(effects.now()),
   });
   await effects.sendProgress(credits, iterationIndex);
+}
+
+export type SubagentMediaSettlementEffects = {
+  usdToCredits: (usd: number) => number;
+  deductCredits: (credits: number) => Promise<void>;
+  /** Mirrors the charge onto the child's `totalCreditsUsed` audit counter. */
+  recordAuditCredits: (credits: number) => Promise<void>;
+  /** Analytics dual-write, same shape as `billIteration`'s, so margin reporting sees this COGS. */
+  recordUsageEvent: (event: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+    cacheWriteTokens: number;
+    costUsd: number;
+    creditsCharged: number;
+  }) => void;
+};
+
+/**
+ * Charges the generated-media USD a dispatched subagent accrued via `foldGeneratedMediaUsd`.
+ * That path has no per-iteration loop (and no token deduction yet), so media settles once,
+ * after the run, on every exit: the provider cost was paid whether the run completed, was
+ * aborted or threw. Drains `pending` so a second call cannot double-charge. Returns the
+ * credits charged.
+ */
+export async function settleSubagentMediaUsage(
+  pending: PendingToolUsage,
+  effects: SubagentMediaSettlementEffects
+): Promise<number> {
+  const usage = takeToolUsage(pending);
+  if (usage.costUsd <= 0) return 0;
+  const credits = effects.usdToCredits(usage.costUsd);
+  if (credits <= 0) return 0;
+  await effects.deductCredits(credits);
+  effects.recordUsageEvent({
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedInputTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+    costUsd: usage.costUsd,
+    creditsCharged: credits,
+  });
+  await effects.recordAuditCredits(credits);
+  return credits;
 }

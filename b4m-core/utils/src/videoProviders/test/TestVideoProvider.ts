@@ -18,6 +18,7 @@ const READY_AFTER_MS = 4_000;
  */
 export class TestVideoProvider implements VideoProvider {
   readonly id = 'test' as const;
+  readonly models = ['test-video'] as const;
 
   async submit(
     request: ValidatedVideoRequest,

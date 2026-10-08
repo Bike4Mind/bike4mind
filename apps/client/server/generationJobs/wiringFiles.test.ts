@@ -63,7 +63,14 @@ describe('loadInputImage', () => {
 });
 
 describe('saveToFiles', () => {
-  const params = { userId: 'user1', jobId: 'job1', bytes: Buffer.from('mp4'), contentType: 'video/mp4', prompt: 'p' };
+  const params = {
+    userId: 'user1',
+    jobId: 'job1',
+    bytes: Buffer.from('mp4'),
+    contentType: 'video/mp4',
+    prompt: 'p',
+    signal: new AbortController().signal,
+  };
   beforeEach(() => vi.resetAllMocks());
 
   it('returns the existing file for the job without creating another', async () => {
@@ -106,5 +113,48 @@ describe('saveToFiles', () => {
     mocks.findOne.mockResolvedValue(null);
     mocks.createFabFile.mockRejectedValue(new Error(message));
     await expect(saveToFiles(params)).resolves.toEqual({ saved: false, reason });
+  });
+});
+
+describe('saveToFiles signal', () => {
+  beforeEach(() => vi.resetAllMocks());
+  const input = (signal: AbortSignal) => ({
+    userId: 'u1',
+    jobId: 'j1',
+    bytes: Buffer.from('v'),
+    contentType: 'video/mp4',
+    prompt: 'p',
+    signal,
+  });
+
+  it('forwards the step signal to the Files upload', async () => {
+    const controller = new AbortController();
+    mocks.findOne.mockResolvedValue(null);
+    mocks.upload.mockResolvedValue('generated-video/x.mp4');
+    mocks.createFabFile.mockImplementation(
+      async (_userId: string, _file: unknown, deps: { storage: { upload: (...a: unknown[]) => Promise<string> } }) => {
+        await deps.storage.upload('generated-video/x.mp4', Buffer.from('v'), { ContentType: 'video/mp4' });
+        return { id: 'f1', filePath: 'generated-video/x.mp4' };
+      }
+    );
+    await expect(saveToFiles(input(controller.signal))).resolves.toEqual({
+      saved: true,
+      fileId: 'f1',
+      s3Key: 'generated-video/x.mp4',
+    });
+    expect(mocks.upload).toHaveBeenCalledWith(
+      Buffer.from('v'),
+      'generated-video/x.mp4',
+      { ContentType: 'video/mp4' },
+      controller.signal
+    );
+  });
+
+  it('rethrows an abort instead of reporting an ordinary save failure', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    mocks.findOne.mockResolvedValue(null);
+    mocks.createFabFile.mockRejectedValue(new Error('This operation was aborted'));
+    await expect(saveToFiles(input(controller.signal))).rejects.toThrow('aborted');
   });
 });

@@ -505,7 +505,8 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   canPreauthorize: boolean;
   /**
-   * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
+   * Display name (name || username, never email) of the lake's effective owner (an active user
+   * owner grant supersedes the creator, so this follows a transfer). Populated ONLY for lakes
    * the caller does NOT own, and ONLY when the list projection was given a user lookup (the
    * manager list route) - the content-scope resolver and Slack omit it and pay for no extra
    * query. Mirrors the discover catalog's owner rule: never the owner's email, so a cross-org or
@@ -513,6 +514,18 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * account), or for own/fallback lakes.
    */
   ownerDisplayName?: string;
+  /**
+   * User id of the effective owner named by `ownerDisplayName` - the stable key the lake picker
+   * groups on, so two owners sharing a display name don't share a header. Same gate as
+   * `ownerDisplayName`. A raw id is no new exposure: `READER_LAKE_FIELDS` in redactLakeForActor.ts
+   * already serves `createdByUserId` to every reader of the lake.
+   */
+  ownerUserId?: string;
+  /**
+   * Username of that owner, used only to tell apart two owners who share a display name. Same gate
+   * as `ownerDisplayName`; may be absent on its own when the account has no username.
+   */
+  ownerUsername?: string;
   /**
    * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). EDITOR-ONLY,
    * like `systemPrompt`: surfaced only when the caller can manage the lake, so the settings
@@ -547,6 +560,12 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * can't manage the lake, the lake was never created for a connector, or a connection has bound.
    */
   pendingConnector?: DataLakePendingConnector;
+  /**
+   * Whether a GitHub lake connection row (enabled or not) is bound to this lake, read flag-free as
+   * apps/client/server/dataLakes/assertLakeConnectorFree.ts does. Present only alongside
+   * `pendingConnector`, and only when the list route wires the lookup; absent means unknown.
+   */
+  hasGitHubConnection?: boolean;
   /**
    * Lifetime embedding-spend meter (see IDataLake.embeddingSpendMicroUsd). EDITOR-ONLY, same
    * gate as the fields above: a reader gets none of a lake's financial telemetry. ALWAYS present
@@ -870,3 +889,9 @@ export function getDataLakeTags(
 ): string[] {
   return getAccessibleDataLakes(userTags, dynamicDataLakes, entitlementKeys).map(dl => dl.datalakeTag);
 }
+
+/**
+ * Name a lake created by the connector-first GitHub flow carries until a repository binds, when the
+ * bind renames it to the repository's owner/repo - but only if the name is still exactly this.
+ */
+export const GITHUB_LAKE_PLACEHOLDER_NAME = 'New GitHub data lake';
