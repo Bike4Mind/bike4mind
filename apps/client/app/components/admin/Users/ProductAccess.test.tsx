@@ -161,4 +161,112 @@ describe('ProductAccess', () => {
     expect(screen.getByText(/No tag-based grant for this product/)).toBeInTheDocument();
     expect(screen.queryByTestId('product-access-toggle-libreoncology:pro')).not.toBeInTheDocument();
   });
+  describe('implied entitlements (computed live from the held set)', () => {
+    const rows = (questmasterSources: { type: string; detail: string }[] = []) => ({
+      data: {
+        entitlements: [
+          { key: 'optihashi:pro', held: true, grantTag: 'opti', sources: [{ type: 'tag', detail: 'opti' }] },
+          { key: 'questmaster:pro', held: true, grantTag: 'questmaster-pro', sources: questmasterSources },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    it('renders the Implied chip and an implied-only hint, with no Revoke for the implied key', () => {
+      // The server's own `implied` source is ignored in favor of the live computation.
+      mockProductAccess.mockReturnValue(rows([{ type: 'implied', detail: 'optihashi:pro' }]));
+      render(<ProductAccess user={makeUser(['opti'])} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
+      expect(screen.getByTestId('product-access-source-questmaster:pro-implied')).toHaveTextContent('Implied');
+      expect(screen.getByTestId('product-access-implied-hint-questmaster:pro')).toHaveTextContent(
+        'Implied by optihashi:pro - revoke that to remove.'
+      );
+      expect(screen.getByTestId('product-access-toggle-questmaster:pro')).toHaveTextContent('Grant (questmaster-pro)');
+      expect(screen.getAllByText('Held')).toHaveLength(2);
+    });
+
+    it('drops the implied hold as soon as the implying tag revoke is staged (before Save)', () => {
+      // Server still reports the SAVED state (opti tag + implied questmaster); the live user no
+      // longer has the opti tag.
+      mockProductAccess.mockReturnValue(rows([{ type: 'implied', detail: 'optihashi:pro' }]));
+      const { rerender } = render(<ProductAccess user={makeUser(['opti'])} onFieldChange={vi.fn()} />, {
+        wrapper: TestWrapper,
+      });
+      expect(screen.getByTestId('product-access-source-questmaster:pro-implied')).toBeInTheDocument();
+
+      rerender(<ProductAccess user={makeUser([])} onFieldChange={vi.fn()} />);
+      expect(screen.queryByTestId('product-access-source-questmaster:pro-implied')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('product-access-implied-hint-questmaster:pro')).not.toBeInTheDocument();
+      expect(screen.getAllByText('None')).toHaveLength(2);
+    });
+
+    it('shows a staged grant of the implying tag as an implied hold immediately', () => {
+      mockProductAccess.mockReturnValue({
+        data: {
+          entitlements: [
+            { key: 'optihashi:pro', held: false, grantTag: 'opti', sources: [] },
+            { key: 'questmaster:pro', held: false, grantTag: 'questmaster-pro', sources: [] },
+          ],
+        },
+        isLoading: false,
+        error: null,
+      });
+      render(<ProductAccess user={makeUser(['opti'])} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
+      expect(screen.getByTestId('product-access-source-questmaster:pro-implied')).toBeInTheDocument();
+    });
+
+    it('keeps the implied hold when the implying key is held by a non-tag source', () => {
+      mockProductAccess.mockReturnValue({
+        data: {
+          entitlements: [
+            {
+              key: 'optihashi:pro',
+              held: true,
+              grantTag: 'opti',
+              sources: [{ type: 'domain', detail: 'partner.example' }],
+            },
+            { key: 'questmaster:pro', held: true, grantTag: 'questmaster-pro', sources: [] },
+          ],
+        },
+        isLoading: false,
+        error: null,
+      });
+      render(<ProductAccess user={makeUser([])} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
+      expect(screen.getByTestId('product-access-source-questmaster:pro-implied')).toBeInTheDocument();
+    });
+
+    it('does not imply from a bypass-only hold', () => {
+      mockProductAccess.mockReturnValue({
+        data: {
+          entitlements: [
+            {
+              key: 'optihashi:pro',
+              held: true,
+              grantTag: 'opti',
+              sources: [{ type: 'admin-bypass', detail: 'Super Admin' }],
+            },
+            {
+              key: 'questmaster:pro',
+              held: true,
+              grantTag: 'questmaster-pro',
+              sources: [{ type: 'admin-bypass', detail: 'Super Admin' }],
+            },
+          ],
+        },
+        isLoading: false,
+        error: null,
+      });
+      render(<ProductAccess user={makeUser([])} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
+      expect(screen.queryByTestId('product-access-source-questmaster:pro-implied')).not.toBeInTheDocument();
+    });
+
+    it('warns that revoking the questmaster-pro tag alone will not remove an implied hold', () => {
+      mockProductAccess.mockReturnValue(rows());
+      render(<ProductAccess user={makeUser(['opti', 'questmaster-pro'])} onFieldChange={vi.fn()} />, {
+        wrapper: TestWrapper,
+      });
+      expect(screen.getByText(/Also granted via Implied/)).toBeInTheDocument();
+      expect(screen.queryByTestId('product-access-implied-hint-questmaster:pro')).not.toBeInTheDocument();
+    });
+  });
 });

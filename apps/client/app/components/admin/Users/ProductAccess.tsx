@@ -4,6 +4,7 @@ import { Alert, Button, Chip, CircularProgress, Stack, Tooltip, Typography } fro
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { IUserDocument } from '@bike4mind/common';
 import { EntitlementSourceType, useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
+import { IMPLIED_ENTITLEMENTS, applyImpliedEntitlements } from '@client/lib/entitlements/registry';
 
 interface ProductAccessProps {
   /** The live-edited user (FullUsersView's formState) - tag grants are staged into it. */
@@ -32,10 +33,13 @@ const SOURCE_LABEL: Record<EntitlementSourceType, string> = {
  * committed by the card's one "Update" button. Deriving the tag state from the
  * live `user` (formState) prop - NOT a separate immediate mutation - avoids the
  * split-brain where two independent writers to `tags` clobber each other or a
- * pending Role edit. The read-only source chips (domain / subscription / implied /
+ * pending Role edit. The read-only source chips (domain / subscription /
  * admin- or developer-bypass) come from the server resolver, which reflects
  * SAVED state - those axes are not editable here (domain grant is env/DB config;
  * a subscription is managed in the Subscription section; bypass follows Role).
+ * The `implied` chips are recomputed here from the LIVE literal holds (staged
+ * tags included) with the same `applyImpliedEntitlements` the server gate runs,
+ * so staging a revoke of an implying key's tag updates the implied rows at once.
  */
 const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) => {
   const { data, isLoading, error } = useGetUserProductAccess(user.id);
@@ -66,20 +70,41 @@ const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) =>
 
   if (!data) return null;
 
+  const hasLiveTag = (grantTag: string | undefined) =>
+    grantTag ? currentTags.some(tag => tag.toLowerCase() === grantTag.toLowerCase()) : false;
+  // Server-reported sources minus the two axes recomputed live here: the tag (from formState)
+  // and `implied` (from the live literal holds below).
+  const serverSources = (row: (typeof data.entitlements)[number]) =>
+    row.sources.filter(source => source.type !== 'tag' && source.type !== 'implied');
+  // Implications expand from LITERAL holds only - never a bypass - matching the server resolver.
+  const liveLiteralHeld = data.entitlements
+    .filter(
+      row =>
+        hasLiveTag(row.grantTag) ||
+        serverSources(row).some(source => source.type !== 'admin-bypass' && source.type !== 'developer-bypass')
+    )
+    .map(row => row.key);
+  const liveHeld = new Set(applyImpliedEntitlements(liveLiteralHeld));
+  const impliedBy = (key: string): string[] =>
+    [...IMPLIED_ENTITLEMENTS]
+      .filter(([ifHeld, alsoGrant]) => alsoGrant.includes(key) && liveHeld.has(ifHeld))
+      .map(([ifHeld]) => ifHeld);
+
   return (
     <Stack spacing={1.5} data-testid="product-access-panel">
       {data.entitlements.map(row => {
         // Non-tag sources are server-authoritative (not editable here). The tag axis is
         // derived from the LIVE formState so the button + chip reflect a staged, unsaved
         // grant immediately - the server resolver only refreshes after Save.
-        const otherSources = row.sources.filter(source => source.type !== 'tag');
-        const liveTagGranted = row.grantTag
-          ? currentTags.some(tag => tag.toLowerCase() === row.grantTag!.toLowerCase())
-          : false;
+        const impliedSources = impliedBy(row.key).map(ifHeld => ({ type: 'implied' as const, detail: ifHeld }));
+        const otherSources = [...serverSources(row), ...impliedSources];
+        const liveTagGranted = hasLiveTag(row.grantTag);
         const held = liveTagGranted || otherSources.length > 0;
         const displaySources = liveTagGranted
           ? [...otherSources, { type: 'tag' as const, detail: row.grantTag! }]
           : otherSources;
+        const impliedOnly =
+          !liveTagGranted && impliedSources.length > 0 && otherSources.length === impliedSources.length;
 
         return (
           <Stack key={row.key} spacing={0.5} sx={{ borderBottom: '1px solid', borderColor: 'divider', pb: 1 }}>
@@ -96,12 +121,29 @@ const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) =>
               <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
                 {displaySources.map((source, i) => (
                   <Tooltip key={`${source.type}-${i}`} title={source.detail}>
-                    <Chip size="sm" variant="outlined" color="neutral">
+                    <Chip
+                      size="sm"
+                      variant="outlined"
+                      color="neutral"
+                      data-testid={`product-access-source-${row.key}-${source.type}`}
+                    >
                       {SOURCE_LABEL[source.type] ?? source.type}
                     </Chip>
                   </Tooltip>
                 ))}
               </Stack>
+            )}
+
+            {impliedOnly && (
+              <Alert
+                size="sm"
+                color="neutral"
+                variant="soft"
+                startDecorator={<InfoOutlinedIcon />}
+                data-testid={`product-access-implied-hint-${row.key}`}
+              >
+                Implied by {impliedSources.map(source => source.detail).join(', ')} - revoke that to remove.
+              </Alert>
             )}
 
             {liveTagGranted && otherSources.length > 0 && (
