@@ -59,9 +59,15 @@ export async function clearPointers(organizationId: string, userIds: string[]): 
  * defaults to the OS temp dir (never the checkout); an explicit --report must carry a path value.
  */
 export function parseRepairArgs(argv: string[]): { apply: boolean; reportPath: string } {
-  const reportFlag = argv.indexOf('--report');
-  const reportPath =
-    reportFlag === -1 ? join(tmpdir(), `stale-organization-pointers-${Date.now()}.json`) : argv[reportFlag + 1];
+  const reportArg = argv.find(arg => arg === '--report' || arg.startsWith('--report='));
+  let reportPath: string;
+  if (reportArg === undefined) {
+    reportPath = join(tmpdir(), `stale-organization-pointers-${Date.now()}.json`);
+  } else if (reportArg.startsWith('--report=')) {
+    reportPath = reportArg.slice('--report='.length);
+  } else {
+    reportPath = argv[argv.indexOf('--report') + 1];
+  }
   if (!reportPath || reportPath.startsWith('--')) throw new Error('--report needs a file path');
   return { apply: argv.includes('--apply'), reportPath };
 }
@@ -107,8 +113,10 @@ async function gradeOrg(organizationId: string): Promise<{ reason: StalePointerR
  * organizationRepository.findMemberUserIds, so this never re-implements orgMembershipFilter; a
  * pointer the billing gate still honours (resolveActiveOrg: any platform admin, or a non-admin the
  * shareable ACL admits, groups[] arm included) is kept even when that set excludes the user.
- * The report is written before any write, and each org is re-graded right before its write, so
- * only ids that are in the report AND still stale are nulled.
+ * The report is written before any write, and each org is re-graded right before its write, which
+ * narrows (but does not close) the race with a concurrent membership change: only ids that are in
+ * the report AND still stale are nulled, so every nulled pointer is in the report, while the report
+ * can list an id a later write no longer nulls.
  * Idempotent: a second run finds nothing, except a legacy `permissions: []` partner-rule row, whose
  * pointer applyPartnerRuleMembership re-sets on the user's next signup/verify.
  */
@@ -142,10 +150,13 @@ export async function clearStaleOrganizationPointers({
     for (const { organizationId, userIds } of orgs) {
       const reported = new Set(userIds);
       const { stale } = await gradeOrg(organizationId);
-      cleared += await clearPointers(
-        organizationId,
-        stale.filter(id => reported.has(id))
-      );
+      const toClear = stale.filter(id => reported.has(id));
+      // The report lists the plan from the first grading pass; a membership change since then can
+      // shrink the outcome, so log it instead of letting the report silently overstate the write.
+      if (toClear.length < reported.size) {
+        log(`org ${organizationId}: nulled ${toClear.length} of ${reported.size} listed pointer(s)`);
+      }
+      cleared += await clearPointers(organizationId, toClear);
     }
   }
 
