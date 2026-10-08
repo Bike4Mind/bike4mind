@@ -4,6 +4,7 @@ export * from './actorColors';
 export * from './actorKinds';
 export * from './identity';
 export * from './presence';
+export * from './machineSchemas';
 export * from './hookEvents';
 export * from './store';
 export * from './log';

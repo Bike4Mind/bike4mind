@@ -81,6 +81,12 @@ describe('HearthLog', () => {
     expect(readAgain).toHaveLength(1);
   });
 
+  it('append keeps the server-set origin', async () => {
+    const log = new HearthLog(new InMemoryHearthStore());
+    const event = await log.append(message({ origin: 'api-key' }));
+    expect(event.origin).toBe('api-key');
+  });
+
   it('rejects malformed input', async () => {
     const log = new HearthLog(new InMemoryHearthStore());
 

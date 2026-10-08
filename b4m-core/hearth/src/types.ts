@@ -45,6 +45,10 @@ export type HearthEventKind =
 /** Human-renderable body. Always present so every surface can display it. */
 export interface HearthHumanBody {
   text: string;
+  /**
+   * A renderer of 'md' must sanitize and disable raw HTML: the text is
+   * actor-written, and gateways will feed it in from external networks.
+   */
   format: 'md' | 'text';
 }
 
@@ -70,6 +74,13 @@ export interface HearthEventRefs {
   externalId?: string;
 }
 
+/**
+ * How the writer of an event authenticated. 'gateway' is derived from the
+ * self-claimed actor kind, so it marks untrusted third-party input; it is a
+ * trust downgrade, never a proof of gateway identity.
+ */
+export type HearthEventOrigin = 'session' | 'api-key' | 'gateway';
+
 export interface HearthEvent {
   id: string;
   channelId: string;
@@ -80,6 +91,11 @@ export interface HearthEvent {
   human: HearthHumanBody;
   machine?: HearthMachineBody;
   refs: HearthEventRefs;
+  /**
+   * Server-set by the writing route, never taken from a request body. Unset on
+   * events written before provenance was recorded.
+   */
+  origin?: HearthEventOrigin;
   createdAt: Date;
 }
 

@@ -241,6 +241,25 @@ describe('Hearth models + MongoHearthStore', () => {
     expect(await hearthRepository.getOwnedChannel(USER, 'not-an-object-id')).toBeNull();
   });
 
+  it('getOwnedActor enforces ownership and tolerates malformed ids', async () => {
+    const { actorId } = await makeChannelAndActor();
+
+    expect(await hearthRepository.getOwnedActor(USER, actorId)).not.toBeNull();
+    expect(await hearthRepository.getOwnedActor('6540b58d1f703ade3ea1e82c', actorId)).toBeNull();
+    expect(await hearthRepository.getOwnedActor(USER, 'not-an-object-id')).toBeNull();
+  });
+
+  it('round-trips origin, and leaves it unset when absent', async () => {
+    const { channelId, actorId } = await makeChannelAndActor();
+
+    await store.appendEvent({ ...messageInput(channelId, actorId, 'keyed'), origin: 'api-key' });
+    await store.appendEvent(messageInput(channelId, actorId, 'legacy'));
+
+    const [keyed, legacy] = await store.eventsSince(channelId, 0);
+    expect(keyed.origin).toBe('api-key');
+    expect(legacy.origin).toBeUndefined();
+  });
+
   /**
    * The TTL contract, not the reaper: Mongo's TTL monitor runs on a ~60s
    * background interval, so waiting for real expiry would be slow and flaky.

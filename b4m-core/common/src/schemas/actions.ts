@@ -5,6 +5,7 @@ import {
   hearthEventKindSchema,
   hearthMachineBodySchema,
   hearthEventRefsSchema,
+  hearthEventOriginSchema,
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
@@ -912,6 +913,8 @@ export const HearthEventAction = z.object({
     }),
     machine: hearthMachineBodySchema.optional(),
     refs: hearthEventRefsSchema.prefault({}),
+    // Server-set provenance; surfaces badge api-key/gateway writes.
+    origin: hearthEventOriginSchema.optional(),
     createdAt: z.string(),
   }),
 });

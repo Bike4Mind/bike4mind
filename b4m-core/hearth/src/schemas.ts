@@ -33,6 +33,8 @@ export const hearthEventKindSchema = z.enum([
   'system',
 ]);
 
+export const hearthEventOriginSchema = z.enum(['session', 'api-key', 'gateway']);
+
 export const hearthHumanBodySchema = z.object({
   text: z.string().min(1),
   format: z.enum(['md', 'text']),
@@ -57,6 +59,8 @@ export const appendEventInputSchema = z.object({
   human: hearthHumanBodySchema,
   machine: hearthMachineBodySchema.optional(),
   refs: hearthEventRefsSchema,
+  // Must be listed here: append() parses with this schema and zod strips unknown keys.
+  origin: hearthEventOriginSchema.optional(),
 });
 
 export type AppendEventInputParsed = z.infer<typeof appendEventInputSchema>;
