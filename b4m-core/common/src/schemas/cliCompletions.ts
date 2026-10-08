@@ -114,7 +114,7 @@ export const CompletionRequestSchema = z.object({
       tools: z.array(CompletionToolSchema).optional(),
       response_format: ResponseFormatSchema.optional(),
       reasoningEffort: CompletionReasoningEffortSchema.optional().describe(
-        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only) and DeepSeek adapters, and by the Anthropic adapter when `thinking.enabled` is set on a Claude model that takes an effort; Kimi, DeepSeek and Anthropic map it onto their own scale. Silently ignored by every other adapter (Gemini, Bedrock, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
+        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only) and DeepSeek adapters, and by the Anthropic adapters (direct and Bedrock) when `thinking.enabled` is set on a Claude model that takes an effort; Kimi, DeepSeek and Anthropic map it onto their own scale. Silently ignored by every other adapter (Gemini, xAI, Ollama, non-Claude Bedrock models) and by non-reasoning models, so sending it there is a no-op.'
       ),
       /**
        * Ask a model that can think to think on this turn. Claude reads `reasoningEffort` only

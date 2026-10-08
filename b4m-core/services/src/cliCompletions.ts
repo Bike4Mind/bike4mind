@@ -67,8 +67,8 @@ export interface CompletionParams {
     response_format?: import('@bike4mind/common').ResponseFormat;
     /**
      * Forwarded to the adapter, which the OpenAI (reasoning models), Kimi (K3 only) and
-     * DeepSeek backends read, and Anthropic reads only when `thinking.enabled` is set.
-     * Every other backend (Gemini, Bedrock, xAI, Ollama) drops it, so it is a silent no-op there.
+     * DeepSeek backends read, and Claude (direct or Bedrock) reads only when `thinking.enabled`
+     * is set. Every other backend (Gemini, xAI, Ollama) drops it, so it is a silent no-op there.
      */
     reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
     /** See the `thinking` field of CompletionRequestSchema. */
