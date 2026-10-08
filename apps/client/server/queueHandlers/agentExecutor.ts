@@ -1655,8 +1655,13 @@ async function processExecution(
         // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
         // no-ops for every agent-mode run: context.db.sessions was undefined here, so an agent
         // session's imageCount never moved even though the tools ran and the images landed on
-        // the Quest via persistRunAsQuest.
-        sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
+        // the Quest via persistRunAsQuest. `quests` + `findAllByIds` are edit_image's owner lookup for
+        // generated-image keys (resolveOwnedGeneratedImageUrl); without them those keys are refused.
+        sessions: {
+          incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository),
+          findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
+        },
+        quests: questRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -3472,7 +3477,12 @@ async function processSubagentDispatch(
         ...lakeWriteToolDb,
         // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
         // no-ops for every image a delegated subagent generates (same gap as the top-level path).
-        sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
+        // `quests` + `findAllByIds`: edit_image's generated-image owner lookup, as on the top-level path.
+        sessions: {
+          incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository),
+          findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
+        },
+        quests: questRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),

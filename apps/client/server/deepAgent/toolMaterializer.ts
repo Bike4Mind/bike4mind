@@ -17,7 +17,9 @@ import {
   lakeAccessEventRepository,
   organizationRepository,
   projectRepository,
+  questRepository,
   scopedSettingsRepository,
+  sessionRepository,
   userRepository,
 } from '@bike4mind/database';
 import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -102,6 +104,9 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        // Owner lookup for edit_image's generated-image keys (resolveOwnedGeneratedImageUrl).
+        quests: questRepository,
+        sessions: sessionRepository,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,

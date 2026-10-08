@@ -20,3 +20,11 @@ export const GENERATED_AUDIO_EXTENSION_RE = /\.(mp3|wav|m4a|aac|flac|opus)$/i;
 // Rendered videos (VideoGeneration writes .mp4 onto quest.videos). Disjoint from the audio set
 // above, which leaves .webm to this one on purpose.
 export const GENERATED_VIDEO_EXTENSION_RE = /\.(mp4|webm|mov)$/i;
+
+// Storage keys of generated files, as the generation tools mint them (`${uuidv4()}.${ext}`).
+// GENERATED_CONTENT_KEY_RE is what /api/generated-content/[ref] serves (any generated file);
+// GENERATED_IMAGE_KEY_RE is the strict, lowercase image-only subset the image tools accept as an
+// input (see resolveOwnedGeneratedImageUrl in @bike4mind/services). Neither admits a path separator.
+const GENERATED_KEY_UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+export const GENERATED_CONTENT_KEY_RE = new RegExp(`^${GENERATED_KEY_UUID}\\.[a-z]+$`, 'i');
+export const GENERATED_IMAGE_KEY_RE = new RegExp(`^${GENERATED_KEY_UUID}\\.(?:png|jpe?g|webp|gif)$`);

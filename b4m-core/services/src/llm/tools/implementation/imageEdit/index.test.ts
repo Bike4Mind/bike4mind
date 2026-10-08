@@ -402,6 +402,82 @@ describe('imageEditTool - credit reservation counts the image that renders', () 
   });
 });
 
+const GENERATED_KEY = '86cdc650-43d2-416e-aca6-23ff4fe23081.png';
+
+// Wires the owner lookup resolveOwnedGeneratedImageUrl needs: GENERATED_KEY is referenced by one
+// quest in session 's1', owned by `ownerUserId`.
+function createFakeContextWithGeneratedImageOwner(ownerUserId: string): ToolContext {
+  const context = createFakeContext();
+  const db = context.db as unknown as Record<string, unknown>;
+  db.quests = { findSessionIdsByImage: vi.fn().mockResolvedValue(['s1']) };
+  db.sessions = { findAllByIds: vi.fn().mockResolvedValue([{ id: 's1', userId: ownerUserId }]) };
+  context.imageGenerateStorage.getSignedUrl = vi.fn().mockResolvedValue('https://signed.example/generated.png');
+  return context;
+}
+
+describe('imageEditTool - generated-image key ownership', () => {
+  beforeEach(() => {
+    mockAxiosGet.mockReset();
+    mockEditSpy.mockReset();
+    mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+  });
+
+  function buildToolFn(context: ToolContext) {
+    context.onStart = vi.fn();
+    return imageEditTool.implementation(context, { model: ImageModels.GPT_IMAGE_1_5 } as GenerateImageToolCall).toolFn;
+  }
+
+  it('edits a generated image the caller owns', async () => {
+    // A self-host storage origin keeps the download off real DNS (see the provenance tests below).
+    process.env.AWS_ENDPOINT_URL_S3 = 'http://minio:9000';
+    try {
+      mockAxiosGet.mockResolvedValue({ status: 200, headers: {}, data: Buffer.from('png-bytes') });
+      const context = createFakeContextWithGeneratedImageOwner('u1');
+      context.imageGenerateStorage.getSignedUrl = vi
+        .fn()
+        .mockResolvedValue(`http://minio:9000/bucket/${GENERATED_KEY}?X-Amz-Signature=abc`);
+
+      await expect(buildToolFn(context)({ image: GENERATED_KEY, prompt: 'x' })).resolves.toMatch(/stop-after-dispatch/);
+      expect(context.imageGenerateStorage.getSignedUrl).toHaveBeenCalledWith(GENERATED_KEY);
+      expect(mockEditSpy).toHaveBeenCalled();
+    } finally {
+      delete process.env.AWS_ENDPOINT_URL_S3;
+    }
+  });
+
+  it.each([
+    ['source', { image: GENERATED_KEY, prompt: 'x' }],
+    ['mask', { image: PNG_DATA_URL, mask: GENERATED_KEY, prompt: 'x' }],
+  ])('refuses another user generated image as the %s - nothing signed or sent', async (_label, input) => {
+    const context = createFakeContextWithGeneratedImageOwner('someone-else');
+
+    await expect(buildToolFn(context)(input)).rejects.toThrow(/Could not resolve generated image/);
+    expect(context.imageGenerateStorage.getSignedUrl).not.toHaveBeenCalled();
+    expect(mockAxiosGet).not.toHaveBeenCalled();
+    expect(mockEditSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed key without consulting the owner lookup', async () => {
+    const context = createFakeContextWithGeneratedImageOwner('u1');
+
+    await expect(buildToolFn(context)({ image: '../other-user/key.png', prompt: 'x' })).rejects.toThrow(
+      /Could not resolve generated image/
+    );
+    expect((context.db.quests as { findSessionIdsByImage: unknown }).findSessionIdsByImage).not.toHaveBeenCalled();
+    expect(context.imageGenerateStorage.getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('refuses a generated key when the host did not wire the owner lookup', async () => {
+    const context = createFakeContext();
+
+    await expect(buildToolFn(context)({ image: GENERATED_KEY, prompt: 'x' })).rejects.toThrow(
+      /Could not resolve generated image/
+    );
+    expect(context.imageGenerateStorage.getSignedUrl).not.toHaveBeenCalled();
+    expect(mockEditSpy).not.toHaveBeenCalled();
+  });
+});
+
 // Regression for the self-host storage-provenance gap a reviewer found in this tool's own
 // resolution layer: `resolveImageInputUrl` must carry whether a URL was freshly minted by
 // `getSignedUrl()` through to `downloadImageAsBuffer`, and a literal caller-supplied URL that
@@ -474,16 +550,16 @@ describe('imageEditTool - self-host storage provenance (source and mask)', () =>
 
   it('allows a self-host signed URL resolved from a generated-image key as the mask', async () => {
     mockAxiosGet.mockResolvedValue({ status: 200, headers: {}, data: Buffer.from('png-bytes') });
-    const context = createFakeContext();
+    const context = createFakeContextWithGeneratedImageOwner('u1');
     context.imageGenerateStorage.getSignedUrl = vi
       .fn()
-      .mockResolvedValue('http://minio:9000/bucket/generated-key.png?X-Amz-Signature=abc');
+      .mockResolvedValue(`http://minio:9000/bucket/${GENERATED_KEY}?X-Amz-Signature=abc`);
     context.onStart = vi.fn();
     const { toolFn } = imageEditTool.implementation(context, {
       model: ImageModels.GPT_IMAGE_1_5,
     } as GenerateImageToolCall);
 
-    await expect(toolFn({ image: PNG_DATA_URL, mask: 'generated-key.png', prompt: 'make it warmer' })).resolves.toMatch(
+    await expect(toolFn({ image: PNG_DATA_URL, mask: GENERATED_KEY, prompt: 'make it warmer' })).resolves.toMatch(
       /stop-after-dispatch/
     );
 

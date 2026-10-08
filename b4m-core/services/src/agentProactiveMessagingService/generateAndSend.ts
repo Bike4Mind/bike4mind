@@ -143,6 +143,9 @@ export async function generateAndSendProactiveMessage({
           usageEvents: db.usageEvents,
           organizations: db.organizations,
           scopedSettings: db.scopedSettings,
+          // Owner lookup for edit_image's generated-image keys (resolveOwnedGeneratedImageUrl).
+          quests: db.quests,
+          sessions: db.sessions,
         },
       },
       storage,

@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
 import { resolveAttachmentLakeAccess } from '../../base/resolveAttachmentLakeAccess';
+import { resolveOwnedGeneratedImageUrl } from '../../base/resolveOwnedGeneratedImage';
 import {
   ApiKeyType,
   ImageModels,
@@ -126,11 +127,12 @@ export async function getImageFromFileId(fileId: string, context: ToolContext): 
  * image is NOT addressable as a fabFile ObjectId. Resolving it against the image
  * bucket is what lets a follow-up edit ("make it cartoonish") target a
  * previously generated image. The model learns these keys from the "Recently
- * generated images" system note assembled in ChatCompletionProcess.
+ * generated images" system note assembled in ChatCompletionProcess. Only the caller's own
+ * generated images resolve - see resolveOwnedGeneratedImageUrl.
  */
 async function getGeneratedImageUrl(storageKey: string, context: ToolContext): Promise<ResolvedImageUrl> {
   try {
-    const url = await context.imageGenerateStorage.getSignedUrl(storageKey);
+    const url = await resolveOwnedGeneratedImageUrl(storageKey, context);
     // Freshly minted from `getSignedUrl` - trusted provenance for the self-host storage exemption.
     return { url, trustConfiguredStorageOrigin: true };
   } catch (error) {
