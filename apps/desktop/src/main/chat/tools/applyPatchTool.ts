@@ -2,7 +2,16 @@ import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
 import { buildDiff } from './diff';
-import { applyChunks, parsePatch, PatchParseError, type MatchLevel, type OtherFile, type PatchOp } from './patch';
+import {
+  applyChunks,
+  findPatchText,
+  PATCH_BEGIN,
+  parsePatch,
+  PatchParseError,
+  type MatchLevel,
+  type OtherFile,
+  type PatchOp,
+} from './patch';
 import { realpathNearest } from './paths';
 import { recentFiles, recordRecentFile } from './recentFiles';
 import type { ApprovalPrompt, ToolContext, ToolDefinition } from './types';
@@ -24,14 +33,16 @@ import {
 
 const MAX_PATCH_FILES = 100;
 const MAX_SNIPPET_FILES = 8;
-const MAX_HINT_FILES = 6;
 const MAX_HINT_FILE_BYTES = 300_000;
 
-/** Files the session already read or wrote, for naming the one a misplaced hunk came from. */
+/**
+ * Files the session already read or wrote, for naming the one a misplaced hunk came from. All of
+ * them, as recentFiles bounds the list: a model that read a dozen files before patching quotes
+ * from any of them, and this only runs once a hunk has already missed.
+ */
 async function loadOtherFiles(target: string, context: ToolContext): Promise<OtherFile[]> {
   const others: OtherFile[] = [];
   for (const path of recentFiles(context)) {
-    if (others.length >= MAX_HINT_FILES) break;
     if (path === target) continue;
     try {
       const info = await stat(path);
@@ -127,11 +138,18 @@ function displayPath(target: string, context: ToolContext): string {
   return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? target : rel.split('\\').join('/');
 }
 
+function patchTextOf(input: Record<string, unknown>): string {
+  const found = findPatchText(input);
+  if (found !== undefined) return found;
+  const keys = Object.keys(input);
+  throw new Error(
+    'The "patchText" argument is required and must be a non-empty string holding the whole patch, from ' +
+      `"${PATCH_BEGIN}" to "*** End Patch". This call sent ${keys.length === 0 ? 'no arguments' : `only ${keys.map(key => JSON.stringify(key)).join(', ')}`}.`
+  );
+}
+
 async function resolveOps(input: Record<string, unknown>, context: ToolContext): Promise<ResolvedOp[]> {
-  const patchText = input.patchText;
-  if (typeof patchText !== 'string' || patchText.trim() === '') {
-    throw new Error('The "patchText" argument is required and must be a non-empty string.');
-  }
+  const patchText = patchTextOf(input);
 
   let ops: PatchOp[];
   try {
@@ -175,6 +193,7 @@ async function planPatch(resolved: readonly ResolvedOp[], context: ToolContext):
   const view = new Map<string, Entry>();
   const problems: string[] = [];
   const notes: string[] = [];
+  let missed = false;
 
   const entryFor = async (target: string): Promise<Entry> => {
     const known = view.get(target);
@@ -248,6 +267,7 @@ async function planPatch(resolved: readonly ResolvedOp[], context: ToolContext):
       if (others.length > 0) applied = applyChunks(split.lines, op.chunks, others);
     }
     if (applied.failures.length > 0) {
+      missed = true;
       for (const failure of applied.failures) problems.push(`${display}, ${failure.message}`);
       continue;
     }
@@ -290,7 +310,11 @@ async function planPatch(resolved: readonly ResolvedOp[], context: ToolContext):
   }
 
   if (problems.length > 0) {
-    throw new Error(`The patch was not applied. Nothing was written.\n\n${problems.join('\n\n')}`);
+    const retry = missed
+      ? '\n\nBefore retrying, read each range named above with file_read and rebuild those hunks from its ' +
+        'output. Then send the whole patch again, every file in it, as nothing from this one was applied.'
+      : '';
+    throw new Error(`The patch was not applied. Nothing was written.\n\n${problems.join('\n\n')}${retry}`);
   }
 
   return { changes: deriveChanges(view, disk, context), disk, key: planKey(resolved), notes };
@@ -531,7 +555,10 @@ const DESCRIPTION = [
   'Important:',
   '- Every file section needs one of the three headers; new lines are prefixed with + even in a new file.',
   '- Paths are relative to the working folder, or absolute. Only folders the user has shared can be changed.',
-  '- Copy context and removed lines exactly as file_read shows them, WITHOUT the line-number prefix.',
+  '- Copy context and removed lines exactly as file_read shows them, WITHOUT the line-number prefix. Every',
+  '  line is matched whole: never shorten a line, and never write "..." in place of text or lines you skip.',
+  '  Take them from a file_read of the range, not from memory, a search result or a summary, which may',
+  '  leave lines out.',
   '- Put every change you have planned, across all files, in one call. The patch is all-or-nothing: if any',
   '  hunk cannot be located nothing is written, and the error names the hunk and where the file differs.',
   '- Read a file before you update it. Updating or deleting a missing file, or adding an existing one, is an error.',

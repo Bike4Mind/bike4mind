@@ -963,9 +963,10 @@ export interface ChatSession extends ChatSessionMeta {
  * What the model is doing in the round in flight, as far as its stream shows.
  *
  * `waiting` is a request out and nothing back: a reasoning model that hides its reasoning (GPT)
- * spends its whole think here. `writing-tool` is a call the model has opened but not finished -
- * the arguments of a large call (a whole file, a long command) take tens of seconds to write.
- * A tool actually running is not a phase; ChatToolCall.status says that.
+ * spends its whole think here. `thinking` includes a thinking block whose text the provider
+ * omits, which no `reasoning` event ever shows. `writing-tool` is a call the model has opened but
+ * not finished - the arguments of a large call (a whole file, a long command) take tens of
+ * seconds to write. A tool actually running is not a phase; ChatToolCall.status says that.
  */
 export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
@@ -978,7 +979,7 @@ export type ChatStreamEvent =
   | { type: 'tool-progress'; sessionId: string; messageId: string; callId: string; text: string }
   /** What the model is doing in the round in flight; sent on change only. Status, never stored. */
   | { type: 'phase'; sessionId: string; messageId: string; phase: ModelPhase }
-  /** Readable reasoning, streamed ahead of the round's prose. Stored, not drawn; see ChatReplyRound.reasoning. */
+  /** Readable reasoning, streamed ahead of the round's prose; see ChatReplyRound.reasoning. */
   | { type: 'reasoning'; sessionId: string; messageId: string; text: string }
   /**
    * The turn's cost so far, emitted after each tool round trip completes and once more with
@@ -1314,12 +1315,12 @@ export interface ChatReplyRound {
   /** What this round's request cost, as the server reported it. Never sent to the model. */
   usage?: ChatUsage;
   /**
-   * The model's readable reasoning before this round's prose. Captured and stored, but NOT
-   * drawn: the transcript deliberately shows no thinking rows. Kept because sessions already on
-   * disk carry it and it is the only readable record of how a turn got there.
+   * The model's readable reasoning before this round's prose, drawn in the transcript as a row
+   * that is closed by default (ReasoningRow) and never drawn for the round still streaming -
+   * the status line speaks for that one, and the same thought in both places is it twice.
    *
-   * Never the replay channel either: what goes back to the provider is the message's opaque
-   * `thinking`, never this. Nothing reads this field today.
+   * Never the replay channel: what goes back to the provider is the message's opaque
+   * `thinking`, never this.
    */
   reasoning?: string;
 }

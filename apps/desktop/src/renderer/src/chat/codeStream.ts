@@ -6,7 +6,21 @@
  * scrolls past as raw source for a minute before turning into a card. The status line names
  * what is being written instead (see describeActivity).
  */
-export type PendingCode = { kind: 'artifact'; title?: string } | { kind: 'code'; language?: string };
+export type PendingCode = ({ kind: 'artifact'; title?: string } | { kind: 'code'; language?: string }) & {
+  /**
+   * The hidden source itself, so the status line can disclose what it is naming. Tail-bounded
+   * HERE rather than where it is shown: a file streams in over hundreds of kilobytes and this
+   * runs on every frame of the stream, whether or not anyone has the disclosure open.
+   */
+  body: string;
+};
+
+const PENDING_BODY_CHARS = 2000;
+
+/** The end of what has arrived so far, never more than one disclosure can use. */
+function tailFrom(text: string, index: number): string {
+  return text.slice(Math.max(index, text.length - PENDING_BODY_CHARS));
+}
 
 export interface PresentedReply {
   text: string;
@@ -56,9 +70,10 @@ export function presentReply(text: string, streaming: boolean): PresentedReply {
   if (start !== -1) {
     const tagEnd = visible.indexOf('>', start);
     const title = attribute(visible.slice(start, tagEnd === -1 ? undefined : tagEnd + 1), 'title');
+    const body = tailFrom(visible, start);
     visible = visible.slice(0, start).trimEnd();
     return streaming
-      ? { text: visible, pending: { kind: 'artifact', ...(title ? { title } : {}) }, unfinishedArtifact: null }
+      ? { text: visible, pending: { kind: 'artifact', ...(title ? { title } : {}), body }, unfinishedArtifact: null }
       : { text: visible, pending: null, unfinishedArtifact: title ?? '' };
   }
 
@@ -74,7 +89,11 @@ export function presentReply(text: string, streaming: boolean): PresentedReply {
   if (fence) {
     return {
       text: visible.slice(0, fence.index).trimEnd(),
-      pending: { kind: 'code', ...(fence.language ? { language: fence.language } : {}) },
+      pending: {
+        kind: 'code',
+        ...(fence.language ? { language: fence.language } : {}),
+        body: tailFrom(visible, fence.index),
+      },
       unfinishedArtifact: null,
     };
   }

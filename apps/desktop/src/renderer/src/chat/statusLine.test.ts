@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage, ChatReplyRound, ChatToolCall, ChatToolStatus, ModelPhase } from '@shared/chat';
+import type { PendingCode } from './codeStream';
 import {
+  activityDetail,
   contextPercent,
   contextTokens,
   describeActivity,
   describeReplyCost,
+  hasActivityDetail,
   describeSplit,
   describeUsage,
   formatCost,
@@ -16,13 +19,25 @@ import {
   occupancyArc,
   occupancyColor,
   statusFields,
+  STALL_AFTER_MS,
+  writingProse,
   totalTokens,
   usageLabel,
+  withStall,
   type ComposerUsage,
 } from './statusLine';
 
-function call(name: string, status: ChatToolStatus, progress?: string): ChatToolCall {
-  return { id: name, name, input: {}, status, ...(progress ? { progress } : {}) };
+function call(
+  name: string,
+  status: ChatToolStatus,
+  progress?: string,
+  input: Record<string, string> = {}
+): ChatToolCall {
+  return { id: name, name, input, status, ...(progress ? { progress } : {}) };
+}
+
+function code(body: string, language = 'tsx'): PendingCode {
+  return { kind: 'code', language, body };
 }
 
 describe('formatElapsed', () => {
@@ -151,67 +166,258 @@ describe('statusFields with usage', () => {
 });
 
 describe('describeActivity', () => {
-  const RESPONDING: ModelPhase = { kind: 'responding' };
-  const writing = (name: string): ModelPhase => ({ kind: 'writing-tool', name });
+  const writingCall = (name: string): ModelPhase => ({ kind: 'writing-tool', name });
 
   it('names the tool the model is still writing a call to, whatever the tool', () => {
-    expect(describeActivity([], RESPONDING, null)).toBe('Responding...');
-    expect(describeActivity([], writing('file_edit'))).toBe('Editing files...');
-    expect(describeActivity([], writing('bash_execute'))).toBe(
-      describeActivity([call('bash_execute', 'running')], null)
+    expect(describeActivity([], true, null, undefined, writingCall('file_edit'))).toEqual({
+      kind: 'writing',
+      label: 'Editing files...',
+    });
+    expect(describeActivity([], false, null, undefined, writingCall('session_spawn')).label).toBe(
+      'Starting a session...'
     );
-    expect(describeActivity([], writing('session_spawn'))).toBe('Starting a session...');
-  });
-
-  it('says thinking, not responding, when a later round goes back to thinking', () => {
-    expect(describeActivity([call('file_read', 'done')], { kind: 'thinking' })).toBe('Thinking...');
-    expect(describeActivity([call('file_read', 'done')], { kind: 'waiting' })).toBe('Thinking...');
   });
 
   it('lets an approval or a running tool outrank a call still being written', () => {
-    expect(describeActivity([call('file_read', 'running')], writing('file_edit'))).toBe('Reading files...');
-    expect(describeActivity([call('file_write', 'awaiting-approval')], writing('file_edit'))).toBe(
-      'Waiting for your answer...'
+    expect(describeActivity([call('file_read', 'running')], true, null, undefined, writingCall('file_edit')).kind).toBe(
+      'tool'
     );
+    expect(
+      describeActivity([call('file_write', 'awaiting-approval')], true, null, undefined, writingCall('file_edit')).kind
+    ).toBe('approval');
+  });
+
+  it('says thinking when a hidden thinking block follows prose in the same round', () => {
+    expect(describeActivity([], true, null, undefined, { kind: 'thinking' }).label).toBe('Thinking...');
+    expect(describeActivity([], true, null, undefined, { kind: 'responding' }).label).toBe('Responding...');
   });
 
   it('names code being written instead of calling it responding', () => {
-    expect(describeActivity([], RESPONDING, { kind: 'artifact', title: 'Dashboard' })).toBe(
+    expect(describeActivity([], true, { kind: 'artifact', title: 'Dashboard', body: '<artifact' }).label).toBe(
       'Creating an artifact: Dashboard...'
     );
-    expect(describeActivity([], RESPONDING, { kind: 'code' })).toBe('Writing code...');
+    expect(describeActivity([], true, code('const a = 1;')).label).toBe('Writing code...');
+  });
+
+  it('carries the hidden body, which is the one thing the thread does not draw', () => {
+    const activity = describeActivity([], true, code('```tsx\nconst a = 1;'));
+    expect(activity.kind).toBe('code');
+    expect(activityDetail(activity)?.body).toBe('```tsx\nconst a = 1;');
   });
 
   it('still lets a running tool or an approval outrank code being written', () => {
-    expect(describeActivity([call('file_read', 'running')], RESPONDING, { kind: 'code' })).not.toBe('Writing code...');
-    expect(describeActivity([call('file_write', 'awaiting-approval')], RESPONDING, { kind: 'code' })).toBe(
+    expect(describeActivity([call('file_read', 'running')], true, code('x')).kind).toBe('tool');
+    expect(describeActivity([call('file_write', 'awaiting-approval')], true, code('x')).label).toBe(
       'Waiting for your answer...'
     );
   });
 
   it('puts a blocked approval ahead of everything else', () => {
-    expect(describeActivity([call('bash_execute', 'awaiting-approval'), call('file_read', 'running')], null)).toBe(
-      'Waiting for your answer...'
-    );
+    expect(describeActivity([call('bash_execute', 'awaiting-approval'), call('file_read', 'running')], false)).toEqual({
+      kind: 'approval',
+      label: 'Waiting for your answer...',
+    });
   });
 
   it('names the one tool being waited on', () => {
-    expect(describeActivity([call('file_read', 'running')], null)).toBe('Reading files...');
+    expect(describeActivity([call('file_read', 'running')], false).label).toBe('Reading files...');
   });
 
   it('prefers the progress line a running tool reports to the generic phrase', () => {
-    expect(describeActivity([call('generate_image', 'running', 'rendering, 40%')], null)).toBe('rendering, 40%');
+    expect(describeActivity([call('generate_image', 'running', 'rendering, 40%')], false).label).toBe('rendering, 40%');
   });
 
-  it('does not try to name several at once', () => {
-    expect(describeActivity([call('file_read', 'running'), call('grep_search', 'running')], null)).toBe(
-      'Running tools...'
+  it('keeps a progress line to one line, however much the tool printed', () => {
+    const shouting = `step 1\n${'and then '.repeat(60)}`;
+    const label = describeActivity([call('generate_image', 'running', shouting)], false).label;
+    expect(label).toHaveLength(90);
+    expect(label).not.toContain('\n');
+  });
+
+  // The whole point of the line while a tool runs: "Running a command" is true of every command
+  // this app has ever run, and says nothing about the seven minutes you are watching.
+  it('names the tool and what it was called on', () => {
+    expect(describeActivity([call('bash_execute', 'running', undefined, { command: 'pnpm test' })], false).label).toBe(
+      'Running pnpm test...'
+    );
+    expect(
+      describeActivity([call('file_edit', 'running', undefined, { path: 'src/chat/statusLine.ts' })], false).label
+    ).toBe('Editing src/chat/statusLine.ts...');
+    expect(describeActivity([call('grep_search', 'running', undefined, { pattern: 'handleClick' })], false).label).toBe(
+      'Searching for handleClick...'
     );
   });
 
+  it('names the newest of several and counts the rest, which have rows of their own', () => {
+    const calls = [
+      call('file_read', 'running', undefined, { path: 'src/app.ts' }),
+      call('bash_execute', 'running', undefined, { command: 'pnpm lint' }),
+      call('file_edit', 'running', undefined, { path: 'src/chat/TurnStatus.tsx' }),
+    ];
+    expect(describeActivity(calls, false).label).toBe('Editing src/chat/TurnStatus.tsx and 2 more...');
+  });
+
+  it('falls back to the bare phrase for a tool whose call names nothing', () => {
+    expect(describeActivity([call('todo_write', 'running')], false).label).toBe('Updating the plan...');
+  });
+
+  it('names a model that is thinking rather than reporting it as still responding', () => {
+    // The five-to-ten-minute "Responding..." over a reply that stopped growing: the model wrote
+    // a sentence and has been reasoning ever since, and only this event says so.
+    expect(describeActivity([], true, null, 'weighing the options')).toEqual({
+      kind: 'thinking',
+      label: 'Thinking...',
+      reasoning: 'weighing the options',
+    });
+  });
+
+  it('lets a tool and code being written outrank reasoning, which only beats the two vague words', () => {
+    expect(describeActivity([call('file_read', 'running')], true, null, 'hmm').kind).toBe('tool');
+    expect(describeActivity([], true, code('const a = 1;'), 'hmm').kind).toBe('code');
+  });
+
   it('distinguishes a reply being written from one not started', () => {
-    expect(describeActivity([call('file_read', 'done')], RESPONDING)).toBe('Responding...');
-    expect(describeActivity([], null)).toBe('Thinking...');
+    expect(describeActivity([call('file_read', 'done')], true)).toEqual({ kind: 'text', label: 'Responding...' });
+    expect(describeActivity([], false)).toEqual({ kind: 'thinking', label: 'Thinking...' });
+  });
+});
+
+describe('writingProse', () => {
+  const round = (text: string, toolCallIds: string[] = []): ChatReplyRound => ({ text, toolCallIds });
+  const reply = (rounds: ChatReplyRound[]): ChatMessage => ({
+    id: 'm1',
+    role: 'assistant',
+    content: rounds.map(each => each.text).join('\n\n'),
+    createdAt: '2026-10-06T00:00:00.000Z',
+    rounds,
+  });
+
+  it('is true while the open round is taking prose', () => {
+    expect(writingProse(reply([round('Here is what I found')]))).toBe(true);
+  });
+
+  it('is false in the gap after a round ran tools, which is the model thinking again', () => {
+    expect(writingProse(reply([round('I will look.', ['c1'])]))).toBe(false);
+  });
+
+  it('is true again once the next round has said something', () => {
+    expect(writingProse(reply([round('I will look.', ['c1']), round('Found it.')]))).toBe(true);
+  });
+
+  it('reads a reply stored before rounds were recorded off its content', () => {
+    expect(writingProse({ id: 'm2', role: 'assistant', content: 'hello', createdAt: 'x' })).toBe(true);
+    expect(writingProse({ id: 'm3', role: 'assistant', content: '', createdAt: 'x' })).toBe(false);
+    expect(writingProse(undefined)).toBe(false);
+  });
+});
+
+describe('what the line will and will not disclose', () => {
+  it('offers nothing behind what the thread is already drawing', () => {
+    const waiting: ChatToolCall = {
+      id: 'c1',
+      name: 'bash_execute',
+      input: { command: 'rm -rf build' },
+      status: 'awaiting-approval',
+      approvalDetail: 'rm -rf build',
+    };
+    // The approval card, the tool rows and the reply's own prose are all on screen already; a
+    // second copy of any of them under the status line is the same words twice.
+    for (const activity of [
+      describeActivity([waiting], false),
+      describeActivity([call('file_read', 'running')], false),
+      describeActivity([call('file_read', 'running'), call('grep_search', 'running')], false),
+      describeActivity([], true),
+      describeActivity([], false),
+    ]) {
+      expect(hasActivityDetail(activity)).toBe(false);
+      expect(activityDetail(activity)).toBeNull();
+    }
+  });
+
+  it('offers the hidden body of code being written, and nothing when none has arrived', () => {
+    expect(hasActivityDetail(describeActivity([], true, code('const a = 1;')))).toBe(true);
+    expect(hasActivityDetail(describeActivity([], true, code('')))).toBe(false);
+  });
+
+  it('offers the reasoning, which is the other thing the thread never draws', () => {
+    const thinking = describeActivity([], true, null, 'first I should check the schema');
+    expect(hasActivityDetail(thinking)).toBe(true);
+    expect(activityDetail(thinking)).toEqual({ body: 'first I should check the schema' });
+    expect(hasActivityDetail(describeActivity([], false))).toBe(false);
+  });
+
+  it('tails the reasoning rather than mounting a ten-minute think', () => {
+    const think = Array.from({ length: 300 }, (_, index) => `thought ${index}`).join('\n');
+    const shown = activityDetail(describeActivity([], false, null, think))?.body ?? '';
+    expect(shown.split('\n')).toHaveLength(12);
+    expect(shown.endsWith('thought 299')).toBe(true);
+  });
+});
+
+describe('withStall', () => {
+  const turn = { startedAt: 1_000_000, tokens: null, lastEventAt: 1_002_000 };
+  const thinking = describeActivity([], false);
+
+  it('never calls a call still being written stalled: its arguments reach nobody until done', () => {
+    const writing = describeActivity([], true, null, undefined, { kind: 'writing-tool', name: 'file_write' });
+    expect(withStall(writing, turn, turn.lastEventAt + 120_000)).toBe(writing);
+  });
+
+  it('leaves an activity alone while events are still arriving', () => {
+    expect(withStall(thinking, turn, turn.lastEventAt + STALL_AFTER_MS - 1)).toBe(thinking);
+  });
+
+  it('names the silence and times it once nothing has arrived', () => {
+    const stalled = withStall(thinking, turn, turn.lastEventAt + 125_000);
+    expect(stalled.label).toBe('Waiting for the model... 2m 5s');
+  });
+
+  it('measures from the start of the turn until the first event lands', () => {
+    const fresh = { startedAt: 1_000_000, tokens: null };
+    expect(withStall(thinking, fresh, fresh.startedAt + 60_000).label).toBe('Waiting for the model... 1m 0s');
+  });
+
+  // Measured, not assumed: see STALL_AFTER_MS. A turn that is merely thinking sends nothing for
+  // tens of seconds on this server, and a line that called that stalled would be crying wolf on
+  // every Claude turn.
+  it('leaves a turn that has been quiet for half a minute alone', () => {
+    expect(withStall(thinking, turn, turn.lastEventAt + 30_000)).toBe(thinking);
+  });
+
+  // Waiting is a dead end, not a disclosure: there is no live stream behind it, and the line
+  // does not explain itself to the user instead.
+  it('opens nothing at all, whatever the turn was doing when it went quiet', () => {
+    const writing = describeActivity([], true, code('export function Dashboard() {'));
+    const quietMidCode = withStall(writing, turn, turn.lastEventAt + 60_000);
+    expect(hasActivityDetail(quietMidCode)).toBe(false);
+    expect(activityDetail(quietMidCode)).toBeNull();
+  });
+
+  it('does not call a model that is sending reasoning stalled - those are its sign of life', () => {
+    const thinking = describeActivity([], true, null, 'still working through it');
+    const live = { startedAt: 1_000_000, tokens: null, lastEventAt: 1_600_000, reasoning: 'still working through it' };
+    expect(withStall(thinking, live, live.lastEventAt + 5_000)).toBe(thinking);
+  });
+
+  it('never calls a running tool or a waiting approval stalled - the silence is theirs', () => {
+    const running = describeActivity([call('bash_execute', 'running')], false);
+    const waiting = describeActivity([call('bash_execute', 'awaiting-approval')], false);
+    expect(withStall(running, turn, turn.lastEventAt + 600_000)).toBe(running);
+    expect(withStall(waiting, turn, turn.lastEventAt + 600_000)).toBe(waiting);
+  });
+});
+
+describe('activityDetail bounds', () => {
+  it('tails a streamed body rather than mounting all of it', () => {
+    const body = Array.from({ length: 200 }, (_, index) => `line ${index}`).join('\n');
+    const shown = activityDetail(describeActivity([], true, code(body)))?.body ?? '';
+    expect(shown.split('\n')).toHaveLength(12);
+    expect(shown.endsWith('line 199')).toBe(true);
+  });
+
+  it('caps a body with no line breaks in it by characters', () => {
+    const shown = activityDetail(describeActivity([], true, code('x'.repeat(1900))))?.body ?? '';
+    expect(shown).toHaveLength(1200);
   });
 });
 

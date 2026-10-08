@@ -1,11 +1,11 @@
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatUsage } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
-import { describeNested, exploreSystemPrompt, exploreTool, MAX_EXPLORE_ROUNDS } from './exploreTool';
+import { checkQuotes, describeNested, exploreSystemPrompt, exploreTool, MAX_EXPLORE_ROUNDS } from './exploreTool';
 import { MAX_EXPLORE_REPORT_CHARS, MAX_FILE_READ_OUTPUT_CHARS, MAX_TOOL_OUTPUT_CHARS, outputCapFor } from './types';
 import type { ExploreContext, ToolContext } from './types';
 
@@ -265,6 +265,32 @@ describe('explore', () => {
     expect(report).toContain('[truncated: 10 more characters]');
   });
 
+  it('flags a quoted edit point that is not verbatim in the file the explorer read', async () => {
+    await writeFile(
+      join(root, 'spec.ts'),
+      '// returns 422 on validation failure. Body validation: both adapters guarantee it\nif (bad) fail();\n'
+    );
+    const report = [
+      'Edit points',
+      `- ${join(root, 'spec.ts')} lines 1-2`,
+      '```ts',
+      '// returns 422 on validation failure...',
+      'if (bad) fail();',
+      '```',
+    ].join('\n');
+    const { explore } = fakeExplore([
+      [toolUse([{ name: 'file_read', input: { path: join(root, 'spec.ts') } }])],
+      [{ type: 'content', text: report }],
+    ]);
+
+    const result = await exploreTool.run({ question: 'where is validation?' }, { ...context, explore });
+
+    expect(result.startsWith(report)).toBe(true);
+    expect(result).toContain('[Quote check:');
+    expect(result).toContain('spec.ts: "// returns 422 on validation failure..."');
+    expect(result).not.toContain('"if (bad) fail();"');
+  });
+
   it('refuses without a transport', async () => {
     await expect(exploreTool.run({ question: 'q' }, context)).rejects.toThrow(/not available/);
   });
@@ -277,5 +303,43 @@ describe('describeNested', () => {
     );
     expect(describeNested('grep_search', { pattern: 'foo' }, '/p')).toBe('Searching for foo');
     expect(describeNested('glob_files', { pattern: '**/*.ts', path: '/p/src' }, '/p')).toBe('Listing **/*.ts in src');
+  });
+});
+
+describe('checkQuotes', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-quotes-')));
+    await writeFile(join(root, 'a.ts'), 'const a = 1;\n  return a;\n');
+    await writeFile(join(root, 'b.ts'), 'const b = 2;\n');
+  });
+
+  const block = (...lines: string[]) => ['```ts', ...lines, '```'].join('\n');
+
+  it('says nothing when every quoted line is in the cited file, line-number prefixes and indentation aside', async () => {
+    const report = `See ${join(root, 'a.ts')}:\n${block('1\tconst a = 1;', 'return a;')}`;
+    expect(await checkQuotes(report, new Set([join(root, 'a.ts')]), root)).toBe('');
+  });
+
+  it('checks each block against the file cited nearest before it, by relative path too', async () => {
+    const report = `a.ts:\n${block('const a = 1;')}\nb.ts:\n${block('const a = 1;')}`;
+    const note = await checkQuotes(report, new Set([join(root, 'a.ts'), join(root, 'b.ts')]), root);
+    expect(note).toContain('b.ts: "const a = 1;"');
+    expect(note).not.toContain('a.ts: "const a = 1;"');
+  });
+
+  it('matches whole path names, not a shorter name inside a longer one', async () => {
+    await mkdir(join(root, 'src'));
+    await writeFile(join(root, 'src', 'a.ts'), 'const nested = 3;\n');
+    await writeFile(join(root, 'a.tsx'), 'const x = 4;\n');
+    const read = new Set([join(root, 'a.ts'), join(root, 'src', 'a.ts'), join(root, 'a.tsx')]);
+    const report = `src/a.ts:\n${block('const nested = 3;')}\n${join(root, 'a.tsx')}:\n${block('const x = 4;')}`;
+    expect(await checkQuotes(report, read, root)).toBe('');
+  });
+
+  it('only opens files the explorer read', async () => {
+    const report = `${join(root, 'a.ts')}\n${block('invented();')}`;
+    expect(await checkQuotes(report, new Set([join(root, 'b.ts')]), root)).toBe('');
   });
 });

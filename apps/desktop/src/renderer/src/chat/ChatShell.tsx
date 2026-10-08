@@ -38,7 +38,7 @@ import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
 import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
-import { contextTokens, describeActivity, latestReply, type ComposerUsage } from './statusLine';
+import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
@@ -282,10 +282,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // the last message can be that reply, so nothing earlier is consulted.
   const inFlight = conversation.messages[conversation.messages.length - 1];
   const liveText = inFlight ? (roundsOf(inFlight).at(-1)?.text ?? '') : '';
+  // The same parse the thread draws from, which is what lets the line speak for the two things
+  // the thread leaves out: the code presentReply hides, and the reasoning it never draws.
   const activity = describeActivity(
     inFlight?.toolCalls ?? [],
-    conversation.phase,
-    presentReply(liveText, true).pending
+    writingProse(inFlight),
+    presentReply(liveText, true).pending,
+    conversation.turn?.reasoning,
+    conversation.phase
   );
 
   /**
@@ -573,7 +577,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                     <Box data-testid="chat-workspace-status">
                       <TurnStatus
                         turn={{ startedAt: conversation.preparing.since, tokens: null }}
-                        activity={workspacePhrase(conversation.preparing)}
+                        activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
                       />
                     </Box>
                   )}

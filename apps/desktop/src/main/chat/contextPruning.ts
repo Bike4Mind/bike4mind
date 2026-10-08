@@ -1,5 +1,6 @@
 import { normalize } from 'node:path';
 import { messagesSinceBoundary, type ChatMessage, type ChatToolCall } from '@shared/chat';
+import { findPatchText } from './tools/patch';
 
 /**
  * Which old tool results to replace with a placeholder on the wire.
@@ -53,8 +54,8 @@ const REWRITE_TOOLS = new Set(['file_write']);
  */
 function patchRewrites(call: ChatToolCall): Set<string> {
   const paths = new Set<string>();
-  const text = call.input.patchText;
-  if (typeof text !== 'string') return paths;
+  const text = findPatchText(call.input);
+  if (text === undefined) return paths;
   let moving: string | null = null;
   for (const line of text.split(/\r?\n/)) {
     const add = /^\*\*\* (?:Add|Delete) File:\s*(.+?)\s*$/.exec(line);

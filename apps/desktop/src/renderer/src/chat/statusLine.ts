@@ -1,7 +1,7 @@
-import type { ChatToolCall, ChatUsage, ModelPhase } from '@shared/chat';
+import type { ChatMessage, ChatToolCall, ChatUsage, ModelPhase } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, autoCompactThreshold } from '@shared/contextLimit';
 import { pendingCodePhrase, type PendingCode } from './codeStream';
-import { activePhrase } from './toolRows';
+import { activePhrase, namedAction } from './toolRows';
 
 export { contextTokens, inputSide, latestReply } from '@shared/contextLimit';
 
@@ -20,7 +20,62 @@ export interface TurnProgress {
   tokens: number | null;
   /** The same report the count came from, for the split and the cost. */
   usage?: ChatUsage | null;
+  /**
+   * The live tail of what the model is REASONING, when that is the last thing that arrived.
+   *
+   * Main emits a 'reasoning' event per chunk and the thread deliberately draws none of it, so a
+   * model that thinks for five minutes before writing a word arrives as five minutes of nothing
+   * - which is how a turn mid-thought and a turn whose stream died came to render identically,
+   * both as "Responding...". Held here rather than on the message because it is not part of the
+   * reply: it is evidence that the turn is alive, and the one thing in flight that the
+   * transcript has no copy of.
+   *
+   * Bounded to REASONING_TAIL_CHARS and republished no more than once a second - see
+   * EVENT_STAMP_RESOLUTION_MS. Cleared the moment text or a tool arrives.
+   */
+  reasoning?: string;
+  /**
+   * Epoch ms the last stream event arrived, which is the only thing separating a working turn
+   * from a dead one. Elapsed-since-start cannot: a turn that stopped receiving anything twenty
+   * minutes ago renders exactly like one streaming tokens right now.
+   *
+   * Stamped once per batched flush of live events and no finer - see EVENT_STAMP_RESOLUTION_MS.
+   * Absent until the first event, which is what `startedAt` stands in for.
+   */
+  lastEventAt?: number;
 }
+
+/**
+ * How long a turn may go quiet before the line stops claiming it is working.
+ *
+ * Measured against this server rather than guessed: a thinking model sends NOTHING while it
+ * thinks - the completions stream carries no frame for it - so the quiet before a Claude turn's
+ * first token is normal and long. Two turns timed through the hosted backend went 12.5s and 42s
+ * from the request to their first event, and a resumed turn on a large conversation was reported
+ * at over a minute. A threshold under that would call every thinking turn stalled, which is how
+ * a warning stops being read. The case this exists for sat at "Responding..." for 27 minutes.
+ *
+ * The waiting line says only that it is waiting, and how long: see activityDetail.
+ */
+export const STALL_AFTER_MS = 45_000;
+
+/**
+ * The finest `lastEventAt` is recorded to.
+ *
+ * A stamp per delta would hand back exactly what the renderer's frame batching buys - see the
+ * live-event path in useChat. Nothing reads this at a finer grain than whole seconds against a
+ * ten-second threshold, so a coarse stamp costs the display nothing and saves a state update on
+ * every frame of a fast stream.
+ */
+export const EVENT_STAMP_RESOLUTION_MS = 1000;
+
+/**
+ * How much of the model's reasoning is kept for the disclosure.
+ *
+ * A tail, and bounded where it is accumulated rather than where it is shown: a long think runs
+ * to tens of thousands of tokens and none of it is worth holding in state to print twelve lines.
+ */
+export const REASONING_TAIL_CHARS = 2000;
 
 /**
  * New input, cache writes and output. Cache reads are left out: a long tool loop re-reads the
@@ -113,33 +168,185 @@ export function formatTokens(count: number): string {
 }
 
 /**
- * The third field: a short description of what the turn is doing right now.
+ * The third field: WHAT the turn is doing, and - where the transcript cannot show it - a way in.
  *
- * Read off the state the turn already publishes - tool statuses and the progress lines the slow
+ * Read off the state the turn already publishes - tool statuses, the progress lines the slow
  * tools report - rather than asked for. Approval outranks everything, because a turn parked at
- * the gate is not working on anything at all. Code being written is named rather than shown; see
- * presentReply.
+ * the gate is not working on anything at all.
+ *
+ * The line DISCLOSES ONLY WHAT THE TRANSCRIPT IS NOT ALREADY SHOWING, which is nearly nothing:
+ * prose streams into the thread as it arrives, tool rows are drawn there with their own
+ * disclosures, and an approval is a card the user is already looking at. Naming any of those a
+ * second time under the line is the same words twice on one screen. The exceptions are the two
+ * things the thread genuinely does not have: code being written, which presentReply HIDES, and
+ * a stream that has gone quiet, which is an absence and so cannot be drawn anywhere.
+ *
+ * So most kinds carry a label and nothing else. `pending` is a handle on the live body rather
+ * than a rendered string, because this is recomputed on every frame of a stream and the detail
+ * is built only once somebody opens it. See activityDetail.
  */
+export type TurnActivity =
+  | { kind: 'approval'; label: string }
+  | { kind: 'tool'; label: string }
+  | { kind: 'tools'; label: string }
+  | { kind: 'writing'; label: string }
+  | { kind: 'code'; label: string; pending: PendingCode }
+  | { kind: 'text'; label: string }
+  | { kind: 'thinking'; label: string; reasoning?: string }
+  | { kind: 'stalled'; label: string; silentMs: number };
+
+/** As much of a label as fits a line that must not wrap at any window width. */
+const MAX_LABEL_CHARS = 90;
+
+/** Whitespace flattened and the whole thing capped: a label is one line or it is not a label. */
+function oneLine(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length <= MAX_LABEL_CHARS ? flat : `${flat.slice(0, MAX_LABEL_CHARS - 3)}...`;
+}
+
+/** A named action as a clause rather than a sentence, so a count can follow it. */
+function withoutTrail(label: string): string {
+  return label.endsWith('...') ? label.slice(0, -3) : label;
+}
+
+/**
+ * What a running call is doing, in the order the line can say it: the tool and what it was
+ * called on, else whatever the tool reports about its own progress, else its bare phrase.
+ */
+function runningLabel(call: ChatToolCall): string {
+  return namedAction(call) || oneLine(call.progress ?? '') || activePhrase(call.name);
+}
+
+/**
+ * Whether prose for the ROUND IN FLIGHT is arriving.
+ *
+ * Not "has this reply said anything". A turn that spoke, ran tools and is now composing its
+ * next step has said plenty and is saying nothing, and "Responding..." sitting over a finished
+ * tool row is exactly the stale label this line exists to stop - it is also why "Thinking..."
+ * was almost never seen, since the first sentence of a turn made the whole rest of it read as
+ * responding.
+ *
+ * Text that arrives after a round's tool calls opens a NEW round (see appendText in
+ * shared/liveReply), so a last round carrying calls is a round that has no prose yet. A message
+ * stored before rounds were recorded has none to read, and falls back to its flattened content.
+ */
+export function writingProse(message: ChatMessage | undefined | null): boolean {
+  if (!message) return false;
+  const open = message.rounds?.[message.rounds.length - 1];
+  if (!open) return message.content.length > 0;
+  return open.toolCallIds.length === 0 && open.text.length > 0;
+}
+
 export function describeActivity(
   calls: readonly ChatToolCall[],
-  phase: ModelPhase | null,
-  pending: PendingCode | null = null
-): string {
-  if (calls.some(call => call.status === 'awaiting-approval')) return 'Waiting for your answer...';
+  hasText: boolean,
+  pending: PendingCode | null = null,
+  reasoning?: string,
+  phase: ModelPhase | null = null
+): TurnActivity {
+  if (calls.some(call => call.status === 'awaiting-approval'))
+    return { kind: 'approval', label: 'Waiting for your answer...' };
 
+  // What the model is doing, named: the tool's own word for itself and the thing it was called
+  // on, which is the only part of a turn the user cannot work out from the thread while it is
+  // still in flight. "Running a command" for seven minutes names nothing - it is true of every
+  // command this app has ever run.
   const running = calls.filter(call => call.status === 'running');
-  if (running.length === 1) {
-    const only = running[0];
-    return only.progress?.trim() || activePhrase(only.name);
+  if (running.length === 1) return { kind: 'tool', label: runningLabel(running[0]) };
+  if (running.length > 1) {
+    // The newest, because it is the one that just started and the one the rows have not settled
+    // yet; the others are named in full by their own rows a few lines above.
+    const newest = running[running.length - 1];
+    return { kind: 'tools', label: `${withoutTrail(runningLabel(newest))} and ${running.length - 1} more...` };
   }
-  if (running.length > 1) return 'Running tools...';
-  // Named as the tool it will be while the model is still writing the call: the call's
-  // arguments (a whole file, for an edit) are what takes the time, not running it.
-  if (phase?.kind === 'writing-tool') return activePhrase(phase.name);
-  if (pending) return pendingCodePhrase(pending);
+  // A call the model has opened but not finished, named as the tool it will be: writing the
+  // call's arguments (a whole file, a long command) is what takes the time, not running it.
+  if (phase?.kind === 'writing-tool') return { kind: 'writing', label: activePhrase(phase.name) };
+  if (pending) return { kind: 'code', label: pendingCodePhrase(pending), pending };
 
-  // Waiting reads as thinking too: a model that hides its reasoning sends nothing while it thinks.
-  return phase?.kind === 'responding' ? 'Responding...' : 'Thinking...';
+  // Reasoning outranks both words below it, and only those two. A model that wrote a sentence
+  // and then thought for four minutes is NOT still responding - nothing has been added to the
+  // reply in all that time - and reporting it as such is the five-to-ten-minute "Responding..."
+  // that this line was built to end.
+  if (reasoning) return { kind: 'thinking', label: 'Thinking...', reasoning };
+  // A thinking block whose text the provider omits sends markers and nothing else, so only the
+  // phase knows the model went back to thinking after the prose already in this round.
+  if (phase?.kind === 'thinking') return { kind: 'thinking', label: 'Thinking...' };
+
+  // "Responding..." says little, and that is correct here: the words it would otherwise repeat
+  // are being drawn in the thread a few lines above as they arrive.
+  return hasText ? { kind: 'text', label: 'Responding...' } : { kind: 'thinking', label: 'Thinking...' };
+}
+
+/**
+ * The same activity, or a stalled one wrapping it when nothing has arrived for a while.
+ *
+ * Applied where `now` already ticks rather than inside describeActivity, which is computed from
+ * the thread and knows nothing about the clock. See TurnStatus.
+ *
+ * A running tool, a call still being written and a waiting approval are never called stalled:
+ * the silence is theirs - a call's arguments reach nobody until it is complete, a
+ * command can take minutes without printing a line, and an approval is waiting on the user by
+ * definition - and "Waiting for the model" would name the wrong thing entirely.
+ */
+export function withStall(activity: TurnActivity, turn: TurnProgress, now: number): TurnActivity {
+  if (
+    activity.kind === 'approval' ||
+    activity.kind === 'tool' ||
+    activity.kind === 'tools' ||
+    activity.kind === 'writing'
+  )
+    return activity;
+
+  const silentMs = now - (turn.lastEventAt ?? turn.startedAt);
+  if (silentMs < STALL_AFTER_MS) return activity;
+  return { kind: 'stalled', label: `Waiting for the model... ${formatElapsed(silentMs)}`, silentMs };
+}
+
+/** What the line discloses, built only for an OPEN disclosure. */
+export interface ActivityDetail {
+  /** A block of text, already bounded to a tail this view can hold. */
+  body?: string;
+}
+
+/**
+ * Whether the label has anything behind it, cheaply enough to ask on every frame.
+ *
+ * False for everything the thread already draws, which is what keeps the line from being a
+ * second copy of the reply. Deliberately not "is the detail non-empty", which would mean
+ * building the detail to find out - the one thing a collapsed line must never do.
+ */
+export function hasActivityDetail(activity: TurnActivity): boolean {
+  if (activity.kind === 'code') return activity.pending.body.trim().length > 0;
+  if (activity.kind === 'thinking') return (activity.reasoning ?? '').trim().length > 0;
+  return false;
+}
+
+const DETAIL_CHARS = 1200;
+const DETAIL_LINES = 12;
+
+/** The end of a stream, which is where the news is. Bounded twice: characters, then lines. */
+function tailBlock(text: string): string {
+  const tail = text.length > DETAIL_CHARS ? text.slice(text.length - DETAIL_CHARS) : text;
+  const lines = tail.split('\n');
+  return (lines.length > DETAIL_LINES ? lines.slice(lines.length - DETAIL_LINES) : lines).join('\n').trim();
+}
+
+/**
+ * The live detail behind the label - the only expensive thing in this file.
+ *
+ * Called ONLY from an expanded disclosure, once per render of it, and bounded to a capped tail of
+ * the hidden stream. Nothing here grows with the length of a turn, and nothing here repeats
+ * something the thread is already drawing.
+ *
+ * A waiting turn has nothing behind it and opens nothing. There is a live stream to show or
+ * there is not; an explanation of why a stream is empty is a thing the user should not have to
+ * read, let alone click for.
+ */
+export function activityDetail(activity: TurnActivity): ActivityDetail | null {
+  if (activity.kind === 'code') return { body: tailBlock(activity.pending.body) };
+  if (activity.kind === 'thinking') return activity.reasoning ? { body: tailBlock(activity.reasoning) } : null;
+  return null;
 }
 
 /** The whole line, dot-separated, as one string - which is also how a test can read it. */

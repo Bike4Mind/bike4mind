@@ -19,7 +19,7 @@ import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
-import { totalTokens, type TurnProgress } from './statusLine';
+import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
@@ -430,6 +430,8 @@ export function useConversation(
     let queued: LiveReplyEvent[] = [];
     let frame: number | undefined;
     let fallback: ReturnType<typeof setTimeout> | undefined;
+    // What the model is thinking right now, kept out of the thread - see TurnProgress.reasoning.
+    let reasoning = '';
     const flushLive = () => {
       if (frame !== undefined) cancelAnimationFrame(frame);
       if (fallback !== undefined) clearTimeout(fallback);
@@ -441,6 +443,20 @@ export function useConversation(
       setMessages(current =>
         current.map(message => events.reduce((folded, event) => applyLiveEvent(folded, event), message))
       );
+      // The turn's sign of life, stamped once per FLUSH rather than once per event: the batch
+      // above exists so a fast stream does not re-render per token, and a stamp per token would
+      // hand that straight back. Coarser still at a second, where the same object is returned
+      // and React re-renders nothing at all - see EVENT_STAMP_RESOLUTION_MS.
+      reasoning = '';
+      setTurn(current => {
+        if (!current) return current;
+        const stamped = Date.now();
+        const due = stamped - (current.lastEventAt ?? current.startedAt) >= EVENT_STAMP_RESOLUTION_MS;
+        // Text or a tool means the model stopped thinking and started doing, so the reasoning
+        // goes immediately rather than waiting for the next stamp to come due.
+        if (!due && current.reasoning === undefined) return current;
+        return { ...current, reasoning: undefined, ...(due ? { lastEventAt: stamped } : {}) };
+      });
     };
 
     const unsubscribe = window.b4m.chat.onStreamEvent(event => {
@@ -473,6 +489,8 @@ export function useConversation(
 
       if (event.type === 'phase') {
         setPhase(event.phase);
+        // A sign of life like any other frame: a thinking marker carries no text to stamp it.
+        setTurn(current => (current ? { ...current, lastEventAt: Date.now() } : current));
         return;
       }
 
@@ -480,8 +498,26 @@ export function useConversation(
         setPhase(null);
         setPreparing(null);
         setStreaming(true);
-        setTurn({ startedAt: Date.now(), tokens: null });
+        reasoning = '';
+        const startedAt = Date.now();
+        setTurn({ startedAt, tokens: null, lastEventAt: startedAt });
         setMessages(current => startReply(current, event.messageId));
+        return;
+      }
+
+      // Reasoning is a sign of life and nothing else: it is deliberately not folded into the
+      // message, because the thread does not draw it. Published at the same coarse rate as the
+      // stamp, so a model emitting thinking tokens as fast as it can write cannot pull this
+      // window into a re-render per token.
+      if (event.type === 'reasoning') {
+        reasoning = (reasoning + event.text).slice(-REASONING_TAIL_CHARS);
+        setTurn(current => {
+          if (!current) return current;
+          const stamped = Date.now();
+          const previous = current.lastEventAt ?? current.startedAt;
+          if (current.reasoning !== undefined && stamped - previous < EVENT_STAMP_RESOLUTION_MS) return current;
+          return { ...current, lastEventAt: stamped, reasoning };
+        });
         return;
       }
 

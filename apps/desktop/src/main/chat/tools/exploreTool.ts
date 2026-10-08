@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { relative } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { isAbsolute, relative, resolve } from 'node:path';
 import type { ChatUsage } from '@shared/chat';
 import { withCacheBreakpoints, type CompletionMessage } from '../completions';
 import { addUsage, foldUsage } from '../streamEvents';
 import { createThinkFilter } from '../thinkFilter';
 import { fileRead, globFiles, grepSearch } from './fileTools';
+import { foldLine } from './patch';
 import { createLoopTally } from '../turnTiming';
 import {
   capOutput,
@@ -51,7 +53,9 @@ export const exploreTool: ToolDefinition = {
       'and reads on its own (grep_search, glob_files, file_read only) and returns a report: file ' +
       'paths with line numbers, the relevant conventions, what it could not find, and an "Edit ' +
       'points" section quoting verbatim the code you will need to change or copy a pattern from, ' +
-      'so you can edit against it without reading those files again. Use it for exploration that would take many searches and reads, and call it several ' +
+      'so you can edit against it without reading those files again. Its quotes are checked ' +
+      'against the files, and any line flagged as not verbatim must be read again before you ' +
+      'patch it. Use it for exploration that would take many searches and reads, and call it several ' +
       'times in one reply with different questions to explore in parallel. When you already know ' +
       'the file or symbol, use grep_search or file_read directly instead. Once you have delegated a ' +
       'search, do not redo it yourself; use the report.',
@@ -96,10 +100,15 @@ export const exploreTool: ToolDefinition = {
     let calls = 0;
     const tally = createLoopTally();
     let spent: ChatUsage | undefined;
+    const readPaths = new Set<string>();
     // Also on the round-limit exit, which is the slow one worth explaining.
-    const finish = (report: string): string => {
+    const finish = async (report: string): Promise<string> => {
       context.report?.detail({ ...tally.summary(), ...(spent ? { usage: spent } : {}) });
-      return report;
+      const note = await checkQuotes(report, readPaths, context.workingDirectory);
+      // ChatService caps this result again at the same limit; leaving room keeps the note from being the part cut.
+      return note
+        ? `${capOutput(report, MAX_EXPLORE_REPORT_CHARS - note.length - CAP_MARKER_ROOM)}${note}`
+        : capOutput(report, MAX_EXPLORE_REPORT_CHARS);
     };
 
     let target: ExploreTarget = explore;
@@ -154,16 +163,12 @@ export const exploreTool: ToolDefinition = {
       }
       if (context.signal.aborted) throw new Error('Exploring was stopped.');
 
-      if (requested.length === 0)
-        return finish(capOutput(text.trim() || 'The explorer finished without a report.', MAX_EXPLORE_REPORT_CHARS));
+      if (requested.length === 0) return finish(text.trim() || 'The explorer finished without a report.');
       if (round === MAX_EXPLORE_ROUNDS) {
         const partial = text.trim();
         return finish(
-          capOutput(
-            `${partial ? `${partial}\n\n` : ''}[The explorer reached its ${MAX_EXPLORE_ROUNDS}-round limit before ` +
-              'writing a full report.]',
-            MAX_EXPLORE_REPORT_CHARS
-          )
+          `${partial ? `${partial}\n\n` : ''}[The explorer reached its ${MAX_EXPLORE_ROUNDS}-round limit before ` +
+            'writing a full report.]'
         );
       }
 
@@ -175,6 +180,11 @@ export const exploreTool: ToolDefinition = {
           })
         )
       );
+      for (const result of results) {
+        const path = result.input.path;
+        if (result.name !== 'file_read' || result.error || typeof path !== 'string' || !path) continue;
+        readPaths.add(isAbsolute(path) || !context.workingDirectory ? path : resolve(context.workingDirectory, path));
+      }
 
       messages.push({
         role: 'assistant',
@@ -252,6 +262,90 @@ function startPaths(value: unknown): string[] {
   return value
     .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
     .slice(0, MAX_START_PATHS);
+}
+
+/** The "[truncated: N more characters]" line capOutput adds past its limit. */
+const CAP_MARKER_ROOM = 64;
+const MAX_CHECKED_FILE_BYTES = 1_000_000;
+const MAX_FLAGGED_LINES = 8;
+const MAX_FLAGGED_CHARS = 160;
+
+/**
+ * A note naming the lines in the report's code blocks that are not in the file cited before them.
+ * The parent edits against these quotes without reading the files, so an explorer that abridged
+ * one ("// returns 422 on validation failure...") would otherwise hand it a patch that cannot
+ * match. Only files the explorer itself read are opened, so this reaches nothing it could not.
+ */
+export async function checkQuotes(
+  report: string,
+  readPaths: ReadonlySet<string>,
+  workingDirectory?: string
+): Promise<string> {
+  if (readPaths.size === 0 || !report.includes('```')) return '';
+  const shown = (path: string): string => {
+    const rel = workingDirectory ? relative(workingDirectory, path) : '';
+    return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : path;
+  };
+
+  // Whole path names only: `index.ts` must not match inside `src/index.ts`, nor `a.ts` in `a.tsx`.
+  const pathChar = /[\w./\\-]/;
+  const bounded = (at: number, length: number): boolean =>
+    !pathChar.test(report[at - 1] ?? ' ') &&
+    !/[\w-]/.test(report[at + length] ?? ' ') &&
+    !(report[at + length] === '.' && /\w/.test(report[at + length + 1] ?? ' '));
+  const mentions: { at: number; path: string }[] = [];
+  for (const path of readPaths) {
+    for (const name of new Set([path, shown(path)])) {
+      for (let at = report.indexOf(name); at !== -1; at = report.indexOf(name, at + 1)) {
+        if (bounded(at, name.length)) mentions.push({ at, path });
+      }
+    }
+  }
+  mentions.sort((a, b) => a.at - b.at);
+
+  const files = new Map<string, Set<string> | null>();
+  const flagged: string[] = [];
+  let next = 0;
+  let cited: string | undefined;
+  for (const block of report.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) {
+    while (next < mentions.length && mentions[next].at < (block.index ?? 0)) cited = mentions[next++].path;
+    if (!cited) continue;
+    let known = files.get(cited);
+    if (known === undefined) {
+      known = await foldedFileLines(cited);
+      files.set(cited, known);
+    }
+    if (!known) continue;
+    for (const raw of block[1].split('\n')) {
+      // file_read's own line-number prefix, which the explorer is told to drop but sometimes keeps.
+      const line = raw.replace(/^\s*\d+\t/, '');
+      if (line.trim() === '' || known.has(foldLine(line))) continue;
+      const text = line.trim();
+      flagged.push(
+        `  ${shown(cited)}: ${JSON.stringify(text.length > MAX_FLAGGED_CHARS ? `${text.slice(0, MAX_FLAGGED_CHARS)}...` : text)}`
+      );
+      if (flagged.length >= MAX_FLAGGED_LINES) break;
+    }
+    if (flagged.length >= MAX_FLAGGED_LINES) break;
+  }
+  if (flagged.length === 0) return '';
+  return (
+    '\n\n[Quote check: these lines in the code blocks above do not appear verbatim in the file cited ' +
+    'before them, so they were abridged, paraphrased or are not quotes. Read those ranges with file_read ' +
+    `before you patch them:\n${flagged.join('\n')}]`
+  );
+}
+
+async function foldedFileLines(path: string): Promise<Set<string> | null> {
+  try {
+    const info = await stat(path);
+    if (!info.isFile() || info.size > MAX_CHECKED_FILE_BYTES) return null;
+    const text = await readFile(path, 'utf8');
+    if (text.includes('\u0000')) return null;
+    return new Set(text.split(/\r?\n/).map(foldLine));
+  } catch {
+    return null;
+  }
 }
 
 function parseArguments(raw: string | undefined): Record<string, unknown> {
