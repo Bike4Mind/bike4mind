@@ -65,6 +65,7 @@ const UNUSED_WASM_PREFIX = 'quickjs-';
 const TEMP_SUFFIX = '.tmp';
 const TEMP_MAX_AGE_MS = 10 * 60 * 1000;
 const COMPLETE_MARKER = '.complete';
+const SWAP_ATTEMPTS = 3;
 
 function main() {
   // Resolve the worker from the installed package (works with pnpm's nested node_modules).
@@ -105,7 +106,9 @@ function main() {
     if (!entry.startsWith(ASSETS_DIR_PREFIX) || entry === assetsDir) continue;
     const entryPath = path.join(destinationDir, entry);
     // A live run's private temp dir is recent; only an abandoned one (killed run) is swept.
-    if (entry.endsWith(TEMP_SUFFIX) && Date.now() - statSync(entryPath).mtimeMs < TEMP_MAX_AGE_MS) continue;
+    const stat = entry.endsWith(TEMP_SUFFIX) ? statSync(entryPath, { throwIfNoEntry: false }) : null;
+    if (entry.endsWith(TEMP_SUFFIX) && !stat) continue;
+    if (stat && Date.now() - stat.mtimeMs < TEMP_MAX_AGE_MS) continue;
     rmSync(entryPath, { recursive: true, force: true });
     console.log(`[copy-pdf-worker] Removed stale public/${entry}`);
   }
@@ -116,6 +119,7 @@ function main() {
   const tempDir = `${finalDir}.${process.pid}${TEMP_SUFFIX}`;
   const oldDir = `${finalDir}.${process.pid}.old${TEMP_SUFFIX}`;
   const isComplete = () => existsSync(path.join(finalDir, COMPLETE_MARKER));
+  if (isComplete()) return;
   try {
     for (const dir of ASSET_DIRS) {
       cpSync(path.join(pdfjsDir, dir), path.join(tempDir, dir), {
@@ -124,17 +128,34 @@ function main() {
       });
     }
     writeFileSync(path.join(tempDir, COMPLETE_MARKER), '');
-    if (isComplete()) return;
-    try {
-      renameSync(finalDir, oldDir);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-    try {
-      renameSync(tempDir, finalDir);
-    } catch (error) {
-      // A concurrent run renamed its own whole copy into place first.
-      if (!(error.code === 'ENOTEMPTY' || error.code === 'EEXIST') || !isComplete()) throw error;
+    for (let attempt = 1; ; attempt++) {
+      rmSync(oldDir, { recursive: true, force: true });
+      if (isComplete()) return;
+      try {
+        renameSync(finalDir, oldDir);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      try {
+        renameSync(tempDir, finalDir);
+        break;
+      } catch (error) {
+        const lostRace = error.code === 'ENOTEMPTY' || error.code === 'EEXIST';
+        // A concurrent run renamed its own whole copy into place first.
+        if (lostRace && isComplete()) break;
+        if (!lostRace) {
+          // An unrelated rename error must not leave the previous copy deleted by the finally.
+          if (existsSync(oldDir) && !existsSync(finalDir)) {
+            try {
+              renameSync(oldDir, finalDir);
+            } catch {
+              /* best effort */
+            }
+          }
+          throw error;
+        }
+        if (attempt === SWAP_ATTEMPTS) throw error;
+      }
     }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

@@ -107,6 +107,7 @@ describe('copy-pdf-worker.mjs', () => {
   it('survives overlapping runs over an existing assets directory', async () => {
     const dir = makeTempDir();
     expect(run(dir).status).toBe(0);
+    fs.rmSync(path.join(dir, ASSETS_NAME, '.complete'));
     const runAsync = () =>
       new Promise<number | null>(resolve => {
         spawn(process.execPath, [SCRIPT, dir], { stdio: 'ignore' }).on('close', resolve);
@@ -155,6 +156,59 @@ describe('copy-pdf-worker.mjs', () => {
       expect(result.stderr).toContain('[copy-pdf-worker] Failed to copy');
       expect(fs.readdirSync(dir).filter(f => f.startsWith('pdfjs-assets-'))).toEqual([]);
     });
+
+    it('exits 1 when the rename keeps losing to an incomplete directory', () => {
+      const dir = makeTempDir();
+      const result = runPatched(
+        dir,
+        `if (to.endsWith('${ASSETS_NAME}')) { const e = new Error('lost race'); e.code = 'ENOTEMPTY'; throw e; }`
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('[copy-pdf-worker] Failed to copy');
+      expect(fs.readdirSync(dir).filter(f => f.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('retries and exits 0 after one lost race to an incomplete directory', () => {
+      const dir = makeTempDir();
+      const result = runPatched(
+        dir,
+        `if (to.endsWith('${ASSETS_NAME}')) {
+           globalThis.__n = (globalThis.__n || 0) + 1;
+           if (globalThis.__n === 1) { const e = new Error('lost race'); e.code = 'ENOTEMPTY'; throw e; }
+         }`
+      );
+
+      expect(result.status).toBe(0);
+      expect(fs.existsSync(path.join(dir, ASSETS_NAME, '.complete'))).toBe(true);
+      expect(fs.readdirSync(dir).filter(f => f.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('exits 1 on an unrelated rename error even when the final directory is complete', () => {
+      const dir = makeTempDir();
+      const result = runPatched(
+        dir,
+        `if (to.endsWith('${ASSETS_NAME}')) {
+           fs.mkdirSync(to, { recursive: true }); fs.writeFileSync(to + '/.complete', '');
+           const e = new Error('denied'); e.code = 'EPERM'; throw e;
+         }`
+      );
+
+      expect(result.status).toBe(1);
+    });
+
+    it('keeps the previous assets directory on an unrelated rename error', () => {
+      const dir = makeTempDir();
+      fs.mkdirSync(path.join(dir, ASSETS_NAME, 'cmaps'), { recursive: true });
+      fs.writeFileSync(path.join(dir, ASSETS_NAME, 'cmaps', 'keep.bcmap'), 'keep');
+      const result = runPatched(
+        dir,
+        `if (to.endsWith('${ASSETS_NAME}') && !from.endsWith('.old.tmp')) { const e = new Error('busy'); e.code = 'EBUSY'; throw e; }`
+      );
+
+      expect(result.status).toBe(1);
+      expect(fs.existsSync(path.join(dir, ASSETS_NAME, 'cmaps', 'keep.bcmap'))).toBe(true);
+    });
   });
 
   it('keeps a previously copied assets directory when a pdfjs-dist asset directory is missing', () => {
@@ -197,5 +251,6 @@ describe('copy-pdf-worker.mjs', () => {
     expect(result.status).toBe(0);
     expect(fs.existsSync(path.join(dir, 'pdfjs-assets-5.6.205'))).toBe(false);
     expect(fs.existsSync(path.join(dir, ASSETS_NAME, 'cmaps', 'leftover.bcmap'))).toBe(false);
+    expect(fs.readdirSync(dir).filter(f => f.endsWith('.tmp'))).toEqual([]);
   });
 });
