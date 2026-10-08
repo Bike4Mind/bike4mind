@@ -2,14 +2,26 @@
 /**
  * Scope enforcement for /api/v1/projects through the REAL baseApi chain (apiKeyAuth included), so
  * the contracts' `scopes` are proven to reach the gate: reads accept projects:read OR
- * projects:write, create accepts projects:write only, and a rejected key never reaches a repository.
+ * projects:write, create/update/delete accept projects:write only, and a rejected key never reaches a
+ * repository.
  * Same harness shape as pages/api/v1/quests/[id]/__tests__/index.integration.test.ts.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockFindUser, mockRateLimit, mockList, mockCreate, mockFindAccessibleById } = vi.hoisted(() => ({
+const {
+  mockValidate,
+  mockFindUser,
+  mockRateLimit,
+  mockList,
+  mockCreate,
+  mockFindAccessibleById,
+  mockFindByIdAndUserId,
+  mockUpdate,
+} = vi.hoisted(() => ({
+  mockFindByIdAndUserId: vi.fn(),
+  mockUpdate: vi.fn(),
   mockValidate: vi.fn(),
   mockFindUser: vi.fn(),
   mockRateLimit: vi.fn(),
@@ -53,6 +65,8 @@ vi.mock('@bike4mind/database', async orig => {
       listAccessibleAfterId: (...a: unknown[]) => mockList(...a),
       create: (...a: unknown[]) => mockCreate(...a),
       shareable: { findAccessibleById: (...a: unknown[]) => mockFindAccessibleById(...a) },
+      findByIdAndUserId: (...a: unknown[]) => mockFindByIdAndUserId(...a),
+      update: (...a: unknown[]) => mockUpdate(...a),
     },
   };
 });
@@ -88,9 +102,11 @@ function withScopes(scopes: ApiKeyScope[]) {
   });
 }
 
+type FireInit = { method: 'GET' | 'POST' | 'PATCH' | 'DELETE'; url: string; query?: object; body?: object };
+
 // any: the handlers' Express-typed params vs node-mocks-http mocks.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fire(handler: any, init: { method: 'GET' | 'POST'; url: string; query?: object; body?: object }) {
+async function fire(handler: any, init: FireInit) {
   const { req, res } = createMocks(
     { ...init, headers: { 'x-api-key': 'sk-test-valid-key', 'content-type': 'application/json' } } as never,
     { eventEmitter: EventEmitter }
@@ -103,6 +119,15 @@ const list = () => fire(listOrCreate, { method: 'GET', url: '/api/v1/projects' }
 const create = () =>
   fire(listOrCreate, { method: 'POST', url: '/api/v1/projects', body: { name: 'Research', description: 'desc' } });
 const getOne = () => fire(getById, { method: 'GET', url: `/api/v1/projects/${PROJECT_ID}`, query: { id: PROJECT_ID } });
+const patchOne = () =>
+  fire(getById, {
+    method: 'PATCH',
+    url: `/api/v1/projects/${PROJECT_ID}`,
+    query: { id: PROJECT_ID },
+    body: { name: 'Renamed' },
+  });
+const deleteOne = () =>
+  fire(getById, { method: 'DELETE', url: `/api/v1/projects/${PROJECT_ID}`, query: { id: PROJECT_ID } });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -111,6 +136,8 @@ beforeEach(() => {
   mockList.mockResolvedValue({ data: [PROJECT], hasMore: false });
   mockCreate.mockResolvedValue(PROJECT);
   mockFindAccessibleById.mockResolvedValue(PROJECT);
+  mockFindByIdAndUserId.mockResolvedValue(PROJECT);
+  mockUpdate.mockResolvedValue(undefined);
 });
 
 describe('/api/v1/projects scope enforcement (real middleware chain)', () => {
@@ -141,5 +168,34 @@ describe('/api/v1/projects scope enforcement (real middleware chain)', () => {
     expect((await getOne())._getStatusCode()).toBe(403);
     expect(mockList).not.toHaveBeenCalled();
     expect(mockFindAccessibleById).not.toHaveBeenCalled();
+  });
+
+  it('a read-only key can neither update nor delete a project (403) and nothing is written', async () => {
+    withScopes([ApiKeyScope.READ_PROJECTS]);
+    for (const res of [await patchOne(), await deleteOne()]) {
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().required_scopes).toEqual([ApiKeyScope.WRITE_PROJECTS]);
+    }
+    expect(mockFindAccessibleById).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a write key can update a project (200)', async () => {
+    withScopes([ApiKeyScope.WRITE_PROJECTS]);
+    const res = await patchOne();
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ id: PROJECT_ID, name: 'Renamed' });
+  });
+
+  it('an unknown body field is a 422 through the real error handler', async () => {
+    withScopes([ApiKeyScope.WRITE_PROJECTS]);
+    const res = await fire(getById, {
+      method: 'PATCH',
+      url: `/api/v1/projects/${PROJECT_ID}`,
+      query: { id: PROJECT_ID },
+      body: { users: [] },
+    });
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });

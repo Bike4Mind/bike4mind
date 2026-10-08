@@ -43,7 +43,11 @@ const updateRoute = nextRouteForContract(updateProjectContract, {
   let project;
   try {
     // Spread rather than destructured so an omitted field stays absent instead of being set undefined.
-    project = await projectService.update(req.user.id, { ...req.validated, id }, { db: { projects: projectRepository } });
+    project = await projectService.update(
+      req.user.id,
+      { ...req.validated, id },
+      { db: { projects: projectRepository } }
+    );
   } catch (error) {
     // userId_1_name_1 partial-unique index; same status the SPA route answers.
     if (isDuplicateKeyError(error) && name !== undefined) {
