@@ -1,6 +1,5 @@
 // brand externalized
 import { getBrandName } from '@client/config/general';
-import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
 import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
 
 // Generated from the same catalog the New-Key modals offer, so the table can't drift from
@@ -114,7 +113,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions[/{id}]\`
 - Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`
-- Files and data lakes: \`/api/v1/files\`, \`/api/v1/files/{id}\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
+- Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
+  delete), \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
 - Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
@@ -137,72 +137,6 @@ treat the handler as authoritative.
 | GET | /api/quests/[id]/files | Files generated or referenced during quest processing |
 
 **Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access).
-
----
-
-### Files (FabFiles)
-
-Manage uploaded files, trigger chunking for RAG, and search file content.
-
-#### List Files
-
-\`\`\`
-GET /api/files
-\`\`\`
-
-**Query Parameters:**
-
-Nested keys use bracket syntax (parsed with \`qs\`), for example \`pagination[page]=2&order[by]=createdAt&order[direction]=desc\`.
-
-| Param | Type | Description |
-|-------|------|-------------|
-| search | string | Search by filename |
-| filters[tags] | string[] | Only files carrying these tags |
-| filters[type] | string | One of \`text\`, \`pdf\`, \`url\`, \`image\`, \`excel\`, \`word\`, \`json\`, \`csv\`, \`markdown\`, \`code\`, \`audio\`, \`video\` |
-| filters[shared] | boolean | Files shared with you |
-| filters[curated] | boolean | Curated notebook files |
-| filters[projectId] | string | Only files in this project |
-| filters[ids] | string[] | Only these file ids |
-| pagination[page] | number | Page number (default 1) |
-| pagination[limit] | number | Items per page (default 20) |
-| order[by] | string | \`createdAt\`, \`fileName\` or \`fileSize\` (default \`fileName\`) |
-| order[direction] | string | \`asc\` or \`desc\` (default \`asc\`) |
-| options[textSearch] | boolean | Use text search for \`search\` |
-| options[excludeContent] | boolean | Omit file content from the results |
-
-**Query-parameter gotchas.** \`pagination\` and \`order\` are all-or-nothing: send every key of a nested object or omit the object entirely, or the request is a 422 (the documented defaults apply only when you omit the object). Boolean params are coerced, so any non-empty value - including \`false\` - enables them; omit the key to disable. Array params take a repeated key (\`filters[tags]=a&filters[tags]=b\`); the \`[]\` suffix works too, but a list longer than 20 turns into an object (\`qs\` arrayLimit) that the schema rejects. A single bare value is rejected.
-
-The response is \`{ data, hasMore, total }\`, where \`data\` is the page of files.
-
-#### Trigger Chunking
-
-\`\`\`
-POST /api/files/chunk
-\`\`\`
-
-Initiates the chunking and embedding pipeline for a file.
-
-**Request Body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| fabFileId | string | Yes | File ID to chunk |
-| chunkSize | integer | Yes | Passage target in tokens. Must be an integer between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, inclusive. |
-
-#### File Endpoints Summary
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/files | List files with pagination and filters |
-| GET | /api/files/[id] | Get file details |
-| PUT | /api/files/[id] | Update file metadata |
-| DELETE | /api/files/[id] | Delete a file |
-| POST | /api/files/chunk | Trigger chunking pipeline |
-| GET | /api/files/search | Full-text search across file content |
-| DELETE | /api/files/bulk-delete | Delete multiple files |
-| GET | /api/files/byIds | Get multiple files by ID |
-| POST | /api/files/generate-presigned-url | Generate presigned upload URL (internal; use /api/v1/files) |
-| GET | /api/files/getFabFileNameById | Get filename by ID |
 
 ---
 
@@ -370,7 +304,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 2. **Use streaming for better UX.** Pass \`stream: true\` in chat requests and listen for \`streamed_chat_completion\` WebSocket actions to display the reply as it arrives.
 
-3. **Leverage RAG with file context.** Attach \`fileIds\` to chat requests to ground AI responses in your uploaded documents. Files must be chunked first via \`POST /api/files/chunk\`.
+3. **Leverage RAG with file context.** Attach \`fileIds\` to chat requests to ground AI responses in your uploaded documents. Files uploaded via \`POST /api/v1/files\` are chunked and embedded automatically once the upload lands.
 
 4. **Handle 429s gracefully.** Implement exponential backoff when you receive rate limit responses. Check \`X-RateLimit-Reset\` header for the retry timestamp.
 

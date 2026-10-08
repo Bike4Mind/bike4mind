@@ -172,6 +172,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findIdsByDataLakeTag: vi.fn(),
   findLiveMembersByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
+  listOwnedAfterId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),
 });
 

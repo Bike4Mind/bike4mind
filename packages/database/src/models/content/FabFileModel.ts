@@ -1155,6 +1155,33 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return res.modifiedCount;
   }
 
+  /**
+   * One `_id`-ordered page of the files a user owns, for the public list. Owned-only, excluding
+   * archived files, matching the default view of GET /api/files; shares are left to the by-id read.
+   * `search` is a case-insensitive substring match on the pre-lowered `fileNameLower`.
+   */
+  async listOwnedAfterId(
+    userId: string,
+    { afterId, limit, search }: { afterId?: string; limit: number; search?: string }
+  ) {
+    const conditions: Record<string, unknown> = { userId, deletedAt: null, archivedAt: null };
+    if (search) conditions.fileNameLower = { $regex: escapeRegex(search.toLowerCase()) };
+    if (afterId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(afterId)) throw new Error(`Invalid file cursor id: ${afterId}`);
+      conditions._id = { $gt: convertId(afterId) };
+    }
+
+    const result = await this.fabFileModel
+      .find(conditions)
+      .select('fileName mimeType fileSize moderationStatus createdAt')
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit).map(doc => doc.toJSON()), hasMore };
+  }
+
   async findByUserId(userId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ userId, deletedAt: null });
     return result.map(d => d.toJSON());
@@ -3855,6 +3882,10 @@ FabFileSchema.index(
 
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
+
+// Public v1 file list (listOwnedAfterId): equality on the owned/live/unarchived filter, then the
+// `_id` keyset, so each page streams in order instead of sorting the user's whole file set.
+FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 
 // Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'
 // selection and the stale-'scanning' reclaim. The status + deletedAt equality prefix is what keeps

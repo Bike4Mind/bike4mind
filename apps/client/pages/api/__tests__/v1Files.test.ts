@@ -1,6 +1,8 @@
 // @vitest-environment node
 /**
- * Route tests for the public file endpoints (POST /api/v1/files, GET /api/v1/files/{id}).
+ * Route tests for the public file endpoints: GET/POST /api/v1/files and GET/PATCH/DELETE
+ * /api/v1/files/{id}. Scope enforcement through the real auth chain lives in
+ * pages/api/v1/files/__tests__/scopes.integration.test.ts.
  *
  * `baseApi` is stubbed (no DB connect, no auth chain) but `nextRouteForContract` is NOT: the
  * contract's own prelude - path-param validation, body validation, and the non-prod response
@@ -13,21 +15,40 @@ import { createMocks } from 'node-mocks-http';
 import {
   ApiKeyScope,
   CreateFileUploadResponseSchema,
+  FileEvents,
   FileResponseSchema,
+  ListFilesResponseSchema,
   createFileUploadContract,
+  deleteFileContract,
   getFileContract,
+  listFilesContract,
+  updateFileContract,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
+import { encodeCursor } from '@server/utils/cursorPagination';
 
-const { mockCreatePresignedUpload, mockLoadAccessibleFabFile } = vi.hoisted(() => ({
+const {
+  mockCreatePresignedUpload,
+  mockLoadAccessibleFabFile,
+  mockListOwnedAfterId,
+  mockUpdateFabFile,
+  mockDeleteFileForUser,
+  mockLogEvent,
+} = vi.hoisted(() => ({
   mockCreatePresignedUpload: vi.fn(),
   mockLoadAccessibleFabFile: vi.fn(),
+  mockListOwnedAfterId: vi.fn(),
+  mockUpdateFabFile: vi.fn(),
+  mockDeleteFileForUser: vi.fn(),
+  mockLogEvent: vi.fn(),
 }));
 
 // Strip the middleware chain but keep next-connect's registrar shape, so
 // nextRouteForContract's prelude (validation + drift check) still composes and runs.
 vi.mock('@server/middlewares/baseApi', () => ({
+  methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
+    res.status(405).end(),
   baseApi: () => {
     const compose =
       (...handlers: ((req: unknown, res: unknown, next: () => void) => unknown)[]) =>
@@ -44,6 +65,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     chain.use = () => chain;
     chain.get = compose;
     chain.post = compose;
+    chain.patch = compose;
+    chain.delete = compose;
     return chain;
   },
 }));
@@ -57,6 +80,22 @@ vi.mock('@server/files/createPresignedUpload', () => ({
   PRESIGNED_UPLOAD_EXPIRES_IN: 600,
 }));
 vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: mockLoadAccessibleFabFile }));
+vi.mock('@server/files/deleteFileForUser', () => ({ deleteFileForUser: mockDeleteFileForUser }));
+vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: async () => ({ administeredOrgIds: [] }) }));
+vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
+vi.mock('@server/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
+vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => undefined }));
+vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeWriteScope: vi.fn() }));
+vi.mock('@bike4mind/services', () => ({ fabFilesService: { updateFabFile: mockUpdateFabFile } }));
+vi.mock('@bike4mind/database', () => ({
+  dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
+  scopedSettingsRepository: {},
+  fabFileRepository: { listOwnedAfterId: mockListOwnedAfterId },
+  withTransaction: (fn: () => unknown) => fn(),
+}));
 
 const { default: uploadHandler } = await import('@pages/api/v1/files/index');
 const { default: getHandler } = await import('@pages/api/v1/files/[id]/index');
@@ -72,6 +111,24 @@ function post(body: Record<string, unknown>) {
 
 function get(id: string) {
   const { req, res } = createMocks({ method: 'GET', query: { id } });
+  Object.assign(req, { user: { id: 'u1' }, logger });
+  return { req, res };
+}
+
+function list(query: Record<string, string> = {}) {
+  const { req, res } = createMocks({ method: 'GET', query });
+  Object.assign(req, { user: { id: 'u1' }, logger });
+  return { req, res };
+}
+
+function patch(id: string, body: Record<string, unknown>) {
+  const { req, res } = createMocks({ method: 'PATCH', query: { id }, body });
+  Object.assign(req, { user: { id: 'u1' }, logger });
+  return { req, res };
+}
+
+function del(id: string) {
+  const { req, res } = createMocks({ method: 'DELETE', query: { id } });
   Object.assign(req, { user: { id: 'u1' }, logger });
   return { req, res };
 }
@@ -111,12 +168,20 @@ beforeEach(() => {
     fileKey: 'key.png',
   });
   mockLoadAccessibleFabFile.mockResolvedValue(fabFile());
+  mockListOwnedAfterId.mockResolvedValue({ data: [], hasMore: false });
+  mockUpdateFabFile.mockResolvedValue({ ...fabFile(), filePath: 'key.png' });
+  mockDeleteFileForUser.mockResolvedValue('deleted');
+  mockLogEvent.mockResolvedValue(undefined);
 });
 
 describe('file contracts', () => {
-  it('gate upload on files:write and read-back on files:read', () => {
-    expect(createFileUploadContract.scopes).toEqual([ApiKeyScope.WRITE_FILES]);
-    expect(getFileContract.scopes).toEqual([ApiKeyScope.READ_FILES]);
+  it('gate writes on files:write and reads on either files scope', () => {
+    for (const contract of [createFileUploadContract, updateFileContract, deleteFileContract]) {
+      expect(contract.scopes).toEqual([ApiKeyScope.WRITE_FILES]);
+    }
+    for (const contract of [getFileContract, listFilesContract]) {
+      expect(contract.scopes).toEqual([ApiKeyScope.READ_FILES, ApiKeyScope.WRITE_FILES]);
+    }
   });
 
   it('deny a key holding neither files scope, with nothing staged', () => {
@@ -257,5 +322,159 @@ describe('upload -> poll -> download', () => {
     await callHandler(getHandler, secondPoll.req, secondPoll.res);
     expect(secondPoll.res._getJSONData().download_url).toBe('https://cdn.example/key.png?Signature=abc');
     expect(mockLoadAccessibleFabFile).toHaveBeenLastCalledWith(secondPoll.req, FILE_ID);
+  });
+});
+
+/** A full document as the repository returns it, including fields the public shape must drop. */
+const ownedDoc = (id: string) => ({
+  ...fabFile({ id }),
+  _id: id,
+  userId: 'u1',
+  filePath: 'secret/path.png',
+  notes: 'private notes',
+  tags: [{ name: 'datalake:secret', strength: 1 }],
+  users: [{ userId: 'someone-else', permissions: ['read'] }],
+  chunkCount: 3,
+});
+
+const SUMMARY_KEYS = ['created_at', 'file_name', 'file_size', 'id', 'mime_type', 'moderation_status'];
+const ID_2 = '507f1f77bcf86cd799439012';
+
+describe('GET /api/v1/files', () => {
+  it('returns a schema-valid page of allowlisted summaries with no download URL', async () => {
+    mockListOwnedAfterId.mockResolvedValue({ data: [ownedDoc(FILE_ID)], hasMore: false });
+    const { req, res } = list();
+
+    await callHandler(uploadHandler, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(ListFilesResponseSchema.safeParse(body).success).toBe(true);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(Object.keys(body.data[0]).sort()).toEqual(SUMMARY_KEYS);
+    expect(body.next_cursor).toBeNull();
+    expect(JSON.stringify(body)).not.toMatch(/secret|private|someone-else|userId|chunkCount/);
+    expect(mockListOwnedAfterId).toHaveBeenCalledWith('u1', { afterId: undefined, limit: 25, search: undefined });
+  });
+
+  it('issues a cursor when there is another page, and passes it and search back to the repository', async () => {
+    mockListOwnedAfterId.mockResolvedValue({ data: [ownedDoc(FILE_ID)], hasMore: true });
+    const first = list({ limit: '1', search: 'Report' });
+    await callHandler(uploadHandler, first.req, first.res);
+    const { next_cursor } = first.res._getJSONData();
+    expect(next_cursor).toEqual(expect.any(String));
+
+    mockListOwnedAfterId.mockResolvedValue({ data: [ownedDoc(ID_2)], hasMore: false });
+    const second = list({ limit: '1', search: 'Report', cursor: next_cursor });
+    await callHandler(uploadHandler, second.req, second.res);
+
+    expect(mockListOwnedAfterId).toHaveBeenLastCalledWith('u1', { afterId: FILE_ID, limit: 1, search: 'Report' });
+    expect(second.res._getJSONData()).toMatchObject({ data: [{ id: ID_2 }], next_cursor: null });
+  });
+
+  it.each([
+    ['a malformed cursor', { cursor: 'not-a-cursor' }],
+    ['a cursor minted by another endpoint', { cursor: encodeCursor('v1.projects', FILE_ID) }],
+    ['a cursor whose id is not an ObjectId', { cursor: encodeCursor('v1.files', 'nope') }],
+  ])('rejects %s with 422 before querying', async (_label, query) => {
+    const { req, res } = list(query);
+
+    expect(await statusOf(callHandler(uploadHandler, req, res))).toBe(422);
+    expect(mockListOwnedAfterId).not.toHaveBeenCalled();
+  });
+
+  // The 422 mapping itself belongs to errorHandler (stubbed out here) - see scopes.integration.test.ts.
+  it.each([
+    ['an empty search', { search: '' }],
+    ['an out-of-range limit', { limit: '101' }],
+  ])('rejects %s before querying', async (_label, query) => {
+    const { req, res } = list(query);
+
+    await expect(callHandler(uploadHandler, req, res)).rejects.toThrow();
+    expect(mockListOwnedAfterId).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/v1/files/{id}', () => {
+  it('passes only the provided fields to the shared update, logs it, and returns the re-read file', async () => {
+    const { req, res } = patch(FILE_ID, { file_name: 'renamed.png' });
+
+    await callHandler(getHandler, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateFabFile).toHaveBeenCalledWith(
+      req.user,
+      { id: FILE_ID, fileName: 'renamed.png' },
+      expect.anything()
+    );
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: FileEvents.UPDATE_FILE, metadata: { fileId: FILE_ID, fileContent: 'key.png' } }),
+      expect.anything()
+    );
+    expect(mockLoadAccessibleFabFile).toHaveBeenCalledWith(req, FILE_ID);
+    const body = res._getJSONData();
+    expect(FileResponseSchema.safeParse(body).success).toBe(true);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('treats an empty body as a no-op update that returns the file', async () => {
+    const { req, res } = patch(FILE_ID, {});
+
+    await callHandler(getHandler, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateFabFile).toHaveBeenCalledWith(req.user, { id: FILE_ID }, expect.anything());
+  });
+
+  it.each([
+    ['an unknown field', { tags: [] }],
+    ['an empty file name', { file_name: '' }],
+  ])('rejects %s before updating', async (_label, body) => {
+    const { req, res } = patch(FILE_ID, body);
+
+    await expect(callHandler(getHandler, req, res)).rejects.toThrow();
+    expect(mockUpdateFabFile).not.toHaveBeenCalled();
+  });
+
+  it('404s a malformed id without updating', async () => {
+    const { req, res } = patch('not-an-object-id', { notes: 'x' });
+
+    expect(await statusOf(callHandler(getHandler, req, res))).toBe(404);
+    expect(mockUpdateFabFile).not.toHaveBeenCalled();
+  });
+
+  it('404s a file the caller cannot edit', async () => {
+    mockUpdateFabFile.mockRejectedValue(new NotFoundError('Invalid ID'));
+    const { req, res } = patch(FILE_ID, { notes: 'x' });
+
+    expect(await statusOf(callHandler(getHandler, req, res))).toBe(404);
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/v1/files/{id}', () => {
+  it.each(['deleted', 'unshared'])('answers 204 with no body when the file is %s', async action => {
+    mockDeleteFileForUser.mockResolvedValue(action);
+    const { req, res } = del(FILE_ID);
+
+    await callHandler(getHandler, req, res);
+
+    expect(res._getStatusCode()).toBe(204);
+    expect(res._getData()).toBe('');
+    expect(mockDeleteFileForUser).toHaveBeenCalledWith(req, FILE_ID);
+  });
+
+  it.each(['not_found', 'denied'])('404s when the shared delete reports %s', async action => {
+    mockDeleteFileForUser.mockResolvedValue(action);
+    const { req, res } = del(FILE_ID);
+
+    expect(await statusOf(callHandler(getHandler, req, res))).toBe(404);
+  });
+
+  it('404s a malformed id without deleting', async () => {
+    const { req, res } = del('not-an-object-id');
+
+    expect(await statusOf(callHandler(getHandler, req, res))).toBe(404);
+    expect(mockDeleteFileForUser).not.toHaveBeenCalled();
   });
 });

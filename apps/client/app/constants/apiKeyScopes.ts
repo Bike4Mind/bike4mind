@@ -39,13 +39,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.READ_FILES,
     label: 'Read Files',
     description: 'Download and view files',
-    endpoints: ['GET /api/v1/files/:id'],
+    endpoints: ['GET /api/v1/files', 'GET /api/v1/files/:id'],
   },
   {
     value: ApiKeyScope.WRITE_FILES,
     label: 'Write Files',
     description: 'Upload and modify files',
-    endpoints: ['POST /api/v1/files'],
+    endpoints: ['POST /api/v1/files', 'GET /api/v1/files', 'GET /api/v1/files/:id', 'PATCH|DELETE /api/v1/files/:id'],
   },
   {
     value: ApiKeyScope.AI_GENERATE,

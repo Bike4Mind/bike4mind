@@ -1118,6 +1118,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByUserId(userId: string): Promise<IFabFileDocument[]>;
 
+  /** One `_id`-ordered page of the user's own live, unarchived files; see FabFileRepository. */
+  listOwnedAfterId(
+    userId: string,
+    options: { afterId?: string; limit: number; search?: string }
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
   /**
    * Sum the `fileSize` of every non-deleted file a user owns, via an aggregate
    * so no documents are hydrated. A missing or null `fileSize` counts as 0.
