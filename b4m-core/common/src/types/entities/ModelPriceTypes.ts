@@ -73,6 +73,9 @@ export type IModelPrice = z.infer<typeof ModelPrice>;
  */
 export const DISCOVERY_PRICE_NOTE_PREFIX = 'discovery:';
 
+/** The source on a discovery row recorded from an adapter price literal rather than a feed. */
+export const ADAPTER_LITERAL_PRICE_SOURCE = 'adapter-literal';
+
 export type IModelPriceDocument = IModelPrice & IMongoDocument;
 
 /** Zod schema for appending a row (server sets id/timestamps). Repositories
