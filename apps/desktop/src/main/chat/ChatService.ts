@@ -33,7 +33,7 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
 } from '@shared/chat';
-import { isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
+import { awaitsWorktree, isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
 import { shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
@@ -394,6 +394,9 @@ export class ChatService {
    */
   private readonly compacting = new Set<string>();
 
+  /** Sessions cutting a worktree ahead of a first turn (ensureWorkspace); busy as `compacting` is. */
+  private readonly preparing = new Set<string>();
+
   /**
    * A queued message the user promoted past the live turn with "send now", held between the
    * interrupt and the moment the interrupted reply settles.
@@ -545,7 +548,7 @@ export class ChatService {
     controller.abort();
   }
 
-  /** Whether a turn (or a compaction ahead of one) is running in this conversation. */
+  /** Whether a turn (or a compaction or worktree ahead of one) is running in this conversation. */
   isSessionBusy(sessionId: string): boolean {
     return this.isBusy(sessionId);
   }
@@ -745,10 +748,18 @@ export class ChatService {
    */
   private async ensureWorkspace(session: ChatSession, name: string): Promise<{ error: string } | null> {
     const project = session.project;
-    if (!project?.workspace || project.workingDirectory !== project.directory) return null;
+    if (!project || !awaitsWorktree(project)) return null;
 
+    const sessionId = session.id;
+    const base = project.branch;
+    this.preparing.add(sessionId);
+    this.emit({ type: 'workspace', sessionId, running: true, base });
     try {
-      const resolved = await resolveWorkspace(project.directory, { base: project.branch, name });
+      const resolved = await resolveWorkspace(project.directory, {
+        base,
+        name,
+        onBranch: branch => this.emit({ type: 'workspace', sessionId, running: true, base, branch }),
+      });
       const moved: ChatProject = {
         ...project,
         workspaceBranch: resolved.branch,
@@ -760,6 +771,9 @@ export class ChatService {
       return null;
     } catch (err) {
       return { error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
+    } finally {
+      this.preparing.delete(sessionId);
+      this.emit({ type: 'workspace', sessionId, running: false, base });
     }
   }
 
@@ -1152,7 +1166,12 @@ export class ChatService {
     // writing the session: a worktree that cannot be made must refuse the turn rather than
     // leave a prompt in the thread with no reply coming.
     const workspaceFailure = await this.ensureWorkspace(existing, prompt);
-    if (workspaceFailure) return { ok: false, error: workspaceFailure.error };
+    if (workspaceFailure) {
+      // A message typed while the worktree was being cut queued behind it, and no reply is
+      // coming now to release it.
+      this.flushQueue(sessionId);
+      return { ok: false, error: workspaceFailure.error };
+    }
 
     // The skill's body becomes the turn, and `skill` records which one so the thread can show
     // "/review src/foo.ts" rather than the page of instructions that was actually sent.
@@ -1345,7 +1364,7 @@ export class ChatService {
   }
 
   private isBusy(sessionId: string): boolean {
-    return this.active.has(sessionId) || this.compacting.has(sessionId);
+    return this.active.has(sessionId) || this.compacting.has(sessionId) || this.preparing.has(sessionId);
   }
 
   /** The summary round trip behind both compactions; see compactContext for its contract. */

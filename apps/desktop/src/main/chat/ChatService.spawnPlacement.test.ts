@@ -181,6 +181,19 @@ describe('ChatService spawn placement', () => {
     expect(settled()[0]?.status).toBe('done');
   });
 
+  it("reports the worktree step on the parent's turn while the child's checkout is cut", async () => {
+    await spawnWith({ decision: 'once', optionId: 'worktree', value: 'agent/the-thing' });
+
+    const progress = events.flatMap(event => (event.type === 'tool-progress' ? [event.text] : []));
+    expect(progress).toContain('Creating branch agent/the-thing and worktree...');
+  });
+
+  it('reports no worktree step for a child started locally', async () => {
+    await spawnWith({ decision: 'once', optionId: 'local' });
+
+    expect(events.some(event => event.type === 'tool-progress' && /worktree/.test(event.text))).toBe(false);
+  });
+
   it('tells a child in a worktree where it is, since its task was written before anyone knew', async () => {
     // The live failure this exists for: the parent names files by ITS absolute path - the user
     // picks the placement only afterwards - so the child's file tools refuse those paths and its

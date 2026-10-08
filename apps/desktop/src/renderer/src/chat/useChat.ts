@@ -19,6 +19,7 @@ import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } f
 import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
 import { totalTokens, type TurnProgress } from './statusLine';
+import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
 
@@ -249,6 +250,8 @@ export interface ConversationController {
   streaming: boolean;
   /** Elapsed clock and server-reported cost of the turn in flight; null when none is. */
   turn: TurnProgress | null;
+  /** A first turn waiting on its worktree, before `turn` exists. Null otherwise. */
+  preparing: WorkspaceProgress | null;
   sendError: string | null;
   /** One-shot message about something main changed while accepting a turn. Not a failure. */
   notice: string | null;
@@ -315,6 +318,7 @@ export function useConversation(
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [turn, setTurn] = useState<TurnProgress | null>(null);
+  const [preparing, setPreparing] = useState<WorkspaceProgress | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [projectBusy, setProjectBusy] = useState(false);
@@ -341,6 +345,9 @@ export function useConversation(
   /** Replies this window has seen end; see the session load, which must not reopen one. */
   const settledReplies = useRef(new Set<string>());
 
+  /** The session this window has a send out for, read by the subscription; see applyWorkspaceEvent. */
+  const sendingFor = useRef<string | null>(null);
+
   useEffect(() => {
     setSendError(null);
     setNotice(null);
@@ -348,6 +355,7 @@ export function useConversation(
     setReturned(null);
     setQueued([]);
     setCommandProgress(null);
+    setPreparing(null);
     if (!sessionId) {
       setSession(null);
       setMessages([]);
@@ -457,6 +465,7 @@ export function useConversation(
       if (event.sessionId !== activeSessionId.current) return;
 
       if (event.type === 'start') {
+        setPreparing(null);
         setStreaming(true);
         setTurn({ startedAt: Date.now(), tokens: null });
         setMessages(current => startReply(current, event.messageId));
@@ -479,6 +488,12 @@ export function useConversation(
         setMessages(current =>
           current.some(message => message.id === event.message.id) ? current : appendArrived(current, event.message)
         );
+        return;
+      }
+
+      if (event.type === 'workspace') {
+        const sending = sendingFor.current === event.sessionId;
+        setPreparing(current => applyWorkspaceEvent(current, event, Date.now(), sending));
         return;
       }
 
@@ -519,6 +534,7 @@ export function useConversation(
     };
   }, []);
 
+  const sessionProject = session?.project;
   const send = useCallback(
     async (text: string, attachments: readonly ChatAttachment[] = []) => {
       if (!sessionId) return;
@@ -529,14 +545,18 @@ export function useConversation(
       setSendError(null);
       setNotice(null);
 
+      // A turn already being prepared counts as one in flight: main queues behind it.
+      const goingOut = !streaming && !preparing;
+      const localPreparing = preparingOnSend(sessionProject, !goingOut, Date.now());
+      if (localPreparing) setPreparing(localPreparing);
+
       // Drawn before the round trip so the thread answers the keystroke immediately - but only
       // when this turn is going out now. Main decides queueing, so `streaming` is a guess here;
       // it is only ever wrong in the gap where a reply has just ended, and the result below
       // corrects it either way. A queued message must NOT appear in the transcript: that would
       // claim it had been sent, which is the one thing it has not been.
-      const optimistic: ChatMessage | null = streaming
-        ? null
-        : {
+      const optimistic: ChatMessage | null = goingOut
+        ? {
             // Temporary: main assigns the persisted id. They meet again on the next load, which
             // is the only place the difference could show, and by then this one is gone.
             id: `${OPTIMISTIC_ID_PREFIX}${Date.now()}`,
@@ -544,18 +564,27 @@ export function useConversation(
             content: prompt,
             createdAt: new Date().toISOString(),
             ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
-          };
+          }
+        : null;
       if (optimistic) setMessages(current => [...current, optimistic]);
 
       const discardOptimistic = () => {
         if (optimistic) setMessages(current => current.filter(message => message.id !== optimistic.id));
       };
 
-      const result = await window.b4m.chat.sendMessage({
-        sessionId,
-        text: prompt,
-        ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
-      });
+      if (goingOut) sendingFor.current = sessionId;
+      const result = await window.b4m.chat
+        .sendMessage({
+          sessionId,
+          text: prompt,
+          ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+        })
+        .finally(() => {
+          if (!goingOut) return;
+          sendingFor.current = null;
+          // Whatever the outcome: a refused turn has no 'start' coming to clear it.
+          if (activeSessionId.current === sessionId) setPreparing(null);
+        });
       if (!result.ok) {
         discardOptimistic();
         setSendError(result.error);
@@ -589,7 +618,7 @@ export function useConversation(
         onSummaryChanged({ ...rest, messageCount: summary.messages.length });
       }
     },
-    [sessionId, streaming, onSummaryChanged]
+    [sessionId, streaming, preparing, sessionProject, onSummaryChanged]
   );
 
   const stop = useCallback(() => {
@@ -829,6 +858,7 @@ export function useConversation(
     messages,
     streaming,
     turn,
+    preparing,
     sendError,
     notice,
     dismissNotice,

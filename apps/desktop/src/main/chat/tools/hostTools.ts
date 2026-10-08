@@ -201,6 +201,7 @@ export const sessionSpawn: ToolDefinition = {
       input.placement === 'worktree' && branch ? { kind: 'worktree', branch } : { kind: 'local' };
 
     context.beginWrite?.();
+    if (placement.kind === 'worktree') context.report?.progress(`Creating branch ${placement.branch} and worktree...`);
     const outcome = await host.spawn(prompt, title, placement);
     if (!outcome.ok) throw new Error(outcome.message);
     return [

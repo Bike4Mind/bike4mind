@@ -46,6 +46,8 @@ export interface WorkspaceRequest {
   branch?: string;
   /** Seed for a derived branch name - the session's title. */
   name?: string;
+  /** Told the branch as soon as it is decided, ahead of the fetch and checkout that take the time. */
+  onBranch?: (branch: string) => void;
 }
 
 export interface WorkspaceResolution {
@@ -204,6 +206,8 @@ export async function resolveWorkspace(
       branch = base || sessionBranchName(request.name);
     }
   }
+
+  request.onBranch?.(branch);
 
   // Keyed on the session's OWN branch, so this hits only for a worktree this session already
   // has - never for the user's checkout of the base.

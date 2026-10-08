@@ -32,6 +32,7 @@ import { SettingsScreen } from './SettingsPanel';
 import { TodoPanel } from './TodoPanel';
 import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
+import { workspacePhrase } from './workspaceProgress';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
@@ -564,7 +565,21 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               // something this conversation started, so it reads as the last thing that happened
               // in it. It scrolls with the transcript, which is the trade - the panel is reached
               // from the bottom of the thread, not from a bar that is always on screen.
-              footer={<BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />}
+              footer={
+                <>
+                  {/* The turn line's own slot only exists once a reply does, and the worktree is
+                      cut before there is one; this sits where that line will appear. */}
+                  {!conversation.turn && conversation.preparing && (
+                    <Box data-testid="chat-workspace-status">
+                      <TurnStatus
+                        turn={{ startedAt: conversation.preparing.since, tokens: null }}
+                        activity={workspacePhrase(conversation.preparing)}
+                      />
+                    </Box>
+                  )}
+                  <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
+                </>
+              }
             />
           )}
 
