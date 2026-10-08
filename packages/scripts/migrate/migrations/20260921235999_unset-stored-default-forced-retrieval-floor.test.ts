@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-type Row = { _id: string; settingValue: unknown };
+type Row = { _id: string; settingValue: unknown; scopeLevel?: string; scopeId?: string };
 type Filter = Record<string, unknown>;
 
 const { rows, deleteMany, findFilters, fakeModel } = vi.hoisted(() => {
@@ -28,6 +28,15 @@ beforeEach(() => {
   deleteMany.admin.mockResolvedValue({ deletedCount: 1 });
   deleteMany.scoped.mockResolvedValue({ deletedCount: 2 });
 });
+
+const org = (_id: string, settingValue: unknown): Row => ({
+  _id,
+  settingValue,
+  scopeLevel: 'organization',
+  scopeId: _id,
+});
+const owner = (_id: string, settingValue: unknown): Row => ({ _id, settingValue, scopeLevel: 'owner', scopeId: _id });
+const logs = () => vi.mocked(console.log).mock.calls.map(c => String(c[0]));
 
 describe('unset-stored-default-forced-retrieval-floor', () => {
   it.each([75, '75', ' 75', '75.0'])('treats %j as a stored default', v => {
@@ -65,5 +74,49 @@ describe('unset-stored-default-forced-retrieval-floor', () => {
 
     expect(deleteMany.admin).not.toHaveBeenCalled();
     expect(deleteMany.scoped).not.toHaveBeenCalled();
+  });
+
+  it('keeps and logs a scoped 75 over a different platform value, which it was shadowing', async () => {
+    rows.admin = [{ _id: 'a1', settingValue: 80 }];
+    rows.scoped = [org('org-x', '75')];
+
+    await migration.up();
+
+    expect(deleteMany.scoped).not.toHaveBeenCalled();
+    expect(deleteMany.admin).not.toHaveBeenCalled();
+    expect(logs().some(l => l.includes('kept organization:org-x') && l.includes('80'))).toBe(true);
+  });
+
+  it.each([
+    ['unset', []],
+    ['blank', [{ _id: 'a1', settingValue: '  ' }]],
+    ['unparseable', [{ _id: 'a1', settingValue: 'abc' }]],
+  ])('removes a scoped 75 when the platform is %s', async (_label, admin) => {
+    rows.admin = admin as Row[];
+    rows.scoped = [org('org-x', '75'), owner('u1', 75)];
+
+    await migration.up();
+
+    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['org-x', 'u1'] } });
+  });
+
+  it('removes a platform 75 and the scoped 75s it neutralized', async () => {
+    rows.admin = [{ _id: 'a1', settingValue: 75 }];
+    rows.scoped = [org('org-x', '75')];
+
+    await migration.up();
+
+    expect(deleteMany.admin).toHaveBeenCalledWith({ _id: { $in: ['a1'] } }, { hardDelete: true });
+    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['org-x'] } });
+  });
+
+  it('keeps an owner 75 while any org row holds a different value, but still removes an org 75', async () => {
+    rows.admin = [];
+    rows.scoped = [org('org-60', '60'), org('org-75', '75'), owner('u1', '75')];
+
+    await migration.up();
+
+    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['org-75'] } });
+    expect(logs().some(l => l.includes('kept owner:u1') && l.includes('60'))).toBe(true);
   });
 });

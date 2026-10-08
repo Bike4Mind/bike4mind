@@ -39,8 +39,8 @@ function raw(name: string) {
 // Raw driver, not the model: these are pre-migration rows, and the platform value is Mixed while the
 // overlay one is a String, the two shapes the migration's `isStoredDefault` has to accept.
 const adminRow = (settingName: string, settingValue: unknown) => ({ settingName, settingValue, deletedAt: null });
-const scopedRow = (settingName: string, settingValue: string, scopeId: string) => ({
-  scopeLevel: 'Organization',
+const scopedRow = (settingName: string, settingValue: string, scopeId: string, scopeLevel = 'organization') => ({
+  scopeLevel,
   scopeId,
   settingName,
   settingValue,
@@ -94,5 +94,16 @@ describe('unset-stored-default-forced-retrieval-floor migration (real DB)', () =
     const live = await raw('scopedsettings').find({ settingName: KEY, deletedAt: null }).toArray();
     expect(live.map(r => r.settingValue)).toEqual(['60']);
     expect(await raw('scopedsettings').countDocuments({ settingName: KEY })).toBe(2);
+  });
+
+  it('keeps a scoped 75 that shadowed a different platform value', async () => {
+    await raw('adminsettings').insertMany([adminRow(KEY, 80)]);
+    await raw('scopedsettings').insertMany([scopedRow(KEY, '75', 'org-a'), scopedRow(KEY, '75', 'user-a', 'owner')]);
+
+    await migration.up();
+
+    expect(await raw('adminsettings').countDocuments({ settingName: KEY })).toBe(1);
+    const live = await raw('scopedsettings').find({ settingName: KEY, deletedAt: null }).toArray();
+    expect(live.map(r => r.scopeId).sort()).toEqual(['org-a', 'user-a']);
   });
 });
