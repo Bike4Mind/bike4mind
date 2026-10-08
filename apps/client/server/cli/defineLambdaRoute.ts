@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   type EndpointContract,
+  ForbiddenError,
   HTTPError,
   type RequestBodyOf,
   REQUEST_ID_HEADER,
@@ -38,13 +39,19 @@ export type LambdaRateLimit = (ctx: {
 
 export type LambdaRouteOptions = { rateLimit?: LambdaRateLimit };
 
+/** A ForbiddenError (authenticated but forbidden, e.g. a suspended account) is a 403;
+ * any other auth throw, plain Errors included, is a 401. */
+function authFailureStatus(error: unknown): 401 | 403 {
+  return error instanceof ForbiddenError ? 403 : 401;
+}
+
 /**
  * AWS Lambda Function URL adapter for an {@link EndpointContract} - the transport
  * used for public endpoints the Next.js API can't serve (SST dev + Function URLs +
  * CloudFront had socket hang-ups; see cli/tools.ts).
  *
  * Owns the boilerplate every Function-URL handler repeats: request-id resolution,
- * the contract's method (405), body parsing (400), DB connect, contract-driven auth (401, via resolveContractAuth
+ * the contract's method (405), body parsing (400), DB connect, contract-driven auth (401/403, via resolveContractAuth
  * so every JWT/API-key gate matches the rest of the app), optional rate limiting
  * (429, via `options.rateLimit`), contract validation (422 - the pattern's uniform
  * validation gate), JSON response shaping, and turning a thrown handler error into a
@@ -110,7 +117,7 @@ export function defineLambdaRoute<C extends EndpointContract>(
       try {
         auth = await resolveContractAuth(event.headers ?? {}, contract);
       } catch (error) {
-        return json(401, {
+        return json(authFailureStatus(error), {
           error: error instanceof Error ? error.message : 'Authentication failed',
           request_id: requestId,
         });

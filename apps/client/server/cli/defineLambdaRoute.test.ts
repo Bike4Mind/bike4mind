@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { chatContract, NotFoundError } from '@bike4mind/common';
+import { chatContract, executeToolContract, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/common';
 
 // The adapter connects to the DB and authenticates before validating; mock those
 // so this stays a pure unit test of the adapter's parse/auth/validate/shape logic.
@@ -66,6 +66,12 @@ describe('defineLambdaRoute + chatContract', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('keeps a thrown UnauthorizedError as 401', async () => {
+    mockResolveAuth.mockRejectedValueOnce(new UnauthorizedError('User not found or banned'));
+    const res = asResult(await route(makeEvent({ message: 'hi' })));
+    expect(res.statusCode).toBe(401);
+  });
+
   it('405s a method the contract does not declare, before auth, with an Allow header', async () => {
     const event = { ...makeEvent({ message: 'hi' }), requestContext: { http: { method: 'GET' } } };
     const res = asResult(await route(event as unknown as APIGatewayProxyEventV2));
@@ -79,6 +85,22 @@ describe('defineLambdaRoute + chatContract', () => {
     const event = { ...makeEvent({ message: 'hi' }), requestContext: { http: { method: 'POST' } } };
     const res = asResult(await route(event as unknown as APIGatewayProxyEventV2));
     expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('defineLambdaRoute + executeToolContract auth status', () => {
+  const route = defineLambdaRoute(executeToolContract, async () => ({ statusCode: 200, body: {} }));
+
+  beforeEach(() => {
+    mockResolveAuth.mockReset();
+  });
+
+  it('returns 403 when auth throws a ForbiddenError (authenticated but forbidden)', async () => {
+    mockResolveAuth.mockRejectedValueOnce(new ForbiddenError('Account suspended'));
+    const res = asResult(await route(makeEvent({ toolName: 'web_search', input: {} })));
+    expect(res.statusCode).toBe(403);
+    expect(executeToolContract.responses[403]).toBeDefined();
+    expect(JSON.parse(res.body as string)).toMatchObject({ error: 'Account suspended' });
   });
 });
 

@@ -201,11 +201,11 @@ function toApiKeyInfo(v: {
  * owner's key kept working on exactly the surfaces that spend money.
  *
  * Exactly one copy of the gate: `apiKeyAuth` calls {@link assertAccountStateUsable} rather than
- * repeating these conditions. The thrown STATUS is not observable end to end on these paths,
- * though: the Function-URL adapter (defineLambdaRoute) reports any auth throw as 401, and the
- * apiKeyOrJwt resolver swallows a key failure to fall through to JWT - so a 403 raised here can
- * surface as 401 downstream. Keep the messages aligned, but do not rely on the status code
- * reaching the caller.
+ * repeating these conditions. The thrown error class is the status contract: the Function-URL
+ * adapter (defineLambdaRoute) answers a ForbiddenError with 403 and every other auth throw with
+ * 401, and the apiKeyOrJwt resolver (resolveContractAuth) surfaces a key's ForbiddenError when
+ * the JWT fallback also fails. No apiKeyOrJwt transport forwards it yet: its only caller, the
+ * Fargate SSE route (sseRoute.ts), reports any auth throw as a generic failure.
  *
  * This is the `User.findById` the consent gate above deliberately declines to pay
  * on the api-key path. Account state is not the same trade: consent can be proven
