@@ -7,16 +7,21 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
+  mergeLakeFirstListing,
   resetForcedRetrievalFloorWarnings,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
+import { sessionExcludesLibrary } from './tools/base/resolveSessionLakeAccess';
+import type { ToolContext } from './tools/base/types';
+import type { ResolvedLakeAccessSet } from '../dataLakeService/narrowLakeAccessToSession';
 import {
   UNLIMITED_HISTORY_COUNT,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_SETTING_KEYS,
   LAKE_RECALL_K_DEFAULT,
+  libraryFlagForScope,
   SettingScopeLevel,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
@@ -4260,6 +4265,161 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
     );
   });
 
+  describe('includeLibraryFiles', () => {
+    const build = (ctx: ReturnType<typeof makeCtx>, tags: string[], flag: boolean | undefined) =>
+      new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        tags,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        flag
+      );
+
+    // Unset keeps the pre-flag rule (only a named lake excludes the library); a set flag wins.
+    it.each([
+      ['a named lake', ['datalake:acme'], undefined, true],
+      ['a named lake', ['datalake:acme'], false, true],
+      ['a named lake', ['datalake:acme'], true, false],
+      ['all lakes', [], undefined, false],
+      ['all lakes', [], false, true],
+      ['all lakes', [], true, false],
+      ['a content tag', ['legal:review'], undefined, false],
+      ['a content tag', ['legal:review'], false, true],
+      ['a content tag', ['legal:review'], true, false],
+    ])('scopes %s with flag %s to restrictToDataLake: %s', async (_, tags, flag, restrict) => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      await build(ctx, tags as string[], flag as boolean | undefined).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+        'viewer-1',
+        '',
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ restrictToDataLake: restrict })
+      );
+    });
+
+    // Forced retrieval and the knowledge tools must answer "is the library excluded?" identically,
+    // or a turn grounds lake-only while the tool the model calls re-admits the library.
+    // Tags derived from attaching a lake file carry no pick marker, so they never exclude.
+    const picked = { forceKnowledgeRetrieval: true };
+    it.each<[string, string[], Parameters<typeof libraryFlagForScope>[0], boolean]>([
+      ['a legacy lake chat (named lake, Data Lakes mode on)', ['datalake:acme'], picked, true],
+      ['a lake picked in the picker', ['datalake:acme'], { lakeScopeExplicit: true }, true],
+      ['a lake named by its file-tag prefix', ['acme:'], picked, true],
+      ['a plain chat with an attached lake file (derived tags)', ['datalake:acme'], {}, false],
+      ['a plain chat', [], picked, false],
+      ['a content-tag session', ['legal:review'], picked, false],
+    ])(
+      'forced retrieval and the knowledge tools agree for %s with the flag unset',
+      async (_, tags, session, excluded) => {
+        const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+        const flag = libraryFlagForScope(session);
+        await build(ctx, tags, flag).getContextMessages(
+          makeQuest(),
+          embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+          'anything'
+        );
+        const ownerAccess = {
+          dataLakeTags: [LAKE_DOC.datalakeTag],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [LAKE_DOC.fileTagPrefix],
+          lakes: [{ ...LAKE_DOC, membership: { kind: 'owned' }, source: 'dynamic' }],
+        } as unknown as ResolvedLakeAccessSet;
+        const toolExcludes = await sessionExcludesLibrary(
+          { sessionRetrievalTags: tags, sessionIncludeLibraryFiles: flag } as ToolContext,
+          () => Promise.resolve(ownerAccess)
+        );
+
+        expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+          'viewer-1',
+          '',
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ restrictToDataLake: excluded })
+        );
+        expect(toolExcludes).toBe(excluded);
+      }
+    );
+
+    it('abstains as no_lakes for an all-lakes session excluding the library with no lake to reach', async () => {
+      const ctx = makeCtx({ dataLakes: [] });
+      const quest = makeQuest();
+      await build(ctx, [], false).getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('no_lakes');
+      expect(ctx.logger.error).not.toHaveBeenCalled();
+      expect(ctx.db.fabfiles.search).not.toHaveBeenCalled();
+    });
+
+    it('keeps lake files ahead of a personal library large enough to fill the listing when the flag is on', async () => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      const lakeFile = { id: 'lake-1', fileName: 'zz-lake.pdf', tags: [{ name: 'datalake:acme' }] };
+      const library = Array.from({ length: 100 }, (_, i) => ({
+        id: `lib-${i}`,
+        fileName: `a-${String(i).padStart(3, '0')}.pdf`,
+        tags: [],
+      }));
+      // Emulates the DB: the union sorts by name and stops at the page size, so the lake file is cut.
+      ctx.db.fabfiles.search = vi.fn((...args: unknown[]) => {
+        const restrict = (args[5] as { restrictToDataLake: boolean }).restrictToDataLake;
+        return Promise.resolve(restrict ? { data: [lakeFile], hasMore: false } : { data: library, hasMore: true });
+      });
+      await build(ctx, ['datalake:acme'], true).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      const scanned = ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]);
+      expect(scanned[0]).toBe('lake-1');
+      expect(scanned).toHaveLength(100);
+      expect(scanned).not.toContain('lib-99');
+    });
+
+    it('lists only once, without the lake-first pass, when the flag is unset', async () => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      await build(ctx, ['datalake:acme'], undefined).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-admits the library for a named lake this caller can no longer reach when the flag is on', async () => {
+      const ctx = makeCtx({ dataLakes: [] });
+      await build(ctx, ['datalake:unreachable'], true).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+        'viewer-1',
+        '',
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ restrictToDataLake: false })
+      );
+    });
+  });
+
   it('degrades to the abstention block instead of throwing when the underlying search fails', async () => {
     const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
     // A genuine outage on the query itself - distinct from the no_lakes abstain above, and the one
@@ -5086,5 +5246,38 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     expect(content).not.toContain('Uptime is 95%.');
     expect(content).toContain('Uptime is 99.9%.');
     expect(content).not.toContain(CONFLICT_NOTE);
+  });
+});
+
+describe('mergeLakeFirstListing', () => {
+  const row = (id: string) => ({ id });
+
+  it('keeps a lake file that the union also returned exactly once, in its lake slot', () => {
+    const merged = mergeLakeFirstListing(
+      { data: [row('lake-1')], hasMore: false },
+      { data: [row('a'), row('lake-1'), row('b')], hasMore: false },
+      10
+    );
+    expect(merged.data.map(r => r.id)).toEqual(['lake-1', 'a', 'b']);
+    expect(merged.hasMore).toBe(false);
+  });
+
+  it('reports hasMore when the merged rows overflow the cap though neither listing did', () => {
+    const merged = mergeLakeFirstListing(
+      { data: [row('l1'), row('l2')], hasMore: false },
+      { data: [row('a'), row('b')], hasMore: false },
+      3
+    );
+    expect(merged.data.map(r => r.id)).toEqual(['l1', 'l2', 'a']);
+    expect(merged.hasMore).toBe(true);
+  });
+
+  it('reports no more when the merged rows exactly fill the cap', () => {
+    const merged = mergeLakeFirstListing(
+      { data: [row('l1')], hasMore: false },
+      { data: [row('a')], hasMore: false },
+      2
+    );
+    expect(merged.hasMore).toBe(false);
   });
 });

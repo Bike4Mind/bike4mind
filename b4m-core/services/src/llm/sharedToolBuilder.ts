@@ -57,6 +57,8 @@ export interface ToolBuilderDeps {
   kbScope?: ToolContext['kbScope'];
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
+  attachedFileIds?: ToolContext['attachedFileIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
@@ -67,6 +69,8 @@ export interface ToolBuilderDeps {
   sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
+  /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+  sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   /**
@@ -329,11 +333,13 @@ export function buildSharedTools(
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    attachedFileIds,
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
     sessionReaderConsentDatalakeTags,
     sessionLakeScopeExplicit,
+    sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
     apiKeyId,
@@ -351,11 +357,13 @@ export function buildSharedTools(
       retrievalFilter,
       kbScope,
       inlinedAttachmentIds,
+      attachedFileIds,
       fullyInlinedAttachmentIds,
       suppressLakeArms,
       sessionRetrievalTags,
       sessionReaderConsentDatalakeTags,
       sessionLakeScopeExplicit,
+      sessionIncludeLibraryFiles,
       sessionPreauthorizedLakeIds,
       organizationId,
       apiKeyId,

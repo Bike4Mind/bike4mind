@@ -10,6 +10,11 @@ import { resolveAccessibleLakes, queryDataLakeTagCounts } from '@server/dataLake
  * `/api/opti/tag-counts` twin). Access is lake-scoped via
  * `resolveAccessibleLakes` - same rationale as `articles.ts`: the
  * `EnableDataLakes` flag stays on the lake-management/ingestion surface only.
+ *
+ * `tagCounts` rows are tag-tree PATHS, not stored tags: `{ tag, count, fileCount }`, where `count`
+ * is files tagged exactly `tag` and `fileCount` is distinct files at or under it. Every ancestor
+ * path of a stored tag gets a row, so a row with `count: 0` is an ancestor-only path that no file
+ * carries itself - an API-key caller listing tags should skip those (see countDataLakeTagsByPrefix).
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(async (req: Request, res) => {
   const lakes = await resolveAccessibleLakes(req);

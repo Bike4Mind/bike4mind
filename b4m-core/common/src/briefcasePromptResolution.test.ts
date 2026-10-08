@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { replacePromptVariables, countUnresolvedPlaceholders, buildPromptContext } from './promptResolution';
+import { replacePromptVariables, countUnresolvedPlaceholders, buildPromptContext } from './briefcasePromptResolution';
 
 describe('replacePromptVariables', () => {
   it('replaces every known placeholder', () => {

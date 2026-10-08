@@ -37,11 +37,13 @@ export const generateTools = (
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    attachedFileIds,
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
     sessionReaderConsentDatalakeTags,
     sessionLakeScopeExplicit,
+    sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
     apiKeyId,
@@ -52,11 +54,14 @@ export const generateTools = (
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+    attachedFileIds?: ToolContext['attachedFileIds'];
     fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
     suppressLakeArms?: ToolContext['suppressLakeArms'];
     sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
     sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
     sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
+    /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+    sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
     sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
     organizationId?: ToolContext['organizationId'];
     apiKeyId?: ToolContext['apiKeyId'];
@@ -104,11 +109,13 @@ export const generateTools = (
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    attachedFileIds,
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
     sessionReaderConsentDatalakeTags,
     sessionLakeScopeExplicit,
+    sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
     apiKeyId,

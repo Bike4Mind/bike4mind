@@ -41,6 +41,7 @@ const createSessionParametersSchema = z.object({
   // Marks the `retrievalTags` above as a deliberate selection, so an EMPTY one scopes the
   // lake-memory card to nothing instead of widening to every entitled lake.
   lakeScopeExplicit: z.boolean().optional(),
+  includeLibraryFiles: z.boolean().optional(),
   // Resolved from the lake at the create route (resolveLakeSessionDefaults) whenever `dataLakeId`
   // is set: the route deletes the client-sent value there, so the lake is authoritative. A session
   // that names a lake ONLY by `retrievalTags` keeps the caller's own mode, having no lake-defaults

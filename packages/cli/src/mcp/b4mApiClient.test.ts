@@ -3,11 +3,15 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
+const mockPut = vi.fn();
+const mockDelete = vi.fn();
 const mockAxiosPost = vi.fn();
 vi.mock('../auth/ApiClient', () => ({
   ApiClient: class {
     get = mockGet;
     post = mockPost;
+    put = mockPut;
+    delete = mockDelete;
     getAxiosInstance = () => ({ post: mockAxiosPost });
   },
   // Mirrors the real class identity mapApiError keys on: the mocked module and the
@@ -75,6 +79,26 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/sessions/n%201');
   });
 
+  it('posts the briefcase catalog queries and unwraps the catalog map', async () => {
+    const catalog = { general: [{ id: 'p1', name: 'Summarize' }] };
+    mockPost.mockResolvedValue({ catalog });
+    const queries = [{ key: 'general', type: 'general' }];
+    await expect(client.getBriefcaseCatalog(queries)).resolves.toEqual(catalog);
+    // Origin satisfies the route's csrfProtection for a login (JWT) caller.
+    expect(mockPost).toHaveBeenCalledWith(
+      '/api/briefcase/catalog',
+      { queries },
+      { headers: { Origin: 'http://localhost:3000' } }
+    );
+  });
+
+  it('gets a briefcase prompt by id (url-encoded) and unwraps it', async () => {
+    const prompt = { id: 'p 1', name: 'Summarize', promptText: 'Hi' };
+    mockGet.mockResolvedValue({ prompt });
+    await expect(client.getBriefcasePrompt('p 1')).resolves.toEqual(prompt);
+    expect(mockGet).toHaveBeenCalledWith('/api/briefcase/prompts/p%201');
+  });
+
   it('creates a notebook with only the provided fields', async () => {
     mockPost.mockResolvedValue({ id: 'n1' });
     await client.createNotebook({ name: 'My NB' });
@@ -124,6 +148,39 @@ describe('B4mApiClient', () => {
     expect(mockPost).toHaveBeenCalledWith('/api/sessions/create', { name: 'My NB', dataLakeId: 'lake-1' });
   });
 
+  const NB_ID = '64b7f0c2a1e4d5f6a7b8c9d0';
+
+  it('renames a notebook via PUT with only the name', async () => {
+    mockPut.mockResolvedValue({ id: NB_ID });
+    await client.renameNotebook(NB_ID, 'Renamed');
+    expect(mockPut).toHaveBeenCalledWith(`/api/sessions/${NB_ID}`, { name: 'Renamed' });
+  });
+
+  it('clones a notebook via POST .../clone', async () => {
+    mockPost.mockResolvedValue({ id: 'n2' });
+    await client.cloneNotebook(NB_ID);
+    expect(mockPost).toHaveBeenCalledWith(`/api/sessions/${NB_ID}/clone`, {});
+  });
+
+  it('deletes a notebook via DELETE without following redirects', async () => {
+    mockDelete.mockResolvedValue({ newLastNotebookId: null });
+    await expect(client.deleteNotebook(NB_ID)).resolves.toEqual({ newLastNotebookId: null });
+    expect(mockDelete).toHaveBeenCalledWith(`/api/sessions/${NB_ID}`, { maxRedirects: 0 });
+  });
+
+  // '' or '.' would reach DELETE /api/sessions (delete-all) after the trailing-slash redirect.
+  it.each(['', '.', '..', 'n 1', `${NB_ID}/..`])(
+    'refuses notebook id %j on every write without a request',
+    async id => {
+      await expect(client.renameNotebook(id, 'x')).rejects.toThrow('Invalid notebook id');
+      await expect(client.cloneNotebook(id)).rejects.toThrow('Invalid notebook id');
+      await expect(client.deleteNotebook(id)).rejects.toThrow('Invalid notebook id');
+      expect(mockPut).not.toHaveBeenCalled();
+      expect(mockPost).not.toHaveBeenCalled();
+      expect(mockDelete).not.toHaveBeenCalled();
+    }
+  );
+
   it('lists data lakes with flat limit/cursor params and maps next_cursor', async () => {
     mockGet.mockResolvedValue({ data: [{ id: 'l1', name: 'Lake', slug: 'lake' }], next_cursor: 'c2' });
     const result = await client.listDataLakes({ limit: 10, cursor: 'c1' });
@@ -140,41 +197,41 @@ describe('B4mApiClient', () => {
     expect(result).toEqual({ data: [], nextCursor: null });
   });
 
-  it('sends a chat message with wait:true and maps notebookId to sessionId', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
+  it('sends a chat message with wait:false and maps notebookId to sessionId', async () => {
+    mockPost.mockResolvedValue({ id: 'q1', status: 'queued' });
     await client.sendChat({ notebookId: 'nb1', message: 'hi', model: 'gpt' });
     expect(mockPost).toHaveBeenCalledWith('/api/chat', {
       sessionId: 'nb1',
       message: 'hi',
       model: 'gpt',
-      wait: true,
+      wait: false,
     });
   });
 
   it('starts a new conversation when no notebookId is supplied', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'complete', sessionId: 'fresh-nb' });
+    mockPost.mockResolvedValue({ id: 'q1', status: 'queued', sessionId: 'fresh-nb' });
     await client.sendChat({ message: 'hi' });
     expect(mockPost).toHaveBeenCalledWith('/api/chat', {
       newConversation: true,
       message: 'hi',
-      wait: true,
+      wait: false,
     });
   });
 
   it('forwards a supplied systemPrompt in the chat body', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
+    mockPost.mockResolvedValue({ id: 'q1', status: 'queued' });
     await client.sendChat({ notebookId: 'nb1', message: 'hi', systemPrompt: 'Reply only in haiku.' });
     expect(mockPost).toHaveBeenCalledWith('/api/chat', {
       sessionId: 'nb1',
       message: 'hi',
       systemPrompt: 'Reply only in haiku.',
-      wait: true,
+      wait: false,
     });
   });
   it('omits systemPrompt entirely from the body when not supplied', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
+    mockPost.mockResolvedValue({ id: 'q1', status: 'queued' });
     await client.sendChat({ notebookId: 'nb1', message: 'hi' });
-    expect(mockPost).toHaveBeenCalledWith('/api/chat', { sessionId: 'nb1', message: 'hi', wait: true });
+    expect(mockPost).toHaveBeenCalledWith('/api/chat', { sessionId: 'nb1', message: 'hi', wait: false });
   });
 
   it('searches the knowledge base via semantic-search and returns scores', async () => {
@@ -597,6 +654,33 @@ describe('mapApiError', () => {
     expect(mapApiError(axiosError(403), 'http://x', 'files:read')).toBe(
       "API key forbidden: check the key's scopes and account access (recommended scope: files:read)"
     );
+  });
+
+  it('surfaces the CSRF origin message on a 403 instead of the API-key fallback', () => {
+    const msg = mapApiError(
+      axiosError(403, {
+        data: { error: 'Invalid request origin. CSRF protection triggered (expected https://app.example.com).' },
+      }),
+      'http://x',
+      'files:read'
+    );
+    expect(msg).toContain('CSRF protection triggered');
+    expect(msg).not.toContain('API key forbidden');
+  });
+
+  it('keeps the API-key scope fallback for a non-CSRF 403 that carries a server body', () => {
+    expect(mapApiError(axiosError(403, { data: { error: 'Insufficient scope' } }), 'http://x', 'files:read')).toBe(
+      "API key forbidden: check the key's scopes and account access (recommended scope: files:read)"
+    );
+  });
+
+  it.each([
+    'CSRF: APP_URL is not configured on this deployment.',
+    'CSRF: APP_URL is not a valid absolute URL on this deployment.',
+    'CSRF: APP_URL does not resolve to a usable origin on this deployment.',
+    'Invalid request origin. CSRF protection triggered (expected https://app.example.com).',
+  ])('passes a csrfProtection 403 message through unchanged: %s', message => {
+    expect(mapApiError(axiosError(403, { data: { error: message } }), 'http://x', 'files:read')).toBe(message);
   });
 
   it('surfaces a numeric retry-after on 429', () => {

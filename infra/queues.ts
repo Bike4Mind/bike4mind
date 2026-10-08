@@ -350,7 +350,7 @@ const imageGenerationQueue = new sst.aws.Queue('imageGenerationQueue', {
 });
 const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/imageGeneration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/imageGeneration.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -401,7 +401,7 @@ const imageEditQueue = new sst.aws.Queue('imageEditQueue', {
 });
 const imageEditQueueSubscription = imageEditQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/imageEdit.dispatch',
+    handler: 'apps/workers/src/queueHandlers/imageEdit.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,

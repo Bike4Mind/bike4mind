@@ -7,6 +7,10 @@ const { PINNED } = vi.hoisted(() => ({ PINNED: 'memento-pinned-v1' }));
 let docs: Array<{ _id: string; summary: string; embedding?: number[]; embeddingModel?: string }> = [];
 const updateOne = vi.fn(async () => ({}));
 const generateEmbedding = vi.fn(async () => [0.1, 0.2, 0.3]);
+let chain: Array<Record<string, unknown>> = [];
+let dek: Buffer | null = Buffer.alloc(32);
+let missingKey: string | undefined;
+const rewriteEmbedding = vi.fn(async () => 1);
 
 vi.mock('@bike4mind/database', () => ({
   Memento: {
@@ -16,7 +20,10 @@ vi.mock('@bike4mind/database', () => ({
   },
   apiKeyRepository: {},
   adminSettingsRepository: {},
-  memoryLedgerRepository: {},
+  memoryLedgerRepository: {
+    listChain: async () => chain,
+    rewriteEmbedding: (...a: unknown[]) => rewriteEmbedding(...(a as [])),
+  },
   memoryPrincipalKeyRepository: {},
 }));
 
@@ -27,12 +34,12 @@ vi.mock('@bike4mind/common', () => ({
   toMementoVector: (v: number[]) => v,
 }));
 
-// Imported by the module for the LEDGER migration below the function under test, not by this path.
+// "Ciphertext" here is the plaintext with a prefix, so the ledger tests can read their own fixtures.
 vi.mock('./factCipher', () => ({
-  createKeyProvider: vi.fn(),
-  decryptFact: vi.fn(),
-  decryptVector: vi.fn(),
-  encryptVector: vi.fn(),
+  createKeyProvider: () => ({ getDek: async () => dek }),
+  decryptFact: (_k: Buffer, s: { cipher: string }) => (s.cipher.startsWith('enc:') ? s.cipher.slice(4) : null),
+  decryptVector: () => [9, 9, 9, 9],
+  encryptVector: () => ({ cipher: 'vc', iv: 'vi', tag: 'vt' }),
 }));
 
 vi.mock('@bike4mind/fab-pipeline', () => ({
@@ -42,13 +49,13 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
     }
   },
   getProviderFromModel: () => 'openai',
-  resolveEmbeddingConfig: () => ({ config: {}, missing: undefined }),
+  resolveEmbeddingConfig: () => ({ config: {}, missing: missingKey }),
 }));
 
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) } }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 
-import { reembedMementosForUser } from './reembedMementos';
+import { migrateLedgerVectorsForPrincipal, reembedMementosForUser } from './reembedMementos';
 
 const stale = (id: string, summary = `summary ${id}`) => ({ id: id, _id: id, summary, embedding: [1, 2] });
 
@@ -119,5 +126,128 @@ describe('reembedMementosForUser', () => {
     expect(stats).toMatchObject({ total: 2, alreadyCurrent: 0, reembedded: 0, stoppedAtLimit: false });
     expect(generateEmbedding).not.toHaveBeenCalled();
     expect(updateOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('migrateLedgerVectorsForPrincipal', () => {
+  const lake = { principal: { kind: 'lake' as const, id: 'lake:a' }, ownerUserId: 'owner1' };
+  const ev = (hash: string, over: Record<string, unknown> = {}) => ({
+    hash,
+    kind: 'assert',
+    factCipher: `enc:fact ${hash}`,
+    factIv: 'i',
+    factTag: 't',
+    ...over,
+  });
+  const vec = (model?: string) => ({
+    embeddingCipher: 'c',
+    embeddingIv: 'i',
+    embeddingTag: 't',
+    embeddingModel: model,
+  });
+
+  beforeEach(() => {
+    generateEmbedding.mockClear();
+    rewriteEmbedding.mockReset();
+    rewriteEmbedding.mockResolvedValue(1);
+    chain = [];
+    dek = Buffer.alloc(32);
+    missingKey = undefined;
+  });
+
+  it('backfills a vectorless event on a lake chain, writing under the lake principal and owner', async () => {
+    chain = [ev('h1')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake);
+
+    expect(stats).toMatchObject({ backfilled: 1, failed: 0 });
+    expect(generateEmbedding).toHaveBeenCalledWith('fact h1');
+    expect(rewriteEmbedding).toHaveBeenCalledWith('lake', 'lake:a', 'owner1', 'h1', {
+      cipher: 'vc',
+      iv: 'vi',
+      tag: 'vt',
+      model: PINNED,
+    });
+  });
+
+  it('classifies every arm: current, truncation, re-embed, legacy plaintext, no fact, skipped', async () => {
+    chain = [
+      ev('cur', vec(PINNED)),
+      ev('full', vec('text-embedding-3-small')),
+      ev('ada', vec()),
+      { hash: 'legacy', kind: 'assert', fact: 'plain fact' },
+      ev('bad', { factCipher: 'garbled' }),
+      ev('ret', { kind: 'retract' }),
+      ev('shr', { shredded: true }),
+    ];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake);
+
+    expect(stats).toMatchObject({
+      total: 7,
+      alreadyCurrent: 1,
+      truncated: 1,
+      reembedded: 1,
+      backfilled: 1,
+      noFact: 1,
+      failed: 0,
+    });
+    expect(generateEmbedding.mock.calls).toEqual([['fact ada'], ['plain fact']]);
+  });
+
+  it('returns empty stats when the principal has no key', async () => {
+    dek = null;
+    chain = [ev('h1')];
+
+    expect(await migrateLedgerVectorsForPrincipal(lake)).toMatchObject({ backfilled: 0, failed: 0, total: 1 });
+    expect(rewriteEmbedding).not.toHaveBeenCalled();
+  });
+
+  it('still truncates with no provider key, failing the embeds and recording the reason once', async () => {
+    missingKey = 'openai';
+    chain = [ev('full', vec('text-embedding-3-small')), ev('h1'), ev('h2')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake);
+
+    expect(stats).toMatchObject({ truncated: 1, backfilled: 0, failed: 2 });
+    expect(stats.errors).toHaveLength(1);
+    expect(stats.errors[0]).toContain('owner owner1');
+  });
+
+  it('makes no provider call and no write on a dry run, but still counts', async () => {
+    missingKey = 'openai';
+    chain = [ev('full', vec('text-embedding-3-small')), ev('h1')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { dryRun: true });
+
+    expect(stats).toMatchObject({ truncated: 1, backfilled: 1, failed: 0, errors: [] });
+    expect(generateEmbedding).not.toHaveBeenCalled();
+    expect(rewriteEmbedding).not.toHaveBeenCalled();
+  });
+
+  it('stops at the provider-call limit without charging truncations to it', async () => {
+    chain = [ev('full', vec('text-embedding-3-small')), ev('h1'), ev('h2')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { limit: 1 });
+
+    expect(stats).toMatchObject({ truncated: 1, backfilled: 1, stoppedAtLimit: true });
+  });
+
+  it('does not report stoppedAtLimit when the last provider call lands exactly on the limit', async () => {
+    chain = [ev('h1'), ev('h2')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { limit: 2 });
+
+    expect(stats).toMatchObject({ backfilled: 2, stoppedAtLimit: false });
+  });
+
+  it('counts a rewrite that matched nothing (e.g. shredded mid-run) as failed', async () => {
+    rewriteEmbedding.mockResolvedValue(0);
+    chain = [ev('h1')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake);
+
+    expect(stats).toMatchObject({ backfilled: 0, failed: 1 });
+    expect(stats.errors[0]).toContain('no document matched');
   });
 });

@@ -27,7 +27,13 @@ import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
 import type { IFabFileDocument } from '@bike4mind/common';
 import type { DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
-import { describePipelineStall, humanizeTagSegment, satisfiesTagPrefix, submittedTagPrefix } from '@bike4mind/common';
+import {
+  countTagPaths,
+  describePipelineStall,
+  humanizeTagSegment,
+  satisfiesTagPrefix,
+  submittedTagPrefix,
+} from '@bike4mind/common';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 
@@ -85,16 +91,15 @@ export default function DataLakeViewer({
     // drift between the two surfaces. `|| ':'` keeps an empty prefix matching nothing - every tag
     // startsWith(''), which would pull unrelated tags into this lake's tree.
     const prefix = submittedTagPrefix(tagPrefix) || ':';
-    const tagCountMap = new Map<string, number>();
-    for (const file of articles) {
-      for (const tag of file.tags ?? []) {
-        if (tag.name.startsWith(prefix) && !tag.name.startsWith('datalake:')) {
-          tagCountMap.set(tag.name, (tagCountMap.get(tag.name) ?? 0) + 1);
-        }
-      }
-    }
-    const tagCounts = Array.from(tagCountMap.entries()).map(([tag, count]) => ({ tag, count }));
-    return buildTagTree(tagCounts);
+    return buildTagTree(
+      countTagPaths(
+        articles.map(file =>
+          (file.tags ?? [])
+            .map(tag => tag.name)
+            .filter(name => name.startsWith(prefix) && !name.startsWith('datalake:'))
+        )
+      )
+    );
   }, [articles, tagPrefix]);
 
   const handleNavigate = useCallback((newBreadcrumb: string[]) => {

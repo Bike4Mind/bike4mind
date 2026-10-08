@@ -82,6 +82,8 @@ import {
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   narrowLakeAccessToSession,
+  sessionExcludesLibraryFiles,
+  hasLakeArms as accessHasLakeArms,
   sessionGroundsOnNoLake,
   sessionNamesALake,
   type ResolvedLakeAccessSet,
@@ -2028,6 +2030,27 @@ function compareForcedRetrievalCandidates(a: ForcedRetrievalCandidate, b: Forced
 }
 
 /**
+ * Lake rows first, then the union's remaining (library) rows, deduped by id and capped at
+ * `listingLimit`. `hasMore` also flips when the merged rows overflow the cap even though neither
+ * listing reported more, so the caller still marks the candidate set as truncated.
+ */
+export function mergeLakeFirstListing<T extends { id: string }>(
+  lakeListing: { data: T[]; hasMore?: boolean },
+  scopeListing: { data: T[]; hasMore?: boolean },
+  listingLimit: number
+): { data: T[]; hasMore: boolean } {
+  const lakeFileIds = new Set(lakeListing.data.map(f => f.id));
+  const libraryRows = scopeListing.data.filter(f => !lakeFileIds.has(f.id));
+  return {
+    data: [...lakeListing.data, ...libraryRows].slice(0, listingLimit),
+    hasMore:
+      lakeListing.hasMore === true ||
+      scopeListing.hasMore === true ||
+      lakeListing.data.length + libraryRows.length > listingLimit,
+  };
+}
+
+/**
  * KnowledgeRetrievalFeature - forced server-side retrieval ("citation enforcer").
  *
  * Generic capability: when a session sets `forceKnowledgeRetrieval`, every user
@@ -2073,6 +2096,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
    */
   private readerConsentTags: string[];
+  /** `session.includeLibraryFiles` - resolve through sessionExcludesLibraryFiles, never raw. */
+  private includeLibraryFiles: boolean | undefined;
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -2081,7 +2106,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     retrievalFilter?: RetrievalExclusionOptions,
     preauthorizedLakeIds?: string[],
     lakeScopeExplicit?: boolean,
-    readerConsentDatalakeTags?: string[]
+    readerConsentDatalakeTags?: string[],
+    includeLibraryFiles?: boolean
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -2091,6 +2117,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
     this.lakeScopeExplicit = lakeScopeExplicit;
     this.readerConsentTags = Array.isArray(readerConsentDatalakeTags) ? readerConsentDatalakeTags : [];
+    this.includeLibraryFiles = includeLibraryFiles;
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2789,11 +2816,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
     // The session deliberately grounds on NO lake, so there is nothing to force retrieval against.
     // Skipping is the whole handling: narrowing to nothing and running anyway would either search
-    // the caller's entire personal library (`restrictToDataLake` is gated on `lakeScoped`, which is
-    // false here) or, with it on, abstain through the `no_lakes` exit and stamp an outcome that
-    // reads as a broken lake rather than a chosen scope. The model can still call
-    // search_knowledge_base for the caller's own files; its lake arms are empty for the same
-    // reason (resolveSessionLakeAccess).
+    // the caller's entire personal library (`restrictToDataLake` follows sessionExcludesLibraryFiles,
+    // which is false here unless the library was turned off) or abstain through the `no_lakes` exit
+    // and stamp an outcome that reads as a broken lake rather than a chosen scope. The model can
+    // still call search_knowledge_base, whose lake arms are empty for the same reason
+    // (resolveSessionLakeAccess); it reads the caller's own files only while the library is on.
     //
     // Checked BEFORE personalCorpusOnly below: that check's remedy ("ask again without the
     // attachment") assumes the session would otherwise ground on a lake, which is never true once
@@ -2868,11 +2895,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // query to one lake); narrowing without restrictToDataLake still leaks the personal library
       // through the own/shared/group base arms.
       //
-      // Both halves are gated on `lakeScoped`, NOT applied unconditionally. The narrowing no-ops
+      // Both halves are gated, NOT applied unconditionally. The narrowing no-ops
       // for a session whose tags name no lake (see sessionNamesALake), and pairing that no-op with
       // restrictToDataLake would drop the base arms for a session that never asked to be
       // lake-scoped - silently confining its grounding to lake content and losing the caller's own
-      // files. `restrictToDataLake` must mean "the session named a lake", not "this code ran".
+      // files. `restrictToDataLake` must mean "the session excludes the library", not "this code
+      // ran": `lakeScoped` while `includeLibraryFiles` is unset, the explicit flag once set. Explicit
+      // false therefore also confines an all-lakes session (no lake named) to lake content. The
+      // knowledge tools derive it through the same sessionExcludesLibraryFiles call, so they agree.
       //
       // `lakeScoped` is computed from the PRE-narrowing set. That is equivalent to asking the
       // narrowed one today - `retainedLakes` is a superset of the prefix-matched lakes, so the
@@ -2886,6 +2916,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const lakeMemberships = lakeMembershipsFrom(lakes);
       warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
       attemptedDataLakeTags = dataLakeTags;
+      const excludeLibrary = sessionExcludesLibraryFiles(this.includeLibraryFiles, resolvedAccess, this.retrievalTags);
+      const hasLakeArms = accessHasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
 
       // The session named a lake and narrowing retained none of it: a revoked grant, an archived
       // lake, or a lapsed entitlement on a session that still names that lake. Nothing was in scope
@@ -2893,9 +2925,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // buildOwnershipConditions' restrictToDataLake fail-fast throws into the outer catch and
       // stamps `failed` at error level on EVERY turn of that session, indefinitely, reporting a
       // benign access state as a retrieval failure to logs and to the retrieval-rate metric.
-      // Only reachable while `lakeScoped` - with it false the base arms survive, so `conditions`
-      // is never empty and the fail-fast cannot fire.
-      if (lakeScoped && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+      // Also the exit for a library-excluding session with no lake at all to reach. Only reachable
+      // while `excludeLibrary` - otherwise the base arms survive, so `conditions` is never empty
+      // and the fail-fast cannot fire.
+      if (excludeLibrary && !hasLakeArms) {
         recordRetrieval('no_lakes', []);
         this.logger.log('🔒 Forced retrieval: session names no lake this caller can reach');
         return this.noContextMessages('unavailable');
@@ -2932,32 +2965,43 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const listingLimit = relevanceSelectionAvailable
         ? FORCED_RETRIEVAL_MAX_LISTED_FILES
         : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
-      const fileResults = await db.fabfiles.search(
-        user.id,
-        '',
-        { tags: nonLakeRetrievalTags, shared: false },
-        { page: 1, limit: listingLimit },
-        { by: 'fileName', direction: 'asc' },
-        {
-          textSearch: true,
-          includeShared: true,
-          userGroups: user.groups || [],
-          dataLakeTags,
-          dataLakeTagPrefixes, // static-registry (open) prefixes
-          lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
-          // Scope to the resolved lake(s) only, never the caller's whole library - but only when
-          // the session actually named a lake; see the `lakeScoped` note above.
-          restrictToDataLake: lakeScoped,
-          excludeContent: true, // metadata only; chunk text + vectors fetched below
-          // supersededInLakes is select:false by default; forced retrieval feeds the same
-          // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
-          // FabFileModel.executeSearch.
-          includeSupersessionRulings: true,
-          // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
-          // so this arm agrees with the surface's document-listing predicate. No-op when unset.
-          ...this.retrievalFilter,
-        }
-      );
+      const listFiles = (restrictToDataLake: boolean) =>
+        db.fabfiles.search(
+          user.id,
+          '',
+          { tags: nonLakeRetrievalTags, shared: false },
+          { page: 1, limit: listingLimit },
+          { by: 'fileName', direction: 'asc' },
+          {
+            textSearch: true,
+            includeShared: true,
+            userGroups: user.groups || [],
+            dataLakeTags,
+            dataLakeTagPrefixes, // static-registry (open) prefixes
+            lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
+            restrictToDataLake,
+            excludeContent: true, // metadata only; chunk text + vectors fetched below
+            // supersededInLakes is select:false by default; forced retrieval feeds the same
+            // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
+            // FabFileModel.executeSearch.
+            includeSupersessionRulings: true,
+            // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
+            // so this arm agrees with the surface's document-listing predicate. No-op when unset.
+            ...this.retrievalFilter,
+          }
+        );
+      // An explicit "+ My files" turns the listing into a union where a large personal library,
+      // sorted by name, could crowd the lake out of the listing and the by-name candidate cut. The
+      // lake-only listing goes first so lake files keep their slots; library files fill the rest.
+      const prioritizeLakeFiles = this.includeLibraryFiles === true && hasLakeArms;
+      // Scope to the resolved lake(s) only, never the caller's whole library - but only when the
+      // session excludes the library; see the gating note above.
+      const [lakeListing, scopeListing] = await Promise.all([
+        prioritizeLakeFiles ? listFiles(true) : null,
+        listFiles(excludeLibrary),
+      ]);
+      const lakeFileIds = new Set((lakeListing?.data ?? []).map(f => f.id));
+      const fileResults = lakeListing ? mergeLakeFirstListing(lakeListing, scopeListing, listingLimit) : scopeListing;
 
       // Authoritative post-filter: the DB clause above is a best-effort pre-filter; re-apply the
       // exclusion in memory so correctness never depends on the DB regex engine or fileNameLower.
@@ -2973,8 +3017,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
       const fileById = new Map(files.map(f => [f.id, f]));
       // Fixed scan order so batching, the model pick, and any truncation are all reproducible;
-      // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves.
+      // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves. Prioritized
+      // lake files sort first so a by-name candidate cut keeps them (see prioritizeLakeFiles).
       const scanOrder = [...files].sort((a, b) => {
+        const al = lakeFileIds.has(a.id);
+        if (al !== lakeFileIds.has(b.id)) return al ? -1 : 1;
         const an = a.fileName ?? '';
         const bn = b.fileName ?? '';
         if (an !== bn) return an < bn ? -1 : 1;

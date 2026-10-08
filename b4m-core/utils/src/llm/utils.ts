@@ -54,7 +54,10 @@ const MAX_FILE_SIZE = 6000;
 const MAX_RECENT_GENERATED_IMAGES = 6;
 /** Chars of the originating prompt kept per generated image, for context without bloat. */
 const RECENT_IMAGE_PROMPT_PREVIEW_CHARS = 120;
-/** quest.images also holds non-image generated artifacts (e.g. .xlsx); only these extensions are editable. */
+/**
+ * quest.images also holds non-image generated artifacts (e.g. .xlsx); only these extensions are editable.
+ * Keep in sync with GENERATED_IMAGE_KEY_RE (@bike4mind/common), what edit_image actually accepts.
+ */
 const EDITABLE_IMAGE_KEY_RE = /\.(jpe?g|png|webp|gif)$/i;
 const PREVIEW_CHUNK = 700;
 const CHARS_PER_TOKEN = 3.5;
