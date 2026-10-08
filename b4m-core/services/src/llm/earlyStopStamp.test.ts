@@ -3,6 +3,7 @@ import {
   CLEAN_FINISH_REASONS,
   DEGENERATE_FINISH_REASON,
   EARLY_STOP_FINISH_REASONS,
+  REFUSAL_FINISH_REASON,
   TRUNCATED_FINISH_REASON,
 } from '@bike4mind/common';
 import {
@@ -12,6 +13,7 @@ import {
   INCOMPLETE_ANSWER_NOTICE,
   TRUNCATED_ANSWER_NOTICE,
   TRUNCATION_WARNING,
+  usageEventStatusForFinish,
 } from './earlyStopStamp';
 
 describe('buildEarlyStopStamp', () => {
@@ -56,6 +58,22 @@ describe('buildEarlyStopStamp', () => {
   });
 });
 
+describe('usageEventStatusForFinish', () => {
+  it('records a model refusal as a refusal, with no early-stop warning', () => {
+    expect(usageEventStatusForFinish(REFUSAL_FINISH_REASON)).toBe('refusal');
+    expect(buildEarlyStopStamp(REFUSAL_FINISH_REASON)).toBeNull();
+  });
+
+  it('defers to the early-stop stamp for degenerate and truncated replies', () => {
+    expect(usageEventStatusForFinish(DEGENERATE_FINISH_REASON)).toBe('degenerate');
+    expect(usageEventStatusForFinish(TRUNCATED_FINISH_REASON)).toBe('ok');
+  });
+
+  it.each([...CLEAN_FINISH_REASONS, undefined, null, 'some_future_reason'])('is ok for %p', reason => {
+    expect(usageEventStatusForFinish(reason)).toBe('ok');
+  });
+});
+
 describe('buildIncompleteAnswerNotice', () => {
   const unanswered = {
     stopped: false,
@@ -63,6 +81,7 @@ describe('buildIncompleteAnswerNotice', () => {
     visibleCharsAfterLastToolCall: 0,
     stopReason: 'end_turn',
     producedNonTextDeliverable: false,
+    endedOnAnswerTool: false,
   };
 
   it('flags a tool-loop turn with no visible text after its last tool call', () => {
@@ -76,6 +95,11 @@ describe('buildIncompleteAnswerNotice', () => {
     expect(buildIncompleteAnswerNotice({ ...unanswered, toolCallCount: 0, stopReason: TRUNCATED_FINISH_REASON })).toBe(
       TRUNCATED_ANSWER_NOTICE
     );
+  });
+
+  it('stays silent when the turn ended on a tool that follows its answer text', () => {
+    expect(buildIncompleteAnswerNotice({ ...unanswered, stopReason: 'tool_use', endedOnAnswerTool: true })).toBeNull();
+    expect(buildIncompleteAnswerNotice({ ...unanswered, stopReason: 'tool_use' })).toBe(INCOMPLETE_ANSWER_NOTICE);
   });
 
   it('stays silent when an answer was written, the turn was stopped, or no tool ran', () => {

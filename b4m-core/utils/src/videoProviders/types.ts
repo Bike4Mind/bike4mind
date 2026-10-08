@@ -1,4 +1,10 @@
-import type { ProviderJobHandle, ProviderOutput, ValidatedVideoRequest, VideoProviderId } from '@bike4mind/common';
+import type {
+  ProviderJobHandle,
+  ProviderOutput,
+  ValidatedVideoRequest,
+  VideoModelId,
+  VideoProviderId,
+} from '@bike4mind/common';
 import { MAX_VIDEO_OUTPUT_BYTES } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -9,7 +15,11 @@ export type { ProviderJobHandle, ProviderOutput };
 export type ProviderPollResult =
   | { status: 'running'; /** Fraction complete, 0..1; the job handler clamps anything outside. */ progress?: number }
   | { status: 'succeeded'; output: ProviderOutput; reportedDurationSeconds?: number }
-  | { status: 'blocked'; reason?: string; raw: unknown }
+  /**
+   * `billed`: set only when the provider is known to have charged for the blocked generation (it generated the clip,
+   * then withheld it). The job then settles the user's hold instead of releasing it; leave it unset when unsure.
+   */
+  | { status: 'blocked'; reason?: string; billed?: boolean; raw: unknown }
   | { status: 'failed'; retryable: boolean; message: string; raw: unknown };
 
 export type ResolvedInputs = { inputImage?: { bytes: Buffer; mimeType: string } };
@@ -25,6 +35,8 @@ export type VideoProviderContext = {
 // Every method is one bounded call: no method sleeps, loops or polls. The job engine owns waiting.
 export interface VideoProvider {
   readonly id: VideoProviderId;
+  /** Must equal the catalog models whose `provider` is this id; the registry enforces it. */
+  readonly models: readonly VideoModelId[];
   submit(request: ValidatedVideoRequest, inputs: ResolvedInputs, ctx: VideoProviderContext): Promise<ProviderJobHandle>;
   poll(handle: ProviderJobHandle, ctx: VideoProviderContext): Promise<ProviderPollResult>;
   fetchOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Buffer>;
@@ -35,12 +47,15 @@ export interface VideoProvider {
  * `definitive: true` means the provider answered and created nothing (a 4xx/429 response), so the
  * engine may retry the submit. Anything else (timeout, reset) leaves the outcome unknown and the
  * engine must not resubmit - see the orphaned-submit section of the design spec.
+ * `retryable` only matters when definitive: false marks a deterministic rejection (invalid parameter,
+ * auth) that the same request would hit again, so the job fails now instead of resubmitting.
  */
 export class ProviderSubmitError extends Error {
   constructor(
     message: string,
     readonly definitive: boolean,
-    readonly raw?: unknown
+    readonly raw?: unknown,
+    readonly retryable: boolean = definitive
   ) {
     super(message);
     this.name = 'ProviderSubmitError';
@@ -51,6 +66,14 @@ export class VideoOutputTooLargeError extends Error {
   constructor(bytes: number) {
     super(`video output exceeds ${MAX_VIDEO_OUTPUT_BYTES} bytes (got at least ${bytes})`);
     this.name = 'VideoOutputTooLargeError';
+  }
+}
+
+/** The provider no longer has the output (expired or purged); retrying the download cannot succeed. */
+export class ProviderOutputUnavailableError extends Error {
+  constructor(readonly status: number) {
+    super(`provider output is no longer available (HTTP ${status})`);
+    this.name = 'ProviderOutputUnavailableError';
   }
 }
 

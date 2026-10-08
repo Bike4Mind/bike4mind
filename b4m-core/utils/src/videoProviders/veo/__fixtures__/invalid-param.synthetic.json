@@ -1,0 +1,39 @@
+{
+  "scenario": "invalid-param.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built: a Google API INVALID_ARGUMENT 400 in the standard error envelope; the message text is a placeholder. Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+        "body": {
+          "instances": [
+            {
+              "prompt": "a lighthouse"
+            }
+          ],
+          "parameters": {
+            "durationSeconds": 4,
+            "aspectRatio": "1:7",
+            "resolution": "720p"
+          }
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "Unsupported aspectRatio '1:7'.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -47,7 +47,7 @@ const retrievalIndex = () =>
     : undefined;
 
 /**
- * POST /api/data-lakes/:id/lifecycle  { action }
+ * POST /api/data-lakes/:id/lifecycle  { action }  (`:id` must be the lake id, not its slug)
  * Drives the lake lifecycle through the service layer so the required side effects
  * (cancel in-flight batch, archive/soft-delete files, dedup on restore, stat
  * recompute, best-effort index removal) always run. Writes are owner/admin only.
@@ -60,8 +60,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const ctx = await toAccessContext(req);
 
     // Resolve + access-gate the lake first (not-found-style denial). Writes are then
-    // further restricted to owner/admin inside each service.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // further restricted to owner/admin inside each service. By id only: a slug skips a deleted
+    // lake, so a retried delete by slug would land on the next lake sharing it.
+    const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     dataLakeService.assertLakeWritable(lake);

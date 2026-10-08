@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { DATA_LAKE_GROUNDING_MODES } from '../constants/dataLakes';
+import { SESSION_ORIGIN_CHANNELS } from '../types/entities/SessionTypes';
+import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 
 // Shared by the request and response schemas below - kept to one definition so the two
 // can't quietly diverge on what a tag looks like.
@@ -55,14 +57,27 @@ export const SessionUpdateRequestSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      'The data lakes this session grounds on, as lake tags (the `datalakeTag` of each lake from ' +
-        'GET /api/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
+      'The data lakes this session grounds on, as lake tags (the `datalake_tag` of each lake from ' +
+        'GET /api/v1/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
         'lake at all, or `null` to clear the choice so retrieval falls back to every lake you can ' +
         'reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach ' +
         'are ignored at retrieval time rather than rejected here. Narrowing the scope does not by ' +
         'itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that ' +
         'is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve ' +
         'from, so its forced retrieval is skipped rather than run against every lake.'
+    ),
+  includeLibraryFiles: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether the session grounds on your own library (files you own, or that are shared with you ' +
+        'or your groups) alongside its lakes. `false` confines retrieval to lake content, including when ' +
+        "every lake is in scope; the session's attached files still reach the model and stay searchable " +
+        'by its knowledge-base tools. Omit to leave it unchanged; ' +
+        'while never set, the library is excluded only when a lake was picked for the session (Data ' +
+        'Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. ' +
+        'While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value ' +
+        'applies again once it is turned back on.'
     ),
   // Defaults to true, matching what every caller did before this flag existed. Pass
   // false when the session gained a file WITHOUT the user asking for it to travel -
@@ -111,6 +126,10 @@ export const SessionResponseSchema = z.object({
     .boolean()
     .optional()
     .describe('True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".'),
+  includeLibraryFiles: z
+    .boolean()
+    .optional()
+    .describe('Whether the session grounds on your own library alongside its lakes. Absent when never set.'),
   lastUsedModel: z.string().nullish(),
   // Plain z.date(), not z.coerce.date(): these are always set on a session (ISession has
   // them as required Date fields), and coerce accepts null (Date(null) -> epoch) which
@@ -120,6 +139,45 @@ export const SessionResponseSchema = z.object({
 });
 
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
+
+/** Request body for POST /api/v1/sessions/{id}/clone. */
+// A bodiless POST reaches Next as '' (no content-type -> text/plain), not undefined, so '' is
+// folded into "absent" before the default applies.
+export const SessionCloneRequestSchema = z.preprocess(
+  body => (body === '' ? undefined : body),
+  z
+    .object({
+      targetSurface: z.string().nullable().optional(),
+    })
+    .default({})
+);
+
+export type SessionCloneRequest = z.infer<typeof SessionCloneRequestSchema>;
+
+/** Query for GET /api/v1/sessions: the pagination convention plus flat filters. */
+export const ListSessionsQuerySchema = PaginationQuerySchema.extend({
+  search: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Case-insensitive substring match on the session name, its summary, or a tag name.'),
+  surface: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Lists only sessions of this product surface. When omitted, only sessions with no surface are listed.'),
+  origin: z
+    .enum(SESSION_ORIGIN_CHANNELS)
+    .optional()
+    .describe('Lists only sessions created through this channel. `web` also matches sessions with no recorded origin.'),
+});
+
+export type ListSessionsQuery = z.infer<typeof ListSessionsQuerySchema>;
+
+export const ListSessionsResponseSchema = paginatedResponseSchema(SessionResponseSchema);
+
+export type ListSessionsResponse = z.infer<typeof ListSessionsResponseSchema>;
 
 /** Response for DELETE /api/sessions/{id}. */
 export const SessionDeleteResponseSchema = z.object({
@@ -167,6 +225,7 @@ export const CreateSessionRequestSchema = z.object({
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
   lakeScopeExplicit: z.boolean().optional(),
+  includeLibraryFiles: z.boolean().optional(),
   corpusGroundingMode: z
     .enum(DATA_LAKE_GROUNDING_MODES)
     .optional()

@@ -99,7 +99,9 @@ export const CompletionRequestSchema = z.object({
       stream: z.boolean().optional(),
       tools: z.array(CompletionToolSchema).optional(),
       response_format: ResponseFormatSchema.optional(),
-      reasoningEffort: CompletionReasoningEffortSchema.optional(),
+      reasoningEffort: CompletionReasoningEffortSchema.optional().describe(
+        'Reasoning effort hint. Honoured only by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only) and DeepSeek adapters; Kimi and DeepSeek map it onto their own scale. Silently ignored by every other adapter (Anthropic, Gemini, Bedrock, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
+      ),
     })
     .optional(),
 });

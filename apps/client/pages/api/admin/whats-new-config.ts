@@ -4,7 +4,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
 import { ForbiddenError } from '@server/utils/errors';
 import { ApiKeyScope, WhatsNewConfigSchema } from '@bike4mind/common';
-import { validateTemplate } from '@server/queueHandlers/whatsNewGeneration.templateUtils';
+import { validateTemplate } from '@server/whatsNew/whatsNewGeneration.templateUtils';
 
 // Rate limiting constants
 const ADMIN_CONFIG_RATE_LIMIT = 10; // requests per minute

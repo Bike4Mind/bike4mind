@@ -147,6 +147,45 @@ describe('TokenCounter', () => {
     });
   });
 
+  describe('forModel (calibrated view)', () => {
+    const TEXT = 'hello world, this is a token counting test';
+
+    it('scales counts for a Claude model by its multiplier', () => {
+      const raw = counter.countTokens(TEXT);
+
+      expect(counter.forModel('claude-sonnet-5').countTokens(TEXT)).toBe(Math.ceil((raw * 150) / 100));
+      expect(counter.forModel('claude-opus-4-6').countTokens(TEXT)).toBe(Math.ceil((raw * 109) / 100));
+    });
+
+    it('returns the raw count for non-Claude and versionless models', () => {
+      const raw = counter.countTokens(TEXT);
+
+      expect(counter.forModel('gpt-4o').countTokens(TEXT)).toBe(raw);
+      expect(counter.forModel(undefined).countTokens(TEXT)).toBe(raw);
+      // No version -> tokenEstimateMultiplier returns 1.
+      expect(counter.forModel('claude-sonnet').countTokens(TEXT)).toBe(raw);
+    });
+
+    it('returns the counter itself when nothing needs scaling', () => {
+      expect(counter.forModel('gpt-4o')).toBe(counter);
+      expect(counter.forModel(undefined)).toBe(counter);
+    });
+
+    it('leaves the flat image estimate unscaled on a calibrated view', () => {
+      const image = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: '' } }];
+
+      expect(counter.countMessageContent(image as never)).toBe(1_600);
+      expect(counter.forModel('claude-sonnet-5').countMessageContent(image as never)).toBe(1_600);
+    });
+
+    it('disposing the view does not free the shared encoder', () => {
+      const view = counter.forModel('claude-sonnet-5');
+      view.dispose();
+
+      expect(counter.countTokens('still countable')).toBeGreaterThan(0);
+    });
+  });
+
   describe('getTokenCounter singleton', () => {
     it('should return the same instance', () => {
       const counter1 = getTokenCounter();

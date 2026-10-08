@@ -315,11 +315,13 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
     it('rejects a banned owner even with accepted policy and a current tokenVersion', async () => {
       vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', isBanned: true }));
       await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('User not found or banned');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(UnauthorizedError);
     });
 
     it('rejects a chargeback/dispute-pending owner', async () => {
       vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', disputePending: true }));
       await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('dispute resolution');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(ForbiddenError);
     });
 
     it('rejects a content-policy-suspended owner', async () => {
@@ -327,6 +329,7 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
         mockUser({ aupAcceptedVersion: 'v1', moderation: { status: 'suspended' } })
       );
       await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('suspended for repeated content-policy');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(ForbiddenError);
     });
 
     it('accepts a usable account (not banned, disputed, or suspended)', async () => {

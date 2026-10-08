@@ -365,7 +365,7 @@ describe('planCatalogWrites', () => {
     );
     const result = plan({
       base,
-      contributions: [{ name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: {} }] }],
+      contributions: [{ name: 'models.dev', kind: 'aggregator', records: [gpt6()] }],
     });
 
     // The aggregators keep retired ids forever; treating one as evidence the
@@ -928,6 +928,84 @@ describe('planCatalogWrites', () => {
 
     expect(agreeing.diff[0].promoted).toBe(true);
     expect(alone.diff[0].blockedBy).toEqual(['no-trusted-price']);
+    expect(alone.rows[0].patch).toMatchObject({
+      autoDisabledReason: 'discovered, awaiting price (aggregator quote not corroborated)',
+    });
+  });
+
+  it('says the build holds a price for a per-image literal no trusted source quotes', () => {
+    // Text literals arrive as a trusted price; the per-image and per-minute ones do not, which is
+    // the only way a build-priced model is still blocked on price.
+    const image = gpt6({ id: 'gpt-image-1', name: 'GPT Image 1' });
+    const contributions = [
+      { name: 'openai', kind: 'provider' as const, records: [{ ...image, modelId: 'gpt-image-1' }] },
+    ];
+
+    const priced = plan({
+      resolveDispatch: dispatchable,
+      contributions,
+      buildPricedModelIds: new Set(['gpt-image-1']),
+    });
+    const unpriced = plan({ resolveDispatch: dispatchable, contributions, buildPricedModelIds: new Set(['other']) });
+
+    expect(priced.diff[0].blockedBy).toEqual(['no-trusted-price']);
+    expect(priced.rows[0].patch).toMatchObject({
+      autoDisabledReason: 'discovered, priced in this build per image or minute, no trusted per-token price',
+    });
+    expect(unpriced.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
+  });
+
+  describe('uncorroborated wording across runs', () => {
+    const lone = {
+      name: 'models.dev',
+      kind: 'aggregator' as const,
+      records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 2, outputPerMTok: 8 } }],
+    };
+    const provider = { name: 'openai', kind: 'provider' as const, records: [gpt6()] };
+
+    const afterLoneQuote = () => plan({ resolveDispatch: dispatchable, contributions: [provider, lone] });
+
+    it('keeps the wording in force when no aggregator ran, so the wording alone appends nothing', () => {
+      const first = afterLoneQuote();
+      expect(first.rows[0].patch).toMatchObject({
+        autoDisabledReason: 'discovered, awaiting price (aggregator quote not corroborated)',
+      });
+
+      const second = plan({ resolveDispatch: dispatchable, contributions: [provider], base: asBase(first.rows) });
+
+      expect(second.rows).toEqual([]);
+    });
+
+    it('replaces the wording when the denial is no longer a price one, even with no aggregator running', () => {
+      const second = plan({
+        resolveDispatch: dispatchable,
+        contributions: [provider],
+        base: asBase(afterLoneQuote().rows),
+        policy: 'manual',
+      });
+
+      expect(second.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting admin approval' });
+    });
+
+    it('drops the wording once an aggregator listing the model ran and still quoted nothing', () => {
+      const second = plan({
+        resolveDispatch: dispatchable,
+        contributions: [provider, { ...lone, records: [gpt6()] }],
+        base: asBase(afterLoneQuote().rows),
+      });
+
+      expect(second.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
+    });
+
+    it('keeps the wording when an aggregator that does not list the model ran', () => {
+      const second = plan({
+        resolveDispatch: dispatchable,
+        contributions: [provider, { name: 'litellm', kind: 'aggregator' as const, records: [] }],
+        base: asBase(afterLoneQuote().rows),
+      });
+
+      expect(second.rows).toEqual([]);
+    });
   });
 
   // A text row whose output reserve eats its whole context window makes safeInputWindow
@@ -1127,6 +1205,9 @@ describe('planCatalogWrites', () => {
     });
 
     expect(result.diff[0].blockedBy).toEqual(['no-trusted-price']);
+    expect(result.rows[0].patch).toMatchObject({
+      autoDisabledReason: 'discovered, awaiting price (aggregator quote not corroborated)',
+    });
   });
 
   describe('introducing a model no source describes fully', () => {

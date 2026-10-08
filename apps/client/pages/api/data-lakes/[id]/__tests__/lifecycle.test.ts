@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   archiveDataLake: vi.fn(),
   deleteDataLake: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     archiveDataLake: h.archiveDataLake,
     deleteDataLake: h.deleteDataLake,
@@ -143,7 +143,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   });
 
   it('enqueues the cleanup and returns 202 for the owner without running the sweep inline', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 
@@ -159,7 +159,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   });
 
   it('claims the purge BEFORE enqueueing, so the lake leaves the deleted list first (#1744)', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     const order: string[] = [];
     h.acceptDataLakePurge.mockImplementation(async () => void order.push('accept'));
     h.sendToQueue.mockImplementation(async () => void order.push('enqueue'));
@@ -180,7 +180,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   it('releases the claim when the enqueue fails, so the lake cannot strand in purging', async () => {
     // Without the release this is the one unrecoverable outcome: no list shows a purging lake, and
     // with no message enqueued there is nothing to alarm on or replay - only a manual DB edit.
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     h.sendToQueue.mockRejectedValue(new Error('sqs unavailable'));
     const { res } = makeRes();
     await expect(
@@ -192,7 +192,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   });
 
   it('rethrows the original enqueue error when the release itself fails', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     h.sendToQueue.mockRejectedValue(new Error('sqs unavailable'));
     h.releasePurgingToDeleted.mockRejectedValueOnce(new Error('mongo down'));
     const { res } = makeRes();
@@ -208,7 +208,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   });
 
   it('releases the claim when the transaction fails after the claim, so the lake cannot strand in purging', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     h.commitError = new Error('commit result unknown');
     const { res } = makeRes();
     try {
@@ -227,7 +227,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     // Attempt 1 claimed and was then aborted (rolled back); attempt 2 finds a concurrent purge holds
     // the claim. An anonymous release would put THAT purge's lake back in the deleted list mid-sweep;
     // keyed to our id it matches nothing.
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     h.acceptDataLakePurge
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('Data lake must be soft-deleted before cleanup'));
@@ -248,7 +248,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   });
 
   it('enqueues once and releases nothing when an aborted first attempt is retried successfully', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     h.retryAfterAbort = true;
     const { res } = makeRes();
     try {
@@ -264,7 +264,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   });
 
   it('does NOT release on a successful enqueue', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 
@@ -273,7 +273,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   });
 
   it('does NOT enqueue when the claim is lost, so a refused purge leaves no orphan message', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     h.acceptDataLakePurge.mockRejectedValue(new Error('Data lake must be soft-deleted before cleanup'));
     const { res } = makeRes();
     await expect(
@@ -288,7 +288,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   });
 
   it('rejects with 403 and does not enqueue when a non-owner requests cleanup', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'someone-else' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'someone-else' });
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 
@@ -298,7 +298,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
   });
 
   it('rejects with 400 and does not enqueue when the lake is not soft-deleted', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 
@@ -310,7 +310,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     // The generic 'must be soft-deleted' reads as a transient state problem, which is wrong here for
     // the same reason it was wrong on restore: this purge is already accepted and irreversible. The
     // claim would refuse it anyway, but the caller deserves to know WHY.
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'purging', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'purging', createdByUserId: 'u1' });
     const { res, json } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 
@@ -322,7 +322,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
 
   it('now delegates to canManageLake, so a blank-identity lake is rejected rather than granted (#1153)', async () => {
     h.toAccessContext.mockResolvedValueOnce({ userId: '', isAdmin: false });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: '' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: '' });
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 
@@ -338,7 +338,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
   beforeEach(() => {
     vi.clearAllMocks();
     h.assertLakeWritable.mockReturnValue(undefined);
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
     h.archiveDataLake.mockResolvedValue({ id: 'lake1', status: 'archived' });
     h.deleteDataLake.mockResolvedValue({ id: 'lake1', status: 'deleted' });
     h.unarchiveDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
@@ -480,11 +480,31 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
   });
 });
 
+describe('POST /api/data-lakes/[id]/lifecycle - id-only resolution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeWritable.mockReturnValue(undefined);
+  });
+
+  // The slug-capable gate would let a retried delete-by-slug resolve the NEXT lake sharing the slug
+  // once the first is deleted, and soft-delete that one. The id-only gate is the whole fix.
+  it('resolves the lake through the id-only gate and refuses before any service runs', async () => {
+    h.assertLakeAccessById.mockRejectedValue(new Error('This action needs the data lake id; a slug is not accepted'));
+    const { res } = makeRes();
+    await expect(
+      (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'delete' }), res)
+    ).rejects.toThrow(/needs the data lake id/);
+
+    expect(h.assertLakeAccessById).toHaveBeenCalledWith('lake1', expect.anything(), expect.anything());
+    expect(h.deleteDataLake).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/data-lakes/[id]/lifecycle - db.users wiring (delete/restore/unarchive)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.assertLakeWritable.mockReturnValue(undefined);
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
     h.deleteDataLake.mockResolvedValue({ id: 'lake1', status: 'deleted' });
     h.unarchiveDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
     h.restoreDeletedDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
@@ -512,7 +532,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - transaction scope (promote/demot
     vi.clearAllMocks();
     h.inTransaction.length = 0;
     h.assertLakeWritable.mockReturnValue(undefined);
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
     h.archiveDataLake.mockResolvedValue({ archivedCount: 0 });
   });
 
@@ -533,7 +553,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - transaction scope (promote/demot
   });
 
   it('cleanup claims the purge inside a transaction and enqueues only after it commits', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     h.acceptDataLakePurge.mockImplementation(async () => void h.inTransaction.push('claim'));
     h.sendToQueue.mockImplementation(async () => void h.inTransaction.push('enqueue'));
     const { res } = makeRes();

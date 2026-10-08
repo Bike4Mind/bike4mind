@@ -47,6 +47,7 @@ import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWin
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
+import ApiIcon from '@mui/icons-material/Api';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import RefreshIcon from '@mui/icons-material/RefreshOutlined';
 import { useNotebookLayout } from '..';
@@ -583,6 +584,15 @@ const ProfileMenu = () => {
                     }}
                   />
                 ))}
+                <MenuRow
+                  testId="profile-more-api-docs"
+                  icon={<ApiIcon sx={{ fontSize: '18px' }} />}
+                  label={t('api_docs', 'API Docs')}
+                  onClick={() => {
+                    openExternalLinkByKey('apiDocs');
+                    closeAll();
+                  }}
+                />
                 <MenuRow
                   testId="profile-more-changelog"
                   icon={<LogoDevIcon sx={{ fontSize: '18px' }} />}

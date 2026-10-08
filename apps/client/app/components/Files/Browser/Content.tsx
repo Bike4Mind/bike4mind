@@ -1,4 +1,10 @@
-import { IFabFileDocument, InviteType, isMediaOnlyMimeType, KnowledgeType } from '@bike4mind/common';
+import {
+  IFabFileDocument,
+  InviteType,
+  isFabFileTypeFilter,
+  isMediaOnlyMimeType,
+  KnowledgeType,
+} from '@bike4mind/common';
 import { useSessions, useWorkBenchFiles, useWorkBenchStore } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -603,7 +609,7 @@ const FileBrowserContent = () => {
                 ...filter,
                 filters: {
                   ...filter.filters,
-                  type: type === 'all' ? undefined : (type as any),
+                  type: isFabFileTypeFilter(type) ? type : undefined,
                 },
               });
             }}

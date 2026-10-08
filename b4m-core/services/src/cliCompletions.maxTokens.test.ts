@@ -52,7 +52,12 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
-import { getTextModelCost, PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS } from '@bike4mind/common';
+import {
+  ChatModels,
+  getTextModelCost,
+  PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
+  type CompletionTool,
+} from '@bike4mind/common';
 import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR } from '@bike4mind/llm-adapters';
 import { DEFAULT_OUTPUT_MAX_TOKENS, usdToCredits } from '@bike4mind/utils';
 import { executeCompletion } from './cliCompletions';
@@ -70,6 +75,12 @@ const PLAIN_MODEL = {
   id: 'plain-model',
   backend: 'anthropic',
   max_tokens: 8192,
+};
+
+const GPT5_MODEL = {
+  id: ChatModels.GPT5,
+  backend: 'openai',
+  max_tokens: 128_000,
 };
 
 function buildDb() {
@@ -133,6 +144,28 @@ describe('executeCompletion - output budget', () => {
     await executeCompletion({ ...baseParams, model: 'plain-model', db, options: { reasoningEffort: 'low' } });
 
     expect(capturedOptions?.reasoningEffort).toBe('low');
+  });
+
+  // This layer forwards both untouched. Whether the effort is then dropped (chat path) or kept
+  // (Responses path) is the adapter's call per model: openaiBackend.reasoningEffortGate.test.ts,
+  // openaiBackend.responsesRouting.test.ts.
+  it('forwards reasoningEffort alongside tools to the adapter on a GPT-5 model', async () => {
+    availableModels = [GPT5_MODEL];
+    const { db } = buildDb();
+    const wireTool: CompletionTool = {
+      toolSchema: { name: 'client_tool', description: 'x', parameters: { type: 'object' } },
+    };
+
+    await executeCompletion({
+      ...baseParams,
+      model: ChatModels.GPT5,
+      db,
+      options: { reasoningEffort: 'medium', tools: [wireTool] },
+    });
+
+    expect(capturedOptions?.reasoningEffort).toBe('medium');
+    expect(capturedOptions?.tools).toHaveLength(1);
+    expect(capturedOptions?.tools[0].toolSchema.name).toBe('client_tool');
   });
 
   it('omits reasoningEffort when not sent', async () => {

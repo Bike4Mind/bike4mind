@@ -145,8 +145,31 @@ describe('slackQuestProcessor failure notice', () => {
     expect(call.text).toContain('something went wrong');
     expect(call.text).toContain(processError.message);
 
-    // The pending notification is cleared so a retry cannot double-post.
+    // The pending notification stays so a successful retry can still replace the notice.
+    expect(mockFindByIdAndUpdate).not.toHaveBeenCalledWith(QUEST_ID, { $unset: { slackNotification: 1 } });
+  });
+
+  it('replaces the failure notice with the answer when a retry succeeds', async () => {
+    await expect(handler(makeEvent())).rejects.toThrow(processError.message);
+
+    mockProcess.mockResolvedValueOnce(undefined);
+    questDoc = { slackNotification, type: 'completion', reply: 'recovered answer' };
+    await handler(makeEvent());
+
+    expect(mockUpdateMessage).toHaveBeenCalledTimes(2);
+    const [, retryCall] = mockUpdateMessage.mock.calls.map(([arg]) => arg);
+    expect(retryCall.ts).toBe(slackNotification.messageTs);
+    expect(retryCall.text).toContain('recovered answer');
     expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(QUEST_ID, { $unset: { slackNotification: 1 } });
+  });
+
+  it('quotes every line of a multi-line error detail', async () => {
+    questDoc = { slackNotification, type: 'error', reply: 'first line\nsecond line\r\nthird line' };
+
+    await expect(handler(makeEvent())).rejects.toThrow(processError.message);
+
+    const [call] = mockUpdateMessage.mock.calls[0];
+    expect(call.text).toContain('> first line\n> second line\n> third line');
   });
 
   it('omits the detail line when the quest carries no error reply', async () => {

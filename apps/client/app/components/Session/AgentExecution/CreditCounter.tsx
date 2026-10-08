@@ -1,9 +1,9 @@
 /**
  * CreditCounter - live tally of credits consumed by an in-flight agent
- * execution. Mounted by `ActiveAgentExecutions` next to `ExecutionStatusBanner`
- * only while the run is active; it unmounts on terminal status. The final bill
- * then lives in chat history via the persisted Quest's `creditsUsed`
- * (persistRunAsQuest -> MessageContent), not this transient store view.
+ * execution. Mounted by `IterationStream` only while the run is active; it
+ * unmounts on terminal status. The final bill then lives in chat history via
+ * the persisted Quest's `creditsUsed` (persistRunAsQuest -> MessageContent),
+ * not this transient store view.
  *
  * The store accumulates `totalCreditsUsed` from two sources:
  *   - per-iteration `progress.creditsUsed` deltas during the run

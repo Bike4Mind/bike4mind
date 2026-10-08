@@ -13,7 +13,7 @@ export type StepResult =
   | { next: 'storing'; payload: IGenerationJob['payload'] } // provider finished
   | { next: 'succeeded'; payload: IGenerationJob['payload'] }
   | { next: 'failed'; error: GenerationJobError; rawProviderError?: unknown }
-  | { next: 'blocked'; error: GenerationJobError; rawProviderError?: unknown }
+  | { next: 'blocked'; error: GenerationJobError; rawProviderError?: unknown; payload?: IGenerationJob['payload'] }
   | { next: 'retry'; reason: string }; // transient; same state, backoff
 
 /**

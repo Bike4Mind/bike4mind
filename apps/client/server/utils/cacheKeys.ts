@@ -18,7 +18,8 @@ import crypto from 'crypto';
  * a change to a builder fails there rather than silently re-pointing live callers.
  */
 const PAYLOAD_VERSIONS = {
-  modelMetrics: 1,
+  // Bumped when clientFirstTokenTime moved to a top-level quest field: a v1 payload predates it.
+  modelMetrics: 2,
   // Bumped for the degenerateRate KPI: a stale v1 payload would hide the new field for
   // up to the cache's 12h TTL after deploy.
   spend: 2,

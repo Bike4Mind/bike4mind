@@ -1,0 +1,37 @@
+{
+  "scenario": "invalid-param",
+  "recordedAt": "2026-10-06T12:57:19.676Z",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "gemini-omni-1.1-flash",
+          "input": "a lighthouse",
+          "background": true,
+          "response_format": {
+            "type": "video",
+            "delivery": "uri",
+            "aspect_ratio": "1:7",
+            "resolution": "720p",
+            "duration": "3s"
+          }
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "error": {
+            "message": "The value '1:7' is not supported for 'response_format.aspect_ratio'. Supported values: '16:9', '9:16'.",
+            "code": "invalid_request"
+          }
+        }
+      }
+    }
+  ]
+}

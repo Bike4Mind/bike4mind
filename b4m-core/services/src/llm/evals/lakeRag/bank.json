@@ -1,0 +1,299 @@
+[
+  {
+    "id": "moons-fact-galilean-discovery",
+    "subject": "planetary-moons",
+    "kind": "fact",
+    "question": "Who discovered Jupiter's four largest moons, and in what year?",
+    "expect": ["Galileo", "1610"],
+    "expectSource": "galilean-moons.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "moons-fact-largest-moon",
+    "subject": "planetary-moons",
+    "kind": "fact",
+    "question": "Which moon is the largest in the solar system?",
+    "expect": ["Ganymede"],
+    "expectSource": "galilean-moons.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "moons-fact-titan-discoverer",
+    "subject": "planetary-moons",
+    "kind": "fact",
+    "question": "Who discovered Titan?",
+    "expect": ["Huygens"],
+    "expectSource": "titan-and-cassini.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "moons-fact-cassini-end",
+    "subject": "planetary-moons",
+    "kind": "fact",
+    "question": "In what year did the Cassini mission end?",
+    "expect": ["2017"],
+    "expectSource": "titan-and-cassini.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "moons-fact-juno-orbit",
+    "subject": "planetary-moons",
+    "kind": "fact",
+    "question": "When did the Juno spacecraft enter orbit around Jupiter?",
+    "expect": ["2016"],
+    "expectSource": "galilean-moons.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "moons-same-name-saturn-count",
+    "subject": "planetary-moons",
+    "kind": "stale-same-name",
+    "question": "How many confirmed moons does Saturn have?",
+    "expect": ["146"],
+    "expectSource": "giant-planet-moons.md",
+    "rejectTokens": ["82"]
+  },
+  {
+    "id": "moons-same-name-jupiter-count",
+    "subject": "planetary-moons",
+    "kind": "stale-same-name",
+    "question": "How many confirmed moons does Jupiter have?",
+    "expect": ["95"],
+    "expectSource": "giant-planet-moons.md",
+    "rejectTokens": ["79"]
+  },
+  {
+    "id": "moons-different-name-uranus-count",
+    "subject": "planetary-moons",
+    "kind": "stale-different-name",
+    "question": "How many known moons does Uranus have?",
+    "expect": ["28"],
+    "expectSource": "ice-giants-factsheet.md",
+    "rejectTokens": ["27"]
+  },
+  {
+    "id": "moons-different-name-neptune-count",
+    "subject": "planetary-moons",
+    "kind": "stale-different-name",
+    "question": "How many known moons does Neptune have?",
+    "expect": ["16"],
+    "expectSource": "ice-giants-factsheet.md",
+    "rejectTokens": ["13"]
+  },
+  {
+    "id": "moons-absent-pluto",
+    "subject": "planetary-moons",
+    "kind": "absent",
+    "question": "How many moons does Pluto have?",
+    "expect": [],
+    "expectSource": null,
+    "rejectTokens": []
+  },
+  {
+    "id": "moons-absent-enceladus",
+    "subject": "planetary-moons",
+    "kind": "absent",
+    "question": "What is the diameter of Saturn's moon Enceladus?",
+    "expect": [],
+    "expectSource": null,
+    "rejectTokens": []
+  },
+  {
+    "id": "si-fact-base-unit-count",
+    "subject": "si-units",
+    "kind": "fact",
+    "question": "How many base units does the SI have?",
+    "expect": ["seven|7"],
+    "expectSource": "si-base-units.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "si-fact-caesium-frequency",
+    "subject": "si-units",
+    "kind": "fact",
+    "question": "What caesium transition frequency defines the second?",
+    "expect": ["9,?192,?631,?770"],
+    "expectSource": "si-base-units.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "si-fact-metre-constant",
+    "subject": "si-units",
+    "kind": "fact",
+    "question": "Which constant of nature defines the metre?",
+    "expect": ["speed of light"],
+    "expectSource": "si-base-units.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "si-fact-treaty-year",
+    "subject": "si-units",
+    "kind": "fact",
+    "question": "When was the Treaty of the Metre signed?",
+    "expect": ["1875"],
+    "expectSource": "si-base-units.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "si-fact-leap-second-end",
+    "subject": "si-units",
+    "kind": "fact",
+    "question": "By what year is the insertion of leap seconds due to stop?",
+    "expect": ["2035"],
+    "expectSource": "utc-and-leap-seconds.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "si-same-name-kilogram-basis",
+    "subject": "si-units",
+    "kind": "stale-same-name",
+    "question": "What is the kilogram defined by?",
+    "expect": ["Planck"],
+    "expectSource": "kilogram-definition.md",
+    "rejectTokens": ["International Prototype", "platinum-iridium"]
+  },
+  {
+    "id": "si-same-name-kilogram-effective",
+    "subject": "si-units",
+    "kind": "stale-same-name",
+    "question": "Since what year has the current definition of the kilogram been in effect?",
+    "expect": ["2019"],
+    "expectSource": "kilogram-definition.md",
+    "rejectTokens": ["1889"]
+  },
+  {
+    "id": "si-different-name-tai-utc",
+    "subject": "si-units",
+    "kind": "stale-different-name",
+    "question": "By how many seconds is TAI ahead of UTC?",
+    "expect": ["37"],
+    "expectSource": "utc-and-leap-seconds.md",
+    "rejectTokens": ["35"]
+  },
+  {
+    "id": "si-different-name-leap-second-total",
+    "subject": "si-units",
+    "kind": "stale-different-name",
+    "question": "How many leap seconds have been inserted since 1972?",
+    "expect": ["27"],
+    "expectSource": "utc-and-leap-seconds.md",
+    "rejectTokens": ["25"]
+  },
+  {
+    "id": "si-absent-magnetic-flux",
+    "subject": "si-units",
+    "kind": "absent",
+    "question": "What is the SI unit of magnetic flux?",
+    "expect": [],
+    "expectSource": null,
+    "rejectTokens": []
+  },
+  {
+    "id": "si-absent-nist-director",
+    "subject": "si-units",
+    "kind": "absent",
+    "question": "Who is the current director of NIST?",
+    "expect": [],
+    "expectSource": null,
+    "rejectTokens": []
+  },
+  {
+    "id": "census-fact-first-census",
+    "subject": "us-census",
+    "kind": "fact",
+    "question": "In what year was the first U.S. census taken?",
+    "expect": ["1790"],
+    "expectSource": "census-basics.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "census-fact-census-day",
+    "subject": "us-census",
+    "kind": "fact",
+    "question": "What is the reference date for the census count?",
+    "expect": ["April 1"],
+    "expectSource": "census-basics.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "census-fact-house-size",
+    "subject": "us-census",
+    "kind": "fact",
+    "question": "How many seats does the House of Representatives have?",
+    "expect": ["435"],
+    "expectSource": "census-basics.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "census-fact-department",
+    "subject": "us-census",
+    "kind": "fact",
+    "question": "Which federal department is the Census Bureau part of?",
+    "expect": ["Commerce"],
+    "expectSource": "census-basics.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "census-fact-constitutional-basis",
+    "subject": "us-census",
+    "kind": "fact",
+    "question": "Which part of the Constitution requires the census?",
+    "expect": ["Article I"],
+    "expectSource": "census-basics.md",
+    "rejectTokens": []
+  },
+  {
+    "id": "census-same-name-texas-seats",
+    "subject": "us-census",
+    "kind": "stale-same-name",
+    "question": "How many House seats does Texas have?",
+    "expect": ["38"],
+    "expectSource": "apportionment.md",
+    "rejectTokens": ["36"]
+  },
+  {
+    "id": "census-same-name-california-seats",
+    "subject": "us-census",
+    "kind": "stale-same-name",
+    "question": "How many House seats does California have?",
+    "expect": ["52"],
+    "expectSource": "apportionment.md",
+    "rejectTokens": ["53"]
+  },
+  {
+    "id": "census-different-name-population",
+    "subject": "us-census",
+    "kind": "stale-different-name",
+    "question": "What is the resident population of the United States?",
+    "expect": ["331,?449,?281|331(?:\\.\\d+)? million"],
+    "expectSource": "census-2020-highlights.md",
+    "rejectTokens": ["308,?745,?538|308(?:\\.\\d+)? million"]
+  },
+  {
+    "id": "census-different-name-center",
+    "subject": "us-census",
+    "kind": "stale-different-name",
+    "question": "Where is the mean center of population of the United States?",
+    "expect": ["Hartville"],
+    "expectSource": "census-2020-highlights.md",
+    "rejectTokens": ["Plato"]
+  },
+  {
+    "id": "census-absent-puerto-rico",
+    "subject": "us-census",
+    "kind": "absent",
+    "question": "What was the census population count for Puerto Rico?",
+    "expect": [],
+    "expectSource": null,
+    "rejectTokens": []
+  },
+  {
+    "id": "census-absent-response-rate",
+    "subject": "us-census",
+    "kind": "absent",
+    "question": "What was the national self-response rate for the census?",
+    "expect": [],
+    "expectSource": null,
+    "rejectTokens": []
+  }
+]

@@ -2,14 +2,19 @@ import type {
   GenerationJobSource,
   IGenerationJobDocument,
   IGenerationJobRepository,
+  UsageEventStatus,
   VideoGenerationSettings,
   VideoProviderId,
   VideoValidationErrorCode,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { VideoProviderRegistry } from '@bike4mind/utils/videoProviders';
+import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+
+/** Whether a resolveApiKey answer may reach a provider: shared by the create-time check and every job step. */
+export const isUsableApiKey = (apiKey: string | null): apiKey is string => !!apiKey && apiKey !== EXPIRED_KEY_SENTINEL;
 
 // Stamped on the job as deadlineAt at create; the engine fails a pending or running job past it.
 export const VIDEO_JOB_MAX_WALL_CLOCK_MS = 20 * 60_000;
@@ -30,11 +35,18 @@ export type VideoJobDeps = {
     bytes: Buffer;
     contentType: string;
     prompt: string;
+    /** The step's lease-bounded signal; an abort must reject, never report an ordinary save failure. */
+    signal: AbortSignal;
   }): Promise<
     | { saved: true; fileId: string; s3Key: string }
     | { saved: false; reason: 'storage_limit' | 'file_too_large' | 'error' }
   >;
-  saveToGeneratedBucket(params: { key: string; bytes: Buffer; contentType: string }): Promise<{ s3Key: string }>;
+  saveToGeneratedBucket(params: {
+    key: string;
+    bytes: Buffer;
+    contentType: string;
+    signal: AbortSignal;
+  }): Promise<{ s3Key: string }>;
   credits: CreditHoldAdapters;
   enqueue(jobId: string, delaySeconds: number): Promise<void>;
   recordUsage(event: {
@@ -42,6 +54,8 @@ export type VideoJobDeps = {
     creditsCharged: number;
     costUsd: number;
     durationSeconds: number;
+    /** `refusal` for a block the provider billed: spend with no video delivered. */
+    status: Extract<UsageEventStatus, 'ok' | 'refusal'>;
   }): Promise<void>;
   now(): Date;
   logger: Logger;

@@ -31,6 +31,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     });
     return;
   }
-  const outcome = await getGenerationJobEngine().step(parsed.data.jobId);
+  // The self-host runner passes a context whose getRemainingTimeInMillis reports 24h, so the lease bounds it.
+  const remainingMs =
+    typeof context.getRemainingTimeInMillis === 'function' ? context.getRemainingTimeInMillis() : undefined;
+  const outcome = await getGenerationJobEngine().step(parsed.data.jobId, { remainingMs });
   logger.debug('generation job step', { jobId: parsed.data.jobId, outcome });
 });

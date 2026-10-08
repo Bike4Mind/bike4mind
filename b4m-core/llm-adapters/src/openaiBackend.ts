@@ -9,7 +9,6 @@ import {
   RESPONSES_API_TOOL_MODELS,
   REASONING_SUPPORTED_MODELS,
   SpeechToTextModels,
-  VideoModels,
   type ModelInfo,
   type ReasoningEffort,
   type CacheUsageStats,
@@ -28,7 +27,7 @@ import type {
 } from 'openai/resources/responses/responses';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -941,51 +940,6 @@ export class OpenAIBackend implements ICompletionBackend {
         description:
           "OpenAI's speech-to-text model supporting multiple languages and audio formats. Optimized for transcription and translation tasks.",
       },
-      // OpenAI Video Models (Sora)
-      {
-        id: VideoModels.SORA_2,
-        type: 'video',
-        name: 'Sora',
-        backend: ModelBackend.OpenAI,
-        contextWindow: 10000, // Prompt length limit
-        max_tokens: 10000,
-        can_stream: false,
-        pricing: {
-          // Pricing per video based on duration: 4s = $0.25, 8s = $0.50, 12s = $0.75
-          1: { input: 0.25, output: 0 },
-        },
-        supportsVision: false,
-        supportsTools: false,
-        supportsImageVariation: false,
-        logoFile: 'OpenAI_Logo.svg',
-        rank: 1,
-        // Sora 2 and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
-        deprecationDate: '2026-09-24',
-        description:
-          "OpenAI's Sora video generation model. Creates high-quality videos from text prompts with durations of 4, 8, or 12 seconds.",
-      },
-      {
-        id: VideoModels.SORA_2_PRO,
-        type: 'video',
-        name: 'Sora Pro',
-        backend: ModelBackend.OpenAI,
-        contextWindow: 10000, // Prompt length limit
-        max_tokens: 10000,
-        can_stream: false,
-        pricing: {
-          // Pricing per video based on duration: 4s = $0.50, 8s = $1.00, 12s = $1.50
-          1: { input: 0.5, output: 0 },
-        },
-        supportsVision: false,
-        supportsTools: false,
-        supportsImageVariation: false,
-        logoFile: 'OpenAI_Logo.svg',
-        rank: 0,
-        // Sora 2 Pro and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
-        deprecationDate: '2026-09-24',
-        description:
-          "OpenAI's premium Sora video generation model. Produces the highest quality videos with enhanced detail, coherence, and visual fidelity.",
-      },
     ];
   }
 
@@ -1423,6 +1377,28 @@ export class OpenAIBackend implements ICompletionBackend {
               );
             }
 
+            const requestedToolNames = c.message.tool_calls.flatMap(call =>
+              call.type === 'function' ? [call.function.name] : []
+            );
+            if (shouldEndTurnAfterTools(requestedToolNames, options.tools, c.message.content)) {
+              this.logger.info('[Tool Execution] Ending turn: answer already in hand, only end-of-turn tools ran', {
+                model,
+                toolsExecuted: requestedToolNames,
+              });
+              // Non-streaming never forwarded this round's text, so it rides on the terminal emit.
+              await (artifactGuard?.callback ?? callback)([c.message.content ?? ''], {
+                ...splitCacheInclusiveInput(
+                  accumInputTokens + (response.usage?.prompt_tokens || 0),
+                  totalCacheReadTokens
+                ),
+                outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // Keep tools available for MCP tools (enables chaining); remove for built-in tools
             // Carry this turn's tokens forward so the terminal recursive call's
             // emits carry the full multi-turn billable total (each OpenAI API
@@ -1509,6 +1485,8 @@ export class OpenAIBackend implements ICompletionBackend {
     // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
     // capture) - the terminal chunk of a round carries it, earlier chunks don't.
     let streamFinishReason: string | undefined;
+    // This round's visible answer text, for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
     for await (const chunk of response) {
       chunkCount++;
       const streamedText: string[] = [];
@@ -1557,6 +1535,7 @@ export class OpenAIBackend implements ICompletionBackend {
 
         if (c.delta.content) {
           streamedText[c.index] = (streamedText[c.index] || '') + c.delta.content;
+          streamedRoundText += c.delta.content;
         }
 
         if (c.finish_reason) {
@@ -1795,6 +1774,23 @@ export class OpenAIBackend implements ICompletionBackend {
             { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
             sanitizedResult
           );
+        }
+
+        const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
+        if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
+          this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+            model,
+            toolsExecuted: requestedToolNames,
+          });
+          await (artifactGuard?.callback ?? callback)([], {
+            ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+            outputTokens: accumOutputTokens + outputTokens,
+            toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+            cacheStats,
+            stopReason: 'tool_use',
+          });
+          if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+          return;
         }
 
         // Keep tools available for MCP tools (enables chaining); remove for built-in tools.
@@ -2099,8 +2095,11 @@ export class OpenAIBackend implements ICompletionBackend {
     // Named to match the chat streaming path: this turn's cache reads, known only at
     // the terminal Response, so the per-delta emits below carry 0 for it.
     let cachedTokensFromStream = 0;
+    // This round's visible answer text, for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
     for await (const event of stream) {
       if (event.type === 'response.output_text.delta') {
+        streamedRoundText += event.delta;
         await callback([event.delta], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
@@ -2257,6 +2256,22 @@ export class OpenAIBackend implements ICompletionBackend {
     }
 
     const anyMcpTool = resolved.some(r => r.isMcpTool);
+
+    const requestedToolNames = functionCalls.map(fc => fc.name);
+    if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
+      this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+        model,
+        toolsExecuted: requestedToolNames,
+      });
+      await (artifactGuard?.callback ?? callback)([], {
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+        outputTokens: accumOutputTokens + outputTokens,
+        toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+        stopReason: 'tool_use',
+      });
+      if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+      return;
+    }
 
     // Recurse. Tool results are now in `messages`; carry this turn's tokens forward so
     // the terminal emit reports the full multi-turn billable total. Drop tools for the

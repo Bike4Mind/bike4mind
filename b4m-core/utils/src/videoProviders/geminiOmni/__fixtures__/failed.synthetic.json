@@ -1,0 +1,89 @@
+{
+  "scenario": "failed.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built and stays synthetic: no live call reliably produces a provider-side failure. The status name is from the documented W6 enum; the error object follows the W9 Interactions error shape (string code), which is unverified for an interaction-level error.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "gemini-omni-1.1-flash",
+          "input": "A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.",
+          "background": true,
+          "response_format": {
+            "type": "video",
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration": "3s"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-failed",
+          "status": "in_progress",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:00Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_synthetic-failed"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-failed",
+          "status": "in_progress",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:05Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_synthetic-failed"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-failed",
+          "status": "failed",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:20Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash",
+          "error": {
+            "message": "Internal error encountered.",
+            "code": "internal"
+          }
+        }
+      }
+    }
+  ]
+}

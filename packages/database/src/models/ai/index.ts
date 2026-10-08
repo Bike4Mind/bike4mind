@@ -11,6 +11,7 @@ export * from './DataLakeModel';
 export * from './DataLakeAccessGrantModel';
 export * from './DataLakeOwnershipOfferModel';
 export * from './DataLakeHealthSnapshotModel';
+export * from './EmbedConversationModel';
 export * from './EmbeddingCacheModel';
 export * from './LakeAccessEventModel';
 export * from './DataLakeSpendNotificationModel';

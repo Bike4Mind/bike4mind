@@ -1,3 +1,5 @@
+import type { FabFileTypeFilter } from '@bike4mind/common';
+
 export const FILE_TYPE_OPTIONS = [
   { value: 'all', label: 'All Files Type' },
   { value: 'text', label: 'Text' },
@@ -11,6 +13,7 @@ export const FILE_TYPE_OPTIONS = [
   { value: 'markdown', label: 'Markdown' },
   { value: 'code', label: 'Code' },
   { value: 'audio', label: 'Audio' },
-] as const;
+  { value: 'video', label: 'Video' },
+] as const satisfies ReadonlyArray<{ value: FabFileTypeFilter | 'all'; label: string }>;
 
 export type FileTypeValue = Exclude<(typeof FILE_TYPE_OPTIONS)[number]['value'], 'all'>;

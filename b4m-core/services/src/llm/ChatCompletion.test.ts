@@ -19,6 +19,7 @@ import {
   calculateTotalTokenLength,
   fetchAndProcessPreviousMessages,
   processUrlsFromPrompt,
+  getSettingByName,
   shouldTriggerFallback,
   isOverloadedError,
   getLlmWithFallback,
@@ -623,7 +624,8 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       const call = (service as any).buildOptimizedFeatures.mock.calls[0];
-      expect(call[call.length - 1]).toEqual(['datalake:x']);
+      // Reader-consent tags sit just before the trailing includeLibraryFiles argument.
+      expect(call[call.length - 2]).toEqual(['datalake:x']);
     });
 
     it('forced-retrieval door: withholds retrievalTags when the acting user is not the session owner', async () => {
@@ -634,7 +636,8 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       const call = (service as any).buildOptimizedFeatures.mock.calls[0];
-      expect(call[call.length - 1]).toBeUndefined();
+      // Reader-consent tags sit just before the trailing includeLibraryFiles argument.
+      expect(call[call.length - 2]).toBeUndefined();
     });
 
     it('tool door: forwards sessionReaderConsentDatalakeTags only when the acting user owns the session', async () => {
@@ -677,6 +680,78 @@ describe('ChatCompletionProcess', () => {
 
       expect(capturedDeps.sessionReaderConsentDatalakeTags).toBeUndefined();
       buildMcpToolsSpy.mockRestore();
+    });
+  });
+
+  // The library-off flag and the attached-file allow-list must reach BOTH doors from a real turn;
+  // the feature/tool unit tests construct their own arguments and would stay green without these.
+  describe('library-off plumbing at both doors', () => {
+    const captureToolDeps = () => {
+      const originalBuildMcpTools = ToolBuilder.prototype.buildMcpTools;
+      const captured: { deps?: any } = {};
+      const spy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockImplementation(function (this: any, args: any) {
+        captured.deps = this.deps;
+        return originalBuildMcpTools.call(this, args);
+      });
+      return { captured, restore: () => spy.mockRestore() };
+    };
+
+    it('forced-retrieval door: passes the resolved library flag as the trailing argument', async () => {
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = true;
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBe(false);
+    });
+
+    it('forced-retrieval door: Data Lakes off resolves a stored false to true', async () => {
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = false;
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBe(true);
+    });
+
+    it('tool door: forwards sessionIncludeLibraryFiles and the session attachments as attachedFileIds', async () => {
+      const { captured, restore } = captureToolDeps();
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = true;
+      mockSession.knowledgeIds = ['k1'];
+      const body = { ...wireMinimalTurn(), fabFileIds: ['f1'], messageFileIds: ['m1'] };
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        expect(captured.deps.sessionIncludeLibraryFiles).toBe(false);
+        expect([...captured.deps.attachedFileIds].sort()).toEqual(['f1', 'k1', 'm1']);
+      } finally {
+        restore();
+      }
+    });
+
+    it('tool door: Data Lakes off resolves a stored false to true', async () => {
+      const { captured, restore } = captureToolDeps();
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = false;
+      const body = wireMinimalTurn();
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        expect(captured.deps.sessionIncludeLibraryFiles).toBe(true);
+      } finally {
+        restore();
+      }
     });
   });
 
@@ -1510,6 +1585,59 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // The root cause of the slow-first-token anomaly never firing was THIS call site dropping
+    // the TTFVT pair. Every other test drives `performanceFromPromptMeta` directly, so only a
+    // test through the real finalisation fails if the call site regresses to the two-field
+    // literal. Do not replace it with a direct helper call.
+    describe('first-token telemetry forwarding', () => {
+      beforeEach(() => {
+        vi.mocked(getSettingByName).mockResolvedValue('true');
+      });
+
+      afterEach(() => {
+        vi.mocked(getSettingByName).mockResolvedValue(null);
+      });
+
+      it('forwards promptMeta.performance TTFVT into the persisted context telemetry', async () => {
+        const body = wireMinimalTurn();
+
+        await service.process({ body, logger: mockLogger });
+
+        const telemetry = mockQuest.promptMeta.contextTelemetry;
+        expect(telemetry).toBeDefined();
+        // A visible token streamed, so both stamps are measured numbers. Reverting the call site
+        // to `{ totalResponseTimeMs, modelInferenceMs }` leaves these undefined.
+        expect(typeof telemetry.performance.firstTokenTimeMs).toBe('number');
+        expect(typeof telemetry.performance.firstChunkTimeMs).toBe('number');
+        expect(telemetry.anomalies.slowFirstToken).toBe(false);
+      });
+
+      it('classifies a thinking-only turn as never-rendered', async () => {
+        const body = wireMinimalTurn();
+        // Reasoning streams (so firstChunkTime stamps) but nothing visible ever renders - the
+        // frozen turn the anomaly exists to catch. Without the forwarded pair both stamps read
+        // as absent, the state collapses to 'unknown', and this comes back false.
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            // A real tick: ttfvtState reads a 0 firstChunkTime as "not recorded", and an
+            // all-microtask test can stamp 0ms, which would collapse this to 'unknown'.
+            await new Promise(resolve => setTimeout(resolve, 5));
+            await cb(['<think>weighing the options</think>']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+
+        await service.process({ body, logger: mockLogger });
+
+        const telemetry = mockQuest.promptMeta.contextTelemetry;
+        expect(telemetry.performance.firstTokenTimeMs).toBeUndefined();
+        expect(typeof telemetry.performance.firstChunkTimeMs).toBe('number');
+        // A short turn sits under the elapsed bound; the builder tests pin the firing case.
+        expect(telemetry.anomalies.slowFirstToken).toBe(false);
+      });
+    });
+
     it('keeps a user-stopped quest as stopped when the aborted backend resolves normally', async () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
@@ -1776,6 +1904,63 @@ describe('ChatCompletionProcess', () => {
         await runTurn();
 
         expect(mockQuest.replies.at(-1)).toBe(`\n\n${TRUNCATED_ANSWER_NOTICE}`);
+      });
+
+      describe('turn ended by a tool flagged endsTurnAfterText', () => {
+        const navTool = (endsTurnAfterText: boolean) => ({
+          toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} },
+          endsTurnAfterText,
+        });
+
+        // The adapter streams the answer, runs the tool, and ends the turn on 'tool_use'.
+        async function answerThenNavigate(cb: Emit) {
+          const toolsUsed: Array<Record<string, unknown>> = [];
+          await cb(['Here is the answer.'], { toolsUsed });
+          toolsUsed.push({ name: 'navigate_view', arguments: '{}', id: 't1' });
+          await cb([], { toolsUsed, stopReason: 'tool_use' });
+        }
+
+        afterEach(() => vi.restoreAllMocks());
+
+        it('adds no notice when every tool of the last round is flagged', async () => {
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([navTool(true)] as any); // any: minimal tool shape
+          setupTurn(answerThenNavigate);
+
+          await runTurn();
+
+          expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+          expect(mockQuest.replies.join('')).toContain('Here is the answer.');
+        });
+
+        it('still adds the notice when the tool is not flagged', async () => {
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([navTool(false)] as any); // any: minimal tool shape
+          setupTurn(answerThenNavigate);
+
+          await runTurn();
+
+          expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+        });
+
+        // Accepted residual: an OpenAI-family mixed round reports a native per-round
+        // 'tool_use' and the adapter recurses; if the follow-up reports no stop reason, the
+        // sticky 'tool_use' plus a flagged last tool suppresses the notice on an empty answer.
+        it('adds no notice when a mixed round leaves a stale tool_use and the follow-up is empty', async () => {
+          const searchTool = { toolSchema: { name: 'web_search', description: 'search', parameters: {} } };
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([searchTool, navTool(true)] as any); // any: minimal tool shape
+          setupTurn(async cb => {
+            const toolsUsed: Array<Record<string, unknown>> = [];
+            await cb(['Let me look that up.'], { toolsUsed });
+            toolsUsed.push({ name: 'web_search', arguments: '{}', id: 't1' });
+            toolsUsed.push({ name: 'navigate_view', arguments: '{}', id: 't2' });
+            await cb([], { toolsUsed, stopReason: 'tool_use' });
+            await cb(['\n\n'], { toolsUsed });
+            await cb([], { toolsUsed });
+          });
+
+          await runTurn();
+
+          expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+        });
       });
 
       it('adds no notice to a plain answer with no tool calls', async () => {
@@ -3673,6 +3858,269 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall).toBeDefined();
       expect(updateCall[0].promptMeta.tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(updateCall[0].promptMeta.tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+    });
+
+    // A safety-classifier refusal throws so the loop falls back, which means the refused call
+    // never settles on its own. Settlement must still leave a 'refusal' row for it alongside the
+    // fallback's billed row, or the Spend tab's Refusal Rate reads 0 forever.
+    it('records a refusal usage event for a refused hop alongside the fallback settlement', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) => key === 'enforceCredits');
+      mockDb.users = {
+        update: vi.fn(),
+        findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+        incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+      };
+      mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error(
+            `Anthropic safety classifier refusal for ${ChatModels.GPT4} - falling back to an alternative model`
+          );
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({
+        model: fallbackModel,
+        backend: {
+          complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+            await cb(['Hello from the fallback'], { inputTokens: 100, outputTokens: 50 });
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: fallbackModel.id,
+        },
+        attempt: 1,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(usageEventsRecord).toHaveBeenCalledTimes(2);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ model: fallbackModel.id, status: 'ok', creditsCharged: 5 })
+      );
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestId: mockQuest.id,
+          model: ChatModels.GPT4,
+          provider: ModelBackend.OpenAI,
+          status: 'refusal',
+          creditsCharged: 0,
+          costUsd: 0,
+        })
+      );
+    });
+
+    it('records the refusal even when no fallback model is available and the turn fails', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      mockedGetLlmWithFallback.mockResolvedValue(null);
+      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) => key === 'enforceCredits');
+      mockDb.users = {
+        update: vi.fn(),
+        findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+        incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+      };
+      mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error(`Anthropic safety classifier refusal for ${ChatModels.GPT4}`);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ model: ChatModels.GPT4, status: 'refusal', creditsCharged: 0 })
+      );
+    });
+
+    // Shared arrange for the usage-event gating tests below. `primaryComplete` drives the first hop;
+    // when it throws, a fallback model answers 'Hello from the fallback'.
+    const arrangeUsageEventScenario = (opts: {
+      enforceCredits: boolean;
+      primaryComplete: (...args: any[]) => Promise<void>;
+    }) => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation(
+        (key: string) => key === 'enforceCredits' && opts.enforceCredits
+      );
+      mockDb.users = {
+        update: vi.fn(),
+        findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+        incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+      };
+      mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(opts.primaryComplete),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({
+        model: fallbackModel,
+        backend: {
+          complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+            await cb(['Hello from the fallback'], { inputTokens: 100, outputTokens: 50 });
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: fallbackModel.id,
+        },
+        attempt: 1,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      return { usageEventsRecord, fallbackModel };
+    };
+
+    const runUsageEventScenario = () =>
+      service.process({
+        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        logger: mockLogger,
+      });
+
+    it('records no refusal row when the hop failed for a non-refusal reason', async () => {
+      const { usageEventsRecord, fallbackModel } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async () => {
+          throw new Error('Model overloaded');
+        },
+      });
+
+      await runUsageEventScenario();
+
+      expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ model: fallbackModel.id, status: 'ok' })
+      );
+      expect(usageEventsRecord).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'refusal' }));
+    });
+
+    it('records no refusal row when enforceCredits is off', async () => {
+      const { usageEventsRecord } = arrangeUsageEventScenario({
+        enforceCredits: false,
+        primaryComplete: async () => {
+          throw new Error(`Anthropic safety classifier refusal for ${ChatModels.GPT4}`);
+        },
+      });
+
+      await runUsageEventScenario();
+
+      expect(usageEventsRecord).not.toHaveBeenCalled();
+    });
+
+    it('records a settled stop_reason refusal as a refusal row, not ok', async () => {
+      const { usageEventsRecord } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async (_m, _ms, _o, cb) => {
+          await cb(['I cannot help with that'], { inputTokens: 100, outputTokens: 5, stopReason: 'refusal' });
+        },
+      });
+
+      await runUsageEventScenario();
+
+      expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ model: ChatModels.GPT4, status: 'refusal' })
+      );
     });
 
     // Exhaustion path + final-hop cross-provider wiring: every hop fails, so the loop runs the

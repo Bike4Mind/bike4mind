@@ -155,6 +155,10 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   scopes?: readonly ApiKeyScope[];
   /** The schema the handlers validate the request body with (all transports). */
   request?: ReqSchema;
+  /** Whether OpenAPI clients must send a body when `request` is present. Defaults to true. */
+  requestBodyRequired?: boolean;
+  /** HTTP status used when request, path, or query validation fails. Defaults to 422. */
+  validationErrorStatus?: 400 | 422;
   /**
    * Schema for dynamic path segments (e.g. `{id}` in `/api/sessions/{id}`).
    * Values arrive via Next.js's file-based routing convention as `req.query`
@@ -201,14 +205,6 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * query params yet, matching its existing `pathParams` gap.
    */
   queryParams?: z.ZodObject<z.ZodRawShape>;
-  /**
-   * Optional OpenAPI-representable projection of `request`, used ONLY for the
-   * generated spec. Needed when `request` carries wrappers zod-to-openapi cannot
-   * introspect (`.catch()`, `.transform()`, `.pipe()`). Its INPUT shape must
-   * match `request` exactly, so it is a doc projection, not a second contract.
-   * Defaults to `request` when omitted.
-   */
-  requestDoc?: z.ZodTypeAny;
   requestExample?: unknown;
   responses: Record<number, ResponseSpec>;
   /** SSE endpoint: skips JSON response-body docs and gets streaming code samples. */

@@ -6,8 +6,10 @@ import { getTestRunId, saveSpecUser, getE2ETestId } from './test-users';
 interface SpecUserConfig {
   key: string;
   authFile: string;
-  /** Extra user tags to seed (merged with the default predefined tags), e.g. ['tavern'] to grant Tavern access. */
+  /** Extra user tags to seed (merged with the predefined tags unless includePredefinedTags is false), e.g. ['tavern'] to grant Tavern access. */
   tags?: string[];
+  /** Pass false to seed only `tags`, without the server's predefined Developer/Customer/Opti tags. */
+  includePredefinedTags?: boolean;
   prefs?: Record<string, unknown>;
   /** Starting credit balance; omit for the default effectively-unlimited grant. */
   initialCredits?: number;
@@ -31,6 +33,7 @@ export function setupSpecUser(config: SpecUserConfig) {
       password: `E2e${config.key}Pass123!`,
       isAdmin: false,
       ...(config.tags && { tags: config.tags }),
+      ...(config.includePredefinedTags !== undefined && { includePredefinedTags: config.includePredefinedTags }),
       ...(config.initialCredits !== undefined && { initialCredits: config.initialCredits }),
     };
 

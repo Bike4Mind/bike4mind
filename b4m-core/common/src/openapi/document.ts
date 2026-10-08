@@ -11,7 +11,7 @@ import './schemas';
 import { registeredContracts } from './operations';
 
 // Neutral placeholder default so the committed openapi.json never hardcodes a
-// real deployment domain in this public repo (matches apiReferenceContent.ts).
+// real deployment domain in this public repo.
 // Real deployments set B4M_OPENAPI_PROD_URL at build time.
 const PLACEHOLDER_PROD_URL = 'https://your-deployment.example.com';
 
@@ -23,8 +23,7 @@ function prodUrl(): string {
 /**
  * Server URLs are env-overridable with neutral placeholder defaults so the
  * committed openapi.json never hardcodes a real deployment domain in this public
- * repo (matches the placeholder convention in apiReferenceContent.ts). Real
- * deployments set these at build time.
+ * repo. Real deployments set these at build time.
  */
 function servers() {
   return [
@@ -349,6 +348,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
   doc.tags = [
     { name: 'AI', description: 'Chat, completions, embeddings, and server-side tool execution.' },
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
+    { name: 'Release notes', description: 'Customer-facing notes on what changed in each release. Public.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },

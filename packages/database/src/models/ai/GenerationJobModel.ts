@@ -10,9 +10,11 @@ import {
   type GenerationJobCommitGuard,
   type GenerationJobCreateInput,
   type GenerationJobState,
+  type StalledJobLimits,
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobRepository,
+  type ListByRequesterQuery,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -58,6 +60,8 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
 GenerationJobSchema.index({ ownerType: 1, ownerId: 1, createdAt: -1 });
 GenerationJobSchema.index({ state: 1, nextPollAt: 1 });
 GenerationJobSchema.index({ state: 1, terminalHandledAt: 1, updatedAt: 1 });
+// Serves the public list endpoint (newest first per requester); kind/state/source are residual filters.
+GenerationJobSchema.index({ requestedBy: 1, _id: -1 });
 GenerationJobSchema.index(
   { ownerType: 1, ownerId: 1, idempotencyKey: 1 },
   { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } }
@@ -152,20 +156,36 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
     await this.jobModel.updateOne({ _id: id }, { $set: { settledCredits } });
   }
 
+  async listByRequester({ requestedBy, kind, state, source, beforeId, limit }: ListByRequesterQuery) {
+    const docs = await this.jobModel
+      .find({
+        requestedBy,
+        kind,
+        ...(state && { state }),
+        ...(source && { source }),
+        ...(beforeId && { _id: { $lt: new mongoose.Types.ObjectId(beforeId) } }),
+      })
+      .sort({ _id: -1 })
+      .limit(limit);
+    return docs.map(doc => doc.toJSON() as IGenerationJobDocument);
+  }
+
   /**
-   * Oldest first: in-flight jobs by nextPollAt, then terminal jobs by updatedAt. Two queries because Mongo sorts a
-   * null nextPollAt (every terminal job) first. A stuck-claimed terminal job matches every sweep forever, so it must
+   * Oldest first: in-flight jobs by nextPollAt, then terminal jobs by updatedAt, each within its own limit. Two
+   * queries because Mongo sorts a null nextPollAt (every terminal job) first. A stuck-claimed terminal job matches every sweep forever, so it must
    * never crowd out real recovery; each sweep's lease bumps its updatedAt, which also rotates it behind older ones.
    * Served by the { state, nextPollAt } and { state, terminalHandledAt, updatedAt } indexes.
    */
-  async findStalled(overdueBefore: Date, limit: number) {
-    const inFlight = await this.jobModel
-      .find({ state: { $in: NON_TERMINAL }, nextPollAt: { $lt: overdueBefore } })
-      .sort({ nextPollAt: 1 })
-      .limit(limit);
-    const remaining = limit - inFlight.length;
+  async findStalled(overdueBefore: Date, limits: StalledJobLimits) {
+    const inFlight =
+      limits.inFlight > 0
+        ? await this.jobModel
+            .find({ state: { $in: NON_TERMINAL }, nextPollAt: { $lt: overdueBefore } })
+            .sort({ nextPollAt: 1 })
+            .limit(limits.inFlight)
+        : [];
     const terminal =
-      remaining > 0
+      limits.terminal > 0
         ? await this.jobModel
             .find({
               state: { $in: TERMINAL_GENERATION_JOB_STATES },
@@ -179,7 +199,7 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
               ],
             })
             .sort({ updatedAt: 1 })
-            .limit(remaining)
+            .limit(limits.terminal)
         : [];
     return [...inFlight, ...terminal].map(doc => doc.toJSON() as IGenerationJobDocument);
   }

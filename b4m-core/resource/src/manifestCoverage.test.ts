@@ -135,11 +135,9 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   // generates through a local backend (IMAGE_GEN_BASE_URL) and nothing enqueues. That decision has
   // since been made the other way - both are registered in all three files now - so they are
   // reachable AND wired, and exempting them would be the stale claim this guard exists to catch.
-  videoGenerationQueue: 'no self-host video path at all yet',
 
   // User-facing, handler in open core, no AWS-only dependency. These are the strongest
   // candidates to wire next.
-  questExportQueue: 'reachable from /api/quest-plans/[id]/export - candidate to wire',
   slackExportQueue: 'reachable from /api/slack/export/async - candidate to wire',
   githubWebhookQueue: 'reachable from /api/webhooks/github/[token] - candidate to wire',
 

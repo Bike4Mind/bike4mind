@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   bedrockFoundationIdOf,
+  isBedrockRegionProfileId,
+  stripBedrockRegionPrefix,
   DEFAULT_MAX_OUTPUT_TOKENS,
   inferVendor,
   isPromptMetaModelType,
@@ -190,6 +192,20 @@ describe('bedrockFoundationIdOf', () => {
   it('returns null for an id with no profile prefix', () => {
     expect(bedrockFoundationIdOf('anthropic.claude-sonnet-4-6')).toBeNull();
     expect(bedrockFoundationIdOf('deepseek.v3-v1:0')).toBeNull();
+  });
+});
+
+describe('isBedrockRegionProfileId / stripBedrockRegionPrefix', () => {
+  it.each(['us.', 'eu.', 'apac.', 'global.'])('recognises and strips the %s scope', scope => {
+    const id = `${scope}anthropic.claude-sonnet-4-6`;
+    expect(isBedrockRegionProfileId(id)).toBe(true);
+    expect(stripBedrockRegionPrefix(id)).toBe('anthropic.claude-sonnet-4-6');
+  });
+
+  it('leaves ids without a region scope untouched', () => {
+    expect(isBedrockRegionProfileId('anthropic.claude-sonnet-4-6')).toBe(false);
+    expect(isBedrockRegionProfileId('usa.anthropic.claude')).toBe(false);
+    expect(stripBedrockRegionPrefix('anthropic.claude-sonnet-4-6')).toBe('anthropic.claude-sonnet-4-6');
   });
 });
 

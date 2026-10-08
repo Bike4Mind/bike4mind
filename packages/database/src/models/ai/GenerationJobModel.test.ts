@@ -173,7 +173,9 @@ describe('GenerationJobRepository', () => {
     await generationJobRepository.createJob(newJob({ state: 'running', nextPollAt: plus(10 * 60_000) }));
     const unhandled = await generationJobRepository.createJob(newJob({ state: 'succeeded', terminalHandledAt: null }));
     await GenerationJobModel.updateOne({ _id: unhandled.id }, { $set: { updatedAt: t0 } }, { timestamps: false });
-    const ids = (await generationJobRepository.findStalled(plus(60_000), 50)).map(j => j.id).sort();
+    const ids = (await generationJobRepository.findStalled(plus(60_000), { inFlight: 50, terminal: 50 }))
+      .map(j => j.id)
+      .sort();
     expect(ids).toEqual([overdue.id, unhandled.id].sort());
   });
 
@@ -200,7 +202,9 @@ describe('GenerationJobRepository', () => {
 
     it('returns a job claimed before the cutoff and never handled', async () => {
       const stuck = await terminal({ terminalHandlingClaimedAt: t0 });
-      expect((await generationJobRepository.findStalled(cutoff, 50)).map(j => j.id)).toEqual([stuck.id]);
+      expect(
+        (await generationJobRepository.findStalled(cutoff, { inFlight: 50, terminal: 50 })).map(j => j.id)
+      ).toEqual([stuck.id]);
     });
 
     it('skips claimed-after-cutoff, handled and recently updated unclaimed terminal jobs', async () => {
@@ -208,13 +212,15 @@ describe('GenerationJobRepository', () => {
       await terminal({ terminalHandlingClaimedAt: t0, terminalHandledAt: t0 });
       const fresh = await terminal({});
       await setUpdatedAt(fresh.id, plus(120_000));
-      expect(await generationJobRepository.findStalled(cutoff, 50)).toEqual([]);
+      expect(await generationJobRepository.findStalled(cutoff, { inFlight: 50, terminal: 50 })).toEqual([]);
     });
 
     it('returns an unclaimed terminal job once it is older than the cutoff', async () => {
       const old = await terminal({});
       await setUpdatedAt(old.id, t0);
-      expect((await generationJobRepository.findStalled(cutoff, 50)).map(j => j.id)).toEqual([old.id]);
+      expect(
+        (await generationJobRepository.findStalled(cutoff, { inFlight: 50, terminal: 50 })).map(j => j.id)
+      ).toEqual([old.id]);
     });
   });
 
@@ -230,27 +236,44 @@ describe('GenerationJobRepository', () => {
     }
   });
 
-  it('findStalled returns in-flight jobs by nextPollAt before terminal jobs by updatedAt, within the limit', async () => {
-    const setUpdatedAt = (id: string, updatedAt: Date) =>
-      GenerationJobModel.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { updatedAt } });
-    // Stuck-claimed terminal jobs older than every in-flight one: they must not crowd the in-flight jobs out.
+  const setUpdatedAt = (id: string, updatedAt: Date) =>
+    GenerationJobModel.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { updatedAt } });
+
+  it('findStalled returns in-flight jobs by nextPollAt then terminal jobs by updatedAt, each within its own limit', async () => {
+    const stuck: string[] = [];
     for (let i = 0; i < 3; i++) {
-      const stuck = await generationJobRepository.createJob(
+      const job = await generationJobRepository.createJob(
         newJob({ state: 'failed', terminalHandledAt: null, terminalHandlingClaimedAt: plus(-120_000) })
       );
-      await setUpdatedAt(stuck.id, plus(-120_000 + i));
+      await setUpdatedAt(job.id, plus(-120_000 + i));
+      stuck.push(job.id);
     }
     const later = await generationJobRepository.createJob(newJob({ state: 'running', nextPollAt: plus(-10_000) }));
     const earlier = await generationJobRepository.createJob(newJob({ state: 'running', nextPollAt: plus(-20_000) }));
     const unclaimed = await generationJobRepository.createJob(newJob({ state: 'succeeded', terminalHandledAt: null }));
     await setUpdatedAt(unclaimed.id, plus(-600_000));
 
-    expect((await generationJobRepository.findStalled(t0, 2)).map(j => j.id)).toEqual([earlier.id, later.id]);
-    expect((await generationJobRepository.findStalled(t0, 3)).map(j => j.id)).toEqual([
+    expect((await generationJobRepository.findStalled(t0, { inFlight: 2, terminal: 0 })).map(j => j.id)).toEqual([
       earlier.id,
       later.id,
-      unclaimed.id,
     ]);
+    expect((await generationJobRepository.findStalled(t0, { inFlight: 1, terminal: 2 })).map(j => j.id)).toEqual([
+      earlier.id,
+      unclaimed.id,
+      stuck[0],
+    ]);
+  });
+
+  it('findStalled still returns terminal jobs when the in-flight backlog exceeds its limit', async () => {
+    for (let i = 0; i < 3; i++) {
+      await generationJobRepository.createJob(newJob({ state: 'running', nextPollAt: plus(-10_000 - i) }));
+    }
+    const unclaimed = await generationJobRepository.createJob(newJob({ state: 'failed', terminalHandledAt: null }));
+    await setUpdatedAt(unclaimed.id, plus(-600_000));
+
+    const stalled = await generationJobRepository.findStalled(t0, { inFlight: 2, terminal: 1 });
+    expect(stalled).toHaveLength(3);
+    expect(stalled.map(j => j.id)).toContain(unclaimed.id);
   });
 
   it('concurrent acquireLease calls yield exactly one winner', async () => {
@@ -260,6 +283,60 @@ describe('GenerationJobRepository', () => {
       generationJobRepository.acquireLease(job.id, t0, plus(330_000)),
     ]);
     expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('listByRequester pages newest first and filters by state and source', async () => {
+    const ids: string[] = [];
+    for (const [state, source] of [
+      ['succeeded', 'api'],
+      ['failed', 'studio'],
+      ['succeeded', 'studio'],
+      ['running', 'api'],
+    ] as const) {
+      ids.push((await generationJobRepository.createJob(newJob({ state, source }))).id);
+    }
+    await generationJobRepository.createJob(newJob({ requestedBy: 'u2' }));
+
+    const firstPage = await generationJobRepository.listByRequester({ requestedBy: 'u1', kind: 'video', limit: 2 });
+    expect(firstPage.map(j => j.id)).toEqual([ids[3], ids[2]]);
+    const secondPage = await generationJobRepository.listByRequester({
+      requestedBy: 'u1',
+      kind: 'video',
+      beforeId: ids[2],
+      limit: 2,
+    });
+    expect(secondPage.map(j => j.id)).toEqual([ids[1], ids[0]]);
+
+    const succeeded = await generationJobRepository.listByRequester({
+      requestedBy: 'u1',
+      kind: 'video',
+      state: 'succeeded',
+      limit: 10,
+    });
+    expect(succeeded.map(j => j.id)).toEqual([ids[2], ids[0]]);
+    const api = await generationJobRepository.listByRequester({
+      requestedBy: 'u1',
+      kind: 'video',
+      source: 'api',
+      limit: 10,
+    });
+    expect(api.map(j => j.id)).toEqual([ids[3], ids[0]]);
+  });
+
+  it('listByRequester never returns another member of the same org', async () => {
+    const mine = await generationJobRepository.createJob(
+      newJob({ ownerType: CreditHolderType.Organization, ownerId: 'org1', requestedBy: 'u1' })
+    );
+    await generationJobRepository.createJob(
+      newJob({ ownerType: CreditHolderType.Organization, ownerId: 'org1', requestedBy: 'u2' })
+    );
+    const listed = await generationJobRepository.listByRequester({ requestedBy: 'u1', kind: 'video', limit: 10 });
+    expect(listed.map(j => j.id)).toEqual([mine.id]);
+  });
+
+  it('declares the requester index', async () => {
+    const indexes = await GenerationJobModel.collection.indexes();
+    expect(indexes.map(index => index.key)).toContainEqual({ requestedBy: 1, _id: -1 });
   });
 
   it('findByIdempotencyKey round-trips', async () => {

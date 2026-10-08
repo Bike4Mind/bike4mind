@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   post: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  userId: 'user-1' as string | undefined,
 }));
 
 vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: { googleClientId: 'gcid' } }) }));
@@ -18,13 +19,21 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 vi.mock('react-google-drive-picker', () => ({ default: () => [h.openPicker] }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post } }));
 vi.mock('sonner', () => ({ toast: { success: h.toastSuccess, error: h.toastError } }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: { getState: () => ({ currentUser: h.userId ? { id: h.userId } : null }) },
+}));
+vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => 'org-1' }));
 
 import { useLakeDriveFolderConnect } from './useLakeDriveFolderConnect';
+import { consumeDriveConnectHandoff } from '@client/app/utils/driveConnectHandoff';
 
 type PickerArgs = { callbackFunction: (pick: { action: string; docs?: { id: string; name?: string }[] }) => void };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.userId = 'user-1';
+  sessionStorage.clear();
+  vi.stubGlobal('google', { picker: {} }); // the Picker API counts as loaded
 });
 
 describe('useLakeDriveFolderConnect', () => {
@@ -74,6 +83,41 @@ describe('useLakeDriveFolderConnect', () => {
       expect(window.location.href).toBe('https://accounts.google.com/o/oauth2/auth?x=1');
       expect(h.openPicker).not.toHaveBeenCalled();
       expect(h.connectMutate).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+    }
+  });
+
+  it('saves a return-to-this-lake handoff bound to the consent attempt before redirecting', async () => {
+    const realLocation = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { href: '' } });
+    h.get.mockRejectedValue({ response: { status: 400 } });
+    h.post.mockResolvedValue({ data: { authUrl: 'https://accounts.google.com/o/oauth2/auth?state=s1' } });
+    try {
+      const { result } = renderHook(() => useLakeDriveFolderConnect('lake1'));
+      await act(() => result.current.openFolderPicker());
+
+      expect(window.location.href).toBe('https://accounts.google.com/o/oauth2/auth?state=s1');
+      expect(consumeDriveConnectHandoff({ userId: 'user-1', organizationId: 'org-1', oauthState: 's1' })).toMatchObject(
+        { kind: 'lake', dataLakeId: 'lake1' }
+      );
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+    }
+  });
+
+  it('still redirects without a handoff when no user is signed in', async () => {
+    const realLocation = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { href: '' } });
+    h.userId = undefined;
+    h.get.mockRejectedValue({ response: { status: 400 } });
+    h.post.mockResolvedValue({ data: { authUrl: 'https://accounts.google.com/o/oauth2/auth?state=s1' } });
+    try {
+      const { result } = renderHook(() => useLakeDriveFolderConnect('lake1'));
+      await act(() => result.current.openFolderPicker());
+
+      expect(window.location.href).toBe('https://accounts.google.com/o/oauth2/auth?state=s1');
+      expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
     } finally {
       Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
     }

@@ -36,8 +36,8 @@ const PromptMetaModelParametersSchema = z.object({
   background: z.string().optional(), // Background handling (transparent/opaque/auto), gpt-image only
   response_format: z.string().optional(), // Response format (url/b64_json)
 
-  // Video generation parameters (Sora)
-  seconds: z.number().optional(), // Video duration in seconds (4, 8, or 12)
+  // Video generation parameters
+  seconds: z.number().optional(), // Requested clip length in seconds
   model: z.string().optional(), // Video model name
 });
 
@@ -256,7 +256,8 @@ const PromptMetaPerformanceSchema = z.object({
   firstTokenTime: z.number().optional(),
   /** Elapsed ms until the first chunk of any kind, including a hidden thinking block. */
   firstChunkTime: z.number().optional(),
-  clientFirstTokenTime: z.number().optional(), // Time from client sending prompt to client rendering first token
+  /** @deprecated Read/write the quest-level clientFirstTokenTime instead. */
+  clientFirstTokenTime: z.number().optional(),
   streamingPerformance: z
     .object({
       chunkCount: z.number().optional(),

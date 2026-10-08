@@ -276,3 +276,30 @@ describe('runOrgFeedbackSummary', () => {
     ]);
   });
 });
+
+it('releases the persisted hold when the cooperative budget expires before work', async () => {
+  await expect(
+    runOrgFeedbackSummary(message, makeLogger() as never, () => {
+      throw new Error('run budget exhausted');
+    })
+  ).rejects.toThrow('run budget exhausted');
+  expect(h.complete).not.toHaveBeenCalled();
+  expect(h.updateOne).toHaveBeenCalledWith(
+    { summaryJobId: SUMMARY_JOB_ID },
+    { status: 'failed', activeKey: SUMMARY_JOB_ID, errorMessage: 'run budget exhausted' }
+  );
+});
+
+it.each([2, 3])('releases the active window and suppresses the next side effect at checkpoint %s', async index => {
+  let check = 0;
+  await expect(
+    runOrgFeedbackSummary(message, makeLogger() as never, () => {
+      if (++check === index) throw new Error('run budget exhausted');
+    })
+  ).rejects.toThrow('run budget exhausted');
+  expect(index === 2 ? h.complete : h.upload).not.toHaveBeenCalled();
+  expect(h.updateOne).toHaveBeenLastCalledWith(
+    { summaryJobId: SUMMARY_JOB_ID },
+    { status: 'failed', activeKey: SUMMARY_JOB_ID, errorMessage: 'run budget exhausted' }
+  );
+});

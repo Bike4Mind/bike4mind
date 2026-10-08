@@ -244,9 +244,10 @@ export class NotebookImportService {
   private importingUser: IUserDocument | null = null;
 
   /** Bytes admitted so far in THIS import. `currentStorageSize` on the user document is a snapshot
-   * read once - uploaded bytes are only debited later, by the S3 objectCreated event - so several
-   * files that each pass against that stale value can overshoot the quota together. Same reason as
-   * the accumulator in b4m-core/slack/src/CommandHandler.ts. */
+   * read once - the caller charges imported bytes only once every file is admitted
+   * (apps/client/server/s3/storageCharge.ts) - so several files that each pass against that stale
+   * value can overshoot the quota together. Same reason as the accumulator in
+   * b4m-core/slack/src/CommandHandler.ts. */
   private admittedBytes = 0;
 
   /**

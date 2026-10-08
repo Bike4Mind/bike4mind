@@ -1,0 +1,15 @@
+# contract-gate-allowlist.txt
+#
+# Permanent legitimate exceptions to the contract gate.
+# These are v1 routes that are NOT API handlers and therefore do not use
+# nextRouteForContract: they serve static content (the OpenAPI spec and the
+# Scalar UI) with no auth, no user data, and no DB access.
+#
+# Rules:
+#   - Do NOT add real API handlers here. Every handler under pages/api/v1
+#     must use nextRouteForContract from day one.
+#   - Remove an entry only if the file is deleted or rewritten as a handler.
+
+apps/client/pages/api/v1/docs.ts
+apps/client/pages/api/v1/openapi.deployment.json.ts
+apps/client/pages/api/v1/openapi.json.ts

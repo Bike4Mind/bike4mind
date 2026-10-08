@@ -10,7 +10,9 @@ import {
   useUpdateSessionTags,
   sessionMatchesListFilters,
   updateSessionsQueryData,
+  useSnipSession,
 } from './sessions';
+import { api } from '@client/app/contexts/ApiContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { ISessionDocument } from '@bike4mind/common';
 // Mocked below (vi.mock is hoisted); imported so the toast assertions can read the spy.
@@ -481,5 +483,36 @@ describe('updateSessionsQueryData', () => {
     updateSessionsQueryData(queryClient, 'write', apiOriginSession);
 
     expect(dataOf(queryClient, hideApiKey)).toContainEqual(expect.objectContaining({ name: 'From API key' }));
+  });
+});
+
+// A snip lives in its source's surface, and the cached lists don't filter by surface, so a surfaced
+// snip must be re-placed by refetch rather than spliced into the main list.
+describe('useSnipSession', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const snip = async (snipped: Partial<ISessionDocument>) => {
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: { id: 'snip-1', name: 'Snip', ...snipped } });
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useSnipSession(), { wrapper });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    return invalidate;
+  };
+
+  it('refetches the own-session lists when the snip carries a surface', async () => {
+    const invalidate = await snip({ surface: 'opti' });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
+  });
+
+  it('does not refetch the own-session lists for a main-list snip', async () => {
+    const invalidate = await snip({});
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
   });
 });

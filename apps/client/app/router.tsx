@@ -84,6 +84,7 @@ const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
+const VideoStudioPage = lazy(() => import('./routes/studio/video'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // Shared coercion for the optional string search params nearly every route declares.
@@ -464,6 +465,17 @@ const hearthRoute = createRoute({
         <HearthPage />
       </Suspense>
     </ExperimentalFeatureGate>
+  ),
+});
+
+// Video Studio: generate clips from text or a library image, and the gallery of the user's video jobs.
+const studioVideoRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/studio/video',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <VideoStudioPage />
+    </Suspense>
   ),
 });
 
@@ -1172,6 +1184,7 @@ const routeTree = rootRoute.addChildren([
     dataLakesRoute,
     hudRoute,
     hearthRoute,
+    studioVideoRoute,
     ...builtAppShellPremiumRoutes,
   ]),
   // QA status pages (admin layout without the sidenav)

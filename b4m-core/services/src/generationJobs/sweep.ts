@@ -1,8 +1,9 @@
-import type { IGenerationJobRepository } from '@bike4mind/common';
+import type { IGenerationJobRepository, StalledJobLimits } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 export const SWEEP_OVERDUE_MS = 5 * 60_000;
-const SWEEP_LIMIT = 200;
+// Terminal handling is cheap and returns held credits, so it always gets its own share of every sweep.
+export const SWEEP_LIMITS: StalledJobLimits = { inFlight: 200, terminal: 50 };
 
 // Recovers jobs whose SQS message was lost or whose worker died mid-step; the engine's lease makes a spurious re-enqueue harmless.
 export async function runGenerationJobSweep(
@@ -12,10 +13,10 @@ export async function runGenerationJobSweep(
     now(): Date;
     logger: Logger;
   },
-  options: { overdueMs?: number; limit?: number } = {}
+  options: { overdueMs?: number; limits?: StalledJobLimits } = {}
 ): Promise<{ requeued: number }> {
   const overdueBefore = new Date(deps.now().getTime() - (options.overdueMs ?? SWEEP_OVERDUE_MS));
-  const stalled = await deps.repository.findStalled(overdueBefore, options.limit ?? SWEEP_LIMIT);
+  const stalled = await deps.repository.findStalled(overdueBefore, options.limits ?? SWEEP_LIMITS);
   let requeued = 0;
   for (const job of stalled) {
     try {

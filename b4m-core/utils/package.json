@@ -100,6 +100,16 @@
         "default": "./dist/globMatches.cjs"
       }
     },
+    "./calibratedTokenizer": {
+      "import": {
+        "types": "./dist/calibratedTokenizer.d.mts",
+        "default": "./dist/calibratedTokenizer.mjs"
+      },
+      "require": {
+        "types": "./dist/calibratedTokenizer.d.cts",
+        "default": "./dist/calibratedTokenizer.cjs"
+      }
+    },
     "./contentDisposition": {
       "import": {
         "types": "./dist/contentDisposition.d.mts",
@@ -212,6 +222,7 @@
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
     "esbuild": "0.28.1",
+    "msw": "^2.15.0",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3"
   }

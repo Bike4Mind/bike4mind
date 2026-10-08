@@ -23,16 +23,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/common', () => ({ OAUTH_DEVICE_CLIENT_IDS: ['b4m-cli', 'b4m-desktop'] }));
 vi.mock('@bike4mind/database', () => ({
   // Held well under the live-pending cap: that cap has its own tests in initiate.test.ts, and
   // this file is only about which client_id the route accepts.
-  deviceAuthorizationRepository: { create: h.create, countPendingAndUnexpired: async () => 0 },
+  cacheRepository: { incrementCounterConditional: vi.fn().mockResolvedValue({ success: true, count: 1 }) },
+  deviceAuthorizationRepository: { create: h.create },
   digestDeviceCode: (c: string) => `digest:${c}`,
 }));
 vi.mock('@server/utils/oauth/deviceAuthHelpers', () => ({
   generateDeviceCode: () => 'device-code',
   generateUserCode: () => 'WXYZ-1234',
   MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS: 50,
+  LIVE_PENDING_COUNTER_KEY: 'device-auth:live-pending-count',
 }));
 vi.mock('@server/utils/validators', () => ({ isLocalAppUrl: () => false }));
 

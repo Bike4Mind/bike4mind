@@ -23,6 +23,14 @@ const EARLY_DELIVERY_GRACE_MS = 2000;
 // Time left between a step's abort and its lease expiring, for the step's own commit.
 const STEP_COMMIT_MARGIN_MS = 30_000;
 
+// Fresh budget for a failure-path cancel when the step signal already fired; must fit inside STEP_COMMIT_MARGIN_MS.
+const FAILURE_CANCEL_BUDGET_MS = 10_000;
+
+export type StepOptions = {
+  /** Lambda `getRemainingTimeInMillis()` at delivery; absent outside Lambda (inline dev path). */
+  remainingMs?: number;
+};
+
 const orphaned = (message: string): StepResult => ({ next: 'failed', error: { code: 'orphaned_submit', message } });
 
 type Lease = Extract<GenerationJobCommitGuard, { kind: 'lease' }>;
@@ -65,7 +73,13 @@ export class GenerationJobEngine {
     return 'failed';
   }
 
-  async step(jobId: string): Promise<StepOutcome> {
+  async step(jobId: string, options: StepOptions = {}): Promise<StepOutcome> {
+    // The step must commit before both the lease and the invocation end, whichever is first.
+    const stepBudgetMs = Math.floor(
+      Math.min(this.deps.leaseMs, options.remainingMs ?? Number.POSITIVE_INFINITY) - STEP_COMMIT_MARGIN_MS
+    );
+    // Thrown before leasing so SQS redelivers to a fresh invocation; an already-aborted submit would orphan the job.
+    if (!(stepBudgetMs > 0)) throw new Error(`generation job step has no time budget (${stepBudgetMs}ms)`);
     const now = this.deps.now();
     const lease: Lease = { kind: 'lease', leaseToken: new Date(now.getTime() + this.deps.leaseMs) };
     const job = await this.deps.repository.acquireLease(jobId, now, lease.leaseToken);
@@ -78,6 +92,8 @@ export class GenerationJobEngine {
 
     if (isTerminal(job.state)) return this.finishTerminal(job, handler, lease);
 
+    const context: GenerationJobStepContext = { signal: AbortSignal.timeout(stepBudgetMs) };
+
     // Checked before cancel and deadline so neither can suppress the orphan alarm.
     if (job.state === 'pending' && job.submitAttemptedAt) {
       this.deps.logger.error('generation_job_orphaned_submit', {
@@ -89,13 +105,10 @@ export class GenerationJobEngine {
         job,
         handler,
         lease,
-        orphaned('A previous submit attempt ended without a recorded provider job')
+        orphaned('A previous submit attempt ended without a recorded provider job'),
+        context
       );
     }
-
-    const context: GenerationJobStepContext = {
-      signal: AbortSignal.timeout(this.deps.leaseMs - STEP_COMMIT_MARGIN_MS),
-    };
 
     // Storing means the provider already produced (and billed) the output, so a cancel no longer saves anything.
     if (job.cancelRequested && job.state !== 'storing') {
@@ -122,7 +135,7 @@ export class GenerationJobEngine {
     }
 
     const result = await this.runStep(job, handler, context);
-    return this.apply(job, handler, lease, result);
+    return this.apply(job, handler, lease, result, context);
   }
 
   private handlerFor(job: IGenerationJobDocument): GenerationJobHandler {
@@ -165,7 +178,8 @@ export class GenerationJobEngine {
     job: IGenerationJobDocument,
     handler: GenerationJobHandler,
     lease: Lease,
-    result: StepResult
+    result: StepResult,
+    context: GenerationJobStepContext
   ): Promise<StepOutcome> {
     switch (result.next) {
       case 'running':
@@ -186,6 +200,7 @@ export class GenerationJobEngine {
       case 'retry': {
         const attempts = job.attempts + 1;
         if (attempts >= MAX_STEP_ATTEMPTS) {
+          await this.cancelIfRunning(job, handler, context);
           return this.toTerminal(job, handler, lease, {
             state: 'failed',
             error: { code: 'provider_error', message: result.reason },
@@ -198,11 +213,19 @@ export class GenerationJobEngine {
       case 'succeeded':
         return this.toTerminal(job, handler, lease, { state: 'succeeded', payload: result.payload, progress: 1 });
       case 'failed':
+        await this.cancelIfRunning(job, handler, context);
+        return this.toTerminal(job, handler, lease, {
+          state: 'failed',
+          error: result.error,
+          rawProviderError: result.rawProviderError,
+        });
       case 'blocked':
         return this.toTerminal(job, handler, lease, {
           state: result.next,
           error: result.error,
           rawProviderError: result.rawProviderError,
+          // Only when set: payload is required, and the commit must never clear it.
+          ...(result.payload && { payload: result.payload }),
         });
     }
   }
@@ -278,6 +301,22 @@ export class GenerationJobEngine {
       return;
     }
     this.deps.logger.debug('generation job terminal handling claimed by a concurrent run', { jobId: job.id });
+  }
+
+  // A job we fail and refund must not keep generating (and billing) at the provider. Only `running` has a live
+  // provider job to stop: pending never submitted, and storing already produced its output.
+  private async cancelIfRunning(
+    job: IGenerationJobDocument,
+    handler: GenerationJobHandler,
+    context: GenerationJobStepContext
+  ) {
+    if (job.state !== 'running') return;
+    // A step that timed out leaves its signal aborted, which would make this cancel a no-op in exactly the case
+    // that most needs it.
+    const cancelContext = context.signal.aborted
+      ? { ...context, signal: AbortSignal.timeout(FAILURE_CANCEL_BUDGET_MS) }
+      : context;
+    await this.bestEffortCancel(job, handler, cancelContext);
   }
 
   private async bestEffortCancel(

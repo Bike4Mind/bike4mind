@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CHUNK_STALL_REASONS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
+import { CHUNK_STALL_REASONS, FAB_FILE_TYPE_FILTERS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 import {
   buildFabFileSearchQuery,
   buildLakeArms,
@@ -132,6 +132,16 @@ describe('buildFabFileSearchQuery', () => {
 
   // ── 3. MIME type mapping ───────────────────────────────────────────
   describe('getMimeTypeFilter', () => {
+    it('maps video to regex ^video/', () => {
+      expect(getMimeTypeFilter('video')).toEqual({ mimeType: { $regex: '^video/' } });
+    });
+
+    it('maps every type filter to a non-empty condition', () => {
+      for (const type of FAB_FILE_TYPE_FILTERS) {
+        expect(Object.keys(getMimeTypeFilter(type) ?? {})).not.toHaveLength(0);
+      }
+    });
+
     it('maps text to text/plain', () => {
       expect(getMimeTypeFilter('text')).toEqual({ mimeType: 'text/plain' });
     });

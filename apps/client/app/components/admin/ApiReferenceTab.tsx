@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm';
 import { useState } from 'react';
 import { getApiReferenceContent } from './content/apiReferenceContent';
 import { getQuickstartContent } from './content/quickstartContent';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 
 const markdownStyles = {
   '& h1': { fontSize: '1.8rem', fontWeight: 700, mt: 3, mb: 2 },
@@ -62,6 +64,7 @@ const markdownStyles = {
 
 const ApiReferenceTab = () => {
   const [view, setView] = useState<'full' | 'quickstart'>('full');
+  const scopes = useGenericApiKeyScopes();
 
   return (
     <Box sx={{ p: 3, height: '100%', overflow: 'auto' }}>
@@ -70,7 +73,7 @@ const ApiReferenceTab = () => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Button
             component="a"
-            href="/api/v1/docs"
+            href={ExternalLinks.apiDocs}
             target="_blank"
             rel="noopener noreferrer"
             variant="outlined"
@@ -82,7 +85,7 @@ const ApiReferenceTab = () => {
           </Button>
           <Button
             component="a"
-            href="/api/v1/openapi.json"
+            href={ExternalLinks.openApiSpec}
             // Same-origin, so the browser saves rather than navigates.
             download="openapi.json"
             variant="outlined"
@@ -132,19 +135,23 @@ const ApiReferenceTab = () => {
         // hand-written surface is migrated onto the contract pattern.
         <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-reference-drift-banner">
           <Typography level="body-sm">
-            This reference is hand-maintained and may lag the code. For endpoints with a verified, always-current
-            contract, use the{' '}
-            <Link href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
+            This reference is hand-maintained and may lag the code. Where an endpoint has a contract, the{' '}
+            <Link
+              href={ExternalLinks.apiDocs}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="api-reference-drift-docs-link"
+            >
               generated interactive API docs
-            </Link>
-            .
+            </Link>{' '}
+            are authoritative; this page covers the endpoints that do not have one yet.
           </Typography>
         </Alert>
       )}
       <Sheet variant="outlined" sx={{ p: 3, borderRadius: 'lg', ...markdownStyles }}>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
           {view === 'full'
-            ? getApiReferenceContent(window.location.origin)
+            ? getApiReferenceContent(window.location.origin, scopes)
             : getQuickstartContent(window.location.origin)}
         </ReactMarkdown>
       </Sheet>

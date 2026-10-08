@@ -8,6 +8,7 @@ type ReadState = { isSuccess: boolean; data: unknown };
 
 const h = vi.hoisted(() => ({
   gitHubFlag: true,
+  canManage: true,
   gitHub: { isSuccess: true, data: null } as ReadState,
   drive: { isSuccess: true, data: null } as ReadState,
   gitHubEnabledArg: undefined as boolean | undefined,
@@ -34,6 +35,7 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
     h.driveEnabledArg = enabled;
     return h.drive;
   },
+  useLakeDriveCanManage: () => ({ data: h.canManage }),
 }));
 vi.mock('@client/app/hooks/data/useBeginLakeGitHubConnect', () => ({
   useBeginLakeGitHubConnect: (lakeId: string) => {
@@ -68,6 +70,7 @@ const DRIVE_BANNER = 'googleDrive-finish-connect-banner-lake1';
 beforeEach(() => {
   vi.clearAllMocks();
   h.gitHubFlag = true;
+  h.canManage = true;
   h.gitHub = { isSuccess: true, data: null };
   h.drive = { isSuccess: true, data: null };
   h.gitHubEnabledArg = undefined;
@@ -99,6 +102,19 @@ describe('FinishSourceConnectBanner', () => {
     expect(h.gitHubEnabledArg).toBe(false);
     expect(h.driveEnabledArg).toBe(false);
   });
+
+  it.each([
+    ['GitHub', LAKE, BANNER],
+    ['Google Drive', DRIVE_LAKE, DRIVE_BANNER],
+  ])(
+    'hides the %s banner for an appointed org admin, who can read the status but whose connect would 404',
+    (_label, lake, banner) => {
+      h.canManage = false;
+      wrap(<FinishSourceConnectBanner lake={lake} fileCount={0} />);
+
+      expect(screen.queryByTestId(banner)).toBeNull();
+    }
+  );
 
   it.each([
     ['no pendingConnector', undefined],

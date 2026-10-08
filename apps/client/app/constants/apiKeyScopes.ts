@@ -55,6 +55,10 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/v1/image-generations',
       'POST /api/v1/image-edits',
       'POST /api/v1/video-generations',
+      'GET /api/v1/video-generations',
+      'GET /api/v1/video-generations/:id',
+      'POST /api/v1/video-generations/:id/cancel',
+      'GET /api/v1/video-models',
       'POST /api/v1/embeddings',
       'GET /api/v1/voice/voices',
       'POST /api/v1/voice/sessions',
@@ -74,13 +78,54 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.READ_PROJECTS,
     label: 'Read Projects',
     description: 'View projects',
-    endpoints: ['GET /api/projects'],
+    endpoints: [
+      'GET /api/projects',
+      'GET /api/projects/:id',
+      'GET /api/projects/:id/files',
+      'GET /api/projects/:id/sessions',
+      'GET /api/projects/:id/invites',
+    ],
   },
   {
     value: ApiKeyScope.WRITE_PROJECTS,
     label: 'Write Projects',
-    description: 'Create and modify projects',
-    endpoints: ['POST /api/projects', 'PUT /api/projects/:id'],
+    description: 'Create, modify, share and delete projects',
+    endpoints: [
+      'POST /api/projects',
+      'PUT /api/projects/:id',
+      'DELETE /api/projects/:id',
+      'POST|DELETE /api/projects/:id/files',
+      'POST|DELETE /api/projects/:id/sessions',
+      'POST /api/projects/:id/invites',
+      'DELETE /api/projects/:id/members',
+      'POST|DELETE /api/projects/:id/systemPrompts',
+      'POST /api/projects/:id/systemPrompts/toggle',
+      'DELETE /api/projects/removeNonExistintFiles',
+    ],
+  },
+  {
+    value: ApiKeyScope.READ_AGENTS,
+    label: 'Read Agents',
+    description: 'View agents',
+    endpoints: ['GET /api/agents', 'GET /api/agents/:id', 'GET /api/agents/:id/missions'],
+  },
+  {
+    value: ApiKeyScope.WRITE_AGENTS,
+    label: 'Write Agents',
+    description: 'Create, modify, fund and delete agents, and run the agent-authoring assistants',
+    endpoints: [
+      'POST /api/agents',
+      'PUT /api/agents/:id',
+      'DELETE /api/agents/:id',
+      'POST /api/agents/create-from-context',
+      'POST /api/agents/:id/missions',
+      'POST /api/agents/:id/transfer-credits',
+      'GET /api/agents/:id/embed-keys',
+      'POST /api/agents/:id/generate-avatar',
+      'POST /api/agents/:id/generate-description',
+      'POST /api/agents/:id/generate-system-prompt',
+      'POST /api/agents/:id/enhance-field',
+    ],
   },
   {
     value: ApiKeyScope.ME_READ,
@@ -122,20 +167,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.OPTIHASHI_READ,
     label: 'OptiHashi: Read',
     description: 'Inspect OptiHashi problems, runs, and run artifacts without commissioning any compute',
-    endpoints: [
-      'GET /api/premium-optihashi/quantum/runs',
-      'GET /api/premium-optihashi/quantum/runs/:id',
-      'GET /api/premium-optihashi/quantum/problems',
-    ],
+    endpoints: ['OptiHashi run and problem reads'],
   },
   {
     value: ApiKeyScope.OPTIHASHI_COMPUTE,
     label: 'OptiHashi: Compute',
     description: 'Submit OptiHashi compute runs and cancel them. Spends credits - grant only to keys that must solve',
-    endpoints: [
-      'POST /api/premium-optihashi/quantum/qwork/submit',
-      'POST /api/premium-optihashi/quantum/runs/:id/cancel',
-    ],
+    endpoints: ['OptiHashi run submit and cancel'],
   },
   {
     value: ApiKeyScope.DATALAKE_READ,
@@ -216,6 +254,22 @@ export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScope> = new Set(
 export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
   s => !DEDICATED_FLOW_SCOPES.has(s.value)
 );
+
+/**
+ * Premium scopes, only usable when the OptiHashi overlay is mounted. Every surface that
+ * lists GENERIC_MODAL_API_KEY_SCOPES must go through genericApiKeyScopesFor (or the
+ * useGenericApiKeyScopes hook) so they stay hidden from users without OptiHashi access.
+ */
+export const OPTI_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
+  ApiKeyScope.OPTIHASHI_READ,
+  ApiKeyScope.OPTIHASHI_COMPUTE,
+]);
+
+const GENERIC_SCOPES_WITHOUT_OPTI = GENERIC_MODAL_API_KEY_SCOPES.filter(s => !OPTI_API_KEY_SCOPES.has(s.value));
+
+/** The generic scopes a viewer may see; `hasOptiAccess` is the useOptiAccess verdict. Returns a stable reference. */
+export const genericApiKeyScopesFor = (hasOptiAccess: boolean): ApiKeyScopeOption[] =>
+  hasOptiAccess ? GENERIC_MODAL_API_KEY_SCOPES : GENERIC_SCOPES_WITHOUT_OPTI;
 
 /**
  * Scopes no mint route may ever issue: they are granted by a flow of their own

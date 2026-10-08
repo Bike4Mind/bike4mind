@@ -2,7 +2,7 @@
  * GitHub API helpers for release management
  */
 
-interface GitHubCommit {
+export interface GitHubCommit {
   sha: string;
   message: string;
   author: string;
@@ -10,7 +10,7 @@ interface GitHubCommit {
   date: string;
 }
 
-interface GitHubRelease {
+export interface GitHubRelease {
   tag_name: string;
   name: string;
   body: string;
@@ -116,18 +116,26 @@ export async function getLatestRelease(tagPattern?: RegExp): Promise<GitHubRelea
  */
 export async function getCommitRange(base: string, head: string = 'HEAD'): Promise<GitHubCommit[]> {
   const { owner, repo } = getRepoInfo();
+  const commits: Array<{
+    sha: string;
+    commit: {
+      message: string;
+      author: { name: string; email: string; date: string };
+    };
+  }> = [];
 
-  const comparison = await githubRequest<{
-    commits: Array<{
-      sha: string;
-      commit: {
-        message: string;
-        author: { name: string; email: string; date: string };
-      };
-    }>;
-  }>(`/repos/${owner}/${repo}/compare/${base}...${head}`);
+  // Unpaginated, compare returns at most 250 commits; paged, it returns them all. A short page ends the
+  // walk even when total_commits is missing.
+  const perPage = 100;
+  for (let page = 1; ; page++) {
+    const comparison = await githubRequest<{ total_commits?: number; commits: typeof commits }>(
+      `/repos/${owner}/${repo}/compare/${base}...${head}?per_page=${perPage}&page=${page}`
+    );
+    commits.push(...comparison.commits);
+    if (comparison.commits.length < perPage || commits.length >= (comparison.total_commits ?? Infinity)) break;
+  }
 
-  return comparison.commits.map(c => ({
+  return commits.map(c => ({
     sha: c.sha,
     message: c.commit.message,
     author: c.commit.author.name,
@@ -279,5 +287,54 @@ export async function getPRWithCommits(prNumber: number): Promise<{
       return null;
     }
     throw error;
+  }
+}
+
+export interface PRSummary {
+  number: number;
+  title: string;
+  labels: string[];
+  body: string;
+}
+
+/**
+ * Get a pull request's title, label names and description, or null when it does not exist
+ */
+export async function getPRSummary(prNumber: number): Promise<PRSummary | null> {
+  const { owner, repo } = getRepoInfo();
+
+  try {
+    const pr = await githubRequest<{ title: string; body: string | null; labels: Array<{ name: string }> }>(
+      `/repos/${owner}/${repo}/pulls/${prNumber}`
+    );
+    return { number: prNumber, title: pr.title, labels: pr.labels.map(l => l.name), body: pr.body ?? '' };
+  } catch (error) {
+    if ((error as Error).message.includes('404')) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Resolve a ref (tag, branch or sha) to the commit sha it points at
+ */
+export async function resolveCommitSha(ref: string): Promise<string> {
+  const { owner, repo } = getRepoInfo();
+  const commit = await githubRequest<{ sha: string }>(`/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`);
+  return commit.sha;
+}
+
+/**
+ * List every release, following pagination (newest first, as GitHub returns them)
+ */
+export async function listReleases(): Promise<GitHubRelease[]> {
+  const { owner, repo } = getRepoInfo();
+  const releases: GitHubRelease[] = [];
+
+  for (let page = 1; ; page++) {
+    const batch = await githubRequest<GitHubRelease[]>(`/repos/${owner}/${repo}/releases?per_page=100&page=${page}`);
+    releases.push(...batch);
+    if (batch.length < 100) return releases;
   }
 }

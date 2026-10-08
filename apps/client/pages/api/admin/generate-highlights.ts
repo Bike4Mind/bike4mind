@@ -7,7 +7,7 @@ import { AdminSettings, ModalModel } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
-import type { WhatsNewHighlightsPayload } from '@server/queueHandlers/whatsNewHighlights.types';
+import type { WhatsNewHighlightsPayload } from '@server/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
 
 // Rate limiting - 1 request per minute to prevent abuse

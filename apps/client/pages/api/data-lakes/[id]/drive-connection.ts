@@ -11,14 +11,18 @@ import { driveConnectionOwnerOf, isDriveDisconnectStalled, isSameDriveConnection
 import type { DriveConnectionOwner, IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
 import type { DriveDisconnectPurgePayload } from '@server/queueHandlers/driveDisconnectPurge';
 import { listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
-import { authorizeLakeDriveAccess } from '@server/integrations/google/drive/authorizeLakeDriveAccess';
+import {
+  authorizeLakeDriveAccess,
+  authorizeLakeDriveRead,
+} from '@server/integrations/google/drive/authorizeLakeDriveAccess';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { sendToQueue } from '@server/utils/sqs';
 import { NotFoundError } from '@server/utils/errors';
 import { Request } from 'express';
 
 /**
- * Safe, credential-free view of a connection for the lake owner/manager. The refresh token is
+ * Safe, credential-free view of a connection for whoever may read it (the lake's org owner, manager
+ * or appointed admin, or a personal lake's creator). The refresh token is
  * `select: false` so it never reaches here anyway; this narrows further to just what the wizard
  * needs to show connection state and offer re-sync/disconnect.
  *
@@ -42,18 +46,32 @@ function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: numbe
   };
 }
 
-/**
- * Resolve the lake and assert the caller may manage its Drive connection - an org owner/manager on an
- * org lake, the creator on a personal one (the same gate as drive-sync).
- */
-async function resolveLake(req: Request): Promise<{ lake: IDataLakeDocument; owner: DriveConnectionOwner }> {
+async function findLake(req: Request): Promise<IDataLakeDocument> {
   const { id } = req.query as { id: string };
   const lake = await dataLakeRepository.findById(id);
   if (!lake) {
     throw new NotFoundError('Data lake not found');
   }
+  return lake;
+}
+
+/**
+ * Resolve the lake and assert the caller may manage its Drive connection - an org owner/manager on an
+ * org lake, the creator on a personal one (the same gate as drive-sync).
+ */
+async function resolveLake(req: Request): Promise<{ lake: IDataLakeDocument; owner: DriveConnectionOwner }> {
+  const lake = await findLake(req);
   const owner = await authorizeLakeDriveAccess(req.user, lake);
   return { lake, owner };
+}
+
+/** Same lookup for the status read, which an appointed org admin may also make (see authorizeLakeDriveRead). */
+async function resolveLakeForRead(
+  req: Request
+): Promise<{ lake: IDataLakeDocument; owner: DriveConnectionOwner; canManage: boolean }> {
+  const lake = await findLake(req);
+  const { owner, canManage } = await authorizeLakeDriveRead(req.user, lake);
+  return { lake, owner, canManage };
 }
 
 /**
@@ -66,7 +84,7 @@ async function resolveLake(req: Request): Promise<{ lake: IDataLakeDocument; own
  * revoking anything, and the folder would stay unclaimable by anyone.
  *
  * findByDataLakeIdAny is deliberately global (server-side only). The tenant boundary is
- * resolveLake's authorizeLakeDriveAccess, which has already run; the comparison below is defence in
+ * the authorizeLakeDrive* gate resolveLake/resolveLakeForRead ran; the comparison below is defence in
  * depth against inconsistent data - both sides derive from the same lake - and is NOT what scopes the
  * caller. A route that copies this finder needs the authorization, not just the comparison.
  */
@@ -79,7 +97,7 @@ async function findLakeConnection(lakeId: string, owner: DriveConnectionOwner) {
 }
 
 /**
- * GET    /api/data-lakes/:id/drive-connection -> { connection: SafeConnection | null }
+ * GET    /api/data-lakes/:id/drive-connection -> { connection: SafeConnection | null, canManage: boolean }
  * DELETE /api/data-lakes/:id/drive-connection -> 202 once the purge is queued (the
  *        driveDisconnectPurge consumer deletes the ingested files, then revokes the Google grant and
  *        releases the folder claim), or 204 when there is no connection
@@ -88,28 +106,29 @@ async function findLakeConnection(lakeId: string, owner: DriveConnectionOwner) {
  * findLakeConnection: `enabled` is a poll switch, not a disconnect, and only the DELETE here or the
  * phase-2 purge actually revokes.
  *
- * Both are gated like drive-sync: an org owner/manager (or platform admin) on an org lake, the
- * creator on a personal lake. A lake with no connection resolves 200 with a null connection rather
+ * DELETE is gated like drive-sync: an org owner/manager (or platform admin) on an org lake, the
+ * creator on a personal lake. GET also admits an appointed org admin, who can manage the lake but not
+ * its connection; `canManage` tells the client which controls to offer. A lake with no connection resolves 200 with a null connection rather
  * than 404 - a caller needs to tell "no connection" from "can't tell" apart, and conflating them into
  * one 404 broke every consumer that renders differently for the two (see useLakeDriveConnection).
- * A 404 from GET therefore always means a real failure: the lake doesn't exist, or the caller may not
- * manage its Drive connection. The connect + ingest trigger lives in POST
+ * A 404 from GET therefore always means a real failure: the lake doesn't exist, or the caller has no
+ * standing on its org. The connect + ingest trigger lives in POST
  * /api/data-lakes/drive-sync; this route is the per-lake status + disconnect surface.
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
-    const { lake, owner } = await resolveLake(req);
+    const { lake, owner, canManage } = await resolveLakeForRead(req);
     const conn = await findLakeConnection(lake.id, owner);
     if (!conn) {
-      return res.json({ connection: null });
+      return res.json({ connection: null, canManage });
     }
     const fileCount = await fabFileRepository.countByDriveConnectionIdInDataLake(conn.id, lake.datalakeTag);
     // The confirm number must equal what the purge removes, so it folds in the gate-cleared orphans
     // (files this connection unpicked and left alive) the purge sweeps the same way - the member
     // count alone under-reports exactly the rows this change is about.
     const orphans = await listDeletableDriveOrphans(lake, conn.id, req.logger);
-    return res.json({ connection: toSafeConnection(conn, fileCount + orphans.length) });
+    return res.json({ connection: toSafeConnection(conn, fileCount + orphans.length), canManage });
   })
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);

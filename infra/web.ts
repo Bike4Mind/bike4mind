@@ -31,7 +31,6 @@ import {
   generationCallbackQueue,
   imageEditQueue,
   imageGenerationQueue,
-  videoGenerationQueue,
   generationJobQueue,
   researchEngineQueue,
   agentProactiveMessageQueue,
@@ -67,7 +66,6 @@ import {
   generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
-  videoGenerationDLQ,
   generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
@@ -126,10 +124,9 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'generation-callback': generationCallbackQueueDLQ.url,
     'image-generation': imageGenerationDLQ.url,
     'image-edit': imageEditDLQ.url,
-    'video-generation': videoGenerationDLQ.url,
     'generation-job': generationJobDLQ.url,
     'research-engine': researchEngineQueueDLQ.url,
-    'whats-new-generation': whatsNewGenerationQueueDLQ.url,
+    'release-notes': whatsNewGenerationQueueDLQ.url,
     'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
     'notebook-curation': notebookCurationQueueDLQ.url,
     'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
@@ -190,7 +187,6 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     generationCallbackQueue: generationCallbackQueue.url,
     imageGenerationQueue: imageGenerationQueue.url,
     imageEditQueue: imageEditQueue.url,
-    videoGenerationQueue: videoGenerationQueue.url,
     generationJobQueue: generationJobQueue.url,
     researchEngineQueue: researchEngineQueue.url,
     agentProactiveMessageQueue: agentProactiveMessageQueue.url,
@@ -231,7 +227,10 @@ export const web = new sst.aws.Nextjs(
   'frontend',
   {
     path: 'apps/client',
-    openNextVersion: '3.9.16',
+    // Coupled to the `next` version in apps/client/package.json. next >=16.3.8 keys the response
+    // cache by a scoped route-cache key; OpenNext <4.1.7 seeds and looks up the bare pathname, so
+    // every prerendered route misses and runs its handler in the Lambda (e.g. /serwist/sw.js 500s).
+    openNextVersion: '4.1.8',
 
     vpc: lambdaVpc,
     router: router ? { instance: router } : undefined,

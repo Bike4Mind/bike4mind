@@ -173,7 +173,11 @@ Write 200-400 words covering:
   return responseText.trim();
 }
 
-export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, logger: Logger): Promise<void> {
+export async function runOrgFeedbackSummary(
+  message: OrgFeedbackSummaryMessage,
+  logger: Logger,
+  checkBudget: () => void = () => undefined
+): Promise<void> {
   const { summaryJobId, organizationId, userId } = message;
   logger.updateMetadata({ handler: 'orgFeedbackSummary', summaryJobId, organizationId, userId });
 
@@ -190,6 +194,7 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
   }
 
   try {
+    checkBudget();
     // A redelivery re-running a failed job works against a window that job already released, so
     // the status moves without re-taking `activeKey`: a newer job may hold the window by now.
     await OrgFeedbackSummaryJob.updateOne({ summaryJobId }, { status: 'processing' });
@@ -204,6 +209,7 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
     });
 
     await sendProgress(userId, summaryJobId, organizationId, 'processing', 40);
+    checkBudget();
     const summary = await generateSummary(message, buildPrompt(report), logger);
 
     const artifact: OrgFeedbackSummaryArtifact = {
@@ -224,6 +230,7 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
       },
     };
 
+    checkBudget();
     const key = summaryS3Key(organizationId, summaryJobId);
     // Bucket name resolved from SST at runtime, never written down.
     await new S3Storage(Resource.appFilesBucket.name).upload(JSON.stringify(artifact), key, {

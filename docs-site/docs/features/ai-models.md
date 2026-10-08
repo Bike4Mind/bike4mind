@@ -185,12 +185,6 @@ If your organization has Ollama configured, you can access locally-hosted models
 ### xAI Image Models
 - **Grok 2 Image** — Image generation via xAI
 
-## Supported Video Models
-
-### OpenAI Sora
-- **Sora** — AI video generation (4s, 8s, or 12s clips)
-- **Sora Pro** — Higher quality video generation
-
 ## Speech-to-Text Models
 
 - **Whisper-1** (OpenAI) — Industry-leading speech recognition
@@ -253,9 +247,6 @@ Controls response length:
 - **FLUX Pro Ultra**: Photorealistic images
 - **GPT-Image-1.5**: Creative and artistic
 - **FLUX Kontext Pro/Max**: Image transformations and editing
-
-### For Video Generation
-- **Sora Pro**: Highest quality AI video clips
 
 ## Context Windows
 

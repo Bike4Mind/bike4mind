@@ -8,6 +8,7 @@ import type {
 } from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
+import { isObjectIdOrHexString } from 'mongoose';
 import type { LakeGrant } from './manageRule';
 import { classifyLakeAccess } from './classifyLakeAccess';
 import {
@@ -260,12 +261,15 @@ const resolveGrantHeldLakeBySlug = async (
 const resolveLakeAccessWithGrants = async (
   lakeIdOrSlug: string,
   ctx: AccessContext,
-  { db, logger }: AssertLakeAccessAdapters
+  { db, logger }: AssertLakeAccessAdapters,
+  { idOnly = false }: { idOnly?: boolean } = {}
 ): Promise<{ lake: IDataLakeDocument; grants: LakeGrant[] }> => {
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
-    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds)) ??
-    (await resolveGrantHeldLakeBySlug(lakeIdOrSlug, ctx, db.dataLakeAccessGrants, db.dataLakes, logger));
+    (idOnly
+      ? null
+      : ((await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds)) ??
+        (await resolveGrantHeldLakeBySlug(lakeIdOrSlug, ctx, db.dataLakeAccessGrants, db.dataLakes, logger))));
   if (lake) {
     // A persisted lake may carry grants; a fallback lake never does. Fetch only when the repo is
     // wired, so callers that have not threaded it keep the createdByUserId + org/tag/public behavior.
@@ -301,7 +305,13 @@ const resolveLakeAccessWithGrants = async (
     return { lake, grants };
   }
   const fallback = await resolveFallbackLake(lakeIdOrSlug, ctx, db.fallbackLakeSettings, logger);
-  if (!fallback) throw new NotFoundError('Data lake not found');
+  if (!fallback) {
+    // Purely syntactic, so it confirms nothing about which lakes exist.
+    if (idOnly && !isObjectIdOrHexString(lakeIdOrSlug)) {
+      throw new BadRequestError('This action needs the data lake id; a slug is not accepted');
+    }
+    throw new NotFoundError('Data lake not found');
+  }
   return { lake: fallback, grants: [] };
 };
 
@@ -328,3 +338,17 @@ export const assertLakeAccess = async (
   ctx: AccessContext,
   adapters: AssertLakeAccessAdapters
 ): Promise<IDataLakeDocument> => (await resolveLakeAccessWithGrants(lakeIdOrSlug, ctx, adapters)).lake;
+
+/**
+ * The access gate with the slug arms removed, for doors whose action must never land on a lake
+ * other than the one the caller meant. A slug skips `deleted`/`purging` lakes
+ * (DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES), so once a lake is deleted its slug resolves to the next
+ * lake sharing it, and a retried delete by slug would soft-delete that one instead. The registry
+ * fallback still resolves (by its config id or slug): it is static, and assertLakeWritable refuses
+ * every write on it. A value that is neither an ObjectId nor a registry lake is a 400, not a 404.
+ */
+export const assertLakeAccessById = async (
+  lakeId: string,
+  ctx: AccessContext,
+  adapters: AssertLakeAccessAdapters
+): Promise<IDataLakeDocument> => (await resolveLakeAccessWithGrants(lakeId, ctx, adapters, { idOnly: true })).lake;

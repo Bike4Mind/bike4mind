@@ -490,9 +490,8 @@ declare module "sst" {
       "sre-job": string
       "tavern-heartbeat": string
       "type": "sst.sst.Linkable"
-      "video-generation": string
       "webhook-delivery": string
-      "whats-new-generation": string
+      "release-notes": string
       "whats-new-highlights": string
     }
     "emailAnalysisQueue": {
@@ -727,7 +726,6 @@ declare module "sst" {
       "sreJobQueue": string
       "tavernHeartbeatQueue": string
       "type": "sst.sst.Linkable"
-      "videoGenerationQueue": string
       "webhookDeliveryQueue": string
       "whatsNewGenerationQueue": string
       "whatsNewHighlightsQueue": string
@@ -762,14 +760,6 @@ declare module "sst" {
     "userActivityReportFunction": {
       "name": string
       "type": "sst.aws.Function"
-    }
-    "videoGenerationDLQ": {
-      "type": "sst.aws.Queue"
-      "url": string
-    }
-    "videoGenerationQueue": {
-      "type": "sst.aws.Queue"
-      "url": string
     }
     "webhookDeliveryQueue": {
       "type": "sst.aws.Queue"

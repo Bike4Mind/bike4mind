@@ -229,6 +229,39 @@ describe('ConversationContext', () => {
     it('uses a sane default replay budget', () => {
       expect(DEFAULT_TOOL_TRACE_REPLAY_TOKENS).toBeGreaterThan(0);
     });
+
+    it('calibrates the replay budget to the model, so a Claude turn omits more', () => {
+      const ctx = ConversationContext.fromSession(session([]));
+      ctx.recordTurn({
+        userInput: 'run tools',
+        result: result('all done', [
+          { name: 'a', input: {}, result: 'y'.repeat(400) },
+          { name: 'b', input: {}, result: 'y'.repeat(400) },
+          { name: 'c', input: {}, result: 'y'.repeat(400) },
+          { name: 'd', input: {}, result: 'y'.repeat(400) },
+        ]),
+      });
+
+      // Budget every raw line fits but the x1.5 Claude estimate does not: measure the
+      // full raw trace first, then reuse its cost as the per-line budget.
+      const unbounded = ctx.buildTurnMessages('next', {
+        model: 'm',
+        contextWindow: 200_000,
+        toolTraceReplayTokens: 1_000_000,
+      });
+      const rawTrace = (unbounded.find(m => m.role === 'assistant')!.content as string).split('<tool-trace>')[1] ?? '';
+      const budget = counter.countTokens(rawTrace) + 5;
+
+      const raw = ctx.buildTurnMessages('next', { model: 'm', contextWindow: 200_000, toolTraceReplayTokens: budget });
+      const claude = ctx.buildTurnMessages('next', {
+        model: 'claude-sonnet-5',
+        contextWindow: 200_000,
+        toolTraceReplayTokens: budget,
+      });
+
+      expect(raw.find(m => m.role === 'assistant')!.content as string).not.toContain('omitted');
+      expect(claude.find(m => m.role === 'assistant')!.content as string).toContain('omitted');
+    });
   });
 
   describe('multimodal user input', () => {
@@ -302,6 +335,60 @@ describe('ConversationContext', () => {
       // Tiny message body alone is under 80%, but a large system prompt pushes it over.
       expect(ctx.needsCompaction(0, { model: 'm', contextWindow: window }, 0.8)).toBe(false);
       expect(ctx.needsCompaction(900, { model: 'm', contextWindow: window }, 0.8)).toBe(true);
+    });
+  });
+
+  describe('calibrated token counting (Claude under-count fix)', () => {
+    function mediumSession(): Session {
+      const messages: Message[] = [];
+      for (let i = 0; i < 10; i++) {
+        messages.push(msg('user', `question ${i} ${'padding '.repeat(20)}`, i * 2));
+        messages.push(msg('assistant', `answer ${i} ${'padding '.repeat(20)}`, i * 2 + 1));
+      }
+      return session(messages);
+    }
+
+    it('compacts a Claude session at a window where a non-Claude one does not', () => {
+      const ctx = ConversationContext.fromSession(mediumSession());
+      // Raw weight under the unscaled counter (multiplier 1)...
+      const raw = ctx.estimateSessionTokens(0, { model: 'm', contextWindow: 1_000_000 });
+      // ...so a window sized to ~70% raw sits under 80% unscaled, but over it once calibrated x1.5.
+      const contextWindow = Math.floor(raw / 0.7);
+
+      expect(ctx.needsCompaction(0, { model: 'm', contextWindow }, 0.8)).toBe(false);
+      expect(ctx.needsCompaction(0, { model: 'claude-sonnet-5', contextWindow }, 0.8)).toBe(true);
+    });
+
+    it('scales the per-message estimate by the model multiplier', () => {
+      const rawCount = counter.countTokens('hello world, a short message');
+      const ctx = ConversationContext.fromSession(session([msg('user', 'hello world, a short message', 0)]));
+
+      expect(ctx.estimateSessionTokens(0, { model: 'm', contextWindow: 1_000 })).toBe(rawCount);
+      expect(ctx.estimateSessionTokens(0, { model: 'claude-sonnet-5', contextWindow: 1_000 })).toBe(
+        Math.ceil((rawCount * 150) / 100)
+      );
+    });
+
+    it('windows less history for a Claude model at the same budget', () => {
+      const messages: Message[] = [];
+      for (let i = 0; i < 10; i++) {
+        messages.push(msg('user', `question number ${i} with some padding words here`, i * 2));
+        messages.push(msg('assistant', `answer number ${i} with some padding words here`, i * 2 + 1));
+      }
+      const ctx = ConversationContext.fromSession(session(messages));
+      const raw = ctx.estimateSessionTokens(0, { model: 'm', contextWindow: 1_000_000 });
+      const contextWindow = Math.floor(raw / 1.2);
+
+      const rawKept = ctx.buildPreviousMessages('current', { model: 'm', contextWindow, reservedTokens: 0 });
+      const claudeKept = ctx.buildPreviousMessages('current', {
+        model: 'claude-sonnet-5',
+        contextWindow,
+        reservedTokens: 0,
+      });
+
+      expect(rawKept.length).toBeGreaterThan(0);
+      expect(claudeKept.length).toBeGreaterThan(0);
+      expect(claudeKept.length).toBeLessThan(rawKept.length);
     });
   });
 

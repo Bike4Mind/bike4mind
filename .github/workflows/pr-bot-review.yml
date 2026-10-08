@@ -37,8 +37,8 @@ jobs:
     # switch this to pull_request_target: it would check out the untrusted head
     # and run an agent over it.
     if: github.event.label.name == 'bot-review' || github.event.label.name == 'bot-review-fold'
-    # workflow-templates main, 2026-10-06
-    uses: Bike4Mind/workflow-templates/.github/workflows/pr-bot-review.yml@c77665bf0f35e26c1d66622f4322def5c3c009e3
+    # workflow-templates main, 2026-10-07
+    uses: Bike4Mind/workflow-templates/.github/workflows/pr-bot-review.yml@1043e062f7acd22229da5b60bdcd80e5101e4682
     secrets: inherit
     with:
       fold_mode: ${{ github.event.label.name == 'bot-review-fold' }}
@@ -50,3 +50,10 @@ jobs:
       verdict_on_clean: COMMENT
       changeset_guard: true
       runner_label: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+      # Workload identity federation. Unset the rule variable to fall back to the
+      # ANTHROPIC_API_KEY secret; with it set, the key is not sent and a failed
+      # exchange fails the review.
+      anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+      anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+      anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+      anthropic_workspace_id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
