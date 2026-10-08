@@ -136,9 +136,13 @@ async function getGeneratedImageUrl(storageKey: string, context: ToolContext): P
     // Freshly minted from `getSignedUrl` - trusted provenance for the self-host storage exemption.
     return { url, trustConfiguredStorageOrigin: true };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    // Only the refusal's own message reaches the model; a lookup failure (e.g. the DB) is logged instead.
+    if (!(error instanceof NotFoundError)) {
+      context.logger.error('[edit_image] Generated image ownership lookup failed', error);
+    }
+    const detail = error instanceof NotFoundError ? ` (${error.message})` : '';
     throw new Error(
-      `Could not resolve generated image "${storageKey}". Use the exact id from the "Recently generated images" system note, a fabFile ID from "Available Files", or a full URL. (${detail})`
+      `Could not resolve generated image "${storageKey}". Use the exact id from the "Recently generated images" system note, a fabFile ID from "Available Files", or a full URL.${detail}`
     );
   }
 }

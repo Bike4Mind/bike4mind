@@ -9,9 +9,12 @@ export type OwnedGeneratedImageContext = Pick<ToolContext, 'userId' | 'db' | 'im
  * signed URL, for a tool that hands the image to a provider (edit_image; video_generation next).
  *
  * Generated keys live in an owner-less bucket, so the key alone proves nothing. The caller must
- * OWN it: a quest referencing the key belongs to a session whose `userId` is the caller. Unlike
- * userCanAccessGeneratedImage (apps/client/server/utils/generatedImageAccess.ts), which also serves
- * share recipients for viewing, a share does not count here - a tool call derives new content.
+ * own a session whose history references the key: a quest holding it belongs to a session whose
+ * `userId` is the caller. Being a share recipient does not count - a tool call derives new content -
+ * but cloning a shared session or importing a notebook copies `images` into a session the caller
+ * owns, so this is "owns a session that references it", not "generated it".
+ * The lookup chain mirrors userCanAccessGeneratedImage (apps/client/server/utils/generatedImageAccess.ts),
+ * which additionally serves share recipients for viewing - keep the two in sync.
  * Caveat: this guards the bare-key route only. While the CDN serves `/generated/<key>` publicly
  * (infra/buckets.ts), anyone holding a key can fetch it directly, so this is not yet a
  * confidentiality boundary.

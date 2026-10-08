@@ -45,6 +45,35 @@ describe('resolveOwnedGeneratedImageUrl', () => {
     expect(getSignedUrl).not.toHaveBeenCalled();
   });
 
+  it('signs a key referenced by several sessions when the caller owns any one of them', async () => {
+    const { context } = createContext({
+      sessionIds: ['s1', 's2'],
+      sessions: [{ userId: 'someone-else' }, { userId: 'u1' }],
+    });
+
+    await expect(resolveOwnedGeneratedImageUrl(OWNED_KEY, context)).resolves.toBe(SIGNED_URL);
+  });
+
+  it('refuses when the caller has no user id, even against a session with an empty owner', async () => {
+    const { context, findSessionIdsByImage, getSignedUrl } = createContext({ sessions: [{ userId: '' }] });
+    context.userId = '';
+
+    await expect(resolveOwnedGeneratedImageUrl(OWNED_KEY, context)).rejects.toThrow(NotFoundError);
+    expect(findSessionIdsByImage).not.toHaveBeenCalled();
+    expect(getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the quest lookup', 'quests'],
+    ['the session lookup', 'sessions'],
+  ] as const)('rejects without signing when %s fails', async (_label, failing) => {
+    const { context, findSessionIdsByImage, findAllByIds, getSignedUrl } = createContext();
+    (failing === 'quests' ? findSessionIdsByImage : findAllByIds).mockRejectedValue(new Error('db down'));
+
+    await expect(resolveOwnedGeneratedImageUrl(OWNED_KEY, context)).rejects.toThrow('db down');
+    expect(getSignedUrl).not.toHaveBeenCalled();
+  });
+
   it('refuses a key the caller reaches only as a share recipient', async () => {
     const { context, getSignedUrl } = createContext({
       sessions: [{ userId: 'someone-else', users: [{ userId: 'u1' }] }],

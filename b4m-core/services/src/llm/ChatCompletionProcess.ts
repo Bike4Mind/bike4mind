@@ -3349,6 +3349,9 @@ export class ChatCompletionProcess {
       // describe a tool the model never received.
       const navigateViewAvailable = allTools?.some(t => t.toolSchema.name === 'navigate_view') ?? false;
       const editImageAvailable = allTools?.some(t => t.toolSchema.name === 'edit_image') ?? false;
+      // edit_image resolves a generated key only for the session's owner (resolveOwnedGeneratedImageUrl),
+      // so a share recipient must not be told to edit keys it would be refused.
+      const callerOwnsSession = session.userId === this.user.id;
 
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
@@ -3531,7 +3534,7 @@ export class ChatCompletionProcess {
         // only because edit_image is never auto-added, which is exactly the assumption
         // that broke the view registry once navigate_view became auto-added.
         recentImages:
-          editImageAvailable && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+          editImageAvailable && callerOwnsSession && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
             ? [
                 {
                   role: 'system' as const,

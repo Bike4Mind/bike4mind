@@ -469,6 +469,23 @@ describe('imageEditTool - generated-image key ownership', () => {
     expect(context.imageGenerateStorage.getSignedUrl).not.toHaveBeenCalled();
   });
 
+  it('refuses when the owner lookup fails - nothing reserved, signed or sent, no DB detail to the model', async () => {
+    const context = createFakeContextWithGeneratedImageOwner('u1');
+    (context.db.quests as { findSessionIdsByImage: ReturnType<typeof vi.fn> }).findSessionIdsByImage.mockRejectedValue(
+      new Error('db down')
+    );
+
+    const error = await buildToolFn(context)({ image: GENERATED_KEY, prompt: 'x' }).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/Could not resolve generated image/);
+    expect((error as Error).message).not.toMatch(/db down/);
+    expect(context.logger.error).toHaveBeenCalled();
+    expect(context.onStart).not.toHaveBeenCalled();
+    expect(context.imageGenerateStorage.getSignedUrl).not.toHaveBeenCalled();
+    expect(mockAxiosGet).not.toHaveBeenCalled();
+    expect(mockEditSpy).not.toHaveBeenCalled();
+  });
+
   it('refuses a generated key when the host did not wire the owner lookup', async () => {
     const context = createFakeContext();
 

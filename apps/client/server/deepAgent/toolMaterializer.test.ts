@@ -62,6 +62,7 @@ vi.mock('@server/utils/storage', () => ({
 }));
 
 const { createDeepAgentToolMaterializer } = await import('./toolMaterializer');
+const { questRepository, sessionRepository } = await import('@bike4mind/database');
 
 // A minimal backend stand-in; never invoked by the paths under test.
 const fakeLlm = { complete: vi.fn() } as unknown as ICompletionBackend;
@@ -119,10 +120,13 @@ describe('createDeepAgentToolMaterializer', () => {
     // Without it the resolver fails closed, so owners are refused with only a logged warning.
     await materialize()(['edit_image'], 'owner-1');
     const toolDeps = buildSharedToolsSpy.mock.calls[0]?.[0] as {
-      db: { quests?: { findSessionIdsByImage?: unknown }; sessions?: { findAllByIds?: unknown } };
+      db: { quests?: unknown; sessions?: { findAllByIds: (ids: string[]) => unknown } };
     };
-    expect(toolDeps.db.quests?.findSessionIdsByImage).toBeTypeOf('function');
-    expect(toolDeps.db.sessions?.findAllByIds).toBeTypeOf('function');
+    expect(toolDeps.db.quests).toBe(questRepository);
+    // Narrow by design: only the lookup, never incrementImageCount.
+    expect(Object.keys(toolDeps.db.sessions ?? {})).toEqual(['findAllByIds']);
+    toolDeps.db.sessions?.findAllByIds(['s1']);
+    expect(sessionRepository.findAllByIds).toHaveBeenCalledWith(['s1']);
   });
 
   it('hands the lake write tools their audit adapters and no organization', async () => {

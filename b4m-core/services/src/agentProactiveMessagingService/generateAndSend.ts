@@ -143,9 +143,10 @@ export async function generateAndSendProactiveMessage({
           usageEvents: db.usageEvents,
           organizations: db.organizations,
           scopedSettings: db.scopedSettings,
-          // Owner lookup for edit_image's generated-image keys (resolveOwnedGeneratedImageUrl).
+          // Owner lookup for edit_image's generated-image keys (resolveOwnedGeneratedImageUrl). Narrow on
+          // purpose: the whole repo would enable incrementImageCount for images no quest here holds.
           quests: db.quests,
-          sessions: db.sessions,
+          sessions: { findAllByIds: db.sessions.findAllByIds.bind(db.sessions) },
         },
       },
       storage,
