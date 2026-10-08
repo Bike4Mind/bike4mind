@@ -37,7 +37,8 @@ const bodySchema = z.object({
       principalId: z.string(),
       ownerUserId: z.string(),
     })
-    .optional(),
+    // nullish, not optional: the first page's `nextAfter` is null and the loop feeds it straight back.
+    .nullish(),
 });
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
@@ -49,7 +50,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
   }
-  const { execute, after } = parsed.data;
+  const execute = parsed.data.execute;
+  const after = parsed.data.after ?? undefined;
 
   const totals = { total: 0, alreadyCurrent: 0, truncated: 0, reembedded: 0, backfilled: 0, noFact: 0, failed: 0 };
   const failedPrincipals: Array<PrincipalCursor & { error: string }> = [];

@@ -84,6 +84,12 @@ describe('/api/admin/mementos/reembed-ledger', () => {
     expect(res._getStatusCode()).toBe(400);
   });
 
+  it('accepts the null nextAfter a first page returns as a fresh walk', async () => {
+    const res = await post({ after: null });
+    expect(res._getStatusCode()).toBe(200);
+    expect(listPrincipals).toHaveBeenCalledWith(expect.any(String), { after: undefined, limit: 25 });
+  });
+
   it('answers an empty page with the full shape and hasMore false', async () => {
     const data = (await post({}))._getJSONData();
     expect(data).toMatchObject({
