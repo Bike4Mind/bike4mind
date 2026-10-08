@@ -428,6 +428,15 @@ describe('POST /api/hearth/events machine payload validation', () => {
     ).rejects.toThrow(/does not match hearth.presence@1/);
     expect(hearthLogAppendMock).not.toHaveBeenCalled();
   });
+
+  it('treats a schema name that shadows an Object.prototype key as unknown', async () => {
+    const res = makeRes();
+    await post()(
+      makeReq({ channelId: 'ch-1', human: { text: 'x' }, machine: { schema: 'constructor', payload: {} } }),
+      res
+    );
+    expect(res.statusCode).toBe(201);
+  });
 });
 
 describe('POST /api/hearth/events presence projection', () => {

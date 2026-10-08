@@ -90,7 +90,9 @@ const PostEventSchema = z
         path: ['machine', 'schema'],
       });
     }
-    const payloadSchema = schema ? knownMachinePayloadSchemas[schema] : undefined;
+    // hasOwn: a caller-chosen name like 'constructor' must not hit Object.prototype.
+    const payloadSchema =
+      schema && Object.hasOwn(knownMachinePayloadSchemas, schema) ? knownMachinePayloadSchemas[schema] : undefined;
     if (payloadSchema && !payloadSchema.safeParse(b.machine?.payload).success) {
       ctx.addIssue({
         code: 'custom',
