@@ -28,7 +28,10 @@ export interface FunctionDefaultArgs {
   environment: Record<string, string>;
 }
 
-/** A Function's `logging` config, or `false` when log forwarding is disabled outright. */
+/**
+ * A Function's `logging` config when log forwarding is enabled. Disabling it
+ * outright is the separate `false` input handled by `resolveDefaultLogging`.
+ */
 export interface FunctionLogging {
   retention?: unknown;
   logGroup?: unknown;
@@ -60,6 +63,10 @@ export function buildFunctionDefaults(options: FunctionDefaultsOptions = {}): Fu
  * production, 1 week elsewhere. A config that already sets `retention` or a
  * `logGroup` is returned unchanged - SST rejects those two together, and a
  * custom log group owns its own retention - as is `logging: false`.
+ *
+ * Unrelated to DEFAULT_LOG_RETENTION, the shorter default buildFunctionDefaults
+ * bakes into product Lambdas: an explicit retention always wins here, so the
+ * two cannot conflict.
  */
 export function resolveDefaultLogging<T extends FunctionLogging>(
   logging: T | false | undefined,
