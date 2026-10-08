@@ -132,4 +132,13 @@ describe('directories and modules moved into apps/workers stay moved', () => {
       .map(({ file, handler }) => `${file}: ${handler}`);
     expect(stale, 'retarget these handlers at apps/workers/src').toEqual([]);
   });
+
+  it('every apps/workers infra handler resolves to a real module file', () => {
+    // A handler path can survive a rename and still point at a file that no longer exists; only a deploy fails.
+    const missing = infraHandlers()
+      .filter(({ handler }) => handler.startsWith('apps/workers/'))
+      .filter(({ handler }) => !fs.existsSync(path.join(REPO_ROOT, handler.replace(/\.[^.]+$/, '.ts'))))
+      .map(({ file, handler }) => `${file}: ${handler}`);
+    expect(missing, 'retarget these handlers at an existing file').toEqual([]);
+  });
 });
