@@ -7,6 +7,7 @@ import {
   GENERATED_IMAGE_EXTENSION_RE,
   ImageModels,
   ImagePromptResolutionSchema,
+  joinReplySlots,
   PROMPT_TEXT_MAX,
   questReplyText,
   ttsRequestSchema,
@@ -408,7 +409,7 @@ const isImageSettled = (q: QuestResponse) => isSettled(q) || (!q.status && !!q.i
 
 // Derived here rather than read from the poll's `reply` because older servers return the stored
 // scalar, which can be a stale rapid-reply prefix of the streamed slots.
-const replyText = (q: QuestResponse) => questReplyText(q) ?? '';
+const replyText = (q: QuestResponse) => questReplyText(q, joinReplySlots) ?? '';
 
 const questRef = (questId: string, notebookId?: string) =>
   `quest ${questId}${notebookId ? `, notebook ${notebookId}` : ''}`;

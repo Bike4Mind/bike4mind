@@ -567,7 +567,7 @@ describe('sendMessage', () => {
     expect(result.reply).toBe('ChatCompletion dispatch failed');
   });
 
-  it('hides reasoning, strips the choices block and joins the slots without a separator', async () => {
+  it('hides reasoning, strips the choices block and separates the slots', async () => {
     const choices = '```choices\n[{"label":"A","description":"a"},{"label":"B","description":"b"}]\n```';
     const getQuest = vi.fn().mockResolvedValue({
       ...doneQuest,
@@ -577,7 +577,19 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
 
-    expect(result.reply).toBe('Checking the docs. The answer is 42.');
+    expect(result.reply).toBe('Checking the docs. \n\nThe answer is 42.');
+  });
+
+  it('puts a paragraph break after a slot that ends in a closing code fence', async () => {
+    const getQuest = vi.fn().mockResolvedValue({
+      ...doneQuest,
+      reply: null,
+      replies: ['Here is the script:\n```bash\necho hi\n```', 'I ran it and it printed hi.'],
+    });
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
+
+    expect(result.reply).toBe('Here is the script:\n```bash\necho hi\n```\n\nI ran it and it printed hi.');
   });
 
   it('polls every interval for the first 30s, then backs off to 5s', async () => {

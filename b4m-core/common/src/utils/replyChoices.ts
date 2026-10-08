@@ -184,14 +184,20 @@ export function stripChoicesFromReplies(replies: readonly string[]): {
  * POST /api/chat `wait: true`, and the CLI's send_message reply. The chat pipeline streams into
  * `replies[]` and leaves `quest.reply` null on an ordinary success (or a stale rapid-reply prefix),
  * so the scalar is derived from the slots, matching what setErrorReply in ChatCompletionProcess
- * writes. Slots join with no separator because they are one streamed answer split at tool calls.
- * Paths that write only `reply` (pre-flight invoke error, empty recovery) have no visible slots,
- * so the stored scalar is the fallback.
+ * writes, so the server paths keep its bare join. A reader that renders the text as markdown passes
+ * `joinReplySlots` instead (see streamVisibility.ts): a bare join glues a slot's closing code fence
+ * to the next slot's text. Paths that write only `reply` (pre-flight invoke error, empty recovery)
+ * have no visible slots, so the stored scalar is the fallback.
  */
-export function questReplyText(quest: { reply?: string | null; replies?: readonly string[] | null }): string | null {
-  const visible = stripChoicesFromReplies(quest.replies ?? [])
-    .replies.map(slot => visibleReplyText(slot))
-    .join('');
+export function questReplyText(
+  quest: { reply?: string | null; replies?: readonly string[] | null },
+  joinSlots: (slots: string[]) => string = slots => slots.join('')
+): string | null {
+  const visible = joinSlots(
+    stripChoicesFromReplies(quest.replies ?? [])
+      .replies.map(slot => visibleReplyText(slot))
+      .filter(Boolean)
+  );
   return visible || (quest.reply ?? null);
 }
 
