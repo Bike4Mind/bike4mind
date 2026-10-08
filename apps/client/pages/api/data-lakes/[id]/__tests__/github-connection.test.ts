@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ConflictError, InternalServerError } from '@server/utils/errors';
+import { ConflictError, InternalServerError, NotFoundError } from '@server/utils/errors';
 
 // Unit test of the per-lake GitHub connection status/install/disconnect route. Repo + auth gate +
 // the githubLakeConnection lib (which has its own dedicated unit tests) are mocked.
@@ -19,7 +19,16 @@ const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   assertLakeWritable: vi.fn(),
   updateDataLake: vi.fn(),
-  withTransaction: vi.fn(async (fn: () => Promise<unknown>) => fn()),
+  inTransaction: false,
+  updateDataLakeInTxn: false,
+  withTransaction: vi.fn(async (fn: () => Promise<unknown>) => {
+    h.inTransaction = true;
+    try {
+      return await fn();
+    } finally {
+      h.inTransaction = false;
+    }
+  }),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -168,8 +177,14 @@ describe('/api/data-lakes/[id]/github-connection', () => {
     beforeEach(() => {
       h.getGitHubLakeAppConfig.mockReturnValue({ slug: 'test-app', clientId: 'client-1' });
       h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: false });
-      h.assertLakeAccess.mockResolvedValue({ id: 'lake1' });
-      h.updateDataLake.mockResolvedValue({ id: 'lake1', origin: 'connector-fed' });
+      h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active' });
+      h.inTransaction = false;
+      h.updateDataLakeInTxn = false;
+      // Records whether it ran inside the transaction so the test can pin the wrapper.
+      h.updateDataLake.mockImplementation(async () => {
+        h.updateDataLakeInTxn = h.inTransaction;
+        return { id: 'lake1', origin: 'connector-fed' };
+      });
       h.buildGitHubLakeAuthorizeUrl.mockReturnValue(
         'https://github.com/login/oauth/authorize?client_id=client-1&state=abc'
       );
@@ -218,11 +233,24 @@ describe('/api/data-lakes/[id]/github-connection', () => {
     describe('ensureConnectorFed', () => {
       const switchReq = (body: unknown = { ensureConnectorFed: true }) => makeReq('POST', { body });
 
-      it('does not let a plain start through a curated lake', async () => {
+      it('a plain start passes allowCurated: false', async () => {
         const { res } = makeRes();
         await run(makeReq('POST', { body: '' }), res);
         expect(h.resolveConnectableLake).toHaveBeenCalledWith(expect.anything(), 'lake1', { allowCurated: false });
         expect(h.updateDataLake).not.toHaveBeenCalled();
+      });
+
+      it('passes allowCurated: false for an explicit ensureConnectorFed: false', async () => {
+        const { res } = makeRes();
+        await run(makeReq('POST', { body: { ensureConnectorFed: false } }), res);
+        expect(h.resolveConnectableLake).toHaveBeenCalledWith(expect.anything(), 'lake1', { allowCurated: false });
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+      });
+
+      it('rejects an unknown body key before any check runs', async () => {
+        const { res } = makeRes();
+        await expect(run(makeReq('POST', { body: { foo: 1 } }), res)).rejects.toThrow();
+        expect(h.resolveConnectableLake).not.toHaveBeenCalled();
       });
 
       it('switches a curated lake to connector-fed after the start checks pass, then returns the authorizeUrl', async () => {
@@ -230,13 +258,20 @@ describe('/api/data-lakes/[id]/github-connection', () => {
         const { res, json } = makeRes();
         await run(switchReq(), res);
         expect(h.resolveConnectableLake).toHaveBeenCalledWith(expect.anything(), 'lake1', { allowCurated: true });
-        expect(h.assertLakeWritable).toHaveBeenCalledWith({ id: 'lake1' });
+        expect(h.assertLakeAccess).toHaveBeenCalledWith(
+          'lake1',
+          { userId: 'u1' },
+          expect.objectContaining({ db: expect.anything() })
+        );
+        expect(h.assertLakeWritable).toHaveBeenCalledWith({ id: 'lake1', status: 'active' });
         expect(h.updateDataLake).toHaveBeenCalledWith(
           expect.objectContaining({ auditPrincipal: { kind: 'user' } }),
           'lake1',
           { origin: 'connector-fed' },
           expect.anything()
         );
+        // The write must run inside the transaction that re-gates access against live grants.
+        expect(h.updateDataLakeInTxn).toBe(true);
         expect(h.resolveConnectableLake.mock.invocationCallOrder[0]).toBeLessThan(
           h.updateDataLake.mock.invocationCallOrder[0]
         );
@@ -264,13 +299,40 @@ describe('/api/data-lakes/[id]/github-connection', () => {
         expect(h.updateDataLake).not.toHaveBeenCalled();
       });
 
-      it('does not mint an authorizeUrl when the switch itself is refused', async () => {
+      it('does not return an authorizeUrl when the switch itself is refused', async () => {
         h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
         h.updateDataLake.mockRejectedValue(new Error('You do not have permission to update this data lake'));
         const { res, json } = makeRes();
         await expect(run(switchReq(), res)).rejects.toThrow(/permission/);
-        expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
         expect(json).not.toHaveBeenCalled();
+      });
+
+      it('writes nothing and returns no authorizeUrl when the in-transaction access re-check refuses', async () => {
+        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.assertLakeAccess.mockRejectedValue(new NotFoundError('Data lake not found'));
+        const { res, json } = makeRes();
+        await expect(run(switchReq(), res)).rejects.toThrow(/not found/i);
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+        expect(json).not.toHaveBeenCalled();
+      });
+
+      it('writes nothing when the lake was archived between the resolve and the switch', async () => {
+        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'archived' });
+        const { res, json } = makeRes();
+        await expect(run(switchReq(), res)).rejects.toThrow(/'archived' status/i);
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+        expect(json).not.toHaveBeenCalled();
+      });
+
+      it('writes nothing when the authorize URL cannot be minted for a curated switch', async () => {
+        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.buildGitHubLakeAuthorizeUrl.mockImplementation(() => {
+          throw new Error('Missing JWT_SECRET configuration for OAuth state signing');
+        });
+        const { res } = makeRes();
+        await expect(run(switchReq(), res)).rejects.toThrow(/JWT_SECRET/);
+        expect(h.updateDataLake).not.toHaveBeenCalled();
       });
 
       it('rejects a malformed body before any check runs', async () => {
