@@ -15,7 +15,7 @@ import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { isValidObjectId } from '@server/utils/objectId';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { UnprocessableEntityError } from '@server/utils/errors';
 import { toPublicProject } from '@server/projects/toPublicProject';
 
@@ -63,7 +63,7 @@ const createRoute = nextRouteForContract(createProjectContract, {
     throw error;
   }
 
-  await logProjectCreated(req.user.id, project, { ability: req.ability });
+  await logProjectCreated(req.user.id, project, { ability: req.ability }, req.logger);
 
   return res.status(201).json(toPublicProject(project));
 });
@@ -72,21 +72,24 @@ const createRoute = nextRouteForContract(createProjectContract, {
 async function logProjectCreated(
   userId: string,
   project: { id: string; name: string; sessionIds: string[]; fileIds: string[] },
-  context: Parameters<typeof logEvent>[1]
+  context: Parameters<typeof logEventSafe>[1],
+  logger: Parameters<typeof logEventSafe>[2]
 ) {
   const projectMeta = { projectId: project.id, projectName: project.name };
   await Promise.all([
-    logEvent({ userId, type: ProjectEvents.CREATE_PROJECT, metadata: projectMeta }, context),
+    logEventSafe({ userId, type: ProjectEvents.CREATE_PROJECT, metadata: projectMeta }, context, logger),
     ...project.sessionIds.map(contentId =>
-      logEvent(
+      logEventSafe(
         { userId, type: ProjectEvents.ADD_SESSION, metadata: { ...projectMeta, contentId, contentType: 'session' } },
-        context
+        context,
+        logger
       )
     ),
     ...project.fileIds.map(contentId =>
-      logEvent(
+      logEventSafe(
         { userId, type: ProjectEvents.ADD_FILE, metadata: { ...projectMeta, contentId, contentType: 'file' } },
-        context
+        context,
+        logger
       )
     ),
   ]);
