@@ -135,8 +135,8 @@ export const updateProjectContract = defineEndpoint({
   operationId: 'updateProject',
   summary: 'Update a project',
   description:
-    'Renames a project you own or changes its description. Omitted fields are left unchanged. Only the ' +
-    'owner can update a project. Unknown body fields are rejected.',
+    'Renames a project you own or changes its description. Omitted fields are left unchanged, and an empty ' +
+    'body changes nothing. Only the owner can update a project. Unknown body fields are rejected.',
   tags: ['Projects'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.WRITE_PROJECTS],

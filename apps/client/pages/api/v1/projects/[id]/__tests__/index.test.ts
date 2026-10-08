@@ -198,6 +198,20 @@ describe('PATCH /api/v1/projects/{id}', () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
+  it('treats an empty body as a no-op: no write, no analytics event', async () => {
+    const res = await call('PATCH', PROJECT_ID, {});
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ id: PROJECT_ID, name: 'Research', description: 'desc' });
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for an empty body on a project only shared with the caller', async () => {
+    mockFindByIdAndUserId.mockResolvedValue(null);
+    expect((await errorOf(PROJECT_ID, 'PATCH', {})).statusCode).toBe(404);
+  });
+
   it('answers 404 for a malformed or unreadable id', async () => {
     mockFindAccessibleById.mockResolvedValue(null);
     expect((await errorOf('not-an-id', 'PATCH', { name: 'x' })).statusCode).toBe(404);

@@ -17,7 +17,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { logEventSafe } from '@server/utils/analyticsLog';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
 import { toPublicProject } from '@server/projects/toPublicProject';
 
 // Named so every project id shares one bucket per method instead of one per pathname.
@@ -39,6 +39,13 @@ const updateRoute = nextRouteForContract(updateProjectContract, {
 }).patch(async (req, res) => {
   const { id } = await getAccessibleProject(req.user.id, req.validatedParams.id);
   const { name } = req.validated;
+
+  // An empty body is a no-op: no updatedAt bump and no analytics event, but still owner-only like a real write.
+  if (Object.keys(req.validated).length === 0) {
+    const owned = await projectRepository.findByIdAndUserId(id, req.user.id);
+    if (!owned) throw new NotFoundError('Project not found');
+    return res.json(toPublicProject(owned));
+  }
 
   let project;
   try {
