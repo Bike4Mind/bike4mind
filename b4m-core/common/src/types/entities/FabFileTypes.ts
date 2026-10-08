@@ -9,6 +9,27 @@ export type MimeType =
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
 
+// The Files type filter. getMimeTypeFilter (packages/database/src/queries/fabFileSearchQuery.ts) maps every value
+// to a query and FILE_TYPE_OPTIONS (apps/client/app/components/Files/Browser/constants.ts) labels every value.
+export const FAB_FILE_TYPE_FILTERS = [
+  'text',
+  'pdf',
+  'url',
+  'image',
+  'excel',
+  'word',
+  'json',
+  'csv',
+  'markdown',
+  'code',
+  'audio',
+  'video',
+] as const;
+export type FabFileTypeFilter = (typeof FAB_FILE_TYPE_FILTERS)[number];
+
+export const isFabFileTypeFilter = (value: unknown): value is FabFileTypeFilter =>
+  typeof value === 'string' && (FAB_FILE_TYPE_FILTERS as readonly string[]).includes(value);
+
 export enum KnowledgeType {
   /**
    * A knowledge that is from a URL.
@@ -1224,7 +1245,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+      type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)

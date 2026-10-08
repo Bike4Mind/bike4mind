@@ -20,6 +20,9 @@ const handler = baseApi()
    */
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
+      // Response depends on who asks, so a shared CDN cache must never store it.
+      res.setHeader('Cache-Control', 'private, no-store');
+
       const id = req.query.id;
 
       if (!id) {
@@ -31,10 +34,16 @@ const handler = baseApi()
       // while the invite has no token of its own, so a tokenized invite cannot be opened by
       // guessing ObjectIds around a real one.
       const invite = await sharingService.resolveRedeemableInvite(id, { db: { invites: inviteRepository } });
-      // A caller who is not a named recipient or share-authorized gets the same 404 as a missing
-      // or malformed id: a 403 would confirm the id exists, and splitting 400 from 404 between
-      // malformed and valid-but-unauthorized is the same class of signal.
-      if (!invite || !(await canViewInvite(req.user, invite))) {
+      // Strangers and bad ids get the same 404 so ids cannot be probed; an expired invite returns
+      // 410 only to callers who could otherwise view it (see canViewInvite).
+      if (!invite) {
+        return res.status(404).json({ message: 'Invite Not Found' });
+      }
+      const access = await canViewInvite(req.user, invite);
+      if (access === 'expired') {
+        return res.status(410).json({ message: 'Invite has expired' });
+      }
+      if (access !== 'allowed') {
         return res.status(404).json({ message: 'Invite Not Found' });
       }
 

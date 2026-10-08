@@ -115,9 +115,14 @@ export function getLlmByModel(
         case ChatModels.CLAUDE_4_5_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_6_SONNET_BEDROCK:
         case ChatModels.CLAUDE_5_SONNET_BEDROCK:
+        case ChatModels.CLAUDE_5_5_SONNET_BEDROCK:
         case ChatModels.CLAUDE_4_6_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_7_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_8_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_FABLE_5_BEDROCK:
+        case ChatModels.CLAUDE_FABLE_5_1_BEDROCK:
+        case ChatModels.CLAUDE_5_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_5_5_OPUS_BEDROCK:
           backend = new AnthropicBedrockBackend();
           break;
         case ChatModels.LLAMA3_INSTRUCT_8B_V1:

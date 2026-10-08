@@ -26,6 +26,8 @@ interface ImageBrowserModalProps {
   onSelectImage: (file: IFabFileDocument) => void;
   onApplyImage: (file: IFabFileDocument) => void;
   onSearch: () => void;
+  title?: string;
+  emptyHint?: string;
 }
 
 const ImageBrowserModal: React.FC<ImageBrowserModalProps> = ({
@@ -39,6 +41,8 @@ const ImageBrowserModal: React.FC<ImageBrowserModalProps> = ({
   onSelectImage,
   onApplyImage,
   onSearch,
+  title = 'Select Portrait Image',
+  emptyHint = 'Upload images through the File Browser to use them as agent portraits',
 }) => {
   return (
     <Modal open={isOpen} onClose={onClose}>
@@ -53,8 +57,8 @@ const ImageBrowserModal: React.FC<ImageBrowserModalProps> = ({
         }}
       >
         <ModalClose onClick={onClose} />
-        <Typography level="h4" mb={2}>
-          Select Portrait Image
+        <Typography level="h4" mb={2} data-testid="image-browser-modal-title">
+          {title}
         </Typography>
 
         <Box sx={{ mb: 2, display: 'flex', gap: 1 }}>
@@ -75,8 +79,12 @@ const ImageBrowserModal: React.FC<ImageBrowserModalProps> = ({
         ) : imageFiles.length === 0 ? (
           <Box sx={{ p: 4, textAlign: 'center' }}>
             <Typography level="body-lg">No images found</Typography>
-            <Typography level="body-sm" sx={{ mt: 1, color: 'text.secondary' }}>
-              Upload images through the File Browser to use them as agent portraits
+            <Typography
+              level="body-sm"
+              sx={{ mt: 1, color: 'text.secondary' }}
+              data-testid="image-browser-modal-empty-hint"
+            >
+              {emptyHint}
             </Typography>
           </Box>
         ) : (
