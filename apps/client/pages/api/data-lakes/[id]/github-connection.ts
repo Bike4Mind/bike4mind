@@ -10,14 +10,14 @@ import {
   resolveConnectableLake,
   toGitHubLakeConnectionResponse,
 } from '@server/integrations/github/dataLake/githubLakeConnection';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess, verifyOrgAdminRead } from '@server/utils/orgAccess';
 import { NotFoundError } from '@server/utils/errors';
 import { Request } from 'express';
 
 /**
  * The lake's connection, scoped to the lake's org. findByDataLakeIdAny is global; the tenant
- * boundary is the caller's verifyOrgAccess, and the org comparison here is defence in depth only
- * (same contract as drive-connection.ts findLakeConnection).
+ * boundary is the caller's org gate (verifyOrgAdminRead on GET, verifyOrgAccess on DELETE), and the
+ * org comparison here is defence in depth only (same contract as drive-connection.ts findLakeConnection).
  */
 async function findLakeConnection(lakeId: string, organizationId: string) {
   const conn = await orgGitHubLakeConnectionRepository.findByDataLakeIdAny(lakeId);
@@ -28,7 +28,8 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
 }
 
 /**
- * GET    /api/data-lakes/:id/github-connection -> { connection: IOrgGitHubLakeConnectionResponse | null }
+ * GET    /api/data-lakes/:id/github-connection -> { connection: IOrgGitHubLakeConnectionResponse | null,
+ *        canManage: boolean } (always false for a personal lake: GitHub lakes are org-only, so there is nothing to manage)
  * POST   /api/data-lakes/:id/github-connection -> { authorizeUrl } (starts the connect, see
  *        buildGitHubLakeAuthorizeUrl. The callback page relays GitHub's return to POST
  *        /api/data-lakes/github-callback; the picker then lists .../repositories and binds via
@@ -39,8 +40,9 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
  *        when the lake has no connection
  *
  * Mirrors drive-connection.ts: GET answers a personal lake with a null connection (it genuinely has
- * none), so a 404 always means the lake is missing or the caller is not an org owner/manager. POST
- * and DELETE are org owner/manager (or platform admin) only.
+ * none), so a 404 always means the lake is missing or the caller has no standing on its org. GET also
+ * admits an appointed org admin (the view is credential-free); POST and DELETE are org owner/manager
+ * (or platform admin) only, and `canManage` tells the client which controls to offer.
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -52,16 +54,16 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       throw new NotFoundError('Data lake not found');
     }
     if (!lake.organizationId) {
-      return res.json({ connection: null });
+      return res.json({ connection: null, canManage: false });
     }
-    await verifyOrgAccess(req.user, lake.organizationId);
+    const { canManage } = await verifyOrgAdminRead(req.user, lake.organizationId);
     const conn = await findLakeConnection(lake.id, lake.organizationId);
     if (!conn) {
-      return res.json({ connection: null });
+      return res.json({ connection: null, canManage });
     }
     // Rides along for the disconnect confirmation, which must say how many files the purge deletes.
     const fileCount = await fabFileRepository.countByGitHubConnectionIdInDataLake(conn.id, lake.datalakeTag);
-    return res.json({ connection: toGitHubLakeConnectionResponse(conn, fileCount) });
+    return res.json({ connection: toGitHubLakeConnectionResponse(conn, fileCount), canManage });
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);

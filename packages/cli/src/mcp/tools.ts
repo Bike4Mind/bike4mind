@@ -1,14 +1,26 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { isAxiosError } from 'axios';
 import {
   DEFAULT_TTS_PROVIDER,
+  GENERATED_IMAGE_EXTENSION_RE,
+  ImageModels,
+  ImagePromptResolutionSchema,
   PROMPT_TEXT_MAX,
   ttsRequestSchema,
   type GeneratedAudioResponse,
   type TTSRequest,
 } from '@bike4mind/common';
-import { B4mApiClient, mapApiError, type QuestResponse, type RawDataLake, type RawNotebook } from './b4mApiClient.js';
+import {
+  B4mApiClient,
+  mapApiError,
+  parseRetryAfterSeconds,
+  type QuestResponse,
+  type RawDataLake,
+  type RawNotebook,
+  type RawProject,
+} from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
 export interface ToolMeta {
@@ -38,6 +50,25 @@ export const TOOL_META: ToolMeta[] = [
     description:
       'Create a new notebook, optionally inside a project or grounded in a data lake (dataLakeId, see list_lakes). Defaults the name to "New Notebook" when omitted.',
     scope: 'notebooks:write',
+  },
+  {
+    name: 'list_projects',
+    title: 'List projects',
+    description: 'List the Bike4Mind projects the caller can access, including ones shared with them.',
+    scope: 'projects:read',
+  },
+  {
+    name: 'get_project',
+    title: 'Get project',
+    description: 'Fetch a single project by id.',
+    scope: 'projects:read',
+  },
+  {
+    name: 'create_project',
+    title: 'Create project',
+    description:
+      'Create a new project. Pass the returned id as projectId to create_notebook to create notebooks inside it.',
+    scope: 'projects:write',
   },
   {
     name: 'send_message',
@@ -80,6 +111,13 @@ export const TOOL_META: ToolMeta[] = [
       'Synthesize speech from text. Returns a saved audio file with a signed download URL when available, otherwise audio inline.',
     scope: 'ai:generate',
   },
+  {
+    name: 'generate_image',
+    title: 'Generate image',
+    description:
+      "Generate an image from a text prompt and wait for the render. Returns the quest and notebook ids plus each image's file name and download URL. Image names are not file ids and do not work with get_file.",
+    scope: 'ai:generate',
+  },
 ];
 
 export const TOOL_NAMES = TOOL_META.map(t => t.name);
@@ -101,6 +139,23 @@ const createNotebookShape = {
     .string()
     .optional()
     .describe("Data lake id or slug to ground the notebook in (see list_lakes); seeds the lake's retrieval defaults"),
+};
+
+const listProjectsShape = {
+  search: z.string().optional().describe('Filter projects by name'),
+  limit: z.number().int().min(1).max(100).default(25).describe('Maximum projects to return'),
+  page: z.number().int().min(1).default(1).describe('1-based page number; request the next page when hasMore is true'),
+};
+
+const getProjectShape = {
+  projectId: z.string().describe('The project id'),
+};
+
+const createProjectShape = {
+  name: z.string().min(1).describe('Name for the new project; must be unique among your projects'),
+  description: z.string().min(1).describe('Short description of the project'),
+  sessionIds: z.array(z.string()).optional().describe('Notebook (session) ids to add to the project'),
+  fileIds: z.array(z.string()).optional().describe('File ids to add to the project'),
 };
 
 const sendMessageShape = {
@@ -160,6 +215,17 @@ const generateSoundEffectShape = {
   format: z.string().optional().describe('Provider output encoding token, e.g. mp3_44100_128'),
 };
 
+const generateImageShape = {
+  prompt: z.string().min(1).describe('Text description of the image to generate'),
+  model: z.string().default(ImageModels.GPT_IMAGE_2).describe('Image model id, e.g. gpt-image-2'),
+  size: z.string().optional().describe("Image size as 'widthxheight', e.g. 1024x1024; omit for the model default"),
+  notebookId: z.string().optional().describe('Notebook to add the image to; omit to create a new one'),
+  projectId: z.string().optional().describe('Project for the new notebook when notebookId is omitted'),
+  promptResolution: ImagePromptResolutionSchema.optional().describe(
+    "'auto' (default) rewrites the prompt against the notebook history; 'literal' sends it as written"
+  ),
+};
+
 const textToSpeechShape = {
   ...ttsRequestSchema.omit({ encoding: true }).shape,
   text: ttsRequestSchema.shape.text.describe('Text to speak'),
@@ -175,6 +241,10 @@ function notebookSummary(n: RawNotebook) {
     createdAt: n.createdAt ?? n.firstCreated,
     updatedAt: n.updatedAt ?? n.lastUpdated,
   };
+}
+
+function projectSummary(p: RawProject) {
+  return { id: p.id, name: p.name, createdAt: p.createdAt };
 }
 
 function lakeSummary(l: RawDataLake) {
@@ -205,6 +275,22 @@ export async function createNotebook(
   // POST /api/sessions/create hard-requires a name; default to the web app's
   // convention when the caller omits one so a nameless create still succeeds.
   return client.createNotebook({ ...args, name: args.name ?? 'New Notebook' });
+}
+
+export async function listProjects(client: B4mApiClient, args: { search?: string; limit: number; page?: number }) {
+  const { data, hasMore } = await client.listProjects(args);
+  return { projects: data.map(projectSummary), hasMore };
+}
+
+export async function getProject(client: B4mApiClient, args: { projectId: string }) {
+  return client.getProject(args.projectId);
+}
+
+export async function createProject(
+  client: B4mApiClient,
+  args: { name: string; description: string; sessionIds?: string[]; fileIds?: string[] }
+) {
+  return projectSummary(await client.createProject(args));
 }
 
 export async function sendMessage(
@@ -271,6 +357,119 @@ export async function generateSoundEffect(
 ): Promise<CallToolResult> {
   const response = await client.generateSoundEffect(args);
   return generatedAudioResult(response, { provider: args.provider });
+}
+
+export interface PollOptions {
+  intervalMs?: number;
+  timeoutMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  /** Aborts the poll when the MCP client cancels the call. */
+  signal?: AbortSignal;
+  /** Called after each non-terminal poll, so the tool can keep the client's request alive. */
+  onProgress?: (elapsedMs: number) => Promise<void> | void;
+  /** Named in poll-failure messages, e.g. an unreachable server. */
+  baseURL?: string;
+}
+
+const IMAGE_POLL_INTERVAL_MS = 2000;
+// Renders typically finish well under a minute; the cap only stops a wedged quest from
+// holding the tool call open indefinitely.
+const IMAGE_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+// The render is already queued and billed, so a transient poll failure (5xx, 429, network)
+// must not abandon it; only a run of them does.
+const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
+const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+// `status` is optional on the poll response; a quest that already carries its outcome is
+// finished whatever its status says.
+const isTerminal = (q: QuestResponse) =>
+  q.status === 'done' || q.status === 'stopped' || q.type === 'error' || (!q.status && !!q.images?.length);
+
+const isRateLimited = (err: unknown) => isAxiosError(err) && err.response?.status === 429;
+
+const isPermanentApiError = (err: unknown) => {
+  const status = isAxiosError(err) ? err.response?.status : undefined;
+  return status === 401 || status === 403 || status === 404;
+};
+
+/**
+ * Queue an image render and poll its quest to completion. A failed render still
+ * resolves `status: 'done'`, so `type: 'error'` (reason in `reply`) is the failure signal.
+ * Generated images are not FabFiles, so there is no file id: the quest id is the handle,
+ * and each image is its generated-file name plus the URL the quest poll resolves for it
+ * (`fileUrl` is absent when the server has no CDN configured).
+ */
+export async function generateImage(
+  client: B4mApiClient,
+  args: Parameters<B4mApiClient['generateImage']>[0],
+  {
+    intervalMs = IMAGE_POLL_INTERVAL_MS,
+    timeoutMs = IMAGE_POLL_TIMEOUT_MS,
+    sleep = defaultSleep,
+    signal,
+    onProgress,
+    baseURL = '',
+  }: PollOptions = {}
+) {
+  const ack = await client.generateImage(args);
+  const questId = ack.quest.id;
+  const ref = `quest ${questId}${ack.quest.sessionId ? `, notebook ${ack.quest.sessionId}` : ''}`;
+
+  const started = Date.now();
+  let failures = 0;
+  let retryAfterMs = 0;
+  let quest: QuestResponse | undefined;
+  for (;;) {
+    signal?.throwIfAborted();
+    try {
+      quest = await client.getQuest(questId);
+      failures = 0;
+      if (isTerminal(quest)) break;
+    } catch (err) {
+      // The per-minute key limit is shared with other calls, so a 429 says nothing about the render.
+      if (isRateLimited(err)) {
+        retryAfterMs =
+          (parseRetryAfterSeconds(isAxiosError(err) && err.response?.headers?.['retry-after']) ?? 0) * 1000;
+      } else {
+        failures += 1;
+        if (isPermanentApiError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          throw new Error(`${mapApiError(err, baseURL, 'ai:generate')} (${ref}; the render may still complete)`);
+        }
+      }
+    }
+    const elapsed = Date.now() - started;
+    if (elapsed >= timeoutMs) {
+      throw new Error(`image generation did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
+    }
+    await onProgress?.(elapsed);
+    await sleep(Math.min(Math.max(intervalMs, retryAfterMs), Math.max(timeoutMs - elapsed, intervalMs)));
+    retryAfterMs = 0;
+  }
+
+  if (quest.status === 'stopped') {
+    throw new Error(`image generation was stopped (${ref})`);
+  }
+  if (quest.type === 'error') {
+    const code = quest.errorCode ? `${quest.errorCode}: ` : '';
+    throw new Error(`${code}${quest.reply || 'image generation failed'} (${ref})`);
+  }
+
+  const urls = new Map((quest.files ?? []).map(f => [f.name, f.url]));
+  const images = (quest.images ?? [])
+    .filter(name => GENERATED_IMAGE_EXTENSION_RE.test(name))
+    .map(name => ({ fileName: name, fileUrl: urls.get(name) }));
+  if (images.length === 0) {
+    throw new Error(`${quest.reply || 'image generation finished without producing an image'} (${ref})`);
+  }
+
+  return {
+    notebookId: quest.sessionId ?? ack.quest.sessionId,
+    questId,
+    model: args.model,
+    enhancedPrompt: ack.enhancedPrompt,
+    images,
+  };
 }
 
 function toResult(value: unknown): CallToolResult {
@@ -415,6 +614,32 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
   );
 
   server.registerTool(
+    'list_projects',
+    {
+      title: meta('list_projects').title,
+      description: meta('list_projects').description,
+      inputSchema: listProjectsShape,
+    },
+    args => run('projects:read', () => listProjects(client, args))
+  );
+
+  server.registerTool(
+    'get_project',
+    { title: meta('get_project').title, description: meta('get_project').description, inputSchema: getProjectShape },
+    args => run('projects:read', () => getProject(client, args))
+  );
+
+  server.registerTool(
+    'create_project',
+    {
+      title: meta('create_project').title,
+      description: meta('create_project').description,
+      inputSchema: createProjectShape,
+    },
+    args => run('projects:write', () => createProject(client, args))
+  );
+
+  server.registerTool(
     'send_message',
     { title: meta('send_message').title, description: meta('send_message').description, inputSchema: sendMessageShape },
     args => run('ai:chat', () => sendMessage(client, args))
@@ -477,6 +702,33 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       } catch (err) {
         return errorResult(mapApiError(err, baseURL, 'ai:generate'));
       }
+    }
+  );
+
+  server.registerTool(
+    'generate_image',
+    {
+      title: meta('generate_image').title,
+      description: meta('generate_image').description,
+      inputSchema: generateImageShape,
+    },
+    (args, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      return run('ai:generate', () =>
+        generateImage(client, args, {
+          signal: extra.signal,
+          baseURL,
+          // Progress lets a client that resets its request timeout on progress wait out a slow render.
+          onProgress:
+            progressToken === undefined
+              ? undefined
+              : elapsedMs =>
+                  extra.sendNotification({
+                    method: 'notifications/progress',
+                    params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: 'rendering image' },
+                  }),
+        })
+      );
     }
   );
 }

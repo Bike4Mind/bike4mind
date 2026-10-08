@@ -11,6 +11,7 @@ import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
 // The stored key type each vendor needs. Resolved per-user first, then falling
 // back to the admin-configured key (getEffectiveApiKey), so the feature works
@@ -69,6 +70,7 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
   const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 
   const sessionId = `music-${userId}-${Date.now()}`;
+  const source = resolveRequestUsageSource(req);
 
   // Analytics is never part of the billing path: one usage event per provider
   // call (ok or error), independent of enforceCredits and of whether the charge
@@ -84,8 +86,8 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
         feature: 'music_generation',
         provider,
         model: modelId,
-        // Matches this call's ledger write (deductCreditsWithOrgSupport, source: 'api').
-        source: 'api',
+        // Matches this call's ledger write (deductCreditsWithOrgSupport).
+        source,
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,
@@ -120,7 +122,7 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
     type: 'music_generation_usage',
     sessionId,
     model: modelId,
-    source: 'api',
+    source,
   });
 
   recordUsage('ok', creditsCharged, usdCost);

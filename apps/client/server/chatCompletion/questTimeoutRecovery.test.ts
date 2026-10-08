@@ -47,6 +47,11 @@ describe('resolveQuestTimeoutRecovery', () => {
     expect(recovery).toEqual({ status: 'done', finishReason: 'timeout' });
   });
 
+  it('preserves video job ids on a stale running quest and adds no "try again" notice', () => {
+    const recovery = resolveQuestTimeoutRecovery(quest({ replies: [], videoJobIds: ['job-1'] }), NOW);
+    expect(recovery).toEqual({ status: 'done', finishReason: 'timeout', fallbackInfo: null });
+  });
+
   it('drops fallbackInfo when only media survived, since the failed primary may have produced it', () => {
     const recovery = resolveQuestTimeoutRecovery(quest({ replies: [], images: ['primary.png'] }), NOW);
     expect(recovery).toEqual({ status: 'done', finishReason: 'timeout', fallbackInfo: null });

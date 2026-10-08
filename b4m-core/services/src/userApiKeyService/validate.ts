@@ -36,6 +36,8 @@ export interface ValidationResult {
   agentId?: string;
   /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
   allowedOrigins?: string[];
+  /** OAuth clients allowed to mint identified sessions on this embed key. */
+  identifiedClientIds?: string[];
   /** Lake ids this key is bound to for the manage-but-not-member session admission. */
   preauthorizedLakeIds?: string[];
   /** White-label config for an embed key; consumed by the widget serve route. */
@@ -79,6 +81,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     organizationId: apiKey.organizationId,
     agentId: apiKey.agentId,
     allowedOrigins: apiKey.allowedOrigins,
+    identifiedClientIds: apiKey.identifiedClientIds,
     preauthorizedLakeIds: apiKey.preauthorizedLakeIds,
     branding: apiKey.branding,
     spendCap: apiKey.spendCap,

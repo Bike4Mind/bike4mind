@@ -5,6 +5,7 @@ import { dataLakeResearchService } from '@bike4mind/services';
 import { withTransaction, dataLakeResearchConfigRepository, dataLakeRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { ResearchLeversInput, ResearchScheduleInput } from '@server/dataLakes/researchConfigInput';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
@@ -25,11 +26,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .put(async (req: Request, res) => {
     const { id, configId } = req.query as { id: string; configId: string };
+    // Resolved outside the transaction: it issues concurrent reads, which an ambient session rejects.
+    const ctx = await toAccessContext(req);
 
     // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
     // on the lake doc and the retry re-reads live grants.
     const updated = await withTransaction(async () => {
-      const { lake, actor, grants } = await assertLakeResearchManage(req, id);
+      const { lake, actor, grants } = await assertLakeResearchManage(req, id, ctx);
       const input = UpdateInput.parse(req.body);
 
       const result = await dataLakeResearchService.updateResearchConfig(configId, lake, actor, grants, input, {
@@ -44,9 +47,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   })
   .delete(async (req: Request, res) => {
     const { id, configId } = req.query as { id: string; configId: string };
+    // Resolved outside the transaction: it issues concurrent reads, which an ambient session rejects.
+    const ctx = await toAccessContext(req);
 
     await withTransaction(async () => {
-      const { lake, actor, grants } = await assertLakeResearchManage(req, id);
+      const { lake, actor, grants } = await assertLakeResearchManage(req, id, ctx);
 
       await dataLakeResearchService.deleteResearchConfig(configId, lake, actor, grants, { db, logger: req.logger });
       await dataLakeRepository.touchIfStable(lake.id);

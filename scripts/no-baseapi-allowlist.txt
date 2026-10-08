@@ -58,3 +58,7 @@ apps/client/pages/api/webhooks/jira/[token].ts          # Jira HMAC + routing to
 # Qwork webhook — authenticated via HMAC-SHA256 (dual-secret rotation + 5-min replay prevention)
 apps/client/pages/api/webhooks/qwork/index.ts           # HMAC-SHA256 over raw body, dual-secret rotation, timestamp replay guard
 apps/client/pages/api/webhooks/qwork/__tests__/index.test.ts # Test file for the handler above (script greps by path, not export)
+
+# Removed Sora-era alias: a 410 tombstone, no auth or body to guard (not a contract route, outside the contract status set)
+apps/client/pages/api/ai/generate-video.ts               # 410 tombstone pointing at POST /api/v1/video-generations
+apps/client/pages/api/ai/__tests__/generate-video.integration.test.ts # Test file for the handler above (script greps by path, not export)

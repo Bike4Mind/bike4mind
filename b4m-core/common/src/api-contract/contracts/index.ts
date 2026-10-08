@@ -2,6 +2,8 @@ import type { EndpointContract } from '../types';
 import { chatContract } from './chat.contract';
 import { startAgentExecutionContract, getAgentExecutionContract } from './agentExecutions.contract';
 import { sessionUpdateContract } from './sessionUpdate.contract';
+import { sessionGetContract } from './sessionGet.contract';
+import { sessionDeleteContract } from './sessionDelete.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
 import { synthesizeSpeechContract } from './tts.contract';
@@ -16,6 +18,7 @@ import { createFileUploadContract, getFileContract } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
 import { getQuestContract } from './quest.contract';
 import { createSessionContract } from './sessionCreate.contract';
+import { listSessionsContract } from './sessionList.contract';
 import {
   listDataLakesContract,
   getDataLakeContract,
@@ -24,7 +27,13 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './dataLakes.contract';
-import { generateVideoContract } from './videoGeneration.contract';
+import {
+  cancelVideoGenerationContract,
+  createVideoGenerationContract,
+  getVideoGenerationContract,
+  listVideoGenerationsContract,
+  listVideoModelsContract,
+} from './videoGeneration.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
 
 /**
@@ -37,7 +46,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   chatContract,
   startAgentExecutionContract,
   getAgentExecutionContract,
+  sessionGetContract,
   sessionUpdateContract,
+  sessionDeleteContract,
   executeToolContract,
   createCompletionContract,
   synthesizeSpeechContract,
@@ -53,13 +64,18 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createEmbeddingsContract,
   getQuestContract,
   createSessionContract,
+  listSessionsContract,
   listDataLakesContract,
   getDataLakeContract,
   getDataLakeFileContract,
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
-  generateVideoContract,
+  cancelVideoGenerationContract,
+  createVideoGenerationContract,
+  getVideoGenerationContract,
+  listVideoGenerationsContract,
+  listVideoModelsContract,
   listVoicesContract,
   createVoiceSessionContract,
   endVoiceSessionContract,

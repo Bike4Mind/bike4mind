@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   detectLakeInconsistencies: vi.fn(),
   recordLakeFindings: vi.fn(),
@@ -82,7 +85,15 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: { update: h.update },
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { update: h.update, touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   dataLakeFindingRepository: { recordDetected: h.recordDetected, listByLake: h.listByLake },
   cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrementWithinLimitFixedWindow },
@@ -140,7 +151,9 @@ beforeEach(() => {
   // Plain objects/Sets, not vi.fn() - clearAllMocks does not touch these, so each test starts clean.
   h.rateLimitCallsByBucket = {};
   h.blockedFeatureKeys = new Set();
-  h.assertLakeWriteAccess.mockResolvedValue(lake);
+  h.tx.length = 0;
+  h.assertLakeWriteAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
+  h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
   h.detectLakeInconsistencies.mockResolvedValue(result());
   h.sendToQueue.mockResolvedValue(undefined);
   h.getSourceQueueUrl.mockReturnValue('https://sqs.test/lakeInconsistencyModelQueue');
@@ -159,8 +172,28 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     const { done } = invoke();
     await done;
 
-    expect(h.assertLakeWriteAccess).toHaveBeenCalledTimes(1);
+    // Twice: the early gate keeps strangers from triggering detection, the in-transaction one serializes.
+    expect(h.assertLakeWriteAccess).toHaveBeenCalledTimes(2);
     expect(h.assertLakeWriteAccess.mock.calls[0][0]).toBe('lake1');
+  });
+
+  it('re-gates and records findings plus the summary inside the transaction, with no separate touch', async () => {
+    h.recordLakeFindings.mockImplementation(async () => (h.tx.push('findings'), { recorded: 0, failed: 0 }));
+    h.update.mockImplementation(async () => (h.tx.push('summary'), lake));
+
+    await invoke().done;
+
+    expect(h.tx).toEqual(['gate', 'enter', 'gate', 'findings', 'summary', 'exit']);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the in-transaction re-gate refuses', async () => {
+    h.assertLakeWriteAccess.mockResolvedValueOnce(lake).mockRejectedValueOnce(new ForbiddenError('revoked'));
+
+    await expect(invoke().done).rejects.toThrow('revoked');
+
+    expect(h.recordLakeFindings).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
   });
 
   it('persists the run SUMMARY and its timestamp on the lake, never the findings', async () => {
@@ -564,6 +597,29 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
     await done;
 
     expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+  });
+
+  it('gates and touches the lake inside the transaction; the cap and the send run after commit', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockImplementation(async () => {
+      h.tx.push('cap');
+      return { success: true, expiresAt: new Date(Date.now() + 1000) };
+    });
+    h.sendToQueue.mockImplementation(async () => void h.tx.push('send'));
+
+    await invoke({}, 'POST', { detector: 'model' }).done;
+
+    expect(h.tx).toEqual(['enter', 'gate', 'touch', 'exit', 'cap', 'send']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
+    expect(h.detectLakeInconsistencies).not.toHaveBeenCalled();
+  });
+
+  it('touches nothing when the lease is held, so a refused click does not collide with a revoke', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({ ...lake, modelInconsistencyRunAt: new Date() });
+
+    await expect(invoke({}, 'POST', { detector: 'model' }).done).rejects.toThrow(/already in progress/);
+
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('enqueues the run and returns 202 rather than doing the LLM work in the request', async () => {

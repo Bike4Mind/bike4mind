@@ -115,6 +115,13 @@ describe('canViewInvite', () => {
       ...over,
     }) as any;
 
+  const past = () => new Date(Date.now() - 60_000).toISOString();
+  const future = () => new Date(Date.now() + 60_000).toISOString();
+  const namedInvite = (
+    expiresAt: string,
+    recipients = { pending: ['viewer@x.com'], accepted: [] as string[], refused: [] as string[] }
+  ) => linkInvite({ recipients, expiresAt });
+
   beforeEach(() => {
     authorizeByInviteType.mockReset();
     // A caller who holds no permission on the document: the share arm always denies,
@@ -123,31 +130,52 @@ describe('canViewInvite', () => {
   });
 
   it('lets a stranger view a redeemable link invite without consulting the share arm', async () => {
-    await expect(canViewInvite(user, linkInvite())).resolves.toBe(true);
+    await expect(canViewInvite(user, linkInvite())).resolves.toBe('allowed');
     expect(authorizeByInviteType).not.toHaveBeenCalled();
   });
 
   it('tolerates a link invite with no recipients object at all', async () => {
-    await expect(canViewInvite(user, linkInvite({ recipients: undefined }))).resolves.toBe(true);
+    await expect(canViewInvite(user, linkInvite({ recipients: undefined }))).resolves.toBe('allowed');
   });
 
   it('refuses an exhausted link invite', async () => {
-    await expect(canViewInvite(user, linkInvite({ remaining: 0 }))).resolves.toBe(false);
+    await expect(canViewInvite(user, linkInvite({ remaining: 0 }))).resolves.toBe('denied');
   });
 
-  it('refuses an expired link invite even with redemptions left', async () => {
-    const expiresAt = new Date(Date.now() - 60_000).toISOString();
-    await expect(canViewInvite(user, linkInvite({ expiresAt }))).resolves.toBe(false);
+  it('reports an expired link invite with redemptions left as expired', async () => {
+    await expect(canViewInvite(user, linkInvite({ expiresAt: past() }))).resolves.toBe('expired');
   });
 
   it('allows a link invite whose expiry is still in the future', async () => {
-    const expiresAt = new Date(Date.now() + 60_000).toISOString();
-    await expect(canViewInvite(user, linkInvite({ expiresAt }))).resolves.toBe(true);
+    await expect(canViewInvite(user, linkInvite({ expiresAt: future() }))).resolves.toBe('allowed');
+  });
+
+  it('reports an expired named invite as expired to its own recipient', async () => {
+    await expect(canViewInvite(user, namedInvite(past()))).resolves.toBe('expired');
+  });
+
+  it('reports an expired invite as expired to a recipient who already accepted', async () => {
+    const accepted = namedInvite(past(), { pending: [], accepted: ['viewer@x.com'], refused: [] });
+    await expect(canViewInvite(user, accepted)).resolves.toBe('expired');
+  });
+
+  it('allows a named invite to its recipient while the expiry is in the future', async () => {
+    await expect(canViewInvite(user, namedInvite(future()))).resolves.toBe('allowed');
+  });
+
+  it('still shows an expired named invite to a caller with share authority', async () => {
+    authorizeByInviteType.mockResolvedValue(undefined);
+    await expect(canViewInvite(user, namedInvite(past()))).resolves.toBe('allowed');
+  });
+
+  it('denies an expired named invite to a non-recipient without share authority', async () => {
+    const named = namedInvite(past(), { pending: ['someone@x.com'], accepted: [], refused: [] });
+    await expect(canViewInvite(user, named)).resolves.toBe('denied');
   });
 
   it('does not extend the link arm to a named invite the caller is not on', async () => {
     const named = linkInvite({ recipients: { pending: ['someone@x.com'], accepted: [], refused: [] } });
-    await expect(canViewInvite(user, named)).resolves.toBe(false);
+    await expect(canViewInvite(user, named)).resolves.toBe('denied');
     expect(authorizeByInviteType).toHaveBeenCalled();
   });
 
@@ -157,33 +185,33 @@ describe('canViewInvite', () => {
   // caller holding the id.
   it('does not treat a named Project invite as a link invite', async () => {
     const named = linkInvite({ type: 'Project', isLinkOnly: false });
-    await expect(canViewInvite(user, named)).resolves.toBe(false);
+    await expect(canViewInvite(user, named)).resolves.toBe('denied');
     expect(authorizeByInviteType).toHaveBeenCalled();
   });
 
   it('does not treat a named Organization invite as a link invite', async () => {
     const named = linkInvite({ type: 'Organization', isLinkOnly: false });
-    await expect(canViewInvite(user, named)).resolves.toBe(false);
+    await expect(canViewInvite(user, named)).resolves.toBe('denied');
   });
 
   it('fails closed on a legacy Project invite that predates the flag', async () => {
     // No isLinkOnly at all and an empty pending: indistinguishable from a link invite by shape,
     // so the type is what decides. Only FabFile/Session recipients always resolved to emails.
     const legacy = linkInvite({ type: 'Project' });
-    await expect(canViewInvite(user, legacy)).resolves.toBe(false);
+    await expect(canViewInvite(user, legacy)).resolves.toBe('denied');
   });
 
   it('still treats a legacy FabFile invite with no recipients as a link invite', async () => {
-    await expect(canViewInvite(user, linkInvite({ type: 'FabFile' }))).resolves.toBe(true);
+    await expect(canViewInvite(user, linkInvite({ type: 'FabFile' }))).resolves.toBe('allowed');
   });
 
   it('honours an explicit isLinkOnly over the inferred fallback', async () => {
-    await expect(canViewInvite(user, linkInvite({ type: 'Project', isLinkOnly: true }))).resolves.toBe(true);
+    await expect(canViewInvite(user, linkInvite({ type: 'Project', isLinkOnly: true }))).resolves.toBe('allowed');
   });
 
   it('still admits a named recipient by email, case-insensitively', async () => {
     const named = linkInvite({ recipients: { pending: ['VIEWER@x.com'], accepted: [], refused: [] } });
-    await expect(canViewInvite(user, named)).resolves.toBe(true);
+    await expect(canViewInvite(user, named)).resolves.toBe('allowed');
     expect(authorizeByInviteType).not.toHaveBeenCalled();
   });
 });

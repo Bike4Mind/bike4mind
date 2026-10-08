@@ -118,6 +118,22 @@ describe('OrgGitHubLakeConnectionModel - accessors', () => {
   });
 });
 
+describe('OrgGitHubLakeConnectionModel - findBoundDataLakeIds', () => {
+  it('returns the given lakes that have a row, disabled rows included, like findByDataLakeIdAny', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    await OrgGitHubLakeConnection.create({ ...base, targetDataLakeId: 'lake-2', repositoryId: 2, enabled: false });
+    await OrgGitHubLakeConnection.create({ ...base, targetDataLakeId: 'lake-other', repositoryId: 3 });
+
+    const bound = await orgGitHubLakeConnectionRepository.findBoundDataLakeIds(['lake-1', 'lake-2', 'lake-3']);
+    expect(bound.sort()).toEqual(['lake-1', 'lake-2']);
+  });
+
+  it('returns an empty array for an empty input', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    expect(await orgGitHubLakeConnectionRepository.findBoundDataLakeIds([])).toEqual([]);
+  });
+});
+
 describe('OrgGitHubLakeConnectionModel - release', () => {
   it('is org-scoped: the wrong org cannot release, and the row is kept', async () => {
     const created = await OrgGitHubLakeConnection.create(base);
@@ -418,6 +434,77 @@ describe('OrgGitHubLakeConnectionModel - recordLastError', () => {
 
   it('reports false for a missing connection', async () => {
     expect(await repo.recordLastError('000000000000000000000000', 'boom')).toBe(false);
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - reconcile selection', () => {
+  let seq = 0;
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+  const add = async (fields: Record<string, unknown> = {}) => {
+    seq += 1;
+    const { id } = await repo.create({ ...base, repositoryId: 1000 + seq, targetDataLakeId: `lake-r${seq}` });
+    if (Object.keys(fields).length > 0)
+      await OrgGitHubLakeConnection.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: fields });
+    return id;
+  };
+  const dueIds = async (limit = 50) => (await repo.findDueForReconcile(limit)).map(c => String(c.id));
+
+  it('includes connected, legacy unset status, and stale syncing claims (both windows)', async () => {
+    const connected = await add();
+    const legacy = await add();
+    await OrgGitHubLakeConnection.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(legacy) },
+      { $unset: { status: '' } }
+    );
+    const staleUnchained = await add({ status: 'syncing', syncClaimedAt: minutesAgo(21) });
+    const staleChained = await add({ status: 'syncing', syncClaimedAt: minutesAgo(61), activeIngestBatchId: 'b1' });
+    expect((await dueIds()).sort()).toEqual([connected, legacy, staleUnchained, staleChained].sort());
+  });
+
+  it('excludes disabled, disconnecting, live syncing, and error connections', async () => {
+    await add({ enabled: false });
+    await add({ disconnectRequestedAt: new Date() });
+    await add({ status: 'syncing', syncClaimedAt: minutesAgo(5) });
+    await add({ status: 'syncing', syncClaimedAt: minutesAgo(30), activeIngestBatchId: 'b1' });
+    await add({ status: 'error' });
+    expect(await dueIds()).toEqual([]);
+  });
+
+  it('orders never-checked first, then oldest checked, and honors the limit', async () => {
+    const recent = await add({ reconcileCheckedAt: minutesAgo(1) });
+    const old = await add({ reconcileCheckedAt: minutesAgo(60) });
+    const never = await add();
+    expect(await dueIds()).toEqual([never, old, recent]);
+    expect(await dueIds(2)).toEqual([never, old]);
+    expect(await dueIds(0)).toEqual([]);
+  });
+
+  it('markReconcileChecked stamps only the given ids and leaves updatedAt untouched', async () => {
+    const a = await add();
+    const b = await add();
+    const before = await repo.findById(a);
+    const at = new Date('2026-10-01T00:00:00Z');
+    await repo.markReconcileChecked([a], at);
+    const after = await repo.findById(a);
+    expect(after?.reconcileCheckedAt).toEqual(at);
+    expect(after?.updatedAt).toEqual(before?.updatedAt);
+    expect((await repo.findById(b))?.reconcileCheckedAt).toBeUndefined();
+    await expect(repo.markReconcileChecked([], at)).resolves.toBeUndefined();
+    expect(await dueIds()).toEqual([b, a]);
+  });
+
+  it('markReconcileEnqueued records the target (including null) and leaves updatedAt untouched', async () => {
+    const a = await add();
+    const before = await repo.findById(a);
+    const at = new Date('2026-10-01T00:00:00Z');
+    await repo.markReconcileEnqueued(a, 'abc123', at);
+    let after = await repo.findById(a);
+    expect(after?.reconcileEnqueuedSha).toBe('abc123');
+    expect(after?.reconcileEnqueuedAt).toEqual(at);
+    expect(after?.updatedAt).toEqual(before?.updatedAt);
+    await repo.markReconcileEnqueued(a, null, at);
+    after = await repo.findById(a);
+    expect(after?.reconcileEnqueuedSha).toBeNull();
   });
 });
 

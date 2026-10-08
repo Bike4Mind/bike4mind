@@ -9,6 +9,27 @@ export type MimeType =
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
 
+// The Files type filter. getMimeTypeFilter (packages/database/src/queries/fabFileSearchQuery.ts) maps every value
+// to a query and FILE_TYPE_OPTIONS (apps/client/app/components/Files/Browser/constants.ts) labels every value.
+export const FAB_FILE_TYPE_FILTERS = [
+  'text',
+  'pdf',
+  'url',
+  'image',
+  'excel',
+  'word',
+  'json',
+  'csv',
+  'markdown',
+  'code',
+  'audio',
+  'video',
+] as const;
+export type FabFileTypeFilter = (typeof FAB_FILE_TYPE_FILTERS)[number];
+
+export const isFabFileTypeFilter = (value: unknown): value is FabFileTypeFilter =>
+  typeof value === 'string' && (FAB_FILE_TYPE_FILTERS as readonly string[]).includes(value);
+
 export enum KnowledgeType {
   /**
    * A knowledge that is from a URL.
@@ -440,6 +461,15 @@ export interface IFabFile {
    * write bumps). Only meaningful while `moderationStatus === 'scanning'`.
    */
   moderationClaimedAt?: Date;
+
+  /**
+   * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
+   * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
+   * handler or a notebook import charges it (apps/client/server/s3/storageCharge.ts). Imported rows
+   * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
+   * predate it.
+   */
+  storageChargedAt?: Date;
 
   /**
    * How many moderation scan attempts have been made on this row and failed without reaching a
@@ -1215,7 +1245,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+      type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
@@ -1933,7 +1963,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * (`chunkStallReason`, `noExtractableTextAt`), which is what makes reprocess the documented way
    * back in for a file the rescue sweep has written off.
    */
-  resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  resetChunkStateByIds(ids: string[], options?: { concurrency?: number }): Promise<string[]>;
   /**
    * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
    * chunkless reasons by whether a producer actually removed its passages, and clearing the

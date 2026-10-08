@@ -407,6 +407,22 @@ describe('runModelDiscovery', () => {
     ]);
   });
 
+  it('logs the self-host Bedrock skip once per run, and only when Bedrock is unconfigured', async () => {
+    const cases = [
+      { creds: testCredentials({ isSelfHost: true, bedrock: false, awsIam: false }), lines: 1 },
+      { creds: testCredentials({ isSelfHost: true, bedrock: true, awsIam: false }), lines: 0 },
+      { creds: testCredentials(), lines: 0 },
+      { creds: testCredentials({ isSelfHost: false, bedrock: false }), lines: 0 },
+    ];
+
+    for (const { creds, lines } of cases) {
+      const bench = harness([openaiSource(), stubSource({ name: 'bedrock', configured: false })]);
+      await runModelDiscovery({ ...bench.adapters, resolveCredentials: async () => creds }, bench.options);
+
+      expect(bench.infos.filter(line => line.includes('bedrock skipped'))).toHaveLength(lines);
+    }
+  });
+
   it('skips a source with no credential without failing the run', async () => {
     const partial = harness([openaiSource(), stubSource({ name: 'xai', configured: false })]);
 
@@ -778,6 +794,63 @@ describe('runModelDiscovery', () => {
         const controlRows = bedrock.catalog.rows.filter(row => row.modelId === 'anthropic.foo-v1:0');
         expect(controlRows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(true);
       });
+
+      describe('frozen profile ids', () => {
+        it('persists and warns on a profile id whose foundation id the listing omitted', async () => {
+          const bedrock = harness([
+            stubSource({
+              name: 'bedrock',
+              kind: 'provider',
+              records: [bareFoundation],
+              authoritativeFor: [ModelBackend.Bedrock],
+            }),
+          ]);
+          await seedActive(bedrock, 'global.anthropic.claude-opus-9-v1:0', 'Claude Opus 9 (global)');
+
+          const result = await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+          expect(result.absence.frozenProfileIds).toEqual(['global.anthropic.claude-opus-9-v1:0']);
+          expect(bedrock.runs.docs.at(-1)?.frozenProfileIds).toEqual(['global.anthropic.claude-opus-9-v1:0']);
+          expect(bedrock.warnings.some(message => message.includes('global.anthropic.claude-opus-9-v1:0'))).toBe(true);
+        });
+
+        it('persists an empty list and stays quiet when nothing is frozen', async () => {
+          const bedrock = harness([
+            stubSource({
+              name: 'bedrock',
+              kind: 'provider',
+              records: [bareFoundation],
+              authoritativeFor: [ModelBackend.Bedrock],
+            }),
+          ]);
+
+          await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+          expect(bedrock.runs.docs.at(-1)?.frozenProfileIds).toEqual([]);
+          expect(bedrock.warnings.some(message => message.includes('frozen'))).toBe(false);
+        });
+
+        it('caps the logged profile ids at 20 and counts the rest', async () => {
+          const bedrock = harness([
+            stubSource({
+              name: 'bedrock',
+              kind: 'provider',
+              records: [bareFoundation],
+              authoritativeFor: [ModelBackend.Bedrock],
+            }),
+          ]);
+          for (let index = 0; index < 21; index += 1) {
+            await seedActive(bedrock, `global.anthropic.claude-opus-${index}-v1:0`, `Opus ${index}`);
+          }
+
+          const result = await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+          expect(result.absence.frozenProfileIds).toHaveLength(21);
+          const warning = bedrock.warnings.find(message => message.includes('frozen'));
+          expect(warning).toContain('21 Bedrock profile id(s) frozen');
+          expect(warning).toContain('(+1 more)');
+        });
+      });
     });
 
     describe('typed and docs signals', () => {
@@ -1046,6 +1119,179 @@ describe('runModelDiscovery', () => {
 
       expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6', promoted: true, blockedBy: [] });
       expect(result.metrics.ModelsPromoted).toBe(1);
+    });
+
+    it('promotes a model priced only by an adapter literal when no price row or source quotes it', async () => {
+      // Moonshot publishes no pricing, so kimi-k3 has no source price and, on an
+      // environment where the seed was never applied, no row in force either. Its
+      // only price is the literal in kimiBackend, so this fails if that is removed.
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const kimi = harness([
+        stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] }),
+      ]);
+      expect(kimi.prices.rows).toHaveLength(0);
+
+      const result = await runModelDiscovery(kimi.adapters, kimi.options);
+
+      expect(result.diff[0]).toMatchObject({ modelId: 'kimi-k3', promoted: true, blockedBy: [] });
+    });
+
+    it('records the adapter literal as the first price row and appends nothing on the next run', async () => {
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const kimi = harness([
+        stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] }),
+      ]);
+
+      await runModelDiscovery(kimi.adapters, kimi.options);
+
+      // A first row from the build's own literal is recorded, but is not a reprice.
+      expect(kimi.runs.docs[0].changes?.repriced).toEqual([]);
+      expect(kimi.prices.rows).toHaveLength(1);
+      expect(kimi.prices.rows[0]).toMatchObject({ modelId: 'kimi-k3', unit: 'per_token' });
+      expect(kimi.prices.rows[0].note).toMatch(/^discovery:adapter-literal@/);
+      const [tier] = Object.values(kimi.prices.rows[0].pricing);
+      expect(tier.input).toBeCloseTo(3 / 1_000_000, 12);
+      expect(tier.output).toBeCloseTo(15 / 1_000_000, 12);
+
+      await runModelDiscovery(kimi.adapters, kimi.options);
+
+      expect(kimi.prices.rows).toHaveLength(1);
+    });
+
+    it('plans the literal row without writing it in report mode, and still promotes on the literal alone', async () => {
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const reporting = harness(
+        [stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] })],
+        { modelDiscoveryMode: 'report' }
+      );
+
+      const result = await runModelDiscovery(reporting.adapters, reporting.options);
+
+      // Report mode plans a single pass, so the literal row cannot be what satisfies promotion here:
+      // only the knownPricedModelIds union can.
+      expect(result.diff[0]).toMatchObject({ modelId: 'kimi-k3', promoted: true, blockedBy: [] });
+      expect(reporting.prices.rows).toEqual([]);
+      expect(reporting.runs.docs[0].changes?.plannedPriceRows).toBe(1);
+      expect(reporting.runs.docs[0].changes?.appendedPriceRows).toBe(0);
+    });
+
+    it('does not spend a convergence pass on literal rows alone', async () => {
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const kimi = harness([
+        stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] }),
+      ]);
+      await runModelDiscovery(kimi.adapters, kimi.options);
+      kimi.prices.rows.splice(0);
+      kimi.advance(2 * 60 * 60 * 1000);
+
+      const second = await runModelDiscovery(kimi.adapters, kimi.options);
+
+      expect(kimi.prices.rows).toHaveLength(1);
+      expect(second.passes).toBe(1);
+    });
+
+    it('does not let a literal row that lost a unique-index race hide a price row that landed', async () => {
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const mixed = harness([
+        openaiSource([gpt6]),
+        stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] }),
+      ]);
+      await runModelDiscovery(mixed.adapters, mixed.options);
+      mixed.prices.rows.splice(0);
+      mixed.advance(2 * 60 * 60 * 1000);
+      const append = mixed.prices.append.bind(mixed.prices);
+      vi.spyOn(mixed.prices, 'append').mockImplementation(async row => {
+        if (row.note?.startsWith('discovery:adapter-literal')) {
+          throw Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+        }
+        return append(row);
+      });
+
+      const second = await runModelDiscovery(mixed.adapters, mixed.options);
+
+      // Planned: one source-priced row and one literal row; only the source-priced one landed. Netting
+      // the planned literal against the appended total would read that as zero and stop converging.
+      expect(mixed.prices.rows.map(row => row.modelId)).toEqual(['gpt-6']);
+      expect(second.passes).toBeGreaterThanOrEqual(2);
+    });
+
+    it('words a per-image literal as priced in this build, which no trusted source quotes', async () => {
+      const image: DiscoveredModel = {
+        modelId: 'gpt-image-1',
+        patch: { ...gpt6.patch, id: 'gpt-image-1', name: 'GPT Image 1' },
+      };
+      const imaging = harness([openaiSource([image])]);
+
+      const result = await runModelDiscovery(imaging.adapters, imaging.options);
+
+      expect(result.diff[0].blockedBy).toContain('no-trusted-price');
+      expect(imaging.catalog.rows[0].patch).toMatchObject({
+        autoDisabledReason: 'discovered, priced in this build per image or minute, no trusted per-token price',
+      });
+    });
+
+    it('still blocks a model with neither a literal, a row, nor a trusted source price', async () => {
+      const unpriced: DiscoveredModel = {
+        modelId: 'gpt-unpriced-9',
+        patch: { ...gpt6.patch, id: 'gpt-unpriced-9', name: 'GPT unpriced' },
+      };
+      const blocked = harness([openaiSource([unpriced])]);
+
+      const result = await runModelDiscovery(blocked.adapters, blocked.options);
+
+      expect(result.diff[0]).toMatchObject({ modelId: 'gpt-unpriced-9', promoted: false });
+      expect(result.diff[0].blockedBy).toContain('no-trusted-price');
+      expect(blocked.prices.rows).toEqual([]);
     });
 
     it('never supersedes an operator price row', async () => {

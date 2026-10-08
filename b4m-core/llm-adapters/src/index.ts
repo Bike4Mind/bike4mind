@@ -6,6 +6,7 @@ import {
   ModelInfo,
   SupersededModelInfo,
   applyModelPriceCatalog,
+  bedrockClientCredentials,
   isModelDeprecated,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -114,9 +115,14 @@ export function getLlmByModel(
         case ChatModels.CLAUDE_4_5_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_6_SONNET_BEDROCK:
         case ChatModels.CLAUDE_5_SONNET_BEDROCK:
+        case ChatModels.CLAUDE_5_5_SONNET_BEDROCK:
         case ChatModels.CLAUDE_4_6_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_7_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_8_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_FABLE_5_BEDROCK:
+        case ChatModels.CLAUDE_FABLE_5_1_BEDROCK:
+        case ChatModels.CLAUDE_5_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_5_5_OPUS_BEDROCK:
           backend = new AnthropicBedrockBackend();
           break;
         case ChatModels.LLAMA3_INSTRUCT_8B_V1:
@@ -273,11 +279,13 @@ function hashKeyValue(value: string): string {
  */
 function getModelCacheKey(
   apiKeys: ApiKeyTable | null,
-  gate: { isSelfHost: boolean; perBackendTimeoutMs?: number }
+  gate: { isSelfHost: boolean; bedrockReachable: boolean; perBackendTimeoutMs?: number }
 ): string {
-  // isSelfHost decides which backends get constructed and perBackendTimeoutMs
-  // decides what a slow one contributes, so both are part of the identity.
-  const suffix = `|selfHost:${gate.isSelfHost ? '1' : '0'}|timeout:${gate.perBackendTimeoutMs ?? 0}`;
+  // isSelfHost and bedrockReachable decide which backends get constructed and
+  // perBackendTimeoutMs decides what a slow one contributes, so all are part of the identity.
+  const suffix =
+    `|selfHost:${gate.isSelfHost ? '1' : '0'}|bedrock:${gate.bedrockReachable ? '1' : '0'}` +
+    `|timeout:${gate.perBackendTimeoutMs ?? 0}`;
   if (!apiKeys) return `null${suffix}`;
   const keys = Object.keys(apiKeys)
     .sort()
@@ -305,6 +313,8 @@ export interface GetAvailableModelsOptions {
   includePrivate?: boolean;
   /** Deployment self-host flag; defaults to B4M_SELF_HOST. See BackendGateContext. */
   isSelfHost?: boolean;
+  /** Bedrock credentials are present; defaults to bedrockClientCredentials(). See BackendGateContext. */
+  bedrockReachable?: boolean;
 }
 
 /**
@@ -355,9 +365,13 @@ export const getAvailableModels = async (
   const { perBackendTimeoutMs } = options;
   const includePrivate = options.includePrivate ?? true;
   const isSelfHost = options.isSelfHost ?? process.env.B4M_SELF_HOST === 'true';
+  // Evaluated under the effective isSelfHost, so an isSelfHost override cannot list Bedrock off hosted defaults.
+  const bedrockReachable =
+    options.bedrockReachable ??
+    bedrockClientCredentials({ ...process.env, B4M_SELF_HOST: isSelfHost ? 'true' : undefined }) !== null;
 
   // Check module-level cache first
-  const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, perBackendTimeoutMs });
+  const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, bedrockReachable, perBackendTimeoutMs });
   if (_modelCache && _modelCache.key === cacheKey && Date.now() < _modelCache.expiresAt) {
     return applyPrivateVisibility(_modelCache.models, includePrivate);
   }
@@ -366,7 +380,7 @@ export const getAvailableModels = async (
   // the catalog merge gates catalog-only records with, so the two tiers cannot
   // disagree about which backends this caller can reach. The local-image env
   // fallback lives in that predicate for the same reason.
-  const gateCtx: BackendGateContext = { apiKeys, isSelfHost };
+  const gateCtx: BackendGateContext = { apiKeys, isSelfHost, bedrockReachable };
   const openaiKey = resolveListingKey(ModelBackend.OpenAI, gateCtx);
   const anthropicKey = resolveListingKey(ModelBackend.Anthropic, gateCtx);
   const geminiKey = resolveListingKey(ModelBackend.Gemini, gateCtx);
@@ -381,8 +395,8 @@ export const getAvailableModels = async (
     [ModelBackend.OpenAI]: openaiKey ? new OpenAIBackend(openaiKey) : null,
     [ModelBackend.Anthropic]: anthropicKey ? new AnthropicBackend(anthropicKey) : null,
     // The keyless AWS-credentialed pair goes through isBackendUsable so the
-    // self-host cutoff is stated once, in the same predicate the catalog tier
-    // reads, instead of once here and once in /api/models.
+    // self-host rules (Bedrock needs BEDROCK_AWS_*, AWS is hosted-only) are stated
+    // once, in the same predicate the catalog tier reads, instead of once here and once in /api/models.
     [ModelBackend.Bedrock]: isBackendUsable(ModelBackend.Bedrock, gateCtx)
       ? new UndifferentiatedBedrockBackend()
       : null,

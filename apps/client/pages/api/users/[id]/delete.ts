@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { adminSettingsRepository, userRepository } from '@bike4mind/database';
+import { adminSettingsRepository, embedConversationRepository, userRepository } from '@bike4mind/database';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
 import { IUserDocument } from '@bike4mind/common';
@@ -38,6 +38,15 @@ const handler = baseApi().delete(
         },
       }
     );
+
+    // Identified-embed history is keyed only by user id, so nothing else reaches it once the
+    // account is gone. Best-effort: the user is already deleted, so a purge failure must not
+    // turn this into a 500 a retry cannot fix; the collection's TTL index is the backstop.
+    try {
+      await embedConversationRepository.deleteAllForUser(userId);
+    } catch (err) {
+      req.logger.error(`Failed to purge embed conversations for deleted user ${userId}: ${String(err)}`);
+    }
 
     return res.json(deletedUser);
   })

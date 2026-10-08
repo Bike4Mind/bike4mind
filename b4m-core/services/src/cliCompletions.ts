@@ -1,8 +1,12 @@
 import {
+  CHAT_MODELS,
   ChatModels,
   IMessage,
+  ModelBackend,
+  type ModelInfo,
   CompletionInfo,
   getTextModelCost,
+  pricingTierForTokens,
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
@@ -15,6 +19,7 @@ import {
   IUserApiKeyRepository,
   IUserRepository,
   normalizeMultimodalMessages,
+  BadRequestError,
   type CompletionSource,
 } from '@bike4mind/common';
 import {
@@ -25,6 +30,7 @@ import {
   getSettingsValue,
   getSettingsByNames,
   DEFAULT_OUTPUT_MAX_TOKENS,
+  isSafetyRefusalError,
 } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -40,7 +46,7 @@ import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
-import { buildEarlyStopStamp } from './llm/earlyStopStamp';
+import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 
 export interface CompletionParams {
   userId: string;
@@ -61,6 +67,11 @@ export interface CompletionParams {
      * b4m-core/common/src/schemas/cliCompletions.ts.
      */
     response_format?: import('@bike4mind/common').ResponseFormat;
+    /**
+     * Forwarded to the adapter, which only the OpenAI (reasoning models), Kimi (K3
+     * only) and DeepSeek backends read. Every other backend (Anthropic, Gemini,
+     * Bedrock, xAI, Ollama) drops it, so it is a silent no-op there.
+     */
     reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
   };
   /**
@@ -152,6 +163,103 @@ function estimateInputTokens(messages: IMessage[]): number {
 }
 
 /**
+ * Backends whose server caches prompt prefixes without a client flag; they only get the cache
+ * rate when the catalog publishes an explicit cache_read (the default 0.1x multiplier is
+ * Anthropic's). Must stay in sync with the adapters that report cache reads into settlement
+ * (those calling `splitCacheInclusiveInput`): xAI's adapter does not, so settlement bills its
+ * full input. Gemini and Ollama publish no cache_read; Bedrock's cache_control is gated on
+ * options.cacheStrategy.enableCaching, which this path never sets.
+ */
+const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
+  ModelBackend.OpenAI,
+  ModelBackend.Kimi,
+  ModelBackend.DeepSeek,
+]);
+
+// Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
+const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
+
+/**
+ * Prices the input side of the pre-flight reservation. Every request in a tool loop re-sends
+ * the whole conversation, but the part before the newest tool results / user text is served
+ * from the provider's prompt cache at a fraction of the input rate, so pricing it uncached
+ * over-reserves by an order of magnitude and refuses users who can afford many real rounds.
+ *
+ * Billing rule: a cache read can only cover what an earlier round wrote, which ended before the
+ * last assistant message. Anthropic hoists every system message into the `system` param ahead of
+ * the conversation, so system messages are their own leading segment: read when one is flagged
+ * (or a conversation breakpoint follows them) and an assistant turn exists. Conversation
+ * (non-system) messages read up to min(last flagged, message before the last assistant); from
+ * there to the last flagged one they bill at cache_write (the new breakpoint writes them, the
+ * last assistant message included); the rest is plain input. Auto-caching backends read the
+ * system messages that precede the last assistant message (they preserve message order, so a later
+ * one is new content) and the conversation up to the message before the last assistant, and bill
+ * the rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
+ * uncached. If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges
+ * actual usage.
+ *
+ * The input side is floored at CACHED_INPUT_RESERVATION_FLOOR of the uncached input cost, so a
+ * client-claimed or lapsed cache cannot shrink the hold below it.
+ *
+ * The pricing tier comes from the total input, since a request's tier is set by its whole prompt
+ * and not by the uncached remainder.
+ */
+function estimateReservationUsd(
+  modelInfo: ModelInfo,
+  messages: IMessage[],
+  estimatedInputTokens: number,
+  estimatedOutputTokens: number
+): number {
+  const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
+  if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
+
+  const lastAssistantMessageIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
+  const conversation = messages.filter(m => m.role !== 'system');
+  const lastAssistantIndex = conversation.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
+  const tier = pricingTierForTokens(modelInfo, estimatedInputTokens);
+
+  let readEnd: number;
+  let writeEnd = -1;
+  let hoistsSystem: boolean;
+  if (modelInfo.backend === ModelBackend.Anthropic) {
+    const lastFlagged = conversation.reduce((last, m, i) => (m.cache === true ? i : last), -1);
+    if (lastFlagged < 0 && !messages.some(m => m.role === 'system' && m.cache === true)) return uncachedUsd;
+    readEnd = Math.min(lastFlagged, lastAssistantIndex - 1);
+    writeEnd = lastFlagged;
+    hoistsSystem = true;
+  } else {
+    const publishesCacheRead = tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
+    if (!AUTO_CACHING_BACKENDS.has(modelInfo.backend) || !publishesCacheRead) return uncachedUsd;
+    readEnd = lastAssistantIndex - 1;
+    hoistsSystem = false;
+  }
+
+  let readTokens = 0;
+  let writeTokens = 0;
+  let plainTokens = 0;
+  let conversationIndex = 0;
+  messages.forEach((m, index) => {
+    const tokens = estimateInputTokens([m]);
+    if (m.role === 'system') {
+      if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
+      else plainTokens += tokens;
+      return;
+    }
+    const i = conversationIndex++;
+    if (i <= readEnd) readTokens += tokens;
+    else if (i <= writeEnd) writeTokens += tokens;
+    else plainTokens += tokens;
+  });
+
+  const tieredModel =
+    tier === null ? modelInfo : ({ ...modelInfo, pricing: { [tier]: modelInfo.pricing[tier] } } as ModelInfo);
+  const cachedInputUsd = getTextModelCost(tieredModel, plainTokens, 0, readTokens, writeTokens);
+  const uncachedInputUsd = getTextModelCost(tieredModel, estimatedInputTokens, 0);
+  const outputUsd = getTextModelCost(tieredModel, 0, estimatedOutputTokens);
+  return Math.max(cachedInputUsd, CACHED_INPUT_RESERVATION_FLOOR * uncachedInputUsd) + outputUsd;
+}
+
+/**
  * OpenAI's own API accepts these bare names as an alias for whatever dated snapshot is
  * current, but our catalog stores the dated snapshot id itself (ChatModels.GPT4_1 etc. in
  * @bike4mind/common), so a caller using OpenAI's convention otherwise finds no catalog
@@ -195,7 +303,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // false) and server tools (executeTools true) imply opposite loop semantics - silently
   // picking a winner could bill a server tool loop the client never asked for.
   if (params.serverTools?.length && options?.tools?.length) {
-    throw new Error(
+    throw new BadRequestError(
       '[CLI_COMPLETIONS] serverTools (server-executed) and options.tools (wire/client-executed) are mutually exclusive'
     );
   }
@@ -231,7 +339,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
       if (!actor?.isAdmin) {
-        throw new Error(
+        throw new BadRequestError(
           `[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`
         );
       }
@@ -257,7 +365,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   });
 
   if (!llm) {
-    throw new Error(`Failed to create LLM backend for model: ${model}`);
+    // Only an id outside the static catalog is caller input. A catalogued model with no backend
+    // means the platform key is missing or its model listing failed: an operator fault that must stay counted.
+    const message = `Failed to create LLM backend for model: ${model}`;
+    throw CHAT_MODELS.includes(model as ChatModels) ? new Error(message) : new BadRequestError(message);
   }
 
   llm.currentModel = model;
@@ -359,7 +470,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS,
       reservationOutputTokens(maxTokens, reasonsWithinOutputBudget(modelInfo))
     );
-    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
+    const estimatedUsdCost = estimateReservationUsd(modelInfo, messages, estimatedInputTokens, estimatedOutputTokens);
     reservedCredits = usdToCredits(estimatedUsdCost);
 
     // Rail the money path independently of whatever sized it. A non-finite estimate must
@@ -490,8 +601,16 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // (res 'close' -> abort -> AbortError here) mid tool-loop. Record the partial spend
     // as an errored event so org metering stays complete. creditsCharged is 0: the
     // reservation was refunded above and nothing settled. Status 'error' (no 'aborted'
-    // in USAGE_EVENT_STATUSES; a disconnect is an errored completion).
-    if (params.alwaysRecordUsage && modelInfo && (finalInputTokens > 0 || finalOutputTokens > 0)) {
+    // in USAGE_EVENT_STATUSES; a disconnect is an errored completion). A safety-classifier
+    // refusal is recorded as 'refusal' under the same gate as the settled success row
+    // (enforceCredits or alwaysRecordUsage), so Refusal Rate = refusals / calls stays unskewed;
+    // this path has no fallback loop, so the refused call is the whole request.
+    const isRefusal = error instanceof Error && isSafetyRefusalError(error);
+    const recordsUsage = enforceCredits || params.alwaysRecordUsage;
+    if (
+      modelInfo &&
+      ((isRefusal && recordsUsage) || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))
+    ) {
       db.usageEvents
         ?.record({
           requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
@@ -499,6 +618,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           ownerId: holderId,
           ownerType: holderType,
           feature: 'completion_api',
+          source,
+          apiKeyId: apiKeyInfo?.keyId,
           provider: modelInfo.backend,
           model,
           inputTokens: finalInputTokens,
@@ -513,7 +634,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             finalCacheCreationTokens
           ),
           creditsCharged: 0,
-          status: 'error',
+          status: isRefusal ? 'refusal' : 'error',
           latencyMs: Date.now() - completionStartTime,
         })
         .catch(err => logger?.warn?.('Failed to record aborted usage event', err));
@@ -590,8 +711,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         creditsCharged,
         // Same refund key the web chat path records: a stream aborted as degenerate is
         // priced normally (the provider tokens were spent) but must not read as a clean,
-        // fully-valued success. See buildEarlyStopStamp.
-        status: buildEarlyStopStamp(finalStopReason)?.usageEventStatus ?? 'ok',
+        // fully-valued success. See usageEventStatusForFinish.
+        status: usageEventStatusForFinish(finalStopReason),
         latencyMs: Date.now() - completionStartTime,
       })
       .catch(err => logger?.warn?.('Failed to record usage event', err));

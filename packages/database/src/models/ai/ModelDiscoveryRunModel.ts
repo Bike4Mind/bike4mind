@@ -87,6 +87,7 @@ const ModelDiscoveryRunSchema = new Schema<IModelDiscoveryRunDocument>(
       required: false,
     },
     unmatchedIds: { type: [String], required: false },
+    frozenProfileIds: { type: [String], required: false },
     changes: {
       type: new Schema(
         {
@@ -277,6 +278,7 @@ const RUN_LIST_PROJECTION = {
   catalogDiff: 0,
   droppedRecords: 0,
   unmatchedIds: 0,
+  frozenProfileIds: 0,
 } as const;
 
 /**

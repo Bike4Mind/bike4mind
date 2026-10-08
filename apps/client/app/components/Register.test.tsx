@@ -28,6 +28,11 @@ vi.mock('@client/app/hooks/data/mfa', () => ({
   useSetupMFA: () => ({ mutateAsync: mocks.mutateAsync, isPending: false }),
   useVerifyMFASetup: () => ({ mutateAsync: mocks.mutateAsync, isPending: false }),
 }));
+vi.mock('@client/app/hooks/data/passkeys', () => ({
+  useVerifyPasskeyMFA: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  describePasskeyMfaError: () => 'Passkey verification failed',
+  passkeysSupported: () => false,
+}));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ setCurrentUser: mocks.setCurrentUser, currentUser: null }),
 }));

@@ -1,0 +1,55 @@
+{
+  "scenario": "image-to-video.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built like text-to-video; the image rides as image.url (a data URI, redacted here as the recorder does). Replace with a recording (see record.ts).",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/videos/generations",
+        "body": {
+          "model": "grok-imagine-video-1.5",
+          "prompt": "The color slowly ripples like water, camera static.",
+          "duration": 2,
+          "aspect_ratio": "16:9",
+          "resolution": "480p",
+          "image": { "url": "<redacted:data-uri 64 chars>" }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "request_id": "synthetic-image-to-video" }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": { "method": "GET", "path": "/v1/videos/synthetic-image-to-video" },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "status": "pending", "progress": 35 }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": { "method": "GET", "path": "/v1/videos/synthetic-image-to-video" },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": {
+          "status": "done",
+          "progress": 100,
+          "model": "grok-imagine-video-1.5",
+          "video": {
+            "url": "https://vidgen.x.ai/synthetic/image-to-video.mp4",
+            "duration": 2,
+            "respect_moderation": true
+          },
+          "usage": { "cost_in_usd_ticks": 1600000000 }
+        }
+      }
+    }
+  ]
+}

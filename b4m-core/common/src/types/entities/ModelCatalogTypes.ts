@@ -176,7 +176,7 @@ const ModelRecordFields = z.strictObject({
   /** Operator-owned block. Discovery may never set or clear it. */
   disabled: z.boolean().optional(),
   disabledReason: z.string().optional(),
-  /** Discovery-owned block ("discovered, awaiting price"). Operators may never clear it. */
+  /** Discovery-owned block (e.g. "discovered, awaiting price"). Operators may never clear it. */
   autoDisabled: z.boolean().optional(),
   autoDisabledReason: z.string().optional(),
   private: z.boolean().optional(),
@@ -824,6 +824,8 @@ export const ModelDiscoveryRun = z.object({
   joinCoverage: z.array(DiscoveryJoinCoverage).optional(),
   /** Ids no aggregator matched: a work item, not a log line. */
   unmatchedIds: z.array(z.string()).optional(),
+  /** Bedrock profile ids whose foundation id a covered listing omitted: neither sighted nor missed. */
+  frozenProfileIds: z.array(z.string()).optional(),
   changes: DiscoveryRunChanges.optional(),
   /** Convergence passes the run made; the cap being hit is worth seeing. */
   passes: z.number().int().nonnegative().optional(),

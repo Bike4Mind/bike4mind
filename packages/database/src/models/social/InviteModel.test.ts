@@ -38,13 +38,14 @@ describe('InviteModel — findAllByPendingUserIdOrEmail / countPendingByUserId (
     return _id.toString();
   };
 
-  const createPendingInvite = (pendingEmail: string) =>
+  const createPendingInvite = (pendingEmail: string, expiresAt?: Date) =>
     Invite.create({
       type: InviteType.Session,
       documentId: new mongoose.Types.ObjectId().toString(),
       recipients: { pending: [pendingEmail], accepted: [], refused: [] },
       remaining: 1,
       accepted: 0,
+      expiresAt,
     });
 
   it('does not throw or log a MongoServerError for a user with a null email', async () => {
@@ -119,5 +120,20 @@ describe('InviteModel — findAllByPendingUserIdOrEmail / countPendingByUserId (
 
     expect(result).toHaveLength(1);
     await expect(inviteRepository.countPendingByUserId(userId)).resolves.toBe(1);
+  });
+
+  it('excludes expired pending invites from the list and the count', async () => {
+    const email = 'invitee@example.com';
+    const userId = await insertUserWithEmail(email);
+    const day = 24 * 60 * 60 * 1000;
+    await createPendingInvite(email, new Date(Date.now() - day));
+    await createPendingInvite(email, new Date(Date.now() + day));
+    await createPendingInvite(email);
+
+    const result = await inviteRepository.findAllByPendingUserIdOrEmail(userId, { limit: 20, page: 1 });
+
+    expect(result).toHaveLength(2);
+    expect(result.every(invite => !invite.expiresAt || new Date(invite.expiresAt) > new Date())).toBe(true);
+    await expect(inviteRepository.countPendingByUserId(userId)).resolves.toBe(2);
   });
 });

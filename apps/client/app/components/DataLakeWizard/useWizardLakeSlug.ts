@@ -26,11 +26,14 @@ export function useWizardLakeSlug(): string {
   const { debouncedValue: debouncedName, setValue: setDebounceName } = useDebounceValue(config.name);
   useEffect(() => setDebounceName(config.name), [config.name, setDebounceName]);
   // A name that cannot form a slug only earns a 400 from the server; the source step blocks it anyway.
+  // No tagPrefix: the slug half of the answer doesn't depend on it, and useWizardIdentityPreview
+  // sends none either while the prefix is auto-derived, so the two share the query.
   const slugPreview = useDataLakeSlugPreview(
     debouncedName,
+    undefined,
     !targetLake && !reusedLake && isValidDataLakeSlug(debouncedName)
   );
-  const settledPreview = debouncedName === config.name ? slugPreview.data : undefined;
+  const settledPreview = debouncedName === config.name ? slugPreview.data?.slug : undefined;
 
   if (targetLake) return targetLake.slug;
   return reusedLake?.slug ?? settledPreview ?? slugifyDataLakeName(config.name);

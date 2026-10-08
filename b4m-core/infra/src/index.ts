@@ -1,6 +1,6 @@
 export type { DlqDescriptor, DlqResolvers, CreateDlqRegistryOptions } from './types.js';
 export { createDlqRegistry } from './dlqRegistry.js';
-export { isMonitoredStage } from './stageGating.js';
+export { isMonitoredStage, PRODUCTION_STAGES } from './stageGating.js';
 export type {
   QueueEncryption,
   QueueTransformArgs,
@@ -50,3 +50,32 @@ export type { HelpCorpusHashSources } from './helpCorpusHash.js';
 export { computeHelpCorpusHash } from './helpCorpusHash.js';
 export type { McpContentHashSources } from './mcpContentHash.js';
 export { computeMcpContentHash } from './mcpContentHash.js';
+export type {
+  ValidationSeverity,
+  ValidationStatus,
+  Tier1ValidationResult,
+  Tier1Enforcement,
+  Tier1SecretSpec,
+  Tier1SecretStatus,
+  EvaluateTier1SecretsOptions,
+} from './tier1Secrets.js';
+export {
+  SST_PLACEHOLDER_VALUE,
+  NOT_CONFIGURED_PLACEHOLDER,
+  COMMON_PLACEHOLDERS,
+  JWT_SECRET_MIN_LENGTH,
+  JWT_SECRET_WARN_LENGTH,
+  SESSION_SECRET_MIN_LENGTH,
+  SHARED_SECRET_MIN_LENGTH,
+  TIER1_SECRET_SPECS,
+  isCommonPlaceholder,
+  validateEncryptionKey,
+  validateMongoUri,
+  validateSessionSecret,
+  validateJwtSecret,
+  validateSharedSecret,
+  evaluateTier1Secrets,
+  formatTier1DeployFailure,
+} from './tier1Secrets.js';
+export type { QuestMetricName } from './questMetricSpecs.js';
+export { QUESTS_NAMESPACE, QUEST_METRICS } from './questMetricSpecs.js';
