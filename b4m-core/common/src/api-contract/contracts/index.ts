@@ -4,6 +4,7 @@ import { startAgentExecutionContract, getAgentExecutionContract } from './agentE
 import { sessionUpdateContract } from './sessionUpdate.contract';
 import { sessionGetContract } from './sessionGet.contract';
 import { sessionDeleteContract } from './sessionDelete.contract';
+import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
 import { synthesizeSpeechContract } from './tts.contract';
@@ -49,6 +50,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   sessionGetContract,
   sessionUpdateContract,
   sessionDeleteContract,
+  sessionCloneContract,
   executeToolContract,
   createCompletionContract,
   synthesizeSpeechContract,

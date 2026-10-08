@@ -123,6 +123,15 @@ export const SessionResponseSchema = z.object({
 
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
 
+/** Request body for POST /api/v1/sessions/{id}/clone. */
+export const SessionCloneRequestSchema = z
+  .object({
+    targetSurface: z.string().nullable().optional(),
+  })
+  .default({});
+
+export type SessionCloneRequest = z.infer<typeof SessionCloneRequestSchema>;
+
 /** Query for GET /api/v1/sessions: the pagination convention plus flat filters. */
 export const ListSessionsQuerySchema = PaginationQuerySchema.extend({
   search: z

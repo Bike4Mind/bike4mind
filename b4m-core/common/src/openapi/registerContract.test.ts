@@ -42,16 +42,17 @@ const contract: EndpointContract = {
  */
 type FixtureOperation = {
   parameters?: { name: string; in: string; required?: boolean; description?: string; schema?: { type?: unknown } }[];
+  requestBody?: { required?: boolean };
   responses?: Record<string, unknown>;
 };
 
-function getOperation(document: unknown, path: string): FixtureOperation {
+function getOperation(document: unknown, path: string, method = 'get'): FixtureOperation {
   const paths = (document as { paths?: unknown }).paths;
   const pathItem = typeof paths === 'object' && paths !== null ? (paths as Record<string, unknown>)[path] : undefined;
   const operation =
-    typeof pathItem === 'object' && pathItem !== null ? (pathItem as Record<string, unknown>).get : undefined;
+    typeof pathItem === 'object' && pathItem !== null ? (pathItem as Record<string, unknown>)[method] : undefined;
   if (typeof operation !== 'object' || operation === null) {
-    throw new Error(`Expected GET ${path} to be registered in the generated document`);
+    throw new Error(`Expected ${method.toUpperCase()} ${path} to be registered in the generated document`);
   }
   return operation as FixtureOperation;
 }
@@ -143,5 +144,25 @@ describe('registerContract - queryParams', () => {
     });
     const op = getOperation(generated, '/api/v1/fixture-query-only');
     expect(op.responses?.['422']).toBeDefined();
+  });
+
+  it('documents an optional request body when the contract permits omission', () => {
+    const optionalBody: EndpointContract = {
+      ...contract,
+      method: 'post',
+      operationId: 'createFixtureOptionalBody',
+      path: '/api/v1/fixture-optional-body',
+      pathParams: undefined,
+      queryParams: undefined,
+      request: z.object({ value: z.string().optional() }).default({}),
+      requestBodyRequired: false,
+    };
+    registerContract(optionalBody);
+    const generated = new OpenApiGeneratorV31(registry.definitions).generateDocument({
+      openapi: '3.1.0',
+      info: { title: 'fixture', version: '0.0.0' },
+    });
+
+    expect(getOperation(generated, optionalBody.path, 'post').requestBody).toMatchObject({ required: false });
   });
 });

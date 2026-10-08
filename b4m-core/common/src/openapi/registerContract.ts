@@ -180,16 +180,17 @@ export function registerContract(contract: EndpointContract): void {
   }
 
   // Any NON-streaming contract with a request body, path params, or query params
-  // returns 422 on validation failure. Body validation: both adapters guarantee it
-  // (Next: ZodError -> errorHandler -> UnprocessableEntity; Lambda: safeParse ->
-  // 422). Path/query-param validation currently only runs on the Next adapter (see
-  // the `pathParams`/`queryParams` doc comments in api-contract/types.ts) -
-  // documenting 422 here regardless is still correct for every contract actually
-  // served today. Auto-document it (unless the contract declares its own 422).
+  // documents its validation failure status. 422 is the default; legacy routes can
+  // preserve a published 400 with validationErrorStatus.
   // Streaming endpoints are excluded: they open the stream first, so a bad body
-  // arrives as an in-band SSE `error` event, not a 422 JSON body.
-  if ((contract.request || contract.pathParams || contract.queryParams) && !contract.streaming && !responses['422']) {
-    responses['422'] = {
+  // arrives as an in-band SSE `error` event, not a JSON error body.
+  const validationStatus = contract.validationErrorStatus ?? 422;
+  if (
+    (contract.request || contract.pathParams || contract.queryParams) &&
+    !contract.streaming &&
+    !responses[String(validationStatus)]
+  ) {
+    responses[String(validationStatus)] = {
       description: 'Request failed validation.',
       content: { 'application/json': { schema: ErrorResponse } },
     };
@@ -258,7 +259,7 @@ export function registerContract(contract: EndpointContract): void {
             ...(query && { query }),
             ...(requestSchema && {
               body: {
-                required: true,
+                required: contract.requestBodyRequired ?? true,
                 content: {
                   'application/json': {
                     schema: requestSchema.openapi(`${contract.operationId}Request`, {

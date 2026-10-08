@@ -208,6 +208,18 @@ describe('nextRouteForContract', () => {
   });
 
   describe('middleware ordering', () => {
+    it('uses a contract legacy validation status instead of the default 422', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const handlerFn = vi.fn();
+      const route = nextRouteForContract(makeContract({ validationErrorStatus: 400 })).post(handlerFn);
+
+      const { req, res } = fire({ apiKey: 'b4m_live_key', body: { message: 42 } });
+      await route(req, res);
+
+      expect(res._getStatusCode()).toBe(400);
+      expect(handlerFn).not.toHaveBeenCalled();
+    });
+
     it('runs caller-mounted middleware BEFORE contract validation', async () => {
       // The regression this guards: installing validation with `router.use()` at
       // construction time puts it ahead of everything the caller mounts, so a flood
