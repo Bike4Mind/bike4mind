@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runCompletion, EmptyCompletionError } from './runCompletion';
+import { runCompletion, EmptyCompletionError, NoReplyCompletionError } from './runCompletion';
 import { InMemoryStreamTransport, type ScriptedStep } from './InMemoryStreamTransport';
 import { createTransientRetryPolicy } from './retryPolicy';
 import type { CompletionRequest, RetryPolicy } from './streamTransport';
@@ -73,6 +73,21 @@ describe('runCompletion', () => {
     const { transport, callback, promise } = run([[]], policy(1));
     await expect(promise).rejects.toBeInstanceOf(EmptyCompletionError);
     expect(transport.attempts).toBe(2); // retried before giving up
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a blank turn that finished at max_tokens, and says why', async () => {
+    // A reasoning model that spent the whole budget thinking: every frame is blank.
+    const blankEnd: StreamEvent = {
+      type: 'content',
+      text: '',
+      usage: { outputTokens: 4096 },
+      stopReason: 'max_tokens',
+    };
+    const { transport, callback, promise } = run([[{ emit: content('') }, { emit: blankEnd }]], policy(2));
+    await expect(promise).rejects.toThrow(/output limit on reasoning/);
+    await expect(promise).rejects.toBeInstanceOf(NoReplyCompletionError);
+    expect(transport.attempts).toBe(1); // one billed request, not three
     expect(callback).not.toHaveBeenCalled();
   });
 

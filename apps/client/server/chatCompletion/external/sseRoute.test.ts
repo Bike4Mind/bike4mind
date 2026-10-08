@@ -176,14 +176,17 @@ describe('POST /api/ai/v1/completions', () => {
     mockExecuteCompletion.mockImplementationOnce(
       async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
         await params.onChunk(['<think>'], { channel: 'reasoning' });
-        await params.onChunk(['private reasoning'], { channel: 'reasoning' });
+        await params.onChunk(['private reasoning'], {
+          channel: 'reasoning',
+          toolsUsed: [{ name: 'search', arguments: '{}' }],
+        });
         await params.onChunk(['</think>'], { channel: 'reasoning' });
         await params.onChunk(['', 'hello'], { outputTokens: 5 });
       }
     );
     const body = await (await post()).text();
+    // Join every frame, not just content: a reasoning frame in a tool loop goes out as tool_use.
     const text = frames(body)
-      .filter(f => f.type === 'content')
       .map(f => f.text)
       .join('');
     expect(text).toBe('hello');

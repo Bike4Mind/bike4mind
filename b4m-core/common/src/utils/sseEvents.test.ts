@@ -138,6 +138,16 @@ describe('buildSSEEvent', () => {
     expect(e.thinking).toHaveLength(1);
   });
 
+  it('blanks reasoning text on a tool_use frame too', () => {
+    // In a tool loop the reasoning frame carries toolsUsed, so it goes out as tool_use.
+    const e = buildSSEEvent(['<think>x'], {
+      channel: 'reasoning',
+      toolsUsed: [{ name: 'search', arguments: '{}' }] as never,
+    });
+    expect(e.type).toBe('tool_use');
+    expect(e.text).toBe('');
+  });
+
   it('keeps the text of untagged and tool-artifact frames', () => {
     expect(buildSSEEvent(['', 'the answer']).text).toBe('the answer');
     expect(buildSSEEvent(['artifact'], { channel: 'tool-artifact' }).text).toBe('artifact');
