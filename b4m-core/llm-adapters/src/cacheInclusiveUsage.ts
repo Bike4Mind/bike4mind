@@ -24,11 +24,33 @@
  */
 export function splitCacheInclusiveInput(
   totalPromptTokens: number,
-  cacheReadTokens: number
-): { inputTokens: number; cacheReadInputTokens?: number } {
-  if (cacheReadTokens <= 0) return { inputTokens: totalPromptTokens };
-  const cached = Math.min(cacheReadTokens, totalPromptTokens);
-  return { inputTokens: Math.max(0, totalPromptTokens - cached), cacheReadInputTokens: cached };
+  cacheReadTokens: number,
+  cacheWriteTokens: number = 0
+): { inputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } {
+  const cached = Math.max(0, Math.min(cacheReadTokens, totalPromptTokens));
+  const written = Math.max(0, Math.min(cacheWriteTokens, totalPromptTokens - cached));
+  return {
+    inputTokens: Math.max(0, totalPromptTokens - cached - written),
+    ...(cached > 0 ? { cacheReadInputTokens: cached } : {}),
+    ...(written > 0 ? { cacheCreationInputTokens: written } : {}),
+  };
+}
+
+/**
+ * Prompt tokens OpenAI billed as cache WRITES (1.25x the input rate from GPT-5.6 on), which it
+ * reports inside the prompt count like cached reads. Chat Completions nests them under
+ * `prompt_tokens_details`, the Responses API under `input_tokens_details`.
+ */
+export function cacheWriteTokensFromUsage(usage: Record<string, unknown> | undefined | null): number {
+  if (!usage) return 0;
+  const candidates: unknown[] = [
+    (usage.prompt_tokens_details as Record<string, unknown> | undefined)?.cache_write_tokens,
+    (usage.input_tokens_details as Record<string, unknown> | undefined)?.cache_write_tokens,
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
 }
 
 /**

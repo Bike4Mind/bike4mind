@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
+import { cacheWriteTokensFromUsage, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 
 describe('splitCacheInclusiveInput', () => {
   it('subtracts the cached count so the two components are disjoint', () => {
@@ -85,5 +85,30 @@ describe('cachedTokensFromUsage', () => {
     ['NaN', { cached_tokens: Number.NaN }],
   ])('reports no cache read for %s', (_label, usage) => {
     expect(cachedTokensFromUsage(usage as Record<string, unknown> | undefined)).toBe(0);
+  });
+});
+
+describe('cache writes', () => {
+  it('splits a prompt into disjoint new, read and write parts', () => {
+    expect(splitCacheInclusiveInput(201430, 133878, 67000)).toEqual({
+      inputTokens: 552,
+      cacheReadInputTokens: 133878,
+      cacheCreationInputTokens: 67000,
+    });
+  });
+
+  it('never lets reads plus writes exceed the prompt', () => {
+    expect(splitCacheInclusiveInput(100, 80, 80)).toEqual({
+      inputTokens: 0,
+      cacheReadInputTokens: 80,
+      cacheCreationInputTokens: 20,
+    });
+  });
+
+  it('reads the write count from either OpenAI usage spelling', () => {
+    expect(cacheWriteTokensFromUsage({ input_tokens_details: { cache_write_tokens: 7, cached_tokens: 1 } })).toBe(7);
+    expect(cacheWriteTokensFromUsage({ prompt_tokens_details: { cache_write_tokens: 9 } })).toBe(9);
+    expect(cacheWriteTokensFromUsage({ prompt_tokens_details: { cached_tokens: 9 } })).toBe(0);
+    expect(cacheWriteTokensFromUsage(undefined)).toBe(0);
   });
 });

@@ -310,3 +310,83 @@ describe('OpenAI cached-input rates', () => {
     expect(getTextModelCost(model, 0, 0, 1_000_000, 0)).toBeCloseTo(0.5, 6);
   });
 });
+
+describe('OpenAI cache writes (GPT-5.6 and later)', () => {
+  it('splits streamed usage into new, read and write parts that re-sum to the prompt', async () => {
+    const { backend } = streamingBackend([
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 201430,
+            completion_tokens: 40,
+            prompt_tokens_details: { cached_tokens: 133878, cache_write_tokens: 67000 },
+          },
+        },
+      ],
+    ]);
+
+    const info = settled(await run(backend, ChatModels.GPT5_6_SOL, { stream: true }));
+
+    expect(info.cacheReadInputTokens).toBe(133878);
+    expect(info.cacheCreationInputTokens).toBe(67000);
+    expect(info.inputTokens).toBe(552);
+  });
+
+  it('splits non-streamed usage the same way', async () => {
+    const { backend } = nonStreamingBackend([
+      {
+        choices: [{ index: 0, message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }],
+        usage: {
+          prompt_tokens: 2000,
+          completion_tokens: 50,
+          prompt_tokens_details: { cached_tokens: 1000, cache_write_tokens: 800 },
+        },
+      },
+    ]);
+
+    const info = settled(await run(backend, ChatModels.GPT5_6_SOL, { stream: false }));
+
+    expect(info).toMatchObject({ inputTokens: 200, cacheReadInputTokens: 1000, cacheCreationInputTokens: 800 });
+  });
+
+  it('splits Responses usage and sums writes across a tool round', async () => {
+    const { backend } = responsesBackend(
+      [
+        {
+          output: [{ type: 'function_call', call_id: 'c1', name: 'lookup', arguments: '{}' }],
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 20,
+            input_tokens_details: { cached_tokens: 600, cache_write_tokens: 300 },
+          },
+        },
+      ],
+      [
+        {
+          choices: [{ index: 0, message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 1200,
+            completion_tokens: 30,
+            prompt_tokens_details: { cached_tokens: 500, cache_write_tokens: 400 },
+          },
+        },
+      ]
+    );
+
+    const info = settled(await run(backend, ChatModels.GPT5_6_SOL, { tools: [sampleTool] }));
+
+    expect(info.cacheCreationInputTokens).toBe(700);
+    expect(info.cacheReadInputTokens).toBe(1100);
+    expect(info.inputTokens).toBe(2200 - 1100 - 700);
+  });
+
+  it('bills a write at 1.25x the Sol input rate', () => {
+    const sol = {
+      id: ChatModels.GPT5_6_SOL,
+      backend: 'openai',
+      pricing: { 272000: { input: 0.000005, output: 0.00003 } },
+    } as never;
+    expect(getTextModelCost(sol, 0, 0, 0, 1_000_000)).toBeCloseTo(6.25, 6);
+  });
+});
