@@ -173,6 +173,10 @@ Register the trust config in the same run. Adding `federatedIdp` to an existing 
 
 There is no admin UI or API for registration yet.
 
+A stock self-hosted stack does not expose the completions API (`/api/ai/v1/completions`) on its public origin, so your app's completion calls return 404. Uncomment the `@completions` block in `selfhost/caddy/Caddyfile` and set `CHAT_COMPLETION_PUBLIC_URL=https://<your-domain>` in `.env.selfhost`.
+
+Set `OAUTH_RSA_PRIVATE_KEY` (a base64-encoded PKCS8 PEM) to the same value on every instance. Without it, each process generates its own signing key at startup, so ID tokens stop verifying after a restart and verify only intermittently across replicas.
+
 ### Hosted B4M
 
 Registration on hosted B4M is done by the maintainers on request and is not self-serve yet. Open an issue on the [Bike4Mind GitHub repository](https://github.com/bike4mind/bike4mind/issues) with your app's name and redirect URIs, and never post a secret in the issue.
@@ -238,7 +242,7 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 ### Before you start
 
-`GET https://<your-b4m-host>/api/v1/credits` with the user's `ai:generate` key returns `{ "balance": 31667 }`. Use it as a pre-flight check before a batch of work. A 401 means the key itself was rejected (see "One re-mint" above).
+`GET https://<your-b4m-host>/api/v1/credits` with the user's `ai:generate` key returns `{ "balance": 31667 }`. Use it as an advisory pre-flight check before a batch of work, not as a gate: when the deployment does not enforce credits (the self-hosted default), balances can sit at 0 while completions succeed. The in-band `insufficient_credits` event below is the authoritative signal. A 401 means the key itself was rejected (see "One re-mint" above).
 
 ### During a completion
 
@@ -292,7 +296,7 @@ Request `me:read` at the exchange (`scope: "ai:generate me:read"`) and call `GET
 
 ## 9. Worked example
 
-A minimal server-side flow in TypeScript, using Node 18+ (`fetch`, `crypto`) and [`jose`](https://github.com/panva/jose) for ID-token verification. Session storage and the HTTP framework are left to you: `session` stands for your server-side session store.
+A minimal server-side flow in TypeScript, run as an ES module (`"type": "module"`, since it uses top-level `await`), using Node 18+ (`fetch`, `crypto`) and [`jose`](https://github.com/panva/jose) for ID-token verification. Session storage and the HTTP framework are left to you: `session` stands for your server-side session store.
 
 ### Setup
 
@@ -371,10 +375,10 @@ async function callback(session: Record<string, string>, query: URLSearchParams)
 ```ts
 type CachedKey = { key: string; expiresAt: number };
 const keys = new Map<string, CachedKey>();
-const inFlight = new Map<string, Promise<string>>(); // userId -> the mint in progress
+const inFlight = new Map<string, { idToken: string; promise: Promise<string> }>(); // userId -> mint in progress
 // Keyed by ID token, so a fresh sign-in is not blocked by a failure on the old token.
 const failures = new Map<string, number>(); // idToken -> retry-after timestamp
-let clientBackoffUntil = 0; // a 429/503 from the exchange pauses minting for every user
+let clientBackoffUntil = 0; // a 429 from the exchange pauses minting for every user
 
 const SKEW_MS = 60_000;
 const DEFAULT_TTL_S = 900;
@@ -389,11 +393,15 @@ async function getUserKey(userId: string, idToken: string, { rejectedKey = '' } 
   const usable = cached && cached.expiresAt - SKEW_MS > Date.now() && cached.key !== rejectedKey;
   if (usable) return cached.key;
   const pending = inFlight.get(userId);
-  if (pending) return pending;
+  if (pending) {
+    // Another session's token may be the one that fails; then mint with ours.
+    if (pending.idToken === idToken) return pending.promise;
+    return pending.promise.catch(() => getUserKey(userId, idToken, { rejectedKey }));
+  }
 
-  const mint = mintKey(userId, idToken).finally(() => inFlight.delete(userId));
-  inFlight.set(userId, mint);
-  return mint;
+  const promise = mintKey(userId, idToken).finally(() => inFlight.delete(userId));
+  inFlight.set(userId, { idToken, promise });
+  return promise;
 }
 
 async function mintKey(userId: string, idToken: string): Promise<string> {
@@ -417,9 +425,12 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
   if (res.status === 401 || res.status === 403) {
     failures.set(idToken, Date.now() + NEGATIVE_TTL_MS);
     keys.delete(userId);
-  } else if (res.status === 429 || res.status === 503) {
+  } else if (res.status === 429) {
     const retryAfterS = Number(res.headers.get('Retry-After')) || NEGATIVE_TTL_MS / 1000;
     clientBackoffUntil = Date.now() + retryAfterS * 1000;
+  } else if (res.status === 503) {
+    // This user's consent lookup failed; retry them later without pausing everyone.
+    failures.set(idToken, Date.now() + NEGATIVE_TTL_MS);
   }
   if (!res.ok) throw new Error(`ai-token exchange failed: ${res.status}`);
 
@@ -435,6 +446,11 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
 ```ts
 class OutOfCreditsError extends Error {}
 class SpendCapError extends Error {}
+class TruncatedReplyError extends Error {
+  constructor(readonly partial: string) {
+    super('Reply was cut off at max_tokens');
+  }
+}
 
 async function checkBalance(key: string): Promise<Response> {
   return fetch(`${B4M}/api/v1/credits`, { headers: { Authorization: `Bearer ${key}` } });
@@ -444,6 +460,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
   let key = await getUserKey(userId, idToken);
 
   // Pre-flight: a 401 here means the cached key was rejected. Re-mint exactly once.
+  // The balance is advisory; the in-band insufficient_credits event is authoritative.
   let pre = await checkBalance(key);
   if (pre.status === 401) {
     key = await getUserKey(userId, idToken, { rejectedKey: key });
@@ -451,7 +468,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
   }
   if (!pre.ok) throw new Error(`Balance check failed: ${pre.status}`);
   const { balance } = await pre.json();
-  if (balance <= 0) throw new OutOfCreditsError('User has no B4M credits');
+  if (balance <= 0) console.warn(`User ${userId} shows a zero balance; the completion may be refused`);
 
   const res = await fetch(`${B4M}/api/ai/v1/completions`, {
     method: 'POST',
@@ -465,6 +482,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
 
   // The status is 200 even on failure; read the events.
   let text = '';
+  let stopReason: string | undefined;
   let buffer = '';
   const decoder = new TextDecoder();
   const reader = res.body.getReader();
@@ -476,13 +494,18 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
       // Reasoning models wrap their reasoning in <think> spans; never show it to users.
-      if (data === '[DONE]') return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      if (data === '[DONE]') {
+        const reply = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        if (stopReason === 'max_tokens') throw new TruncatedReplyError(reply);
+        return reply;
+      }
       const event = JSON.parse(data);
       if (event.type === 'error') {
         if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
         if (event.code === 'spend_cap_exceeded') throw new SpendCapError(event.message);
         throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
       }
+      if (event.stopReason) stopReason = event.stopReason;
       if (event.type === 'content') text += event.text;
     }
   }
@@ -490,7 +513,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
 }
 ```
 
-Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `SpendCapError`, tell them a B4M spending cap was reached (topping up will not help).
+Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `SpendCapError`, tell them a B4M spending cap was reached (topping up will not help). On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens` (or omit it, which lets B4M size the ceiling; recommended for reasoning models).
 
 ## Further reading
 

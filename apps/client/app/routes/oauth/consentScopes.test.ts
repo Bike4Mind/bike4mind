@@ -19,7 +19,7 @@ describe('toConsentScopes', () => {
     // must not read as media-only; me:read must not fall through to its raw id.
     expect(toConsentScopes(['ai:generate', 'me:read'])).toEqual([
       { id: 'ai:generate', label: 'Use your Bike4Mind credits to generate AI responses, images, video and audio' },
-      { id: 'me:read', label: 'See your plan, subscription and credit balance' },
+      { id: 'me:read', label: 'See your name, plan, subscription, credit balance and feature access' },
     ]);
   });
 
