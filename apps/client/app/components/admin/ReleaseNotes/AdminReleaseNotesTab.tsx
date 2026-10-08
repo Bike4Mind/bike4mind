@@ -43,6 +43,11 @@ const ReleaseNoteCard: React.FC<{
         <Typography level="body-sm">{note.releaseTag}</Typography>
         <Typography level="body-xs">publishes {new Date(note.publishAt).toLocaleString()}</Typography>
         {note.editedAt && <Typography level="body-xs">edited</Typography>}
+        {note.deniedTerm && (
+          <Chip color="danger" variant="soft" data-testid="release-notes-denied-chip">
+            Withheld from the feed: mentions &quot;{note.deniedTerm}&quot;
+          </Chip>
+        )}
       </Stack>
       <Typography level="title-md">{note.headline || '(no headline)'}</Typography>
       {note.summary && <Typography level="body-sm">{note.summary}</Typography>}

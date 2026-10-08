@@ -17,6 +17,7 @@ export interface AdminReleaseNote {
   deployedAt: string;
   deployedSha: string;
   editedAt: string | null;
+  deniedTerm: string | null;
 }
 
 export type ReleaseNoteEdit = Partial<Pick<AdminReleaseNote, 'headline' | 'summary' | 'items'>>;

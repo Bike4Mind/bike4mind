@@ -4,7 +4,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 import { ForbiddenError, UnprocessableEntityError } from '@server/utils/errors';
-import { toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
+import { loadReleaseNotesConfig, toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
 
 const QuerySchema = z.object({
   status: z.enum(['scheduled', 'published', 'hidden']).default('scheduled'),
@@ -28,6 +28,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   const cursorScope = `admin.release-notes.${status}`;
   const after = cursor === undefined ? undefined : decodeTimeIdCursor(cursor, cursorScope);
 
+  const { config } = await loadReleaseNotesConfig(req.logger);
   const now = new Date();
   const { items, hasMore } = await releaseNoteRepository.adminList({
     status,
@@ -37,7 +38,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   });
   const last = items[items.length - 1];
   return res.json({
-    data: items.map(note => toAdminReleaseNote(note, now)),
+    data: items.map(note => toAdminReleaseNote(note, now, config.denylist)),
     next_cursor: hasMore ? encodeTimeIdCursor(cursorScope, { at: last.publishAt, id: last.id }) : null,
   });
 });

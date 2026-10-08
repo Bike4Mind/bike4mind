@@ -1,10 +1,15 @@
 import { z } from 'zod';
 import { releaseNoteRepository } from '@bike4mind/database';
-import { ApiKeyScope, findDenied } from '@bike4mind/common';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { loadDenylistOrThrow, noteOrThrow, toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
+import {
+  findDeniedInNote,
+  loadDenylistOrThrow,
+  noteOrThrow,
+  toAdminReleaseNote,
+} from '@server/releaseNotes/adminReleaseNotes';
 
 const ActionSchema = z.object({ action: z.enum(['hide', 'unhide', 'publishNow']) }).strict();
 
@@ -25,8 +30,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     const denylist = await loadDenylistOrThrow(req.logger);
     const current = await releaseNoteRepository.findById(id);
     if (!current) throw new NotFoundError('Release note not found');
-    const texts = [current.headline, current.summary, ...current.items.map(item => item.text)];
-    const term = texts.map(text => findDenied(text, denylist)).find(Boolean);
+    const term = findDeniedInNote(current, denylist);
     if (term) throw new BadRequestError(`This release note mentions "${term}"; edit it before it goes live`);
   }
   const result =

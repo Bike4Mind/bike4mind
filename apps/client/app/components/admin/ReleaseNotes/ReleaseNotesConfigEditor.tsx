@@ -6,6 +6,7 @@ import {
   Chip,
   ChipDelete,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Stack,
@@ -118,6 +119,9 @@ const ConfigForm: React.FC<{ initial: ReleaseNotesConfig; malformed: boolean }> 
           }}
           slotProps={{ input: { 'data-testid': 'release-notes-config-denylist-input' } }}
         />
+        <FormHelperText>
+          Applies to existing notes too: the public feed withholds any note that matches until it is edited.
+        </FormHelperText>
       </FormControl>
       <Box>
         <Button onClick={onSave} loading={save.isPending} data-testid="release-notes-config-save-btn">

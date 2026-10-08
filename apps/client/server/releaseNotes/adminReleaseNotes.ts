@@ -5,6 +5,7 @@ import {
   type ReleaseNoteMutationResult,
 } from '@bike4mind/database';
 import {
+  findDenied,
   parseReleaseNotesConfig,
   ReleaseNotesConfigSchema,
   type ReleaseNoteItem,
@@ -27,9 +28,23 @@ export interface AdminReleaseNote {
   deployedAt: string;
   deployedSha: string;
   editedAt: string | null;
+  // The denylist term this note matches, which keeps it out of the public feed until it is edited.
+  deniedTerm: string | null;
 }
 
-export const toAdminReleaseNote = (note: IReleaseNoteDocument, now = new Date()): AdminReleaseNote => ({
+type ReleaseNoteCopy = Pick<IReleaseNoteDocument, 'headline' | 'summary' | 'items'>;
+
+/** The first denylist term anywhere in a note's customer-facing copy. */
+export const findDeniedInNote = (note: ReleaseNoteCopy, denylist: string[]): string | undefined =>
+  [note.headline, note.summary, ...note.items.map(item => item.text)]
+    .map(text => findDenied(text, denylist))
+    .find(Boolean);
+
+export const toAdminReleaseNote = (
+  note: IReleaseNoteDocument,
+  now = new Date(),
+  denylist: string[] = []
+): AdminReleaseNote => ({
   id: note.id,
   releaseTag: note.releaseTag,
   headline: note.headline,
@@ -40,6 +55,7 @@ export const toAdminReleaseNote = (note: IReleaseNoteDocument, now = new Date())
   deployedAt: note.deployedAt.toISOString(),
   deployedSha: note.deployedSha,
   editedAt: note.editedAt ? note.editedAt.toISOString() : null,
+  deniedTerm: findDeniedInNote(note, denylist) ?? null,
 });
 
 export function noteOrThrow(result: ReleaseNoteMutationResult): IReleaseNoteDocument {
@@ -59,7 +75,7 @@ export async function loadReleaseNotesConfig(
   );
   const parsed = parseReleaseNotesConfig(settings[RELEASE_NOTES_SETTING]);
   if (parsed.success) return { config: parsed.data, malformed: false };
-  logger.warn(`[admin/release-notes] ${RELEASE_NOTES_SETTING} is malformed`, { issues: parsed.error.issues });
+  logger.warn(`[release-notes] ${RELEASE_NOTES_SETTING} is malformed`, { issues: parsed.error.issues });
   return { config: ReleaseNotesConfigSchema.parse({}), malformed: true };
 }
 

@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { encodeCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
+import { decodeTimeIdCursor, encodeCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 
 const { mockListPublished, mockGetSettings, rateLimitOptions } = vi.hoisted(() => ({
   mockListPublished: vi.fn(),
@@ -192,6 +192,18 @@ describe('GET /api/v1/whats-new', () => {
       expect(mockListPublished).not.toHaveBeenCalled();
     }
   );
+
+  it('withholds a note that matches the current denylist but still advances the cursor past it', async () => {
+    mockGetSettings.mockResolvedValue({ releaseNotesConfig: { enabled: true, denylist: ['Acme Corp'] } });
+    mockListPublished.mockResolvedValue({
+      items: [NOTES[0], { ...NOTES[1], items: [{ ...NOTES[1].items[0], text: 'Built for ACME corp' }] }],
+      hasMore: true,
+    });
+    const body = (await run({ limit: '2' }))._getJSONData();
+    expect(body.data.map((note: { id: string }) => note.id)).toEqual([NOTES[0].id]);
+    expect(decodeTimeIdCursor(body.next_cursor, SCOPE)).toEqual({ at: T1, id: NOTES[1].id });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('withholding'), { id: NOTES[1].id });
+  });
 
   it('serves an empty list without reading notes while the feature is disabled', async () => {
     mockGetSettings.mockResolvedValue({ releaseNotesConfig: null });

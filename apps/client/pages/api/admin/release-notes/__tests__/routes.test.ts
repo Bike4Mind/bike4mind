@@ -130,6 +130,12 @@ describe('GET /api/admin/release-notes', () => {
     expect(foreign.error?.statusCode).toBe(422);
   });
 
+  it('flags a note that matches the current denylist, since the public feed withholds it', async () => {
+    m.adminList.mockResolvedValue({ items: [note(), note({ headline: 'Now live for Acme Corp' })], hasMore: false });
+    const { body } = await call(listHandler, { method: 'GET', query: { status: 'published' } });
+    expect(body.data.map((n: { deniedTerm: string | null }) => n.deniedTerm)).toEqual([null, 'Acme Corp']);
+  });
+
   it.each([{ status: 'live' }, { limit: '0' }, { limit: '101' }, { limit: 'abc' }])(
     'rejects %o with 422, the same status as a bad cursor',
     async query => {
