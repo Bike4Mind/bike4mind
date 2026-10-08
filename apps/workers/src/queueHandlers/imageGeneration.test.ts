@@ -30,7 +30,7 @@ const run = () => (dispatch as unknown as (e: SQSEvent, c: Context, l: never) =>
 
 describe('imageGeneration dispatch', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('fires the quest callback only after process settles', async () => {
@@ -46,6 +46,21 @@ describe('imageGeneration dispatch', () => {
 
     expect(h.dispatchQuestCallback).toHaveBeenCalledWith('quest-1', logger);
     expect(h.dispatchQuestCallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not return until the quest callback settles', async () => {
+    h.process.mockResolvedValue(undefined);
+    let settleCallback!: () => void;
+    h.dispatchQuestCallback.mockImplementation(() => new Promise<void>(resolve => (settleCallback = resolve)));
+
+    let returned = false;
+    const running = run().then(() => (returned = true));
+    await vi.waitFor(() => expect(h.dispatchQuestCallback).toHaveBeenCalled());
+    expect(returned).toBe(false);
+
+    settleCallback();
+    await running;
+    expect(returned).toBe(true);
   });
 
   it('fires the quest callback only after process rejects, then rethrows', async () => {
