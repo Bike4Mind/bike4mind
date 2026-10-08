@@ -39,6 +39,7 @@ describe('API reference scopes table', () => {
     expect(requiredLines).toHaveLength(3);
     expect(requiredLines.some(line => line.includes('for `refineText`'))).toBe(true);
     expect(required).toContain('notebooks:read');
+    expect(required).toContain('projects:read');
     expect(required).toContain('projects:write');
     for (const scope of required) {
       expect(listed).toContain(scope);
