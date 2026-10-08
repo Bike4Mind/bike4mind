@@ -10,7 +10,9 @@ export type GhFailureKind = 'missing' | 'unauthenticated' | 'rate-limited' | 'no
 export class GhError extends Error {
   constructor(
     readonly kind: GhFailureKind,
-    message: string
+    message: string,
+    /** What gh printed anyway. A GraphQL query with some failing parts exits 1 but still prints the rest. */
+    readonly stdout?: string
   ) {
     super(message);
     this.name = 'GhError';
@@ -74,7 +76,7 @@ export const runGh: GhRunner = async (args, options = {}) => {
         const code = (error as NodeJS.ErrnoException).code;
         const kind = classifyGhFailure(String(stderr ?? ''), code);
         const detail = kind === 'missing' ? 'gh is not installed' : firstLine(String(stderr ?? '')) || error.message;
-        reject(new GhError(kind, detail));
+        reject(new GhError(kind, detail, String(stdout ?? '') || undefined));
       }
     );
   });

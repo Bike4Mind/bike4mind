@@ -25,6 +25,7 @@ function setup() {
     },
     emit: collector().emit,
     logger: quietLogger,
+    batchWindowMs: 0,
   });
   return { store, fake, archived, monitor };
 }

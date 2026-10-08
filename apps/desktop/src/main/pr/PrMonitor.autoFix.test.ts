@@ -31,6 +31,7 @@ function setup({ busy = false, accept = true } = {}) {
     },
     emit: out.emit,
     logger: quietLogger,
+    batchWindowMs: 0,
   });
   return { store, fake, out, monitor, started, state };
 }

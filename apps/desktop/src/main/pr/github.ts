@@ -12,34 +12,54 @@ import type {
 } from '@shared/pullRequest';
 import { GhError, type GhRunner } from './gh';
 
-/**
- * One query per read: the PR, its head commit's checks (with whether each is required), the
- * repo's merge settings and the viewer. Review threads and change requests ride along only while auto-fix is on,
- * because they are the expensive part and nothing else reads them.
- */
-const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $number: Int!, $threads: Boolean!) {
-  viewer { login }
-  repository(owner: $owner, name: $name) {
-    autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed viewerDefaultMergeMethod
-    pullRequest(number: $number) {
-      number title url state isDraft
+/** PRs read in one query, at most. Each brings up to 100 checks, so this keeps a query well inside GitHub's node limit. */
+export const MAX_BATCH = 20;
+
+const REPO_FIELDS =
+  'autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed viewerDefaultMergeMethod';
+
+function pullRequestFields(number: string, threads: string): string {
+  return `number title url state isDraft
       author { login }
       headRefName headRefOid baseRefName additions deletions
       mergeable mergeStateStatus reviewDecision
       autoMergeRequest { enabledAt }
       commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
         __typename
-        ... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
+        ... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: ${number})
           checkSuite { workflowRun { workflow { name } } } }
-        ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
+        ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: ${number}) }
       } } } } } }
-      reviewThreads(first: 50) @include(if: $threads) { nodes { id isResolved isOutdated path line
+      reviewThreads(first: 50) @include(if: ${threads}) { nodes { id isResolved isOutdated path line
         comments(last: 1) { nodes { databaseId author { login } authorAssociation body url } } } }
-      latestReviews(first: 20) @include(if: $threads) { nodes { databaseId state author { login }
-        authorAssociation body url } }
+      latestReviews(first: 20) @include(if: ${threads}) { nodes { databaseId state author { login }
+        authorAssociation body url } }`;
+}
+
+/**
+ * One query for several PRs, each under its own alias (`p0`, `p1`, ...): its repo's merge
+ * settings, the PR, its head commit's checks with whether each is required, and the viewer once.
+ * Review threads and change requests ride along per PR only while its auto-fix is on, because
+ * they are the expensive part and nothing else reads them.
+ */
+export function batchQuery(count: number): string {
+  const indexes = Array.from({ length: count }, (_, index) => index);
+  const variables = indexes.map(i => `$o${i}: String!, $n${i}: String!, $p${i}: Int!, $t${i}: Boolean!`).join(', ');
+  const parts = indexes.map(
+    i => `  p${i}: repository(owner: $o${i}, name: $n${i}) {
+    ${REPO_FIELDS}
+    pullRequest(number: $p${i}) {
+      ${pullRequestFields(`$p${i}`, `$t${i}`)}
     }
-  }
-}`;
+  }`
+  );
+  return `query(${variables}) {\n  viewer { login }\n${parts.join('\n')}\n}`;
+}
+
+export interface SnapshotRequest {
+  ref: PrRef;
+  threads: boolean;
+}
 
 type Json = Record<string, unknown>;
 
@@ -145,10 +165,20 @@ function parseReviewDecision(value: unknown): PrReviewDecision {
   return value === 'APPROVED' || value === 'CHANGES_REQUESTED' || value === 'REVIEW_REQUIRED' ? value : null;
 }
 
-/** The GraphQL response, as a snapshot. Exported for tests, which feed it recorded shapes. */
+/** A single-PR response (`data.repository`), as a snapshot. Exported for tests, which feed it recorded shapes. */
 export function parseSnapshot(ref: PrRef, raw: unknown, now: number, withThreads: boolean): PrSnapshot {
   const data = obj(obj(raw).data);
-  const repository = obj(data.repository);
+  return parseRepository(ref, data.repository, str(obj(data.viewer).login), now, withThreads);
+}
+
+function parseRepository(
+  ref: PrRef,
+  repositoryNode: unknown,
+  viewer: string,
+  now: number,
+  withThreads: boolean
+): PrSnapshot {
+  const repository = obj(repositoryNode);
   const pr = obj(repository.pullRequest);
   if (!pr.number) throw new GhError('not-found', `#${ref.number} was not found in ${ref.owner}/${ref.repo}`);
 
@@ -182,7 +212,7 @@ export function parseSnapshot(ref: PrRef, raw: unknown, now: number, withThreads
       allowedMethods,
       ...(allowedMethods.includes(viewerDefault) ? { defaultMethod: viewerDefault } : {}),
     },
-    viewer: str(obj(data.viewer).login),
+    viewer,
     ...(withThreads
       ? {
           threads: nodes(pr.reviewThreads).flatMap(node => toThread(node) ?? []),
@@ -191,6 +221,13 @@ export function parseSnapshot(ref: PrRef, raw: unknown, now: number, withThreads
       : {}),
     fetchedAt: now,
   };
+}
+
+/** The first GraphQL error under `alias` (or the first of all), as GitHub worded it. */
+function graphqlError(raw: Json, alias?: string): { type: string; message: string } | undefined {
+  const errors = Array.isArray(raw.errors) ? raw.errors.map(obj) : [];
+  const match = errors.find(error => alias === undefined || (Array.isArray(error.path) && error.path[0] === alias));
+  return match ? { type: str(match.type), message: str(match.message) } : undefined;
 }
 
 /** The repo's merge method this app uses: GitHub's default for the viewer, else the first allowed. */
@@ -210,28 +247,65 @@ export class PrGithub {
   ) {}
 
   async snapshot(ref: PrRef, options: { threads: boolean }): Promise<PrSnapshot> {
-    const stdout = await this.gh([
-      'api',
-      'graphql',
-      '-f',
-      `query=${SNAPSHOT_QUERY}`,
+    const [result] = await this.snapshots([{ ref, threads: options.threads }]);
+    if (result instanceof GhError) throw result;
+    return result;
+  }
+
+  /**
+   * Read up to MAX_BATCH PRs in one query, answering per PR in request order. A PR that is
+   * missing or unreadable answers with its own error and leaves the others' answers intact;
+   * a failure of the whole call (gh missing, signed out, rate limited) rejects.
+   */
+  async snapshots(requests: readonly SnapshotRequest[]): Promise<(PrSnapshot | GhError)[]> {
+    if (requests.length === 0) return [];
+    if (requests.length > MAX_BATCH) throw new Error(`At most ${MAX_BATCH} pull requests per query`);
+    const args = ['api', 'graphql', '-f', `query=${batchQuery(requests.length)}`];
+    requests.forEach(({ ref, threads }, i) => {
       // -f, not -F, for the names: -F would turn a repo called "123" into a number.
-      '-f',
-      `owner=${ref.owner}`,
-      '-f',
-      `name=${ref.repo}`,
-      '-F',
-      `number=${ref.number}`,
-      '-F',
-      `threads=${options.threads}`,
-    ]);
-    let raw: unknown;
+      args.push(
+        '-f',
+        `o${i}=${ref.owner}`,
+        '-f',
+        `n${i}=${ref.repo}`,
+        '-F',
+        `p${i}=${ref.number}`,
+        '-F',
+        `t${i}=${threads}`
+      );
+    });
+
+    let stdout: string;
     try {
-      raw = JSON.parse(stdout);
+      stdout = await this.gh(args);
+    } catch (err) {
+      // Exit 1 with a body is GraphQL reporting some PRs failed; the rest are still in `data`.
+      if (!(err instanceof GhError) || err.kind === 'rate-limited' || err.kind === 'unauthenticated' || !err.stdout) {
+        throw err;
+      }
+      stdout = err.stdout;
+    }
+    let raw: Json;
+    try {
+      raw = obj(JSON.parse(stdout));
     } catch {
       throw new GhError('failed', 'GitHub returned something that is not JSON');
     }
-    return parseSnapshot(ref, raw, this.now(), options.threads);
+    const data = raw.data;
+    if (!data || typeof data !== 'object') {
+      throw new GhError('failed', graphqlError(raw)?.message || 'GitHub returned no data');
+    }
+    const viewer = str(obj(obj(data).viewer).login);
+    const now = this.now();
+    return requests.map(({ ref, threads }, i) => {
+      const failure = graphqlError(raw, `p${i}`);
+      try {
+        return parseRepository(ref, obj(data)[`p${i}`], viewer, now, threads);
+      } catch (err) {
+        if (failure) return new GhError(/not_found/i.test(failure.type) ? 'not-found' : 'failed', failure.message);
+        return err instanceof GhError ? err : new GhError('failed', String(err));
+      }
+    });
   }
 
   /** The open PR whose head is `branch` in the repo at `cwd`, or null. */

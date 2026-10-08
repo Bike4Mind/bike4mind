@@ -33,7 +33,8 @@ function manualTimers() {
 }
 
 function setup(initial = snapshot({ checks: [check('Build', 'pending')] })) {
-  let now = 1_000_000;
+  // On the 15s grid, so the delays below are the cadences themselves.
+  let now = 990_000;
   const store = tempStore();
   const fake = fakeGithub(initial);
   const clock = manualTimers();
@@ -53,6 +54,7 @@ function setup(initial = snapshot({ checks: [check('Build', 'pending')] })) {
     timers: clock.timers,
     now: () => now,
     random: () => 0,
+    batchWindowMs: 0,
   });
   return {
     store,
@@ -153,6 +155,20 @@ describe('PrMonitor polling', () => {
     fake.answer(snapshot());
     await monitor.refresh(SESSION);
     expect(clock.delays().length).toBe(1);
+  });
+
+  it('reads every conversation due on the same tick in one query', async () => {
+    const { store, fake, clock, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });
+    await store.set('session-2', { ...REF, number: 612, source: 'shell', boundAt: '' });
+    await monitor.watch(1, SESSION);
+    await monitor.watch(2, 'session-2');
+    await settle();
+    expect(clock.delays()).toEqual([POLL_MS.onScreenActive, POLL_MS.onScreenActive]);
+
+    fake.batches.length = 0;
+    await clock.fire();
+    expect(fake.batches).toEqual([2]);
   });
 
   it('runs one read at a time per conversation', async () => {

@@ -34,6 +34,7 @@ function setup(initial: PrSnapshot) {
     },
     emit: out.emit,
     logger: quietLogger,
+    batchWindowMs: 0,
   });
   return { store, fake, out, monitor };
 }

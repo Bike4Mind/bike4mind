@@ -20,8 +20,8 @@ import type { PrGithub } from './github';
 import { shouldAutoArchive } from './autoArchive';
 import { MAX_AUTO_FIX_ATTEMPTS, SHELL_TOOLS, planAutoFix } from './autoFix';
 import { desktopMergeReadiness } from './autoMerge';
-import { mergeMethodFor } from './github';
-import { POLL_MS, pollDelay } from './pollSchedule';
+import { MAX_BATCH, mergeMethodFor } from './github';
+import { POLL_MS, alignToTick, pollDelay } from './pollSchedule';
 
 /** Branches a PR lookup is never made for: a PR "for main" is someone else's fork, not this session's work. */
 const UNOWNED_BRANCHES = new Set(['main', 'master', 'develop', 'HEAD']);
@@ -84,6 +84,18 @@ export interface PrMonitorDeps {
   now?: () => number;
   timers?: PrTimers;
   random?: () => number;
+  /** How long a read waits for others to share its query, in ms. */
+  batchWindowMs?: number;
+}
+
+/** Reads that land within this long of each other go to GitHub as one query; see readTogether. */
+const BATCH_WINDOW_MS = 10;
+
+interface QueuedRead {
+  ref: PrRef;
+  threads: boolean;
+  resolve(snapshot: PrSnapshot): void;
+  reject(err: unknown): void;
 }
 
 interface Live {
@@ -127,6 +139,8 @@ export class PrMonitor {
   /** Set when GitHub reports a rate limit; every read waits until then. */
   private pausedUntil = 0;
   private ghFailedAt = 0;
+  private queuedReads: QueuedRead[] = [];
+  private batchTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly timers: PrTimers;
 
   constructor(protected readonly deps: PrMonitorDeps) {
@@ -457,6 +471,9 @@ export class PrMonitor {
   dispose(): void {
     this.disposed = true;
     for (const sessionId of this.live.keys()) this.disarm(sessionId);
+    if (this.batchTimer) clearTimeout(this.batchTimer);
+    this.batchTimer = undefined;
+    for (const read of this.queuedReads.splice(0)) read.reject(new GhError('failed', 'The app is closing.'));
   }
 
   /** Read again in `ms`, replacing whatever timer was set. */
@@ -464,7 +481,8 @@ export class PrMonitor {
     if (this.disposed) return;
     const live = this.entry(sessionId);
     if (live.timer !== undefined) this.timers.clear(live.timer);
-    const wait = Math.max(ms, this.pausedUntil - this.now());
+    // On the shared grid, so reads due around the same time fire together and share a query.
+    const wait = alignToTick(this.now(), Math.max(ms, this.pausedUntil - this.now()));
     live.timer = this.timers.set(() => {
       live.timer = undefined;
       void this.read(sessionId);
@@ -546,6 +564,35 @@ export class PrMonitor {
     }
   }
 
+  /**
+   * One PR's snapshot, read in the same query as any other read asked for within the batch
+   * window: with ten bound PRs whose timers share the grid, that is one gh process and one
+   * GraphQL call per tick instead of ten.
+   */
+  protected readTogether(ref: PrRef, threads: boolean): Promise<PrSnapshot> {
+    return new Promise<PrSnapshot>((resolve, reject) => {
+      this.queuedReads.push({ ref, threads, resolve, reject });
+      this.batchTimer ??= setTimeout(() => this.sendQueuedReads(), this.deps.batchWindowMs ?? BATCH_WINDOW_MS);
+    });
+  }
+
+  private sendQueuedReads(): void {
+    this.batchTimer = undefined;
+    const queued = this.queuedReads.splice(0);
+    for (let start = 0; start < queued.length; start += MAX_BATCH) {
+      const chunk = queued.slice(start, start + MAX_BATCH);
+      this.withGh(() => this.deps.github.snapshots(chunk.map(({ ref, threads }) => ({ ref, threads })))).then(
+        results =>
+          chunk.forEach((read, index) => {
+            const result = results[index];
+            if (result && !(result instanceof GhError)) read.resolve(result);
+            else read.reject(result ?? new GhError('failed', 'GitHub sent no answer for this pull request'));
+          }),
+        err => chunk.forEach(read => read.reject(err))
+      );
+    }
+  }
+
   /** Read the PR now, joining a read already running for this conversation. */
   protected read(sessionId: string): Promise<void> {
     const live = this.entry(sessionId);
@@ -566,9 +613,8 @@ export class PrMonitor {
       return;
     }
     try {
-      const snapshot = await this.withGh(() =>
-        this.deps.github.snapshot(binding, { threads: this.wantsThreads(binding) })
-      );
+      const ref: PrRef = { owner: binding.owner, repo: binding.repo, number: binding.number, url: binding.url };
+      const snapshot = await this.readTogether(ref, this.wantsThreads(binding));
       this.gh = 'ok';
       // Re-bound to another PR while gh ran: this answer is about a PR the conversation left.
       if (!samePullRequest(await this.deps.store.get(sessionId), binding)) return;

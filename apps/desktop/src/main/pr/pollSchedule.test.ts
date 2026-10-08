@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { POLL_MS, pollDelay, type PollInput } from './pollSchedule';
+import { POLL_MS, alignToTick, pollDelay, type PollInput } from './pollSchedule';
 
 const base: PollInput = {
   state: 'OPEN',
@@ -41,5 +41,14 @@ describe('pollDelay', () => {
     expect(pollDelay({ ...base, failures: 2 })).toBe(POLL_MS.backoffFloor * 4);
     expect(pollDelay({ ...base, failures: 50 })).toBe(POLL_MS.maxBackoff);
     expect(pollDelay({ ...base, onScreen: false, active: false, failures: 1 })).toBe(POLL_MS.openedSettled * 2);
+  });
+});
+
+describe('alignToTick', () => {
+  it('stretches a delay to end on the next grid line, never by a full tick or more', () => {
+    expect(alignToTick(0, 30_000)).toBe(30_000);
+    expect(alignToTick(4_000, 30_000)).toBe(41_000);
+    expect(alignToTick(4_000, 2_000)).toBe(11_000);
+    expect(alignToTick(990_000, 0)).toBe(0);
   });
 });
