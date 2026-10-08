@@ -327,7 +327,7 @@ export async function queryDataLakeArticles(
 }
 
 /**
- * Tag-occurrence + unique-file counts that drive the Explorer's tag tree and the
+ * Per-tree-path + unique-file counts that drive the Explorer's tag tree and the
  * KB-article stats. Serves `/api/data-lakes/tag-counts`.
  */
 export async function queryDataLakeTagCounts(
