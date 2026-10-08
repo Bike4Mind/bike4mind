@@ -850,6 +850,8 @@ async function handleReconnect(
     action: 'reconnect_result',
     found: true,
     executionId: execution.id,
+    // Safe to echo: only sent past the ownership check above.
+    sessionId: execution.sessionId,
     status: execution.status,
     // Projected, not passed through: `pendingPermission` also stores the withheld
     // tool calls the executor replays on approval, and their arguments are
