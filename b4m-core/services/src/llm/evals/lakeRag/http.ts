@@ -65,13 +65,16 @@ export const MAX_429_RETRIES = 4;
 export const MAX_429_WAIT_MS = 180_000;
 const DEFAULT_429_WAIT_MS = 5_000;
 
-/** Wait (ms) a 429 asks for: Retry-After (seconds or HTTP date), else the "retry in Ns" body hint. */
+/** Wait (ms) a 429 asks for: Retry-After (seconds or HTTP date), else the "retry in Ns" body hint, else backoff. */
 export function retryAfterMs(res: Response, text: string, attempt: number, nowMs: number): number {
   const header = res.headers.get('retry-after')?.trim();
   if (header) {
     if (/^\d+(?:\.\d+)?$/.test(header)) return Math.ceil(Number(header) * 1000);
-    const at = Date.parse(header);
-    if (!Number.isNaN(at)) return Math.max(0, at - nowMs);
+    // Date.parse alone is lenient ('-5' and 'abc 2' parse as 2001), so only an IMF-fixdate counts.
+    if (/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(header)) {
+      const at = Date.parse(header);
+      if (!Number.isNaN(at)) return Math.max(0, at - nowMs);
+    }
   }
   const hint = /(?:retry|try again) in (\d{1,5}(?:\.\d{1,3})?) ?s/i.exec(text.slice(0, MAX_SCANNED));
   if (hint) return Math.ceil(Number(hint[1]) * 1000);

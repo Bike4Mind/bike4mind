@@ -110,6 +110,43 @@ describe('call 429 backoff', () => {
     expect(sends).toHaveLength(3);
   });
 
+  it.each(['-5', 'abc 2', 'soon'])('ignores a malformed Retry-After %s and uses the body hint', async header => {
+    const { api, sends } = server([tooMany('{"error":"retry in 4s"}', { 'Retry-After': header }), ok()]);
+    const pending = call(api, 'GET', '/api/x');
+    await vi.advanceTimersByTimeAsync(4_000);
+    await pending;
+    expect(sends[1].at - sends[0].at).toBe(4_000);
+  });
+
+  it('reads an HTTP-date Retry-After relative to now', async () => {
+    const at = new Date(Date.now() + 9_000).toUTCString();
+    const { api, sends } = server([tooMany('{}', { 'Retry-After': at }), ok()]);
+    const pending = call(api, 'GET', '/api/x');
+    await vi.advanceTimersByTimeAsync(9_000);
+    await pending;
+    expect(sends[1].at - sends[0].at).toBeLessThanOrEqual(9_000);
+    expect(sends[1].at - sends[0].at).toBeGreaterThan(8_000);
+  });
+
+  it('still renews a 401 that follows a 429 backoff', async () => {
+    let token = 'Bearer old';
+    const credential: LakeRagCredential = {
+      header: async () => token,
+      renew: vi.fn(async () => {
+        token = 'Bearer new';
+        return true;
+      }),
+    };
+    const { api, sends } = server(
+      [tooMany('{}', { 'Retry-After': '1' }), new Response('', { status: 401 }), ok()],
+      credential
+    );
+    const pending = call(api, 'GET', '/api/x');
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(pending).resolves.toEqual({ ok: true });
+    expect(sends.map(s => s.auth)).toEqual(['Bearer old', 'Bearer old', 'Bearer new']);
+  });
+
   it.each([500, 503, 400])('does not retry a %i', async status => {
     const { api, sends } = server([new Response('{}', { status, headers: { 'Retry-After': '1' } }), ok()]);
     await expect(call(api, 'GET', '/api/x')).rejects.toMatchObject({ status });
