@@ -7,6 +7,7 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
+  resetForcedRetrievalFloorWarnings,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -78,8 +79,12 @@ const makeArgs = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-// getSettingsByNames caches process-wide; each test's fixture must not see the last one's rows.
-beforeEach(() => invalidateSettingsCache());
+// getSettingsByNames caches process-wide, and so does the over-floor warn-once set; each test's
+// fixture must not see the last one's rows or warnings.
+beforeEach(() => {
+  invalidateSettingsCache();
+  resetForcedRetrievalFloorWarnings();
+});
 describe('ContextSummarizationFeature', () => {
   let contextSummarizeSession: ReturnType<typeof vi.fn>;
   let feature: ContextSummarizationFeature;
@@ -3405,11 +3410,12 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
   it('reads a null configured absolute floor as unset, not as a floor of 0', async () => {
     // `Number(null)` is 0, which a lower bound of 0 accepted and then DISABLED the absolute floor -
     // the opposite of "unset, resolve per space". The blank check must precede the numeric range.
+    // 0.5 and 0.3 sit below 3-small's measured 58% but clear a floor of 0, so this kills that mutant.
     const spy = stubForcedRetrievalRead(null);
     try {
-      const ctx = makeCtx({ scores: [0.9, 0.7, 0.6], platform: smallSpace });
+      const ctx = makeCtx({ scores: [0.9, 0.5, 0.3], platform: smallSpace });
       const { injected } = await run(ctx);
-      expect(injected).toEqual([0, 1, 2]);
+      expect(injected).toEqual([0]);
       expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
         expect.stringContaining('is unusable')
       );
@@ -3417,6 +3423,42 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
       spy.mockRestore();
     }
   });
+
+  for (const absolute of [0, '0']) {
+    it(`rejects a configured absolute floor of ${JSON.stringify(absolute)} as unusable and resolves per space`, async () => {
+      // The setting's min is 1: a 0 is a cleared field, not "no absolute floor".
+      const spy = stubForcedRetrievalRead(absolute);
+      try {
+        const ctx = makeCtx({ scores: [0.9, 0.5, 0.3], platform: smallSpace });
+        const { injected } = await run(ctx);
+        expect(injected).toEqual([0]);
+        expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+          expect.stringContaining('is unusable')
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }
+
+  for (const [absolute, expected] of [
+    [1, [0, 1, 2]],
+    [100, []],
+  ] as const) {
+    it(`honors the inclusive limit ${absolute} as a configured absolute floor`, async () => {
+      const spy = stubForcedRetrievalRead(absolute);
+      try {
+        const ctx = makeCtx({ scores: [0.9, 0.5, 0.3], platform: smallSpace });
+        const { injected } = await run(ctx);
+        expect(injected).toEqual(expected);
+        expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
+          expect.stringContaining('is unusable')
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }
 
   for (const withScopedOverlay of [true, false]) {
     it(`a platform value of 75 is an explicit floor in every space (overlay: ${withScopedOverlay})`, async () => {
@@ -3500,15 +3542,14 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
   });
 
   it("warns once per process when a configured absolute floor sits above the space's measured floor", async () => {
-    // 74, not 75: the dedupe is process-wide, and an earlier test already configures 75 on 3-small.
     const turn = async () => {
       const ctx = makeCtx({
         scores: [0.9, 0.7, 0.6],
-        platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '74' },
+        platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
       });
       await run(ctx);
       return (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn.mock.calls.filter(c =>
-        String(c[0]).includes('configured absolute floor 74% is above the 58% measured for embedding space')
+        String(c[0]).includes('configured absolute floor 75% is above the 58% measured for embedding space')
       ).length;
     };
     expect(await turn()).toBe(1);

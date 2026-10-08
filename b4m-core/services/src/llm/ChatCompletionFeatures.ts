@@ -1837,6 +1837,14 @@ function forcedRetrievalConfiguredAbsolutePct(raw: unknown, logger: Logger): num
   return undefined;
 }
 
+/** `${space}:${pct}` pairs already warned about, so a misconfigured floor warns once per process. */
+const warnedOverFloor = new Set<string>();
+
+/** Test-only: forget which floors were warned about, so a warn-once test does not depend on test order. */
+export function resetForcedRetrievalFloorWarnings(): void {
+  warnedOverFloor.clear();
+}
+
 /**
  * The absolute floor to grade THIS turn's candidates against, given what the operator configured and
  * which embedding space the scores were actually produced in.
@@ -1871,9 +1879,6 @@ function forcedRetrievalConfiguredAbsolutePct(raw: unknown, logger: Logger): num
  * The log below therefore names the space the floor was chosen FOR, which is always right, and says
  * nothing about whether every scored chunk really lives there.
  */
-/** `${space}:${pct}` pairs already warned about, so a misconfigured floor warns once per process. */
-const warnedOverFloor = new Set<string>();
-
 function resolveForcedRetrievalAbsoluteFloor(configuredPct: number | undefined, space: string, logger: Logger): number {
   const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
   if (configuredPct !== undefined) {
