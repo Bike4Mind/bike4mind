@@ -107,6 +107,16 @@ Data Lake must be switched to connector-fed in its settings first. A Drive folde
 Data Lake, personal or organization. To move a Drive-fed Data Lake into or out of an organization,
 disconnect its folder first and reconnect it afterwards.
 
+**Who can connect a GitHub repository to a Data Lake, and what if the lake is curated?**
+Only an organization Data Lake can take a GitHub repository, and only an organization owner or
+manager (or a platform admin) can connect one. The Data Lake must be connector-fed and not archived.
+On a curated Data Lake, **Connect GitHub** offers to switch it to connector-fed for you. The switch
+applies to the whole Data Lake, not just GitHub: any connector or scheduled import can then add
+files to it. It is made only when the connection can actually start, so if it cannot (for example,
+the lake is archived) the lake stays curated and nothing changes. The
+switch is recorded in the lake's History tab. If you leave GitHub's page without finishing, the lake
+stays connector-fed; switch it back in its settings if you no longer want that.
+
 **What happens when I disconnect a Google Drive folder?**
 Every file the connection brought into the Data Lake is permanently deleted, along with its
 extracted text and search entries, and it is removed from any chat it was attached to. This cannot

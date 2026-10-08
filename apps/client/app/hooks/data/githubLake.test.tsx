@@ -175,11 +175,26 @@ describe('useStartLakeGitHubConnect', () => {
 
     let response: unknown;
     await act(async () => {
-      response = await result.current.mutateAsync('lake1');
+      response = await result.current.mutateAsync({ dataLakeId: 'lake1' });
     });
 
     expect(post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection');
     expect(response).toEqual(urls);
+  });
+
+  it('asks the server to switch the origin, then refetches the lake list and its config history', async () => {
+    post.mockResolvedValue({ data: { authorizeUrl: 'https://github.com/login/oauth/authorize?state=s1' } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useStartLakeGitHubConnect(), { wrapper: wrapperFor(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', ensureConnectorFed: true });
+    });
+
+    expect(post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection', { ensureConnectorFed: true });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: dataLakeKeys.list });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: dataLakeKeys.configHistoryOf('lake1') });
   });
 });
 

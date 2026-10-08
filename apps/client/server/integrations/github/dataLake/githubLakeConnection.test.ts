@@ -342,6 +342,28 @@ describe('resolveConnectableLake', () => {
     await expect(resolveConnectableLake(USER, 'lake1')).rejects.toThrow(/curated/i);
   });
 
+  it('lets a curated lake through with allowCurated, flagged so the caller can switch it', async () => {
+    h.dlFindById.mockResolvedValue({ ...ACTIVE_LAKE, origin: 'curated' });
+    await expect(resolveConnectableLake(USER, 'lake1', { allowCurated: true })).resolves.toEqual({
+      lakeId: 'lake1',
+      organizationId: 'orgA',
+      curated: true,
+    });
+  });
+
+  it('still refuses a curated lake that another connector holds, with allowCurated', async () => {
+    h.dlFindById.mockResolvedValue({ ...ACTIVE_LAKE, origin: 'curated' });
+    h.claimFindByLakeId.mockResolvedValue({ kind: 'googleDrive', connectionId: 'd1', claimedAt: new Date() });
+    await expect(resolveConnectableLake(USER, 'lake1', { allowCurated: true })).rejects.toThrow(
+      /already connected to a Google Drive/i
+    );
+  });
+
+  it('still refuses a non-ingestable curated lake, with allowCurated', async () => {
+    h.dlFindById.mockResolvedValue({ ...ACTIVE_LAKE, origin: 'curated', status: 'archived' });
+    await expect(resolveConnectableLake(USER, 'lake1', { allowCurated: true })).rejects.toThrow(/'archived' status/i);
+  });
+
   it('409s when a GitHub connection already feeds the lake', async () => {
     h.ghConnFindByDataLakeIdAny.mockResolvedValue({ id: 'existing-gh' });
     await expect(resolveConnectableLake(USER, 'lake1')).rejects.toThrow(/already connected to a GitHub/i);
@@ -364,11 +386,19 @@ describe('resolveConnectableLake', () => {
       claimedAt: new Date(Date.now() - CLAIM_GRACE_MS - 1000),
     });
     h.driveConnFindById.mockResolvedValue(null);
-    await expect(resolveConnectableLake(USER, 'lake1')).resolves.toEqual({ lakeId: 'lake1', organizationId: 'orgA' });
+    await expect(resolveConnectableLake(USER, 'lake1')).resolves.toEqual({
+      lakeId: 'lake1',
+      organizationId: 'orgA',
+      curated: false,
+    });
   });
 
   it('resolves the lake and org id on a clean connectable lake', async () => {
-    await expect(resolveConnectableLake(USER, 'lake1')).resolves.toEqual({ lakeId: 'lake1', organizationId: 'orgA' });
+    await expect(resolveConnectableLake(USER, 'lake1')).resolves.toEqual({
+      lakeId: 'lake1',
+      organizationId: 'orgA',
+      curated: false,
+    });
   });
 });
 

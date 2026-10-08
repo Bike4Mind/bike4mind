@@ -129,8 +129,15 @@ export function requireGitHubLakeAppConfig(config: GitHubLakeAppConfig | null): 
  * The org lake a user may bind a repository to right now, or a thrown HTTP error saying why not.
  * Runs at every step of the connect (start, authorize return, picker, completion): the flow can take
  * minutes, during which the lake can be archived, re-originated, or connected by someone else.
+ *
+ * `allowCurated` lets a curated lake through with `curated: true`, for the start route's switch-and-connect
+ * (it switches the origin itself, after these checks). Every later step keeps refusing a curated lake.
  */
-export async function resolveConnectableLake(user: LakeUser, dataLakeId: string) {
+export async function resolveConnectableLake(
+  user: LakeUser,
+  dataLakeId: string,
+  { allowCurated = false }: { allowCurated?: boolean } = {}
+) {
   const lake = await dataLakeRepository.findById(dataLakeId);
   if (!lake) {
     throw new NotFoundError('Data lake not found');
@@ -146,13 +153,14 @@ export async function resolveConnectableLake(user: LakeUser, dataLakeId: string)
     throw new BadRequestError(`Cannot connect a GitHub repository to a data lake in '${lake.status}' status`);
   }
   // Binding never flips origin: the owner declaring the lake connector-fed is the consent (drive-sync.ts).
-  if (!acceptsConnectorContent(lake.origin)) {
+  const curated = !acceptsConnectorContent(lake.origin);
+  if (curated && !allowCurated) {
     throw new BadRequestError(
       `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a GitHub repository.`
     );
   }
   await assertLakeConnectorFree(lake.id, { includeClaim: true });
-  return { lakeId: lake.id, organizationId: lake.organizationId };
+  return { lakeId: lake.id, organizationId: lake.organizationId, curated };
 }
 
 /**

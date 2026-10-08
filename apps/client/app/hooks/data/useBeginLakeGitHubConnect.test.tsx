@@ -71,4 +71,55 @@ describe('useBeginLakeGitHubConnect', () => {
     expect(assign).not.toHaveBeenCalled();
     expect(onFailed).toHaveBeenCalledWith(refusal);
   });
+
+  it('asks the start to switch a curated lake when ensureConnectorFed is set', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { authorizeUrl: AUTHORIZE_URL } });
+    const { result } = renderHook(() => useBeginLakeGitHubConnect('lake1'), { wrapper });
+
+    await act(async () => result.current.begin({ ensureConnectorFed: true }));
+
+    expect(api.post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection', { ensureConnectorFed: true });
+    expect(assign).toHaveBeenCalledWith(AUTHORIZE_URL);
+  });
+
+  it('still leaves for GitHub when the caller unmounts while the start is in flight', async () => {
+    let resolveStart!: (value: unknown) => void;
+    vi.mocked(api.post).mockReturnValue(new Promise(resolve => (resolveStart = resolve)));
+    const { result, unmount } = renderHook(() => useBeginLakeGitHubConnect('lake1'), { wrapper });
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.begin({ ensureConnectorFed: true });
+    });
+    unmount();
+    await act(async () => {
+      resolveStart({ data: { authorizeUrl: AUTHORIZE_URL } });
+      await pending;
+    });
+
+    expect(readGitHubLakeConnectHandoff()).toEqual({ dataLakeId: 'lake1' });
+    expect(assign).toHaveBeenCalledWith(AUTHORIZE_URL);
+  });
+
+  it('still reports a refusal when the caller unmounts while the start is in flight', async () => {
+    let rejectStart!: (reason: unknown) => void;
+    vi.mocked(api.post).mockReturnValue(new Promise((_resolve, reject) => (rejectStart = reject)));
+    const { result, unmount } = renderHook(() => useBeginLakeGitHubConnect('lake1'), { wrapper });
+    const onFailed = vi.fn();
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.begin({ onFailed });
+    });
+    unmount();
+    const refusal = { isAxiosError: true, response: { status: 400, data: { error: 'Not configured' } } };
+    await act(async () => {
+      rejectStart(refusal);
+      await pending;
+    });
+
+    expect(h.toastError).toHaveBeenCalledWith('Not configured');
+    expect(onFailed).toHaveBeenCalledWith(refusal);
+    expect(assign).not.toHaveBeenCalled();
+  });
 });
