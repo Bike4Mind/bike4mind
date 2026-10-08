@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ReleaseNotesJobPr } from '@bike4mind/common';
-import { finalizeReleaseNote, scrubCustomerText } from './finalize';
+import { scrubCustomerText, type ReleaseNotesJobPr } from '@bike4mind/common';
+import { finalizeReleaseNote } from './finalize';
 import type { ReleaseNoteDraft } from './generate';
 
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };

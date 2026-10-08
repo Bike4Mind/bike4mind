@@ -92,6 +92,7 @@ export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';
 export * from './utils/internalStaffDomains';
 export * from './utils/countCodePoints';
+export * from './utils/releaseNoteText';
 export * from './utils/capForParse';
 export * from './utils/toolArtifactEmitters';
 export * from './utils/artifactOpenTag';
