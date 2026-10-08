@@ -179,125 +179,6 @@ describe('tool handlers', () => {
     });
   });
 
-  it('send_message extracts the reply from responses and returns the supplied notebookId', async () => {
-    const getQuest = vi.fn().mockResolvedValue({ id: 'q1', status: 'done', sessionId: 'other-nb' });
-    // The real wait:true response carries the reply in `responses`; `response` is null.
-    const client = mockClient({
-      sendChat: vi
-        .fn()
-        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['hello'], model: 'gpt' }),
-      getQuest,
-    });
-
-    const result = await sendMessage(client, { message: 'hi', notebookId: 'nb1' });
-
-    expect(result).toEqual({ notebookId: 'nb1', questId: 'q1', reply: 'hello', model: 'gpt', citables: [] });
-  });
-
-  it('send_message returns the quest citables, projected without metadata', async () => {
-    const client = mockClient({
-      sendChat: vi
-        .fn()
-        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['grounded'], model: 'gpt' }),
-      getQuest: vi.fn().mockResolvedValue({
-        id: 'q1',
-        status: 'done',
-        sessionId: 'nb1',
-        promptMeta: {
-          citables: [
-            {
-              id: 'fab1',
-              type: 'document',
-              title: 'Handbook.pdf',
-              url: '/files/fab1',
-              description: 'p. 3',
-              metadata: { fullContext: 'long passage text' },
-            },
-          ],
-        },
-      }),
-    });
-
-    const result = await sendMessage(client, { message: 'hi', notebookId: 'nb1' });
-
-    expect(result.reply).toBe('grounded');
-    expect(result.citables).toEqual([
-      { id: 'fab1', type: 'document', title: 'Handbook.pdf', url: '/files/fab1', description: 'p. 3' },
-    ]);
-  });
-
-  it('send_message still returns the reply, with citables omitted, when the quest fetch fails', async () => {
-    const client = mockClient({
-      sendChat: vi
-        .fn()
-        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['hello'], model: 'gpt' }),
-      getQuest: vi.fn().mockRejectedValue(new Error('boom')),
-    });
-
-    const result = await sendMessage(client, { message: 'hi', notebookId: 'nb1' });
-
-    expect(result).toEqual({ notebookId: 'nb1', questId: 'q1', reply: 'hello', model: 'gpt', citables: undefined });
-  });
-
-  it('send_message joins multiple responses with a blank line', async () => {
-    const client = mockClient({
-      sendChat: vi
-        .fn()
-        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['a', 'b'], model: 'gpt' }),
-      getQuest: vi.fn(),
-    });
-
-    const result = await sendMessage(client, { message: 'hi', notebookId: 'nb1' });
-
-    expect(result.reply).toBe('a\n\nb');
-  });
-
-  it('send_message forwards a supplied systemPrompt through to sendChat', async () => {
-    const sendChat = vi
-      .fn()
-      .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['hello'], model: 'gpt' });
-    const client = mockClient({ sendChat, getQuest: vi.fn() });
-
-    await sendMessage(client, { message: 'hi', notebookId: 'nb1', systemPrompt: 'Reply only in haiku.' });
-
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({ message: 'hi', notebookId: 'nb1', systemPrompt: 'Reply only in haiku.' })
-    );
-  });
-
-  it('send_message resolves the notebookId from the quest when none was supplied', async () => {
-    const client = mockClient({
-      sendChat: vi
-        .fn()
-        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['hello'], model: 'gpt' }),
-      getQuest: vi.fn().mockResolvedValue({ id: 'q1', status: 'done', sessionId: 'resolved-nb' }),
-    });
-
-    const result = await sendMessage(client, { message: 'hi' });
-
-    expect(result.notebookId).toBe('resolved-nb');
-  });
-
-  it('send_message prefers the sessionId echoed on the chat response over the quest', async () => {
-    const getQuest = vi.fn().mockResolvedValue({ id: 'q1', status: 'done', sessionId: 'quest-nb' });
-    const client = mockClient({
-      sendChat: vi.fn().mockResolvedValue({
-        id: 'q1',
-        status: 'done',
-        response: null,
-        responses: ['hello'],
-        model: 'gpt',
-        sessionId: 'echoed-nb',
-      }),
-      getQuest,
-    });
-
-    const result = await sendMessage(client, { message: 'hi' });
-
-    expect(result.notebookId).toBe('echoed-nb');
-    expect(getQuest).toHaveBeenCalledWith('q1');
-  });
-
   it('search_knowledge_base wraps the score array in a results object', async () => {
     const client = mockClient({
       searchKnowledgeBase: vi.fn().mockResolvedValue([{ sessionId: 's1', maxSimilarity: 0.9, matchingMessages: 1 }]),
@@ -561,6 +442,158 @@ const axiosError = (status: number, opts: { headers?: Record<string, string> } =
     config: {} as InternalAxiosRequestConfig,
   } as AxiosResponse);
 
+describe('sendMessage', () => {
+  const noSleep = { sleep: vi.fn().mockResolvedValue(undefined) };
+  const ack = { id: 'q1', status: 'queued', model: 'gpt' };
+  const doneQuest = {
+    id: 'q1',
+    status: 'done',
+    type: 'message',
+    sessionId: 'quest-nb',
+    reply: 'hello',
+    replies: ['hello'],
+  };
+  const chatClient = (getQuest: ReturnType<typeof vi.fn>, sendChat = vi.fn().mockResolvedValue(ack)) =>
+    mockClient({ sendChat, getQuest });
+
+  it('polls the quest until done and returns its reply with the supplied notebookId', async () => {
+    const getQuest = vi.fn().mockResolvedValueOnce({ id: 'q1', status: 'running' }).mockResolvedValueOnce(doneQuest);
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi', notebookId: 'nb1' }, noSleep);
+
+    expect(getQuest).toHaveBeenCalledTimes(2);
+    expect(getQuest).toHaveBeenCalledWith('q1');
+    expect(result).toEqual({ notebookId: 'nb1', questId: 'q1', reply: 'hello', model: 'gpt', citables: [] });
+  });
+
+  it('returns the quest citables, projected without metadata', async () => {
+    const getQuest = vi.fn().mockResolvedValue({
+      ...doneQuest,
+      promptMeta: {
+        citables: [
+          {
+            id: 'fab1',
+            type: 'document',
+            title: 'Handbook.pdf',
+            url: '/files/fab1',
+            description: 'p. 3',
+            metadata: { fullContext: 'long passage text' },
+          },
+        ],
+      },
+    });
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi', notebookId: 'nb1' }, noSleep);
+
+    expect(result.citables).toEqual([
+      { id: 'fab1', type: 'document', title: 'Handbook.pdf', url: '/files/fab1', description: 'p. 3' },
+    ]);
+  });
+
+  it('prefers the visible reply text over the raw reply slots', async () => {
+    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, reply: 'visible', replies: ['<choices/>visible'] });
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
+
+    expect(result.reply).toBe('visible');
+  });
+
+  it('joins the reply slots with a blank line when the server sent no reply text', async () => {
+    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, reply: null, replies: ['a', 'b'] });
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
+
+    expect(result.reply).toBe('a\n\nb');
+  });
+
+  it('forwards a supplied systemPrompt through to sendChat', async () => {
+    const sendChat = vi.fn().mockResolvedValue(ack);
+
+    await sendMessage(
+      chatClient(vi.fn().mockResolvedValue(doneQuest), sendChat),
+      { message: 'hi', notebookId: 'nb1', systemPrompt: 'Reply only in haiku.' },
+      noSleep
+    );
+
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'hi', notebookId: 'nb1', systemPrompt: 'Reply only in haiku.' })
+    );
+  });
+
+  it('resolves the notebookId from the quest when neither the caller nor the ACK named one', async () => {
+    const result = await sendMessage(chatClient(vi.fn().mockResolvedValue(doneQuest)), { message: 'hi' }, noSleep);
+
+    expect(result.notebookId).toBe('quest-nb');
+  });
+
+  it('prefers the sessionId echoed on the ACK over the quest', async () => {
+    const sendChat = vi.fn().mockResolvedValue({ ...ack, sessionId: 'echoed-nb' });
+
+    const result = await sendMessage(
+      chatClient(vi.fn().mockResolvedValue(doneQuest), sendChat),
+      { message: 'hi' },
+      noSleep
+    );
+
+    expect(result.notebookId).toBe('echoed-nb');
+  });
+
+  it("returns a failed turn's explanation as its reply, as the wait path did", async () => {
+    const getQuest = vi.fn().mockResolvedValue({
+      ...doneQuest,
+      type: 'error',
+      errorCode: 'insufficient_credits',
+      reply: 'Not enough credits',
+    });
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
+
+    expect(result.reply).toBe('Not enough credits');
+  });
+
+  it('treats a stopped quest as finished', async () => {
+    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, status: 'stopped', reply: 'Stopped by user' });
+
+    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
+
+    expect(getQuest).toHaveBeenCalledTimes(1);
+    expect(result.reply).toBe('Stopped by user');
+  });
+
+  it('reports each in-flight poll, with the quest it read, until the reply lands', async () => {
+    const running = { id: 'q1', status: 'running', reply: 'hel' };
+    const getQuest = vi
+      .fn()
+      .mockResolvedValueOnce({ id: 'q1', status: 'pending' })
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce(doneQuest);
+    const onProgress = vi.fn();
+
+    await sendMessage(chatClient(getQuest), { message: 'hi' }, { ...noSleep, onProgress });
+
+    expect(onProgress).toHaveBeenCalledTimes(2);
+    expect(onProgress).toHaveBeenLastCalledWith(expect.any(Number), running);
+  });
+
+  it('names the quest and notebook when the poll keeps failing', async () => {
+    const getQuest = vi.fn().mockRejectedValue(new Error('network down'));
+    const sendChat = vi.fn().mockResolvedValue({ ...ack, sessionId: 'nb1' });
+
+    await expect(sendMessage(chatClient(getQuest, sendChat), { message: 'hi' }, noSleep)).rejects.toThrow(
+      '(quest q1, notebook nb1; the chat completion may still complete)'
+    );
+    expect(getQuest).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up once the poll timeout elapses', async () => {
+    const getQuest = vi.fn().mockResolvedValue({ id: 'q1', status: 'running' });
+
+    await expect(sendMessage(chatClient(getQuest), { message: 'hi' }, { ...noSleep, timeoutMs: 0 })).rejects.toThrow(
+      'chat completion did not finish within 0s (quest q1)'
+    );
+  });
+});
+
 describe('generateImage', () => {
   const noSleep = { sleep: vi.fn().mockResolvedValue(undefined) };
   const doneQuest = {
@@ -641,7 +674,7 @@ describe('generateImage', () => {
     const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
 
     await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
-      /\(quest q1; the render may still complete\)/
+      /\(quest q1; the image generation may still complete\)/
     );
     expect(getQuest).toHaveBeenCalledTimes(3);
   });
@@ -1044,6 +1077,74 @@ describe('registerTools', () => {
     expect(result.content[0]).toMatchObject({
       type: 'text',
       text: "API key forbidden: check the key's scopes and account access (recommended scope: ai:generate)",
+    });
+  });
+
+  describe('send_message progress and cancellation', () => {
+    type ChatHandler = (a: unknown, e: unknown) => Promise<CallToolResult>;
+    const doneQuest = { id: 'q1', status: 'done', type: 'message', sessionId: 'nb1', reply: 'hello world' };
+    const chatClient = (getQuest: ReturnType<typeof vi.fn>) =>
+      mockClient({ sendChat: vi.fn().mockResolvedValue({ id: 'q1', status: 'queued', sessionId: 'nb1' }), getQuest });
+
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('sends notifications/progress on each status while a token is supplied and returns the reply', async () => {
+      const getQuest = vi
+        .fn()
+        .mockResolvedValueOnce({ id: 'q1', status: 'pending' })
+        .mockResolvedValueOnce({ id: 'q1', status: 'running', reply: null })
+        .mockResolvedValueOnce({ id: 'q1', status: 'running', reply: 'hello' })
+        .mockResolvedValueOnce(doneQuest);
+      const handler = collectTools(chatClient(getQuest)).get('send_message') as ChatHandler;
+      const sendNotification = vi.fn().mockResolvedValue(undefined);
+
+      const pending = handler(
+        { message: 'hi' },
+        { signal: new AbortController().signal, sendNotification, _meta: { progressToken: 7 } }
+      );
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(sendNotification.mock.calls.map(([n]) => n.params.message)).toEqual([
+        'waiting for the reply to start',
+        'generating reply',
+        'generating reply (5 characters so far)',
+      ]);
+      expect(sendNotification).toHaveBeenCalledWith({
+        method: 'notifications/progress',
+        params: { progressToken: 7, progress: expect.any(Number), message: 'generating reply' },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent).toMatchObject({ notebookId: 'nb1', questId: 'q1', reply: 'hello world' });
+    });
+
+    it('sends no notification without a progress token', async () => {
+      const getQuest = vi.fn().mockResolvedValueOnce({ id: 'q1', status: 'running' }).mockResolvedValueOnce(doneQuest);
+      const handler = collectTools(chatClient(getQuest)).get('send_message') as ChatHandler;
+      const sendNotification = vi.fn();
+
+      const pending = handler({ message: 'hi' }, { signal: new AbortController().signal, sendNotification });
+      await vi.runAllTimersAsync();
+      await pending;
+
+      expect(sendNotification).not.toHaveBeenCalled();
+    });
+
+    it('stops polling and returns isError when the client cancels the call', async () => {
+      const controller = new AbortController();
+      const getQuest = vi.fn().mockImplementation(async () => {
+        controller.abort();
+        return { id: 'q1', status: 'running' };
+      });
+      const handler = collectTools(chatClient(getQuest)).get('send_message') as ChatHandler;
+
+      const pending = handler({ message: 'hi' }, { signal: controller.signal, sendNotification: vi.fn() });
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(result.isError).toBe(true);
+      expect(getQuest).toHaveBeenCalledTimes(1);
     });
   });
 

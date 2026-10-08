@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import { isAxiosError } from 'axios';
 import {
   DEFAULT_TTS_PROVIDER,
@@ -74,7 +74,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'send_message',
     title: 'Send message',
     description:
-      'Send a chat message and wait for the assistant reply; returns the cited sources (citables) the answer was grounded in.',
+      'Send a chat message and wait for the assistant reply, reporting progress while it is generated; returns the cited sources (citables) the answer was grounded in.',
     scope: 'ai:chat',
   },
   {
@@ -293,40 +293,40 @@ export async function createProject(
   return projectSummary(await client.createProject(args));
 }
 
+/**
+ * Queue a chat turn and poll its quest to completion. A failed turn still finishes `status: 'done'`
+ * with its explanation as the reply (`type: 'error'`), which is returned as-is like any other reply.
+ */
 export async function sendMessage(
   client: B4mApiClient,
-  args: { message: string; notebookId?: string; model?: string; systemPrompt?: string }
+  args: { message: string; notebookId?: string; model?: string; systemPrompt?: string },
+  { intervalMs = CHAT_POLL_INTERVAL_MS, timeoutMs = CHAT_POLL_TIMEOUT_MS, ...poll }: PollOptions = {}
 ) {
-  const res = await client.sendChat(args);
-  const questId = res.id;
+  const ack = await client.sendChat(args);
+  const questId = ack.id;
+  const quest = await pollQuest(
+    client,
+    {
+      questId,
+      ref: questRef(questId, ack.sessionId),
+      task: 'chat completion',
+      scope: 'ai:chat',
+      isFinished: isSettled,
+    },
+    { intervalMs, timeoutMs, ...poll }
+  );
 
-  // The wait body carries no citables, so re-fetch the quest for them; it also backs the
-  // notebookId should the response omit the echoed sessionId. Best-effort: the reply already
-  // succeeded, so a failed fetch only costs the citables (and that fallback id).
-  let quest: QuestResponse | undefined;
-  try {
-    quest = await client.getQuest(questId);
-  } catch {
-    quest = undefined;
-  }
-  const notebookId = args.notebookId ?? res.sessionId ?? quest?.sessionId;
+  const notebookId = args.notebookId ?? ack.sessionId ?? quest.sessionId;
   // Drop `metadata`: it can carry `fullContext` passage text that would bloat the MCP client's context.
-  // A failed quest fetch leaves citables undefined (omitted), so it never reads as "no sources".
-  const citables = quest
-    ? (quest.promptMeta?.citables ?? []).map(c => ({
-        id: c.id,
-        type: c.type,
-        title: c.title,
-        url: c.url,
-        description: c.description,
-      }))
-    : undefined;
+  const citables = (quest.promptMeta?.citables ?? []).map(c => ({
+    id: c.id,
+    type: c.type,
+    title: c.title,
+    url: c.url,
+    description: c.description,
+  }));
 
-  // The completed quest carries the raw reply slots in `responses` and the visible answer
-  // text in `response`. Older servers left `response` null on the wait path, so prefer `responses`.
-  const reply = res.responses && res.responses.length > 0 ? res.responses.join('\n\n') : (res.response ?? '');
-
-  return { notebookId, questId, reply, model: res.model, citables };
+  return { notebookId, questId, reply: questReplyText(quest), model: ack.model, citables };
 }
 
 export async function searchKnowledgeBase(
@@ -365,8 +365,11 @@ export interface PollOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Aborts the poll when the MCP client cancels the call. */
   signal?: AbortSignal;
-  /** Called after each non-terminal poll, so the tool can keep the client's request alive. */
-  onProgress?: (elapsedMs: number) => Promise<void> | void;
+  /**
+   * Called after each non-terminal poll with the quest it read (absent when that poll failed), so
+   * the tool can keep the client's request alive and report how far the quest has got.
+   */
+  onProgress?: (elapsedMs: number, quest?: QuestResponse) => Promise<void> | void;
   /** Named in poll-failure messages, e.g. an unreachable server. */
   baseURL?: string;
 }
@@ -375,16 +378,28 @@ const IMAGE_POLL_INTERVAL_MS = 2000;
 // Renders typically finish well under a minute; the cap only stops a wedged quest from
 // holding the tool call open indefinitely.
 const IMAGE_POLL_TIMEOUT_MS = 5 * 60 * 1000;
-// The render is already queued and billed, so a transient poll failure (5xx, 429, network)
+const CHAT_POLL_INTERVAL_MS = 2000;
+// A turn with tool rounds or a slow reasoning model can run for minutes, so this cap sits well
+// above the image one; it too only stops a wedged quest from holding the call open.
+const CHAT_POLL_TIMEOUT_MS = 15 * 60 * 1000;
+// The quest is already queued and billed, so a transient poll failure (5xx, 429, network)
 // must not abandon it; only a run of them does.
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
 const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
-// `status` is optional on the poll response; a quest that already carries its outcome is
+const isSettled = (q: QuestResponse) => q.status === 'done' || q.status === 'stopped' || q.type === 'error';
+
+// `status` is optional on the poll response; a render that already carries its images is
 // finished whatever its status says.
-const isTerminal = (q: QuestResponse) =>
-  q.status === 'done' || q.status === 'stopped' || q.type === 'error' || (!q.status && !!q.images?.length);
+const isImageSettled = (q: QuestResponse) => isSettled(q) || (!q.status && !!q.images?.length);
+
+// The poll's `reply` is the visible answer text; older servers left it null, so fall back to the
+// raw reply slots.
+const questReplyText = (q: QuestResponse) => q.reply || (q.replies ?? []).join('\n\n');
+
+const questRef = (questId: string, notebookId?: string) =>
+  `quest ${questId}${notebookId ? `, notebook ${notebookId}` : ''}`;
 
 const isRateLimited = (err: unknown) => isAxiosError(err) && err.response?.status === 429;
 
@@ -392,6 +407,62 @@ const isPermanentApiError = (err: unknown) => {
   const status = isAxiosError(err) ? err.response?.status : undefined;
   return status === 401 || status === 403 || status === 404;
 };
+
+interface QuestPoll {
+  questId: string;
+  /** Identifies the quest in error messages, so the caller can find the turn afterwards. */
+  ref: string;
+  /** What the quest is doing, e.g. "image generation"; names it in a timeout message. */
+  task: string;
+  /** API-key scope named in a poll failure's permission hint. */
+  scope: string;
+  isFinished: (q: QuestResponse) => boolean;
+}
+
+/** Poll a queued quest until `isFinished`, the timeout, a permanent poll failure, or an abort. */
+async function pollQuest(
+  client: B4mApiClient,
+  { questId, ref, task, scope, isFinished }: QuestPoll,
+  {
+    intervalMs,
+    timeoutMs,
+    sleep = defaultSleep,
+    signal,
+    onProgress,
+    baseURL = '',
+  }: PollOptions & { intervalMs: number; timeoutMs: number }
+): Promise<QuestResponse> {
+  const started = Date.now();
+  let failures = 0;
+  let retryAfterMs = 0;
+  for (;;) {
+    signal?.throwIfAborted();
+    let quest: QuestResponse | undefined;
+    try {
+      quest = await client.getQuest(questId);
+      failures = 0;
+      if (isFinished(quest)) return quest;
+    } catch (err) {
+      // The per-minute key limit is shared with other calls, so a 429 says nothing about the quest.
+      if (isRateLimited(err)) {
+        retryAfterMs =
+          (parseRetryAfterSeconds(isAxiosError(err) && err.response?.headers?.['retry-after']) ?? 0) * 1000;
+      } else {
+        failures += 1;
+        if (isPermanentApiError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          throw new Error(`${mapApiError(err, baseURL, scope)} (${ref}; the ${task} may still complete)`);
+        }
+      }
+    }
+    const elapsed = Date.now() - started;
+    if (elapsed >= timeoutMs) {
+      throw new Error(`${task} did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
+    }
+    await onProgress?.(elapsed, quest);
+    await sleep(Math.min(Math.max(intervalMs, retryAfterMs), Math.max(timeoutMs - elapsed, intervalMs)));
+    retryAfterMs = 0;
+  }
+}
 
 /**
  * Queue an image render and poll its quest to completion. A failed render still
@@ -403,49 +474,16 @@ const isPermanentApiError = (err: unknown) => {
 export async function generateImage(
   client: B4mApiClient,
   args: Parameters<B4mApiClient['generateImage']>[0],
-  {
-    intervalMs = IMAGE_POLL_INTERVAL_MS,
-    timeoutMs = IMAGE_POLL_TIMEOUT_MS,
-    sleep = defaultSleep,
-    signal,
-    onProgress,
-    baseURL = '',
-  }: PollOptions = {}
+  { intervalMs = IMAGE_POLL_INTERVAL_MS, timeoutMs = IMAGE_POLL_TIMEOUT_MS, ...poll }: PollOptions = {}
 ) {
   const ack = await client.generateImage(args);
   const questId = ack.quest.id;
-  const ref = `quest ${questId}${ack.quest.sessionId ? `, notebook ${ack.quest.sessionId}` : ''}`;
-
-  const started = Date.now();
-  let failures = 0;
-  let retryAfterMs = 0;
-  let quest: QuestResponse | undefined;
-  for (;;) {
-    signal?.throwIfAborted();
-    try {
-      quest = await client.getQuest(questId);
-      failures = 0;
-      if (isTerminal(quest)) break;
-    } catch (err) {
-      // The per-minute key limit is shared with other calls, so a 429 says nothing about the render.
-      if (isRateLimited(err)) {
-        retryAfterMs =
-          (parseRetryAfterSeconds(isAxiosError(err) && err.response?.headers?.['retry-after']) ?? 0) * 1000;
-      } else {
-        failures += 1;
-        if (isPermanentApiError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) {
-          throw new Error(`${mapApiError(err, baseURL, 'ai:generate')} (${ref}; the render may still complete)`);
-        }
-      }
-    }
-    const elapsed = Date.now() - started;
-    if (elapsed >= timeoutMs) {
-      throw new Error(`image generation did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
-    }
-    await onProgress?.(elapsed);
-    await sleep(Math.min(Math.max(intervalMs, retryAfterMs), Math.max(timeoutMs - elapsed, intervalMs)));
-    retryAfterMs = 0;
-  }
+  const ref = questRef(questId, ack.quest.sessionId);
+  const quest = await pollQuest(
+    client,
+    { questId, ref, task: 'image generation', scope: 'ai:generate', isFinished: isImageSettled },
+    { intervalMs, timeoutMs, ...poll }
+  );
 
   if (quest.status === 'stopped') {
     throw new Error(`image generation was stopped (${ref})`);
@@ -570,6 +608,38 @@ export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 
   });
 }
 
+/** The slice of a tool call's request context a progress reporter needs. */
+interface ProgressContext {
+  _meta?: { progressToken?: string | number };
+  sendNotification: (notification: ServerNotification) => Promise<void>;
+}
+
+/**
+ * Turn a quest poll's progress callback into MCP `notifications/progress`, or nothing when the
+ * client sent no progressToken. Progress also lets a client that resets its request timeout on
+ * progress wait out a slow quest.
+ */
+function progressReporter(
+  { _meta, sendNotification }: ProgressContext,
+  describe: (quest?: QuestResponse) => string
+): PollOptions['onProgress'] {
+  const progressToken = _meta?.progressToken;
+  if (progressToken === undefined) return undefined;
+  return (elapsedMs, quest) =>
+    sendNotification({
+      method: 'notifications/progress',
+      params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: describe(quest) },
+    });
+}
+
+// Partial text is persisted only every few seconds while a turn streams, so this is a coarse
+// "still producing" signal rather than a live count.
+function chatProgress(quest?: QuestResponse): string {
+  if (quest?.status !== 'running') return 'waiting for the reply to start';
+  const characters = questReplyText(quest).length;
+  return characters > 0 ? `generating reply (${characters} characters so far)` : 'generating reply';
+}
+
 /**
  * Register the Bike4Mind MCP tools on `server`. Each handler is wrapped so an
  * API failure becomes a structured `isError` result carrying a friendly message
@@ -642,7 +712,10 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
   server.registerTool(
     'send_message',
     { title: meta('send_message').title, description: meta('send_message').description, inputSchema: sendMessageShape },
-    args => run('ai:chat', () => sendMessage(client, args))
+    (args, extra) =>
+      run('ai:chat', () =>
+        sendMessage(client, args, { signal: extra.signal, baseURL, onProgress: progressReporter(extra, chatProgress) })
+      )
   );
 
   server.registerTool(
@@ -712,23 +785,13 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       description: meta('generate_image').description,
       inputSchema: generateImageShape,
     },
-    (args, extra) => {
-      const progressToken = extra._meta?.progressToken;
-      return run('ai:generate', () =>
+    (args, extra) =>
+      run('ai:generate', () =>
         generateImage(client, args, {
           signal: extra.signal,
           baseURL,
-          // Progress lets a client that resets its request timeout on progress wait out a slow render.
-          onProgress:
-            progressToken === undefined
-              ? undefined
-              : elapsedMs =>
-                  extra.sendNotification({
-                    method: 'notifications/progress',
-                    params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: 'rendering image' },
-                  }),
+          onProgress: progressReporter(extra, () => 'rendering image'),
         })
-      );
-    }
+      )
   );
 }
