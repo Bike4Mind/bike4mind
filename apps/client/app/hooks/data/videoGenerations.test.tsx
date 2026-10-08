@@ -62,7 +62,7 @@ describe('videoGenerationPollInterval', () => {
     }
   });
 
-  it('keeps the socket-down poll under the 10/min per-user detail bucket', () => {
+  it('polls every 15s, 4 detail reads a minute per job', () => {
     expect(SOCKET_DOWN_POLL_MS).toBe(15_000);
   });
 
@@ -237,6 +237,23 @@ describe('useVideoGeneration', () => {
     renderHook(() => useVideoGeneration('job-1'), { wrapper });
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(h.get).not.toHaveBeenCalled();
+  });
+
+  it('polls a live job every 15s while the socket is not open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      h.readyState = 3;
+      h.get.mockResolvedValue({ data: videoJob({ id: 'job-1', state: 'running' }) });
+      queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ id: 'job-1', state: 'running' }));
+      renderHook(() => useVideoGeneration('job-1'), { wrapper });
+      expect(h.get).not.toHaveBeenCalled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SOCKET_DOWN_POLL_MS);
+      });
+      await waitFor(() => expect(h.get).toHaveBeenCalledTimes(1));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

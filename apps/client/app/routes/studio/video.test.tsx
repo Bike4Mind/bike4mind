@@ -5,7 +5,7 @@ import type { CreateVideoGenerationBody } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
-  mutate: vi.fn(),
+  models: {} as Record<string, unknown>,
   useDocumentTitle: vi.fn(),
   mutate: vi.fn(),
 }));

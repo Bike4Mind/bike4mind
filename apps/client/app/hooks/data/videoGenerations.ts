@@ -18,7 +18,7 @@ import { describeVideoGenerationError } from './videoGenerationErrors';
 import { videoGenerationKeys } from './videoGenerationKeys';
 
 export const VIDEO_GALLERY_PAGE_SIZE = 12;
-// Detail reads share the per-user 10/min bucket with every other video route, so the fallback poll stays well under it.
+// Each video route has its own per-user bucket (as low as 10/min). At 4/min per job, three or more polling cards can draw 429s; those are not retried and the next tick tries again.
 export const SOCKET_DOWN_POLL_MS = 15_000;
 // A scan normally clears in well under a minute; one that stalls backs off with the job's age up to the cap, so a few
 // stuck cards cannot drain that bucket.
