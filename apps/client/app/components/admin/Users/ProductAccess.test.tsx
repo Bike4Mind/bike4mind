@@ -176,6 +176,56 @@ describe('ProductAccess', () => {
     expect(screen.getByText(/Also granted via Email domain/)).toBeInTheDocument();
   });
 
+  it('warns that revoking the comp tag will not remove access when a second tag also grants the key', () => {
+    mockProductAccess.mockReturnValue({
+      data: { entitlements: [{ key: 'optihashi:pro', held: true, grantTag: 'opti', sources: [] }] },
+      isLoading: false,
+      error: null,
+    });
+    render(<ProductAccess user={makeUser(['opti', 'optihashi:pro'])} onFieldChange={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    // The button removes only the comp tag; the 1:1 tag keeps the row held, so say so.
+    expect(screen.getByTestId('product-access-toggle-optihashi:pro')).toHaveTextContent('Revoke (opti)');
+    expect(
+      screen.getByText(/Also granted via tag optihashi:pro - revoking the opti tag alone will not remove access/)
+    ).toBeInTheDocument();
+  });
+
+  it('reads Held via the 1:1 tag with a Grant button and no revoke-only warning', () => {
+    const onFieldChange = vi.fn();
+    mockProductAccess.mockReturnValue({
+      data: { entitlements: [{ key: 'optihashi:pro', held: true, grantTag: 'opti', sources: [] }] },
+      isLoading: false,
+      error: null,
+    });
+    render(<ProductAccess user={makeUser(['optihashi:pro'])} onFieldChange={onFieldChange} />, {
+      wrapper: TestWrapper,
+    });
+    // No comp tag -> the button offers to add it, and nothing claims revoking a tag is the remedy.
+    expect(screen.getByTestId('product-access-toggle-optihashi:pro')).toHaveTextContent('Grant (opti)');
+    expect(screen.queryByText(/revoking the/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('product-access-tag-hint-optihashi:pro')).toHaveTextContent(
+      'Held via tag optihashi:pro.'
+    );
+    expect(screen.getByText('Held')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('product-access-toggle-optihashi:pro'));
+    expect(onFieldChange).toHaveBeenCalledWith('tags', ['optihashi:pro', 'opti']);
+  });
+
+  it('disambiguates the source-chip testid when two tags grant the same key', () => {
+    mockProductAccess.mockReturnValue({
+      data: { entitlements: [{ key: 'optihashi:pro', held: true, grantTag: 'opti', sources: [] }] },
+      isLoading: false,
+      error: null,
+    });
+    render(<ProductAccess user={makeUser(['opti', 'optihashi:pro'])} onFieldChange={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.getByTestId('product-access-source-optihashi:pro-tag')).toHaveTextContent('Tag');
+    expect(screen.getByTestId('product-access-source-optihashi:pro-tag-2')).toHaveTextContent('Tag');
+  });
+
   it('shows a read-only note (no grant control) for a key with no tag-based grant path', () => {
     mockProductAccess.mockReturnValue({
       data: { entitlements: [{ key: 'libreoncology:pro', held: false, grantTag: undefined, sources: [] }] },

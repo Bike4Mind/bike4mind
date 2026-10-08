@@ -103,8 +103,15 @@ const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) =>
         // grant immediately - the server resolver only refreshes after Save.
         const impliedSources = impliedBy(row.key).map(ifHeld => ({ type: 'implied' as const, detail: ifHeld }));
         const otherSources = [...serverSources(row), ...impliedSources];
-        const tagSources = liveTagsFor(row.key).map(detail => ({ type: 'tag' as const, detail }));
+        const liveTags = liveTagsFor(row.key);
         const liveTagGranted = hasLiveTag(row.grantTag);
+        // The toggle only reads/writes the single comp `grantTag`. Any OTHER live tag that also
+        // grants the key (a 1:1 key-name tag, or a second remap) keeps the row held after a
+        // revoke, so track them apart to warn - and to explain a hold the button cannot remove.
+        const extraTags = row.grantTag
+          ? liveTags.filter(tag => tag.toLowerCase() !== row.grantTag!.toLowerCase())
+          : liveTags;
+        const tagSources = liveTags.map(detail => ({ type: 'tag' as const, detail }));
         const held = tagSources.length > 0 || otherSources.length > 0;
         const displaySources = [...otherSources, ...tagSources];
         const impliedOnly =
@@ -123,18 +130,23 @@ const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) =>
 
             {displaySources.length > 0 && (
               <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                {displaySources.map((source, i) => (
-                  <Tooltip key={`${source.type}-${i}`} title={source.detail}>
-                    <Chip
-                      size="sm"
-                      variant="outlined"
-                      color="neutral"
-                      data-testid={`product-access-source-${row.key}-${source.type}`}
-                    >
-                      {SOURCE_LABEL[source.type] ?? source.type}
-                    </Chip>
-                  </Tooltip>
-                ))}
+                {displaySources.map((source, i) => {
+                  // Two sources of the same type (e.g. two tags granting the key) would share a
+                  // testid; disambiguate the repeats so each chip stays individually addressable.
+                  const repeat = displaySources.slice(0, i).filter(other => other.type === source.type).length;
+                  return (
+                    <Tooltip key={`${source.type}-${i}`} title={source.detail}>
+                      <Chip
+                        size="sm"
+                        variant="outlined"
+                        color="neutral"
+                        data-testid={`product-access-source-${row.key}-${source.type}${repeat ? `-${repeat + 1}` : ''}`}
+                      >
+                        {SOURCE_LABEL[source.type] ?? source.type}
+                      </Chip>
+                    </Tooltip>
+                  );
+                })}
               </Stack>
             )}
 
@@ -150,10 +162,26 @@ const ProductAccess: React.FC<ProductAccessProps> = ({ user, onFieldChange }) =>
               </Alert>
             )}
 
-            {tagSources.length > 0 && otherSources.length > 0 && (
+            {liveTagGranted && (otherSources.length > 0 || extraTags.length > 0) && (
               <Alert size="sm" color="warning" variant="soft" startDecorator={<InfoOutlinedIcon />}>
-                Also granted via {otherSources.map(source => SOURCE_LABEL[source.type] ?? source.type).join(', ')} -
-                revoking the tag alone will not remove access.
+                Also granted via{' '}
+                {[
+                  ...otherSources.map(source => SOURCE_LABEL[source.type] ?? source.type),
+                  ...extraTags.map(tag => `tag ${tag}`),
+                ].join(', ')}{' '}
+                - revoking the {row.grantTag} tag alone will not remove access.
+              </Alert>
+            )}
+
+            {!liveTagGranted && extraTags.length > 0 && (
+              <Alert
+                size="sm"
+                color="neutral"
+                variant="soft"
+                startDecorator={<InfoOutlinedIcon />}
+                data-testid={`product-access-tag-hint-${row.key}`}
+              >
+                Held via tag {extraTags.join(', ')}.
               </Alert>
             )}
 
