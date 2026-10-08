@@ -336,6 +336,8 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
   // slackNotification is deliberately left in place: the handler rethrows so the event is
   // retried, and a successful retry must still find it to replace this notice with the
   // answer. A repeat failure only re-edits the same message by ts, which is idempotent.
+  // Once every retry is exhausted the field stays set on that quest for good, so any new
+  // reader of slackNotification must check the quest's status before acting on it.
 }
 
 /**
