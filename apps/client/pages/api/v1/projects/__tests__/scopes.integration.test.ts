@@ -170,6 +170,15 @@ describe('/api/v1/projects scope enforcement (real middleware chain)', () => {
     expect(mockFindAccessibleById).not.toHaveBeenCalled();
   });
 
+  it('an invalid key can neither update nor delete a project (401) and nothing is written', async () => {
+    mockValidate.mockResolvedValue({ isValid: false });
+    for (const res of [await patchOne(), await deleteOne()]) {
+      expect(res._getStatusCode()).toBe(401);
+    }
+    expect(mockFindAccessibleById).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
   it('a read-only key can neither update nor delete a project (403) and nothing is written', async () => {
     withScopes([ApiKeyScope.READ_PROJECTS]);
     for (const res of [await patchOne(), await deleteOne()]) {
