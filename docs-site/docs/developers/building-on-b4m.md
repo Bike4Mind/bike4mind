@@ -222,7 +222,7 @@ Every successful exchange **revokes the previous key** minted for the same user 
 
 - **Expiry skew.** Re-mint shortly before `expires_in` runs out (for example 60 seconds early), not after a request fails.
 - **Default lifetime.** If `expires_in` is ever missing, assume the 900-second default rather than caching forever.
-- **Negative cache.** After a 401 or 403 from the exchange, remember the failure for that user briefly instead of retrying on every request; the user needs to sign in or consent again.
+- **Negative cache.** After a 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request. Either the user needs to sign in or consent again, or your client is misconfigured (`invalid_client`, `invalid_scope`); log the `error` code to tell which.
 - **Timeout.** Bound the exchange call with a timeout so a slow B4M does not hang your request path.
 - **One re-mint.** If B4M rejects a cached key, mint once and retry once. If that fails too, surface the error.
 
@@ -246,7 +246,7 @@ Revoking your app's access in B4M stops new exchanges, but a key already minted 
 - `code: "spend_cap_exceeded"`: the user is solvent, but the key hit an admin-set spending ceiling. Topping up does not help; the cap has to be raised.
 - `code` absent: an unclassified failure (including a rejected key). Show `message` and log `requestId`.
 
-Branch on `code`, never on `message`, which is prose and can change. The HTTP status tells you nothing here, and B4M never returns 402. (The JSON, non-streaming B4M APIs report the same condition as HTTP 422 with `errorCode: "insufficient_credits"`.)
+Branch on `code`, never on `message`, which is prose and can change. The HTTP status tells you nothing here, and the public API never returns 402. (The JSON, non-streaming B4M APIs report the same condition as HTTP 422 with `errorCode: "insufficient_credits"`.)
 
 ## 7. Read the user's state
 
@@ -354,7 +354,7 @@ async function callback(session: Record<string, string>, query: URLSearchParams)
   if (payload.nonce !== session.nonce) throw new Error('Nonce mismatch');
 
   // Keep the ID token server-side; it is needed for the billing exchange.
-  return { userId: payload.sub!, idToken: id_token, idTokenExp: payload.exp! };
+  return { userId: payload.sub!, idToken: id_token };
 }
 ```
 
@@ -363,7 +363,8 @@ async function callback(session: Record<string, string>, query: URLSearchParams)
 ```ts
 type CachedKey = { key: string; expiresAt: number };
 const keys = new Map<string, CachedKey>();
-const failures = new Map<string, number>(); // userId -> retry-after timestamp
+// Keyed by ID token, so a fresh sign-in is not blocked by a failure on the old token.
+const failures = new Map<string, number>(); // idToken -> retry-after timestamp
 
 const SKEW_MS = 60_000;
 const DEFAULT_TTL_S = 900;
@@ -374,7 +375,7 @@ const NEGATIVE_TTL_MS = 60_000;
 async function getUserKey(userId: string, idToken: string, { force = false } = {}): Promise<string> {
   const cached = keys.get(userId);
   if (!force && cached && cached.expiresAt - SKEW_MS > Date.now()) return cached.key;
-  if ((failures.get(userId) ?? 0) > Date.now()) throw new Error('Exchange recently failed; re-authorize the user');
+  if ((failures.get(idToken) ?? 0) > Date.now()) throw new Error('Exchange recently failed; re-authorize the user');
 
   const res = await fetch(`${B4M}/api/oauth/ai-token`, {
     method: 'POST',
@@ -388,7 +389,7 @@ async function getUserKey(userId: string, idToken: string, { force = false } = {
     signal: AbortSignal.timeout(10_000),
   });
   if (res.status === 401 || res.status === 403) {
-    failures.set(userId, Date.now() + NEGATIVE_TTL_MS);
+    failures.set(idToken, Date.now() + NEGATIVE_TTL_MS);
     keys.delete(userId);
   }
   if (!res.ok) throw new Error(`ai-token exchange failed: ${res.status}`);
