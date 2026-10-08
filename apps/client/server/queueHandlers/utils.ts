@@ -5,7 +5,6 @@ import { Config } from '@server/utils/config';
 import { registerToolGearObserver } from '@server/services/gears/toolGearObserver';
 import { contextToLogs } from '@server/utils/logger';
 import { Context, SQSEvent } from 'aws-lambda';
-import { handleWarmerInvocation } from '@server/utils/warmer';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
@@ -51,13 +50,8 @@ export const MARK_PAUSED_RETRY_DELAY_MS = 150;
 export const dispatchWithLogger = <T = void>(
   handler: (event: SQSEvent, context: Context, logger: Logger) => Promise<T>
 ) => {
-  return async (event: SQSEvent, context: Context): Promise<T | void> => {
+  return async (event: SQSEvent, context: Context): Promise<T> => {
     const logger = new Logger().withMetadata(contextToLogs(context));
-    // Check if this is a warmer invocation and exit early if it is
-    if (handleWarmerInvocation(event)) {
-      logger.info('Skipping warmer invocation');
-      return;
-    }
 
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
 
