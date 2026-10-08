@@ -117,8 +117,9 @@ This is a single pass: with `FEDERATED_SUBJECT_SOURCE=sub`, `FEDERATED_AUDIENCE`
 to the `client_id` the script generates. Register the trust config in the same run; adding
 `federatedIdp` to an existing client by hand leaves `allowedScopes` without `ai:generate` /
 `me:read`, and the exchange then returns 403 `invalid_scope`. For an external Cognito pool, omit
-`FEDERATED_SUBJECT_SOURCE` (defaults to `'identities'`), set `FEDERATED_PROVIDER_NAME`
-instead, and leave `FEDERATED_JWKS_URI` unset.
+`FEDERATED_SUBJECT_SOURCE` (defaults to `'identities'`), and set
+`FEDERATED_PROVIDER_NAME`, `FEDERATED_AUDIENCE` (the Cognito app client id) and the pool's
+`FEDERATED_ISSUER` instead; leave `FEDERATED_JWKS_URI` unset.
 
 ## Failure modes
 

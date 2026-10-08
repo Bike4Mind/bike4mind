@@ -75,7 +75,7 @@ Use the authorization code flow with PKCE (`S256`), plus `state` and `nonce`. **
 
 `redirect_uri` must match one of your registered redirect URIs exactly.
 
-Add `me:read` to `scope` if you will read the user's state (section 7). Request every API scope you will ever exchange for: a scope the user never consented to is rejected at the exchange, and the fix is to send the user through this request again with that scope included.
+Add `me:read` to `scope` if you will read the user's state (section 7). Request every API scope you will ever exchange for: where the consent check is enforced (section 5), a scope the user never consented to is rejected at the exchange, and the fix is to send the user through this request again with that scope included.
 
 ### The code exchange
 
@@ -149,10 +149,12 @@ With that config, the client's `allowedScopes` are `openid email profile ai:gene
 
 ### Self-hosted B4M
 
-Operators register clients with the seed script, run from the repository root. One pass registers the client with its trust config:
+The exchange verifies the ID token by fetching B4M's own JWKS over HTTPS from inside the `app` container. So it works only when B4M serves its public URL over HTTPS with a publicly trusted certificate (the Caddy setup in `SELF_HOST.md`, with `APP_URL=https://<your-domain>`). On a plain `http://` install, or with a self-signed certificate, every exchange fails with 401 `invalid_grant`.
+
+Operators register clients with the seed script. A stock install pulls images and has no Node toolchain, so on the host first install Node 24 and pnpm, then run `pnpm install --filter @bike4mind/scripts...` from the repository root. One pass registers the client with its trust config. The compose network's `mongo` hostname does not resolve from the host, so use the published port with `directConnection=true`:
 
 ```bash
-MONGODB_URI="<mongodb-uri>" \
+MONGODB_URI="mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true" \
 CLIENT_NAME="My App" \
 REDIRECT_URIS="https://app.example.com/callback" \
 FEDERATED_SUBJECT_SOURCE=sub \
@@ -185,6 +187,13 @@ handle @completions {
 Keep it a `handle` block: a bare `reverse_proxy @completions` loses to the catch-all and still 404s. Then change `CHAT_COMPLETION_PUBLIC_URL` in `.env.selfhost` from its `http://localhost:8788` default to `https://<your-domain>`, so the CLI is pointed at the public origin too.
 
 Set `OAUTH_RSA_PRIVATE_KEY` (a base64-encoded RSA private key PEM) to the same value on every instance. Generate one with `openssl genrsa 2048 | base64 | tr -d '\n'`. Without it, each process generates its own signing key at startup, so ID tokens stop verifying after a restart and verify only intermittently across replicas.
+
+Caddy and the app read these files only at startup, so recreate both containers after the edits:
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.caddy.yaml \
+  --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app
+```
 
 ### Hosted B4M
 
@@ -224,11 +233,11 @@ The ID token must still be valid when you exchange it. Once it expires, re-autho
 | 403 `invalid_scope`           | a requested scope is not `ai:generate` or `me:read`, or is not allowed for this client                                 |
 | 401 `invalid_grant`           | the ID token is invalid or expired, or its subject is not a B4M user                                                   |
 | 400 `invalid_request`         | the body is malformed, `scope` is empty, or the user has reached their cap on API keys                                 |
-| 429                           | rate limited (300 per minute per client, and per IP); the per-client limit sends `Retry-After`                         |
+| 429                           | rate limited (300 per minute per client, and per IP); both send `Retry-After`                                          |
 | 503 `temporarily_unavailable` | B4M could not look up this user's consent; retry that user after a short delay (no `Retry-After`)                      |
 | other 5xx                     | an unexpected B4M failure; retry with backoff, and do not ask the user to re-authorize                                 |
 
-The per-client and per-IP limits return different 429 bodies, so branch on the status, not the `error` field.
+The per-client and per-IP limits return different 429 bodies, so branch on the status and `Retry-After`, not the `error` field.
 
 ### One live key per user: cache it in one place
 
@@ -242,7 +251,7 @@ Every successful exchange **revokes the previous key** minted for the same user 
 
 - **Expiry skew.** Re-mint shortly before `expires_in` runs out (for example 60 seconds early), not after a request fails.
 - **Default lifetime.** If `expires_in` is ever missing, assume the 900-second default rather than caching forever.
-- **Negative cache.** After a 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request. Either the user needs to sign in or consent again, or your client is misconfigured (`invalid_client`, `invalid_scope`); log the `error` code to tell which. A 429 or 5xx is different. A 429 is client-wide, so pause every mint for its `Retry-After` seconds (or a default when it is absent). A 5xx is a B4M-side failure (a 503 affects only that user) and carries no `Retry-After`; retry that user after a short delay, and do not ask them to re-authorize.
+- **Negative cache.** After a 400, 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request, and log the `error` and `error_description` to tell the cases apart. `invalid_grant`, and an `access_denied` for missing consent, mean the user must sign in again (with the API scopes included). `access_denied` with "Policy acceptance required" means the user must accept the B4M terms in B4M; re-authorizing does not help. `invalid_client`, `invalid_scope` or a missing trust config mean your client is misconfigured. A 400 `invalid_request` is a malformed request or the user's API-key cap. A 429 or 5xx is different. A 429 is client-wide, so pause every mint for its `Retry-After` seconds (or a default when it is absent). A 5xx is a B4M-side failure (a 503 affects only that user) and carries no `Retry-After`; retry that user after a short delay, and do not ask them to re-authorize.
 - **Timeout.** Bound the exchange call with a timeout so a slow B4M does not hang your request path.
 - **One re-mint.** If B4M rejects a cached key, mint once and retry once. If that fails too, surface the error. Re-mint only if the rejected key is still the cached one: if another request already replaced it, use the replacement, or your re-mint revokes it.
 
@@ -388,7 +397,7 @@ type CachedKey = { key: string; expiresAt: number };
 const keys = new Map<string, CachedKey>();
 const inFlight = new Map<string, { idToken: string; promise: Promise<string> }>(); // userId -> mint in progress
 // Keyed by ID token, so a fresh sign-in is not blocked by a failure on the old token.
-const failures = new Map<string, { until: number; reason: 'auth' | 'unavailable' }>();
+const failures = new Map<string, { until: number; reason: 'rejected' | 'unavailable'; detail: string }>();
 let clientBackoffUntil = 0; // a 429 from the exchange pauses minting for every user
 
 const SKEW_MS = 60_000;
@@ -422,7 +431,7 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
   for (const [token, f] of failures) if (f.until <= now) failures.delete(token);
   if (clientBackoffUntil > now) throw new Error('B4M asked us to back off; retry later');
   const failure = failures.get(idToken);
-  if (failure?.reason === 'auth') throw new Error('Exchange recently failed; re-authorize the user');
+  if (failure?.reason === 'rejected') throw new Error(`Exchange recently failed: ${failure.detail}`);
   if (failure) throw new Error('B4M temporarily unavailable; retry later');
 
   const res = await fetch(`${B4M}/api/oauth/ai-token`, {
@@ -436,18 +445,23 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
     }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (res.status === 401 || res.status === 403) {
-    failures.set(idToken, { until: Date.now() + NEGATIVE_TTL_MS, reason: 'auth' });
-    keys.delete(userId);
-  } else if (res.status === 429) {
-    const retryAfterS = Number(res.headers.get('Retry-After')) || NEGATIVE_TTL_MS / 1000;
-    clientBackoffUntil = Date.now() + retryAfterS * 1000;
-  } else if (res.status >= 500) {
-    // A B4M-side failure (503: this user's consent lookup failed): retry them shortly, without
-    // pausing everyone or asking them to re-authorize. 5xx responses carry no Retry-After.
-    failures.set(idToken, { until: Date.now() + RETRY_5XX_MS, reason: 'unavailable' });
+  if (!res.ok) {
+    const err: { error?: string; error_description?: string } = await res.json().catch(() => ({}));
+    // Log this: it tells "re-authorize the user" apart from "fix your client config".
+    const detail = `${res.status} ${err.error ?? ''} ${err.error_description ?? ''}`.trim();
+    if (res.status === 429) {
+      const retryAfterS = Number(res.headers.get('Retry-After')) || NEGATIVE_TTL_MS / 1000;
+      clientBackoffUntil = Date.now() + retryAfterS * 1000;
+    } else if (res.status >= 500) {
+      // A B4M-side failure (503: this user's consent lookup failed): retry them shortly, without
+      // pausing everyone or asking them to re-authorize. 5xx responses carry no Retry-After.
+      failures.set(idToken, { until: Date.now() + RETRY_5XX_MS, reason: 'unavailable', detail });
+    } else {
+      failures.set(idToken, { until: Date.now() + NEGATIVE_TTL_MS, reason: 'rejected', detail });
+      keys.delete(userId);
+    }
+    throw new Error(`ai-token exchange failed: ${detail}`);
   }
-  if (!res.ok) throw new Error(`ai-token exchange failed: ${res.status}`);
 
   const body = await res.json();
   const ttlSeconds = body.expires_in ?? DEFAULT_TTL_S;
