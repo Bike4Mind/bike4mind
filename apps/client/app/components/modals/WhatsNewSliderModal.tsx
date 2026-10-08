@@ -275,7 +275,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
       const renderDuration = Date.now() - renderStartTime.current;
 
       // Determine source (auto-trigger vs manual)
-      const source = tagToTrigger === 'whats-new' ? 'manual' : 'auto';
+      const source = autoTriggered ? 'auto' : 'manual';
 
       logEvent.mutate(
         {
@@ -295,7 +295,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, tagToTrigger, activeModalList.length]);
+  }, [isOpen, tagToTrigger, autoTriggered, activeModalList.length]);
   // logEvent excluded from deps - useMutation returns a new ref on every render;
   // including it causes this effect to re-fire after each mutation, creating an infinite request loop.
 

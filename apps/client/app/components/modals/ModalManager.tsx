@@ -285,7 +285,8 @@ const ModalManager: React.FC = () => {
       !isStreaming &&
       !isModalOpen &&
       !anyDialogOpen &&
-      !isComposing;
+      !isComposing &&
+      !modals.slidesPending;
 
     // Update banners (only if changed)
     if (banners.length !== newBanners.length || !banners.every((b, i) => b._id === newBanners[i]._id)) {
@@ -370,6 +371,7 @@ const ModalManager: React.FC = () => {
     }
   }, [
     modals.data,
+    modals.slidesPending,
     currentUser,
     counters.data,
     counters.isPending,

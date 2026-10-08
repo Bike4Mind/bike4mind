@@ -215,7 +215,7 @@ describe('whatsNewHighlights queue handler', () => {
     ['disabled', { enabled: false }, false],
     ['malformed', { enabled: true }, true],
   ])(
-    'records skipped without querying, calling the LLM or posting when release notes are %s',
+    'records skipped and posts a notice without querying or calling the LLM when release notes are %s',
     async (_label, config, malformed) => {
       mockReleaseNotesConfig(config, malformed);
       mockNotes([note]);
@@ -224,8 +224,10 @@ describe('whatsNewHighlights queue handler', () => {
 
       expect(releaseNoteRepository.findPublishedBetween).not.toHaveBeenCalled();
       expect(getLlmByModel).not.toHaveBeenCalled();
-      expect(fetchMock).not.toHaveBeenCalled();
       expect(lastStatusUpdate()?.['settingValue.lastStatus']).toBe('skipped');
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const init = fetchMock.mock.calls[0][1] as RequestInit;
+      expect(JSON.parse(init.body as string).text).toContain('release notes are disabled');
     }
   );
 

@@ -18,6 +18,7 @@ const NOTE = {
 const PAGE = { data: [NOTE], next_cursor: 'abc' };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+const OVERSIZE_PAGE = () => json({ data: [], next_cursor: null, pad: 'x'.repeat(1024 * 1024) });
 const fetchOnce = (query: { limit: number; cursor?: string } = { limit: 5 }) => fetchUpstreamFeed(query, logger);
 
 beforeEach(() => {
@@ -90,12 +91,17 @@ describe('fetchUpstreamFeed', () => {
     ['an off-schema body', () => json({ data: [{ id: 1 }] })],
     ['a non-JSON body', () => new Response('<html>', { status: 200 })],
     ['a non-200 status', () => json(PAGE, 503)],
-    ['an oversize body', () => new Response('x'.repeat(1024 * 1024 + 1), { status: 200 })],
     ['an empty body', () => new Response('', { status: 200 })],
   ])('returns null and warns on %s', async (_label, make) => {
     mockSafeFetch.mockResolvedValue(make());
     expect(await fetchOnce()).toBeNull();
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('returns null and warns of the size cap on an oversize body', async () => {
+    mockSafeFetch.mockResolvedValue(OVERSIZE_PAGE());
+    expect(await fetchOnce()).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('exceeded the size cap'), expect.anything());
   });
 
   it('returns null when the SSRF guard blocks the target', async () => {
@@ -156,7 +162,7 @@ describe('fetchUpstreamFeed', () => {
   });
 
   it.each([
-    ['an oversize body', () => new Response('x'.repeat(1024 * 1024 + 1), { status: 200 })],
+    ['an oversize body', OVERSIZE_PAGE],
     ['an empty body', () => new Response('', { status: 200 })],
     ['an off-schema body', () => json({ data: [{ id: 1 }] })],
   ])('does not open an outage window on %s for one query', async (_label, make) => {

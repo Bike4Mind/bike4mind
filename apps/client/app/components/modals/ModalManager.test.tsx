@@ -7,7 +7,7 @@ import { releaseNoteToModal } from './releaseNoteSlides';
 
 const mocks = vi.hoisted(() => ({
   triggerModalByTag: vi.fn(),
-  modals: { data: [] as unknown[], isPending: false },
+  modals: { data: [] as unknown[], isPending: false, slidesPending: false },
   createdAt: new Date('2020-01-01'),
 }));
 
@@ -45,6 +45,7 @@ describe('ModalManager whats-new auto-trigger', () => {
   beforeEach(() => {
     mocks.triggerModalByTag.mockReset();
     mocks.createdAt = new Date('2020-01-01');
+    mocks.modals.slidesPending = false;
     mocks.modals.data = [
       releaseNoteToModal({
         id: 'n1',
@@ -60,6 +61,18 @@ describe('ModalManager whats-new auto-trigger', () => {
   it('opens the slider with the auto source for an unseen release-note slide', () => {
     render(<ModalManager />);
     expect(mocks.triggerModalByTag).toHaveBeenCalledWith('whats-new', 'WhatsNewSlider', 'auto');
+  });
+
+  it('waits for the release-note feed before auto-triggering, then triggers once', () => {
+    mocks.modals.slidesPending = true;
+    // ModalManager is memoized and the mocked hooks cannot schedule a render, so a changing prop forces one
+    const Manager = ModalManager as React.ComponentType<{ tick?: number }>;
+    const { rerender } = render(<Manager tick={0} />);
+    expect(mocks.triggerModalByTag).not.toHaveBeenCalled();
+
+    mocks.modals.slidesPending = false;
+    rerender(<Manager tick={1} />);
+    expect(mocks.triggerModalByTag).toHaveBeenCalledTimes(1);
   });
 
   it('does not auto-trigger for a brand-new account', () => {

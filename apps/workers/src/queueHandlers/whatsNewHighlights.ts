@@ -29,6 +29,63 @@ const MAX_RESPONSE_SIZE = 100000; // 100KB limit for highlights (longer than mod
 const LLM_TIMEOUT_MS = 120000; // 2 minutes timeout for LLM generation
 const DEFAULT_LLM_MODEL = ChatModels.GPT4o_MINI;
 
+/** Posts a headline + detail notice in place of the highlights. No-ops without Slack ids or a bot token. */
+async function postHighlightsNotice(
+  target: { slackChannelId?: string; slackTeamId?: string; correlationId: string },
+  headline: string,
+  detail: string,
+  logger: Logger
+): Promise<void> {
+  const { slackChannelId, slackTeamId, correlationId } = target;
+  if (!slackChannelId || !slackTeamId) return;
+
+  try {
+    const workspace = await slackDevWorkspaceRepository.findBySlackTeamIdWithToken(slackTeamId);
+    if (!workspace?.slackBotToken) return;
+
+    const blocks = [
+      {
+        type: 'header',
+        text: { type: 'plain_text', text: "What's New Weekly Highlights", emoji: true },
+      },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*${headline}*\n\n${detail}` },
+      },
+      {
+        type: 'context',
+        elements: [{ type: 'mrkdwn', text: `Correlation ID: \`${correlationId}\`` }],
+      },
+    ];
+
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${decryptToken(workspace.slackBotToken)}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel: slackChannelId,
+        text: headline,
+        blocks,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+
+    const result = (await response.json()) as { ok: boolean; error?: string };
+    if (result.ok) {
+      logger.log('Posted highlights notice to Slack');
+    } else {
+      logger.warn('Failed to post highlights notice to Slack', { error: result.error });
+    }
+  } catch (slackError) {
+    logger.warn('Failed to send highlights notice to Slack', {
+      error: slackError instanceof Error ? slackError.message : String(slackError),
+    });
+  }
+}
+
 /**
  * Queue handler for generating What's New weekly highlights and posting to Slack
  */
@@ -109,6 +166,12 @@ async function processHighlightsGeneration(
   if (releaseNotes.kind === 'disabled') {
     logger.log('Release notes are disabled - skipping highlights generation');
     await updateSettingsStatus('skipped', undefined, correlationId);
+    await postHighlightsNotice(
+      { slackChannelId, slackTeamId, correlationId },
+      `Weekly highlights skipped for ${dateRange.start} - ${dateRange.end}: release notes are disabled.`,
+      'Enable release notes (or fix their config) in the Release Notes admin tab to resume weekly highlights.',
+      logger
+    );
     return;
   }
   const modals = releaseNotes.entries;
@@ -122,57 +185,12 @@ async function processHighlightsGeneration(
     await updateSettingsStatus('no_modals', undefined, correlationId);
 
     // Post a warning in place of the highlights so an empty week is still visible in Slack
-    if (slackChannelId && slackTeamId) {
-      try {
-        const workspace = await slackDevWorkspaceRepository.findBySlackTeamIdWithToken(slackTeamId);
-        if (workspace?.slackBotToken) {
-          const noNotesText = `No release notes were published for ${dateRange.start} - ${dateRange.end}.`;
-          const warningBlocks = [
-            {
-              type: 'header',
-              text: { type: 'plain_text', text: "What's New Weekly Highlights", emoji: true },
-            },
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: `*${noNotesText}*\n\nIf releases shipped this week, check the Release Notes admin tab for notes that are hidden or still scheduled.`,
-              },
-            },
-            {
-              type: 'context',
-              elements: [{ type: 'mrkdwn', text: `Correlation ID: \`${correlationId}\`` }],
-            },
-          ];
-
-          const response = await fetch('https://slack.com/api/chat.postMessage', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${decryptToken(workspace.slackBotToken)}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              channel: slackChannelId,
-              text: noNotesText,
-              blocks: warningBlocks,
-              unfurl_links: false,
-              unfurl_media: false,
-            }),
-          });
-
-          const result = (await response.json()) as { ok: boolean; error?: string };
-          if (result.ok) {
-            logger.log('Posted no-release-notes warning to Slack');
-          } else {
-            logger.warn('Failed to post no-release-notes warning to Slack', { error: result.error });
-          }
-        }
-      } catch (slackError) {
-        logger.warn('Failed to send no-release-notes Slack warning', {
-          error: slackError instanceof Error ? slackError.message : String(slackError),
-        });
-      }
-    }
+    await postHighlightsNotice(
+      { slackChannelId, slackTeamId, correlationId },
+      `No release notes were published for ${dateRange.start} - ${dateRange.end}.`,
+      'If releases shipped this week, check the Release Notes admin tab for notes that are hidden or still scheduled.',
+      logger
+    );
 
     return;
   }
