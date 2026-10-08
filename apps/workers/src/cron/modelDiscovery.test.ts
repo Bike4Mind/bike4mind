@@ -78,7 +78,7 @@ const runResult = (overrides: Record<string, unknown> = {}) => ({
   skippedSources: [],
   diff: [],
   droppedRecords: [],
-  absence: { sighted: [], missed: [], frozenBackends: [] },
+  absence: { sighted: [], missed: [], frozenBackends: [], frozenProfileIds: [] },
   metrics: {
     ModelsDiscovered: 0,
     ModelsPromoted: 0,

@@ -582,6 +582,7 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     },
     images: { type: [String], required: false },
     videos: { type: [String], required: false },
+    videoJobIds: { type: [String], default: undefined },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -1120,6 +1121,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           replies: 1,
           images: 1,
           videos: 1,
+          videoJobIds: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1269,6 +1271,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           replies: 1,
           images: 1,
           videos: 1,
+          videoJobIds: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1552,7 +1555,7 @@ export const questRepository = new QuestRepository(Quest);
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
 >;
 
 /**
@@ -1566,5 +1569,5 @@ export type UnfinishedQuestView = { id: string } & Pick<
  */
 export type StaleRunningQuestView = { id: string; updatedAt: Date } & Pick<
   IChatHistoryItem,
-  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
 >;

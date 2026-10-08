@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync } from 'fs';
 import path from 'path';
-import { methodBlocks } from './scopeCoverageHelpers';
+import { extractRequiredScopesGate, methodBlocks, stripComments, tsFiles } from './scopeCoverageHelpers';
 
 /**
  * Every `/api/files` door gates API keys on a files scope (server/files/fileScopes.ts). Before
@@ -45,35 +45,9 @@ const EXPECTED_GATES: Record<string, string> = {
   'tags/index.ts': 'FILES_READ_OR_WRITE_SCOPES',
 };
 
-function tsFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return entry.name === '__tests__' ? [] : tsFiles(full);
-    return /\.tsx?$/.test(entry.name) ? [full] : [];
-  });
-}
-
 // Normalized to forward slashes like the sibling coverage tests (adminApiKeyScopeCoverage.test.ts,
 // apiKeyScopePostureCoverage.test.ts), so EXPECTED_GATES keys don't drift by platform path.sep.
 const rel = (f: string) => path.relative(FILES_API_DIR, f).split(path.sep).join('/');
-
-/**
- * Strips both comment forms before the gate regex runs, so a commented-out
- * `requiredScopes` mention - line or block - never counts as a real gate.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-}
-
-/**
- * Anchors to the `baseApi(...)` call itself so a mention anywhere else in the file (e.g. a
- * sibling constant reference, or one living only in a comment) cannot satisfy the gate.
- */
-function extractRequiredScopesGate(source: string): string | undefined {
-  return stripComments(source).match(
-    /baseApi\(\{[^}]*requiredScopes:\s*(FILES_(?:READ|WRITE|READ_OR_WRITE)_SCOPES)\b[^}]*\}\)/
-  )?.[1];
-}
 
 const routes = tsFiles(FILES_API_DIR).map(file => [rel(file), file] as const);
 
@@ -84,7 +58,7 @@ describe('every /api/files door gates API keys on a files scope', () => {
 
   it.each(routes)('%s', (relPath, file) => {
     const rawSource = readFileSync(file, 'utf8');
-    const gate = extractRequiredScopesGate(rawSource);
+    const gate = extractRequiredScopesGate(rawSource, 'FILES');
     expect(gate, 'declare baseApi({ requiredScopes: FILES_*_SCOPES }) from @server/files/fileScopes').toBeDefined();
 
     const expectedGate = EXPECTED_GATES[relPath];
@@ -162,7 +136,7 @@ describe('methodBlocks splitter', () => {
 describe('the gate regex actually rejects a bad door', () => {
   it('fails a route with no requiredScopes at all', () => {
     const source = 'const handler = baseApi({}).get(async (req, res) => {});\nexport default handler;';
-    expect(extractRequiredScopesGate(source)).toBeUndefined();
+    expect(extractRequiredScopesGate(source, 'FILES')).toBeUndefined();
   });
 
   it('ignores a requiredScopes mention living only in a line comment', () => {
@@ -170,7 +144,7 @@ describe('the gate regex actually rejects a bad door', () => {
       '// requiredScopes: FILES_READ_SCOPES',
       'const handler = baseApi({}).get(async (req, res) => {});',
     ].join('\n');
-    expect(extractRequiredScopesGate(source)).toBeUndefined();
+    expect(extractRequiredScopesGate(source, 'FILES')).toBeUndefined();
   });
 
   // A bare `baseApi({})` alongside a block-commented gate must not be recognized as gated - the
@@ -181,6 +155,6 @@ describe('the gate regex actually rejects a bad door', () => {
       '/* baseApi({ requiredScopes: FILES_READ_SCOPES }) */',
       'const handler = baseApi({}).get(async (req, res) => {});',
     ].join('\n');
-    expect(extractRequiredScopesGate(source)).toBeUndefined();
+    expect(extractRequiredScopesGate(source, 'FILES')).toBeUndefined();
   });
 });

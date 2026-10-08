@@ -104,6 +104,7 @@ const RUN_DETAIL = {
   lifecycleTransitions: [],
   catalogDiff: [],
   unmatchedIds: [],
+  frozenProfileIds: [],
   droppedRecords: [],
 };
 

@@ -4,6 +4,7 @@ import {
   Image as ImageIcon,
   MusicNote as MusicIcon,
   GraphicEq as AudioIcon,
+  Videocam as VideoIcon,
   Calculate as MathIcon,
   Schema as MermaidIcon,
   Search as SearchIcon,
@@ -42,6 +43,11 @@ export const TOOLS_MAP = {
     name: 'Audio Generation',
     description: 'Generate speech or sound effects',
     icon: <AudioIcon />,
+  },
+  video_generation: {
+    name: 'Video Generation',
+    description: 'Generate a short video clip',
+    icon: <VideoIcon />,
   },
   mermaid_chart: {
     name: 'Mermaid Chart',

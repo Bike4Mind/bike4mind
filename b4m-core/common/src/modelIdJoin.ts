@@ -1,3 +1,5 @@
+import { stripBedrockRegionPrefix } from './modelCatalog';
+
 /**
  * The aggregator join (spec sec 5.6). Pure, deterministic, and deliberately
  * placed in `common` rather than in the discovery service: the checked-in
@@ -23,14 +25,6 @@ export interface ModelIdAliasEntry {
 }
 
 export type ModelIdAliasMap = Readonly<Record<string, ModelIdAliasEntry>>;
-
-/**
- * Routing prefixes Bedrock puts in front of a model id. Exactly the four the
- * spec names; other regions exist in aggregator key space (`jp.`, `au.`) but our
- * ids never use them, so leaving those keys unstripped costs a duplicate index
- * entry and never a wrong match.
- */
-const REGION_PREFIXES = ['us.', 'eu.', 'apac.', 'global.'] as const;
 
 /**
  * Bedrock version suffix. Widened from the spec's literal `-v1:0` / `-v2:0` to
@@ -125,12 +119,7 @@ function normalize(key: string, namespaces: ReadonlySet<string>): string {
     value = value.slice(slash + 1);
   }
 
-  for (const prefix of REGION_PREFIXES) {
-    if (value.startsWith(prefix)) {
-      value = value.slice(prefix.length);
-      break;
-    }
-  }
+  value = stripBedrockRegionPrefix(value);
 
   value = value.replace(VERSION_SUFFIX, '');
   value = value.replace(DATE_SUFFIX_COMPACT, '');

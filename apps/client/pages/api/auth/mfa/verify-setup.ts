@@ -89,7 +89,7 @@ const handler = baseApi()
           });
         }
 
-        const remainingAttempts = 3 - (updatedUser?.mfa?.failedAttempts ?? 0);
+        const remainingAttempts = mfaService.MAX_FAILED_ATTEMPTS - (updatedUser?.mfa?.failedAttempts ?? 0);
         const errMessage = error instanceof Error ? error.message : 'Invalid MFA code';
         res.status(400).json({
           error: errMessage,

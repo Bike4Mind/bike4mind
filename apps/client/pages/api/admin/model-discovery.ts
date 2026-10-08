@@ -115,6 +115,7 @@ const fullRun = (run: IModelDiscoveryRun) => ({
   // stored array is complete.
   detailTotals: run.detailTotals ?? {},
   unmatchedIds: run.unmatchedIds ?? [],
+  frozenProfileIds: run.frozenProfileIds ?? [],
   droppedRecords: run.droppedRecords ?? [],
 });
 

@@ -133,6 +133,39 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(created.corpusGroundingMode).toBe(ownerId === 'caller-1' ? 'retrieve' : undefined);
   });
 
+  // Create-only too, and outside the isOwner gate: see the comment on these fields in clone.ts.
+  it.each([
+    ['owns the session', 'caller-1'],
+    ['only holds a share', 'owner-1'],
+  ])(
+    'carries the source session tool lists and systemPromptId onto the clone when the caller %s',
+    async (_, ownerId) => {
+      const { db } = makeAdapters(ownerId);
+      db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+        id: 'session-1',
+        userId: ownerId,
+        name: 'Original',
+        knowledgeIds: [],
+        tags: [],
+        enabledTools: ['web_search'],
+        disabledTools: ['image_generation'],
+        disableUserIntegrations: true,
+        systemPromptId: 'triage_router',
+      });
+
+      await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+      expect(db.sessions.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabledTools: ['web_search'],
+          disabledTools: ['image_generation'],
+          disableUserIntegrations: true,
+          systemPromptId: 'triage_router',
+        })
+      );
+    }
+  );
+
   /**
    * `taggedAt` is the companion timestamp of `tags`, same as `summaryAt` is of `summary`. A clone
    * that arrives without it looks untagged, so the spider re-tags it and overwrites the copied tags.
