@@ -18,6 +18,7 @@ function fakeServer(
     lakeTag?: boolean;
     failDelete?: RegExp;
     storageStatus?: number;
+    putError?: Error;
     promote?: { status: number; lakeStatus?: string | null };
   } = {}
 ) {
@@ -39,7 +40,10 @@ function fakeServer(
     calls.push({ method, url, headers: { ...(init.headers as Record<string, string>) }, body: init.body as string });
     const path = url.startsWith('https://storage.') ? '' : new URL(url).pathname;
 
-    if (url.startsWith('https://storage.')) return new Response('', { status: opts.storageStatus ?? 200 });
+    if (url.startsWith('https://storage.')) {
+      if (opts.putError) throw opts.putError;
+      return new Response('', { status: opts.storageStatus ?? 200 });
+    }
     if (method === 'POST' && path === '/api/data-lakes') {
       const { slug } = JSON.parse(init.body as string) as { slug: string };
       return json(201, { id: `lake-${slug}`, ...(opts.lakeTag === false ? {} : { datalakeTag: `tag-${slug}` }) });
@@ -227,11 +231,10 @@ describe('provisionLakeRagLakes', () => {
   });
 
   it('rethrows the original error unchanged when teardown is clean', async () => {
-    const { api } = fakeServer({ storageStatus: 403 });
+    const sentinel = new Error('storage unreachable');
+    const { api } = fakeServer({ putError: sentinel });
     const err = await provisionLakeRagLakes(api, [doc('a.md', 'current')], { runId: 'r1' }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(Error);
-    expect(err).not.toBeInstanceOf(AggregateError);
-    expect(String(err)).toMatch(/upload PUT -> 403/);
+    expect(err).toBe(sentinel);
   });
 
   it('surfaces what teardown could not delete alongside the original error', async () => {
@@ -245,12 +248,17 @@ describe('provisionLakeRagLakes', () => {
     expect(String(errors[1])).toMatch(/DELETE \/api\/data-lakes\/.* -> 500/);
   });
 
-  it('reports a failed file detach as a failed delete, not a leftover lake', async () => {
-    const { api } = fakeServer({ ingestion: { 0: ['failed'] }, failDelete: /\/files\// });
-    const err = await provisionLakeRagLakes(api, [doc('a.md', 'current')], { runId: 'r1' }).catch((e: unknown) => e);
+  it('counts failed deletes, not lakes, when teardown has leftovers', async () => {
+    const { api } = fakeServer({ ingestion: { 1: ['failed'] }, failDelete: /\/files\// });
+    const err = await provisionLakeRagLakes(api, [doc('a.md', 'current'), doc('b.md', 'current')], {
+      runId: 'r1',
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AggregateError);
-    // The lake archive succeeded, so nothing is actually left; the count is the failed detach.
-    expect((err as AggregateError).message).toMatch(/ingestion_status failed; teardown left 1 failed delete\(s\)/);
+    const { message, errors } = err as AggregateError;
+    // One lake, two failed detaches: the count is the deletes, not the lakes.
+    expect(message).toMatch(/ingestion_status failed; teardown left 2 failed delete\(s\)/);
+    expect(errors).toHaveLength(3);
+    expect(String(errors[1])).toMatch(/\/files\/.* -> 500/);
   });
 
   it('throws when the created lake carries no datalakeTag', async () => {
