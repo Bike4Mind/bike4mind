@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 
 const {
   getOwnedChannelMock,
+  getOwnedActorMock,
   ensureChannelByNameMock,
   ensureActorMock,
   createChannelMock,
@@ -29,6 +30,7 @@ const {
   return {
     gateKeys,
     getOwnedChannelMock: vi.fn(),
+    getOwnedActorMock: vi.fn(),
     ensureChannelByNameMock: vi.fn(),
     ensureActorMock: vi.fn(),
     createChannelMock: vi.fn(),
@@ -98,6 +100,7 @@ vi.mock('@bike4mind/database', () => ({
   hearthRepository: {
     store: storeMock,
     getOwnedChannel: getOwnedChannelMock,
+    getOwnedActor: getOwnedActorMock,
     ensureChannelByName: ensureChannelByNameMock,
     ensureActor: ensureActorMock,
     createChannel: createChannelMock,
@@ -181,6 +184,7 @@ const presenceRow = (actorId: string, state: string, lastSeen: string, extra: Re
 beforeEach(() => {
   vi.clearAllMocks();
   getOwnedChannelMock.mockResolvedValue({ _id: 'ch-1', nextSeq: 5, userId: 'u1' });
+  getOwnedActorMock.mockResolvedValue({ _id: 'actor-2', userId: 'u1' });
   ensureChannelByNameMock.mockResolvedValue({ _id: 'ch-default', nextSeq: 0, userId: 'u1' });
   ensureActorMock.mockResolvedValue({ _id: { toString: () => 'actor-1' }, displayName: 'erik', kind: 'human' });
   hearthLogAppendMock.mockResolvedValue(DOMAIN_EVENT);
@@ -310,6 +314,119 @@ describe('POST /api/hearth/events', () => {
       'wss://test',
       expect.objectContaining({ action: 'hearth_event' })
     );
+  });
+});
+
+const withApiKey = (req: Request, scopes = ['hearth:write']) => {
+  (req as unknown as { apiKeyInfo: { scopes: string[] } }).apiKeyInfo = { scopes };
+  return req;
+};
+
+describe('API keys are never the human actor', () => {
+  it('defaults an API-key caller with no declared kind to an agent actor on events and catchup', async () => {
+    await eventsRouter._routes.post(withApiKey(makeReq({ channelId: 'ch-1', human: { text: 'hi' } })), makeRes());
+    await catchupRouter._routes.post(withApiKey(makeReq({ channelId: 'ch-1' })), makeRes());
+    expect(ensureActorMock).toHaveBeenNthCalledWith(1, 'u1', 'agent', 'erik');
+    expect(ensureActorMock).toHaveBeenNthCalledWith(2, 'u1', 'agent', 'erik');
+  });
+
+  it('a session caller with no declared kind is still the human actor on catchup', async () => {
+    await catchupRouter._routes.post(makeReq({ channelId: 'ch-1' }), makeRes());
+    expect(ensureActorMock).toHaveBeenCalledWith('u1', 'human', 'erik');
+  });
+});
+
+describe('POST /api/hearth/events origin', () => {
+  const post = () => eventsRouter._routes.post;
+  const originOf = () => hearthLogAppendMock.mock.calls[0][0].origin;
+
+  it('stamps session for a cookie/JWT caller and ignores a body-supplied origin', async () => {
+    await post()(makeReq({ channelId: 'ch-1', human: { text: 'hi' }, origin: 'gateway' }), makeRes());
+    expect(originOf()).toBe('session');
+  });
+
+  it('stamps api-key for an API-key caller', async () => {
+    await post()(withApiKey(makeReq({ channelId: 'ch-1', human: { text: 'hi' } })), makeRes());
+    expect(originOf()).toBe('api-key');
+  });
+
+  it('stamps gateway when the resolved actor is a gateway', async () => {
+    ensureActorMock.mockResolvedValueOnce({ _id: { toString: () => 'gw-1' }, displayName: 'slack', kind: 'gateway' });
+    await post()(
+      withApiKey(
+        makeReq({ channelId: 'ch-1', human: { text: 'hi' }, actor: { kind: 'gateway', displayName: 'slack' } })
+      ),
+      makeRes()
+    );
+    expect(originOf()).toBe('gateway');
+  });
+});
+
+describe('POST /api/hearth/events machine payload validation', () => {
+  const post = () => eventsRouter._routes.post;
+  const delegation = (machine: unknown, kind = 'delegation') => ({
+    channelId: 'ch-1',
+    kind,
+    human: { text: 'please do it', format: 'text' },
+    machine,
+  });
+  const VALID = { schema: 'hearth.delegation@1', payload: { targetActorId: 'actor-2', task: 'run tests', extra: 1 } };
+
+  it('accepts a valid delegation to an owned actor', async () => {
+    const res = makeRes();
+    await post()(makeReq(delegation(VALID)), res);
+    expect(getOwnedActorMock).toHaveBeenCalledWith('u1', 'actor-2');
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('rejects a delegation with a missing or malformed payload', async () => {
+    for (const machine of [
+      undefined,
+      { schema: 'hearth.delegation@1', payload: { task: 'run tests' } },
+      { schema: 'hearth.delegation@1', payload: { targetActorId: 'actor-2', task: '' } },
+    ]) {
+      await expect(post()(makeReq(delegation(machine)), makeRes())).rejects.toThrow();
+    }
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
+  });
+
+  it('pairs the delegation schema with the delegation kind in both directions', async () => {
+    await expect(post()(makeReq(delegation({ ...VALID, schema: 's@1' })), makeRes())).rejects.toThrow(
+      /delegation events require/
+    );
+    await expect(post()(makeReq(delegation(VALID, 'message')), makeRes())).rejects.toThrow(
+      /only valid on delegation events/
+    );
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
+  });
+
+  it('404s a delegation whose target is not owned by the caller', async () => {
+    getOwnedActorMock.mockResolvedValue(null);
+    await expect(post()(makeReq(delegation(VALID)), makeRes())).rejects.toThrow(/target actor not found/i);
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
+  });
+
+  it('403s a delegation from a gateway actor', async () => {
+    ensureActorMock.mockResolvedValueOnce({ _id: { toString: () => 'gw-1' }, displayName: 'slack', kind: 'gateway' });
+    await expect(
+      post()(makeReq({ ...delegation(VALID), actor: { kind: 'gateway', displayName: 'slack' } }), makeRes())
+    ).rejects.toThrow(/gateway actors cannot delegate/i);
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a presence event whose payload does not match the presence schema', async () => {
+    await expect(
+      post()(
+        makeReq({
+          channelId: 'ch-1',
+          kind: 'presence',
+          human: { text: 'x', format: 'text' },
+          machine: { schema: 'hearth.presence@1', payload: { activity: 'x' } },
+        }),
+        makeRes()
+      )
+    ).rejects.toThrow(/does not match hearth.presence@1/);
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
   });
 });
 

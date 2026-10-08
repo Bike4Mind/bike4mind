@@ -1,6 +1,14 @@
 import { hearthRepository } from '@bike4mind/database';
-import { HearthLog, hearthEventKindSchema, hearthEventRefsSchema, hearthMachineBodySchema } from '@bike4mind/hearth';
-import { ApiKeyScope, NotFoundError, UnauthorizedError } from '@bike4mind/common';
+import {
+  HearthLog,
+  DELEGATION_PAYLOAD_SCHEMA_NAME,
+  delegationPayloadSchema,
+  hearthEventKindSchema,
+  hearthEventRefsSchema,
+  hearthMachineBodySchema,
+  knownMachinePayloadSchemas,
+} from '@bike4mind/hearth';
+import { ApiKeyScope, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -63,6 +71,33 @@ const PostEventSchema = z
   .refine(b => (b.channelId === undefined) !== (b.channelName === undefined), {
     message: 'Provide exactly one of channelId or channelName',
     path: ['channelId'],
+  })
+  // Known machine schemas are enforced here so a mismatch takes the same zod
+  // error path as every other malformed body. Unknown names stay accepted.
+  .superRefine((b, ctx) => {
+    const schema = b.machine?.schema;
+    if (b.kind === 'delegation' && schema !== DELEGATION_PAYLOAD_SCHEMA_NAME) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `delegation events require machine.schema ${DELEGATION_PAYLOAD_SCHEMA_NAME}`,
+        path: ['machine', 'schema'],
+      });
+    }
+    if (schema === DELEGATION_PAYLOAD_SCHEMA_NAME && b.kind !== 'delegation') {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${DELEGATION_PAYLOAD_SCHEMA_NAME} is only valid on delegation events`,
+        path: ['machine', 'schema'],
+      });
+    }
+    const payloadSchema = schema ? knownMachinePayloadSchemas[schema] : undefined;
+    if (payloadSchema && !payloadSchema.safeParse(b.machine?.payload).success) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `machine.payload does not match ${schema}`,
+        path: ['machine', 'payload'],
+      });
+    }
   });
 
 /**
@@ -93,7 +128,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope
     const channel = await resolveTargetChannel(req.user.id, body);
     if (!channel) throw new NotFoundError('Channel not found');
 
-    const actor = await resolveRequestActor(req.user, body.actor, body.session);
+    const actor = await resolveRequestActor(req.user, body.actor, body.session, Boolean(req.apiKeyInfo));
+
+    if (body.kind === 'delegation') {
+      // Gateways mirror external networks; their content must never task an agent.
+      if (actor.kind === 'gateway') throw new ForbiddenError('Gateway actors cannot delegate');
+      const { targetActorId } = delegationPayloadSchema.parse(body.machine?.payload);
+      if (!(await hearthRepository.getOwnedActor(req.user.id, targetActorId))) {
+        throw new NotFoundError('Target actor not found');
+      }
+    }
 
     const event = await hearthLog.append({
       channelId: channel._id.toString(),
@@ -102,6 +146,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope
       human: body.human,
       machine: body.machine,
       refs: body.refs,
+      // Server-set; PostEventSchema has no origin key, so a body value is stripped.
+      origin: actor.kind === 'gateway' ? 'gateway' : req.apiKeyInfo ? 'api-key' : 'session',
     });
 
     const wireEvent = toWireHearthEvent(event, wireActorIdentity(actor));

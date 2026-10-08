@@ -37,6 +37,7 @@ export function toWireHearthEvent(event: HearthEvent, actor?: HearthActorIdentit
     human: event.human,
     machine: event.machine,
     refs: event.refs,
+    origin: event.origin,
     createdAt: event.createdAt.toISOString(),
   };
 }
@@ -210,6 +211,10 @@ export function toWireHearthPresence(row: IHearthPresenceDoc, actor?: HearthActo
  * concurrent CLI sessions get independent cursors - and is a human actor unless
  * the session declared itself one of the self-claimable kinds.
  *
+ * An API key is never the human actor: with no declared kind it defaults to
+ * 'agent', so a hearth:write key cannot post events that render as the owner
+ * typing them. Only a cookie/JWT session can be the human.
+ *
  * The identity key deliberately uses the slug form (no label): see
  * humanSessionActorName for why a renameable string must not reach it.
  * `displayLabel` carries the friendly name separately, so a notebook rename
@@ -218,7 +223,8 @@ export function toWireHearthPresence(row: IHearthPresenceDoc, actor?: HearthActo
 export async function resolveRequestActor(
   user: { id: string; username?: string | null; email?: string | null },
   actor: ActorParam,
-  session?: SessionParam
+  session?: SessionParam,
+  isApiKey = false
 ) {
   if (actor) return hearthRepository.ensureActor(user.id, actor.kind, actor.displayName);
 
@@ -230,7 +236,7 @@ export async function resolveRequestActor(
   // stored for this session; omitting it leaves that stored value alone.
   const safeLabel = sanitizeSessionLabel(session?.label);
   const displayLabel = safeLabel ? humanSessionActorName(base, session?.id, safeLabel) : undefined;
-  const kind = session?.kind ?? 'human';
+  const kind = session?.kind ?? (isApiKey ? 'agent' : 'human');
 
   // Omit the options argument entirely when there is no label, rather than
   // passing an explicit undefined: ensureActor treats a missing label as "leave

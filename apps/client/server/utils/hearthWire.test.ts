@@ -54,6 +54,11 @@ describe('actor identity on the wire', () => {
     expect(wire).toMatchObject({ actorName: 'agent one', actorKind: 'agent' });
   });
 
+  it('carries the server-set origin onto an event', () => {
+    expect(toWireHearthEvent({ ...EVENT, origin: 'gateway' }).origin).toBe('gateway');
+    expect(toWireHearthEvent(EVENT).origin).toBeUndefined();
+  });
+
   it('leaves both undefined when no actor was resolved, rather than guessing a kind', () => {
     expect(toWireHearthEvent(EVENT).actorKind).toBeUndefined();
     expect(toWireHearthEvent(EVENT).actorName).toBeUndefined();
@@ -78,6 +83,13 @@ describe('resolveRequestActor', () => {
   it('defaults to a human actor named from the account', async () => {
     await resolveRequestActor(USER, undefined, undefined);
     expect(ensureActorMock).toHaveBeenCalledWith('u1', 'human', 'erik');
+  });
+
+  it('never resolves an API key to the human actor', async () => {
+    await resolveRequestActor(USER, undefined, undefined, true);
+    await resolveRequestActor(USER, undefined, { id: 'sess-1', kind: 'device' }, true);
+    expect(ensureActorMock.mock.calls[0]).toEqual(['u1', 'agent', 'erik']);
+    expect(ensureActorMock.mock.calls[1][1]).toBe('device');
   });
 
   it('honors a session kind while keeping the name server-derived', async () => {
