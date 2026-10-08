@@ -257,6 +257,21 @@ describe('AnthropicBedrockBackend image content translation', () => {
   }
 });
 
+describe('AnthropicBedrockBackend model id prefixing', () => {
+  const messages: IMessage[] = [{ role: 'user', content: 'hi' }];
+
+  it.each(['us.', 'eu.', 'apac.', 'global.'])('keeps a %s inference-profile id as is', scope => {
+    const model = `${scope}anthropic.claude-sonnet-4-6`;
+    expect(backend.getPayload(model, messages, { maxTokens: 1024 }).modelId).toBe(model);
+  });
+
+  it('prepends the anthropic vendor prefix to a bare model id', () => {
+    expect(backend.getPayload('claude-sonnet-4-6', messages, { maxTokens: 1024 }).modelId).toBe(
+      'anthropic.claude-sonnet-4-6'
+    );
+  });
+});
+
 describe('AnthropicBedrockBackend safety-classifier refusal fallback', () => {
   let backend: AnthropicBedrockBackend;
   beforeEach(() => {
