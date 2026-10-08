@@ -1,4 +1,4 @@
-import { Alert, Box, Button, Divider, Link, Sheet, Typography } from '@mui/joy';
+import { Alert, Box, Button, Divider, Link, Sheet, ToggleButtonGroup, Typography } from '@mui/joy';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useState } from 'react';
@@ -76,9 +76,11 @@ const ApiReferenceTab = () => {
 
   return (
     <Box sx={{ p: 3, height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+      <Box
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 3 }}
+      >
         <Typography level="h3">API Reference</Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
           <Button
             component="a"
             href={ExternalLinks.apiDocs}
@@ -104,25 +106,13 @@ const ApiReferenceTab = () => {
             Download OpenAPI Spec
           </Button>
           <Divider orientation="vertical" />
-          {VIEWS.map(({ value, label }) => (
-            <Sheet
-              key={value}
-              variant={view === value ? 'solid' : 'outlined'}
-              color={view === value ? 'primary' : 'neutral'}
-              sx={{
-                px: 2,
-                py: 0.75,
-                borderRadius: 'md',
-                cursor: 'pointer',
-                fontWeight: view === value ? 600 : 400,
-                fontSize: '0.875rem',
-              }}
-              onClick={() => setView(value)}
-              data-testid={`api-reference-view-${value}-toggle`}
-            >
-              {label}
-            </Sheet>
-          ))}
+          <ToggleButtonGroup size="sm" value={view} onChange={(_e, v) => v && setView(v as View)}>
+            {VIEWS.map(({ value, label }) => (
+              <Button key={value} value={value} data-testid={`api-reference-view-${value}-toggle`}>
+                {label}
+              </Button>
+            ))}
+          </ToggleButtonGroup>
         </Box>
       </Box>
       {view === 'full' && (

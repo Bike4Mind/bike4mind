@@ -29,6 +29,14 @@ describe('ApiReferenceTab', () => {
     expect(screen.queryByTestId('api-reference-drift-banner')).toBeNull();
   });
 
+  it('marks the active view toggle as pressed', () => {
+    render(<ApiReferenceTab />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('api-reference-view-docs-toggle')).toHaveAttribute('aria-pressed', 'true');
+    showHandWritten();
+    expect(screen.getByTestId('api-reference-view-full-toggle')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('api-reference-view-docs-toggle')).toHaveAttribute('aria-pressed', 'false');
+  });
+
   it('switches to the quickstart, unmounting the docs frame', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
     fireEvent.click(screen.getByTestId('api-reference-view-quickstart-toggle'));
