@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { LakeRagKind } from './bank';
-import { buildLakeRagReport, compareLakeRagReports, LAKE_RAG_NOISE_BAND, type LakeRagReport } from './report';
+import {
+  buildLakeRagReport,
+  compareLakeRagReports,
+  formatLakeRagReport,
+  LAKE_RAG_NOISE_BAND,
+  type LakeRagReport,
+} from './report';
 import { readLakeRagReport, writeLakeRagReport } from './reportFile';
 import type { LakeRagArm, LakeRagTurn } from './run';
 
@@ -161,5 +167,37 @@ describe('compareLakeRagReports', () => {
 
   it('uses the gate-accepted band by default', () => {
     expect(LAKE_RAG_NOISE_BAND).toEqual({ passRate: 0.1, retrievalRate: 0.05, multiLakeDrop: 0.1 });
+  });
+});
+
+describe('formatLakeRagReport', () => {
+  const report = buildLakeRagReport(
+    [
+      turn('lake', 'fact', true, true),
+      turn('lake', 'stale-same-name', false, true),
+      turn('plain', 'fact', true),
+      turn('plain', 'absent', false),
+    ],
+    META
+  );
+
+  it('prints each arm, marks plain absent n/a and lists only scored failures', () => {
+    const text = formatLakeRagReport(report);
+    expect(text).toContain('lake: pass 1/2 (50.0%), retrieval 2/2 (100.0%)');
+    expect(text).toContain('plain: pass 1/1 (100.0%)');
+    expect(text).toContain('absent n/a');
+    expect(text).toContain('multi-lake drop: n/a');
+    expect(text).toContain('FAIL lake lake-stale-same-name#0');
+    expect(text).not.toContain('FAIL plain');
+    expect(text).not.toContain('baseline');
+  });
+
+  it('names the metrics outside the band when given a comparison', () => {
+    const prev = buildLakeRagReport([turn('lake', 'fact', true, true)], META);
+    const text = formatLakeRagReport(report, compareLakeRagReports(prev, report));
+    expect(text).toContain('baseline: OUT OF BAND lake.pass 100.0% -> 50.0%');
+    expect(formatLakeRagReport(report, compareLakeRagReports(report, report))).toContain(
+      'baseline: within the noise band'
+    );
   });
 });

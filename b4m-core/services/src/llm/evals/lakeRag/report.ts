@@ -130,3 +130,36 @@ export function compareLakeRagReports(
   ].filter((c): c is LakeRagBandCheck => c !== null);
   return { withinBand: checks.every(c => c.ok), checks };
 }
+
+function pct(value: number | null): string {
+  return value === null ? 'n/a' : `${(value * 100).toFixed(1)}%`;
+}
+
+function rateText(rate: LakeRagRate | null): string {
+  return rate === null ? 'n/a' : `${rate.passed}/${rate.total} (${pct(rate.rate)})`;
+}
+
+/** The text summary the live run prints to stdout; the JSON report is the full record. */
+export function formatLakeRagReport(report: LakeRagReport, comparison?: LakeRagComparison): string {
+  const lines = [`lake RAG eval: ${report.model} @ ${report.samples} sample(s) per question`];
+  for (const arm of LAKE_RAG_ARMS) {
+    const a = report.arms[arm];
+    if (!a) continue;
+    const kinds = LAKE_RAG_KINDS.map(kind => `${kind} ${rateText(a.byKind[kind])}`).join(', ');
+    lines.push(`  ${arm}: pass ${rateText(a.pass)}, retrieval ${rateText(a.retrieval)}; ${kinds}`);
+  }
+  const drop = report.multiLakeDrop;
+  lines.push(`  multi-lake drop: ${drop === null ? 'n/a' : `${(drop * 100).toFixed(1)}pp`}`);
+  if (comparison) {
+    const out = comparison.checks.filter(c => !c.ok);
+    lines.push(
+      out.length === 0
+        ? '  baseline: within the noise band'
+        : `  baseline: OUT OF BAND ${out.map(c => `${c.metric} ${pct(c.prev)} -> ${pct(c.curr)}`).join(', ')}`
+    );
+  }
+  for (const t of report.turns.filter(t => isScored(t) && !t.grade.passed)) {
+    lines.push(`  FAIL ${t.arm} ${t.rowId}#${t.sample}: ${t.grade.reason}`);
+  }
+  return lines.join('\n');
+}
