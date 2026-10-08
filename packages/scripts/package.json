@@ -59,6 +59,7 @@
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "backfill:session-image-count": "tsx src/backfill-session-image-count.ts",
     "repair:bedrock-profile-absence": "tsx src/repair-bedrock-profile-absence.ts",
+    "repair:stale-organization-pointers": "tsx src/clear-stale-organization-pointers.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
     "count-tokens-probe": "tsx count-tokens-probe.ts",
     "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
