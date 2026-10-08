@@ -610,12 +610,42 @@ const MODEL_DISCOVERY_SCHEDULE_BY_STAGE: Record<string, `cron(${string})`> = {
   dev: 'cron(50 3,9,15,21 * * ? *)', // 03:50, 09:50, 15:50, 21:50 UTC
 };
 
+// The no-successful-run alarm in alarms.ts keys off this too; keep one source.
+const modelDiscoveryCronEnabled = ['production', 'dev'].includes($app.stage);
+
 const modelDiscoveryCron = new sst.aws.Cron('modelDiscoveryCron', {
   schedule: MODEL_DISCOVERY_SCHEDULE_BY_STAGE[$app.stage] ?? MODEL_DISCOVERY_SCHEDULE_BY_STAGE.production,
   job: modelDiscoveryFunction.arn,
   event: { trigger: 'cron' },
   // Preview stages never hammer providers.
-  enabled: ['production', 'dev'].includes($app.stage),
+  enabled: modelDiscoveryCronEnabled,
+});
+
+// Independent of modelDiscoveryCron: the check must still run when discovery stops.
+const modelDiscoveryStalenessFunction = new sst.aws.Function('modelDiscoveryStalenessFunction', {
+  vpc: lambdaVpc,
+  handler: 'apps/workers/src/cron/modelDiscoveryStaleness.handler',
+  runtime: 'nodejs24.x',
+  timeout: '2 minutes',
+  link: [...allSecrets],
+  environment: {
+    ...DEFAULT_LAMBDA_ENVIRONMENT,
+  },
+  logging: {
+    retention: '1 week',
+  },
+  permissions: [
+    {
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+    },
+  ],
+});
+
+const modelDiscoveryStalenessCron = new sst.aws.Cron('modelDiscoveryStalenessCron', {
+  schedule: 'rate(15 minutes)',
+  job: modelDiscoveryStalenessFunction.arn,
+  enabled: modelDiscoveryCronEnabled,
 });
 
 /**
@@ -995,6 +1025,7 @@ const lakeInconsistencySweepCron = new sst.aws.Cron('lakeInconsistencySweep', {
 });
 
 export {
+  modelDiscoveryCronEnabled,
   dailyUserActivityReport,
   weeklyUserActivityReport,
   secretRotationNotifierCron,
@@ -1018,6 +1049,8 @@ export {
   attackSimulationCron,
   modelDiscoveryFunction,
   modelDiscoveryCron,
+  modelDiscoveryStalenessFunction,
+  modelDiscoveryStalenessCron,
   questTimeoutSweepCron,
   generationJobSweepCron,
   agentExecutionAbandonedSweepCron,
