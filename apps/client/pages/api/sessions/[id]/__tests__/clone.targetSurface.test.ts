@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { BadRequestError, OPTI_SURFACE } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, OPTI_SURFACE } from '@bike4mind/common';
 
 type RouteHandler = (req: unknown, res: unknown) => unknown;
 
@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   postHandler: null as null | RouteHandler,
   baseApiOptions: undefined as unknown,
   rateLimitOptions: undefined as unknown,
+  rateLimiter: () => undefined,
+  postArgs: [] as RouteHandler[],
   cloneSession: vi.fn(),
   getRequestEntitlements: vi.fn(),
 }));
@@ -16,6 +18,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
     post: (...fns: RouteHandler[]) => {
+      h.postArgs = fns;
       h.postHandler = fns[fns.length - 1];
       return chain;
     },
@@ -30,7 +33,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     h.rateLimitOptions = options;
-    return () => undefined;
+    return h.rateLimiter;
   },
 }));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
@@ -67,8 +70,18 @@ describe('POST /api/sessions/[id]/clone - targetSurface', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['notebooks:write'] });
   });
 
-  it('rate-limits clones per caller on a route-wide bucket', () => {
+  it('rate-limits clones per caller on a route-wide bucket, mounted ahead of the handler', () => {
     expect(h.rateLimitOptions).toEqual({ limit: 10, windowMs: 60_000, bucket: 'sessions/clone' });
+    expect(h.postArgs).toHaveLength(2);
+    expect(h.postArgs[0]).toBe(h.rateLimiter);
+  });
+
+  it('403s a caller whose ability cannot clone', async () => {
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'session-1' } });
+    Object.assign(req, { user: { id: 'user-1', tags: [] }, ability: { can: () => false } });
+
+    await expect(h.postHandler!(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(h.cloneSession).not.toHaveBeenCalled();
   });
 
   it('inherits when the body names no target', async () => {

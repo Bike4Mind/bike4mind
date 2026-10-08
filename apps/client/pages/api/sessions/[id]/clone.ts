@@ -11,7 +11,7 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ApiKeyScope, SessionEvents, redactSessionForClient } from '@bike4mind/common';
 import { Request } from 'express';
@@ -32,7 +32,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.WRITE_NOTEBOOKS] }).post(
     }
 
     if (!req.ability!.can('clone', Session)) {
-      throw new Error('User does not have permission to clone sessions');
+      throw new ForbiddenError('User does not have permission to clone sessions');
     }
 
     const targetSurface = parseTargetSurface(req.body);
