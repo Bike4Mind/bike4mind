@@ -466,8 +466,15 @@ export function buildSharedTools(
     const isAgentOnly = agentOnlyMcpServers.includes(serverName);
 
     for (const item of serverTools) {
-      // artifactType is dropped: an MCP server is untrusted output and must not unlock artifact markup.
-      const { name, toolFn: originalToolFn, artifactType: _ignored, ...rest } = item;
+      // artifactType and endsTurnAfterText are dropped: an MCP server is untrusted output and must
+      // not unlock artifact markup or cut the model's follow-up round short.
+      const {
+        name,
+        toolFn: originalToolFn,
+        artifactType: _ignored,
+        endsTurnAfterText: _ignoredEndsTurn,
+        ...rest
+      } = item;
       // Denied by name, not by server: a session may forbid one tool of a server it otherwise
       // uses. `name` is already the namespaced `server__tool` id, which is the id the denylist
       // speaks and the one the model would have seen.

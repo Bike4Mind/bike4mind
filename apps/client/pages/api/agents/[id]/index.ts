@@ -1,5 +1,7 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { agentRepository, User, userRepository, creditTransactionRepository } from '@bike4mind/database';
 import {
   IAgent,
@@ -10,7 +12,7 @@ import {
   groupShareSchema,
   userShareSchema,
 } from '@bike4mind/common';
-import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
+import { BadRequestError } from '@bike4mind/utils';
 import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
 import { creditService } from '@bike4mind/services';
 import {
@@ -255,20 +257,14 @@ const updateBodySchema = z.object({
   users: z.array(userShareSchema).optional(),
 });
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either agents scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
   .get<Request<{}, {}, {}, { id: string }>>(async (req, res) => {
+    assertAgentsReadScope(req);
     const { id } = req.query;
 
     const agent = await agentRepository.findById(id as string);
-    if (!agent) {
-      throw new NotFoundError('Agent not found');
-    }
-
-    // Check permission (user must own the agent or be shared)
-    const isSharedWithUser = agent.users?.some((u: { userId: string }) => u.userId === req.user!.id);
-    if (agent.userId !== req.user!.id && !isSharedWithUser) {
-      throw new ForbiddenError("You don't have permission to view this agent");
-    }
+    assertAgentAccess(agent, req.user!.id, 'view');
 
     // Refresh avatar URL before returning
     const [agentWithRefreshedAvatar] = await refreshAgentAvatarUrls([agent], req.user!.id);
@@ -276,6 +272,7 @@ const handler = baseApi()
     res.json(agentWithRefreshedAvatar);
   })
   .put(async (req, res) => {
+    assertAgentsWriteScope(req);
     const { id } = req.query;
 
     const parsedBody = updateBodySchema.safeParse(req.body);
@@ -286,14 +283,7 @@ const handler = baseApi()
 
     // Find the agent
     const agent = await agentRepository.findById(id as string);
-    if (!agent) {
-      throw new NotFoundError('Agent not found');
-    }
-
-    // Check ownership
-    if (agent.userId !== req.user!.id) {
-      throw new ForbiddenError("You don't have permission to update this agent");
-    }
+    assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to update this agent");
 
     // Validate model config fields
     if (agentData.preferredModel && !supportedChatModels.safeParse(agentData.preferredModel).success) {
@@ -372,18 +362,12 @@ const handler = baseApi()
     res.json(updatedAgent);
   })
   .delete(async (req, res) => {
+    assertAgentsWriteScope(req);
     const { id } = req.query;
 
     // Find the agent
     const agent = await agentRepository.findById(id as string);
-    if (!agent) {
-      throw new NotFoundError('Agent not found');
-    }
-
-    // Check ownership
-    if (agent.userId !== req.user!.id) {
-      throw new ForbiddenError("You don't have permission to delete this agent");
-    }
+    assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to delete this agent");
 
     // Reclaim agent credits back to owning user before deletion.
     // claimCredits atomically zeroes the agent balance and returns the claimed amount -

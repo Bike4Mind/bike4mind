@@ -83,6 +83,10 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       corpusGroundingMode: session.corpusGroundingMode,
       retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
       retrievalVectorizedOnly: session.retrievalVectorizedOnly,
+      enabledTools: session.enabledTools,
+      disabledTools: session.disabledTools,
+      disableUserIntegrations: session.disableUserIntegrations,
+      systemPromptId: session.systemPromptId,
     },
     adapters,
     { knowledgeIdsFromSourceSession: true }

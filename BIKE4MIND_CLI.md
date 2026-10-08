@@ -143,6 +143,7 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `list_files` | Search your files | `files:read` |
 | `get_file` | File metadata plus a signed download URL | `files:read` |
 | `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
+| `generate_image` | Generate an image from a text prompt and return its quest id, file names, and URLs | `ai:generate` |
 | `text_to_speech` | Synthesize speech from text; return a saved file URL or inline audio | `ai:generate` |
 
 `text_to_speech` accepts `text` and optional provider, voice, model, format, and voice settings. It uses the scoped `/api/ai/tts` route and spends generation credits. Set `preview: true` to skip saving a copy. The result takes one of three shapes:
