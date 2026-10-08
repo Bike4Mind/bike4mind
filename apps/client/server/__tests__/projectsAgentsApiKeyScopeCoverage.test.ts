@@ -206,7 +206,7 @@ describe('the gate regex actually rejects a bad door', () => {
   });
 
   it('stripComments fails closed on an unterminated scan instead of truncating', () => {
-    expect(() => stripComments("const s = 'oops;")).toThrow();
+    expect(() => stripComments("const s = 'oops;")).toThrow(/source ends inside/);
   });
 
   it('does not count an assert that only appears as text in a template literal with an interpolation', () => {
