@@ -111,7 +111,9 @@ async function getPrompt(
  * server rather than through `registerPrompt`: the catalog is per-caller server
  * data that changes at runtime, so it is fetched on every prompts/list instead
  * of being frozen at build time. Requires the `prompts` capability to be declared
- * on the server (see buildMcpServer).
+ * on the server (see buildMcpServer). Claims prompts/list and prompts/get on the
+ * low-level server, so do not also call McpServer.registerPrompt on this server
+ * (a claimed method makes it throw "already exists" at startup).
  */
 export function registerPrompts(server: McpServer, client: B4mApiClient, now: () => Date = () => new Date()): void {
   server.server.setRequestHandler(ListPromptsRequestSchema, () => listPrompts(client));
