@@ -91,7 +91,7 @@ describe('check-no-run-interpolation.py', () => {
   });
 
   it('ignores a job named run, which is not a script', () => {
-    // After another job's steps:, so the guard has to notice that steps: block has ended.
+    // After another job's steps:, so it is the run: key sitting no deeper than steps: that keeps it out.
     const r = scan({
       'job.yml': `name: t
 on: push
