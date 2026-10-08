@@ -42,6 +42,8 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
         // The sidebar learns of a change it did not ask for through the summary push.
         if (summary) send(IPC_CHANNELS.chatSessionSummary, summary);
       },
+      isBusy: sessionId => chat().isSessionBusy(sessionId),
+      startAutoFix: (sessionId, prompt, origin) => chat().startAutomaticTurn(sessionId, prompt, origin),
     },
   });
 

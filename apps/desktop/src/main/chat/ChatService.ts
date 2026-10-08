@@ -6,6 +6,7 @@ import type {
   ChatApprovalOption,
   ChatArtifact,
   ChatAttachment,
+  ChatAutomaticOrigin,
   ChatDiff,
   ChatMedia,
   ChatMessage,
@@ -38,6 +39,7 @@ import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
+import { autoFixRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
@@ -436,6 +438,9 @@ export class ChatService {
    */
   private readonly turnRelay = new Map<string, { hops: number; sends: number }>();
 
+  /** Sessions whose running turn auto-fix started; their shell commands go through autoFixRefusal. */
+  private readonly autoFixTurns = new Set<string>();
+
   /** Instructions and file tree per session, frozen so the cached system prompt never moves. */
   private readonly projectContext: ProjectContextCache;
   /** The skill list per session, frozen for the same reason. Absent when there is no catalog. */
@@ -517,7 +522,7 @@ export class ChatService {
     const pending = queue.list(sessionId).find(entry => entry.id === queuedId);
     // Another conversation's words. Firing them early is not something the user asked for, and
     // the row offers no control to ask it; this is the guard behind that.
-    if (!pending || pending.relay) return;
+    if (!pending || pending.relay || pending.automatic) return;
 
     const taken = queue.take(sessionId, queuedId);
     if (!taken) return;
@@ -526,6 +531,24 @@ export class ChatService {
     // the stop button does - see ApprovalGate.request. That is an interrupt, not an answer
     // given on the user's behalf: denying ends the turn, where approving would carry it on.
     controller.abort();
+  }
+
+  /** Whether a turn (or a compaction ahead of one) is running in this conversation. */
+  isSessionBusy(sessionId: string): boolean {
+    return this.isBusy(sessionId);
+  }
+
+  /**
+   * Start a turn the app decided on (auto-fix), through the same queue a typed-ahead message
+   * and a relay take. Refused while the conversation is busy: the caller waits for the turn to
+   * end rather than lining one up behind it.
+   */
+  startAutomaticTurn(sessionId: string, text: string, automatic: ChatAutomaticOrigin): boolean {
+    const queue = this.deps.queue;
+    if (!queue || this.isBusy(sessionId)) return false;
+    queue.enqueueAutomatic(sessionId, text, automatic);
+    this.flushQueue(sessionId);
+    return true;
   }
 
   setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
@@ -1034,7 +1057,8 @@ export class ChatService {
      * another just by sending it those eight characters. A relay is data; only this window's
      * composer invokes a skill.
      */
-    const invocation = this.deps.skills && !released?.relay ? parseSkillInvocation(prompt) : null;
+    const invocation =
+      this.deps.skills && !released?.relay && !released?.automatic ? parseSkillInvocation(prompt) : null;
     const skillCommand = invocation
       ? await this.deps.skills?.get(existing.project?.workingDirectory ?? null, invocation.name)
       : undefined;
@@ -1119,6 +1143,9 @@ export class ChatService {
       content,
       createdAt: new Date().toISOString(),
       ...(released?.relay ? { system: true, relay: released.relay } : {}),
+      ...(released?.automatic
+        ? { system: true, automatic: released.automatic, display: `Auto-fix: ${released.automatic.summary}` }
+        : {}),
       ...(attached.length > 0 ? { attachments: attached } : {}),
       ...(skill ? { skill } : {}),
     };
@@ -1142,6 +1169,8 @@ export class ChatService {
     // it: runReply emits 'start' the moment it is called.
     if (released) this.deps.queue?.sent(sessionId, released.id, userMessage);
 
+    if (released?.automatic) this.autoFixTurns.add(sessionId);
+    else this.autoFixTurns.delete(sessionId);
     const replyId = this.startReply(session, api, undefined, released?.relay?.hops ?? seedHops ?? 0);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
@@ -1388,6 +1417,7 @@ export class ChatService {
         // telling activity this reply ended would then mark a live one idle.
         if (this.active.get(sessionId) !== controller) return;
         this.active.delete(sessionId);
+        this.autoFixTurns.delete(sessionId);
         this.deps.activity?.replyEnded(sessionId);
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
@@ -2138,6 +2168,18 @@ export class ChatService {
           this.emit({ type: 'tool-start', sessionId, messageId, call });
           this.emit({ type: 'tool-end', sessionId, messageId, call: unknown });
           return unknown;
+        }
+
+        const command = typeof call.input.command === 'string' ? call.input.command : '';
+        const refusal =
+          this.autoFixTurns.has(sessionId) && (request.name === 'bash_execute' || request.name === 'bash_background')
+            ? autoFixRefusal(command)
+            : null;
+        if (refusal) {
+          const refused: ChatToolCall = { ...call, status: 'denied', error: refusal };
+          this.emit({ type: 'tool-start', sessionId, messageId, call });
+          this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+          return refused;
         }
 
         // Collected as the tool runs and folded onto the settled call. The media and the notice

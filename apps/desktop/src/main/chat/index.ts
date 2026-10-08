@@ -305,7 +305,11 @@ export function registerChat(auth: AuthService): RegisteredChat {
   // Declared before the two things that feed it, because both take it as a constructor
   // argument: the gate reports who is waiting on the user, the service reports who is
   // replying, and this turns the pair into the one status a sidebar row draws.
-  const activity = new SessionActivity((event: ChatSessionStatusEvent) => send(IPC_CHANNELS.chatSessionStatus, event));
+  const activity = new SessionActivity((event: ChatSessionStatusEvent) => {
+    send(IPC_CHANNELS.chatSessionStatus, event);
+    // Only reached once a turn has run, long after pullRequests below exists.
+    if (event.status === 'done') pullRequests.turnSettled(event.sessionId);
+  });
 
   // Typed-ahead messages, on their own channel: this is per-session state that outlives any
   // one reply, so it travels beside the status pushes rather than inside the reply stream.

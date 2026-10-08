@@ -9,7 +9,7 @@ import type { PrActionResult, PrBarState, PrOption } from '@shared/pullRequest';
 import { CloseIcon, ExternalLinkIcon, PullRequestIcon, ReloadIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { ghFixLine, lifecycleLabel, middleTruncate } from './prBarModel';
-import { PrAutomations, autoMergeDescription } from './PrAutomations';
+import { PrAutomations, autoFixDescription, autoMergeDescription } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
 
 const BRANCH_MAX_CHARS = 44;
@@ -152,6 +152,22 @@ export function PrStatusBar({
           <Chip size="sm" variant="soft" color="danger" data-testid="pr-bar-conflicts">
             Conflicts
           </Chip>
+        )}
+
+        {binding.autoFix && snapshot?.state === 'OPEN' && (
+          <Tooltip title={autoFixDescription(state)} size="sm" variant="soft" placement="top">
+            <Chip
+              size="sm"
+              variant="soft"
+              color={state.autoFix.status === 'exhausted' ? 'warning' : 'neutral'}
+              data-testid="pr-bar-autofix-status"
+              data-status={state.autoFix.status}
+            >
+              {state.autoFix.status === 'exhausted'
+                ? 'Auto-fix gave up'
+                : `Auto-fix ${state.autoFix.attempts}/${state.autoFix.max}`}
+            </Chip>
+          </Tooltip>
         )}
 
         {binding.autoMerge && snapshot?.state === 'OPEN' && (

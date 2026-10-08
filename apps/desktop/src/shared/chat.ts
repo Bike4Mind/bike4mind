@@ -485,6 +485,20 @@ export interface ChatRelayOrigin {
   hops: number;
 }
 
+/**
+ * A turn the APP started on the user's standing instruction rather than anyone typing it: today
+ * only auto-fix on a pull request (see main/pr/autoFix.ts). Carried on the queue entry and on
+ * the message it becomes, so the thread can say who started it and a guard can hold the turn to
+ * the rules the user agreed to (no force-push, no merge).
+ */
+export interface ChatAutomaticOrigin {
+  kind: 'auto-fix';
+  prUrl: string;
+  prNumber: number;
+  /** One line for the thread's collapsed row, e.g. "2 failing checks on #611". */
+  summary: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -537,6 +551,8 @@ export interface ChatMessage {
    * thread and on the wire alike.
    */
   relay?: ChatRelayOrigin;
+  /** Set with `system` when the app started this turn on its own; see ChatAutomaticOrigin. */
+  automatic?: ChatAutomaticOrigin;
   /**
    * What the THREAD shows in place of `content`, on messages the app wrote rather than either
    * speaker.
@@ -1044,6 +1060,11 @@ export interface ChatQueuedMessage {
    * ChatQueueEvent.returned.
    */
   relay?: ChatRelayOrigin;
+  /**
+   * Set when the app queued this on its own (auto-fix). Like a relay it never merges, never
+   * goes back to the composer, and is not offered "send now".
+   */
+  automatic?: ChatAutomaticOrigin;
 }
 
 /**

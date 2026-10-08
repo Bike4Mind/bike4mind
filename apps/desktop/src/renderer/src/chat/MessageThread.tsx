@@ -13,7 +13,7 @@ import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
-import { displayText, relaySummary } from './relayRows';
+import { automaticSummary, displayText, relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
 import { describeReplyCost, formatCreditsSpent } from './statusLine';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
@@ -313,6 +313,27 @@ function SystemTurn({ message }: { message: ChatMessage }) {
  * full text one click away.
  */
 function RelayTurn({ message }: { message: ChatMessage }) {
+  return <CollapsedTurn message={message} summary={relaySummary(message)} kind="relay" />;
+}
+
+/**
+ * A turn the app started on the user's standing instruction (auto-fix on a PR). Drawn like a
+ * relay, and for the same reason: the user did not type it, and a bubble on their side of the
+ * thread would say they had. The summary names auto-fix first so that is the first thing read.
+ */
+function AutomaticTurn({ message }: { message: ChatMessage }) {
+  return <CollapsedTurn message={message} summary={automaticSummary(message)} kind="automatic" />;
+}
+
+function CollapsedTurn({
+  message,
+  summary,
+  kind,
+}: {
+  message: ChatMessage;
+  summary: string;
+  kind: 'relay' | 'automatic';
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -321,7 +342,7 @@ function RelayTurn({ message }: { message: ChatMessage }) {
         component="details"
         open={open}
         onToggle={event => setOpen(event.currentTarget.open)}
-        data-testid="chat-message-relay"
+        data-testid={`chat-message-${kind}`}
         data-from={message.relay?.fromSessionId}
       >
         <Stack
@@ -337,10 +358,10 @@ function RelayTurn({ message }: { message: ChatMessage }) {
             '&::-webkit-details-marker': { display: 'none' },
             '&:hover': { color: 'text.secondary' },
           }}
-          data-testid="chat-message-relay-summary"
+          data-testid={`chat-message-${kind}-summary`}
         >
           <Typography level="body-xs" textColor="inherit" noWrap sx={{ minWidth: 0 }}>
-            {relaySummary(message)}
+            {summary}
           </Typography>
           <Box sx={{ display: 'flex', opacity: 0.6 }}>
             <ChevronIcon open={open} />
@@ -351,9 +372,9 @@ function RelayTurn({ message }: { message: ChatMessage }) {
           level="body-sm"
           sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', pt: 0.5, pb: 0.5 }}
           textColor="text.secondary"
-          data-testid="chat-message-relay-body"
+          data-testid={`chat-message-${kind}-body`}
         >
-          {displayText(message)}
+          {kind === 'automatic' ? message.content : displayText(message)}
         </Typography>
       </Box>
     </Box>
@@ -516,6 +537,7 @@ export function MessageThread({
   // rules rather than a second rendering path that can drift from this one.
   const turn = (message: ChatMessage, index: number): ReactNode => {
     if (message.boundary) return <BoundaryRow key={message.id} message={message} />;
+    if (message.automatic) return <AutomaticTurn key={message.id} message={message} />;
     if (message.relay) return <RelayTurn key={message.id} message={message} />;
     if (message.system) return <SystemTurn key={message.id} message={message} />;
     if (message.role === 'user') return <UserTurn key={message.id} message={message} sessionId={sessionId} />;

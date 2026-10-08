@@ -1,9 +1,10 @@
-import type { ChatToolCall } from '@shared/chat';
+import type { ChatAutomaticOrigin, ChatToolCall } from '@shared/chat';
 import {
   parsePullRequestUrl,
   pullRequestFromShell,
   samePullRequest,
   type PrActionResult,
+  type PrAutoFixStatus,
   type PrBarState,
   type PrBinding,
   type PrBindingSource,
@@ -16,6 +17,7 @@ import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
 import type { PrGithub } from './github';
 import { shouldAutoArchive } from './autoArchive';
+import { MAX_AUTO_FIX_ATTEMPTS, planAutoFix } from './autoFix';
 import { desktopMergeReadiness } from './autoMerge';
 import { mergeMethodFor } from './github';
 import { POLL_MS, pollDelay } from './pollSchedule';
@@ -61,6 +63,10 @@ export interface PrChatHooks {
   project(sessionId: string): Promise<{ workingDirectory: string; branch: string | null } | null>;
   /** Move the conversation to the sidebar's Archived section. */
   archive(sessionId: string): Promise<void>;
+  /** Whether a turn is running in the conversation. */
+  isBusy(sessionId: string): boolean;
+  /** Start an auto-fix turn through the conversation's queue. False when it was busy after all. */
+  startAutoFix(sessionId: string, prompt: string, origin: ChatAutomaticOrigin): boolean;
 }
 
 export interface PrMonitorLogger {
@@ -94,6 +100,7 @@ interface Live {
   merging?: boolean;
   /** Read sooner than the cadence says, once: after a push or a merge something is about to change. */
   nudge?: number;
+  autoFix?: { status: PrAutoFixStatus; note?: string };
 }
 
 /**
@@ -270,7 +277,17 @@ export class PrMonitor {
     } else if (option === 'autoMerge') {
       result = await this.changeAutoMerge(sessionId, enabled);
     } else {
-      result = { ok: false, error: 'Not available yet.' };
+      // Checking the box is fresh consent, so the attempt budget refills. What was already
+      // handled stays handled: the same failure or comment is never sent twice.
+      await this.deps.store.set(sessionId, {
+        ...binding,
+        autoFix: enabled,
+        ...(enabled ? { autoFixAttempts: 0 } : {}),
+      });
+      const live = this.entry(sessionId);
+      live.autoFix = { status: enabled ? 'watching' : 'off' };
+      // Threads are only read while auto-fix is on, so turning it on needs a read that has them.
+      if (enabled) void this.read(sessionId);
     }
     await this.schedule(sessionId);
     await this.publish(sessionId);
@@ -401,6 +418,24 @@ export class PrMonitor {
     // A refresh is the user's way to say they have installed or signed in to gh.
     if (this.gh !== 'ok') this.gh = 'ok';
     await this.read(sessionId);
+  }
+
+  /**
+   * A turn ended in this conversation. An auto-fix that was waiting for it goes now, from the
+   * read already in hand; and since the turn may have pushed, the next read comes soon.
+   */
+  turnSettled(sessionId: string): void {
+    const live = this.live.get(sessionId);
+    if (!live) return;
+    if (live.autoFix?.status === 'waiting' && live.snapshot) {
+      void this.evaluateAutoFix(sessionId, live.snapshot).then(() => this.publish(sessionId));
+      return;
+    }
+    if (live.autoFix?.status === 'started') {
+      live.autoFix = { status: 'watching', note: 'Waiting for checks on the pushed fix.' };
+      this.nudge(sessionId, AFTER_PUSH_MS);
+      void this.publish(sessionId);
+    }
   }
 
   /** The conversation was deleted. */
@@ -543,8 +578,8 @@ export class PrMonitor {
     await this.publish(sessionId);
   }
 
-  protected wantsThreads(_binding: PrBinding): boolean {
-    return false;
+  protected wantsThreads(binding: PrBinding): boolean {
+    return binding.autoFix === true;
   }
 
   protected async afterRead(sessionId: string, binding: PrBinding, snapshot: PrSnapshot): Promise<void> {
@@ -564,6 +599,69 @@ export class PrMonitor {
       await this.deps.chat.archive(sessionId).catch(err => this.deps.logger.warn(`PR: archive failed: ${err}`));
     }
     await this.reconcileAutoMerge(sessionId, snapshot);
+    await this.evaluateAutoFix(sessionId, snapshot);
+  }
+
+  /**
+   * Start an auto-fix turn if this read calls for one; see planAutoFix for when it does. The
+   * attempt and what it covers are recorded BEFORE the turn starts, so a crash or a relaunch
+   * can never send the same failure twice or hand back an attempt that was spent.
+   */
+  private async evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {
+    const binding = await this.deps.store.get(sessionId);
+    const live = this.entry(sessionId);
+    if (!binding?.autoFix) {
+      delete live.autoFix;
+      return;
+    }
+    const plan = planAutoFix(binding, snapshot, this.deps.chat.isBusy(sessionId));
+    if (plan.kind === 'none') {
+      // The post-push note stays only while the pushed fix's checks are still running.
+      const running = snapshot.checks.some(check => check.bucket === 'pending');
+      if (live.autoFix?.status !== 'started') {
+        live.autoFix = {
+          status: 'watching',
+          note: running && live.autoFix?.status === 'watching' ? live.autoFix.note : undefined,
+        };
+      }
+      return;
+    }
+    if (plan.kind === 'exhausted') {
+      live.autoFix = {
+        status: 'exhausted',
+        note: `Auto-fix gave up after ${MAX_AUTO_FIX_ATTEMPTS} attempts. Re-check the box to allow more.`,
+      };
+      return;
+    }
+    if (plan.kind === 'wait') {
+      live.autoFix = { status: 'waiting', note: 'Waiting for the current turn to finish.' };
+      return;
+    }
+
+    const attempts = (binding.autoFixAttempts ?? 0) + 1;
+    const recorded: PrBinding = {
+      ...binding,
+      autoFixAttempts: attempts,
+      autoFixHandled: [...(binding.autoFixHandled ?? []), ...plan.fingerprints],
+    };
+    await this.deps.store.set(sessionId, recorded);
+    const started = this.deps.chat.startAutoFix(sessionId, plan.prompt, {
+      kind: 'auto-fix',
+      prUrl: snapshot.url,
+      prNumber: snapshot.number,
+      summary: plan.summary,
+    });
+    if (!started) {
+      // A turn began between the check and the start: nothing was sent, so nothing is spent.
+      await this.deps.store.set(sessionId, binding);
+      live.autoFix = { status: 'waiting', note: 'Waiting for the current turn to finish.' };
+      return;
+    }
+    this.deps.logger.debug(`PR: auto-fix attempt ${attempts} on #${snapshot.number} for ${sessionId}`);
+    live.autoFix = {
+      status: 'started',
+      note: `Fixing ${plan.summary} (attempt ${attempts} of ${MAX_AUTO_FIX_ATTEMPTS}).`,
+    };
   }
 
   /** Records a missing or signed-out gh as app-wide state, and returns the line to show. */
@@ -593,7 +691,12 @@ export class PrMonitor {
         mode: binding?.autoMerge ? (binding.autoMergeMode ?? 'github') : null,
         ...(live?.mergeNote ? { note: live.mergeNote } : {}),
       },
-      autoFix: { status: 'off', attempts: binding?.autoFixAttempts ?? 0, max: 0 },
+      autoFix: {
+        status: binding?.autoFix ? (live?.autoFix?.status ?? 'watching') : 'off',
+        attempts: binding?.autoFixAttempts ?? 0,
+        max: MAX_AUTO_FIX_ATTEMPTS,
+        ...(binding?.autoFix && live?.autoFix?.note ? { note: live.autoFix.note } : {}),
+      },
     };
   }
 

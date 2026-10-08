@@ -19,6 +19,8 @@ function setup() {
       archive: async sessionId => {
         archived.push(sessionId);
       },
+      isBusy: () => false,
+      startAutoFix: () => false,
     },
     emit: collector().emit,
     logger: quietLogger,
