@@ -3,6 +3,7 @@
  * subject, every document uploaded, attached and polled to `ready`. Fetch-injected and fs-free so
  * the subpath stays importable anywhere; `corpus.ts` is the node:fs half.
  */
+import { call, pollUntil, resolved, stringField } from './http';
 
 export type LakeRagApi = {
   baseUrl: string;
@@ -40,52 +41,6 @@ export type LakeRagProvision = {
 // send this exact value (apps/client/server/files/createPresignedUpload.ts).
 const MARKDOWN_MIME = 'text/markdown';
 const RUN_ID = /^[a-z0-9]{1,12}$/;
-
-type Json = Record<string, unknown>;
-
-function resolved(api: LakeRagApi) {
-  return {
-    fetch: api.fetch ?? fetch,
-    pollIntervalMs: api.pollIntervalMs ?? 2_000,
-    pollTimeoutMs: api.pollTimeoutMs ?? 600_000,
-    notIngestedGraceMs: api.notIngestedGraceMs ?? 120_000,
-    sleep: api.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms))),
-    now: api.now ?? Date.now,
-  };
-}
-
-async function call(api: LakeRagApi, method: string, path: string, body?: unknown): Promise<Json> {
-  const res = await resolved(api).fetch(new URL(path, api.baseUrl), {
-    method,
-    headers: {
-      Authorization: api.authorization,
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}: ${text.slice(0, 300)}`);
-  return text ? (JSON.parse(text) as Json) : {};
-}
-
-type PollStep = { done: true } | { done: false; status: string };
-
-async function pollUntil(api: LakeRagApi, label: string, step: () => Promise<PollStep>): Promise<void> {
-  const { pollIntervalMs, pollTimeoutMs, sleep, now } = resolved(api);
-  const deadline = now() + pollTimeoutMs;
-  for (;;) {
-    const result = await step();
-    if (result.done) return;
-    if (now() >= deadline) throw new Error(`${label}: still ${result.status} after ${pollTimeoutMs}ms`);
-    await sleep(pollIntervalMs);
-  }
-}
-
-function stringField(json: Json, key: string, what: string): string {
-  const value = json[key];
-  if (typeof value !== 'string' || !value) throw new Error(`${what}: response has no ${key}`);
-  return value;
-}
 
 async function createLake(api: LakeRagApi, subject: string, runId: string): Promise<ProvisionedLake> {
   const slug = `lakerag-eval-${subject}-${runId}`;
