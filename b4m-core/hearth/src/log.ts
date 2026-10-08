@@ -1,6 +1,6 @@
 import { appendEventInputSchema } from './schemas';
 import type { EventsSinceOptions, HearthStore } from './store';
-import type { AppendEventInput, HearthEvent } from './types';
+import type { AppendEventInput, HearthEvent, HearthEventOrigin } from './types';
 
 export interface CatchupOptions extends EventsSinceOptions {
   /** When true (default), advance the actor's cursor past returned events. */
@@ -14,8 +14,8 @@ export interface CatchupOptions extends EventsSinceOptions {
 export class HearthLog {
   constructor(private store: HearthStore) {}
 
-  /** Validates and appends. Throws ZodError on malformed input. */
-  async append(input: AppendEventInput): Promise<HearthEvent> {
+  /** Validates and appends. Throws ZodError on malformed input. Every new event must carry its origin. */
+  async append(input: AppendEventInput & { origin: HearthEventOrigin }): Promise<HearthEvent> {
     const parsed = appendEventInputSchema.parse(input);
     return this.store.appendEvent(parsed as AppendEventInput);
   }

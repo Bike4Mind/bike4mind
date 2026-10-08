@@ -223,8 +223,8 @@ export function toWireHearthPresence(row: IHearthPresenceDoc, actor?: HearthActo
 export async function resolveRequestActor(
   user: { id: string; username?: string | null; email?: string | null },
   actor: ActorParam,
-  session?: SessionParam,
-  isApiKey = false
+  session: SessionParam | undefined,
+  isApiKey: boolean
 ) {
   if (actor) return hearthRepository.ensureActor(user.id, actor.kind, actor.displayName);
 

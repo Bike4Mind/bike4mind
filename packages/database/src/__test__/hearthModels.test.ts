@@ -185,7 +185,7 @@ describe('Hearth models + MongoHearthStore', () => {
     const log = new HearthLog(store);
 
     for (let i = 0; i < 3; i++) {
-      await log.append(messageInput(channelId, actorId, `msg ${i}`));
+      await log.append({ ...messageInput(channelId, actorId, `msg ${i}`), origin: 'session' });
     }
 
     const events = await log.catchup(actorId, channelId);

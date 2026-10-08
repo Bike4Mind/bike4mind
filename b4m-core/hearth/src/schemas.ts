@@ -60,7 +60,8 @@ export const appendEventInputSchema = z.object({
   machine: hearthMachineBodySchema.optional(),
   refs: hearthEventRefsSchema,
   // Must be listed here: append() parses with this schema and zod strips unknown keys.
-  origin: hearthEventOriginSchema.optional(),
+  // Required on writes so every new event records its origin; reads stay optional for legacy rows.
+  origin: hearthEventOriginSchema,
 });
 
 export type AppendEventInputParsed = z.infer<typeof appendEventInputSchema>;

@@ -81,7 +81,7 @@ describe('actor identity on the wire', () => {
 
 describe('resolveRequestActor', () => {
   it('defaults to a human actor named from the account', async () => {
-    await resolveRequestActor(USER, undefined, undefined);
+    await resolveRequestActor(USER, undefined, undefined, false);
     expect(ensureActorMock).toHaveBeenCalledWith('u1', 'human', 'erik');
   });
 
@@ -93,7 +93,7 @@ describe('resolveRequestActor', () => {
   });
 
   it('honors a session kind while keeping the name server-derived', async () => {
-    await resolveRequestActor(USER, undefined, { id: 'sess-1', kind: 'agent' });
+    await resolveRequestActor(USER, undefined, { id: 'sess-1', kind: 'agent' }, false);
     const [userId, kind, name] = ensureActorMock.mock.calls[0];
     expect([userId, kind]).toEqual(['u1', 'agent']);
     // The authenticated username stays the prefix: a session cannot name itself.
@@ -101,8 +101,8 @@ describe('resolveRequestActor', () => {
   });
 
   it('keeps one actor per session across kinds of call, label or not', async () => {
-    await resolveRequestActor(USER, undefined, { id: 'sess-1', kind: 'agent' });
-    await resolveRequestActor(USER, undefined, { id: 'sess-1', label: 'my nb', kind: 'agent' });
+    await resolveRequestActor(USER, undefined, { id: 'sess-1', kind: 'agent' }, false);
+    await resolveRequestActor(USER, undefined, { id: 'sess-1', label: 'my nb', kind: 'agent' }, false);
     const [, , bare] = ensureActorMock.mock.calls[0];
     const [, , labelled, options] = ensureActorMock.mock.calls[1];
     expect(labelled).toBe(bare);

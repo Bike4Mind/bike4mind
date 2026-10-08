@@ -3,12 +3,13 @@ import { HearthLog } from './log';
 import { InMemoryHearthStore } from './store';
 import type { AppendEventInput } from './types';
 
-const message = (overrides: Partial<AppendEventInput> = {}): AppendEventInput => ({
+const message = (overrides: Partial<AppendEventInput> = {}) => ({
   channelId: 'ch1',
   actorId: 'agent1',
-  kind: 'message',
-  human: { text: 'hello', format: 'md' },
+  kind: 'message' as const,
+  human: { text: 'hello', format: 'md' as const },
   refs: {},
+  origin: 'session' as const,
   ...overrides,
 });
 
@@ -85,6 +86,13 @@ describe('HearthLog', () => {
     const log = new HearthLog(new InMemoryHearthStore());
     const event = await log.append(message({ origin: 'api-key' }));
     expect(event.origin).toBe('api-key');
+  });
+
+  it('rejects an append with no origin', async () => {
+    const log = new HearthLog(new InMemoryHearthStore());
+    const { origin: _origin, ...noOrigin } = message();
+    // any: deliberately missing origin to exercise runtime validation
+    await expect(log.append(noOrigin as any)).rejects.toThrow();
   });
 
   it('rejects malformed input', async () => {
