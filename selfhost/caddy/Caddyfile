@@ -67,8 +67,8 @@
 # just those two paths to the chatcompletion container (which listens on :8080);
 # Caddy handles the WebSocket upgrade on ws-completions automatically. As with
 # /ws, it must be a "handle" block: a bare "reverse_proxy @completions" loses to
-# the catch-all handle and the paths 404 from the app. Recreate the caddy
-# container afterwards (up -d --force-recreate caddy); it does not watch this file.
+# the catch-all handle and the paths 404 from the app. Recreate caddy and app
+# afterwards (up -d --force-recreate caddy app): neither re-reads its config live.
 #
 # 	@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
 # 	handle @completions {

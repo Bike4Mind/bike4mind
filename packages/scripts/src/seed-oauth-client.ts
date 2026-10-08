@@ -6,7 +6,7 @@
  *
  * Usage (from repo root):
  *   MONGODB_URI=<uri> CLIENT_NAME="My App" REDIRECT_URIS="https://..." \
- *     npx tsx packages/scripts/src/seed-oauth-client.ts
+ *     pnpm --filter @bike4mind/scripts exec tsx src/seed-oauth-client.ts
  *
  * To register a Pattern-A *federated* client (one allowed to mint per-user
  * `ai:generate` keys via POST /api/oauth/ai-token), also set the trust config.

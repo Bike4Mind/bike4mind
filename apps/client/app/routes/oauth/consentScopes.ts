@@ -21,6 +21,7 @@ const SCOPE_LABELS: Readonly<Record<string, string>> = {
   email: 'See your email address',
   'ai:chat': 'Use your Bike4Mind credits to generate AI responses',
   'ai:generate': 'Use your Bike4Mind credits to generate AI responses, images, video and audio',
+  // Keep in sync with the ME_READ description in app/constants/apiKeyScopes.ts.
   'me:read': 'See your name, plan, subscription, credit balance and feature access',
   'notebooks:read': 'View your notebooks and sessions',
   'notebooks:write': 'Create and modify your notebooks',

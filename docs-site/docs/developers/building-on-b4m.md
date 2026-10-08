@@ -151,7 +151,7 @@ With that config, the client's `allowedScopes` are `openid email profile ai:gene
 
 The exchange verifies the ID token by fetching B4M's own JWKS over HTTPS from inside the `app` container. So it works only when B4M serves its public URL over HTTPS with a publicly trusted certificate (the Caddy setup in `SELF_HOST.md`, with `APP_URL=https://<your-domain>`). On a plain `http://` install, or with a self-signed certificate, every exchange fails with 401 `invalid_grant`.
 
-Operators register clients with the seed script. A stock install pulls images and has no Node toolchain, so on the host first install Node 24 and pnpm, then run `pnpm install --filter @bike4mind/scripts...` from the repository root. One pass registers the client with its trust config. The compose network's `mongo` hostname does not resolve from the host, so use the published port with `directConnection=true`:
+Operators register clients with the seed script. A stock install pulls images and has no Node toolchain, so on the host first install Node 24 and pnpm, then run `pnpm install --filter @bike4mind/scripts...` from the repository root. One pass registers the client with its trust config. The compose network's `mongo` hostname does not resolve from the host, so use the published port with `directConnection=true`. If you set `MONGO_HOST_PORT` in `.env.selfhost`, use that port instead of 27017:
 
 ```bash
 MONGODB_URI="mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true" \
@@ -160,7 +160,7 @@ REDIRECT_URIS="https://app.example.com/callback" \
 FEDERATED_SUBJECT_SOURCE=sub \
 FEDERATED_ISSUER="https://<your-b4m-host>" \
 FEDERATED_JWKS_URI="https://<your-b4m-host>/api/oauth/jwks" \
-  npx tsx packages/scripts/src/seed-oauth-client.ts
+  pnpm --filter @bike4mind/scripts exec tsx src/seed-oauth-client.ts
 ```
 
 - `REDIRECT_URIS` is comma-separated.
@@ -226,16 +226,16 @@ The key currently lives 15 minutes; use `expires_in` rather than hard-coding 900
 
 The ID token must still be valid when you exchange it. Once it expires, re-authorize the user (section 3) before you can mint another key. A 403 `access_denied` for missing consent also needs re-authorization, and only helps if the new authorization request includes the API scopes you exchange for.
 
-| Response                      | Meaning                                                                                                                |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 401 `invalid_client`          | unknown `client_id` or wrong secret                                                                                    |
-| 403 `access_denied`           | the client has no trust config, the user has not consented to these scopes, or the user has not accepted the B4M terms |
-| 403 `invalid_scope`           | a requested scope is not `ai:generate` or `me:read`, or is not allowed for this client                                 |
-| 401 `invalid_grant`           | the ID token is invalid or expired, or its subject is not a B4M user                                                   |
-| 400 `invalid_request`         | the body is malformed, `scope` is empty, or the user has reached their cap on API keys                                 |
-| 429                           | rate limited (300 per minute per client, and per IP); both send `Retry-After`                                          |
-| 503 `temporarily_unavailable` | B4M could not look up this user's consent; retry that user after a short delay (no `Retry-After`)                      |
-| other 5xx                     | an unexpected B4M failure; retry with backoff, and do not ask the user to re-authorize                                 |
+| Response                      | Meaning                                                                                                                                      |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 401 `invalid_client`          | unknown `client_id` or wrong secret                                                                                                          |
+| 403 `access_denied`           | the client has no trust config, the user has not consented to these scopes, or the user has not accepted the B4M terms                       |
+| 403 `invalid_scope`           | a requested scope is not `ai:generate` or `me:read`, or is not allowed for this client                                                       |
+| 401 `invalid_grant`           | the ID token is invalid or expired, or its subject is not a B4M user                                                                         |
+| 400 `invalid_request`         | the body is malformed, `scope` is empty, or the user has reached their cap on API keys                                                       |
+| 429                           | rate limited (300 per minute per client, and per IP); both send `Retry-After`                                                                |
+| 503 `temporarily_unavailable` | B4M could not look up this user's consent (only where the consent check is enforced); retry that user after a short delay (no `Retry-After`) |
+| other 5xx                     | an unexpected B4M failure; retry with backoff, and do not ask the user to re-authorize                                                       |
 
 The per-client and per-IP limits return different 429 bodies, so branch on the status and `Retry-After`, not the `error` field.
 

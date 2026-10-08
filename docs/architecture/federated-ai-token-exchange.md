@@ -110,7 +110,7 @@ REDIRECT_URIS="https://..." \
 FEDERATED_SUBJECT_SOURCE=sub \
 FEDERATED_ISSUER="https://<b4m-app-url>" \
 FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks" \
-  npx tsx packages/scripts/src/seed-oauth-client.ts
+  pnpm --filter @bike4mind/scripts exec tsx src/seed-oauth-client.ts
 ```
 
 This is a single pass: with `FEDERATED_SUBJECT_SOURCE=sub`, `FEDERATED_AUDIENCE` defaults
