@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -38,6 +38,10 @@ const general: RawBriefcasePrompt = { id: GENERAL_ID, name: 'Summarize', descrip
 const personal: RawBriefcasePrompt = { id: PERSONAL_ID, name: 'My standup' };
 
 describe('registerPrompts', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('advertises the prompts capability', async () => {
     const mcpClient = await connect(mockClient({}));
     expect(mcpClient.getServerCapabilities()?.prompts).toBeDefined();

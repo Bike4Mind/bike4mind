@@ -1,10 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { B4mApiClient } from './b4mApiClient';
 import { buildMcpServer } from './server';
 
 describe('buildMcpServer', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('serves the briefcase catalog over prompts/list', async () => {
     vi.spyOn(B4mApiClient.prototype, 'getBriefcaseCatalog').mockResolvedValue({
       general: [{ id: 'a'.repeat(24), name: 'Summarize' }],
