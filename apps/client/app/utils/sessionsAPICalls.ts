@@ -81,7 +81,7 @@ export type SessionUpdatePayload = Omit<Partial<ISessionDocument>, 'includeLibra
 // the scope change that defaults it.
 export const updateSessionToServer = async (sessionData: SessionUpdatePayload & { id: string }) => {
   const { includeLibraryFilesChoice, ...rest } = sessionData;
-  // The type already excludes the key; this still catches a cached session cast past it.
+  // Omit only rejects a literal key: a spread cached session still carries it at runtime.
   const body: Record<string, unknown> = { ...rest };
   delete body.includeLibraryFiles;
   if (includeLibraryFilesChoice !== undefined) body.includeLibraryFiles = includeLibraryFilesChoice;

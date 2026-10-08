@@ -286,6 +286,14 @@ describe('semanticDataLakeSearch lakeMemberships (#2243)', () => {
     expect(search.mock.calls[0][5]).toMatchObject({ restrictToDataLake: true, admitFileIds: [ATTACHED] });
   });
 
+  it('a restricted search with an empty admit list still bails when no lake is in reach', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], restrictToDataLake: true, admitFileIds: [] }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(search).not.toHaveBeenCalled();
+  });
+
   it('admitFileIds without restrictToDataLake does not bypass the empty-dataLakeTags bail', async () => {
     const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
     await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], admitFileIds: ['64b7f0f0f0f0f0f0f0f0f0f3'] }, {

@@ -5,6 +5,7 @@ import {
   type ResolvedLakeAccessSet,
 } from '../../../dataLakeService/narrowLakeAccessToSession';
 import { admitSessionLakes, noSessionLakes, searchedSessionLakes } from '../../../dataLakeService/sessionLakeAdmission';
+import { isObjectIdShaped } from './objectId';
 import type { ToolContext } from './types';
 
 /**
@@ -61,6 +62,18 @@ export async function sessionExcludesLibrary(
   const access = needsAccess ? await ownerAccess() : noSessionLakes();
   return sessionExcludesLibraryFiles(context.sessionIncludeLibraryFiles, access, tags);
 }
+
+/**
+ * The attached files a library-off session still admits (the rest of the library stays out).
+ * Ids are caller-supplied strings, so anything not ObjectId-shaped is dropped before a query sees it.
+ */
+export function admittedAttachmentIds(context: ToolContext, excludesLibrary: boolean): string[] {
+  return excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
+}
+
+/** Lead-in for a library-off, no-lake answer when attached files are still in reach. */
+export const LIBRARY_OFF_ATTACHMENTS_LEAD =
+  "No data lake is in this chat's scope and your other files are turned off for this chat";
 
 /** What a knowledge tool says when the library is off and no lake is left to search. */
 export const LIBRARY_OFF_NO_LAKE_MESSAGE =

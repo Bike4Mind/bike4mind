@@ -1999,6 +1999,27 @@ function compareForcedRetrievalCandidates(a: ForcedRetrievalCandidate, b: Forced
 }
 
 /**
+ * Lake rows first, then the union's remaining (library) rows, deduped by id and capped at
+ * `listingLimit`. `hasMore` also flips when the merged rows overflow the cap even though neither
+ * listing reported more, so the caller still marks the candidate set as truncated.
+ */
+export function mergeLakeFirstListing<T extends { id: string }>(
+  lakeListing: { data: T[]; hasMore?: boolean },
+  scopeListing: { data: T[]; hasMore?: boolean },
+  listingLimit: number
+): { data: T[]; hasMore: boolean } {
+  const lakeFileIds = new Set(lakeListing.data.map(f => f.id));
+  const libraryRows = scopeListing.data.filter(f => !lakeFileIds.has(f.id));
+  return {
+    data: [...lakeListing.data, ...libraryRows].slice(0, listingLimit),
+    hasMore:
+      lakeListing.hasMore === true ||
+      scopeListing.hasMore === true ||
+      lakeListing.data.length + libraryRows.length > listingLimit,
+  };
+}
+
+/**
  * KnowledgeRetrievalFeature - forced server-side retrieval ("citation enforcer").
  *
  * Generic capability: when a session sets `forceKnowledgeRetrieval`, every user
@@ -2021,27 +2042,6 @@ function compareForcedRetrievalCandidates(a: ForcedRetrievalCandidate, b: Forced
  * `citables[N-1]` (index-only citation: the model never names a source, so it
  * cannot fabricate one).
  */
-/**
- * Lake rows first, then the union's remaining (library) rows, deduped by id and capped at
- * `listingLimit`. `hasMore` also flips when the merged rows overflow the cap even though neither
- * listing reported more, so the caller still marks the candidate set as truncated.
- */
-export function mergeLakeFirstListing<T extends { id: string }>(
-  lakeListing: { data: T[]; hasMore?: boolean },
-  scopeListing: { data: T[]; hasMore?: boolean },
-  listingLimit: number
-): { data: T[]; hasMore: boolean } {
-  const lakeFileIds = new Set(lakeListing.data.map(f => f.id));
-  const libraryRows = scopeListing.data.filter(f => !lakeFileIds.has(f.id));
-  return {
-    data: [...lakeListing.data, ...libraryRows].slice(0, listingLimit),
-    hasMore:
-      lakeListing.hasMore === true ||
-      scopeListing.hasMore === true ||
-      lakeListing.data.length + libraryRows.length > listingLimit,
-  };
-}
-
 export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private chatCompletion: ChatCompletionContext;
   private logger: Logger;

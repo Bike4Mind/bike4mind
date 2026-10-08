@@ -1,5 +1,4 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
-import { isObjectIdShaped } from '../../base/objectId';
 import type { IFabFileRepository } from '@bike4mind/common';
 import {
   filterRetrievalExcluded,
@@ -7,7 +6,9 @@ import {
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
 import {
+  LIBRARY_OFF_ATTACHMENTS_LEAD,
   LIBRARY_OFF_NO_LAKE_MESSAGE,
+  admittedAttachmentIds,
   resolveSessionLakeAccess,
   sessionExcludesLibrary,
 } from '../../base/resolveSessionLakeAccess';
@@ -162,7 +163,7 @@ export const knowledgeBaseCountTool: ToolDefinition = {
 
         if (lakes.length === 0) {
           if (await sessionExcludesLibrary(context)) {
-            const attached = (context.attachedFileIds ?? []).filter(isObjectIdShaped);
+            const attached = admittedAttachmentIds(context, true);
             if (!attached.length) return LIBRARY_OFF_NO_LAKE_MESSAGE;
             // Same ownership check as any other count: an attached id only counts if the caller can read it.
             const counted = await countScope(context, {
@@ -170,7 +171,7 @@ export const knowledgeBaseCountTool: ToolDefinition = {
               options: { includeShared: true, userGroups: context.user.groups ?? [] },
             });
             return (
-              `No data lake is in this chat's scope and your other files are turned off for this chat. The files ` +
+              `${LIBRARY_OFF_ATTACHMENTS_LEAD}. The files ` +
               `attached to this chat are still searchable: ${describeCount(counted)}.${REPORTING_NOTE}`
             );
           }
@@ -190,6 +191,16 @@ export const knowledgeBaseCountTool: ToolDefinition = {
         );
 
         const lines = counted.map(({ lake, result }) => `- ${lake.name}: ${describeCount(result)}`);
+        // Library off still admits this chat's attachments (search/retrieve read them), so report them
+        // too. Not added to the total: an attachment may itself be one of the lake files counted above.
+        const attached = admittedAttachmentIds(context, await sessionExcludesLibrary(context));
+        if (attached.length) {
+          const attachedCount = await countScope(context, {
+            filters: { restrictToFileIds: attached },
+            options: { includeShared: true, userGroups: context.user.groups ?? [] },
+          });
+          lines.push(`- Files attached to this chat: ${describeCount(attachedCount)}`);
+        }
         const total = counted.reduce((n, c) => n + c.result.count, 0);
         const totalExact = counted.every(c => c.result.exact);
         const totalLine =

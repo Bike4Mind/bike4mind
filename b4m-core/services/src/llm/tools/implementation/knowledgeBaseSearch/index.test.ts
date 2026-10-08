@@ -3738,6 +3738,20 @@ describe('search_knowledge_base includeLibraryFiles', () => {
     expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: true, admitFileIds: [ATTACHED_ID] });
   });
 
+  it('library off with no reachable lake still searches its attachments semantically', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(noLakes);
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makeFlagContext({ sessionIncludeLibraryFiles: false, attachedFileIds: [ATTACHED_ID] });
+    const out = await run(ctx);
+
+    expect(out).not.toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
+      dataLakeTags: [],
+      restrictToDataLake: true,
+      admitFileIds: [ATTACHED_ID],
+    });
+  });
+
   it('library off wins over a personal-corpus session: nothing is searched', async () => {
     const ctx = makeFlagContext({ suppressLakeArms: true, sessionIncludeLibraryFiles: false });
     const out = await run(ctx);

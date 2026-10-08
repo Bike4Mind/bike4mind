@@ -3433,6 +3433,10 @@ async function processSubagentDispatch(
 
     // Build the full tool set - same as the top-level path. The orchestrator filters
     // these per agentDef.allowedTools/deniedTools.
+    // The parent run's message and workbench files; the child row carries none of its own.
+    const parentRun = child.parentExecutionId
+      ? await agentExecutionRepository.findById(child.parentExecutionId)
+      : undefined;
     const toolDeps: ToolBuilderDeps = {
       userId: child.userId,
       user: user as IUserDocument,
@@ -3456,7 +3460,7 @@ async function processSubagentDispatch(
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
       sessionIncludeLibraryFiles: libraryFlagForScope(session),
       // Without it a library-off session's delegated agent cannot open the files attached to it.
-      attachedFileIds: attachedFileIdsForRun(undefined, session.knowledgeIds),
+      attachedFileIds: attachedFileIdsForRun(parentRun ?? undefined, session.knowledgeIds),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,

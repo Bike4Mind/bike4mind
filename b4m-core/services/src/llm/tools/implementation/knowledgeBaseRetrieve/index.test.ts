@@ -1857,6 +1857,15 @@ describe('retrieve_knowledge_content with the library off', () => {
     expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
   });
 
+  it('reports the empty corpus when every attached id is malformed and no lake is reachable', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({ ...lakeAccess, dataLakeTags: [] });
+    const ctx = offContext({ attachedFileIds: ['not-an-id'] });
+    const out = await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect(out).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
+  });
+
   it('admits attached files on the query path, matching search_knowledge_base', async () => {
     getDynamicDataLakeAccessMock.mockResolvedValue(lakeAccess);
     const ctx = offContext({ attachedFileIds: [FILE_ID, 'not-an-id'] });

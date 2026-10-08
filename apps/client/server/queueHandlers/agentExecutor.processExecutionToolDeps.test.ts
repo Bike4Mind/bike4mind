@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
-// Drives the real `handler` through a `dag_node_dispatch` message and asserts what
-// `processSubagentDispatch` hands `buildSharedTools`. Harness mirrors agentExecutor.subagentMediaBilling.test.ts.
+// Drives the real `handler` through a continuation message so the top-level `processExecution`
+// builds its toolDeps, and asserts what it hands `buildSharedTools`. Module mocks mirror
+// agentExecutor.subagentToolDeps.test.ts; buildSharedTools throws once captured to end the run.
 
 const benignStub: ProxyHandler<object> = {
   get(_, key) {
@@ -76,6 +77,9 @@ vi.mock('@bike4mind/services/llm', async () => {
     resolveToolAvailability: vi.fn().mockResolvedValue({}),
     buildSharedTools: (...args: unknown[]) => buildSharedToolsMock(...args),
     ServerAgentStore: class {
+      getAllAgents() {
+        return [];
+      }
       getAgent() {
         return { name: 'researcher', allowedTools: [], deniedTools: [] };
       }
@@ -92,33 +96,36 @@ vi.mock('@bike4mind/services/llm', async () => {
   };
 });
 
-const childDoc = {
-  id: 'child-1',
-  status: 'pending',
+vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
+
+const execDoc = {
+  id: 'exec-1',
+  status: 'running',
   abortedAt: null,
   userId: 'user-1',
   sessionId: 'session-1',
   questId: 'quest-1',
   organizationId: null,
-  parentExecutionId: 'parent-1',
-  dagNodeId: 'node-b',
   model: 'claude-sonnet-5',
   query: 'summarize the attached files',
-  subagentConfig: { agentName: 'researcher', thoroughness: 'quick' },
+  messageFileIds: ['file-m'],
+  sessionFabFileIds: ['file-f'],
 };
 
 const baseSession = { id: 'session-1', userId: 'user-1', disableUserIntegrations: true };
 
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
-  vi.spyOn(actual.agentExecutionRepository, 'findById').mockResolvedValue(childDoc as never);
-  vi.spyOn(actual.agentExecutionRepository, 'claimExecution').mockResolvedValue(true as never);
-  vi.spyOn(actual.agentExecutionRepository, 'updateConnectionId').mockResolvedValue(undefined as never);
-  vi.spyOn(actual.agentExecutionRepository, 'markComplete').mockResolvedValue(undefined as never);
-  vi.spyOn(actual.agentExecutionRepository, 'incrementCreditsUsed').mockResolvedValue(undefined as never);
-  vi.spyOn(actual.agentExecutionRepository, 'markFailed').mockResolvedValue(undefined as never);
-  vi.spyOn(actual.agentExecutionRepository, 'markAborted').mockResolvedValue(undefined as never);
-  vi.spyOn(actual.agentExecutionRepository, 'checkAbortFlag').mockResolvedValue(false as never);
+  const repo = actual.agentExecutionRepository;
+  vi.spyOn(repo, 'findById').mockResolvedValue(execDoc as never);
+  vi.spyOn(repo, 'claimExecution').mockResolvedValue(true as never);
+  vi.spyOn(repo, 'updateConnectionId').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'incrementLambdaInvocationCount').mockResolvedValue(1 as never);
+  vi.spyOn(repo, 'persistProfileDeniedTools').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'persistResolvedEnabledTools').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'markFailed').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'markAborted').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'checkAbortFlag').mockResolvedValue(false as never);
   vi.spyOn(actual.usageEventRepository, 'record').mockResolvedValue(undefined as never);
   vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100 } as never);
   vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue(baseSession as never);
@@ -129,43 +136,35 @@ vi.mock('@bike4mind/database', async () => {
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 
-function dagNodeDispatchEvent() {
+const toolsBuilt = new Error('tools built');
+
+function continuationEvent() {
   return {
-    Records: [
-      {
-        messageId: 'msg-1',
-        body: JSON.stringify({
-          kind: 'dag_node_dispatch',
-          childExecutionId: 'child-1',
-          connectionId: 'conn-1',
-          dagNodeId: 'node-b',
-        }),
-      },
-    ],
+    Records: [{ messageId: 'msg-1', body: JSON.stringify({ executionId: 'exec-1', connectionId: 'conn-1' }) }],
   } as never;
 }
 
 const lambdaContext = { getRemainingTimeInMillis: () => 600_000 } as never;
 
-async function dispatchWithSession(session: Record<string, unknown>) {
+async function runWithSession(session: Record<string, unknown>) {
   const { sessionRepository } = await import('@bike4mind/database');
   vi.mocked(sessionRepository.findById).mockResolvedValue(session as never);
   const { handler } = await import('./agentExecutor');
-  const result = await handler(dagNodeDispatchEvent(), lambdaContext);
-  expect(result).toEqual({ batchItemFailures: [] });
+  await handler(continuationEvent(), lambdaContext).catch(() => undefined);
   expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
   return buildSharedToolsMock.mock.calls[0][0] as Record<string, unknown>;
 }
 
-describe('processSubagentDispatch tool deps', () => {
-  // The first import of agentExecutor dominates the run; paying it here keeps it off the per-test timeout.
+describe('processExecution tool deps', () => {
   beforeAll(async () => {
     await import('./agentExecutor');
   }, 120_000);
 
   beforeEach(() => {
     vi.clearAllMocks();
-    buildSharedToolsMock.mockReturnValue([]);
+    buildSharedToolsMock.mockImplementation(() => {
+      throw toolsBuilt;
+    });
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
   });
 
@@ -173,52 +172,22 @@ describe('processSubagentDispatch tool deps', () => {
     vi.useRealTimers();
   });
 
-  it("passes the session's attached files as attachedFileIds alongside its library opt-out", async () => {
-    const deps = await dispatchWithSession({
-      ...baseSession,
-      knowledgeIds: ['file-a', 'file-b'],
-      includeLibraryFiles: false,
-    });
+  it('passes every attached file and the resolved library opt-out to the tools', async () => {
+    const deps = await runWithSession({ ...baseSession, knowledgeIds: ['file-k'], includeLibraryFiles: false });
 
-    expect(deps.attachedFileIds).toEqual(['file-a', 'file-b']);
+    expect((deps.attachedFileIds as string[]).slice().sort()).toEqual(['file-f', 'file-k', 'file-m']);
     expect(deps.sessionIncludeLibraryFiles).toBe(false);
   });
 
-  it("adds the parent run's message and session files to attachedFileIds", async () => {
-    const { agentExecutionRepository } = await import('@bike4mind/database');
-    vi.mocked(agentExecutionRepository.findById).mockImplementation((async (id: string) =>
-      id === 'parent-1'
-        ? { ...childDoc, id: 'parent-1', messageFileIds: ['file-m'], sessionFabFileIds: ['file-f'] }
-        : childDoc) as never);
-    try {
-      const deps = await dispatchWithSession({ ...baseSession, knowledgeIds: ['file-a'], includeLibraryFiles: false });
+  it('resolves an unset library flag to included for a session with no explicit lake scope', async () => {
+    const deps = await runWithSession(baseSession);
 
-      expect((deps.attachedFileIds as string[]).slice().sort()).toEqual(['file-a', 'file-f', 'file-m']);
-    } finally {
-      vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
-    }
+    expect(deps.sessionIncludeLibraryFiles).toBe(true);
   });
 
-  it('passes an empty attachedFileIds when the session has no attached files', async () => {
-    const deps = await dispatchWithSession(baseSession);
+  it('resolves a stored false to included when Data Lakes is off', async () => {
+    const deps = await runWithSession({ ...baseSession, includeLibraryFiles: false, forceKnowledgeRetrieval: false });
 
-    expect(deps.attachedFileIds).toEqual([]);
-  });
-});
-
-describe('attachedFileIdsForRun', () => {
-  it('unions message files, session files and session knowledge without duplicates', async () => {
-    const { attachedFileIdsForRun } = await import('./agentExecutor');
-    expect(attachedFileIdsForRun({ messageFileIds: ['m', 'k'], sessionFabFileIds: ['f'] }, ['k']).sort()).toEqual([
-      'f',
-      'k',
-      'm',
-    ]);
-  });
-
-  it('falls back to session knowledge alone when the run carries no attachments', async () => {
-    const { attachedFileIdsForRun } = await import('./agentExecutor');
-    expect(attachedFileIdsForRun(undefined, ['k'])).toEqual(['k']);
-    expect(attachedFileIdsForRun(undefined, undefined)).toEqual([]);
+    expect(deps.sessionIncludeLibraryFiles).toBe(true);
   });
 });

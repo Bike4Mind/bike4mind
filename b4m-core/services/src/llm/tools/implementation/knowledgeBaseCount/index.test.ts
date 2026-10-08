@@ -293,4 +293,29 @@ describe('count_knowledge_base with the library off', () => {
     expect(search.mock.calls[0][2]).toMatchObject({ restrictToFileIds: ['64b7f0f0f0f0f0f0f0f0f0f4'] });
     expect(search.mock.calls[0][5]).not.toHaveProperty('skipOwnership');
   });
+
+  it('with a lake in scope, lists the attached files beside the lake without adding them to the total', async () => {
+    const ctx = makeContext({
+      sessionRetrievalTags: [dynamicLake.datalakeTag],
+      sessionIncludeLibraryFiles: false,
+      attachedFileIds: ['64b7f0f0f0f0f0f0f0f0f0f4', 'not-an-id'],
+    } as never);
+    const out = await run(ctx);
+    expect(out).toContain('- Research Library:');
+    expect(out).toContain('- Files attached to this chat:');
+    expect(searchCalls(ctx)).toHaveLength(2);
+    expect(searchCalls(ctx)[1][2]).toMatchObject({ restrictToFileIds: ['64b7f0f0f0f0f0f0f0f0f0f4'] });
+    expect(out).not.toContain('Total across');
+  });
+
+  it('with the library on, a lake count does not add an attachments line', async () => {
+    const ctx = makeContext({
+      sessionRetrievalTags: [dynamicLake.datalakeTag],
+      sessionIncludeLibraryFiles: true,
+      attachedFileIds: ['64b7f0f0f0f0f0f0f0f0f0f4'],
+    } as never);
+    const out = await run(ctx);
+    expect(out).not.toContain('attached to this chat');
+    expect(searchCalls(ctx)).toHaveLength(1);
+  });
 });

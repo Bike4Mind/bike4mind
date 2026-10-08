@@ -6,6 +6,7 @@ import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/r
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import {
   LIBRARY_OFF_NO_LAKE_MESSAGE,
+  admittedAttachmentIds,
   resolveOwnerLakeAccess,
   resolveSessionLakeAccess,
   sessionExcludesLibrary,
@@ -294,7 +295,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             } else {
               const { dataLakeTags, dataLakeTagPrefixes, lakes } = await dynamicAccess();
               const lakeMemberships = lakeMembershipsFrom(lakes);
-              const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
+              const admitFileIds = admittedAttachmentIds(context, excludesLibrary);
               if (
                 excludesLibrary &&
                 !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&

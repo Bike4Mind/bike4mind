@@ -1,5 +1,4 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
-import { isObjectIdShaped } from '../../base/objectId';
 import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import {
   citationTagDescription,
@@ -22,6 +21,7 @@ import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
 import {
   LIBRARY_OFF_NO_LAKE_MESSAGE,
+  admittedAttachmentIds,
   resolveSessionLakeAccess,
   sessionExcludesLibrary,
 } from '../../base/resolveSessionLakeAccess';
@@ -662,16 +662,15 @@ async function trySemanticKbSearch(
     // `includeShared: true` alongside these, so emptying them leaves the caller's own and shared
     // files as the corpus - which is exactly the intent, and keeps their whole library rankable.
     const { dataLakeTags, dataLakeTagPrefixes, lakes, lakeViewComplete } = await resolveSessionLakeAccess(context);
-    // No accessible data lake - keyword search owns the user's own files. EXCEPT when the lakes
-    // were suppressed deliberately: there the caller does have a corpus worth ranking (their own
-    // files), and falling through to the metadata-only keyword arm would lose content search over
-    // it entirely. Left intact for the genuinely lake-less caller so their behaviour is unchanged.
-    if (dataLakeTags.length === 0 && !context.suppressLakeArms) return NO_SEMANTIC_RESULT;
     // Library off: only lake arms and the chat's own attachments may match. With neither, the
     // keyword arm reports the empty corpus (an ownership query with zero arms would throw on
     // restrictToDataLake).
     const excludesLibrary = await sessionExcludesLibrary(context);
-    const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
+    const admitFileIds = admittedAttachmentIds(context, excludesLibrary);
+    // No accessible data lake - keyword search owns the user's own files. EXCEPT when the lakes
+    // were suppressed deliberately, or library-off admits attachments: there the caller has a corpus
+    // worth ranking, and the metadata-only keyword arm would lose content search over it.
+    if (dataLakeTags.length === 0 && !context.suppressLakeArms && !admitFileIds.length) return NO_SEMANTIC_RESULT;
 
     const ceiling = resolvePassageCeiling(bounds.rawMaxResults, bounds.defaultResults, budgets.kbResultTokenBudget);
     // Widen the candidate pool when either adaptive knob is on: minScore is re-applied CLIENT-side
@@ -1419,7 +1418,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             keywordArmOriginLakes = lakeViewComplete === false ? undefined : lakes;
             const lakeMemberships = lakeMembershipsFrom(lakes);
             const excludesLibrary = await sessionExcludesLibrary(context);
-            const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
+            const admitFileIds = admittedAttachmentIds(context, excludesLibrary);
             if (
               excludesLibrary &&
               !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&

@@ -1,4 +1,3 @@
-import { isObjectIdShaped } from '../../base/objectId';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import {
   DATALAKE_TAG_PREFIX,
@@ -14,7 +13,9 @@ import {
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
 import {
+  LIBRARY_OFF_ATTACHMENTS_LEAD,
   LIBRARY_OFF_NO_LAKE_MESSAGE,
+  admittedAttachmentIds,
   resolveSessionLakeAccess,
   sessionExcludesLibrary,
 } from '../../base/resolveSessionLakeAccess';
@@ -435,9 +436,9 @@ export const describeKnowledgeBaseTool: ToolDefinition = {
 
         if (lakes.length === 0) {
           if (await sessionExcludesLibrary(context)) {
-            if (!(context.attachedFileIds ?? []).some(isObjectIdShaped)) return LIBRARY_OFF_NO_LAKE_MESSAGE;
+            if (!admittedAttachmentIds(context, true).length) return LIBRARY_OFF_NO_LAKE_MESSAGE;
             return (
-              "No data lake is in this chat's scope and your other files are turned off for this chat, so there is " +
+              `${LIBRARY_OFF_ATTACHMENTS_LEAD}, so there is ` +
               'no corpus shape to describe. The files attached to this chat are still searchable - use ' +
               'count_knowledge_base for a total.'
             );

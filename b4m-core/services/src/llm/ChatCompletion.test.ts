@@ -726,13 +726,32 @@ describe('ChatCompletionProcess', () => {
       mockSession.includeLibraryFiles = false;
       mockSession.forceKnowledgeRetrieval = true;
       mockSession.knowledgeIds = ['k1'];
+      const body = { ...wireMinimalTurn(), fabFileIds: ['f1'], messageFileIds: ['m1'] };
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        expect(captured.deps.sessionIncludeLibraryFiles).toBe(false);
+        expect([...captured.deps.attachedFileIds].sort()).toEqual(['f1', 'k1', 'm1']);
+      } finally {
+        restore();
+      }
+    });
+
+    it('tool door: Data Lakes off resolves a stored false to true', async () => {
+      const { captured, restore } = captureToolDeps();
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = false;
       const body = wireMinimalTurn();
 
-      await service.process({ body, logger: mockLogger });
+      try {
+        await service.process({ body, logger: mockLogger });
 
-      expect(captured.deps.sessionIncludeLibraryFiles).toBe(false);
-      expect(captured.deps.attachedFileIds).toEqual(expect.arrayContaining(['k1']));
-      restore();
+        expect(captured.deps.sessionIncludeLibraryFiles).toBe(true);
+      } finally {
+        restore();
+      }
     });
   });
 
