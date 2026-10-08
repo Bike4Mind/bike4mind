@@ -735,6 +735,7 @@ export const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAct
   const [isLoading, setIsLoading] = useState(false);
   const [isConfirmed, setIsConfirmed] = useState(() => parsedData?.status === 'confirmed');
   const [isCancelled, setIsCancelled] = useState(() => parsedData?.status === 'cancelled');
+  const [isReplaced, setIsReplaced] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string; url?: string } | null>(
     () => parsedData?.result || null
   );
@@ -768,6 +769,9 @@ export const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAct
         : error instanceof Error
           ? error.message
           : 'Failed to execute action';
+      if (isAxiosError(error) && error.response?.status === 409 && message.includes('replaced by a newer one')) {
+        setIsReplaced(true);
+      }
       setResult({
         success: false,
         message,
@@ -800,6 +804,9 @@ export const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAct
         : error instanceof Error
           ? error.message
           : 'Failed to cancel action';
+      if (isAxiosError(error) && error.response?.status === 409 && message.includes('replaced by a newer one')) {
+        setIsReplaced(true);
+      }
       setResult({
         success: false,
         message,
@@ -809,7 +816,7 @@ export const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAct
     }
   };
 
-  if (isConfirmed || isCancelled) {
+  if (isConfirmed || isCancelled || isReplaced) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'background.level1' }}>
         <Typography

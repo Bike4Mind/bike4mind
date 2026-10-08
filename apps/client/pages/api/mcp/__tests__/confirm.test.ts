@@ -170,4 +170,23 @@ describe('POST /api/mcp/confirm', () => {
     expect(Quest.findByIdAndUpdate).not.toHaveBeenCalled();
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
+
+  it('rejects a stale expired action as replaced before claiming it', async () => {
+    const expiredTs = Date.now() - 16 * 60 * 1000;
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: { tool: 'create_issue', params: {}, ts: expiredTs },
+    } as never);
+
+    const res = await post({
+      questId: QUEST_ID,
+      sessionId: SESSION_ID,
+      confirmed: true,
+      pendingActionTs: expiredTs - 1,
+    });
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData().error).toContain('replaced by a newer one');
+    expect(claimPendingAction).not.toHaveBeenCalled();
+  });
 });

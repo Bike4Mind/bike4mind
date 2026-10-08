@@ -34,4 +34,12 @@ describe('parseConfirmationButtonValue', () => {
   it('returns the whole value as the quest id when the suffix is not numeric', () => {
     expect(parseConfirmationButtonValue('abc:xyz')).toEqual({ questId: 'abc:xyz' });
   });
+
+  it('parses an empty timestamp suffix as zero', () => {
+    expect(parseConfirmationButtonValue('abc:')).toEqual({ questId: 'abc', pendingActionTs: 0 });
+  });
+
+  it('uses the final separator when a quest id contains a colon', () => {
+    expect(parseConfirmationButtonValue('a:b:5')).toEqual({ questId: 'a:b', pendingActionTs: 5 });
+  });
 });

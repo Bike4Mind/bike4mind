@@ -124,19 +124,40 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     );
   });
 
-  it('shows the server error message when the request is rejected with a 409', async () => {
+  it('keeps a lost Cancel claim unresolved and shows the 409 error', async () => {
     postMock.mockRejectedValue({
       isAxiosError: true,
       message: 'Request failed with status code 409',
-      response: { status: 409, data: { error: 'This action was replaced by a newer one.' } },
+      response: { status: 409, data: { error: 'This action has already been processed.' } },
     });
     renderCard();
 
-    fireEvent.click(screen.getByTestId('mcp-confirm-btn'));
+    fireEvent.click(screen.getByTestId('mcp-cancel-btn'));
 
     const error = await screen.findByTestId('mcp-confirm-error');
-    expect(error.textContent).toContain('This action was replaced by a newer one.');
+    expect(error.textContent).toContain('This action has already been processed.');
+    expect(screen.queryByTestId('mcp-confirm-result')).toBeNull();
+    expect(screen.getByTestId('mcp-cancel-btn')).toBeTruthy();
   });
+
+  it.each(['mcp-confirm-btn', 'mcp-cancel-btn'])(
+    'ends the stale card after %s receives a replaced 409',
+    async button => {
+      postMock.mockRejectedValue({
+        isAxiosError: true,
+        message: 'Request failed with status code 409',
+        response: { status: 409, data: { error: 'This action was replaced by a newer one.' } },
+      });
+      renderCard();
+
+      fireEvent.click(screen.getByTestId(button));
+
+      const result = await screen.findByTestId('mcp-confirm-result');
+      expect(result.textContent).toContain('This action was replaced by a newer one.');
+      expect(screen.queryByTestId('mcp-confirm-btn')).toBeNull();
+      expect(screen.queryByTestId('mcp-cancel-btn')).toBeNull();
+    }
+  );
 
   it('keeps the card open for a retry when a pre-execution check rejects with a 400', async () => {
     postMock.mockRejectedValue({

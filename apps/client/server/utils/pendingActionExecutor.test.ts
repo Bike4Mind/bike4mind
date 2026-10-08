@@ -136,6 +136,18 @@ describe('executePendingAction', () => {
     );
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
+
+  it('rejects a stale expired action as replaced before claiming it', async () => {
+    const expiredTs = Date.now() - TOKEN_EXPIRATION_MS - 1000;
+    storePendingAction({ tool: 'create_issue', params: {}, ts: expiredTs });
+
+    const result = await executePendingAction(QUEST_ID, dbUser, logger, expiredTs - 1);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('replaced by a newer one');
+    expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
 });
 
 describe('cancelPendingActionOnQuest', () => {
