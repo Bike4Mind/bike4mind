@@ -179,6 +179,25 @@ export function stripChoicesFromReplies(replies: readonly string[]): {
   return { replies: stripped, choices, found, outcome };
 }
 
+/**
+ * The visible answer text of a quest, derived from its reply slots (choices stripped, `<think>`
+ * hidden) with the scalar `reply` as the fallback when no slot has visible text. `joinSlots` joins
+ * the visible slots: a bare join by default, matching the scalar the server persists, and a
+ * paragraph join for a reader that renders the text as markdown (see streamVisibility.ts), since a
+ * bare join glues a slot's closing code fence to the next slot's text.
+ */
+export function questReplyText(
+  quest: { reply?: string | null; replies?: readonly string[] | null },
+  joinSlots: (slots: string[]) => string = slots => slots.join('')
+): string | null {
+  const visible = joinSlots(
+    stripChoicesFromReplies(quest.replies ?? [])
+      .replies.map(slot => visibleReplyText(slot))
+      .filter(Boolean)
+  );
+  return visible || (quest.reply ?? null);
+}
+
 type ParsedOptions = { options: ChoiceOption[] } | { reason: ReplyChoicesInvalidReason };
 
 function parseChoiceOptions(body: string): ParsedOptions {

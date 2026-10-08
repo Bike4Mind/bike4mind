@@ -35,6 +35,7 @@ import {
   B4MLLMTools,
   chatContract,
   filterKnownTools,
+  questReplyText,
   toToolPayloads,
   type SimplifiedChatRequest,
 } from '@bike4mind/common';
@@ -43,7 +44,6 @@ import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import type { Request } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
-import { questReplyText } from '@server/utils/questPollBody';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';

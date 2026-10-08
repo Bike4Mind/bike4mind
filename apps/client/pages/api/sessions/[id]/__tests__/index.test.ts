@@ -297,6 +297,29 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       expect(mockUpdateSession).not.toHaveBeenCalled();
     });
 
+    it('forwards includeLibraryFiles: false to updateSession and 422s a non-boolean one', async () => {
+      keyWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
+      mockUpdateSession.mockResolvedValue({
+        id: 'sess-1',
+        name: 'n',
+        userId: 'user-1',
+        includeLibraryFiles: false,
+        firstCreated: new Date('2026-01-01T00:00:00Z'),
+        lastUpdated: new Date('2026-01-02T00:00:00Z'),
+      });
+      const ok = fire({ method: 'PUT', body: { includeLibraryFiles: false } });
+      await handler(ok.req, ok.res);
+      expect(ok.res._getStatusCode()).toBe(200);
+      expect(mockUpdateSession.mock.calls[0][1]).toMatchObject({ includeLibraryFiles: false });
+      expect(ok.res._getJSONData()).toMatchObject({ includeLibraryFiles: false });
+
+      mockUpdateSession.mockClear();
+      const bad = fire({ method: 'PUT', body: { includeLibraryFiles: 'no' } });
+      await handler(bad.req, bad.res);
+      expect(bad.res._getStatusCode()).toBe(422);
+      expect(mockUpdateSession).not.toHaveBeenCalled();
+    });
+
     it('422s a malformed body without calling updateSession (contract validation ran)', async () => {
       keyWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
       const { req, res } = fire({ method: 'PUT', body: { forceKnowledgeRetrieval: 'not-a-boolean' } });

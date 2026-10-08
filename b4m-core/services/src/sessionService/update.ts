@@ -78,6 +78,7 @@ export const updateSession = async (
     forceKnowledgeRetrieval,
     propagateToProjects,
     lakeScope,
+    includeLibraryFiles,
   } = secureParameters(parameters, updateSessionParamtersSchema);
 
   // Whether this request SPEAKS about the lake scope at all - `[]` and `null` are both statements,
@@ -157,6 +158,9 @@ export const updateSession = async (
   // Explicit undefined check (not `|| session.x`) so toggling OFF (false) actually persists.
   if (forceKnowledgeRetrieval !== undefined) {
     update.forceKnowledgeRetrieval = forceKnowledgeRetrieval;
+  }
+  if (includeLibraryFiles !== undefined) {
+    update.includeLibraryFiles = includeLibraryFiles;
   }
   // The stored pair is always written together, never one half: `lakeScopeExplicit` is the only
   // thing separating "grounds on no lake" from "never chose", and leaving a stale flag beside a
