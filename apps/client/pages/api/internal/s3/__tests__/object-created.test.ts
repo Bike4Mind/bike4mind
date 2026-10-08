@@ -183,8 +183,9 @@ describe('POST /api/internal/s3/object-created', () => {
   // Without this scan nothing moved a self-host file off 'pending' until the rescue sweep's
   // 30-minute floor, so every upload and generated video was unservable for half an hour.
   it('runs the upload-time moderation scan for the landed file, owned by its uploader', async () => {
+    const req = makeReq('secret-token', 'uploads/clip.mp4');
     const res = makeRes();
-    await handler(makeReq('secret-token', 'uploads/clip.mp4'), res);
+    await handler(req, res);
 
     expect(moderateFilesMock).toHaveBeenCalledTimes(1);
     expect(moderateFilesMock).toHaveBeenCalledWith(
@@ -196,6 +197,25 @@ describe('POST /api/internal/s3/object-created', () => {
         claim: moderationDeps.claim,
       })
     );
+    // The wiring must be the real thing, not a stray stub: the request logger carries the failure
+    // context, and dropping `release` would strand a failed scan on 'scanning' instead of 'pending'.
+    expect(buildDepsMock).toHaveBeenCalledWith(req.logger);
+    expect(moderateFilesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ persist: moderationDeps.persist, release: moderationDeps.release })
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  // The scan is deliberately not awaited: holding MinIO's webhook on a full object download would
+  // time it out and provoke a redelivery. A never-settling mock makes an `await` on that chain hang
+  // this test, so it fails loudly instead of silently regressing to a blocking webhook.
+  it('answers 200 before the upload-time scan settles', async () => {
+    moderateFilesMock.mockImplementationOnce(() => new Promise(() => {}));
+    const res = makeRes();
+
+    await handler(makeReq('secret-token', 'uploads/clip.mp4'), res);
+
+    expect(moderateFilesMock).toHaveBeenCalledTimes(1);
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
