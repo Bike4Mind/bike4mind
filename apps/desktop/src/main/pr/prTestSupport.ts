@@ -46,11 +46,19 @@ export function check(name: string, bucket: PrCheck['bucket'], required = true):
 export function fakeGithub(initial: PrSnapshot = snapshot()) {
   let next: PrSnapshot | Error = initial;
   const calls: string[] = [];
+  const batches: number[] = [];
   const github = {
     snapshot: async (_ref: PrRef, options: { threads: boolean }) => {
       calls.push(`snapshot${options.threads ? '+threads' : ''}`);
       if (next instanceof Error) throw next;
       return next;
+    },
+    snapshots: async (requests: readonly { ref: PrRef; threads: boolean }[]) => {
+      batches.push(requests.length);
+      for (const request of requests) calls.push(`snapshot${request.threads ? '+threads' : ''}`);
+      if (next instanceof Error) throw next;
+      const answer = next;
+      return requests.map(request => ({ ...answer, ...request.ref }));
     },
     findOpenForBranch: async (_cwd: string, branch: string) => {
       calls.push(`branch:${branch}`);
@@ -69,6 +77,7 @@ export function fakeGithub(initial: PrSnapshot = snapshot()) {
   return {
     github: github as unknown as PrGithub,
     calls,
+    batches,
     answer(value: PrSnapshot | Error) {
       next = value;
     },

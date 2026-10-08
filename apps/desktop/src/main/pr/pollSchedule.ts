@@ -10,8 +10,9 @@ import type { PrState } from '@shared/pullRequest';
  * when an automation is armed on it, every 15 min - enough for auto-archive and auto-merge to
  * act within a coffee break, and at most four reads an hour per armed PR.
  *
- * Each read is one GraphQL query (a few points of the 5000/hour budget), so even a dozen PRs
- * on the slowest cadences stay far below anything GitHub would throttle.
+ * Reads due on the same tick share one GraphQL query (see PrMonitor.readTogether). Measured on
+ * GitHub: ten PRs in one query cost 1 point of the 5000/hour budget, 5 with auto-fix's review
+ * data on all ten, against 10 points read one by one.
  */
 export const POLL_MS = {
   onScreenActive: 30_000,
@@ -24,7 +25,17 @@ export const POLL_MS = {
   maxBackoff: 30 * 60_000,
   /** How long every read stops after GitHub says the rate limit is hit. */
   rateLimitPause: 15 * 60_000,
+  /** The grid every timed read lands on. Every cadence above is a multiple of it. */
+  tick: 15_000,
 } as const;
+
+/**
+ * `ms` stretched to end on the next grid line. Reads that would have been seconds apart fire
+ * on the same line and go out as one query; none is delayed by more than a tick.
+ */
+export function alignToTick(now: number, ms: number): number {
+  return Math.ceil((now + ms) / POLL_MS.tick) * POLL_MS.tick - now;
+}
 
 export interface PollInput {
   /** The last state read, or undefined before the first read. */

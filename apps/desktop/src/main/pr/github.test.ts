@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PrRef } from '@shared/pullRequest';
 import { GhError, classifyGhFailure } from './gh';
-import { PrGithub, mergeMethodFor, parseSnapshot } from './github';
+import { PrGithub, batchQuery, mergeMethodFor, parseSnapshot } from './github';
 
 const REF: PrRef = {
   owner: 'example-org',
@@ -218,13 +218,70 @@ describe('PrGithub', () => {
   });
 
   it('passes the owner and repo as strings', async () => {
-    const gh = vi.fn().mockResolvedValue(JSON.stringify(response()));
+    const gh = vi.fn().mockResolvedValue(JSON.stringify(batched(repository())));
     await new PrGithub(gh).snapshot(REF, { threads: false });
     const args = gh.mock.calls[0][0] as string[];
-    expect(args[args.indexOf('owner=example-org') - 1]).toBe('-f');
-    expect(args).toContain('threads=false');
+    expect(args[args.indexOf('o0=example-org') - 1]).toBe('-f');
+    expect(args[args.indexOf('n0=widgets') - 1]).toBe('-f');
+    expect(args).toContain('t0=false');
+  });
+
+  it('reads several pull requests in one gh call', async () => {
+    const gh = vi.fn().mockResolvedValue(JSON.stringify(batched(repository(), repository({ number: 612 }))));
+    const results = await new PrGithub(gh).snapshots([
+      { ref: REF, threads: false },
+      { ref: OTHER, threads: true },
+    ]);
+    expect(gh).toHaveBeenCalledTimes(1);
+    expect(results.map(result => (result instanceof GhError ? result.kind : result.number))).toEqual([611, 612]);
+    expect((results[1] as { threads?: unknown[] }).threads).toEqual([]);
+    const args = gh.mock.calls[0][0] as string[];
+    expect(args).toEqual(expect.arrayContaining(['p0=611', 'p1=612', 't0=false', 't1=true']));
+  });
+
+  it('keeps the other answers when one pull request cannot be read', async () => {
+    const body = {
+      ...batched(repository(), { pullRequest: null }),
+      errors: [{ type: 'NOT_FOUND', path: ['p1', 'pullRequest'], message: 'Could not resolve to a PullRequest.' }],
+    };
+    const gh = vi.fn().mockRejectedValue(new GhError('not-found', 'Could not resolve', JSON.stringify(body)));
+    const [first, second] = await new PrGithub(gh).snapshots([
+      { ref: REF, threads: false },
+      { ref: OTHER, threads: false },
+    ]);
+    expect(first).toMatchObject({ number: 611, state: 'OPEN' });
+    expect(second).toBeInstanceOf(GhError);
+    expect((second as GhError).kind).toBe('not-found');
+  });
+
+  it('fails every pull request in the call when gh itself fails', async () => {
+    const gh = vi.fn().mockRejectedValue(new GhError('unauthenticated', 'run gh auth login'));
+    await expect(new PrGithub(gh).snapshots([{ ref: REF, threads: false }])).rejects.toMatchObject({
+      kind: 'unauthenticated',
+    });
+  });
+
+  it('names each pull request by its own variables in the query', () => {
+    const query = batchQuery(2);
+    expect(query).toContain('p1: repository(owner: $o1, name: $n1)');
+    expect(query).toContain('isRequired(pullRequestNumber: $p1)');
+    expect(query).toContain('@include(if: $t1)');
+    expect(query.match(/viewer \{ login \}/g)).toHaveLength(1);
   });
 });
+
+const OTHER: PrRef = { ...REF, number: 612, url: 'https://github.com/example-org/widgets/pull/612' };
+
+function repository(pullRequest: Record<string, unknown> = {}): Record<string, unknown> {
+  const base = response().data.repository as Record<string, unknown>;
+  return { ...base, pullRequest: { ...(base.pullRequest as Record<string, unknown>), ...pullRequest } };
+}
+
+function batched(...repositories: Record<string, unknown>[]) {
+  return {
+    data: { viewer: { login: 'octo-dev' }, ...Object.fromEntries(repositories.map((repo, i) => [`p${i}`, repo])) },
+  };
+}
 
 describe('classifyGhFailure', () => {
   it('tells missing, signed-out and rate-limited apart', () => {

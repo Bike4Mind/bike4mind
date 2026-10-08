@@ -26,6 +26,7 @@ function setup(project: { workingDirectory: string; branch: string | null } | nu
     },
     emit: out.emit,
     logger: quietLogger,
+    batchWindowMs: 0,
   });
   return { store, fake, out, monitor };
 }
