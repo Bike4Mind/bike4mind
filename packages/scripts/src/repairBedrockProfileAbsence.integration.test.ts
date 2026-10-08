@@ -34,6 +34,7 @@ beforeEach(async () => {
 });
 
 const AT = new Date('2026-09-01T00:00:00Z');
+const NOW = new Date('2026-09-15T00:00:00Z');
 const silent = () => undefined;
 
 const bedrockRecord = (id: string, lifecycle: ModelRecord['lifecycle']): ModelRecord => ({
@@ -116,7 +117,7 @@ describe('repairBedrockProfileAbsence', () => {
   it('repairs only the absence-graduated profile id, and a second apply is a no-op', async () => {
     await seed();
 
-    const first = await repairBedrockProfileAbsence({ apply: true, log: silent });
+    const first = await repairBedrockProfileAbsence({ apply: true, log: silent, now: NOW });
     expect(first.repaired).toBe(1);
 
     // `source` decides precedence in resolveCatalogRecords, so the appended row must stay discovery.
@@ -126,7 +127,7 @@ describe('repairBedrockProfileAbsence', () => {
     }).lean();
     expect(appended).toHaveLength(1);
     expect(appended[0].source).toBe('discovery');
-    expect(appended[0].note).toMatch(/^discovery:absence-repair@\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+    expect(appended[0].note).toBe(`discovery:absence-repair@${NOW.toISOString()}`);
 
     const rows = await modelCatalogRepository.rowsInForce(new Date());
     // Active AND undated, or isModelDeprecated would still hide it from /api/models.
@@ -193,13 +194,17 @@ describe('repairBedrockProfileAbsence', () => {
     expect((await repairBedrockProfileAbsence({ apply: true, log: silent })).repaired).toBe(0);
   });
 
-  it('skips a discovery deprecation whose note is not an absence graduation', async () => {
+  it('skips a discovery deprecation with no absence graduation in its history', async () => {
     const modelId = 'global.anthropic.claude-haiku-5';
     await modelCatalogRepository.append(seedRow(modelId, { status: 'active' }));
+    // An earlier discovery row deprecated the id for its own reason, then a later
+    // one carried the same deprecation forward. Neither note is an absence
+    // graduation, so the history lookup must reject the earlier row.
     await modelCatalogRepository.append({
       ...restated(modelId, { status: 'deprecated', deprecationDate: '2026-08-01' }),
       effectiveFrom: AT,
     });
+    await modelCatalogRepository.append(restated(modelId, { status: 'deprecated', deprecationDate: '2026-08-01' }));
     const before = await ModelCatalog.countDocuments({});
 
     const result = await repairBedrockProfileAbsence({ apply: true, log: silent });
