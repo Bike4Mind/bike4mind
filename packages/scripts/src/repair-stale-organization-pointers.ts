@@ -6,9 +6,10 @@
  * idempotency notes: ./clearStaleOrganizationPointers.ts.
  *
  * Dry run by default; pass --apply to write. Every run first records the stale pointers (org, reason,
- * user ids) to --report <path> (default: a timestamped JSON file in the OS temp dir, mode 0600), so a nulled pointer can
- * be traced and restored. The deleteOrganization fix must be deployed first,
- * or org deletes keep creating new stale pointers after the run.
+ * user ids) to --report <path> (default: a timestamped JSON file in the OS temp dir; created with
+ * mode 0600, never overwriting), so a nulled pointer can be traced and restored. The
+ * deleteOrganization fix must be deployed first, or org deletes keep creating new stale pointers
+ * after the run.
  *
  * Usage (inside an SST shell so the Mongo URI resolves):
  *   npx sst shell --stage <stage> pnpm --filter @bike4mind/scripts repair:stale-organization-pointers

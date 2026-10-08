@@ -10,7 +10,10 @@ export type StalePointerReason = 'org-missing' | 'not-member';
 export interface ClearStaleOrganizationPointersOptions {
   /** Default false: report the pointers that would be nulled and write nothing. */
   apply?: boolean;
-  /** JSON file to record every stale pointer (org, reason, user ids) in, written before any write. */
+  /**
+   * JSON file to record every stale pointer (org, reason, user ids) in, written before any write.
+   * Created with mode 0600; an existing file is refused rather than overwritten.
+   */
   reportPath?: string;
   log?: (message: string) => void;
 }
@@ -130,7 +133,7 @@ export async function clearStaleOrganizationPointers({
   }
 
   if (reportPath) {
-    writeFileSync(reportPath, JSON.stringify({ apply, orgs }, null, 2), { mode: 0o600 });
+    writeFileSync(reportPath, JSON.stringify({ apply, orgs }, null, 2), { mode: 0o600, flag: 'wx' });
     log(`Wrote the stale pointer list to ${reportPath}.`);
   }
 

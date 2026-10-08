@@ -119,6 +119,7 @@ describe('clearStaleOrganizationPointers', () => {
     expect(String(await pointerOf(s.removed))).toBe(String(s.liveOrg));
     expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toEqual({ apply: false, orgs: result.orgs });
     expect(statSync(reportPath).mode & 0o777).toBe(0o600);
+    await expect(clearStaleOrganizationPointers({ reportPath, log: silent })).rejects.toThrow(/EEXIST/);
   });
 
   it('apply records exactly the nulled ids in the report', async () => {
