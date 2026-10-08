@@ -40,6 +40,8 @@ describe('imageEdit dispatch', () => {
 
     expect(h.process).toHaveBeenCalledWith({ body: BODY, logger });
     expect(h.dispatchQuestCallback).toHaveBeenCalledWith('quest-1', logger);
+    expect(h.dispatchQuestCallback).toHaveBeenCalledTimes(1);
+    expect(h.process.mock.invocationCallOrder[0]).toBeLessThan(h.dispatchQuestCallback.mock.invocationCallOrder[0]);
   });
 
   it('still fires the quest callback when process throws, and rethrows', async () => {
@@ -49,5 +51,7 @@ describe('imageEdit dispatch', () => {
     await expect(run()).rejects.toBe(failure);
 
     expect(h.dispatchQuestCallback).toHaveBeenCalledWith('quest-1', logger);
+    expect(h.dispatchQuestCallback).toHaveBeenCalledTimes(1);
+    expect(h.process.mock.invocationCallOrder[0]).toBeLessThan(h.dispatchQuestCallback.mock.invocationCallOrder[0]);
   });
 });
