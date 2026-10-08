@@ -78,7 +78,7 @@ vi.mock('@server/auth/auth', async orig => {
   return { ...actual, auth: authRouter };
 });
 
-import { ApiKeyScope, ScopeForbiddenErrorSchema, defineEndpoint } from '@bike4mind/common';
+import { ApiKeyScope, ScopeForbiddenErrorSchema, defineEndpoint, sessionCloneContract } from '@bike4mind/common';
 import { UnauthorizedError } from '@server/utils/errors';
 import { baseApi, methodNotAllowedHandler } from './baseApi';
 import { nextRouteForContract } from './defineNextRoute';
@@ -218,6 +218,52 @@ describe('nextRouteForContract', () => {
 
       expect(res._getStatusCode()).toBe(400);
       expect(handlerFn).not.toHaveBeenCalled();
+    });
+
+    describe('sessionCloneContract', () => {
+      // Next hands a bodiless POST (no content-type, so text/plain) to the route as '', not undefined.
+      it.each(['', {}])('treats an absent body (%j) as inherit, not a 400', async body => {
+        validKey([ApiKeyScope.WRITE_NOTEBOOKS]);
+        let seenBody: unknown;
+        const route = nextRouteForContract(sessionCloneContract).post((req, res) => {
+          seenBody = req.validated;
+          res.status(200).json({ ok: true });
+        });
+        const { req, res } = fire({ apiKey: 'b4m_live_key', query: { id: 'sess-1' }, body });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(200);
+        expect(seenBody).toEqual({});
+      });
+
+      it.each(['not json', [], { targetSurface: 5 }])('400s a malformed body (%j)', async body => {
+        validKey([ApiKeyScope.WRITE_NOTEBOOKS]);
+        const handlerFn = vi.fn();
+        const route = nextRouteForContract(sessionCloneContract).post(handlerFn);
+        const { req, res } = fire({ apiKey: 'b4m_live_key', query: { id: 'sess-1' }, body });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(400);
+        expect(handlerFn).not.toHaveBeenCalled();
+      });
+
+      it('400s a missing session id before the handler runs', async () => {
+        validKey([ApiKeyScope.WRITE_NOTEBOOKS]);
+        const handlerFn = vi.fn();
+        const route = nextRouteForContract(sessionCloneContract).post(handlerFn);
+        const { req, res } = fire({ apiKey: 'b4m_live_key', query: {}, body: {} });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(400);
+        expect(handlerFn).not.toHaveBeenCalled();
+      });
+
+      it('403s a key without notebooks:write', async () => {
+        validKey([ApiKeyScope.AI_CHAT]);
+        const handlerFn = vi.fn();
+        const route = nextRouteForContract(sessionCloneContract).post(handlerFn);
+        const { req, res } = fire({ apiKey: 'b4m_live_key', query: { id: 'sess-1' }, body: {} });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(403);
+        expect(handlerFn).not.toHaveBeenCalled();
+      });
     });
 
     it('runs caller-mounted middleware BEFORE contract validation', async () => {

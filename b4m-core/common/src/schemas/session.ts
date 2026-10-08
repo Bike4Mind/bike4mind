@@ -124,11 +124,16 @@ export const SessionResponseSchema = z.object({
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
 
 /** Request body for POST /api/v1/sessions/{id}/clone. */
-export const SessionCloneRequestSchema = z
-  .object({
-    targetSurface: z.string().nullable().optional(),
-  })
-  .default({});
+// A bodiless POST reaches Next as '' (no content-type -> text/plain), not undefined, so '' is
+// folded into "absent" before the default applies.
+export const SessionCloneRequestSchema = z.preprocess(
+  body => (body === '' ? undefined : body),
+  z
+    .object({
+      targetSurface: z.string().nullable().optional(),
+    })
+    .default({})
+);
 
 export type SessionCloneRequest = z.infer<typeof SessionCloneRequestSchema>;
 
