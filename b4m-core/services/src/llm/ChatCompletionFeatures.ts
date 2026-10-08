@@ -1824,9 +1824,12 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
  * lands on unset (per embedding space) rather than the coded 75, which is an ada-002 number.
  */
 function forcedRetrievalConfiguredAbsolutePct(raw: unknown, logger: Logger): number | undefined {
-  if (raw === undefined) return undefined;
+  // Blank/null is "nobody chose a value", NOT 0 - `Number(null)` is 0, which a lower bound of 0
+  // would accept and then disable the floor instead of resolving it per embedding space.
+  if (isBlankSettingValue(raw)) return undefined;
   const pct = Number(raw);
-  if (Number.isFinite(pct) && pct >= 0 && pct <= 100) return pct;
+  // min 1, matching the setting's schema: 0 is a cleared field, not a floor.
+  if (Number.isFinite(pct) && pct >= 1 && pct <= 100) return pct;
   logger.warn(
     `\u{1F512} Forced retrieval: forcedRetrievalMinSimilarityPct ${JSON.stringify(raw)} is unusable; resolving per embedding space`
   );

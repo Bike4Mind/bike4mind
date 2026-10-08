@@ -3377,6 +3377,48 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     );
   });
 
+  // Inject the RAW absolute value past the schema both read paths run (1..100), which is the only
+  // way to reach the backstop's own contract. `relative: 0` so only the absolute floor decides.
+  const stubForcedRetrievalRead = (absolute: unknown) =>
+    vi
+      .spyOn(
+        KnowledgeRetrievalFeature.prototype as unknown as { readForcedRetrievalSettings: () => Promise<unknown> },
+        'readForcedRetrievalSettings'
+      )
+      .mockResolvedValue({ charBudget: undefined, relative: 0, absolute, spread: undefined });
+
+  it('rejects an out-of-range configured absolute floor as unusable and resolves per space', async () => {
+    // Defense-in-depth, not production-reachable: a stored 2000 is sanitized upstream. Without the
+    // guard it becomes a floor of 20.0 that no similarity clears, starving every Data-Lake turn.
+    const spy = stubForcedRetrievalRead(2000);
+    try {
+      const ctx = makeCtx({ scores: [0.9, 0.7, 0.6], platform: smallSpace });
+      const { injected } = await run(ctx);
+      expect(injected).toEqual([0, 1, 2]);
+      expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+        expect.stringContaining('is unusable')
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reads a null configured absolute floor as unset, not as a floor of 0', async () => {
+    // `Number(null)` is 0, which a lower bound of 0 accepted and then DISABLED the absolute floor -
+    // the opposite of "unset, resolve per space". The blank check must precede the numeric range.
+    const spy = stubForcedRetrievalRead(null);
+    try {
+      const ctx = makeCtx({ scores: [0.9, 0.7, 0.6], platform: smallSpace });
+      const { injected } = await run(ctx);
+      expect(injected).toEqual([0, 1, 2]);
+      expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('is unusable')
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   for (const withScopedOverlay of [true, false]) {
     it(`a platform value of 75 is an explicit floor in every space (overlay: ${withScopedOverlay})`, async () => {
       const { injected } = await run(
