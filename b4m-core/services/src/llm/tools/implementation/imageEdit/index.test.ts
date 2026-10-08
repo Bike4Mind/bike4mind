@@ -448,10 +448,12 @@ describe('imageEditTool - generated-image key ownership', () => {
   it.each([
     ['source', { image: GENERATED_KEY, prompt: 'x' }],
     ['mask', { image: PNG_DATA_URL, mask: GENERATED_KEY, prompt: 'x' }],
-  ])('refuses another user generated image as the %s - nothing signed or sent', async (_label, input) => {
+  ])('refuses another user generated image as the %s - nothing reserved, signed or sent', async (_label, input) => {
     const context = createFakeContextWithGeneratedImageOwner('someone-else');
 
     await expect(buildToolFn(context)(input)).rejects.toThrow(/Could not resolve generated image/);
+    // The chat credit rail has no refund for a call that throws, so a refusal must precede the reservation.
+    expect(context.onStart).not.toHaveBeenCalled();
     expect(context.imageGenerateStorage.getSignedUrl).not.toHaveBeenCalled();
     expect(mockAxiosGet).not.toHaveBeenCalled();
     expect(mockEditSpy).not.toHaveBeenCalled();

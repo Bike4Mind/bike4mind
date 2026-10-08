@@ -368,6 +368,12 @@ Please select a supported edit model in your image settings modal.`;
       // separate question from billing, and is not settled here.
       const provider = isBFLModel ? 'bfl' : isGeminiModel ? 'gemini' : 'openai';
 
+      // Resolve the source and mask (URL, fabFile ObjectId, or generated-image key) BEFORE onStart:
+      // a refused or unknown image must not leave a credit reservation behind, and the chat rail
+      // has no refund for a call that throws.
+      const sourceImage = await resolveImageInputUrl(toolImage, context);
+      const maskImage = toolMask ? await resolveImageInputUrl(toolMask, context) : null;
+
       // Call onStart callback for credit validation. Bills `editModel`, NOT the
       // configured generation model: `editModel` is what the render below actually
       // dispatches to (and what BFL/Gemini/OpenAI charges us for), and the two diverge
@@ -385,15 +391,9 @@ Please select a supported edit model in your image settings modal.`;
         prompt,
       });
 
-      // Resolve the source image (URL, fabFile ObjectId, or generated-image key)
-      // so the model can edit a previously generated image, not just uploads.
-      const sourceImage = await resolveImageInputUrl(toolImage, context);
       const sourceBase64Image = await imageUrlToBase64(sourceImage.url, sourceImage.trustConfiguredStorageOrigin);
-
-      // Mask (optional) uses the same resolution as the source.
       let maskBase64Image: string | null = null;
-      if (toolMask) {
-        const maskImage = await resolveImageInputUrl(toolMask, context);
+      if (maskImage) {
         maskBase64Image = await imageUrlToBase64(maskImage.url, maskImage.trustConfiguredStorageOrigin);
       }
 

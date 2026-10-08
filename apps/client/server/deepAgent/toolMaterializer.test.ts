@@ -43,8 +43,8 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   imageModerationIncidentRepository: {},
   projectRepository: {},
-  questRepository: {},
-  sessionRepository: {},
+  questRepository: { findSessionIdsByImage: vi.fn() },
+  sessionRepository: { findAllByIds: vi.fn() },
   lakeAccessEventRepository: {},
   lakeMembershipRemovalRepository: {},
   lakeConfigChangeEventRepository: {},
@@ -113,6 +113,16 @@ describe('createDeepAgentToolMaterializer', () => {
       config?: { web_search?: { imageUrlSigningSecret?: string } };
     };
     expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe('test-secret');
+  });
+
+  it('wires the owner lookup edit_image needs for generated-image keys', async () => {
+    // Without it the resolver fails closed, so owners are refused with only a logged warning.
+    await materialize()(['edit_image'], 'owner-1');
+    const toolDeps = buildSharedToolsSpy.mock.calls[0]?.[0] as {
+      db: { quests?: { findSessionIdsByImage?: unknown }; sessions?: { findAllByIds?: unknown } };
+    };
+    expect(toolDeps.db.quests?.findSessionIdsByImage).toBeTypeOf('function');
+    expect(toolDeps.db.sessions?.findAllByIds).toBeTypeOf('function');
   });
 
   it('hands the lake write tools their audit adapters and no organization', async () => {
