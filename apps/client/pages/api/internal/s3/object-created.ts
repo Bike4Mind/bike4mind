@@ -7,6 +7,8 @@ import { sendToQueue } from '@server/utils/sqs';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
+import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
+import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { Resource } from 'sst';
 import type { Context, S3Event } from 'aws-lambda';
 import crypto from 'crypto';
@@ -18,9 +20,11 @@ import crypto from 'crypto';
  * FabFile complete and kick off RAG ingestion. Self-host has no S3 events: MinIO instead
  * POSTs an S3-compatible notification here (configured via MINIO_NOTIFY_WEBHOOK_* in
  * compose.selfhost.yaml + an `mc event add` on the fab-file bucket). This mirrors the
- * essential objectCreated path - mark complete, enqueue chunking - but skips Rekognition
- * image moderation (no AWS Rekognition in self-host). A scheduler scan in the worker is
- * the safety net for any notification that doesn't arrive.
+ * objectCreated path - mark complete, enqueue chunking, run the upload-time moderation scan.
+ * A file is unservable until that scan resolves it, so skipping it here held every self-host
+ * file for the rescue sweep's 30-minute floor. On self-host the scan is the type sniff only:
+ * the image check returns early without Rekognition (see imageModerationGate.ts). A scheduler
+ * scan in the worker is the safety net for any notification that doesn't arrive.
  *
  * Self-host only (404 otherwise) and guarded by a shared secret (INTERNAL_S3_WEBHOOK_SECRET)
  * that MinIO sends in the Authorization header; browsers never learn it.
@@ -112,6 +116,7 @@ const handler = baseApi({ auth: false }).post(
     }
 
     const enableAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
+    const moderationEnabled = (await adminSettingsRepository.getSettingsValue('ImageModerationEnabled')) ?? true;
 
     for (const record of fabFileRecords) {
       const rawKey = record.s3?.object?.key;
@@ -151,6 +156,27 @@ const handler = baseApi({ auth: false }).post(
           req.logger.error(`Failed to enqueue FabFile for chunking: ${error}`);
         }
       }
+
+      // The same claim/scan/persist the rescue sweep runs, so the two cannot double-scan a row. Not
+      // awaited: the scan downloads the object, and holding MinIO's webhook on that invites a
+      // redelivery. Deps are built inside the chain so a wiring error is logged instead of 500ing a
+      // file already marked complete. A failed or lost scan leaves the file 'pending' for the sweep.
+      void Promise.resolve()
+        .then(() =>
+          moderateImportedKnowledgeFiles({
+            filePaths: [objectKey],
+            userId: metadata.userId,
+            enabled: moderationEnabled,
+            // The bytes just landed, so a missing read is a storage blip to retry, not an orphan to retire.
+            terminalOnMissingObject: false,
+            ...buildKnowledgeModerationDeps(req.logger),
+          })
+        )
+        .catch(err =>
+          req.logger.error(
+            `Upload moderation failed for ${objectKey}: ${err instanceof Error ? err.message : String(err)}`
+          )
+        );
     }
 
     return res.status(200).json({ ok: true });
