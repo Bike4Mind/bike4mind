@@ -637,17 +637,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             </Box>
           )}
 
-          {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
-            them on one already being chosen is what made them unreachable. */}
-          {conversation.session?.mode === 'code' && (
-            <SessionChips
-              project={conversation.session.project ?? null}
-              binding={conversation.project}
-              settledTurns={conversation.settledTurns}
-              inUse={conversation.messages.length > 0}
-            />
-          )}
-
           <PrStatusBar
             // Keyed so an action error on one conversation's bar does not follow the user to the next.
             key={activeId ?? 'none'}
@@ -662,6 +651,17 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                 : Promise.resolve({ ok: false as const, error: 'No conversation is open.' })
             }
           />
+
+          {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
+            them on one already being chosen is what made them unreachable. */}
+          {conversation.session?.mode === 'code' && (
+            <SessionChips
+              project={conversation.session.project ?? null}
+              binding={conversation.project}
+              settledTurns={conversation.settledTurns}
+              inUse={conversation.messages.length > 0}
+            />
+          )}
 
           <Composer
             sessionId={activeId}
