@@ -50,7 +50,7 @@ export const MARK_PAUSED_RETRY_DELAY_MS = 150;
 export const dispatchWithLogger = <T = void>(
   handler: (event: SQSEvent, context: Context, logger: Logger) => Promise<T>
 ) => {
-  return async (event: SQSEvent, context: Context): Promise<T | void> => {
+  return async (event: SQSEvent, context: Context): Promise<T> => {
     const logger = new Logger().withMetadata(contextToLogs(context));
 
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
