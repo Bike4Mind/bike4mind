@@ -32,6 +32,7 @@ import { SettingsScreen } from './SettingsPanel';
 import { TodoPanel } from './TodoPanel';
 import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
+import { workspacePhrase } from './workspaceProgress';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
@@ -158,8 +159,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
   const conversation = useConversation(activeId, apply);
   // A conversation picked before its transcript has been read would otherwise show the empty
-  // thread's "send a message" line for a frame.
-  const opening = settling || (!!activeId && !conversation.session);
+  // thread's "send a message" line for a frame - or, on a switch, the PREVIOUS conversation's
+  // transcript under this one's id until the read lands.
+  const opening = settling || (!!activeId && conversation.session?.id !== activeId);
   const background = useBackgroundProcesses(activeId);
   const skills = useSkills(activeId);
   const catalog = useModelCatalog();
@@ -525,6 +527,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             <Box sx={{ flex: 1 }} data-testid="chat-thread-opening" />
           ) : (
             <MessageThread
+              // Remounted per conversation, so its window and scroll start over and nothing it
+              // set going outlives the conversation it was for. Prefixed because PrStatusBar, a
+              // sibling, is keyed on the bare id: two siblings sharing a key leave one of them
+              // mounted in the DOM after React drops it.
+              key={`thread-${activeId ?? 'none'}`}
               messages={conversation.messages}
               sessionId={activeId}
               // What stands in for the transcript when there is no session to have one. It is the
@@ -561,7 +568,21 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               // something this conversation started, so it reads as the last thing that happened
               // in it. It scrolls with the transcript, which is the trade - the panel is reached
               // from the bottom of the thread, not from a bar that is always on screen.
-              footer={<BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />}
+              footer={
+                <>
+                  {/* The turn line's own slot only exists once a reply does, and the worktree is
+                      cut before there is one; this sits where that line will appear. */}
+                  {!conversation.turn && conversation.preparing && (
+                    <Box data-testid="chat-workspace-status">
+                      <TurnStatus
+                        turn={{ startedAt: conversation.preparing.since, tokens: null }}
+                        activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
+                      />
+                    </Box>
+                  )}
+                  <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
+                </>
+              }
             />
           )}
 

@@ -2,9 +2,10 @@ import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { BackgroundProcessInfo } from '@shared/chat';
+import type { BackgroundProcessInfo, ChatQueueEvent, ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import { git, listWorktrees } from './project/git';
 import { appWorktreeRoot, worktreeFolderName } from './project/workspace';
@@ -462,5 +463,114 @@ describe('the worktree a Code session gets on its first turn', () => {
     expect(sent.ok === false && sent.error).toMatch(/sign in/i);
     expect(await listWorktrees(main)).toEqual(before);
     expect((await service.getSession(id))?.project?.workingDirectory).toBe(main);
+  });
+});
+
+/**
+ * The status line the renderer draws while a first turn waits on its worktree is fed by these
+ * events, so they have to open, name the branch, and close on every path.
+ */
+describe('the worktree status a first turn reports', () => {
+  let store: SessionStore;
+  let service: ChatService;
+  let events: ChatStreamEvent[];
+  let queueEvents: ChatQueueEvent[];
+  let onEvent: (event: ChatStreamEvent) => void;
+
+  beforeEach(async () => {
+    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-status-sessions-')), 'test-model');
+    events = [];
+    queueEvents = [];
+    onEvent = () => undefined;
+    service = new ChatService({
+      store,
+      access: { list: async () => [] } as unknown as AccessStore,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => ({}) as AuthenticatedApiClient,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: event => {
+        events.push(event);
+        onEvent(event);
+      },
+      queue: new MessageQueue(event => queueEvents.push(event)),
+    });
+  });
+
+  const workspaceEvents = () => events.filter(event => event.type === 'workspace');
+
+  async function bound(directory: string, branch: string): Promise<string> {
+    const created = await service.createCodeSession({ directory, branch, workspace: true });
+    if (!created.ok) throw new Error(created.error);
+    return created.session.id;
+  }
+
+  it('opens, names the branch, and closes before the reply starts', async () => {
+    const { main } = await repository('status-first');
+    const id = await bound(main, 'main');
+
+    await service.send(id, 'Fix the login form');
+
+    const branch = (await service.getSession(id))?.project?.workspaceBranch;
+    expect(workspaceEvents()).toEqual([
+      { type: 'workspace', sessionId: id, running: true, base: 'main' },
+      { type: 'workspace', sessionId: id, running: true, base: 'main', branch },
+      { type: 'workspace', sessionId: id, running: false, base: 'main' },
+    ]);
+    const closed = events.findIndex(event => event.type === 'workspace' && !event.running);
+    expect(events.findIndex(event => event.type === 'start')).toBeGreaterThan(closed);
+  });
+
+  it('says nothing on a turn whose session is already in its worktree', async () => {
+    const { main } = await repository('status-again');
+    const id = await bound(main, 'main');
+    await service.send(id, 'first');
+    events.length = 0;
+
+    await service.send(id, 'second');
+
+    expect(workspaceEvents()).toEqual([]);
+  });
+
+  it('says nothing with the worktree toggle off', async () => {
+    const { main } = await repository('status-off');
+    const created = await service.createCodeSession({ directory: main, branch: 'main', workspace: false });
+    if (!created.ok) throw new Error(created.error);
+
+    await service.send(created.session.id, 'do the thing');
+
+    expect(workspaceEvents()).toEqual([]);
+  });
+
+  it('closes when the worktree cannot be made, and hands back what was typed meanwhile', async () => {
+    const { container, main } = await repository('status-blocked');
+    const id = await bound(main, 'feat/chips');
+    await mkdir(join(appWorktreeRoot(container), 'feat+chips'), { recursive: true });
+    await writeFile(join(appWorktreeRoot(container), 'feat+chips', 'stray.txt'), 'not mine\n', 'utf8');
+    let typedAhead: Promise<unknown> | undefined;
+    onEvent = event => {
+      if (event.type === 'workspace' && event.running && !typedAhead) typedAhead = service.send(id, 'and also');
+    };
+
+    const sent = await service.send(id, 'do the thing');
+
+    expect(sent.ok).toBe(false);
+    expect(await typedAhead).toMatchObject({ ok: true, queued: true });
+    await vi.waitFor(() => expect(queueEvents.some(event => event.returned?.reason === 'refused')).toBe(true));
+    expect(workspaceEvents().at(-1)).toMatchObject({ running: false });
+    expect(service.isSessionBusy(id)).toBe(false);
+  });
+
+  it('queues a message sent while the worktree is being cut rather than cutting a second one', async () => {
+    const { main } = await repository('status-race');
+    const id = await bound(main, 'main');
+    let typedAhead: Promise<unknown> | undefined;
+    onEvent = event => {
+      if (event.type === 'workspace' && event.running && !typedAhead) typedAhead = service.send(id, 'and also');
+    };
+
+    await service.send(id, 'first');
+
+    expect(await typedAhead).toMatchObject({ ok: true, queued: true });
+    expect((await listWorktrees(main)).filter(entry => entry.branch?.startsWith('b4m/'))).toHaveLength(1);
   });
 });

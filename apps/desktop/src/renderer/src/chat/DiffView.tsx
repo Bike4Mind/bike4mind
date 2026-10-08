@@ -3,9 +3,10 @@ import Box from '@mui/joy/Box';
 import Sheet from '@mui/joy/Sheet';
 import { useTheme } from '@mui/joy/styles';
 import Typography from '@mui/joy/Typography';
-import { createElement, Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import type { ChatDiff, ChatDiffLine, ChatDiffLineKind } from '@shared/chat';
 import { diffLanguage } from './diffLanguage';
+import { highlightElement } from './markdown/highlightElements';
 import { SYNTAX_THEMES } from './markdown/syntaxTheme';
 
 /**
@@ -138,7 +139,7 @@ const HighlightedLines = memo(function HighlightedLines({ diff, mode }: { diff: 
               <DiffRow key={index} line={line}>
                 {/* A row the tokenizer did not produce - a trailing blank it trimmed - falls
                     back to the text itself, so no line can silently vanish from the diff. */}
-                {row ? createElement({ node: row, stylesheet, useInlineStyles, key: String(index) }) : line.text || ' '}
+                {row ? highlightElement(row, stylesheet, useInlineStyles, String(index)) : line.text || ' '}
               </DiffRow>
             );
           })}

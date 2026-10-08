@@ -842,6 +842,15 @@ export interface ChatProject {
 }
 
 /**
+ * Whether the next turn has to cut this session's worktree first. Shared so the renderer's
+ * "preparing worktree" line and ChatService.ensureWorkspace can never disagree about which
+ * turn that is.
+ */
+export function awaitsWorktree(project: ChatProject | undefined): boolean {
+  return !!project?.workspace && project.workingDirectory === project.directory;
+}
+
+/**
  * Where a session came from, when it was not the user who started it.
  *
  * Absent means a person created it, which is also what `depth: 0` would mean - the distinction
@@ -1000,7 +1009,14 @@ export type ChatStreamEvent =
    * limit (ChatService.autoCompact). `running: false` ends it either way; `error` says the
    * summary failed, so the turn went out with the conversation as it was.
    */
-  | { type: 'auto-compact'; sessionId: string; running: boolean; error?: string };
+  | { type: 'auto-compact'; sessionId: string; running: boolean; error?: string }
+  /**
+   * A first turn is cutting the session's worktree before it goes out
+   * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`
+   * ends it whether or not the worktree was made - a failure reaches the sender as the turn's
+   * refusal.
+   */
+  | { type: 'workspace'; sessionId: string; running: boolean; base: string; branch?: string };
 
 /**
  * What a session is doing, as the sidebar draws it.

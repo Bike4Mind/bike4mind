@@ -392,3 +392,20 @@ describe('CompletionRequestSchema options.reasoningEffort', () => {
     expect(() => CompletionRequestSchema.parse({ ...base, options: { reasoningEffort: 'turbo' } })).toThrow();
   });
 });
+
+describe('CompletionRequestSchema options.thinking', () => {
+  const base = { model: 'm', messages: [{ role: 'user', content: 'hi' }] };
+
+  // Zod strips unknown keys, so before this field existed the option vanished here and a
+  // Claude turn never reached the adapter branch that applies reasoningEffort.
+  it('keeps thinking on options', () => {
+    const parsed = CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true } } });
+    expect(parsed.options?.thinking).toEqual({ enabled: true });
+  });
+
+  it('rejects a non-positive budget', () => {
+    expect(() =>
+      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 0 } } })
+    ).toThrow();
+  });
+});

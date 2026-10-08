@@ -1,4 +1,8 @@
-import { REASONING_SUPPORTED_MODELS, type ReasoningEffort } from '@bike4mind/common';
+import {
+  ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
+  REASONING_SUPPORTED_MODELS,
+  type ReasoningEffort,
+} from '@bike4mind/common';
 import { REASONING_EFFORT_SETTINGS, type ReasoningEffortSetting } from '@shared/chat';
 
 /** An unset or unrecognised value is `default`: a typo must not silently change how a model reasons. */
@@ -14,15 +18,16 @@ export function storedReasoningEffortSetting(value: unknown): ReasoningEffortSet
 
 /** Whether a reasoning effort may be sent with `model` at all. The picker is disabled when it may not. */
 export function supportsReasoningEffort(model: string): boolean {
-  return REASONING_SUPPORTED_MODELS.has(model);
+  return REASONING_SUPPORTED_MODELS.has(model) || ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS.has(model);
 }
 
 /**
  * The effort to put on a request for `model`, or undefined to send none.
  *
- * Gated on the adapter's own list rather than a provider check: the server forwards the field
- * to whatever backend serves the model, and only these models accept it. Claude is outside the
- * list and has its own thinking settings.
+ * Gated on the adapters' own lists rather than a provider check: the server forwards the field
+ * to whatever backend serves the model, and only these models accept it. Claude reads it only
+ * because every desktop request also sets `thinking` (see completions.ts), and maps 'minimal'
+ * to 'low' - see resolveAnthropicEffort in llm-adapters.
  */
 export function reasoningEffortFor(
   setting: ReasoningEffortSetting | undefined,

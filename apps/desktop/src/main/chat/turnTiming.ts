@@ -17,6 +17,76 @@ export function startRoundTimer(now: () => number = Date.now) {
   };
 }
 
+/**
+ * What one stream frame carried. `marker` is a frame with text in it but nothing to show: the
+ * bare `<think>` / `</think>` around a thinking block whose text the provider omitted.
+ */
+export type RoundFrameKind = 'meta' | 'marker' | 'reasoning' | 'text' | 'toolUse';
+
+export interface RoundPhases {
+  /** Desktop work between the turn starting and this request going out; first round only. */
+  beforeSendMs?: number;
+  /** From the request going out; absent when no such frame arrived. */
+  firstFrameMs?: number;
+  firstMetaMs?: number;
+  firstMarkerMs?: number;
+  firstReasoningMs?: number;
+  firstTextMs?: number;
+  firstToolUseMs?: number;
+  endMs: number;
+  /** The longest silence the status line saw, counted from the request going out. */
+  maxGapMs: number;
+  maxGapBefore?: RoundFrameKind | 'end';
+  frames: number;
+}
+
+type FirstFrameKey = 'firstMetaMs' | 'firstMarkerMs' | 'firstReasoningMs' | 'firstTextMs' | 'firstToolUseMs';
+
+const FIRST_KEY: Record<RoundFrameKind, FirstFrameKey> = {
+  meta: 'firstMetaMs',
+  marker: 'firstMarkerMs',
+  reasoning: 'firstReasoningMs',
+  text: 'firstTextMs',
+  toolUse: 'firstToolUseMs',
+};
+
+/**
+ * Splits one round's wait into phases, so a long "Waiting for the model..." can be put down to
+ * our own work, a silent provider, or tool arguments that only arrive once complete. Created at
+ * the moment the request goes out. See apps/desktop/docs/model-wait-findings.md.
+ */
+export function createRoundProbe(turnStartedAt: number | undefined, now: () => number = Date.now) {
+  const sentAt = now();
+  let lastFrameAt = sentAt;
+  const phases: RoundPhases = {
+    endMs: 0,
+    maxGapMs: 0,
+    frames: 0,
+    ...(turnStartedAt !== undefined ? { beforeSendMs: sentAt - turnStartedAt } : {}),
+  };
+  const gap = (at: number, kind: RoundFrameKind | 'end') => {
+    if (at - lastFrameAt > phases.maxGapMs) {
+      phases.maxGapMs = at - lastFrameAt;
+      phases.maxGapBefore = kind;
+    }
+  };
+  return {
+    frame(kind: RoundFrameKind): void {
+      const at = now();
+      phases.frames++;
+      phases.firstFrameMs ??= at - sentAt;
+      phases[FIRST_KEY[kind]] ??= at - sentAt;
+      gap(at, kind);
+      lastFrameAt = at;
+    },
+    end(): RoundPhases {
+      const at = now();
+      gap(at, 'end');
+      return { ...phases, endMs: at - sentAt };
+    },
+  };
+}
+
 /** What a sub-loop spent, summed over its rounds. Model and tool time are kept apart. */
 export function createLoopTally() {
   let rounds = 0;

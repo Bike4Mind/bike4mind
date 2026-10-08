@@ -65,6 +65,8 @@ import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows } from '../windows';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
+/** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
+const TURN_TIMING = process.env.B4M_DESKTOP_TURN_TIMING === '1';
 
 /**
  * The model a new conversation prefers until the user has picked one (see ModelPreference),
@@ -350,6 +352,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     attachments,
     models,
     logger,
+    turnTiming: TURN_TIMING,
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
     approvals,
