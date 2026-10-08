@@ -1,31 +1,31 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { BadRequestError, ForbiddenError, OPTI_SURFACE } from '@bike4mind/common';
+import { ForbiddenError, OPTI_SURFACE, sessionCloneContract } from '@bike4mind/common';
 
 type RouteHandler = (req: unknown, res: unknown) => unknown;
 
 const h = vi.hoisted(() => ({
   postHandler: null as null | RouteHandler,
-  baseApiOptions: undefined as unknown,
+  contract: undefined as unknown,
+  routeOptions: undefined as unknown,
   rateLimitOptions: undefined as unknown,
-  rateLimiter: () => undefined,
-  postArgs: [] as RouteHandler[],
+  rateLimiter: (() => undefined) as RouteHandler,
   cloneSession: vi.fn(),
   getRequestEntitlements: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => {
+vi.mock('@server/middlewares/defineNextRoute', () => {
   const chain = {
-    post: (...fns: RouteHandler[]) => {
-      h.postArgs = fns;
-      h.postHandler = fns[fns.length - 1];
+    post: (fn: RouteHandler) => {
+      h.postHandler = fn;
       return chain;
     },
   };
   return {
-    baseApi: (options: unknown) => {
-      h.baseApiOptions = options;
+    nextRouteForContract: (contract: unknown, options: unknown) => {
+      h.contract = contract;
+      h.routeOptions = options;
       return chain;
     },
   };
@@ -50,11 +50,16 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => unknown) => fn(),
 }));
 
-await import('../clone');
+await import('../../../v1/sessions/[id]/clone');
 
-const call = (body?: Record<string, unknown>) => {
+const call = (body?: Record<string, unknown>, canClone = true) => {
   const { req, res } = createMocks({ method: 'POST', query: { id: 'session-1' }, body });
-  Object.assign(req, { user: { id: 'user-1', tags: [] }, ability: { can: () => true } });
+  Object.assign(req, {
+    user: { id: 'user-1', tags: [] },
+    ability: { can: () => canClone },
+    validatedParams: { id: 'session-1' },
+    validated: sessionCloneContract.request.parse(body),
+  });
   return { run: () => h.postHandler!(req, res) };
 };
 
@@ -65,22 +70,20 @@ describe('POST /api/sessions/[id]/clone - targetSurface', () => {
     h.getRequestEntitlements.mockResolvedValue(['optihashi:pro']);
   });
 
-  // Only API-key callers are scope-gated; JWT/browser callers (no req.apiKey, as below) clone as before.
-  it('requires notebooks:write from an API key', () => {
-    expect(h.baseApiOptions).toEqual({ requiredScopes: ['notebooks:write'] });
+  it('derives auth, scope, and validation from the clone contract', () => {
+    expect(h.contract).toBe(sessionCloneContract);
+    expect(sessionCloneContract.path).toBe('/api/v1/sessions/{id}/clone');
+    expect(sessionCloneContract.scopes).toEqual(['notebooks:write']);
+    expect(sessionCloneContract.validationErrorStatus).toBe(400);
   });
 
-  it('rate-limits clones per caller on a route-wide bucket, mounted ahead of the handler', () => {
+  it('rate-limits clones per caller on a route-wide bucket', () => {
     expect(h.rateLimitOptions).toEqual({ limit: 10, windowMs: 60_000, bucket: 'sessions/clone' });
-    expect(h.postArgs).toHaveLength(2);
-    expect(h.postArgs[0]).toBe(h.rateLimiter);
+    expect(h.routeOptions).toEqual({ rateLimit: h.rateLimiter });
   });
 
   it('403s a caller whose ability cannot clone', async () => {
-    const { req, res } = createMocks({ method: 'POST', query: { id: 'session-1' } });
-    Object.assign(req, { user: { id: 'user-1', tags: [] }, ability: { can: () => false } });
-
-    await expect(h.postHandler!(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(call(undefined, false).run()).rejects.toBeInstanceOf(ForbiddenError);
     expect(h.cloneSession).not.toHaveBeenCalled();
   });
 
@@ -99,7 +102,8 @@ describe('POST /api/sessions/[id]/clone - targetSurface', () => {
   });
 
   it('400s a malformed target before cloning', async () => {
-    await expect(call({ targetSurface: 42 }).run()).rejects.toBeInstanceOf(BadRequestError);
+    expect(sessionCloneContract.request.safeParse({ targetSurface: 42 }).success).toBe(false);
+    expect(sessionCloneContract.responses[400]).toBeDefined();
     expect(h.cloneSession).not.toHaveBeenCalled();
   });
 });

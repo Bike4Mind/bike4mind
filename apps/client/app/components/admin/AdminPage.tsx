@@ -40,6 +40,7 @@ import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ModalsAdminTab from './AdminModalTab';
 import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
+import AdminReleaseNotesTab from './ReleaseNotes/AdminReleaseNotesTab';
 import { resolveEnvironmentBanner } from './environmentBanner';
 import AnalyticsTab from './Analytics';
 import UsersTab from './Users';
@@ -487,6 +488,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.Modals}>{activeTab === AdminTab.Modals && <ModalsAdminTab />}</TabPanel>
               <TabPanel value={AdminTab.WhatsNewModals} sx={{ padding: { xs: 0, sm: 2 } }}>
                 {activeTab === AdminTab.WhatsNewModals && <AdminWhatsNewModalsTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.ReleaseNotes}>
+                {activeTab === AdminTab.ReleaseNotes && <AdminReleaseNotesTab />}
               </TabPanel>
               <TabPanel value={AdminTab.Files}>{activeTab === AdminTab.Files && <AdminFilesTab />}</TabPanel>
               <TabPanel value={AdminTab.Documentation} sx={{ padding: 0 }}>

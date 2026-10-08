@@ -10,6 +10,14 @@ export enum ApiKeyScope {
   AI_CHAT = 'ai:chat',
   READ_PROJECTS = 'projects:read',
   WRITE_PROJECTS = 'projects:write',
+  /** List and read the key owner's agents (and agents shared with them). */
+  READ_AGENTS = 'agents:read',
+  /**
+   * Create, update, delete and fund agents, manage their embed keys, and run the
+   * agent-authoring assistants (description/avatar/system-prompt/field generation),
+   * which spend the owner's credits on the agent's behalf.
+   */
+  WRITE_AGENTS = 'agents:write',
   /** Authorizes only the cc-bridge WS actions (cc_agent_register /
    *  cc_agent_event / cc_agent_disconnect). Keys with this scope CANNOT
    *  call chat/completions - a leaked bridge key has the narrow blast

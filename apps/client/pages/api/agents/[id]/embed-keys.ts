@@ -3,6 +3,7 @@ import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 
 /**
@@ -25,7 +26,7 @@ export interface EmbedKeyListItem {
   createdAt: Date;
 }
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).get(async (req, res) => {
   const { id } = req.query;
   if (typeof id !== 'string' || id.length === 0) {
     throw new BadRequestError('agentId is required');

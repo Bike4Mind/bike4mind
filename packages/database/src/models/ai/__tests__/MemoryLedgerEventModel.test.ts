@@ -463,4 +463,78 @@ describe('MemoryLedgerRepository', () => {
       expect(ids).toEqual(['lake:multi-event']);
     });
   });
+
+  describe('rewriteEmbedding', () => {
+    const vec = { cipher: 'vc', iv: 'vi', tag: 'vt', model: 'current' };
+
+    it('rewrites only the embedding fields, leaving the chain-bound fields alone', async () => {
+      await memoryLedgerRepository.tryInsert(sealedEvent({ hash: 'h0', commitment: 'c0', salt: 's0' }));
+
+      expect(await memoryLedgerRepository.rewriteEmbedding('user', 'u1', 'u1', 'h0', vec)).toBe(1);
+
+      const doc = await MemoryLedgerEventModel.findOne({ hash: 'h0' }).lean();
+      expect(doc).toMatchObject({ embeddingCipher: 'vc', embeddingModel: 'current', commitment: 'c0', seq: 0 });
+    });
+
+    it('never writes a vector onto a shredded event', async () => {
+      await memoryLedgerRepository.tryInsert(sealedEvent({ hash: 'h0', sources: ['doc-1'] }));
+      await memoryLedgerRepository.markSourceShredded('user', 'u1', 'u1', 'doc-1');
+
+      expect(await memoryLedgerRepository.rewriteEmbedding('user', 'u1', 'u1', 'h0', vec)).toBe(0);
+      const doc = await MemoryLedgerEventModel.findOne({ hash: 'h0' }).lean();
+      expect(doc?.embeddingCipher).toBeUndefined();
+    });
+  });
+
+  describe('listPrincipalsNeedingVectors', () => {
+    const CURRENT = 'space-v2';
+    const at = (kind: IMemoryLedgerEvent['principalKind'], id: string, owner: string, seq = 0) =>
+      sealedEvent({ principalKind: kind, principalId: id, ownerUserId: owner, seq, hash: `${kind}:${id}:${seq}` });
+
+    it('finds vectorless and stale-stamped chains of every kind, distinct and sorted', async () => {
+      await memoryLedgerRepository.tryInsert(at('user', 'u1', 'u1'));
+      await memoryLedgerRepository.tryInsert(at('user', 'u1', 'u1', 1));
+      await memoryLedgerRepository.tryInsert(at('lake', 'lake:a', 'owner1'));
+      await memoryLedgerRepository.tryInsert({
+        ...at('agent', 'ag1', 'u9'),
+        fact: undefined,
+        factCipher: 'c',
+        factIv: 'i',
+        factTag: 't',
+        embeddingCipher: 'old',
+        embeddingModel: 'ada-002',
+      });
+
+      expect(await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 10 })).toEqual([
+        { principalKind: 'agent', principalId: 'ag1', ownerUserId: 'u9' },
+        { principalKind: 'lake', principalId: 'lake:a', ownerUserId: 'owner1' },
+        { principalKind: 'user', principalId: 'u1', ownerUserId: 'u1' },
+      ]);
+    });
+
+    it('skips shredded, retract, factless and already-current events', async () => {
+      await memoryLedgerRepository.tryInsert({ ...at('user', 'shred', 'shred'), shredded: true });
+      await memoryLedgerRepository.tryInsert({ ...at('user', 'retract', 'retract'), kind: 'retract' });
+      await memoryLedgerRepository.tryInsert({ ...at('user', 'nofact', 'nofact'), fact: '' });
+      await memoryLedgerRepository.tryInsert({
+        ...at('user', 'done', 'done'),
+        embeddingCipher: 'v',
+        embeddingModel: CURRENT,
+      });
+
+      expect(await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 10 })).toEqual([]);
+    });
+
+    it('pages by keyset cursor across a kind boundary and honours limit', async () => {
+      await memoryLedgerRepository.tryInsert(at('lake', 'lake:a', 'o1'));
+      await memoryLedgerRepository.tryInsert(at('lake', 'lake:b', 'o1'));
+      await memoryLedgerRepository.tryInsert(at('user', 'u1', 'u1'));
+
+      const first = await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 2 });
+      expect(first.map(p => p.principalId)).toEqual(['lake:a', 'lake:b']);
+
+      const rest = await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { after: first[1], limit: 2 });
+      expect(rest.map(p => p.principalId)).toEqual(['u1']);
+    });
+  });
 });
