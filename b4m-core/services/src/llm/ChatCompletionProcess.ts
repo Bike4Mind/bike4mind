@@ -2383,6 +2383,16 @@ export class ChatCompletionProcess {
         }
       }
 
+      // TEMPORARY QA HOOK - remove before merge.
+      if (
+        process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
+        quest.type !== 'error' &&
+        (quest.prompt ?? '').includes('[[force-transient-failure]]')
+      ) {
+        await new Promise(resolve => setTimeout(resolve, 70_000));
+        throw new Error('simulated transient failure for retry-recovery testing (preview only)');
+      }
+
       // Enforce per-user moderation escalation state. Runs regardless of the
       // ModerationEnabled admin toggle: an escalation, once set, always applies.
       //  - `suspended`: generation blocked outright.
