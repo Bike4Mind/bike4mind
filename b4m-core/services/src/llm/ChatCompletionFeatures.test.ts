@@ -3500,17 +3500,20 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect(injected).toEqual([0, 1, 2]);
   });
 
-  it("warns when a configured absolute floor sits above the space's measured floor", async () => {
-    const ctx = makeCtx({
-      scores: [0.9, 0.7, 0.6],
-      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
-    });
-    await run(ctx);
-    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'configured absolute floor 75% is above the 58% measured for embedding space "text-embedding-3-small"'
-      )
-    );
+  it("warns once per process when a configured absolute floor sits above the space's measured floor", async () => {
+    // 74, not 75: the dedupe is process-wide, and an earlier test already configures 75 on 3-small.
+    const turn = async () => {
+      const ctx = makeCtx({
+        scores: [0.9, 0.7, 0.6],
+        platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '74' },
+      });
+      await run(ctx);
+      return (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn.mock.calls.filter(c =>
+        String(c[0]).includes('configured absolute floor 74% is above the 58% measured for embedding space')
+      ).length;
+    };
+    expect(await turn()).toBe(1);
+    expect(await turn()).toBe(0);
   });
 
   it('does not warn when a configured absolute floor is at or below the measured floor', async () => {

@@ -1870,12 +1870,17 @@ function forcedRetrievalConfiguredAbsolutePct(raw: unknown, logger: Logger): num
  * The log below therefore names the space the floor was chosen FOR, which is always right, and says
  * nothing about whether every scored chunk really lives there.
  */
+/** `${space}:${pct}` pairs already warned about, so a misconfigured floor warns once per process. */
+const warnedOverFloor = new Set<string>();
+
 function resolveForcedRetrievalAbsoluteFloor(configuredPct: number | undefined, space: string, logger: Logger): number {
   const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
   if (configuredPct !== undefined) {
     // Honored, but above the measured floor it can reject the space's whole band (75 on
-    // text-embedding-3-small returns nothing on every query), so say so every turn it applies.
-    if (spacePct !== undefined && configuredPct > spacePct) {
+    // text-embedding-3-small returns nothing on every query), so say so - once, not every turn.
+    const warnKey = `${space}:${configuredPct}`;
+    if (spacePct !== undefined && configuredPct > spacePct && !warnedOverFloor.has(warnKey)) {
+      warnedOverFloor.add(warnKey);
       logger.warn(
         `\u{1F512} Forced retrieval: configured absolute floor ${configuredPct}% is above the ${spacePct}% ` +
           `measured for embedding space "${space}" and may reject every chunk; clear it to use the measured floor`
