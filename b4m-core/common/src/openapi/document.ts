@@ -11,7 +11,7 @@ import './schemas';
 import { registeredContracts } from './operations';
 
 // Neutral placeholder default so the committed openapi.json never hardcodes a
-// real deployment domain in this public repo (matches apiReferenceContent.ts).
+// real deployment domain in this public repo.
 // Real deployments set B4M_OPENAPI_PROD_URL at build time.
 const PLACEHOLDER_PROD_URL = 'https://your-deployment.example.com';
 
@@ -23,8 +23,7 @@ function prodUrl(): string {
 /**
  * Server URLs are env-overridable with neutral placeholder defaults so the
  * committed openapi.json never hardcodes a real deployment domain in this public
- * repo (matches the placeholder convention in apiReferenceContent.ts). Real
- * deployments set these at build time.
+ * repo. Real deployments set these at build time.
  */
 function servers() {
   return [

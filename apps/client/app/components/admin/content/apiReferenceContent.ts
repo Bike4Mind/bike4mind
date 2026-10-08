@@ -14,11 +14,11 @@ export const renderScopeTableRows = (): string =>
 export const getApiReferenceContent = (baseUrl: string): string => `
 # ${getBrandName()} API Reference
 
-Complete API documentation for ${getBrandName()}, a cognitive workbench platform. All endpoints are served from \`${baseUrl}\`.
+API reference for ${getBrandName()}, a cognitive workbench platform. All endpoints are served from \`${baseUrl}\`.
 
-> **Scope of this page.** Internal and admin endpoints are intentionally not documented here:
-> the route handlers under \`apps/client/pages/api\` are the source of truth for them. Public
-> endpoints are documented in the generated, contract-driven docs at [/api/v1/docs](/api/v1/docs).
+> **Scope of this page.** Internal and admin endpoints are intentionally not documented here.
+> Public endpoints are documented in the generated, contract-driven docs at
+> [/api/v1/docs](/api/v1/docs).
 > What remains below is prose with no generated counterpart plus a few endpoint sections still
 > waiting to be migrated.
 
@@ -113,11 +113,11 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions\`
 - Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`
-- Files and data lakes: \`/api/v1/files\`, \`/api/v1/data-lakes\`
+- Files and data lakes: \`/api/v1/files\`, \`/api/v1/files/{id}\`, \`/api/v1/data-lakes\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
 - Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
-- Account: \`/api/v1/me\`, \`/api/v1/credits\`
+- Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
 
 Image, video and chat work is asynchronous: the create call returns a quest or job, and you poll
 \`GET /api/v1/quests/{id}\` (or the job resource) until it is terminal.
@@ -151,71 +151,25 @@ GET /api/files
 
 **Query Parameters:**
 
+Nested keys use bracket syntax (parsed with \`qs\`), for example \`pagination[page]=2&order[by]=createdAt&order[direction]=desc\`.
+
 | Param | Type | Description |
 |-------|------|-------------|
-| page | number | Page number (default 1) |
-| limit | number | Items per page (default 20, max 100) |
 | search | string | Search by filename |
-| tags | string | Comma-separated tag filter |
-| projectId | string | Filter by project |
-| sort | string | Sort field (e.g., \`createdAt\`, \`name\`) |
-| order | string | Sort order: \`asc\` or \`desc\` |
+| filters[tags] | string[] | Only files carrying these tags |
+| filters[type] | string | One of \`text\`, \`pdf\`, \`url\`, \`image\`, \`excel\`, \`word\`, \`json\`, \`csv\`, \`markdown\`, \`code\`, \`audio\`, \`video\` |
+| filters[shared] | boolean | Files shared with you |
+| filters[curated] | boolean | Curated notebook files |
+| filters[projectId] | string | Only files in this project |
+| filters[ids] | string[] | Only these file ids |
+| pagination[page] | number | Page number (default 1); send together with \`pagination[limit]\` |
+| pagination[limit] | number | Items per page (default 20) |
+| order[by] | string | \`createdAt\`, \`fileName\` or \`fileSize\` (default \`fileName\`) |
+| order[direction] | string | \`asc\` or \`desc\` (default \`asc\`); send together with \`order[by]\` |
+| options[textSearch] | boolean | Use text search for \`search\` |
+| options[excludeContent] | boolean | Omit file content from the results |
 
-**Response:**
-
-\`\`\`json
-{
-  "files": [
-    {
-      "id": "file_abc123",
-      "name": "quarterly-report.pdf",
-      "size": 1048576,
-      "mimeType": "application/pdf",
-      "tags": ["reports", "Q4"],
-      "chunked": true,
-      "chunkCount": 24,
-      "projectId": "proj_xyz",
-      "createdAt": "2025-01-10T08:00:00Z",
-      "updatedAt": "2025-01-10T08:05:00Z"
-    }
-  ],
-  "total": 142,
-  "page": 1,
-  "limit": 20
-}
-\`\`\`
-
-#### Upload a File
-
-\`\`\`
-POST /api/v1/files
-\`\`\`
-
-**Required API-key scope:** \`files:write\`.
-
-> **This endpoint is generated from its contract.** The full request/response
-> reference - every field, its type, defaults, and validation rules - lives in the
-> [generated API docs](/api/v1/docs) under \`createFileUpload\`, derived from the same
-> object the handler validates with.
->
-> Uploading is three steps: call this endpoint with the file's name, MIME type, and size;
-> \`PUT\` the raw bytes to the returned \`upload_url\` (no \`Authorization\` header - the URL
-> signature is the credential); then poll \`GET /api/v1/files/[id]\` until the file is
-> downloadable. The returned \`id\` is what you pass to any endpoint that takes a file id.
-
-#### Get a File
-
-\`\`\`
-GET /api/v1/files/[id]
-\`\`\`
-
-**Required API-key scope:** \`files:read\`.
-
-> See the [generated API docs](/api/v1/docs) under \`getFile\`. Returns the file's metadata and
-> a short-lived signed \`download_url\`, which stays \`null\` until the upload has landed and
-> passed moderation. It is both the upload poll and the way to fetch any file id another
-> endpoint returns. GET requests here are exempt from the per-day API-key quota; the
-> per-minute burst limit still applies.
+The response is \`{ data, hasMore, total }\`, where \`data\` is the page of files.
 
 #### Trigger Chunking
 
@@ -236,15 +190,13 @@ Initiates the chunking and embedding pipeline for a file.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | /api/v1/files | Start a file upload (presigned PUT) |
-| GET | /api/v1/files/[id] | Get a file and its download URL |
 | GET | /api/files | List files with pagination and filters |
 | GET | /api/files/[id] | Get file details |
 | PUT | /api/files/[id] | Update file metadata |
 | DELETE | /api/files/[id] | Delete a file |
 | POST | /api/files/chunk | Trigger chunking pipeline |
 | GET | /api/files/search | Full-text search across file content |
-| POST | /api/files/bulk-delete | Delete multiple files |
+| DELETE | /api/files/bulk-delete | Delete multiple files |
 | GET | /api/files/byIds | Get multiple files by ID |
 | POST | /api/files/generate-presigned-url | Generate presigned upload URL (internal; use /api/v1/files) |
 | GET | /api/files/getFabFileNameById | Get filename by ID |
@@ -277,24 +229,17 @@ Projects organize files, sessions, and team members into workspaces.
 GET /api/projects
 \`\`\`
 
-**Response:**
+**Query Parameters:**
 
-\`\`\`json
-{
-  "projects": [
-    {
-      "id": "proj_abc123",
-      "name": "Market Research Q1",
-      "description": "Research project for Q1 market analysis",
-      "fileCount": 15,
-      "sessionCount": 8,
-      "memberCount": 3,
-      "createdAt": "2025-01-05T09:00:00Z"
-    }
-  ],
-  "total": 12
-}
-\`\`\`
+| Param | Type | Description |
+|-------|------|-------------|
+| search | string | Match against project name and description |
+| pagination[page] | number | Page number (default 1) |
+| pagination[limit] | number | Items per page (default 10) |
+| orderBy[by] | string | \`createdAt\` or \`updatedAt\` (default \`createdAt\`) |
+| orderBy[direction] | string | \`asc\` or \`desc\` (default \`desc\`) |
+
+The response is \`{ data, hasMore, total }\`, where \`data\` is the page of projects.
 
 #### Project Endpoints Summary
 
@@ -307,11 +252,12 @@ GET /api/projects
 | DELETE | /api/projects/[id] | Delete project |
 | GET | /api/projects/[id]/files | List project files |
 | GET | /api/projects/[id]/sessions | List project sessions |
-| GET | /api/projects/[id]/members | List project members |
+| DELETE | /api/projects/[id]/members | Remove a project member (send \`userId\` in the body), or leave the project when omitted |
 | GET | /api/projects/[id]/invites | List project invites (requires share permission) |
-| GET | /api/projects/[id]/systemPrompts | List project system prompts |
+| POST | /api/projects/[id]/systemPrompts | Add system prompt files to a project (\`fileIds\` in the body) |
+| DELETE | /api/projects/[id]/systemPrompts | Remove system prompt files from a project (\`fileIds\`, or legacy single \`fileId\`, in the body) |
 | POST | /api/projects/[id]/systemPrompts/toggle | Toggle system prompt |
-| POST | /api/projects/removeNonExistintFiles | Clean up orphan file references |
+| DELETE | /api/projects/removeNonExistintFiles | Clean up orphan file references |
 
 ---
 
@@ -401,26 +347,22 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 ### Key Events
 
-| Event | Direction | Description |
-|-------|-----------|-------------|
-| \`quest:started\` | Server → Client | Quest processing began |
-| \`quest:chunk\` | Server → Client | Streaming response chunk |
-| \`quest:completed\` | Server → Client | Quest finished |
-| \`quest:error\` | Server → Client | Quest processing failed |
-| \`session:updated\` | Server → Client | Session metadata changed |
-| \`notification:new\` | Server → Client | New inbox notification |
-| \`file:chunked\` | Server → Client | File chunking completed |
-| \`proactive:message\` | Server → Client | Agent proactive message |
+| Action | Direction | Description |
+|--------|-----------|-------------|
+| \`streamed_chat_completion\` | Server -> Client | Streamed chat reply: the quest's partial or final \`reply\`, its \`status\` and, on failure, \`type: "error"\` |
+| \`generation_job_updated\` | Server -> Client | A generation job's \`state\`, \`progress\` and \`output\` changed |
+| \`update_file_chunk_vector_status\` | Server -> Client | A file's chunking / vectorizing status changed (\`ongoing\`, \`complete\`, \`failed\`) |
+| \`inbox_refetch\` | Server -> Client | Inbox changed; refetch it |
 
 ---
 
 ## Tips for Development
 
-1. **Poll quests, don&apos;t block on chat.** The \`POST /api/chat\` endpoint returns immediately with a \`questId\`. Poll \`GET /api/v1/quests/{id}\` or listen on WebSocket for \`quest:completed\` to get the response.
+1. **Poll quests, don&apos;t block on chat.** By default \`POST /api/chat\` returns immediately with a queued ACK whose \`id\` is the quest id. Poll \`GET /api/v1/quests/{id}\` until it is terminal to get the response, or pass \`wait: true\` to block and receive the completed turn inline.
 
-2. **Use streaming for better UX.** Pass \`stream: true\` in chat requests and listen for \`quest:chunk\` WebSocket events to display tokens as they arrive.
+2. **Use streaming for better UX.** Pass \`stream: true\` in chat requests and listen for \`streamed_chat_completion\` WebSocket actions to display the reply as it arrives.
 
-3. **Leverage RAG with file context.** Attach \`fileIds\` or \`projectId\` to chat requests to ground AI responses in your uploaded documents. Files must be chunked first via \`POST /api/files/chunk\`.
+3. **Leverage RAG with file context.** Attach \`fileIds\` to chat requests to ground AI responses in your uploaded documents. Files must be chunked first via \`POST /api/files/chunk\`.
 
 4. **Handle 429s gracefully.** Implement exponential backoff when you receive rate limit responses. Check \`X-RateLimit-Reset\` header for the retry timestamp.
 
