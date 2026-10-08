@@ -172,11 +172,14 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // of by writing a tag straight into the user document, and so the partner-rules write
   // boundary stops rejecting it as unknown. Removed when the overlay is extracted.
   { tag: 'meetings', entitlements: ['meetings:pro'] },
-  // [DELETION-FOOTPRINT] Questmaster comp grant: the `questmaster` tag bridges to
+  // [DELETION-FOOTPRINT] Questmaster comp grant: the `questmaster-pro` tag bridges to
   // `questmaster:pro`. No Stripe price; granted-only. Listing it here puts the key in
   // KNOWN_ENTITLEMENT_KEYS (admin Product Access + the partner-rules write boundary).
   // Holders of `optihashi:pro` also get it via IMPLIED_ENTITLEMENT_ROWS below.
-  { tag: 'questmaster', entitlements: ['questmaster:pro'] },
+  // NOT the bare `questmaster` tag: that is an existing cohort tag (Invite Center colors
+  // `QuestMaster`, see InviteCenter/shared/tagColors.ts), and tags match case-insensitively,
+  // so mapping it would silently grant the product to every cohort member.
+  { tag: 'questmaster-pro', entitlements: ['questmaster:pro'] },
   // Embed white-label: the `embed-whitelabel` tag bridges to `embed:whitelabel`,
   // which gates hiding the "Powered by" branding on the public embed widget
   // (epic #41 Phase D). Checked against the KEY OWNER (org billing owner), not

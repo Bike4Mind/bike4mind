@@ -169,6 +169,21 @@ describe('applyImpliedEntitlements', () => {
   });
 });
 
+describe('questmaster-pro grant tag', () => {
+  it('keeps its hyphen through normalization and grants questmaster:pro', () => {
+    expect(normalizeTag('questmaster-pro')).toBe('questmaster-pro');
+    expect(grantTagForEntitlement('questmaster:pro')).toBe('questmaster-pro');
+    expect(entitlementsForTags(['QuestMaster-Pro'])).toContain('questmaster:pro');
+  });
+
+  it('does NOT grant questmaster:pro from the existing QuestMaster cohort tag, in any casing', () => {
+    for (const tag of ['QuestMaster', 'questmaster', ' QUESTMASTER ']) {
+      expect(applyImpliedEntitlements(entitlementsForTags([tag]))).not.toContain('questmaster:pro');
+    }
+    expect(__registryRows.tagGrantRows.map(row => normalizeTag(row.tag))).not.toContain('questmaster');
+  });
+});
+
 describe('normalizeTag', () => {
   it('lowercases and trims', () => {
     expect(normalizeTag('  SomeTag ')).toBe('sometag');
