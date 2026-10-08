@@ -9,9 +9,9 @@ import {
   DOMAIN_GRANTS,
   IMPLIED_ENTITLEMENTS,
   PRICE_ENTITLEMENTS,
-  TAG_GRANTS,
   allKnownEntitlementKeys,
   applyImpliedEntitlements,
+  entitlementsForTags,
   grantTagForEntitlement,
   isBypassExemptEntitlement,
   normalizeTag,
@@ -93,9 +93,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     for (const key of reportedKeys) {
       const sources: EntitlementSource[] = [];
 
+      // Same tag->key rule as the panel's live axis (`entitlementsForTags`): 1:1 by the
+      // tag's own name, or through a TAG_GRANTS remap.
       for (const tag of tags) {
-        const normalizedTag = normalizeTag(tag);
-        if (normalizedTag === key || TAG_GRANTS.get(normalizedTag)?.includes(key)) {
+        if (entitlementsForTags([tag]).has(key)) {
           sources.push({ type: 'tag', detail: tag });
         }
       }
