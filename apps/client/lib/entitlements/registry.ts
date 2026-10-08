@@ -359,11 +359,11 @@ export const DOMAIN_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new
 
 /**
  * Every entitlement key the registry recognizes as a grantable product, sorted - the union of
- * every grant source (price, comp-tag, email-domain) via `allKnownEntitlementKeys`, so there is
- * one source of truth for "what products exist" (e.g. `optihashi:pro`, `libreoncology:pro`). New
- * products surface here automatically as their rows are added above. Admin surfaces that let an
- * operator pick an entitlement to grant (LLM model gating, partner signup rules) source their
- * options from this so a typo can't persist a dead grant.
+ * every grant source (price, comp-tag, email-domain, implied) via `allKnownEntitlementKeys`, so
+ * there is one source of truth for "what products exist" (e.g. `optihashi:pro`,
+ * `libreoncology:pro`). New products surface here automatically as their rows are added above.
+ * Admin surfaces that let an operator pick an entitlement to grant (LLM model gating, partner
+ * signup rules) source their options from this so a typo can't persist a dead grant.
  */
 export const KNOWN_ENTITLEMENT_KEYS: readonly EntitlementKey[] = [...allKnownEntitlementKeys()].sort();
 
@@ -408,9 +408,14 @@ export function isDatalakeEntitlementKey(key: string): boolean {
  * Empty means every key is a known grantable product, or a `datalake:<slug>` grant (see
  * `isDatalakeEntitlementKey`). Used to reject typo'd keys at admin write boundaries before
  * they persist as a silent no-op grant.
+ *
+ * `known` defaults to the real catalog; it is injectable so the catalog test can prove an
+ * implied-only key counts as known without adding a fake product to the shipped registry.
  */
-export function unknownEntitlementKeys(keys: Iterable<string>): string[] {
-  const known = new Set(KNOWN_ENTITLEMENT_KEYS);
+export function unknownEntitlementKeys(
+  keys: Iterable<string>,
+  known: ReadonlySet<string> = new Set(KNOWN_ENTITLEMENT_KEYS)
+): string[] {
   const unknown = new Set<string>();
   for (const raw of keys) {
     const key = normalizeTag(raw);
@@ -540,10 +545,15 @@ export function resolveEntitlements(input: {
  * enumerate every product it should show, so a new product row here is picked up
  * automatically with no second list to update. The implied keys are included so
  * a key that is only ever implied (no tag/price/domain row of its own) is still
- * enforced, shown in Product Access, and accepted at the partner-rule write
- * boundary.
+ * shown in Product Access and accepted at the partner-rule write boundary.
+ *
+ * `implications` defaults to the real graph; it is injectable so the catalog
+ * test can prove the implied branch is load-bearing (today's only implied key
+ * also has a grant row, so a dropped implied loop would otherwise go unnoticed).
  */
-export function allKnownEntitlementKeys(): EntitlementKey[] {
+export function allKnownEntitlementKeys(
+  implications: ReadonlyMap<EntitlementKey, readonly EntitlementKey[]> = IMPLIED_ENTITLEMENTS
+): EntitlementKey[] {
   const keys = new Set<EntitlementKey>();
   for (const grantedKeys of TAG_GRANTS.values()) {
     for (const key of grantedKeys) keys.add(key);
@@ -554,7 +564,7 @@ export function allKnownEntitlementKeys(): EntitlementKey[] {
   for (const grantedKeys of PRICE_ENTITLEMENTS.values()) {
     for (const key of grantedKeys) keys.add(key);
   }
-  for (const grantedKeys of IMPLIED_ENTITLEMENTS.values()) {
+  for (const grantedKeys of implications.values()) {
     for (const key of grantedKeys) keys.add(key);
   }
   return [...keys];

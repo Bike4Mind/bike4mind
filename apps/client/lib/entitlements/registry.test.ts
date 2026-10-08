@@ -140,12 +140,14 @@ describe('implied-entitlement invariants', () => {
 
   // `signupCreditsForKeys` zeroes a key another held key implies, so an implying
   // key must be worth at least as much as anything it implies - otherwise a
-  // bundle would under-pay versus holding the implied key directly.
+  // bundle would under-pay versus holding the implied key directly. Checked over
+  // the full closure (chains included), not just direct alsoGrant rows.
   it('every implying key pays at least as much signup credits as the keys it implies', () => {
     for (const row of __registryRows.impliedRows) {
       const sourceCredits = SIGNUP_CREDITS.get(normalizeTag(row.ifHeld)) ?? 0;
-      for (const key of row.alsoGrant) {
-        const impliedCredits = SIGNUP_CREDITS.get(normalizeTag(key)) ?? 0;
+      // slice(1) drops the implying key itself; the rest is everything it reaches through chains.
+      for (const key of applyImpliedEntitlements([row.ifHeld]).slice(1)) {
+        const impliedCredits = SIGNUP_CREDITS.get(key) ?? 0;
         expect(
           sourceCredits,
           `'${row.ifHeld}' (${sourceCredits}) must pay >= its implied '${key}' (${impliedCredits})`
@@ -446,6 +448,16 @@ describe('allKnownEntitlementKeys', () => {
   it('has no duplicates', () => {
     const known = allKnownEntitlementKeys();
     expect(new Set(known).size).toBe(known.length);
+  });
+
+  // `questmaster:pro` is also a TAG_GRANTS target, so the real catalog cannot detect a dropped
+  // implied loop. Inject a key with no grant row of its own: it must still reach the catalog
+  // (the Product Access / partner-rule option set) and pass the write-boundary check.
+  it('includes a key that is only ever implied', () => {
+    const implications = new Map([['x:a', ['only:implied']]]);
+    const known = allKnownEntitlementKeys(implications);
+    expect(known).toContain('only:implied');
+    expect(unknownEntitlementKeys(['only:implied'], new Set(known))).toEqual([]);
   });
 
   // Deleting the embed-whitelabel grant row silently un-gates nothing (the key
