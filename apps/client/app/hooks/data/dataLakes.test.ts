@@ -105,6 +105,7 @@ import {
   useLakeFileTags,
   useUnderChunkedCount,
   useGetDataLakesWithRetrievability,
+  useGetScopedDataLakeTagCounts,
   useDataLakeSlugPreview,
 } from './dataLakes';
 import { dataLakeKeys } from './dataLakeKeys';
@@ -200,6 +201,38 @@ describe('useGetDataLakesWithRetrievability', () => {
 
     await act(async () => release({ data: { data: [{ ...rows[0], retrievable: false }] } }));
     await waitFor(() => expect(result.current.data?.[0]?.retrievable).toBe(false));
+  });
+});
+
+// The server reads a REPEATED `lakeId` (pages/api/data-lakes/tag-counts.ts). A `set` or a
+// comma-joined value would scope a multi-lake selection to its last lake, or to no lake at all.
+describe('useGetScopedDataLakeTagCounts', () => {
+  beforeEach(() => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValue({ data: { tagCounts: [] } });
+  });
+
+  const mount = (lakeIds: string[]) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useGetScopedDataLakeTagCounts('datalakes', lakeIds), { wrapper });
+  };
+
+  it('sends every selected lake as its own lakeId param', async () => {
+    const { result } = mount(['lake-a', 'lake-b']);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/tag-counts?lakeId=lake-a&lakeId=lake-b');
+  });
+
+  it('fires no request for an empty selection', async () => {
+    const { result } = mount([]);
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(result.current.isLoading).toBe(false);
+    expect(apiGet).not.toHaveBeenCalled();
   });
 });
 

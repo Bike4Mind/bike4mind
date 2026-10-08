@@ -425,6 +425,10 @@ export async function queryDataLakeTagCounts(
  * land in a selected lake's tree. `restrictToDataLake` drops the base-access arms, leaving only
  * the selected lakes' own arms.
  *
+ * Several selected lakes are counted as one union, not per lake: a member of selected lake B that
+ * carries selected lake A's prefix shows under A's branch. Exact per-lake trees would need one
+ * aggregate branch per lake - the fan-out countDataLakeFilesByMembership has to chunk.
+ *
  * `lakeIds` only ever NARROW `lakes` (already resolved by `resolveAccessibleLakes`): an id the
  * caller cannot reach selects nothing and returns an empty tree, never every lake.
  */

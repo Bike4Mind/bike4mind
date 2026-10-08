@@ -122,6 +122,7 @@ const { tagCountsState, uncategorizedState, articleParams } = vi.hoisted(() => (
     // with the unscoped payload (the explorer's prefix belt still narrows it).
     scoped: null as { tag: string; count: number }[] | null,
     scopedLoading: false,
+    scopedError: false,
     scopedLakeIds: [] as string[][],
     total: 0,
     lakeFileCounts: {} as Record<string, number>,
@@ -162,7 +163,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
           ? { tagCounts: tagCountsState.scoped ?? tagCountsState.tagCounts }
           : undefined,
       isLoading: lakeIds.length > 0 && tagCountsState.scopedLoading,
-      isError: false,
+      isError: lakeIds.length > 0 && tagCountsState.scopedError,
     };
   },
   // Records whether the query would actually RUN, mirroring the hook's own `enabled && !!lakeId`
@@ -769,6 +770,7 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     tagCountsState.tagCounts = [];
     tagCountsState.scoped = null;
     tagCountsState.scopedLoading = false;
+    tagCountsState.scopedError = false;
     tagCountsState.scopedLakeIds = [];
     tagCountsState.total = 0;
   });
@@ -805,6 +807,23 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
 
     expect(tree()).toHaveAttribute('data-loading', 'true');
+    expect(screen.queryByTestId('datalake-tree-empty')).not.toBeInTheDocument();
+  });
+
+  // A failed scoped read leaves no tree data, and with an empty lake that would read as the
+  // "lake is empty" CTA; the failure has to surface as the tree's error state instead.
+  it('shows the tree error, not the empty-lake CTA, when the scoped count fails', () => {
+    tagCountsState.tagCounts = [];
+    tagCountsState.total = 0;
+    tagCountsState.scopedError = true;
+    renderExplorer();
+
+    expect(tree()).toHaveAttribute('data-error', 'false');
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    expect(tree()).toHaveAttribute('data-error', 'true');
     expect(screen.queryByTestId('datalake-tree-empty')).not.toBeInTheDocument();
   });
 
