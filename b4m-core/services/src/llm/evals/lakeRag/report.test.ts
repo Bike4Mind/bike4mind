@@ -83,6 +83,20 @@ describe('buildLakeRagReport', () => {
     expect(() => readLakeRagReport(path)).toThrow(`${path} is not a lake RAG eval report`);
   });
 
+  it('reports a missing baseline as a read error, not a malformed report', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'lakerag-')), 'absent.json');
+    const err = (() => {
+      try {
+        readLakeRagReport(path);
+        return undefined;
+      } catch (e) {
+        return e as Error;
+      }
+    })();
+    expect(String(err)).toMatch(/ENOENT/);
+    expect(String(err)).not.toContain('is not a lake RAG eval report');
+  });
+
   it.each([
     ['no arms', { multiLakeDrop: null }, /missing arms/],
     ['a non-numeric drop', { arms: {}, multiLakeDrop: 'x' }, /multiLakeDrop/],

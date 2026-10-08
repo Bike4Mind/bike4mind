@@ -22,12 +22,15 @@ const hasRate = (v: unknown): boolean => isRecord(v) && isRate(v.rate);
  * so a truncated or hand-edited baseline fails here by name instead of as a TypeError mid-compare.
  */
 export function readLakeRagReport(path: string): LakeRagReport {
-  const malformed = (what: string) => new Error(`${path} is not a lake RAG eval report: ${what}`);
+  const malformed = (what: string, cause?: unknown) =>
+    new Error(`${path} is not a lake RAG eval report: ${what}`, cause === undefined ? undefined : { cause });
+  // Read outside the try: a wrong path is a read error, not a malformed report.
+  const text = readFileSync(path, 'utf8');
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
+    parsed = JSON.parse(text);
   } catch (err) {
-    throw malformed(err instanceof Error ? err.message : String(err));
+    throw malformed(err instanceof Error ? err.message : String(err), err);
   }
   if (!isRecord(parsed) || !isRecord(parsed.arms)) throw malformed('missing arms');
   if (!isRate(parsed.multiLakeDrop)) throw malformed('multiLakeDrop is not a number or null');
