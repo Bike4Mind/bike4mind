@@ -69,6 +69,18 @@ function invoke(
 
 const developer = { id: 'u1', isAdmin: false, tags: ['developer'] };
 
+// Every wrong-scope test below needs the gate un-staged so the scope actually enforces.
+const originalStaging = process.env.API_KEY_SCOPE_STAGING;
+
+beforeEach(() => {
+  delete process.env.API_KEY_SCOPE_STAGING;
+});
+
+afterEach(() => {
+  if (originalStaging === undefined) delete process.env.API_KEY_SCOPE_STAGING;
+  else process.env.API_KEY_SCOPE_STAGING = originalStaging;
+});
+
 describe('GET /api/agents/[id]/missions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -80,6 +92,13 @@ describe('GET /api/agents/[id]/missions', () => {
     const { req, run } = invoke('GET', developer);
     await run();
     expect(assertAgentsReadScope).toHaveBeenCalledWith(req);
+  });
+
+  it('refuses a key holding only agents:write before any repository read', async () => {
+    const { run } = invoke('GET', developer, { id: 'a1' }, { apiKeyInfo: { scopes: [ApiKeyScope.WRITE_AGENTS] } });
+    await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(agentFindById).not.toHaveBeenCalled();
+    expect(listMissionsForAgent).not.toHaveBeenCalled();
   });
 
   it('answers a stranger and a missing id with the same status and body', async () => {
@@ -121,17 +140,9 @@ describe('GET /api/agents/[id]/missions', () => {
 });
 
 describe('POST /api/agents/[id]/missions', () => {
-  const originalStaging = process.env.API_KEY_SCOPE_STAGING;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.API_KEY_SCOPE_STAGING;
     agentFindById.mockResolvedValue(OWNED_AGENT);
-  });
-
-  afterEach(() => {
-    if (originalStaging === undefined) delete process.env.API_KEY_SCOPE_STAGING;
-    else process.env.API_KEY_SCOPE_STAGING = originalStaging;
   });
 
   it('refuses a key holding only agents:read before any repository read', async () => {
