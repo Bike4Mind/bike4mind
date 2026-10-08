@@ -21,6 +21,9 @@ describe('real-Mongo suites in apps/workers declare the shared 60s budget', () =
         'src/cron/lakeHealthSweep.e2e.test.ts',
         'src/cron/telemetryCleanup.e2e.test.ts',
         'src/events/sessionTaggingGate.e2e.test.ts',
+        'src/queueHandlers/dataLakeBatchRetryGating.e2e.test.ts',
+        'src/queueHandlers/resumeEmbeddingSpace.e2e.test.ts',
+        'src/queueHandlers/vectorizeStrandRecovery.e2e.test.ts',
         'src/selfhost/abandonedExecutionSweep.e2e.test.ts',
         'src/selfhost/questTimeoutSweep.e2e.test.ts',
       ])

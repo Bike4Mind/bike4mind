@@ -11,6 +11,8 @@ export const b4mLLMTools = z.enum([
   'music_generation',
   // Model-callable TTS + sound effects (OpenAI / ElevenLabs); mirrors image_generation
   'audio_generation',
+  // Non-blocking video job creation; the job engine bills and renders
+  'video_generation',
   'weather_info',
   'web_search',
   'web_fetch',

@@ -98,7 +98,17 @@ vi.mock('@server/auth/auth', async orig => {
 
 import handler from '../index';
 import { ApiKeyScope } from '@bike4mind/common';
-import { QUEST_TIMEOUT_THRESHOLD_MS, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import { Logger } from '@bike4mind/observability';
+import {
+  QUEST_TIMEOUT_THRESHOLD_MS,
+  STUCK_QUEST_RECOVERED_LOG,
+  UNFINISHED_REPLY_NOTICE,
+} from '@server/chatCompletion/questTimeoutRecovery';
+
+// The real middleware chain attaches a real Logger to req (server/middlewares/logging.ts), so spy
+// on the prototype to assert the applied-recovery alert. `vi.clearAllMocks()` in beforeEach wipes
+// its call history between tests.
+const loggerError = vi.spyOn(Logger.prototype, 'error');
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -551,6 +561,14 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
         'quest-1',
         expect.objectContaining({ status: 'done', type: 'error' })
       );
+      // The recovery that actually settles this quest must reach the LiveOps Slack channel; the
+      // sweep never gets the chance once a poll has settled it.
+      expect(loggerError).toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, {
+        questId: 'quest-1',
+        via: 'v1-poll',
+      });
+      const recoveryLogs = loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG);
+      expect(recoveryLogs).toHaveLength(1);
     });
 
     it('dispatches the generation callback once a recovery write is actually applied', async () => {
@@ -597,6 +615,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData().status).toBe('running');
       expect(mockQuestSettle).not.toHaveBeenCalled();
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('does not re-recover an already-terminal quest', async () => {
@@ -609,6 +628,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData().status).toBe('done');
       expect(mockQuestSettle).not.toHaveBeenCalled();
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('works for API-key callers (the actual bug: headless API clients never got recovery)', async () => {
@@ -635,6 +655,9 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      // A lost race means another settle site won and logs for itself - logging here would
+      // double every recovery.
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('still answers with the quest when the recovery write throws', async () => {
@@ -649,6 +672,8 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      // A failed write recovered nothing, so it must not alert either.
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('does not let a sharee read write a terminal status onto the owner quest', async () => {
@@ -663,6 +688,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData().status).toBe('running');
       expect(mockQuestSettle).not.toHaveBeenCalled();
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
   });
 

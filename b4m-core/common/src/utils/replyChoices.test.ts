@@ -319,7 +319,7 @@ describe('formatChoiceReply', () => {
 });
 
 describe('stripChoicesFromReplies', () => {
-  it('reads and strips only the last answer slot', () => {
+  it('strips every slot but reads options only from the last answer slot', () => {
     const other = [
       { label: 'A', description: 'a' },
       { label: 'B', description: 'b' },
@@ -327,7 +327,7 @@ describe('stripChoicesFromReplies', () => {
     const first = `${prose}\n\n${block(JSON.stringify(two))}`;
     const result = stripChoicesFromReplies([first, `${prose}\n\n${block(JSON.stringify(other))}`, '  ']);
     expect(result).toEqual({
-      replies: [first, prose, '  '],
+      replies: [prose, prose, '  '],
       choices: other,
       found: true,
       outcome: { status: 'parsed' },
@@ -348,11 +348,18 @@ describe('stripChoicesFromReplies', () => {
     const earlier = `${prose}\n\n${block(JSON.stringify(two))}`;
     const result = stripChoicesFromReplies([earlier, 'Final answer.']);
     expect(result).toEqual({
-      replies: [earlier, 'Final answer.'],
+      replies: [prose, 'Final answer.'],
       choices: null,
       found: false,
       outcome: { status: 'absent' },
     });
+  });
+
+  it('strips an earlier slot block when the final slot has none', () => {
+    const result = stripChoicesFromReplies([`Answer A\n\n${block(JSON.stringify({ options: two }))}`, '**Result: B**']);
+    expect(result.replies).toEqual(['Answer A', '**Result: B**']);
+    expect(result.replies.join('')).not.toContain('```choices');
+    expect(result.choices).toBeNull();
   });
 
   it('returns the slots untouched when none carries a block', () => {
@@ -443,6 +450,21 @@ describe('applyReplyChoices', () => {
     applyReplyChoices(quest);
     expect(quest.suggestedChoices).toBeUndefined();
     expect(quest.replies).toEqual([prose]);
+  });
+
+  it('strips an earlier slot block from stored replies when the final slot has none', () => {
+    const preamble = `${prose}\n\n${block(JSON.stringify(two))}`;
+    const answer = '**Result: B**';
+    const quest: Parameters<typeof applyReplyChoices>[0] = { replies: [preamble, answer] };
+    expect(applyReplyChoices(quest)).toEqual({ status: 'absent' });
+    expect(quest.replies).toEqual([prose, answer]);
+    expect(quest.suggestedChoices).toBeUndefined();
+  });
+
+  it('leaves an absent replies field absent', () => {
+    const quest: Parameters<typeof applyReplyChoices>[0] = { reply: prose };
+    applyReplyChoices(quest);
+    expect(quest).not.toHaveProperty('replies');
   });
 });
 

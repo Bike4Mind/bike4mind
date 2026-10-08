@@ -189,6 +189,21 @@ function fromThinkingStyle(style: ModelInfo['thinkingStyle']): ReasoningStyle {
 const BEDROCK_REGION_PREFIX = /^(us|eu|apac|global)\./;
 
 /**
+ * The single definition of the Bedrock cross-region scope prefixes (`us.`, `eu.`,
+ * `apac.`, `global.`). Every consumer that needs to recognise or strip one must
+ * use these so a newly added scope is picked up everywhere at once. Other regions
+ * exist in aggregator key space (`jp.`, `au.`) but our ids never use them, so
+ * leaving those unstripped costs a duplicate index entry, never a wrong match.
+ */
+export function isBedrockRegionProfileId(modelId: string): boolean {
+  return BEDROCK_REGION_PREFIX.test(modelId);
+}
+
+export function stripBedrockRegionPrefix(modelId: string): string {
+  return modelId.replace(BEDROCK_REGION_PREFIX, '');
+}
+
+/**
  * The foundation-model id behind a Bedrock inference-profile id, or null when the
  * id carries no region prefix. `ListFoundationModels` lists bare foundation ids
  * (`anthropic.claude-sonnet-4-6`) only; a cross-region inference profile
@@ -196,7 +211,7 @@ const BEDROCK_REGION_PREFIX = /^(us|eu|apac|global)\./;
  * discovery has to sight a profile id through the foundation id it is built from.
  */
 export function bedrockFoundationIdOf(modelId: string): string | null {
-  return BEDROCK_REGION_PREFIX.test(modelId) ? modelId.replace(BEDROCK_REGION_PREFIX, '') : null;
+  return isBedrockRegionProfileId(modelId) ? stripBedrockRegionPrefix(modelId) : null;
 }
 
 const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
@@ -237,7 +252,7 @@ const BEDROCK_VENDOR_ALIASES: Readonly<Record<string, string>> = {
 
 export function inferVendor(info: Pick<ModelInfo, 'id' | 'backend'>): string {
   if (info.backend === ModelBackend.Bedrock) {
-    const withoutRegion = String(info.id).replace(BEDROCK_REGION_PREFIX, '');
+    const withoutRegion = stripBedrockRegionPrefix(String(info.id));
     const dot = withoutRegion.indexOf('.');
     if (dot > 0) {
       const prefix = withoutRegion.slice(0, dot);

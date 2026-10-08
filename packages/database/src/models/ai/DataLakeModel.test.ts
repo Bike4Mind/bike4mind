@@ -340,6 +340,23 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
     expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
   });
 
+  it('counts a gated lake in an org the caller administers but is not a member of, and not for a stranger', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-x', organizationId: 'orgX', createdByUserId: 'alice', requiredUserTag: 'tag' })
+    );
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { administeredOrgIds: ['orgX'] })
+    ).toBe(1);
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { administeredOrgIds: ['orgY'] })
+    ).toBe(0);
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { administeredOrgIds: [] })).toBe(
+      0
+    );
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
+  });
+
   it('counts a gated PUBLIC lake app-wide, even with no shared org', async () => {
     await dataLakeRepository.create(
       baseLake({ slug: 'public-gated', organizationId: 'orgB', isPublic: true, requiredUserTag: 'tag' })
@@ -3845,5 +3862,40 @@ describe('DataLakeRepository - pendingConnector', () => {
     const raw = await DataLakeModel.collection.findOne({ _id: new mongoose.Types.ObjectId(created.id) });
     expect(raw).not.toBeNull();
     expect(raw).not.toHaveProperty('pendingConnector');
+  });
+});
+
+describe('DataLakeRepository - renameIfPlaceholderAndClearPending', () => {
+  setupMongoTest();
+  const PLACEHOLDER = 'Placeholder lake';
+
+  it('renames a placeholder lake and clears its pending connector, leaving slug and tags alone', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'gh-placeholder', name: PLACEHOLDER, pendingConnector: 'github' })
+    );
+
+    const before = await dataLakeRepository.renameIfPlaceholderAndClearPending(created.id, PLACEHOLDER, 'acme/repo');
+
+    expect(before?.name).toBe(PLACEHOLDER);
+    const after = await DataLakeModel.findById(created.id).lean();
+    expect(after?.name).toBe('acme/repo');
+    expect(after).not.toHaveProperty('pendingConnector');
+    expect(after?.slug).toBe(created.slug);
+    expect(after?.datalakeTag).toBe(created.datalakeTag);
+    expect(after?.fileTagPrefix).toBe(created.fileTagPrefix);
+  });
+
+  it('keeps a name the user already changed but still clears the pending connector', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'gh-renamed', name: 'My own name', pendingConnector: 'github' })
+    );
+
+    await expect(
+      dataLakeRepository.renameIfPlaceholderAndClearPending(created.id, PLACEHOLDER, 'acme/repo')
+    ).resolves.toBeNull();
+
+    const after = await DataLakeModel.findById(created.id).lean();
+    expect(after?.name).toBe('My own name');
+    expect(after).not.toHaveProperty('pendingConnector');
   });
 });

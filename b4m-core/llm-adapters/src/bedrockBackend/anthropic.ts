@@ -3,9 +3,11 @@ import {
   ChatModels,
   createThinkMarkerEscaper,
   IMessage,
+  isBedrockRegionProfileId,
   MessageContentText,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
+  REFUSAL_FALLBACK_MODELS,
   type ModelInfo,
 } from '@bike4mind/common';
 import {
@@ -192,7 +194,7 @@ interface ClaudeChunkContentStop extends BaseClaudeChunk {
 interface ClaudeChunkMessageDelta extends BaseClaudeChunk {
   type: ClaudeChunkTypes.MESSAGE_DELTA;
   delta: {
-    stop_reason: 'tool_use' | 'end_turn';
+    stop_reason: string;
   };
   usage: { output_tokens: number };
 }
@@ -602,6 +604,27 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           "Anthropic's newest Claude 5 Sonnet model via AWS Bedrock. Near-Opus quality on coding and agentic work at Sonnet cost, with adaptive extended thinking and a 1M-token context window.",
       },
       {
+        id: ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+        type: 'text',
+        name: 'Claude 5.5 Sonnet',
+        backend: ModelBackend.Bedrock,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          1_000_000: { input: 3 / 1_000_000, output: 15 / 1_000_000 },
+        },
+        supportsVision: true,
+        supportsTools: true,
+        supportsImageVariation: false,
+        logoFile: 'Anthropic_logo.png',
+        rank: 1,
+        description:
+          "Anthropic's Claude 5.5 Sonnet model via AWS Bedrock, with adaptive extended thinking and a 1M-token context window.",
+      },
+      {
         id: ChatModels.CLAUDE_4_6_OPUS_BEDROCK,
         type: 'text',
         name: 'Claude 4.6 Opus',
@@ -670,6 +693,90 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         releaseDate: '2026-05-28',
         description:
           "Anthropic's latest flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
+        isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_FABLE_5_BEDROCK,
+        type: 'text',
+        name: 'Claude Fable 5',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          1_000_000: { input: 10 / 1_000_000, output: 50 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description: "Anthropic's Claude Fable 5 model via AWS Bedrock for complex, long-running agentic tasks.",
+        isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+        type: 'text',
+        name: 'Claude Fable 5.1',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          1_000_000: { input: 10 / 1_000_000, output: 50 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description: "Anthropic's Claude Fable 5.1 model via AWS Bedrock for complex, long-running agentic tasks.",
+        isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_OPUS_BEDROCK,
+        type: 'text',
+        name: 'Claude 5 Opus',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          1_000_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description: "Anthropic's Claude 5 Opus model via AWS Bedrock for coding, reasoning, and agentic tasks.",
+        isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+        type: 'text',
+        name: 'Claude 5.5 Opus',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          1_000_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description: "Anthropic's Claude 5.5 Opus model via AWS Bedrock for coding, reasoning, and agentic tasks.",
         isSlowModel: true,
       },
     ];
@@ -767,8 +874,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     }
 
     // Check if model ID needs to be transformed
-    const hasVendorPrefix =
-      model.includes(':') || model.startsWith('global.') || model.startsWith('us.') || model.startsWith('anthropic.');
+    const hasVendorPrefix = model.includes(':') || isBedrockRegionProfileId(model) || model.startsWith('anthropic.');
     const modelId = hasVendorPrefix ? model : `anthropic.${model}`;
 
     // Ensure maxTokens is always provided and is a number
@@ -1050,6 +1156,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         );
       }
 
+      const stopReason = (response as { stop_reason?: string }).stop_reason;
+      if (stopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
+        throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+      }
+
       // Extract text content from the response
       const textContent = response.content
         .filter(item => item.type === 'text')
@@ -1117,6 +1228,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk } {
     let done = false;
+    let refused = false;
     let choice: IChoice;
 
     // Default choice with empty text
@@ -1202,6 +1314,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         // Reset thinking block state
         this.isInThinkingBlock = false;
       } else if (isMessageDelta(chunk)) {
+        refused = chunk.delta?.stop_reason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model);
         choice = {
           status: ChoiceStatus.STREAM,
           chunkText: '',
@@ -1230,6 +1343,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           choices: [choice],
         },
       };
+    }
+
+    // Thrown outside the try: the catch above swallows errors.
+    if (refused) {
+      throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
     }
 
     return {

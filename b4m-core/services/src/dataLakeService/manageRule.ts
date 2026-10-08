@@ -165,22 +165,26 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  * lake-doc writer too, gated by transfer authority rather than this rule. A write whose own target is
  * another collection joins by touching the lake last (`IDataLakeRepository.touchIfStable`): file add
  * and remove (internal and v1 doors) and tags, research config create/update/delete, proposal
- * decline/restore, finding resolve/assign, batch create and taxonomy dismiss. Inside that transaction a
- * service's best-effort write (audit row, restore record, stats) is no longer best-effort: its failure
- * aborts the transaction and fails the request. Any lake-doc write outside it (an ingestion worker's
- * stats) also collides, so a manage write during a busy upload can exhaust its retries.
+ * decline/restore, finding resolve/assign, batch create, taxonomy dismiss, membership decisions and
+ * corpus actions. A door with an external or batch-wide step serializes only up to its decision (gate,
+ * short DB writes or claim, then a lake-doc write: `touchIfStable`, or the route's own lake update)
+ * and runs the step after commit: research run start, converge, rechunk, lake memory, inconsistency
+ * detection and finding belief in the route; proposal approve, taxonomy apply and reanalyze through
+ * `SerializeLakeClaim`. A revoke landing after that commit does not stop the step. Inside the
+ * transaction a service's best-effort write (audit row, restore record, stats) is no longer
+ * best-effort: its failure aborts the transaction and fails the request. Any lake-doc write outside
+ * it (an ingestion worker's stats) also collides, so a manage write during a busy upload can exhaust
+ * its retries. `touchIfStable` skips a transitional lake, so every door in this paragraph,
+ * `SerializeLakeClaim` included, is unserialized there.
  *
  * Every other manage-gated write is gated once per request, and a revoke committing after that gate
  * does not abort it:
  *   - the archive/unarchive/delete/restore cascades, deliberately: each runs its claim and sweep in
  *     one call, so a transaction would span the whole sweep, and re-checking after the claim would
  *     strand the lake mid-status;
- *   - the writes with an external or long step - proposal approve, research run start, taxonomy
- *     apply/reanalyze, converge, rechunk, lake memory, inconsistency detection, finding belief -
- *     membership decisions, which can recompute stats once per removed duplicate, and corpus
- *     actions, whose merge audits a partial result that a rollback would contradict;
- *   - the toggle-tags join door (`fabFileService.toggleTags`), which reaches a lake from the file side;
- *   - any of the above on a lake in a transitional status, which `touchIfStable` skips.
+ *   - the toggle-tags join door (`fabFileService.toggleTags`), deliberately: it reaches lakes from the
+ *     file side, and one tag edit can reconcile against any number of matching lakes, so touching
+ *     each would turn a tag click into an N-lake-doc write contending with every ingestion worker.
  *
  * A departure lapse collides too when the lapsed grant could manage (`lapseDepartedMemberLakeAccess`
  * phase 1 touches the lake for an owner/curator grant, and like the writers skips a transitional
@@ -214,6 +218,14 @@ export function canManageLake(
       isGrantOrgContained(g, lakeOrg)
   );
 }
+
+/**
+ * Runs a long manage door's gate-and-claim phase, bound by the caller to a transaction that touches
+ * the returned `lake` last, so the claim serializes against a revoke (WRITE-TIME RESIDUAL on
+ * `canManageLake`). The door's external step runs after it returns; a revoke landing then is the
+ * accepted residual. Route-side binding: `serializeLakeClaim` in apps/client/server/dataLakes.
+ */
+export type SerializeLakeClaim = <T extends { lake: { id: string } }>(claim: () => Promise<T>) => Promise<T>;
 
 /**
  * WHICH rung of `canManageLake` authorized this actor, for the config-change audit trail. Returns

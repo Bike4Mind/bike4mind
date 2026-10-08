@@ -6,6 +6,7 @@ import {
   adminSettingsRepository,
   authSessionRepository,
   trustedDeviceRepository,
+  passkeyCredentialRepository,
 } from '@bike4mind/database';
 import { clearTrustedDeviceCookie } from '@server/auth/trustedDevice';
 import { logAuthAudit } from '@server/utils/authAudit';
@@ -27,6 +28,15 @@ const handler = baseApi().post(
       const enforceMFASetting = await adminSettingsRepository.findBySettingName('enforceMFA');
       const enforceMFA = enforceMFASetting?.settingValue === 'true' || false;
 
+      // Phase-1 passkeys are an alternative second factor, so they go with MFA. Removed BEFORE
+      // the disable commits: a failure then leaves MFA on, never orphan passkeys that would
+      // satisfy MFA again once it is re-enabled. Gated on the disable being allowed, so a
+      // refused disable does not strip them.
+      let removedPasskeys = 0;
+      if (freshUser.mfa?.totpEnabled && mfaService.userCanDisableMFA(freshUser, enforceMFA)) {
+        removedPasskeys = await passkeyCredentialRepository.removeAllForUser(freshUser.id);
+      }
+
       const result = await mfaService.disableMFA({ user: freshUser, enforceMFA }, userRepository);
 
       // Disabling MFA is a security-relevant change: revoke every existing session (including
@@ -43,6 +53,13 @@ const handler = baseApi().post(
       clearTrustedDeviceCookie(res);
 
       await logAuthAudit(req, { userId: freshUser.id, event: 'mfa_disabled' });
+      if (removedPasskeys > 0) {
+        await logAuthAudit(req, {
+          userId: freshUser.id,
+          event: 'passkey_removed',
+          metadata: { removed: removedPasskeys, scope: 'all', reason: 'mfa_disabled' },
+        });
+      }
       if (revokedDevices > 0) {
         await logAuthAudit(req, {
           userId: freshUser.id,

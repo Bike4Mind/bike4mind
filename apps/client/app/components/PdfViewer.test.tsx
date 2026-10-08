@@ -97,6 +97,15 @@ const loadsDocument = (numPages = 2) =>
   }));
 
 const FILE = 'https://example.test/doc.pdf';
+// Must match the `pdfjs-assets-${version}/<dir>/` layout scripts/copy-pdf-worker.mjs writes.
+const ASSETS = `/pdfjs-assets-${mockPdfjsVersion}`;
+const ASSET_URLS = {
+  wasmUrl: `${ASSETS}/wasm/`,
+  standardFontDataUrl: `${ASSETS}/standard_fonts/`,
+  cMapUrl: `${ASSETS}/cmaps/`,
+  cMapPacked: true,
+  iccUrl: `${ASSETS}/iccs/`,
+};
 const FILE_B = 'https://example.test/doc-b.pdf';
 const importViewer = async () => (await import('./PdfViewer')).default;
 
@@ -144,7 +153,7 @@ describe('PdfViewer', () => {
     render(<PdfViewer file={FILE} filename="doc.pdf" />, { wrapper: TestWrapper });
 
     await waitFor(() => expect(getDocument).toHaveBeenCalledTimes(1));
-    expect(getDocument).toHaveBeenCalledWith({ url: FILE, worker: PDFWorkerDouble.instances[0] });
+    expect(getDocument).toHaveBeenCalledWith({ url: FILE, worker: PDFWorkerDouble.instances[0], ...ASSET_URLS });
   });
 
   it('hands pdf.js a dedicated module worker as an explicit port', async () => {
@@ -159,7 +168,7 @@ describe('PdfViewer', () => {
     expect(PDFWorkerDouble.instances).toHaveLength(1);
     const pdfWorker = PDFWorkerDouble.instances[0]!;
     expect(pdfWorker.params).toEqual({ port: webWorker });
-    expect(getDocument.mock.calls[0]![0]).toEqual({ url: FILE, worker: pdfWorker });
+    expect(getDocument.mock.calls[0]![0]).toEqual({ url: FILE, worker: pdfWorker, ...ASSET_URLS });
     expect(getDocument.mock.calls[0]![0].worker).toBe(pdfWorker);
   });
 

@@ -28,6 +28,14 @@ export const EmbedSessionContextSchema = z.object({
   organizationId: z.string().min(1),
   /** Fresh per mint; the per-session rate-limit and abuse-attribution handle. */
   sessionId: z.string().min(1),
+  /**
+   * Identified mode only: the host's authenticated B4M user, resolved at mint time
+   * from a federated ID token. Absent = anonymous (the key's org pays, nothing is
+   * persisted). Present = that user is the actor and pays from their own balance.
+   */
+  endUserId: z.string().min(1).optional(),
+  /** Identified mode only: the OAuth client that handed over `endUserId`, re-checked per use. */
+  oauthClientId: z.string().min(1).optional(),
 });
 
 export type EmbedSessionContext = z.infer<typeof EmbedSessionContextSchema>;
@@ -49,5 +57,10 @@ export function signEmbedSessionToken(ctx: EmbedSessionContext, ttlSeconds: numb
  */
 export function verifyEmbedSessionToken(token: string): EmbedSessionContext {
   const decoded = jwt.verify(token, Config.JWT_SECRET, { audience: EMBED_TOKEN_AUDIENCE });
-  return EmbedSessionContextSchema.parse(decoded);
+  const claims = EmbedSessionContextSchema.parse(decoded);
+  // An identified token is only ever minted with both; one without the other is not ours.
+  if (!!claims.endUserId !== !!claims.oauthClientId) {
+    throw new Error('Identified session token is missing its client binding');
+  }
+  return claims;
 }

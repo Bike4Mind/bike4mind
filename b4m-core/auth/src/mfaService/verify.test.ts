@@ -76,5 +76,6 @@ describe('verifyMFA', () => {
     expect(persisted.mfa!.failedAttempts).toBe(0);
     expect(persisted.mfa!.lockedUntil).toBeUndefined();
     expect(persisted.mfa!.lastFailedAttempt).toBeUndefined();
+    expect(persisted.mfa!.lastUsedAt).toBeInstanceOf(Date);
   });
 });

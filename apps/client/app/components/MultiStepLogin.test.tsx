@@ -53,6 +53,11 @@ vi.mock('@client/app/hooks/data/mfa', () => ({
   useSetupMFA: () => ({ mutateAsync: vi.fn() }),
   useVerifyMFASetup: () => ({ mutateAsync: vi.fn() }),
 }));
+vi.mock('@client/app/hooks/data/passkeys', () => ({
+  useVerifyPasskeyMFA: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  describePasskeyMfaError: () => 'Passkey verification failed',
+  passkeysSupported: () => false,
+}));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
   useRouter: () => ({ history: {} }),

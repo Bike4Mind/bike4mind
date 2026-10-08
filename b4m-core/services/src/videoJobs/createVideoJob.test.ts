@@ -5,6 +5,7 @@ import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
 import { GenerationJobEngine } from '../generationJobs/engine';
 import type { CreditHold, CreditHoldAdapters } from '../creditService/creditHold';
+import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import { createVideoJob } from './createVideoJob';
 import { createVideoJobHandler } from './videoJobHandler';
 import type { CreateVideoJobDeps, VideoJobDeps } from './types';
@@ -121,6 +122,30 @@ describe('createVideoJob', () => {
     });
   });
 
+  it.each([null, EXPIRED_KEY_SENTINEL])(
+    'rejects a provider whose key resolves to %j as model_unavailable, holding nothing',
+    async apiKey => {
+      const { deps } = makeDeps({ resolveApiKey: async () => apiKey });
+      expect(await createVideoJob({ user, request: validRequest, source: 'api' }, deps)).toMatchObject({
+        ok: false,
+        status: 422,
+        code: 'model_unavailable',
+      });
+      expect(holdCredits).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reports an admin-disabled model as model_disabled even when no key is configured', async () => {
+    const { deps } = makeDeps({
+      resolveApiKey: async () => null,
+      getSettings: async () => ({ enforceCredits: true, videoGeneration: { enabledModels: { 'test-video': false } } }),
+    });
+    expect(await createVideoJob({ user, request: validRequest, source: 'api' }, deps)).toMatchObject({
+      ok: false,
+      code: 'model_disabled',
+    });
+  });
+
   it("rejects image_to_video when the input image is not the user's", async () => {
     const { deps } = makeDeps({ loadInputImage: async () => null });
     const result = await createVideoJob(
@@ -186,6 +211,17 @@ describe('createVideoJob', () => {
     stored.payload.request = { ...stored.payload.request, audio: undefined };
     const second = await createVideoJob({ user, request: validRequest, source: 'api', idempotencyKey: 'k1' }, deps);
     expect(second).toMatchObject({ ok: true, created: false, job: { id: first.job.id } });
+  });
+
+  it('replays a repeated idempotency key even after the provider key was removed', async () => {
+    let key: string | null = 'key';
+    const { deps } = makeDeps({ resolveApiKey: async () => key });
+    const first = await createVideoJob({ user, request: validRequest, source: 'api', idempotencyKey: 'k1' }, deps);
+    if (!first.ok) throw new Error('expected the first call to succeed');
+    key = null;
+    const second = await createVideoJob({ user, request: validRequest, source: 'api', idempotencyKey: 'k1' }, deps);
+    expect(second).toMatchObject({ ok: true, created: false, job: { id: first.job.id } });
+    expect(holdCredits).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a reused idempotency key with a different request', async () => {

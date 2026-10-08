@@ -58,6 +58,7 @@ import {
   getSettingByName,
   getSettingsMap,
   getSettingsValue,
+  HTTPError,
   NotFoundError,
   ForbiddenError,
   TooManyRequestsError,
@@ -67,6 +68,7 @@ import {
   processUrlsFromPrompt,
   isOverloadedError,
   shouldTriggerFallback,
+  isSafetyRefusalError,
   stripAllToolBlocks,
   usdToCredits,
   usdToCreditsStochastic,
@@ -136,7 +138,7 @@ import {
   ELISION_MATCH_MAX,
   ELISION_NAME_MAX,
 } from './elisionStamp';
-import { buildEarlyStopStamp, buildIncompleteAnswerNotice } from './earlyStopStamp';
+import { buildEarlyStopStamp, buildIncompleteAnswerNotice, usageEventStatusForFinish } from './earlyStopStamp';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -144,6 +146,8 @@ import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
+import { resolveVideoToolConfigSafely } from './resolveVideoToolConfigSafely';
+import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -168,6 +172,7 @@ import {
 import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
+import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
@@ -213,6 +218,7 @@ import {
   categorizeToolError,
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
+  performanceFromPromptMeta,
 } from '../telemetry';
 import type {
   ToolTelemetry,
@@ -337,27 +343,6 @@ const CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC = 0;
  */
 export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 
-/**
- * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
- * non-history overhead reserved below) kept as VERBATIM conversation history
- * before older turns are folded into contextSummary. The fraction tunes the
- * verbatim/summary split of whatever room is left after overhead; it is NOT a
- * fraction of the raw window. Overridable per-deploy via the
- * ContextVerbatimWindowFraction admin setting.
- */
-export const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
-
-/**
- * Non-history input competes with the verbatim window for the same safe-input
- * budget: system prompts, tool schemas, the injected contextSummary, and the
- * current prompt. The verbatim budget must reserve room for these or the window
- * grows until history ALONE nears safe input while total input has already
- * overflowed - the turn then hits the hard overflow guard (which throws before
- * the reactive summarizer's onComplete can run) instead of compacting. These are
- * conservative floors used only to pick the summary boundary; the exact tokenizer
- * still enforces the real budget downstream in buildAndSortMessages.
- */
-export const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
 const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
 
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
@@ -579,6 +564,29 @@ export function isAbortError(error: unknown): boolean {
 
 export function isStreamIdleTimeoutError(error: Error): boolean {
   return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
+}
+
+/**
+ * True when a completion failure is a service fault worth counting on the operator
+ * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
+ * (billing, abort, request/stream timeout, tool pairing, overloaded, context overflow), which
+ * resolve the quest without rethrowing and so never reached /process's failure path. It is not an
+ * exact mirror: the handler matches timeouts case-sensitively and rethrows 4xx HTTPErrors (so
+ * /process counts them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and
+ * embed routes call this; /process does not.
+ */
+export function isOperatorFault(error: unknown): boolean {
+  if (resolveQuestErrorCode(error)) return false;
+  if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
+  if (!(error instanceof Error)) return true;
+  return !(
+    isAbortError(error) ||
+    isRequestTimeoutError(error) ||
+    isStreamIdleTimeoutError(error) ||
+    isToolPairingError(error) ||
+    isOverloadedError(error) ||
+    error.message.startsWith('Your request is too large for')
+  );
 }
 
 /**
@@ -1709,6 +1717,7 @@ export class ChatCompletionProcess {
     prefetchedSession,
     prefetchedOrganization,
     externalTools,
+    videoToolConfigResolver,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -1721,6 +1730,8 @@ export class ChatCompletionProcess {
     prefetchedOrganization?: IOrganizationDocument | null;
     /** External tool definitions (e.g., Slack tools) that can't be serialized through EventBridge */
     externalTools?: Record<string, ToolDefinition>;
+    /** Resolves the video tool's capability; only invoked when video_generation is enabled. */
+    videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
@@ -3055,6 +3066,10 @@ export class ChatCompletionProcess {
         (dataSources as any).remainingUserPrompt = urlResult.remainingPrompt;
       }
 
+      const videoToolConfig = enabledTools.includes('video_generation')
+        ? await resolveVideoToolConfigSafely(videoToolConfigResolver, logger)
+        : null;
+
       let allTools = toolBuilder.buildTools({
         enabledTools,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
@@ -3080,6 +3095,7 @@ export class ChatCompletionProcess {
           edit_image: imageConfig,
           audio_generation: audioConfig,
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
+          video_generation: videoToolConfig ?? undefined,
         },
         model,
         organization,
@@ -4839,6 +4855,34 @@ export class ChatCompletionProcess {
               logger.error(lastError);
             }
             const isRetryableError = shouldTriggerFallback(lastError);
+            // A refused call throws rather than settles, so record it here, whether or not a
+            // fallback then answers. Same enforceCredits gate as the settlement row. Not billed:
+            // the user got no output, and the backend throws before reporting usage, so its
+            // tokens and COGS are unknown and left at 0.
+            if (adminSettingsEnforceCredits && isSafetyRefusalError(lastError)) {
+              this.db.usageEvents
+                ?.record({
+                  requestId: quest.id,
+                  userId: this.user.id,
+                  ownerId: this.reservedCreditsOwnerId || this.user.id,
+                  ownerType: this.reservedCreditsOwnerType,
+                  sessionId: quest.sessionId,
+                  feature: 'chat',
+                  provider: currentModel.backend,
+                  model: currentModel.id,
+                  source: 'web',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  cachedInputTokens: 0,
+                  cacheWriteTokens: 0,
+                  costUsd: 0,
+                  creditsCharged: 0,
+                  status: 'refusal',
+                })
+                .catch((usageEventError: unknown) => {
+                  logger.warn('Failed to record refusal usage event', usageEventError);
+                });
+            }
 
             logger.warn(
               `❌ [${Date.now() - processStartTime}ms] LLM completion failed with ${
@@ -5688,7 +5732,7 @@ export class ChatCompletionProcess {
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
               // Not always 'ok': a turn we aborted as degenerate is priced like any other
               // (the provider tokens were really spent) but has to be findable for a refund.
-              status: earlyStopStamp?.usageEventStatus ?? 'ok',
+              status: usageEventStatusForFinish(providerStopReason),
               latencyMs: Date.now() - processStartTime,
             })
             .catch((usageEventError: unknown) => {
@@ -5873,11 +5917,12 @@ export class ChatCompletionProcess {
             telemetryBuilder.setFinishReason(finishReason);
             telemetryBuilder.setUsedTools(hasToolCalls);
 
-            // Set performance metrics (use promptMeta values which are set earlier)
-            telemetryBuilder.setPerformance({
-              totalResponseTimeMs: totalResponseTime,
-              modelInferenceMs: quest.promptMeta?.performance?.modelInferenceTime,
-            });
+            // Set performance metrics (use promptMeta values which are set earlier). The TTFVT
+            // pair is forwarded unaltered so a never-rendered turn stays distinguishable from
+            // a fast one downstream; see performanceFromPromptMeta.
+            telemetryBuilder.setPerformance(
+              performanceFromPromptMeta(quest.promptMeta?.performance, totalResponseTime)
+            );
 
             // Set context window metrics (for M3, but initialize here)
             telemetryBuilder.setContextWindow({

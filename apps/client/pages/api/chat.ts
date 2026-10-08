@@ -225,6 +225,9 @@ const handler = nextRouteForContract(chatContract, {
         ...internalRequest,
         questId: quest.id,
         userId: req.user.id,
+        // Mirrors the apiKeyId handed to invoke() above: process() reads the tool context's key
+        // from this body only, so without it a key turn reaches tools as a signed-in session.
+        apiKeyId: req.apiKeyInfo?.keyId,
         embeddingModel: currentEmbeddingModel,
         queryComplexity: 'simple',
         // Optional schema fields - declared for QuestStartBodySchema type conformance

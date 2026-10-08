@@ -2,6 +2,7 @@ import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
   isImageServeable,
+  isPlaceholderApiKey,
   KnowledgeType,
   videoFileExtension,
   type IGenerationJobDocument,
@@ -26,9 +27,16 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { fabFilesService, modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
-import { createVideoJobHandler, type VideoJobDeps } from '@bike4mind/services/videoJobs';
+import { createVideoJobHandler, type CreateVideoJobDeps, type VideoJobDeps } from '@bike4mind/services/videoJobs';
 import { ClientMessageSender, getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { createVideoProviderRegistry, TestVideoProvider, type VideoProvider } from '@bike4mind/utils/videoProviders';
+import {
+  createVideoProviderRegistry,
+  GeminiOmniVideoProvider,
+  TestVideoProvider,
+  VeoVideoProvider,
+  XaiVideoProvider,
+  type VideoProvider,
+} from '@bike4mind/utils/videoProviders';
 import { isValidObjectId } from '@server/utils/objectId';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { sendToQueue } from '@server/utils/sqs';
@@ -49,21 +57,29 @@ const SAVE_FAILURE_PATTERNS = {
 /**
  * Maps the raw value of a provider key to one a provider call may use. getEffectiveLLMApiKeys answers an
  * expired per-user key with the expired-key sentinel (a truthy string, so it would otherwise reach the
- * provider as a bearer token); a missing or empty key is null or ''.
+ * provider as a bearer token); a missing or empty key is null or ''. A placeholder (your-api-key,
+ * REPLACE_ME, ...) is no key either, as in modelDiscoveryService/credentials.ts: otherwise a
+ * half-configured stage lists the model, holds credits and only fails after the submit retries.
  */
 export const usableApiKey = (raw: string | null | undefined): string | null => {
-  if (!raw || raw === modelDiscoveryService.EXPIRED_KEY_SENTINEL) return null;
+  if (!raw || raw === modelDiscoveryService.EXPIRED_KEY_SENTINEL || isPlaceholderApiKey(raw)) return null;
   return raw;
 };
 
 /** Each provider adapter adds its case here; the exhaustive switch makes the compiler demand it. */
 export const selectProviderKey = (
   providerId: VideoProviderId,
-  _keys: Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>
+  keys: Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>
 ): string | null | undefined => {
   switch (providerId) {
     case 'test':
       return 'test-key';
+    case 'gemini-omni':
+    case 'veo':
+      return keys.gemini;
+    // The same key as xAI chat (user key, admin setting, then XAI_API_KEY).
+    case 'xai':
+      return keys.xai;
     default: {
       const unhandled: never = providerId;
       throw new Error(`no API key mapping for video provider '${String(unhandled)}'`);
@@ -92,8 +108,10 @@ export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedA
   };
 };
 
-const buildProviders = (): VideoProvider[] => {
-  const providers: VideoProvider[] = [];
+// Gemini, xAI and Veo are registered everywhere; whether a caller can use one depends on a resolvable key
+// (hasUsableKey in server/videoGenerations/listUsableVideoModels.ts).
+export const buildProviders = (): VideoProvider[] => {
+  const providers: VideoProvider[] = [new GeminiOmniVideoProvider(), new XaiVideoProvider(), new VeoVideoProvider()];
   // Set only on non-production stages by infra (TEST_VIDEO_PROVIDER_ENVIRONMENT); never registered in production.
   if (process.env.ENABLE_TEST_VIDEO_PROVIDER === 'true') providers.push(new TestVideoProvider());
   return providers;
@@ -146,7 +164,7 @@ export const loadInputImage: VideoJobDeps['loadInputImage'] = async (userId, fil
   return { bytes, mimeType: fabFile.mimeType };
 };
 
-export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, bytes, contentType }) => {
+export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, bytes, contentType, signal }) => {
   const jobTag = `job:${jobId}`;
   // A re-run after a lost commit must not store a second copy.
   const existing = await fabFileRepository.findOne({
@@ -189,7 +207,7 @@ export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, 
         },
         storage: {
           upload: (path, content, options) =>
-            getFilesStorage().upload(content, path, { ContentType: options?.ContentType || contentType }),
+            getFilesStorage().upload(content, path, { ContentType: options?.ContentType || contentType }, signal),
           generateSignedUrl: (path, expireInSeconds, type) =>
             getFilesStorage().getSignedUrl(path, type ?? 'get', { expiresIn: expireInSeconds }),
         },
@@ -204,6 +222,8 @@ export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, 
     }
     return { saved: true, fileId: created.id, s3Key: created.filePath };
   } catch (error) {
+    // An aborted step must fail the step (and be retried), not fall back to the generated bucket.
+    if (signal.aborted) throw error;
     const message = error instanceof Error ? error.message : '';
     if (SAVE_FAILURE_PATTERNS.storage_limit.test(message)) return { saved: false, reason: 'storage_limit' };
     if (SAVE_FAILURE_PATTERNS.file_too_large.test(message)) return { saved: false, reason: 'file_too_large' };
@@ -212,8 +232,8 @@ export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, 
   }
 };
 
-const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType }) => {
-  await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType });
+const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {
+  await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType }, signal);
   return { s3Key: key };
 };
 
@@ -225,7 +245,7 @@ const getSettings: VideoJobDeps['getSettings'] = async () => {
   };
 };
 
-const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, costUsd, durationSeconds }) => {
+const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, costUsd, durationSeconds, status }) => {
   try {
     await usageEventRepository.record({
       requestId: job.questId ?? job.id,
@@ -242,7 +262,7 @@ const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, c
       units: durationSeconds,
       costUsd,
       creditsCharged,
-      status: 'ok',
+      status,
       latencyMs: Date.now() - (job.createdAt?.getTime() ?? Date.now()),
     });
   } catch (error) {
@@ -278,6 +298,11 @@ export const getVideoJobDeps = (): VideoJobDeps => {
   };
   return videoJobDeps;
 };
+
+export const getCreateVideoJobDeps = (): CreateVideoJobDeps => ({
+  ...getVideoJobDeps(),
+  engine: getGenerationJobEngine(),
+});
 
 let generationJobEngine: GenerationJobEngine | undefined;
 export const getGenerationJobEngine = (): GenerationJobEngine => {

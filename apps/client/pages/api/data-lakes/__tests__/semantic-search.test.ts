@@ -170,10 +170,13 @@ vi.mock('@bike4mind/services', async () => ({
   // Real per-member cap predicate - it is the shared billing decision under test, so a
   // reimplementation here would prove nothing.
   creditService: await import('../../../../../../b4m-core/services/src/creditService/memberCreditCap'),
+  // Real roster predicate, for the same reason: the API-key membership refusal is decided by it.
+  organizationService: await import('../../../../../../b4m-core/services/src/organizationService/orgAuthority'),
 }));
 
 import {
   BedrockEmbeddingModel,
+  BadRequestError,
   CreditHolderType,
   getQuestErrorCode,
   ModelBackend,
@@ -236,7 +239,15 @@ const makeReq = (
   body: unknown,
   user: Record<string, unknown> = { id: 'u1', tags: [] },
   apiKeyInfo?: Record<string, unknown>
-) => ({ user, apiKeyInfo, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() } }) as never;
+) =>
+  ({
+    user,
+    apiKeyInfo,
+    body,
+    headers: {},
+    on: vi.fn(),
+    logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+  }) as never;
 
 const makeRes = () => {
   const res: Record<string, unknown> = { writableEnded: false };
@@ -1135,6 +1146,7 @@ describe('POST /api/data-lakes/semantic-search access-event audit', () => {
     const req = {
       user: { id: 'u1', tags: [] },
       body: { query: 'pto policy' },
+      headers: {},
       on: vi.fn((event: string, cb: () => void) => {
         if (event === 'close') closeCallback = cb;
       }),
@@ -1211,6 +1223,28 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     );
 
     expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+
+  it("refuses an org-billed API key whose holder has left the key's organization, with a 400", async () => {
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'seat-org' }));
+    mockFindOrgById.mockResolvedValue({ id: 'key-org', userId: 'owner', users: [], currentCredits: 1000 });
+
+    const rejection = handler(
+      makeReq({ query: 'onboarding' }, undefined, {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'key-org',
+      }),
+      makeRes()
+    );
+
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/no longer a member/),
+    });
+    expect(mockFindOrgById).toHaveBeenCalledWith('key-org');
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
   });
 
   it('falls back to personal billing when the org pointer is stale - the caller is not on that roster (#2769)', async () => {

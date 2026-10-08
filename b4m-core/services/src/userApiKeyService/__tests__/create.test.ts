@@ -19,20 +19,17 @@ function makeRepo(
     countActiveByUserId: ReturnType<typeof vi.fn>;
     countActiveByProductId: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
+    createIfUnderCap: ReturnType<typeof vi.fn>;
     updateLastUsed: ReturnType<typeof vi.fn>;
   }> = {}
 ) {
+  const docImpl = (doc: Record<string, unknown>) => ({ ...doc, id: 'key-1', createdAt: new Date() });
   return {
     countActiveByUserId: overrides.countActiveByUserId ?? vi.fn().mockResolvedValue(0),
     countActiveByProductId: overrides.countActiveByProductId ?? vi.fn().mockResolvedValue(0),
     updateLastUsed: overrides.updateLastUsed ?? vi.fn().mockResolvedValue(undefined),
-    create:
-      overrides.create ??
-      vi.fn().mockImplementation((doc: Record<string, unknown>) => ({
-        ...doc,
-        id: 'key-1',
-        createdAt: new Date(),
-      })),
+    create: overrides.create ?? vi.fn().mockImplementation(docImpl),
+    createIfUnderCap: overrides.createIfUnderCap ?? vi.fn().mockImplementation(docImpl),
   };
 }
 
@@ -87,19 +84,18 @@ describe('createUserApiKey — overwatch ingest scope', () => {
     ).resolves.toBeDefined();
   });
 
-  it('system user bypasses per-user 10-key cap', async () => {
-    repo = makeRepo({
-      countActiveByUserId: vi.fn().mockResolvedValue(15),
-      countActiveByProductId: vi.fn().mockResolvedValue(0),
-    });
-    // systemUserId === userId, so bypass
+  it('system user bypasses per-user cap (calls create directly, not createIfUnderCap)', async () => {
+    repo = makeRepo({ countActiveByProductId: vi.fn().mockResolvedValue(0) });
+    // systemUserId === userId: create is called directly, skipping the atomic cap check.
     await expect(
       createUserApiKey('sys-1', baseParams, { db: { userApiKeys: repo as any }, systemUserId: 'sys-1' })
     ).resolves.toBeDefined();
+    expect(repo.create).toHaveBeenCalled();
+    expect(repo.createIfUnderCap).not.toHaveBeenCalled();
   });
 
   it('rogue-admin scenario: non-system user hits 10-key cap, tagged with a stable code', async () => {
-    repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(10) });
+    repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
     const error = await createUserApiKey('admin-1', baseParams, {
       db: { userApiKeys: repo as any },
       systemUserId: 'sys-1',
@@ -265,11 +261,13 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
     // EmbedOriginsSchema lowercases + dedupes.
     expect(result.allowedOrigins).toEqual(['https://example.com', 'https://widgets.example.org']);
     expect(result.branding).toEqual({ displayName: 'Acme Assistant', hideBranding: true });
-    expect(repo.create).toHaveBeenCalledWith(
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: 'agent-1',
         allowedOrigins: ['https://example.com', 'https://widgets.example.org'],
-      })
+      }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
     );
   });
 
@@ -290,12 +288,14 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
     const result = await createUserApiKey('user1', embedParams, adapters());
     expect(result.billingOwnerType).toBe(CreditHolderType.Organization);
     expect(result.organizationId).toBe('org-1');
-    expect(repo.create).toHaveBeenCalledWith(
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: 'agent-1',
         billingOwnerType: CreditHolderType.Organization,
         organizationId: 'org-1',
-      })
+      }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
     );
   });
 
@@ -382,7 +382,11 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
   it('persists and echoes spendCap on an embed key', async () => {
     const result = await createUserApiKey('user1', { ...embedParams, spendCap: 5000 }, adapters());
     expect(result.spendCap).toBe(5000);
-    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ spendCap: 5000 }));
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ spendCap: 5000 }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
   });
 
   it('allows an embed key with no spendCap (uncapped)', async () => {
@@ -460,51 +464,64 @@ describe('createUserApiKey - per-user cap pools', () => {
     );
   }
 
-  it('counts an exchange mint against the oauth-exchange pool only', async () => {
+  it('routes an exchange mint through the oauth-exchange pool', async () => {
     const repo = makeRepo();
     await createUserApiKey('user-1', exchangeParams, adapters(repo));
-    expect(repo.countActiveByUserId).toHaveBeenCalledTimes(1);
-    expect(repo.countActiveByUserId).toHaveBeenCalledWith('user-1', 'oauth-exchange');
+    expect(repo.createIfUnderCap).toHaveBeenCalledTimes(1);
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1' }),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
   });
 
-  it('counts a dashboard mint against the standard pool only', async () => {
+  it('routes a dashboard mint through the standard pool', async () => {
     const repo = makeRepo();
     await createUserApiKey('user-1', dashboardParams, adapters(repo));
-    expect(repo.countActiveByUserId).toHaveBeenCalledTimes(1);
-    expect(repo.countActiveByUserId).toHaveBeenCalledWith('user-1', 'standard');
+    expect(repo.createIfUnderCap).toHaveBeenCalledTimes(1);
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1' }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
   });
 
-  it('lets an exchange mint through when the standard pool is full', async () => {
-    const repo = makeRepo({
-      countActiveByUserId: vi.fn(async (_userId: string, pool: string) =>
-        pool === 'standard' ? MAX_ACTIVE_KEYS_PER_USER : 0
-      ),
-    });
+  it('lets an exchange mint through regardless of the standard pool state', async () => {
+    const repo = makeRepo();
     await expect(createUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.anything(),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
   });
 
-  it('lets a dashboard mint through when the exchange pool is full', async () => {
-    const repo = makeRepo({
-      countActiveByUserId: vi.fn(async (_userId: string, pool: string) =>
-        pool === 'oauth-exchange' ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER : 0
-      ),
-    });
+  it('lets a dashboard mint through regardless of the exchange pool state', async () => {
+    const repo = makeRepo();
     await expect(createUserApiKey('user-1', dashboardParams, adapters(repo))).resolves.toBeDefined();
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), MAX_ACTIVE_KEYS_PER_USER, 'standard');
   });
 
-  it('refuses an exchange mint at the exchange cap, tagged with the shared cap code', async () => {
-    const repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(MAX_ACTIVE_EXCHANGE_KEYS_PER_USER) });
+  it('refuses an exchange mint when createIfUnderCap signals at_cap, tagged with the shared cap code', async () => {
+    const repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
     const error = await mintError(exchangeParams, repo);
     expect(error).toBeInstanceOf(BadRequestError);
     expect(error?.message).toBe(
       `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
     );
     expect(error?.additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
-    expect(repo.create).not.toHaveBeenCalled();
   });
 
-  it('allows an exchange mint one below the exchange cap', async () => {
-    const repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(MAX_ACTIVE_EXCHANGE_KEYS_PER_USER - 1) });
+  it('refuses a standard mint when createIfUnderCap signals at_cap, tagged with the shared cap code', async () => {
+    const repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
+    const error = await mintError(dashboardParams, repo);
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(error?.message).toBe(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`);
+    expect(error?.additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
+  });
+
+  it('succeeds when createIfUnderCap returns a document (cap not hit)', async () => {
+    const repo = makeRepo();
     await expect(createUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
   });
 
@@ -539,8 +556,10 @@ describe('userApiKeyService - createUserApiKey org billing', () => {
 
     expect(result.billingOwnerType).toBe(CreditHolderType.User);
     expect(result.organizationId).toBeUndefined();
-    expect(repo.create).toHaveBeenCalledWith(
-      expect.objectContaining({ billingOwnerType: CreditHolderType.User, organizationId: undefined })
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOwnerType: CreditHolderType.User, organizationId: undefined }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
     );
   });
 
@@ -553,8 +572,10 @@ describe('userApiKeyService - createUserApiKey org billing', () => {
 
     expect(result.billingOwnerType).toBe(CreditHolderType.Organization);
     expect(result.organizationId).toBe('org1');
-    expect(repo.create).toHaveBeenCalledWith(
-      expect.objectContaining({ billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' })
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
     );
   });
 
@@ -621,7 +642,7 @@ describe('userApiKeyService - createUserApiKey confined-scope mint guard', () =>
     );
 
     expect(result.id).toBe('key-1');
-    expect(repo.create).toHaveBeenCalled();
+    expect(repo.createIfUnderCap).toHaveBeenCalled();
   });
 
   it('reports the confined-scope reason before the embed agentId requirement', async () => {
@@ -654,7 +675,11 @@ describe('userApiKeyService - createUserApiKey preauthorizedLakeIds', () => {
     );
 
     expect(result.preauthorizedLakeIds).toEqual(['lake1', 'lake2']);
-    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ preauthorizedLakeIds: ['lake1', 'lake2'] }));
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ preauthorizedLakeIds: ['lake1', 'lake2'] }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
   });
 
   it('leaves preauthorizedLakeIds undefined when not given', async () => {
@@ -710,7 +735,11 @@ describe('userApiKeyService - createUserApiKey no escalation by minting', () => 
       db: { userApiKeys: repo },
       callerScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES],
     });
-    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ scopes: [ApiKeyScope.AI_CHAT] }));
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: [ApiKeyScope.AI_CHAT] }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
   });
 
   it('leaves a browser/JWT caller (no callerScopes) unrestricted', async () => {
@@ -719,7 +748,7 @@ describe('userApiKeyService - createUserApiKey no escalation by minting', () => 
       { ...chatParams, scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES] },
       { db: { userApiKeys: repo } }
     );
-    expect(repo.create).toHaveBeenCalled();
+    expect(repo.createIfUnderCap).toHaveBeenCalled();
   });
 
   it('refuses a non-expiring child key when the caller key expires', async () => {
@@ -749,6 +778,10 @@ describe('userApiKeyService - createUserApiKey no escalation by minting', () => 
       { ...chatParams, expiresAt: new Date('2027-01-01') },
       { db: { userApiKeys: repo }, callerExpiresAt: new Date('2027-01-01') }
     );
-    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ expiresAt: new Date('2027-01-01') }));
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresAt: new Date('2027-01-01') }),
+      MAX_ACTIVE_KEYS_PER_USER,
+      'standard'
+    );
   });
 });

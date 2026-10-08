@@ -6,6 +6,7 @@ import { LAKE_FINDING_RESOLUTION_MAX_CHARS, type LakeFindingTerminalStatus } fro
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { loadFindingForLake } from '@server/dataLakes/loadFindingForLake';
 import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingResolutionBelief';
 
@@ -77,8 +78,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // The gate and the write share one transaction so a grant revoke committing mid-request collides
     // on the lake doc and the retry re-reads live grants. The belief write below stays outside: it
     // makes an embedding call a retry would repeat.
+    // Resolved outside the transaction: it issues concurrent reads, which an ambient session rejects.
+    const ctx = await toAccessContext(req);
+
     const outcome = await withTransaction(async () => {
-      const { lake, ctx } = await loadFindingForLake(req, { lakeId: id, findingId });
+      const { lake } = await loadFindingForLake(req, { lakeId: id, findingId, ctx });
 
       // AFTER the gates, deliberately: an unauthorized caller learns nothing about their own payload,
       // and by the time a 400 is reachable the caller has already proven they manage this lake.

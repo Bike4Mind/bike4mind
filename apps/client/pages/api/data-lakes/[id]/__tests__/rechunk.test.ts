@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
+  isFallbackLake: vi.fn(() => false),
   assertLakeAccess: vi.fn(),
   assertLakeRebuildAccess: vi.fn(),
   detectUnderChunkedFiles: vi.fn(),
@@ -30,6 +34,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     assertLakeRebuildAccess: h.assertLakeRebuildAccess,
+    isFallbackLake: h.isFallbackLake,
     detectUnderChunkedFiles: h.detectUnderChunkedFiles,
     detectStaleEmbeddingSpaceFiles: h.detectStaleEmbeddingSpaceFiles,
     countFailedLakeFiles: h.countFailedLakeFiles,
@@ -41,7 +46,15 @@ vi.mock('@server/embeddings/effectiveEmbeddingModel', () => ({
   resolveEffectiveEmbeddingModel: h.resolveEffectiveEmbeddingModel,
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {
     resetChunkStateByIds: h.resetChunkStateByIds,
@@ -80,8 +93,11 @@ const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme', createdByUserId: 'u
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
+  h.isFallbackLake.mockReturnValue(false);
   h.assertLakeAccess.mockResolvedValue(lake);
-  h.assertLakeRebuildAccess.mockResolvedValue(lake);
+  h.assertLakeRebuildAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
+  h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
   h.countFailedLakeFiles.mockResolvedValue(0);
   h.detectStaleEmbeddingSpaceFiles.mockResolvedValue([]);
   // A deployment whose space IS resolvable, so the refusal arm is opt-in rather than the default.
@@ -89,8 +105,8 @@ beforeEach(() => {
   // By default the claim wins every id it's asked for, each with a claim stamp (the token the
   // message carries so the worker can reject a superseded/duplicate delivery).
   // Returns the ids actually reset - a file a worker is mid-run on is skipped (round-8 P1).
-  h.resetChunkStateByIds.mockImplementation(async (ids: string[]) => ids);
-  h.sendToQueue.mockResolvedValue(undefined);
+  h.resetChunkStateByIds.mockImplementation(async (ids: string[]) => (h.tx.push('reset'), ids));
+  h.sendToQueue.mockImplementation(async () => void h.tx.push('send'));
   // Switch OFF by default; the paused cases below opt in.
   h.isConvergenceHalted.mockResolvedValue(false);
 });
@@ -160,6 +176,39 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
 });
 
 describe('POST /api/data-lakes/[id]/rechunk', () => {
+  it('re-gates and resets inside the transaction, touches the lake last, and sends after commit', async () => {
+    h.detectUnderChunkedFiles.mockResolvedValue([
+      { fabFileId: 'f1', userId: 'u1' },
+      { fabFileId: 'f2', userId: 'u1' },
+    ]);
+    await invoke('POST');
+
+    // Early gate (outside), then the in-txn re-gate, the reset, the touch, and only then the sends.
+    expect(h.tx).toEqual(['gate', 'enter', 'gate', 'reset', 'touch', 'exit', 'send', 'send']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
+  });
+
+  it('still resets but does not touch when the lake is a fallback lake with no Mongo doc', async () => {
+    h.detectUnderChunkedFiles.mockResolvedValue([{ fabFileId: 'f1', userId: 'u1' }]);
+    h.isFallbackLake.mockReturnValue(true);
+
+    await invoke('POST');
+
+    expect(h.resetChunkStateByIds).toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
+
+  it('touches nothing and sends nothing when the in-transaction re-gate refuses', async () => {
+    h.detectUnderChunkedFiles.mockResolvedValue([{ fabFileId: 'f1', userId: 'u1' }]);
+    h.assertLakeRebuildAccess.mockResolvedValueOnce(lake).mockRejectedValueOnce(new Error('forbidden'));
+
+    await expect(invoke('POST')).rejects.toThrow('forbidden');
+
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
   it('enqueues only the files the reset actually won, and folds the skipped ones back into remaining', async () => {
     // A file a worker is mid-run on is skipped by the reset's precondition, so resetIds is a proper
     // subset of the wave. Every other test here mocks the reset as identity, which makes skipped
@@ -190,7 +239,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     ]);
     const { json } = await invoke('POST', {});
     expect(h.assertLakeRebuildAccess).toHaveBeenCalled();
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2'], { concurrency: 1 });
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f1',
@@ -214,7 +263,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
       { fabFileId: 'c', userId: 'u' },
     ]);
     const { json } = await invoke('POST', { limit: 2 });
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b'], { concurrency: 1 });
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(json).toHaveBeenCalledWith({ detected: 3, enqueued: 2, remaining: 1 });
   });
@@ -227,7 +276,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     // first send lands, second rejects (SQS hiccup)
     h.sendToQueue.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('sqs unavailable'));
     const { json } = await invoke('POST', {});
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['ok', 'bad']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['ok', 'bad'], { concurrency: 1 });
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 1, remaining: 1 });
   });
 
@@ -240,7 +289,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     // One bulk reset for the wave - no per-file claim, because mutual exclusion is the chunk
     // worker's compare-and-set, not a producer-side reservation.
     expect(h.resetChunkStateByIds).toHaveBeenCalledTimes(1);
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b'], { concurrency: 1 });
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 2, remaining: 0 });
   });
@@ -332,7 +381,7 @@ describe('POST /api/data-lakes/[id]/rechunk  select: stale-embedding-space', () 
 
     expect(h.detectUnderChunkedFiles).not.toHaveBeenCalled();
     expect(h.detectStaleEmbeddingSpaceFiles).toHaveBeenCalledWith(lake, expect.anything(), 'text-embedding-3-small');
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2'], { concurrency: 1 });
     // Each message carries the FILE's owner, not the caller: the chunk worker loads the file under
     // that identity, so the admin's id would fail the accessibility read.
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
@@ -372,7 +421,7 @@ describe('POST /api/data-lakes/[id]/rechunk  select: stale-embedding-space', () 
       { fabFileId: 'c', userId: 'u' },
     ]);
     const { json } = await invoke('POST', { ...body, limit: 2 });
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b'], { concurrency: 1 });
     expect(json).toHaveBeenCalledWith({ detected: 3, enqueued: 2, remaining: 1 });
   });
 

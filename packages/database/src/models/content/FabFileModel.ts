@@ -25,6 +25,7 @@ import {
   UNCATEGORIZED_TAG_SUFFIX,
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
+  type FabFileTypeFilter,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -851,7 +852,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+      type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[];
@@ -2747,7 +2748,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     ]);
   }
 
-  async resetChunkStateByIds(ids: string[]): Promise<string[]> {
+  async resetChunkStateByIds(ids: string[], options: { concurrency?: number } = {}): Promise<string[]> {
     if (ids.length === 0) return [];
     // The ONE reset shape for re-chunking, shared by the bulk "Rebuild passages" wave and the
     // per-file reprocess route, so the two cannot drift on which fields they clear.
@@ -2773,10 +2774,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // queues 198 of them, and on self-host - one long-lived process sharing that pool with every
     // other request - it stalls unrelated queries for the length of the wave. Purely a scheduling
     // bound: the per-document precondition and the exact returned-id set are unchanged.
+    const concurrency = Math.max(1, options.concurrency ?? RESET_CONCURRENCY);
     const results: (string | null)[] = [];
-    for (let i = 0; i < ids.length; i += RESET_CONCURRENCY) {
+    for (let i = 0; i < ids.length; i += concurrency) {
       const batch = await Promise.all(
-        ids.slice(i, i + RESET_CONCURRENCY).map(async id => {
+        ids.slice(i, i + concurrency).map(async id => {
           const doc = await this.fabFileModel.findOneAndUpdate(
             { _id: id, isChunking: { $ne: true } },
             {
@@ -3615,6 +3617,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // "never failed" sorts ahead of any attempted row without a backfill.
     moderationAttempts: { type: Number, required: false },
     moderationLastAttemptAt: { type: Date, required: false },
+    // See IFabFile.storageChargedAt and server/s3/storageCharge.ts.
+    storageChargedAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },

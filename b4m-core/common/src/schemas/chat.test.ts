@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { SimplifiedChatRequestSchema, ChatAckSchema, ChatQuestPollResultSchema } from './chat';
+import { SimplifiedChatRequestSchema, ChatAckSchema, ChatQuestPollResultSchema, ChatWaitResponseSchema } from './chat';
+import { chatContract } from '../api-contract/contracts/chat.contract';
 import { CHAT_HISTORY_ITEM_TYPES } from '../types/entities/SessionTypes';
 import { filterKnownTools, B4MLLMToolsList } from './llm';
 
@@ -139,5 +140,46 @@ describe('filterKnownTools', () => {
   it('does not treat inherited Array/Object properties as tools', () => {
     // `includes` on the id list is the guard; a prototype-key probe must not slip through.
     expect(filterKnownTools(['constructor', 'toString', '__proto__'])).toEqual([]);
+  });
+});
+
+// Mirrors the `wait: true` res.json({...}) in apps/client/pages/api/chat.ts.
+const waitBody = {
+  ...baseAck,
+  sessionId: 'session-1',
+  type: 'message',
+  response: 'Hello',
+  responses: ['Hello'],
+  toolPayloads: [{ type: 'brief_updated', payload: { id: 'brief-1' } }],
+  createdAt: new Date('2026-09-15T00:00:00Z'),
+  performance: { total_ms: 12, phases: { auth: 2 }, pipeline_phases: { llm: 8 } },
+};
+
+describe('ChatWaitResponseSchema', () => {
+  it('accepts the handler body with createdAt as a Date (pre-serialization) and as an ISO string', () => {
+    expect(ChatWaitResponseSchema.safeParse(waitBody).success).toBe(true);
+    expect(ChatWaitResponseSchema.safeParse({ ...waitBody, createdAt: '2026-09-15T00:00:00Z' }).success).toBe(true);
+  });
+
+  it.each(['response', 'responses', 'toolPayloads', 'createdAt', 'performance', 'type'] as const)(
+    'requires %s',
+    field => {
+      const { [field]: _omitted, ...rest } = waitBody;
+      expect(ChatWaitResponseSchema.safeParse(rest).success).toBe(false);
+    }
+  );
+
+  it('accepts a null response (a turn with no visible reply)', () => {
+    expect(ChatWaitResponseSchema.safeParse({ ...waitBody, response: null }).success).toBe(true);
+  });
+
+  it('rejects a non-array responses', () => {
+    expect(ChatWaitResponseSchema.safeParse({ ...waitBody, responses: 'Hello' }).success).toBe(false);
+  });
+
+  it('is one branch of the contract 200, alongside the plain ack', () => {
+    const schema = chatContract.responses[200].schema!;
+    expect(schema.safeParse(waitBody).success).toBe(true);
+    expect(schema.safeParse(baseAck).success).toBe(true);
   });
 });

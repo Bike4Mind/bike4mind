@@ -453,7 +453,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       // Unset means nothing visible ever streamed - see PromptMetaPerformanceSchema.
       firstTokenTime: { type: Number, required: false },
       firstChunkTime: { type: Number, required: false },
-      // Posted back by the client after it renders the first token (quests/[id]/client-timing).
+      // Legacy: written here before it moved to the top-level `clientFirstTokenTime`. Kept for old quests.
       clientFirstTokenTime: { type: Number, required: false },
       streamingPerformance: {
         chunkCount: { type: Number, required: false },
@@ -570,6 +570,8 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // `IChatHistoryItem.correctsQuestId` - a field declared only on the type is dropped on write
     // by Mongoose strict mode, with no error.
     correctsQuestId: { type: String, required: false },
+    // See `IChatHistoryItem.clientFirstTokenTime` for why this is not under promptMeta.performance.
+    clientFirstTokenTime: { type: Number, required: false },
     // Provenance of the routing decision that produced this quest.
     // Drives the `AutoRouteBadge` rendering above auto-routed responses
     // (classifier- or rule-based complexity-routed).
@@ -580,6 +582,7 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     },
     images: { type: [String], required: false },
     videos: { type: [String], required: false },
+    videoJobIds: { type: [String], default: undefined },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -1118,6 +1121,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           replies: 1,
           images: 1,
           videos: 1,
+          videoJobIds: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1166,34 +1170,13 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Set only `promptMeta.performance.clientFirstTokenTime`. The client posts it while the quest is
-   * still streaming, so a read-modify-write of the whole `promptMeta` would clobber whatever the
-   * pipeline saved in between. Returns whether a quest matched.
-   *
-   * Goes through an update pipeline, not a dotted `$set`, for the same reason as `settleIfUnfinished`:
-   * a null `promptMeta` (or `performance`) makes the dotted path error, while `$mergeObjects` treats
-   * a null or missing operand as empty.
+   * Set only the top-level `clientFirstTokenTime`, which the client posts while the quest is still
+   * streaming. A single-field `$set` leaves the pipeline's concurrent writes alone, and the
+   * pipeline's whole-`promptMeta` saves cannot erase a field outside `promptMeta`. Returns whether a
+   * quest matched.
    */
   async setClientFirstTokenTime(id: string, clientFirstTokenTime: number): Promise<boolean> {
-    const result = await this.model.updateOne({ _id: id }, [
-      {
-        $set: {
-          promptMeta: {
-            $mergeObjects: [
-              '$promptMeta',
-              {
-                performance: {
-                  $mergeObjects: [
-                    '$promptMeta.performance',
-                    { clientFirstTokenTime: { $literal: clientFirstTokenTime } },
-                  ],
-                },
-              },
-            ],
-          },
-        },
-      },
-    ]);
+    const result = await this.model.updateOne({ _id: id }, { $set: { clientFirstTokenTime } });
     return result.matchedCount > 0;
   }
 
@@ -1288,6 +1271,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           replies: 1,
           images: 1,
           videos: 1,
+          videoJobIds: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1571,7 +1555,7 @@ export const questRepository = new QuestRepository(Quest);
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
 >;
 
 /**
@@ -1585,5 +1569,5 @@ export type UnfinishedQuestView = { id: string } & Pick<
  */
 export type StaleRunningQuestView = { id: string; updatedAt: Date } & Pick<
   IChatHistoryItem,
-  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
 >;

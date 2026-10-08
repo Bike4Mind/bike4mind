@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { S3Storage } from './S3Storage';
 
 /**
@@ -14,5 +15,21 @@ describe('S3Storage sets requestChecksumCalculation to WHEN_REQUIRED', () => {
     const storage = new S3Storage('test-bucket', 'us-east-2');
     const client = (storage as unknown as { s3: { config: { requestChecksumCalculation: () => Promise<string> } } }).s3;
     await expect(client.config.requestChecksumCalculation()).resolves.toBe('WHEN_REQUIRED');
+  });
+});
+
+describe('S3Storage.upload', () => {
+  it('forwards the abort signal to the SDK send', async () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    const send = vi.spyOn(client, 'send').mockResolvedValue({});
+    const controller = new AbortController();
+
+    await storage.upload(Buffer.from('v'), 'generated-video/j1.mp4', { ContentType: 'video/mp4' }, controller.signal);
+
+    expect(send).toHaveBeenCalledWith(expect.any(PutObjectCommand), {
+      requestTimeout: 300000,
+      abortSignal: controller.signal,
+    });
   });
 });

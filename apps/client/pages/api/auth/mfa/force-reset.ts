@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
-import { userRepository, trustedDeviceRepository } from '@bike4mind/database';
+import { userRepository, trustedDeviceRepository, passkeyCredentialRepository } from '@bike4mind/database';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { logAuthAudit } from '@server/utils/authAudit';
 import * as z from 'zod';
@@ -21,6 +21,11 @@ const handler = baseApi().post(
     const { userId } = forceResetBodySchema.parse(req.body);
 
     try {
+      // A suspected-compromise reset must not leave an enrolled passkey able to satisfy MFA.
+      // Removed before the reset commits, so a failure here leaves MFA intact rather than
+      // leaving passkeys behind a reset that succeeded.
+      const removedPasskeys = await passkeyCredentialRepository.removeAllForUser(userId);
+
       const result = await mfaService.forceResetMFA({ targetUserId: userId, adminUser }, userRepository);
 
       // This is the lost-authenticator / suspected-compromise action, and trusts are
@@ -34,6 +39,15 @@ const handler = baseApi().post(
           event: 'trusted_device_revoked',
           actorUserId: adminUser.id,
           metadata: { revoked: revokedDevices, scope: 'all', reason: 'mfa_force_reset' },
+        });
+      }
+
+      if (removedPasskeys > 0) {
+        await logAuthAudit(req, {
+          userId,
+          event: 'passkey_removed',
+          actorUserId: adminUser.id,
+          metadata: { removed: removedPasskeys, scope: 'all', reason: 'mfa_force_reset' },
         });
       }
 

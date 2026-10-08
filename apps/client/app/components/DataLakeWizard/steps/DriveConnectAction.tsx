@@ -6,11 +6,11 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import {
   useLakeDriveConnection,
-  useConnectDriveFolderToLake,
+  useLakeDriveCanManage,
   useDisconnectLakeDrive,
 } from '@client/app/hooks/data/googleDrive';
 import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
-import { useDriveFolderPicker } from '@client/app/hooks/data/useDriveFolderPicker';
+import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
 import { getServerErrorField } from '@client/app/utils/error';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
 
@@ -23,38 +23,21 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
   const { data: connection, isLoading, isError } = useLakeDriveConnection(lake.id);
-  const connect = useConnectDriveFolderToLake();
+  const canManage = useLakeDriveCanManage(lake.id).data === true;
   const disconnect = useDisconnectLakeDrive();
+  const { openFolderPicker, isPicking, isConnecting } = useLakeDriveFolderConnect(lake.id);
 
   const lakeId = lake.id;
-
-  const { openFolderPicker, isPicking } = useDriveFolderPicker({
-    busy: connect.isPending,
-    onPicked: folder =>
-      connect.mutate(
-        { dataLakeId: lakeId, ...folder },
-        {
-          onSuccess: () =>
-            toast.success(`Syncing "${folder.folderName || folder.driveFolderId}" into this data lake...`),
-          // Surface the server's specific message (folder claimed elsewhere, lake already bound to a
-          // different folder, "connect Drive first", ...) rather than one generic string for every 409.
-          onError: (e: unknown) =>
-            toast.error(getServerErrorField(e) || 'Could not connect that folder. Please try again.'),
-        }
-      ),
-  });
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="drive-connection-loading" />;
   }
 
-  if (isError) {
+  if (isError || (!connection && !canManage)) {
     // Every caller gates this component on org scope already (see SourceSelectionStep and
-    // SelectedLakeHeader), but the read itself needs org owner/manager - narrower than
-    // canManageLake, which also grants the lake's creator, a curator grant, or an administered
-    // org. So this is a normal, steady state for an org member who can manage the lake without
-    // being its org's owner or manager, not just a render/fetch race. No working connect action
-    // to offer either way, so disable it with guidance rather than render a button that can only fail.
+    // SelectedLakeHeader). The read admits an appointed org admin too, but connecting is owner/manager
+    // only, so an admin with no connection yet - like any failed read - has no working connect action
+    // to offer: disable it with guidance rather than render a button that can only fail.
     return (
       <Tooltip title="Google Drive connect is available to organization owners/managers on an organization data lake.">
         <span>
@@ -86,14 +69,14 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
           {label}
         </Chip>
         {/* drive-sync refuses a folder whose disconnect purge is still queued. */}
-        {!connection.disconnecting && (
+        {canManage && !connection.disconnecting && (
           <Button
             data-testid="drive-resync-btn"
             size="sm"
             variant="outlined"
             color="neutral"
             startDecorator={<SyncIcon />}
-            loading={connect.isPending || isPicking}
+            loading={isConnecting || isPicking}
             onClick={openFolderPicker}
           >
             Re-sync
@@ -106,70 +89,71 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
               : `Removing ${connection.fileCount} remaining file${connection.fileCount === 1 ? '' : 's'} in the background.`}
           </Typography>
         )}
-        {confirmingDisconnect ? (
-          <>
-            <Typography
-              level="body-xs"
-              color="danger"
-              data-testid="drive-disconnect-warning"
-              sx={{ flexBasis: '100%' }}
-            >
-              This will permanently delete {connection.fileCount} file{connection.fileCount === 1 ? '' : 's'} this
-              connection ingested into the data lake.
-            </Typography>
+        {canManage &&
+          (confirmingDisconnect ? (
+            <>
+              <Typography
+                level="body-xs"
+                color="danger"
+                data-testid="drive-disconnect-warning"
+                sx={{ flexBasis: '100%' }}
+              >
+                This will permanently delete {connection.fileCount} file{connection.fileCount === 1 ? '' : 's'} this
+                connection ingested into the data lake.
+              </Typography>
+              <Button
+                data-testid="drive-disconnect-confirm-btn"
+                size="sm"
+                variant="soft"
+                color="danger"
+                startDecorator={<LinkOffIcon />}
+                loading={disconnect.isPending}
+                onClick={() =>
+                  disconnect.mutate(lakeId, {
+                    onSuccess: () => {
+                      setConfirmingDisconnect(false);
+                      toast.success(
+                        'Disconnecting the Google Drive folder. Its files are being removed in the background.'
+                      );
+                    },
+                    // Surface e.g. the 409 "a sync is in progress" so the user knows to retry later.
+                    onError: (e: unknown) =>
+                      toast.error(getServerErrorField(e) || 'Could not disconnect. Please try again.'),
+                  })
+                }
+              >
+                Confirm disconnect
+              </Button>
+              <Button
+                data-testid="drive-disconnect-cancel-btn"
+                size="sm"
+                variant="plain"
+                color="neutral"
+                disabled={disconnect.isPending}
+                onClick={() => setConfirmingDisconnect(false)}
+              >
+                Cancel
+              </Button>
+            </>
+          ) : (
             <Button
-              data-testid="drive-disconnect-confirm-btn"
-              size="sm"
-              variant="soft"
-              color="danger"
-              startDecorator={<LinkOffIcon />}
-              loading={disconnect.isPending}
-              onClick={() =>
-                disconnect.mutate(lakeId, {
-                  onSuccess: () => {
-                    setConfirmingDisconnect(false);
-                    toast.success(
-                      'Disconnecting the Google Drive folder. Its files are being removed in the background.'
-                    );
-                  },
-                  // Surface e.g. the 409 "a sync is in progress" so the user knows to retry later.
-                  onError: (e: unknown) =>
-                    toast.error(getServerErrorField(e) || 'Could not disconnect. Please try again.'),
-                })
-              }
-            >
-              Confirm disconnect
-            </Button>
-            <Button
-              data-testid="drive-disconnect-cancel-btn"
+              data-testid="drive-disconnect-btn"
               size="sm"
               variant="plain"
-              color="neutral"
-              disabled={disconnect.isPending}
-              onClick={() => setConfirmingDisconnect(false)}
+              color="danger"
+              startDecorator={<LinkOffIcon />}
+              // The route declines to re-queue a purge that is still progressing, so only offer a retry
+              // once it looks stalled.
+              disabled={connection.disconnecting && !connection.disconnectStalled}
+              onClick={() => setConfirmingDisconnect(true)}
             >
-              Cancel
+              {!connection.disconnecting
+                ? 'Disconnect'
+                : connection.disconnectStalled
+                  ? 'Retry disconnect'
+                  : 'Disconnecting'}
             </Button>
-          </>
-        ) : (
-          <Button
-            data-testid="drive-disconnect-btn"
-            size="sm"
-            variant="plain"
-            color="danger"
-            startDecorator={<LinkOffIcon />}
-            // The route declines to re-queue a purge that is still progressing, so only offer a retry
-            // once it looks stalled.
-            disabled={connection.disconnecting && !connection.disconnectStalled}
-            onClick={() => setConfirmingDisconnect(true)}
-          >
-            {!connection.disconnecting
-              ? 'Disconnect'
-              : connection.disconnectStalled
-                ? 'Retry disconnect'
-                : 'Disconnecting'}
-          </Button>
-        )}
+          ))}
         {connection.lastError && (
           <Box sx={{ flexBasis: '100%' }}>
             {/* Shown for ANY status that recorded one, not just credential_error: a sync that stopped
@@ -191,7 +175,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
         variant="outlined"
         color="neutral"
         startDecorator={<CloudIcon />}
-        loading={isPicking || connect.isPending}
+        loading={isPicking || isConnecting}
         onClick={openFolderPicker}
         sx={{ alignSelf: 'flex-start' }}
       >

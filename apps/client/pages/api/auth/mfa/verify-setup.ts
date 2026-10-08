@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService, userService } from '@bike4mind/services';
-import { userRepository, authSessionRepository } from '@bike4mind/database';
+import { userRepository, authSessionRepository, passkeyCredentialRepository } from '@bike4mind/database';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
@@ -39,6 +39,13 @@ const handler = baseApi()
           lockedUntil: freshUser.mfa?.lockedUntil,
           remainingMinutes,
         });
+      }
+
+      // Passkeys only satisfy MFA alongside an enabled TOTP, so any still on file while setup is
+      // pending are orphans of an earlier MFA that a failed cleanup left behind. Purge them so a
+      // fresh enrollment never revives them.
+      if (!freshUser.mfa?.totpEnabled) {
+        await passkeyCredentialRepository.removeAllForUser(freshUser.id);
       }
 
       try {
@@ -82,7 +89,7 @@ const handler = baseApi()
           });
         }
 
-        const remainingAttempts = 3 - (updatedUser?.mfa?.failedAttempts ?? 0);
+        const remainingAttempts = mfaService.MAX_FAILED_ATTEMPTS - (updatedUser?.mfa?.failedAttempts ?? 0);
         const errMessage = error instanceof Error ? error.message : 'Invalid MFA code';
         res.status(400).json({
           error: errMessage,

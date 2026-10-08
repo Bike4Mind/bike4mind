@@ -119,6 +119,13 @@ export interface ICompletionOptionTools {
    * MCP server. Built-in emitters are pinned in common TOOL_ARTIFACT_EMITTERS, which wins.
    */
   artifactType?: string;
+  /**
+   * Fire-and-forget tool whose result the model never needs to read: when a round already
+   * streamed answer text and every tool it called carries this flag, the adapter ends the
+   * turn instead of making the follow-up model call (which would only restate the answer).
+   * Decided by shouldEndTurnAfterTools (executeToolsBatch.ts). Never honored from MCP servers.
+   */
+  endsTurnAfterText?: boolean;
 }
 
 export interface ICompletionOptions {
@@ -170,7 +177,8 @@ export interface ICompletionOptions {
    */
   complexity?: 'simple' | 'contextual' | 'complex';
   /**
-   * Explicit reasoning effort level for OpenAI reasoning models (O1, O3, GPT-5 series)
+   * Explicit reasoning effort level. Read by the OpenAI (reasoning models: O1, O3, GPT-5 series),
+   * Kimi (K3 only) and DeepSeek backends; ignored by the others (Anthropic, Gemini, Bedrock, xAI, Ollama).
    * When set, overrides the auto-classification from complexity
    * @see https://platform.openai.com/docs/guides/reasoning
    */

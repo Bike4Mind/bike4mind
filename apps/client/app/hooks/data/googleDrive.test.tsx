@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import React from 'react';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -6,6 +6,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import {
   useLakeDriveConnection,
+  useLakeDriveCanManage,
   useDisconnectLakeDrive,
   driveConnectionPollInterval,
   startGoogleDriveConnect,
@@ -103,6 +104,75 @@ describe('useLakeDriveConnection', () => {
     const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.filesOf('lake_1'));
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
+  });
+});
+
+// The query data is { connection, canManage } while consumers read only the connection, so the poll
+// cadence has to key off `data.connection` - reading the wrapper would silently stop polling.
+describe('useLakeDriveConnection polling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps polling an existing connection at the idle cadence', async () => {
+    get.mockResolvedValue({
+      data: { connection: { id: 'c1', status: 'connected', syncStale: false, disconnecting: false, fileCount: 1 } },
+    });
+    renderLakeDriveConnection('lake_1');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(DRIVE_CONNECTION_IDLE_POLL_MS);
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not poll when the lake has no connection', async () => {
+    get.mockResolvedValue({ data: { connection: null, canManage: false } });
+    renderLakeDriveConnection('lake_1');
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(DRIVE_CONNECTION_IDLE_POLL_MS * 3);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useLakeDriveCanManage', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const renderBoth = (lakeId: string) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    return renderHook(
+      () => ({ connection: useLakeDriveConnection(lakeId), canManage: useLakeDriveCanManage(lakeId) }),
+      {
+        wrapper,
+      }
+    );
+  };
+
+  it('reads false for an appointed admin, and shares one request with the connection hook', async () => {
+    get.mockResolvedValue({ data: { connection: { id: 'conn1' }, canManage: false } });
+    const { result } = renderBoth('lake1');
+
+    await waitFor(() => expect(result.current.canManage.data).toBe(false));
+    expect(result.current.connection.data).toEqual({ id: 'conn1' });
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads true for a manager', async () => {
+    get.mockResolvedValue({ data: { connection: null, canManage: true } });
+    const { result } = renderBoth('lake1');
+    await waitFor(() => expect(result.current.canManage.data).toBe(true));
+  });
+
+  it('fails closed (false) when the payload carries no flag', async () => {
+    get.mockResolvedValue({ data: { connection: null } });
+    const { result } = renderBoth('lake2');
+    await waitFor(() => expect(result.current.canManage.data).toBe(false));
   });
 });
 

@@ -3,13 +3,13 @@
  * Integration test for GET/PUT/DELETE /api/sessions/[id].
  *
  * Imports the REAL default-exported handler and drives it through its own method
- * dispatcher (apps/client/pages/api/sessions/[id]/index.ts): GET/DELETE run the
- * real next-connect chain baseApi() assembles, PUT runs the real chain
- * nextRouteForContract(sessionUpdateContract) assembles - including the
- * notebooks:write scope gate. This is what defineNextRoute.test.ts cannot cover
- * on its own (that file drives the adapter against a FIXTURE contract); this
- * proves the actual dispatcher branch, the real sessionUpdateContract, and the
- * sessionService wiring all fit together. Only data/AWS edges are stubbed
+ * dispatcher (apps/client/pages/api/sessions/[id]/index.ts): each verb runs the
+ * real chain nextRouteForContract assembles for its own contract (sessionGetContract,
+ * sessionUpdateContract, sessionDeleteContract) - including each one's notebooks
+ * scope gate. This is what defineNextRoute.test.ts cannot cover on its own (that
+ * file drives the adapter against a FIXTURE contract); this proves the actual
+ * dispatcher branches, the real contracts, and the sessionService wiring all fit
+ * together. Only data/AWS edges are stubbed
  * (connectDB, the User lookup, sessionService, storage).
  *
  * `@server/auth/auth` is intentionally left UNMOCKED: its real first middleware
@@ -99,7 +99,7 @@ vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
 }));
 
 import handler from '../index';
-import { ApiKeyScope, SessionEvents } from '@bike4mind/common';
+import { ApiKeyScope, ConcurrencyConflictError, NotFoundError, SessionEvents } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -160,9 +160,8 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
     });
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockLogEvent.mockResolvedValue(undefined);
-    // GET/DELETE (baseApi()) declare no scope; a key with none of the AI/notebook
-    // scopes must still be admitted to those two verbs.
-    keyWithScopes([]);
+    // notebooks:write satisfies every verb's contract; the scope-gate tests narrow it.
+    keyWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
   });
 
   describe('GET', () => {
@@ -178,6 +177,39 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       expect(res._getStatusCode()).toBe(200);
       expect(mockGetSession).toHaveBeenCalledWith('user-1', { id: 'sess-1' }, expect.anything());
       expect(res._getJSONData()).not.toHaveProperty('systemPromptText');
+    });
+
+    it.each([[ApiKeyScope.READ_NOTEBOOKS], [ApiKeyScope.WRITE_NOTEBOOKS]])(
+      'admits a key holding only %s',
+      async scope => {
+        keyWithScopes([scope]);
+        mockGetSession.mockResolvedValue({ id: 'sess-1', name: 'Untitled', userId: 'user-1' });
+        const { req, res } = fire({ method: 'GET' });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(200);
+      }
+    );
+
+    it('404s a session not visible to the caller', async () => {
+      mockGetSession.mockRejectedValue(new NotFoundError('Session not found'));
+      const { req, res } = fire({ method: 'GET' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+    });
+
+    it('403s a key with neither notebooks scope before the handler runs', async () => {
+      keyWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ method: 'GET' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockGetSession).not.toHaveBeenCalled();
+    });
+
+    it('401s an unauthenticated GET before the handler runs', async () => {
+      const { req, res } = fire({ method: 'GET', apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(401);
+      expect(mockGetSession).not.toHaveBeenCalled();
     });
   });
 
@@ -351,6 +383,32 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData()).toEqual({ newLastNotebookId: null });
+    });
+
+    it('maps a mid-cascade ConcurrencyConflictError to the 409 the contract documents', async () => {
+      mockDeleteSession.mockRejectedValue(new ConcurrencyConflictError('FabFile'));
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(409);
+      expect(mockLogEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: SessionEvents.DELETE_SESSION }),
+        expect.anything()
+      );
+    });
+
+    it('403s a notebooks:read-only key before the handler runs', async () => {
+      keyWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockDeleteSession).not.toHaveBeenCalled();
+    });
+
+    it('401s an unauthenticated DELETE before the handler runs', async () => {
+      const { req, res } = fire({ method: 'DELETE', apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(401);
+      expect(mockDeleteSession).not.toHaveBeenCalled();
     });
   });
 

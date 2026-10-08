@@ -4,9 +4,6 @@
   "aliases": {
     "gemini-2.5-flash-preview-09-25": {
       "litellm": "gemini-2.5-flash-preview-09-2025"
-    },
-    "grok-3-fast": {
-      "litellm": "xai/grok-3-fast-latest"
     }
   }
 }

@@ -12,6 +12,8 @@ export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
 export * from './OAuthGrantModel';
 export * from './PartnerSignupRuleModel';
+export * from './PasskeyChallengeModel';
+export * from './PasskeyCredentialModel';
 export * from './PendingOtcTokenModel';
 export * from './RegistrationInviteModel';
 export * from './SamlRequestIdModel';
