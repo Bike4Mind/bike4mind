@@ -62,18 +62,20 @@ Fetch the discovery document from `https://<your-b4m-host>/.well-known/openid-co
 
 Use `jwks_uri` exactly as published. `/.well-known/jwks.json` also answers today, but it is an alias, not the advertised URL. Both documents are cached for an hour, so cache them on your side too.
 
-Discovery does not list the `ai:generate` and `me:read` scopes because they are not sign-in scopes. You request them later, at the token exchange (section 5).
+Discovery does not list the `ai:generate` and `me:read` scopes because they are not sign-in scopes, but you **must still request them in the authorization request** so the user consents to them. B4M records the scopes the user consented to, and the token exchange (section 5) can only mint scopes from that set.
 
 ### The authorization request
 
 Use the authorization code flow with PKCE (`S256`), plus `state` and `nonce`. **Always send PKCE**, even though your client is confidential.
 
 1. On your server, generate a random `state`, a random `nonce`, and a random `code_verifier`. Compute `code_challenge = BASE64URL(SHA256(code_verifier))`. Store all three in the user's pre-login session.
-2. Redirect the browser to `authorization_endpoint` with: `client_id`, `redirect_uri`, `response_type=code`, `scope=openid email profile`, `state`, `nonce`, `code_challenge`, `code_challenge_method=S256`.
+2. Redirect the browser to `authorization_endpoint` with: `client_id`, `redirect_uri`, `response_type=code`, `scope=openid email profile ai:generate`, `state`, `nonce`, `code_challenge`, `code_challenge_method=S256`.
 3. B4M signs the user in if needed. The first time a user signs in to your app, B4M shows a consent screen; the user's decision is remembered for your app, so later sign-ins redirect straight back. Send `prompt=consent` to show the screen again.
 4. B4M redirects to your `redirect_uri` with `?code=...&state=...`. If the user denies consent, you get `?error=access_denied&state=...` instead. Other errors (an unknown client, a `redirect_uri` that is not registered, a scope your client is not allowed) are shown on the B4M page and **do not** redirect back to you.
 
 `redirect_uri` must match one of your registered redirect URIs exactly.
+
+Add `me:read` to `scope` if you will read the user's state (section 7). Request every API scope you will ever exchange for: a scope the user never consented to is rejected at the exchange, and the fix is to send the user through this request again with that scope included.
 
 ### The code exchange
 
@@ -189,7 +191,7 @@ To run AI on a user's behalf, your server exchanges that user's B4M ID token for
 | `id_token`      | the user's B4M ID token from sign-in                                                  |
 | `scope`         | optional, space-separated from `ai:generate` and `me:read`; defaults to `ai:generate` |
 
-Every requested scope must be in your client's `allowedScopes`, and the user must have consented to your app.
+Every requested scope must be in your client's `allowedScopes`, and the user must have consented to it in the authorization request (section 3). Hosted B4M enforces the consent check. On a self-hosted deployment it is warn-only unless the operator sets `OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; set it, and do not rely on the lenient default.
 
 A successful response is:
 
@@ -199,7 +201,7 @@ A successful response is:
 
 The key currently lives 15 minutes; use `expires_in` rather than hard-coding 900. Send it as `Authorization: Bearer b4m_live_...` (the `x-api-key` header is accepted for older callers).
 
-The ID token must still be valid when you exchange it. Once it expires, re-authorize the user (section 3) before you can mint another key.
+The ID token must still be valid when you exchange it. Once it expires, re-authorize the user (section 3) before you can mint another key. A 403 `access_denied` for missing consent also needs re-authorization, and only helps if the new authorization request includes the API scopes you exchange for.
 
 | Response                      | Meaning                                                                                                                |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -207,22 +209,25 @@ The ID token must still be valid when you exchange it. Once it expires, re-autho
 | 403 `access_denied`           | the client has no trust config, the user has not consented to these scopes, or the user has not accepted the B4M terms |
 | 403 `invalid_scope`           | a requested scope is not allowed for this client                                                                       |
 | 401 `invalid_grant`           | the ID token is invalid or expired, or its subject is not a B4M user                                                   |
-| 429 `temporarily_unavailable` | rate limited (300 per minute per client, and per IP); honour `Retry-After`                                             |
-| 400 `invalid_request`         | the user has reached their cap on API keys                                                                             |
+| 400 `invalid_request`         | the body is malformed, `scope` is empty, or the user has reached their cap on API keys                                 |
+| 429                           | rate limited (300 per minute per client, and per IP); honour `Retry-After`                                             |
+| 503 `temporarily_unavailable` | B4M could not check the user's consent; retry with backoff                                                             |
+
+The per-client and per-IP limits return different 429 bodies, so branch on the status, not the `error` field.
 
 ### One live key per user: cache it in one place
 
 Every successful exchange **revokes the previous key** minted for the same user and app. At most one key is live per (user, app) pair. That has consequences:
 
 - Cache one key per user and reuse it until it is close to expiry. Do not mint per request.
-- Keep that cache in **one place**. If two processes each mint for the same user, each mint revokes the other's key, the next request fails, both re-mint, and the loop never converges. A multi-instance deployment needs a shared cache (for example Redis) keyed by user id, or a single service that owns minting.
+- Keep that cache in **one place**, and let only one mint per user be in flight at a time. Two concurrent cold-cache requests in the same process otherwise each mint, and the second revokes the first. If two processes each mint for the same user, each mint revokes the other's key, the next request fails, both re-mint, and the loop never converges. A multi-instance deployment needs a shared cache (for example Redis) keyed by user id, or a single service that owns minting.
 - Never "evict and retry" a rejected key across processes for the same reason.
 
 ### Safeguards
 
 - **Expiry skew.** Re-mint shortly before `expires_in` runs out (for example 60 seconds early), not after a request fails.
 - **Default lifetime.** If `expires_in` is ever missing, assume the 900-second default rather than caching forever.
-- **Negative cache.** After a 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request. Either the user needs to sign in or consent again, or your client is misconfigured (`invalid_client`, `invalid_scope`); log the `error` code to tell which.
+- **Negative cache.** After a 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request. Either the user needs to sign in or consent again, or your client is misconfigured (`invalid_client`, `invalid_scope`); log the `error` code to tell which. After a 429 or 503, back off for `Retry-After` seconds when it is present.
 - **Timeout.** Bound the exchange call with a timeout so a slow B4M does not hang your request path.
 - **One re-mint.** If B4M rejects a cached key, mint once and retry once. If that fails too, surface the error.
 
@@ -243,8 +248,10 @@ Revoking your app's access in B4M stops new exchanges, but a key already minted 
 ```
 
 - `code: "insufficient_credits"`: the user is out of credits. Prompt them to top up their B4M balance.
-- `code: "spend_cap_exceeded"`: the user is solvent, but the key hit an admin-set spending ceiling. Topping up does not help; the cap has to be raised.
+- `code: "spend_cap_exceeded"`: reserved. The key hit an admin-set spending ceiling, so topping up does not help. Keys from the exchange do not carry a cap today, so you should not see it, but handle it defensively.
 - `code` absent: an unclassified failure (including a rejected key). Show `message` and log `requestId`.
+
+Text arrives as `content` events. With a reasoning model, the text can begin with a `<think>...</think>` span holding the model's reasoning; strip it before you show the reply to the user. The stream ends with `data: [DONE]`; if it ends without one, the reply is incomplete.
 
 Branch on `code`, never on `message`, which is prose and can change. The HTTP status tells you nothing here, and the public API never returns 402. (The JSON, non-streaming B4M APIs report the same condition as HTTP 422 with `errorCode: "insufficient_credits"`.)
 
@@ -269,8 +276,8 @@ Request `me:read` at the exchange (`scope: "ai:generate me:read"`) and call `GET
 ```
 
 - `id` is the same stable B4M user id as the ID token's `sub`.
-- `tier` is one of `free`, `basic`, `pro`, `other`. Use `tier != "free"` for "is this user paying" and `subscription.price_id` for which product; tier names do not track a plan's marketing name.
-- `subscription` is `null` when the user has none.
+- `tier` is one of `free`, `basic`, `pro`, `other`. Use `tier != "free"` for "is this user paying" and `subscription?.price_id` for which product; tier names do not track a plan's marketing name.
+- `subscription` is `null` when the user has none, and can also be `null` for a paying user (for example `tier: "other"`, a subscriber on a retired price). Do not treat `null` as "not paying".
 - `credits.balance` is the user's personal balance, the same number as `GET /api/v1/credits`.
 
 ## 8. What not to do
@@ -318,7 +325,7 @@ function login(session: Record<string, string>): string {
     client_id: CLIENT_ID,
     redirect_uri: REDIRECT_URI,
     response_type: 'code',
-    scope: 'openid email profile',
+    scope: 'openid email profile ai:generate',
     state,
     nonce,
     code_challenge: codeChallenge,
@@ -363,6 +370,7 @@ async function callback(session: Record<string, string>, query: URLSearchParams)
 ```ts
 type CachedKey = { key: string; expiresAt: number };
 const keys = new Map<string, CachedKey>();
+const inFlight = new Map<string, Promise<string>>(); // userId -> the mint in progress
 // Keyed by ID token, so a fresh sign-in is not blocked by a failure on the old token.
 const failures = new Map<string, number>(); // idToken -> retry-after timestamp
 
@@ -370,12 +378,26 @@ const SKEW_MS = 60_000;
 const DEFAULT_TTL_S = 900;
 const NEGATIVE_TTL_MS = 60_000;
 
-// One process, one cache. With several instances, move this to a shared store keyed by
-// userId: every mint revokes the user's previous key, so two minting processes fight.
+// Every mint revokes the user's previous key, so mint at most once at a time per user:
+// concurrent callers share the in-flight mint. With several instances, move both maps
+// to a shared store keyed by userId, or two minting processes fight.
 async function getUserKey(userId: string, idToken: string, { force = false } = {}): Promise<string> {
   const cached = keys.get(userId);
   if (!force && cached && cached.expiresAt - SKEW_MS > Date.now()) return cached.key;
-  if ((failures.get(idToken) ?? 0) > Date.now()) throw new Error('Exchange recently failed; re-authorize the user');
+  const pending = inFlight.get(userId);
+  if (pending) return pending;
+
+  const mint = mintKey(userId, idToken).finally(() => inFlight.delete(userId));
+  inFlight.set(userId, mint);
+  return mint;
+}
+
+async function mintKey(userId: string, idToken: string): Promise<string> {
+  const failedUntil = failures.get(idToken);
+  if (failedUntil !== undefined) {
+    if (failedUntil > Date.now()) throw new Error('Exchange recently failed; retry later or re-authorize the user');
+    failures.delete(idToken);
+  }
 
   const res = await fetch(`${B4M}/api/oauth/ai-token`, {
     method: 'POST',
@@ -391,6 +413,9 @@ async function getUserKey(userId: string, idToken: string, { force = false } = {
   if (res.status === 401 || res.status === 403) {
     failures.set(idToken, Date.now() + NEGATIVE_TTL_MS);
     keys.delete(userId);
+  } else if (res.status === 429 || res.status === 503) {
+    const retryAfterS = Number(res.headers.get('Retry-After')) || NEGATIVE_TTL_MS / 1000;
+    failures.set(idToken, Date.now() + retryAfterS * 1000);
   }
   if (!res.ok) throw new Error(`ai-token exchange failed: ${res.status}`);
 
@@ -445,7 +470,8 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
     for (const line of lines) {
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
-      if (data === '[DONE]') return text;
+      // Reasoning models prefix their reasoning in a <think> span; never show it to users.
+      if (data === '[DONE]') return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       const event = JSON.parse(data);
       if (event.type === 'error') {
         if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
@@ -455,7 +481,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
       if (event.type === 'content') text += event.text;
     }
   }
-  return text;
+  throw new Error('Completion stream ended without [DONE]');
 }
 ```
 

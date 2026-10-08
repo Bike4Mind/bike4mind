@@ -22,10 +22,11 @@
  * Shape 2 - the app signs users in against B4M's OIDC provider directly, so the
  * B4M user id is the token's `sub`. FEDERATED_PROVIDER_NAME is meaningless here
  * and FEDERATED_JWKS_URI is REQUIRED: B4M publishes its JWKS at /api/oauth/jwks,
- * which the derived default would never find.
+ * which the derived default would never find. FEDERATED_AUDIENCE is optional and
+ * defaults to the generated client_id.
  *   FEDERATED_SUBJECT_SOURCE=sub \
  *   FEDERATED_ISSUER="https://<b4m-app-url>" \
- *   FEDERATED_AUDIENCE="<this client_id>" \
+ *   [FEDERATED_AUDIENCE="<this client_id>"] \
  *   FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks"
  */
 
