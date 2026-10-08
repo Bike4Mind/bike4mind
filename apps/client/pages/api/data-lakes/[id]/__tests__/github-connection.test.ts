@@ -166,7 +166,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
     });
 
-    it('500s when the GitHub App is not configured on this deployment', async () => {
+    it('refuses when the GitHub App is not configured on this deployment', async () => {
       h.getGitHubLakeAppConfig.mockReturnValue(null);
       const { res } = makeRes();
       await expect(run(makeReq('POST'), res)).rejects.toThrow(/not configured/i);

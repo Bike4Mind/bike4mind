@@ -43,7 +43,8 @@ import {
   BadRequestError,
   ConflictError,
   ForbiddenError,
-  InternalServerError,
+  HTTPError,
+  HttpStatus,
   NotFoundError,
 } from '@server/utils/errors';
 import { Resource } from 'sst';
@@ -120,7 +121,14 @@ export function toGitHubLakeConnectionResponse(
 
 export function requireGitHubLakeAppConfig(config: GitHubLakeAppConfig | null): GitHubLakeAppConfig {
   if (!config) {
-    throw new InternalServerError('The data-lake GitHub App is not configured on this deployment');
+    // 503 + expected: an unprovisioned App is a deployment state to fix, not a server fault to page
+    // on; the message reaches the connect UI's toast verbatim.
+    const error = new HTTPError(
+      HttpStatus.ServiceUnavailable,
+      'GitHub App not configured: the data-lake GitHub App credentials are not set on this deployment.'
+    );
+    error.expected = true;
+    throw error;
   }
   return config;
 }

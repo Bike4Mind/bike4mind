@@ -63,7 +63,7 @@ describe('GET /api/data-lakes/[id]/github-connection/repositories', () => {
     expect(flagGateCallsAtLoad).toEqual(['EnableDataLakes', 'EnableDataLakeGitHub']);
   });
 
-  it('500s when the GitHub App is not configured on this deployment', async () => {
+  it('refuses when the GitHub App is not configured on this deployment', async () => {
     h.getGitHubLakeAppConfig.mockReturnValue(null);
     h.requireGitHubLakeAppConfig.mockImplementation(() => {
       throw new Error('The data-lake GitHub App is not configured on this deployment');
