@@ -180,14 +180,11 @@ export function stripChoicesFromReplies(replies: readonly string[]): {
 }
 
 /**
- * The visible answer text of a quest: the scalar `reply` of the quest poll body and `response` of
- * POST /api/chat `wait: true`, and the CLI's send_message reply. The chat pipeline streams into
- * `replies[]` and leaves `quest.reply` null on an ordinary success (or a stale rapid-reply prefix),
- * so the scalar is derived from the slots, matching what setErrorReply in ChatCompletionProcess
- * writes, so the server paths keep its bare join. A reader that renders the text as markdown passes
- * `joinReplySlots` instead (see streamVisibility.ts): a bare join glues a slot's closing code fence
- * to the next slot's text. Paths that write only `reply` (pre-flight invoke error, empty recovery)
- * have no visible slots, so the stored scalar is the fallback.
+ * The visible answer text of a quest, derived from its reply slots (choices stripped, `<think>`
+ * hidden) with the scalar `reply` as the fallback when no slot has visible text. `joinSlots` joins
+ * the visible slots: a bare join by default, matching the scalar the server persists, and a
+ * paragraph join for a reader that renders the text as markdown (see streamVisibility.ts), since a
+ * bare join glues a slot's closing code fence to the next slot's text.
  */
 export function questReplyText(
   quest: { reply?: string | null; replies?: readonly string[] | null },
