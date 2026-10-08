@@ -62,7 +62,7 @@ Fetch the discovery document from `https://<your-b4m-host>/.well-known/openid-co
 
 Use `jwks_uri` exactly as published. `/.well-known/jwks.json` also answers today, but it is an alias, not the advertised URL. Both documents are cached for an hour, so cache them on your side too.
 
-Discovery does not list the `ai:generate` and `me:read` scopes because they are not sign-in scopes, but you **must still request them in the authorization request** so the user consents to them. B4M records the scopes the user consented to, and the token exchange (section 5) can only mint scopes from that set.
+Discovery does not list the `ai:generate` and `me:read` scopes because they are not sign-in scopes, but you **must still request them in the authorization request** so the user consents to them. B4M records the scopes the user consented to, and the token exchange (section 5) can only mint scopes from that set wherever the consent check is enforced (see section 5).
 
 ### The authorization request
 
@@ -70,7 +70,7 @@ Use the authorization code flow with PKCE (`S256`), plus `state` and `nonce`. **
 
 1. On your server, generate a random `state`, a random `nonce`, and a random `code_verifier`. Compute `code_challenge = BASE64URL(SHA256(code_verifier))`. Store all three in the user's pre-login session.
 2. Redirect the browser to `authorization_endpoint` with: `client_id`, `redirect_uri`, `response_type=code`, `scope=openid email profile ai:generate`, `state`, `nonce`, `code_challenge`, `code_challenge_method=S256`.
-3. B4M signs the user in if needed. The first time a user signs in to your app, B4M shows a consent screen; the user's decision is remembered for your app, so later sign-ins redirect straight back. Send `prompt=consent` to show the screen again.
+3. B4M signs the user in if needed. The first time a user signs in to your app, B4M shows a consent screen. An approval is remembered for your app, so later sign-ins redirect straight back; a request that adds a scope the user has not approved yet shows the screen again. Send `prompt=consent` to show the screen again.
 4. B4M redirects to your `redirect_uri` with `?code=...&state=...`. If the user denies consent, you get `?error=access_denied&state=...` instead. Other errors (an unknown client, a `redirect_uri` that is not registered, a scope your client is not allowed) are shown on the B4M page and **do not** redirect back to you.
 
 `redirect_uri` must match one of your registered redirect URIs exactly.
@@ -90,7 +90,7 @@ On your callback, check that `state` matches the stored value, then POST to `tok
 | `client_secret` | your client secret (sent in the body; HTTP Basic auth is not supported) |
 | `code_verifier` | the stored PKCE verifier                                                |
 
-Codes live for 10 minutes and are single-use. The token endpoint allows 20 requests per minute. A wrong secret returns 401 `invalid_client`.
+Codes live for 10 minutes and are single-use. The token endpoint allows 20 requests per minute per IP. A wrong secret returns 401 `invalid_client`, an unknown `client_id` or unregistered `redirect_uri` returns 401 `unauthorized_client`, and a code whose grant the user has since revoked returns 400 `access_denied`.
 
 The response is `{ access_token, id_token, token_type: "Bearer", expires_in, scope }`. There is **no refresh token** for third-party apps.
 
@@ -104,7 +104,7 @@ The ID token is an RS256 JWT with a `kid` header. Verify it before you trust it:
 - `exp` has not passed,
 - `nonce` equals the value you stored.
 
-Its claims are `sub` (the stable B4M user id), `iss`, `aud`, `iat`, `exp` and `nonce`, plus `email` with the `email` scope and `name` and `picture` with the `profile` scope. Key your own user records on `sub`.
+Its claims are `sub` (the stable B4M user id), `iss`, `aud`, `iat`, `exp` and `nonce`, plus `email` with the `email` scope and `name` and `picture` with the `profile` scope (`picture` is omitted when the user has none). Key your own user records on `sub`.
 
 **Keep the ID token on your server.** You need it again for the billing exchange in section 5.
 
@@ -162,6 +162,7 @@ FEDERATED_JWKS_URI="https://<your-b4m-host>/api/oauth/jwks" \
 ```
 
 - `REDIRECT_URIS` is comma-separated.
+- `FEDERATED_ISSUER` must equal the discovery `issuer` exactly (no trailing slash), or every exchange fails with 401 `invalid_grant`.
 - `FEDERATED_AUDIENCE` can be omitted with `FEDERATED_SUBJECT_SOURCE=sub`; it defaults to the generated `client_id`.
 - `CLIENT_TYPE` defaults to `relying-party`. Leave it.
 - The script prints the `client_id` (shaped `b4m_<name>_<hex>`) and the client secret **once**. Store the secret in your app's secret manager.
@@ -207,7 +208,7 @@ The ID token must still be valid when you exchange it. Once it expires, re-autho
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | 401 `invalid_client`          | unknown `client_id` or wrong secret                                                                                    |
 | 403 `access_denied`           | the client has no trust config, the user has not consented to these scopes, or the user has not accepted the B4M terms |
-| 403 `invalid_scope`           | a requested scope is not allowed for this client                                                                       |
+| 403 `invalid_scope`           | a requested scope is not `ai:generate` or `me:read`, or is not allowed for this client                                 |
 | 401 `invalid_grant`           | the ID token is invalid or expired, or its subject is not a B4M user                                                   |
 | 400 `invalid_request`         | the body is malformed, `scope` is empty, or the user has reached their cap on API keys                                 |
 | 429                           | rate limited (300 per minute per client, and per IP); honour `Retry-After`                                             |
@@ -229,9 +230,9 @@ Every successful exchange **revokes the previous key** minted for the same user 
 - **Default lifetime.** If `expires_in` is ever missing, assume the 900-second default rather than caching forever.
 - **Negative cache.** After a 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request. Either the user needs to sign in or consent again, or your client is misconfigured (`invalid_client`, `invalid_scope`); log the `error` code to tell which. After a 429 or 503, back off for `Retry-After` seconds when it is present.
 - **Timeout.** Bound the exchange call with a timeout so a slow B4M does not hang your request path.
-- **One re-mint.** If B4M rejects a cached key, mint once and retry once. If that fails too, surface the error.
+- **One re-mint.** If B4M rejects a cached key, mint once and retry once. If that fails too, surface the error. Re-mint only if the rejected key is still the cached one: if another request already replaced it, use the replacement, or your re-mint revokes it.
 
-Revoking your app's access in B4M stops new exchanges, but a key already minted stays valid until it expires (up to 15 minutes).
+Revoking your app's access in B4M stops new exchanges wherever the consent check is enforced (hosted B4M, or `OAUTH_AI_TOKEN_ENFORCE_GRANT=true`), but a key already minted stays valid until it expires (up to 15 minutes).
 
 ## 6. Handle "out of credits"
 
@@ -241,7 +242,7 @@ Revoking your app's access in B4M stops new exchanges, but a key already minted 
 
 ### During a completion
 
-`POST /api/ai/v1/completions` always answers with a Server-Sent Events stream, and once the stream opens the HTTP status is **always 200**. Authentication failures, invalid requests and credit exhaustion all arrive as an in-band event:
+`POST /api/ai/v1/completions` answers with a Server-Sent Events stream, and once the stream opens the HTTP status is **always 200**. Only a request that never reaches the stream (malformed JSON, a body over 25 MB, a wrong method) gets a plain HTTP error. Authentication failures, invalid requests, rate limits and credit exhaustion all arrive as an in-band event:
 
 ```json
 { "type": "error", "message": "...", "requestId": "...", "code": "insufficient_credits" }
@@ -249,9 +250,9 @@ Revoking your app's access in B4M stops new exchanges, but a key already minted 
 
 - `code: "insufficient_credits"`: the user is out of credits. Prompt them to top up their B4M balance.
 - `code: "spend_cap_exceeded"`: reserved. The key hit an admin-set spending ceiling, so topping up does not help. Keys from the exchange do not carry a cap today, so you should not see it, but handle it defensively.
-- `code` absent: an unclassified failure (including a rejected key). Show `message` and log `requestId`.
+- `code` absent: an unclassified failure (including a rejected key, a rate limit or an invalid body). Show `message` and log `requestId`.
 
-Text arrives as `content` events. With a reasoning model, the text can begin with a `<think>...</think>` span holding the model's reasoning; strip it before you show the reply to the user. The stream ends with `data: [DONE]`; if it ends without one, the reply is incomplete.
+The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. The stream ends with `data: [DONE]`; if it ends without one, the reply is incomplete. A `stopReason` of `max_tokens` on the last event means the reply was cut off.
 
 Branch on `code`, never on `message`, which is prose and can change. The HTTP status tells you nothing here, and the public API never returns 402. (The JSON, non-streaming B4M APIs report the same condition as HTTP 422 with `errorCode: "insufficient_credits"`.)
 
@@ -373,17 +374,20 @@ const keys = new Map<string, CachedKey>();
 const inFlight = new Map<string, Promise<string>>(); // userId -> the mint in progress
 // Keyed by ID token, so a fresh sign-in is not blocked by a failure on the old token.
 const failures = new Map<string, number>(); // idToken -> retry-after timestamp
+let clientBackoffUntil = 0; // a 429/503 from the exchange pauses minting for every user
 
 const SKEW_MS = 60_000;
 const DEFAULT_TTL_S = 900;
 const NEGATIVE_TTL_MS = 60_000;
 
-// Every mint revokes the user's previous key, so mint at most once at a time per user:
-// concurrent callers share the in-flight mint. With several instances, move both maps
-// to a shared store keyed by userId, or two minting processes fight.
-async function getUserKey(userId: string, idToken: string, { force = false } = {}): Promise<string> {
+// Every mint revokes the user's previous key, so concurrent callers share one in-flight
+// mint, and a caller whose key was rejected passes it as rejectedKey so it re-mints only if
+// nobody has replaced that key yet. With several instances, move this state to a shared
+// store keyed by userId, or two minting processes fight.
+async function getUserKey(userId: string, idToken: string, { rejectedKey = '' } = {}): Promise<string> {
   const cached = keys.get(userId);
-  if (!force && cached && cached.expiresAt - SKEW_MS > Date.now()) return cached.key;
+  const usable = cached && cached.expiresAt - SKEW_MS > Date.now() && cached.key !== rejectedKey;
+  if (usable) return cached.key;
   const pending = inFlight.get(userId);
   if (pending) return pending;
 
@@ -393,11 +397,11 @@ async function getUserKey(userId: string, idToken: string, { force = false } = {
 }
 
 async function mintKey(userId: string, idToken: string): Promise<string> {
-  const failedUntil = failures.get(idToken);
-  if (failedUntil !== undefined) {
-    if (failedUntil > Date.now()) throw new Error('Exchange recently failed; retry later or re-authorize the user');
-    failures.delete(idToken);
-  }
+  const now = Date.now();
+  // O(n) per mint; use a TTL cache if you track many failed tokens.
+  for (const [token, until] of failures) if (until <= now) failures.delete(token);
+  if (clientBackoffUntil > now) throw new Error('B4M asked us to back off; retry later');
+  if (failures.has(idToken)) throw new Error('Exchange recently failed; re-authorize the user');
 
   const res = await fetch(`${B4M}/api/oauth/ai-token`, {
     method: 'POST',
@@ -415,7 +419,7 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
     keys.delete(userId);
   } else if (res.status === 429 || res.status === 503) {
     const retryAfterS = Number(res.headers.get('Retry-After')) || NEGATIVE_TTL_MS / 1000;
-    failures.set(idToken, Date.now() + retryAfterS * 1000);
+    clientBackoffUntil = Date.now() + retryAfterS * 1000;
   }
   if (!res.ok) throw new Error(`ai-token exchange failed: ${res.status}`);
 
@@ -442,7 +446,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
   // Pre-flight: a 401 here means the cached key was rejected. Re-mint exactly once.
   let pre = await checkBalance(key);
   if (pre.status === 401) {
-    key = await getUserKey(userId, idToken, { force: true });
+    key = await getUserKey(userId, idToken, { rejectedKey: key });
     pre = await checkBalance(key);
   }
   if (!pre.ok) throw new Error(`Balance check failed: ${pre.status}`);
@@ -463,14 +467,15 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
   let text = '';
   let buffer = '';
   const decoder = new TextDecoder();
-  for await (const chunk of res.body) {
-    buffer += decoder.decode(chunk, { stream: true });
+  const reader = res.body.getReader();
+  for (let r = await reader.read(); !r.done; r = await reader.read()) {
+    buffer += decoder.decode(r.value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop()!;
     for (const line of lines) {
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
-      // Reasoning models prefix their reasoning in a <think> span; never show it to users.
+      // Reasoning models wrap their reasoning in <think> spans; never show it to users.
       if (data === '[DONE]') return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       const event = JSON.parse(data);
       if (event.type === 'error') {
