@@ -46,34 +46,51 @@ export function gitHubConnectionPollInterval(connection: LakeGitHubConnection | 
 
 /**
  * The repository feeding a lake, or null (a personal lake resolves null rather than 404, as Drive's
- * does). `isError` is a genuine failure: missing lake, or a caller who is not an org owner/manager.
+ * does). `isError` is a genuine failure: missing lake, or a caller with no standing on its org.
  * Every GitHub lake route 403s while EnableDataLakeGitHub is off: a caller that can mount without the
  * flag passes it as `enabled` (LakeSourceConnectActions, LakeGitHubStatusChip); GitHubConnectAction
  * only ever mounts behind it.
  */
 export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
+  const options = useLakeGitHubConnectionOptions(dataLakeId, enabled);
+  return useQuery({ ...options, select: response => response.connection });
+}
+
+/**
+ * Whether the caller may connect, re-sync or disconnect the lake's repository. The status read also
+ * admits an appointed org admin, who can see the connection but not operate it, so the controls key
+ * off this. Shares useLakeGitHubConnection's query; a payload without the flag reads as `false`, so a dropped field fails closed.
+ */
+export function useLakeGitHubCanManage(dataLakeId?: string, enabled = true) {
+  const options = useLakeGitHubConnectionOptions(dataLakeId, enabled);
+  return useQuery({ ...options, select: response => response.canManage === true });
+}
+
+type LakeGitHubConnectionResponse = { connection: LakeGitHubConnection | null; canManage: boolean };
+
+function useLakeGitHubConnectionOptions(dataLakeId: string | undefined, enabled: boolean) {
   const queryClient = useQueryClient();
-  return useQuery({
+  return {
     queryKey: dataLakeKeys.gitHubConnection(dataLakeId),
     enabled: !!dataLakeId && enabled,
-    queryFn: async () => {
-      const response = await api.get<{ connection: LakeGitHubConnection | null }>(
-        `/api/data-lakes/${dataLakeId}/github-connection`
-      );
+    queryFn: async (): Promise<LakeGitHubConnectionResponse> => {
+      const response = await api.get<LakeGitHubConnectionResponse>(`/api/data-lakes/${dataLakeId}/github-connection`);
       const next = response.data.connection;
       // A sync ingests in the background, so the lake's file lists and counts only go stale as it
       // lands; refresh them whenever a poll shows the ingested set changed or a sync finished.
-      const previous = queryClient.getQueryData<LakeGitHubConnection | null>(dataLakeKeys.gitHubConnection(dataLakeId));
+      const cached = queryClient.getQueryData<LakeGitHubConnectionResponse>(dataLakeKeys.gitHubConnection(dataLakeId));
+      const previous = cached?.connection;
       const syncFinished = previous?.status === 'syncing' && next?.status !== 'syncing';
       // `null` (no connection yet) still counts as a known prior state: a first sync that lands before
       // the first poll after connecting must refresh the file lists too.
-      if (dataLakeId && previous !== undefined && (syncFinished || next?.fileCount !== previous?.fileCount)) {
+      if (dataLakeId && cached !== undefined && (syncFinished || next?.fileCount !== previous?.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
       }
-      return next;
+      return response.data;
     },
-    refetchInterval: query => (enabled ? gitHubConnectionPollInterval(query.state.data) : false),
-  });
+    refetchInterval: (query: { state: { data?: LakeGitHubConnectionResponse } }) =>
+      enabled ? gitHubConnectionPollInterval(query.state.data?.connection) : false,
+  };
 }
 
 /**
@@ -151,7 +168,11 @@ export function useCompleteLakeGitHubConnect() {
     onSuccess: (connection, { dataLakeId }) => {
       // Seed the bound connection and refetch in the background: an awaited invalidation would hold
       // the picker's spinner until every observer of the key refetched.
-      queryClient.setQueryData(dataLakeKeys.gitHubConnection(dataLakeId), connection);
+      // Only a caller who passed the connect gate reaches here, so the seeded envelope can manage.
+      queryClient.setQueryData<LakeGitHubConnectionResponse>(dataLakeKeys.gitHubConnection(dataLakeId), {
+        connection,
+        canManage: true,
+      });
       void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
       // The picker's list is now stale (the bound repository must show as taken); a closed picker
       // just refetches fresh next time it opens rather than carrying this invalidation forward.
@@ -190,8 +211,18 @@ export function useDisconnectLakeGitHub() {
     onSuccess: ({ disconnecting }, dataLakeId) => {
       // Show the outcome now and refresh in the background: awaiting the refetches (the tag-count
       // prefix spans every lake) held the confirm spinner for the length of the slowest one.
-      queryClient.setQueryData<LakeGitHubConnection | null>(dataLakeKeys.gitHubConnection(dataLakeId), previous =>
-        disconnecting ? previous && { ...previous, disconnecting: true, disconnectStalled: false } : null
+      // The disconnect route is manage-gated, so the caller can manage whichever envelope this leaves behind.
+      queryClient.setQueryData<LakeGitHubConnectionResponse>(dataLakeKeys.gitHubConnection(dataLakeId), previous =>
+        disconnecting
+          ? previous && {
+              ...previous,
+              connection: previous.connection && {
+                ...previous.connection,
+                disconnecting: true,
+                disconnectStalled: false,
+              },
+            }
+          : { connection: null, canManage: true }
       );
       void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
       void invalidateLakeFileQueries(queryClient, dataLakeId);

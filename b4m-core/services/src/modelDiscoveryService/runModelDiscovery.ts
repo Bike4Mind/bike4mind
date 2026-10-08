@@ -16,7 +16,9 @@ import {
   type IModelPriceInput,
 } from '@bike4mind/common';
 import {
+  adapterBuildPricedModelIds,
   adapterModelIds,
+  adapterPriceLadders,
   adapterPriceTiers,
   resolveCatalogRecords,
   type ResolvedCatalogRecord,
@@ -32,7 +34,13 @@ import {
   type LifecyclePlan,
   type ParserRowShift,
 } from './lifecyclePlan';
-import { describePriceRows, perTokenRatesInForce, planPriceWrites, type PricePlan } from './pricePlan';
+import {
+  describePriceRows,
+  isAdapterLiteralRow,
+  perTokenRatesInForce,
+  planPriceWrites,
+  type PricePlan,
+} from './pricePlan';
 import type {
   CatalogDiffEntry,
   DiscoveryAutoEnablePolicy,
@@ -258,6 +266,12 @@ async function executeRun(
   // A manual run is how an admin checks a key they just saved, so it reads admin
   // settings fresh; scheduled and startup runs keep the cached map.
   const credentials = await adapters.resolveCredentials({ skipCache: options.trigger === 'manual' });
+  if (credentials.isSelfHost && !credentials.bedrock) {
+    logger.info(
+      `${LOG_PREFIX} bedrock skipped: self-host has no BEDROCK_AWS_ACCESS_KEY_ID/BEDROCK_AWS_SECRET_ACCESS_KEY ` +
+        '(AWS_* are the MinIO credentials)'
+    );
+  }
   const history = await recentRunHistory(adapters, startedAt);
   const minInterval = options.minSourceIntervalMs ?? DEFAULT_MIN_SOURCE_INTERVAL_MS;
 
@@ -398,7 +412,12 @@ async function executeRun(
         );
       }
 
-      if (ctx.mode !== 'write' || appended + pricesAppended === 0 || globalDeadline.signal.aborted) break;
+      // A literal row records what the build already trusted, so it cannot change
+      // what an aggregator join returns and is not worth another full re-fetch.
+      // Counted from what landed: a literal that lost a unique-index race must not
+      // cancel out an aggregator row that did.
+      const joinRelevantPrices = pricesAppended - (priceWrites.appendedLiteral ?? 0);
+      if (ctx.mode !== 'write' || appended + joinRelevantPrices === 0 || globalDeadline.signal.aborted) break;
       if (pass === MAX_DISCOVERY_PASSES) {
         logger.warn(
           `${LOG_PREFIX} convergence capped at ${MAX_DISCOVERY_PASSES} passes while pass ${pass} was still ` +
@@ -459,7 +478,8 @@ async function executeRun(
       promoted,
       deprecated,
       // The plan, not the writes, in both modes - same as `added`.
-      repriced: [...new Set(merged.priceRows.map(row => row.modelId))],
+      // A first row recorded from the build's own literal is not a reprice.
+      repriced: [...new Set(merged.priceRows.filter(row => !isAdapterLiteralRow(row)).map(row => row.modelId))],
       // Operator overlaps and price flags are one queue: both are "a human has
       // to look at this model", which is what report mode exists to surface.
       flagged: [...new Set([...summary.operatorConflicts, ...merged.priceFlags.map(flag => flag.modelId)])],
@@ -772,9 +792,15 @@ async function planPass(input: PassInput): Promise<PassPlan> {
   const priceRowsInForce = await db.prices.rowsInForce(effectiveAt);
   // A price the catalog already holds satisfies the promotion predicate, so a
   // model priced by an earlier run (or by an operator) is not re-blocked as
-  // unpriced on a run where no source happened to quote it.
+  // unpriced on a run where no source happened to quote it. A price the build
+  // ships in an adapter literal counts the same way: it has the seed's
+  // provenance but does not depend on a seed having been applied, and it is the
+  // only trusted price a provider with no listing prices (Moonshot) has until two
+  // aggregators agree.
+  const adapterTiers = await adapterPriceTiers();
   const knownPricedModelIds = new Set([
     ...priceRowsInForce.filter(row => row.unit === 'per_token').map(row => row.modelId),
+    ...adapterTiers.keys(),
     ...(options.knownPricedModelIds ?? []),
   ]);
 
@@ -791,6 +817,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     credentials,
     policy: ctx.autoEnable,
     knownPricedModelIds,
+    buildPricedModelIds: await adapterBuildPricedModelIds(),
     runStartedAt: effectiveAt,
     runId,
   });
@@ -803,7 +830,8 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     // The models this run adds are known too: a new model's first price row
     // lands in the same run as the catalog row that makes it a model at all.
     knownModelIds: new Set([...base.keys(), ...operatorOwnedModelIds, ...catalog.rows.map(row => row.modelId)]),
-    adapterTiers: await adapterPriceTiers(),
+    adapterTiers,
+    adapterLadders: await adapterPriceLadders(),
     bandPct: ctx.bandPct,
     runStartedAt: effectiveAt,
   });
@@ -999,6 +1027,8 @@ async function appendRows(
 interface AppendOutcome {
   appended: number;
   failed: number;
+  /** Of `appended`, the rows recorded from an adapter literal. Set by appendPriceRows only. */
+  appendedLiteral?: number;
 }
 
 async function appendPriceRows(
@@ -1007,10 +1037,14 @@ async function appendPriceRows(
   logger: DiscoveryLogger
 ): Promise<AppendOutcome> {
   let appended = 0;
+  let appendedLiteral = 0;
   let failed = 0;
   for (const row of rows) {
     try {
-      if (await adapters.db.prices.append(row)) appended += 1;
+      if (await adapters.db.prices.append(row)) {
+        appended += 1;
+        if (isAdapterLiteralRow(row)) appendedLiteral += 1;
+      }
     } catch (error) {
       // Unlike the catalog, ModelPrice surfaces its unique index as a thrown
       // E11000: another driver already priced this model for this run window,
@@ -1020,7 +1054,7 @@ async function appendPriceRows(
       logger.error(`${LOG_PREFIX} price append failed for ${row.modelId}: ${describe(error)}`);
     }
   }
-  return { appended, failed };
+  return { appended, failed, appendedLiteral };
 }
 
 const isDuplicateKey = (error: unknown): boolean =>

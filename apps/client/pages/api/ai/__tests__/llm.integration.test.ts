@@ -68,7 +68,7 @@ vi.mock('@bike4mind/services', async orig => {
   };
 });
 
-vi.mock('@bike4mind/services/llm', async orig => {
+vi.mock('@bike4mind/services/llm/ChatCompletionInvoke', async orig => {
   const actual = await orig<Record<string, unknown>>();
   class MockChatCompletionInvoke {
     prefetchedSession = undefined;

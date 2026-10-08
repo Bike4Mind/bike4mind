@@ -43,7 +43,7 @@ import {
 import {
   getDefaultTemplateString,
   TEMPLATE_VARIABLE_DOCS,
-} from '@client/server/queueHandlers/whatsNewGeneration.templateConstants';
+} from '@client/server/whatsNew/whatsNewGeneration.templateConstants';
 
 interface WhatsNewConfigResponse {
   success: boolean;

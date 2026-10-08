@@ -1,7 +1,7 @@
 import { Alert, Button, Stack, Typography } from '@mui/joy';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
-import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
+import { useLakeDriveCanManage, useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGitHubConnect';
 import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
 import {
@@ -30,8 +30,9 @@ const PICKED_THING: Record<LakeSourceKind, string> = { github: 'repository', goo
  * an empty connector-fed org lake with no source attached. Targets the connector the lake was created
  * for (`pendingConnector`); an absent or unrecognized value falls back to GitHub.
  *
- * Shown only once both connection reads have resolved to "none": a failed or in-flight read, a bound
- * Drive folder or GitHub repository, or any file in the lake hides it. The reads, not
+ * Shown only once both connection reads have resolved to "none" and the caller may connect (an
+ * appointed org admin can read the status, but both connect routes are owner/manager only): a failed
+ * or in-flight read, a bound Drive folder or GitHub repository, or any file in the lake hides it. The reads, not
  * `pendingConnector`, decide "no source", because clearing that field on bind is best-effort
  * server-side. With EnableDataLakeGitHub off the GitHub read is replaced by the list's
  * `hasGitHubConnection`, and an absent value hides the banner.
@@ -55,10 +56,12 @@ export default function FinishSourceConnectBanner({
   const gitHubFlag = isAdminFeatureEnabled('EnableDataLakeGitHub');
   const gitHub = useLakeGitHubConnection(lake.id, eligible && gitHubFlag);
   const drive = useLakeDriveConnection(lake.id, eligible);
+  // The Drive read is the one that always fires here, and its flag is the same verdict the GitHub route gives.
+  const canConnect = useLakeDriveCanManage(lake.id, eligible).data === true;
 
   const gitHubNone = gitHubFlag ? gitHub.isSuccess && gitHub.data === null : lake.hasGitHubConnection === false;
   const hasNoSource = gitHubNone && drive.isSuccess && drive.data === null;
-  if (!eligible || !hasNoSource || fileCount !== 0) return null;
+  if (!eligible || !canConnect || !hasNoSource || fileCount !== 0) return null;
 
   const { kind, label, Icon } = source;
   return (

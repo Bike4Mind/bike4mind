@@ -147,6 +147,18 @@ export function hasVisibleReplyText(parts: readonly (string | null | undefined)[
 }
 
 /**
+ * Joins visible reply slots into one string. Each slot is a separate content block, so a slot that
+ * does not end in a newline gets a paragraph break; with a bare join a closing code fence would
+ * land on the same line as the next slot's text and never close.
+ */
+export function joinReplySlots(parts: readonly string[]): string {
+  return parts.reduce(
+    (joined, part) => (!joined || joined.endsWith('\n') ? joined + part : `${joined}\n\n${part}`),
+    ''
+  );
+}
+
+/**
  * Whether an adapter family can put model-generated reasoning into the TEXT channel - the
  * string handed to the completion callback, as opposed to a separate field.
  *

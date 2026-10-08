@@ -6,6 +6,8 @@ import type { NextRequest } from 'next/server';
 const PATH_TRAVERSAL_PATTERN = /(\.\.[/\\])|([/\\]\.\.)|(\.\.%2[fF])|(%2[fF]\.\.)/;
 const NULL_BYTE_PATTERN = /%00|\0/;
 const BACKSLASH_PATTERN = /\\/;
+// Must match the filenames scripts/copy-pdf-worker.mjs writes: versioned and legacy unversioned.
+const PDF_WORKER_PATH = /^\/pdf\.worker(-\d+\.\d+\.\d+)?\.min\.mjs$/;
 
 // Stamped by the router's viewer-request function on every request it forwards; must stay in
 // sync with ORIGIN_VERIFY_HEADER in infra/router.ts. ORIGIN_VERIFY_SECRET is set only on
@@ -108,11 +110,17 @@ export function proxy(request: NextRequest) {
   // hardening pass deliberately removed 'unsafe-eval' from the built CSP; this re-adds
   // it ONLY when NODE_ENV === 'development' (not 'production', not 'test').
   const devUnsafeEval = process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : '';
+  // A dedicated worker is governed by its own response's CSP, and where this proxy serves the pdf.js
+  // worker (dev, self-host) that is this policy. 'wasm-unsafe-eval' lets it compile its wasm image
+  // decoders (PdfViewer's wasmUrl) instead of falling back to slow JS ones; it permits no JS eval
+  // and is scoped to the worker so the app shell's script-src stays unchanged. Hosted stages serve
+  // the worker from S3 with no CSP; a CSP added there would also need 'wasm-unsafe-eval'.
+  const wasmUnsafeEval = PDF_WORKER_PATH.test(pathname) ? " 'wasm-unsafe-eval'" : '';
   // Reddit ads pixel (consent-deferred, see app/utils/redditPixel.ts): script from
   // www.redditstatic.com, pixel config fetch from pixel-config.reddit.com, and the
   // conversion beacon (rp.gif) to alb.reddit.com — the latter goes in both img-src
   // and connect-src since the pixel may use either transport.
-  const scriptSrcPolicy = `'self' 'unsafe-inline'${devUnsafeEval} blob: https://unpkg.com https://cdn.tailwindcss.com https://assets.mailerlite.com https://accounts.google.com https://js.stripe.com https://apis.google.com https://cdn.jsdelivr.net https://www.googletagmanager.com https://www.redditstatic.com https://connect.facebook.net`;
+  const scriptSrcPolicy = `'self' 'unsafe-inline'${wasmUnsafeEval}${devUnsafeEval} blob: https://unpkg.com https://cdn.tailwindcss.com https://assets.mailerlite.com https://accounts.google.com https://js.stripe.com https://apis.google.com https://cdn.jsdelivr.net https://www.googletagmanager.com https://www.redditstatic.com https://connect.facebook.net`;
   // assets.mailerlite.com hosts universal.css for the in-app subscriber widget; explicit host avoids re-opening blanket https:.
   const styleSrcPolicy = `'self' 'unsafe-inline' https://assets.mailerlite.com`;
 
