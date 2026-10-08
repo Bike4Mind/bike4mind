@@ -24,4 +24,13 @@ describe('machine payload schemas', () => {
     expect(delegationPayloadSchema.safeParse({ targetActorId: 'a1', task: 'a'.repeat(4000) }).success).toBe(true);
     expect(delegationPayloadSchema.safeParse({ targetActorId: 'a1', task: 'a'.repeat(4001) }).success).toBe(false);
   });
+
+  // The registry must point presence at the null-tolerant wrapper, not the bare
+  // shape - that mapping is what keeps the write route and the projection from
+  // disagreeing about a contentless post. Delegation stays strict: a null
+  // payload is not a delegation.
+  it('maps presence to a null-tolerant schema and delegation to a strict one', () => {
+    expect(knownMachinePayloadSchemas[PRESENCE_PAYLOAD_SCHEMA_NAME].safeParse(null).success).toBe(true);
+    expect(knownMachinePayloadSchemas[DELEGATION_PAYLOAD_SCHEMA_NAME].safeParse(null).success).toBe(false);
+  });
 });

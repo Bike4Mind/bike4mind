@@ -93,6 +93,16 @@ describe('toPresenceProjection', () => {
     expect(row?.reason).toBe('active');
   });
 
+  // A missing payload key arrives as undefined and an explicit null both mean
+  // "no payload"; the null-tolerant wrapper must treat them exactly like `{}`.
+  it('projects a null or undefined payload the same as an empty one', () => {
+    for (const payload of [null, undefined]) {
+      const row = project(payload);
+      expect(row?.lastSeen).toEqual(EVENT.createdAt);
+      expect(row?.reason).toBe('active');
+    }
+  });
+
   it('uses the event time, not the write time', () => {
     expect(project({ hook_event_name: 'Stop' })?.lastSeen).toEqual(EVENT.createdAt);
   });
