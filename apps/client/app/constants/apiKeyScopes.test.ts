@@ -163,6 +163,12 @@ describe('genericApiKeyScopesFor', () => {
     expect(values).toHaveLength(GENERIC_MODAL_API_KEY_SCOPES.length - OPTI_API_KEY_SCOPES.size);
   });
 
+  it('registers every optihashi:* catalog scope as premium', () => {
+    const optihashiScopes = USER_API_KEY_SCOPES.map(s => s.value).filter(v => v.startsWith('optihashi:'));
+    expect(optihashiScopes.length).toBeGreaterThan(0);
+    for (const scope of optihashiScopes) expect(OPTI_API_KEY_SCOPES.has(scope)).toBe(true);
+  });
+
   it('names no premium route paths in the premium scope docs', () => {
     for (const scope of USER_API_KEY_SCOPES.filter(s => OPTI_API_KEY_SCOPES.has(s.value))) {
       for (const endpoint of scope.endpoints) expect(endpoint).not.toMatch(/\/api\//);

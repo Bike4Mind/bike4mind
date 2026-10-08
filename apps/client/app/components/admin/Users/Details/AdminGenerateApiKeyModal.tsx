@@ -41,8 +41,10 @@ const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== Api
 const confinedScopeValues = new Set<ApiKeyScope>(CONFINED_API_KEY_SCOPES);
 
 export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminGenerateApiKeyModalProps) {
-  // Embed keys are minted through the dedicated embed flow (epic #41 Phase E), not
-  // this generic modal, so embed:chat is excluded from the offered scopes.
+  // Embed keys are minted through the dedicated embed flow, not this generic modal, so
+  // embed:chat is excluded from the offered scopes. Premium scopes gate on the admin's own
+  // access, which useOptiAccess grants admins whenever the overlay is mounted, so they are
+  // hidden only in builds without the overlay, not per target user.
   const scopeOptions = useGenericApiKeyScopes();
   const [formData, setFormData] = useState<AdminCreateUserApiKeyRequest>({
     name: '',

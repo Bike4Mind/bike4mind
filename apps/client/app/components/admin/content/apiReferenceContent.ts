@@ -10,7 +10,7 @@ export const renderScopeTableRows = (scopes: ApiKeyScopeOption[]): string =>
 
 /**
  * `baseUrl` is the deployment's origin, so the examples are runnable as copied. `scopes` is the
- * viewer's generic scope list (useGenericApiKeyScopes), so premium scopes stay entitlement-gated.
+ * viewer's generic scope list (useGenericApiKeyScopes), so premium scopes are hidden from viewers without Opti access.
  */
 export const getApiReferenceContent = (baseUrl: string, scopes: ApiKeyScopeOption[]): string => `
 # ${getBrandName()} API Reference

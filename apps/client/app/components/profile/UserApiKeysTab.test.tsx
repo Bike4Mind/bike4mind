@@ -337,6 +337,44 @@ describe('UserApiKeysTab - premium scopes', () => {
     expect(scopes).not.toContain(ApiKeyScope.OPTIHASHI_COMPUTE);
   });
 
+  const rerenderTab = (view: ReturnType<typeof renderTab>) =>
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <UserApiKeysTab />
+      </CssVarsProvider>
+    );
+
+  const submitKey = (name: string) => {
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, { target: { value: name } });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+  };
+
+  it('drops the premium scopes from a Full access selection when Opti access is revoked', () => {
+    h.hasOptiAccess = true;
+    const view = renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.click(screen.getByTestId('api-key-preset-full').querySelector('button')!);
+    h.hasOptiAccess = false;
+    rerenderTab(view);
+
+    const scopes = submitKey('Revoked key');
+    expect(scopes).toContain(ApiKeyScope.AI_CHAT);
+    for (const scope of PREMIUM) expect(scopes).not.toContain(scope);
+  });
+
+  it('keeps a custom selection when Opti access resolves after the user picked scopes', () => {
+    const view = renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.click(screen.getByTestId(`api-key-scope-${ApiKeyScope.AI_CHAT}`).querySelector('button')!);
+    h.hasOptiAccess = true;
+    rerenderTab(view);
+
+    const scopes = submitKey('Custom key');
+    expect(scopes).toContain(ApiKeyScope.AI_CHAT);
+    for (const scope of PREMIUM) expect(scopes).not.toContain(scope);
+  });
+
   it('leaves the premium scopes out of the scope docs without Opti access', () => {
     openScopeDocs();
     for (const scope of PREMIUM) expect(screen.queryByText(scope)).toBeNull();

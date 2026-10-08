@@ -195,12 +195,20 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   const [expirationDays, setExpirationDays] = useState<string>('never');
 
   // Opti access can resolve after mount (entitlement fetch) or be revoked mid-session, so
-  // re-seed the selection whenever the offered scopes change: the default stays the
-  // Read-only preset and a scope no longer offered can't be submitted while hidden.
+  // re-seed the selection whenever the offered scopes change: a preset selection follows
+  // its preset into the new model, and a custom one keeps the user's picks minus any scope
+  // no longer offered, so a hidden scope can't be submitted.
   const [seededModel, setSeededModel] = useState(scopeModel);
   if (seededModel !== scopeModel) {
+    const previousModel = seededModel;
     setSeededModel(scopeModel);
-    setFormData(fd => ({ ...fd, scopes: [...scopeModel.presetScopes.read] }));
+    setFormData(fd => {
+      const presetId = PRESETS.find(p => sameScopeSet(fd.scopes, previousModel.presetScopes[p.id]))?.id;
+      const scopes = presetId
+        ? [...scopeModel.presetScopes[presetId]]
+        : fd.scopes.filter(scope => scopeModel.scopeValues.includes(scope));
+      return { ...fd, scopes };
+    });
   }
 
   const { data: billingOrgs } = useBillingOrganizations();

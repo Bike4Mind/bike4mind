@@ -215,7 +215,7 @@ export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SC
 );
 
 /**
- * Premium scopes that only exist when the OptiHashi overlay is mounted. Every surface that
+ * Premium scopes, only usable when the OptiHashi overlay is mounted. Every surface that
  * lists GENERIC_MODAL_API_KEY_SCOPES must go through genericApiKeyScopesFor (or the
  * useGenericApiKeyScopes hook) so they stay hidden from users without OptiHashi access.
  */
