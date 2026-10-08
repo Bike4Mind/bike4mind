@@ -53,7 +53,9 @@ import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
-import { startRoundTimer } from './turnTiming';
+import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
+import { devLog } from '../devlog/DevLogSink';
+import { CHAT_STREAM_TAG } from './devLogTag';
 import {
   DEFAULT_COMPLETIONS_PATH,
   streamCompletion,
@@ -321,6 +323,8 @@ export interface ChatServiceDeps {
    * to do at full size.
    */
   turnLimits?: Partial<TurnLimits>;
+  /** Diagnosis only: logs each round's phases. See createRoundProbe. */
+  turnTiming?: boolean;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
@@ -1556,6 +1560,17 @@ export class ChatService {
     });
   }
 
+  /** Only reached with `turnTiming` on; see createRoundProbe. */
+  private logRoundPhases(sessionId: string, model: string, round: number, phases: RoundPhases): void {
+    const line = `CHAT_TIMING ${JSON.stringify({ model, round, ...phases })}`;
+    this.deps.logger.debug(line);
+    devLog.publish(() => ({
+      tags: [CHAT_STREAM_TAG],
+      message: `round ${round} phases: silent ${phases.maxGapMs}ms before ${phases.maxGapBefore ?? 'nothing'}`,
+      fields: { session: sessionId, model, ...phases },
+    }));
+  }
+
   /**
    * Stream one reply. The return value is what the queue turns on, so it names the three ends
    * a turn can have rather than leaving them to be inferred from the events: only 'completed'
@@ -1570,7 +1585,8 @@ export class ChatService {
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
-    const deadline = Date.now() + limits.wallClockMs;
+    const turnStartedAt = Date.now();
+    const deadline = turnStartedAt + limits.wallClockMs;
     this.emit({ type: 'start', sessionId, messageId: replyId });
 
     // Seeded from the interrupted run on a resume, so `done` carries the whole reply: the
@@ -1714,6 +1730,7 @@ export class ChatService {
 
         await this.clearStaleResults(session, toolCalls, produced, wire, replyId);
 
+        const probe = this.deps.turnTiming ? createRoundProbe(roundIndex === 0 ? turnStartedAt : undefined) : undefined;
         const failure = await streamRound(
           api.getAxiosInstance(),
           serverConfig.endpoint,
@@ -1728,11 +1745,21 @@ export class ChatService {
             ...(maxTokens ? { maxTokens } : {}),
           },
           event => {
+            if (event.type === 'meta') probe?.frame('meta');
             // `error` never reaches here (the transport throws on it); `meta` carries no reply.
             if (event.type === 'error' || event.type === 'meta') return;
             if (event.text || event.type === 'tool_use') timer.firstToken();
-            if (event.text) append(splitThinking.push(event.text));
+            if (event.text) {
+              const split = splitThinking.push(event.text);
+              // An empty split is either a bare thinking marker or text the filter is holding
+              // back as a possible partial marker; only the first is a thinking frame.
+              probe?.frame(
+                split.text ? 'text' : split.reasoning ? 'reasoning' : THINK_MARKER.test(event.text) ? 'marker' : 'text'
+              );
+              append(split);
+            }
             if (event.type === 'tool_use') {
+              probe?.frame('toolUse');
               if (event.tools) requested.push(...event.tools);
               if (event.thinking) turnThinking = event.thinking;
             }
@@ -1743,6 +1770,7 @@ export class ChatService {
         );
         append(splitThinking.flush());
         const timing = timer.end();
+        if (probe) this.logRoundPhases(sessionId, session.model, roundIndex, probe.end());
 
         // Recorded before the exits below, so the round that ENDS a turn - the one carrying the
         // answer, which by definition runs no tools - is part of the structure rather than the
@@ -3600,6 +3628,8 @@ const HOST_GUIDANCE: readonly string[] = [
  * needs the round's own bookkeeping - the text that did arrive, the running cost - to have been
  * recorded first. A throw out of the middle of the loop skips all of it.
  */
+const THINK_MARKER = /<\/?think>/;
+
 async function streamRound(...args: Parameters<typeof streamCompletion>): Promise<Error | null> {
   try {
     await streamCompletion(...args);
