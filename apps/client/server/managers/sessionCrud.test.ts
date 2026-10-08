@@ -271,6 +271,7 @@ describe('sessionCrud', () => {
       const result = await getOrCreateSession({
         sessionId: 'existing',
         fabFileIds: ['a', 'b'],
+        persistFabFileIds: true,
         user,
         ability: allowAbility,
         logger,
@@ -285,7 +286,14 @@ describe('sessionCrud', () => {
 
     it('does not write when fabFileIds adds nothing or is omitted', async () => {
       SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
-      await getOrCreateSession({ sessionId: 'existing', fabFileIds: ['a'], user, ability: allowAbility, logger });
+      await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['a'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
       SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
       await getOrCreateSession({ sessionId: 'existing', user, ability: allowAbility, logger });
 
@@ -296,7 +304,7 @@ describe('sessionCrud', () => {
       sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned' });
       updateSessionService.mockResolvedValueOnce({ id: 'owned', knowledgeIds: ['f1'] });
 
-      await getOrCreateSession({ sessionId: 'owned', fabFileIds: ['f1'], user, logger });
+      await getOrCreateSession({ sessionId: 'owned', fabFileIds: ['f1'], persistFabFileIds: true, user, logger });
 
       expect(updateSessionService).toHaveBeenCalledWith(
         user,
@@ -315,6 +323,7 @@ describe('sessionCrud', () => {
       await getOrCreateSession({
         sessionId: 'existing',
         fabFileIds: ['b', 'img-1', 'b'],
+        persistFabFileIds: true,
         user,
         ability: allowAbility,
         logger,
@@ -335,6 +344,7 @@ describe('sessionCrud', () => {
       const result = await getOrCreateSession({
         sessionId: 'existing',
         fabFileIds: ['img-1', 'gone-1'],
+        persistFabFileIds: true,
         user,
         ability: allowAbility,
         logger,
@@ -352,6 +362,7 @@ describe('sessionCrud', () => {
       const result = await getOrCreateSession({
         sessionId: 'existing',
         fabFileIds: ['f1'],
+        persistFabFileIds: true,
         user,
         ability: allowAbility,
         logger,
@@ -359,6 +370,81 @@ describe('sessionCrud', () => {
 
       expect(result.session).toBe(existing);
       expect(logger.warn).toHaveBeenCalled();
+    });
+
+    it('does not persist fabFileIds without the flag (a stale tab must not re-add a removed file)', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: [] });
+
+      await getOrCreateSession({ sessionId: 'existing', fabFileIds: ['doc-x'], user, ability: allowAbility, logger });
+
+      expect(fabFileFindMetadataByIds).not.toHaveBeenCalled();
+      expect(updateSessionService).not.toHaveBeenCalled();
+    });
+
+    it('keeps the resolved session when the metadata lookup fails', async () => {
+      const existing = { id: 'existing', knowledgeIds: [] };
+      SessionModelMock.findOne.mockResolvedValueOnce(existing);
+      fabFileFindMetadataByIds.mockRejectedValueOnce(new Error('db'));
+
+      const result = await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['f1'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(result.session).toBe(existing);
+      expect(updateSessionService).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ sessionId: 'existing' }));
+    });
+
+    it('keeps request order, skips soft-deleted files, and stores a mixed-case duplicate once', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['ab'] });
+      // The repository returns rows in its own order and includes soft-deleted ones.
+      fabFileFindMetadataByIds.mockResolvedValueOnce({
+        data: [
+          { id: 'aa', mimeType: 'application/pdf' },
+          { id: 'del', mimeType: 'application/pdf', deletedAt: new Date() },
+          { id: 'bb', mimeType: 'application/pdf' },
+        ],
+        hasMore: false,
+      });
+      updateSessionService.mockResolvedValueOnce({ id: 'existing' });
+
+      await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['BB', 'bb', 'AB', 'del', 'aa'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(fabFileFindMetadataByIds).toHaveBeenCalledWith(['bb', 'del', 'aa']);
+      expect(updateSessionService.mock.calls[0][1].knowledgeIds).toEqual(['ab', 'bb', 'aa']);
+    });
+
+    it('warns when the new ids exceed the metadata cap', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: [] });
+      fabFileFindMetadataByIds.mockResolvedValueOnce({
+        data: [{ id: 'f1', mimeType: 'application/pdf' }],
+        hasMore: true,
+      });
+      updateSessionService.mockResolvedValueOnce({ id: 'existing' });
+
+      await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['f1', 'f2'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ sessionId: 'existing' }));
+      expect(updateSessionService.mock.calls[0][1].knowledgeIds).toEqual(['f1']);
     });
 
     it("hands createSession the attachment-door lake resolver for the caller's supplied files", async () => {

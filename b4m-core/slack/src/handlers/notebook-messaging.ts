@@ -191,11 +191,18 @@ export async function sendMessageToNotebookAndGetResponse(
   const createdQuest = await sessionManager.addMessageToSession(userId, sessionId, message, ability);
 
   // Keep documents in the notebook for later turns; getOrCreateSession persists only the non-image
-  // ones (see sessionCrud.ts). Every id still rides this turn below, so a failed persist only costs
-  // later turns.
+  // ones (see sessionCrud.ts). Slack fabFileIds are this message's uploads, so they are newly attached.
+  // Every id still rides this turn below, so a failed persist only costs later turns.
   if (fabFileIds.length > 0) {
     try {
-      await sessionManager.getOrCreateSession({ sessionId, fabFileIds, user, ability, logger });
+      await sessionManager.getOrCreateSession({
+        sessionId,
+        fabFileIds,
+        persistFabFileIds: true,
+        user,
+        ability,
+        logger,
+      });
     } catch (error) {
       logger.warn('Failed to keep Slack files in the notebook', { sessionId, error });
     }

@@ -64,33 +64,53 @@ const knowledgeIds = async (sessionId: string) =>
   ((await Session.findById(sessionId).lean()) as { knowledgeIds?: string[] }).knowledgeIds ?? [];
 
 describe('file ids attached to an existing session persist across turns', () => {
-  it('getOrCreateSession writes the new ids once, and a repeat is a no-op', async () => {
+  it('with persistFabFileIds, getOrCreateSession writes the new ids once, and a repeat is a no-op', async () => {
     const owner = await createUser('owner');
     const session = await createSession({ userId: owner.id, name: 'nb' });
     const pdf = await createFile(owner.id, 'application/pdf');
     const ability = defineAbilitiesFor(owner);
+    const params = { sessionId: session.id, fabFileIds: [pdf], persistFabFileIds: true, user: owner, ability, logger };
 
-    const first = await getOrCreateSession({ sessionId: session.id, fabFileIds: [pdf], user: owner, ability, logger });
+    const first = await getOrCreateSession(params);
     expect(first.session.knowledgeIds).toEqual([pdf]);
     expect(await knowledgeIds(session.id)).toEqual([pdf]);
 
     const before = await Session.findById(session.id).lean();
-    await getOrCreateSession({ sessionId: session.id, fabFileIds: [pdf], user: owner, ability, logger });
+    await getOrCreateSession(params);
     expect(await Session.findById(session.id).lean()).toEqual(before);
   });
 
-  it('an image or a repeated id from fabFileIds (the /api/ai/llm path) is not persisted', async () => {
+  it('without the flag (the /api/ai/llm path), fabFileIds are per-turn and knowledgeIds is unchanged', async () => {
     const owner = await createUser('owner');
     const session = await createSession({ userId: owner.id, name: 'nb' });
     const pdf = await createFile(owner.id, 'application/pdf');
-    const png = await createFile(owner.id, 'image/png');
     const ability = defineAbilitiesFor(owner);
 
-    await getOrCreateSession({ sessionId: session.id, fabFileIds: [png], user: owner, ability, logger });
+    await getOrCreateSession({ sessionId: session.id, fabFileIds: [pdf], user: owner, ability, logger });
     expect(await knowledgeIds(session.id)).toEqual([]);
+  });
 
-    await getOrCreateSession({ sessionId: session.id, fabFileIds: [pdf, png, pdf], user: owner, ability, logger });
-    expect(await knowledgeIds(session.id)).toEqual([pdf]);
+  it('a read-only sharee gets NotFound and knowledgeIds is unchanged', async () => {
+    const owner = await createUser('owner');
+    const sharee = await createUser('sharee');
+    const session = await createSession({
+      userId: owner.id,
+      name: 'shared',
+      users: [{ userId: sharee.id, permissions: [Permission.read] }],
+    });
+    const pdf = await createFile(sharee.id, 'application/pdf');
+
+    await expect(
+      getOrCreateSession({
+        sessionId: session.id,
+        fabFileIds: [pdf],
+        persistFabFileIds: true,
+        user: sharee,
+        ability: defineAbilitiesFor(sharee),
+        logger,
+      })
+    ).rejects.toThrow('Session not found');
+    expect(await knowledgeIds(session.id)).toEqual([]);
   });
 
   it('Slack: a document persists to a shared notebook, an image does not, and both ride the turn', async () => {

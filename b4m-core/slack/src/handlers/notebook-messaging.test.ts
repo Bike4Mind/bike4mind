@@ -51,7 +51,9 @@ describe('sendMessageToNotebookAndGetResponse file persistence', () => {
 
     expect(mockGetOrCreateSession).toHaveBeenCalledTimes(1);
     const params = mockGetOrCreateSession.mock.calls[0][0];
-    expect(params).toEqual(expect.objectContaining({ sessionId: 'sess-1', fabFileIds: ['pdf-1', 'png-1'], user }));
+    expect(params).toEqual(
+      expect.objectContaining({ sessionId: 'sess-1', fabFileIds: ['pdf-1', 'png-1'], persistFabFileIds: true, user })
+    );
     // Same object: the no-ability fallback is owner-only and would 404 a routed shared notebook.
     expect(params.ability).toBe(ability);
     // This turn still sees every file.

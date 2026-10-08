@@ -71,11 +71,15 @@ export interface GetOrCreateSessionParams {
   ability?: Ability;
   /** Logger instance */
   logger: Logger;
-  /**
-   * Fab files for this turn. A new session gets them as knowledge; on an existing session the new
-   * non-image ones are also persisted to knowledgeIds (best-effort, never propagated to projects).
-   */
+  /** Per-turn files; seeds knowledge on a new session. */
   fabFileIds?: string[];
+  /**
+   * Internal: on an existing session, also persist the new notebook-scope fabFileIds to knowledgeIds
+   * (best-effort, never propagated to projects). Set only by callers that know the ids were newly
+   * attached (Slack uploads); never wire it from a request body - a browser sends its whole
+   * workbench, so a stale tab would re-add a file another tab removed.
+   */
+  persistFabFileIds?: boolean;
   /**
    * Agents to attach to a newly created session only; ignored for an existing one. Authorized in
    * `sessionService.createSession`, which drops ids the caller cannot access.
@@ -127,6 +131,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
     ability,
     logger,
     fabFileIds,
+    persistFabFileIds,
     agentIds,
     origin,
   } = params;
@@ -174,12 +179,22 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
     // every turn (see resolveAttachScope). Never propagated to projects: an automatic attach is not
     // consent to share. Best-effort: this turn still carries every id as a per-turn session file.
     const knownIds = session?.knowledgeIds ?? [];
-    const addedIds = [...new Set(fabFileIds ?? [])].filter(id => !knownIds.includes(id));
+    const known = new Set(knownIds.map(id => String(id).toLowerCase()));
+    const addedIds = persistFabFileIds
+      ? [...new Set((fabFileIds ?? []).map(id => id.toLowerCase()))].filter(id => !known.has(id))
+      : [];
     if (session && addedIds.length > 0) {
       try {
-        const notebookIds = (await fabFileRepository.findMetadataByIds(addedIds)).data
-          .filter(file => resolveAttachScope('auto', file.mimeType) === 'notebook')
-          .map(file => file.id);
+        const { data, hasMore } = await fabFileRepository.findMetadataByIds(addedIds);
+        if (hasMore)
+          logger.warn('fabFileIds exceed the metadata cap; persisting the first page', { sessionId: session.id });
+        // findMetadataByIds includes soft-deleted rows; those must not come back as knowledge.
+        const notebook = new Set(
+          data
+            .filter(file => !file.deletedAt && resolveAttachScope('auto', file.mimeType) === 'notebook')
+            .map(file => String(file.id))
+        );
+        const notebookIds = addedIds.filter(id => notebook.has(id));
         if (notebookIds.length > 0) {
           session = await sessionService.updateSession(
             user,
@@ -206,6 +221,8 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
       user,
       {
         name: sessionName ?? 'New Notebook',
+        // Every attached file, images included, on purpose: the user started the notebook with them
+        // (matches createSessionForFile).
         knowledgeIds: fabFileIds ?? [],
         agentIds: agentIds ?? [],
         projectId,
