@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { B4mApiClient, mapApiError } from './b4mApiClient';
+import { B4mApiClient } from './b4mApiClient';
 import { NotAuthenticatedError } from '../auth/ApiClient';
 import {
   TOOL_NAMES,
@@ -613,22 +613,38 @@ describe('registerTools', () => {
     expect(z.object(shape).parse({ name: 'n', dataLakeId: 'l1' })).toEqual({ name: 'n', dataLakeId: 'l1' });
   });
 
+  const NB_ID = '64b7f0c2a1e4d5f6a7b8c9d0';
+
   it('delete_notebook input schema rejects a missing or false confirm', () => {
     const schema = z.object(collectTools(mockClient({})).schemas.get('delete_notebook')!);
-    expect(schema.safeParse({ notebookId: 'n1' }).success).toBe(false);
-    expect(schema.safeParse({ notebookId: 'n1', confirm: false }).success).toBe(false);
-    expect(schema.safeParse({ notebookId: 'n1', confirm: true }).success).toBe(true);
+    expect(schema.safeParse({ notebookId: NB_ID }).success).toBe(false);
+    expect(schema.safeParse({ notebookId: NB_ID, confirm: false }).success).toBe(false);
+    expect(schema.safeParse({ notebookId: NB_ID, confirm: true }).success).toBe(true);
   });
 
   it('rename_notebook input schema rejects an empty name', () => {
     const schema = z.object(collectTools(mockClient({})).schemas.get('rename_notebook')!);
-    expect(schema.safeParse({ notebookId: 'n1', name: '' }).success).toBe(false);
+    expect(schema.safeParse({ notebookId: NB_ID, name: '' }).success).toBe(false);
+  });
+
+  // An empty or dot-segment id collapses the URL onto /api/sessions, whose DELETE wipes every notebook.
+  it.each([
+    ['get_notebook', {}],
+    ['rename_notebook', { name: 'x' }],
+    ['clone_notebook', {}],
+    ['delete_notebook', { confirm: true }],
+  ] as const)('%s input schema accepts only an ObjectId notebookId', (tool, rest) => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get(tool)!);
+    for (const bad of ['', '.', '..', 'n1', `${NB_ID}/..`, NB_ID.slice(1)]) {
+      expect(schema.safeParse({ notebookId: bad, ...rest }).success).toBe(false);
+    }
+    expect(schema.safeParse({ notebookId: NB_ID, ...rest }).success).toBe(true);
   });
 
   it.each([
-    ['rename_notebook', 'renameNotebook', { notebookId: 'n1', name: 'x' }],
-    ['clone_notebook', 'cloneNotebook', { notebookId: 'n1' }],
-    ['delete_notebook', 'deleteNotebook', { notebookId: 'n1', confirm: true }],
+    ['rename_notebook', 'renameNotebook', { notebookId: NB_ID, name: 'x' }],
+    ['clone_notebook', 'cloneNotebook', { notebookId: NB_ID }],
+    ['delete_notebook', 'deleteNotebook', { notebookId: NB_ID, confirm: true }],
   ] as const)('%s maps a 403 to an isError naming notebooks:write', async (tool, method, args) => {
     const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
       status: 403,
@@ -645,22 +661,39 @@ describe('registerTools', () => {
     expect((result.content[0] as { text: string }).text).toContain('recommended scope: notebooks:write');
   });
 
-  it.each([404, 409])('delete_notebook passes a %s through mapApiError', async status => {
+  it.each([
+    [404, 'Session not found'],
+    [409, 'Session is being modified, retry'],
+  ])('delete_notebook surfaces the server message of a %s', async (status, message) => {
     const err = new AxiosError('failed', undefined, {} as InternalAxiosRequestConfig, {}, {
       status,
       statusText: '',
-      data: {},
+      data: { message },
       headers: {},
       config: {} as InternalAxiosRequestConfig,
     } as AxiosResponse);
     const tools = collectTools(mockClient({ deleteNotebook: vi.fn().mockRejectedValue(err) }));
 
-    const result = await tools.get('delete_notebook')!({ notebookId: 'n1', confirm: true });
+    const result = await tools.get('delete_notebook')!({ notebookId: NB_ID, confirm: true });
 
     expect(result.isError).toBe(true);
-    expect((result.content[0] as { text: string }).text).toBe(
-      mapApiError(err, 'http://localhost:3000', 'notebooks:write')
-    );
+    expect((result.content[0] as { text: string }).text).toBe(message);
+  });
+
+  it('clone_notebook surfaces a 429 with its Retry-After', async () => {
+    const err = new AxiosError('failed', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 429,
+      statusText: '',
+      data: {},
+      headers: { 'retry-after': '42' },
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ cloneNotebook: vi.fn().mockRejectedValue(err) }));
+
+    const result = await tools.get('clone_notebook')!({ notebookId: NB_ID });
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toBe('rate limit exceeded (retry after 42s)');
   });
 
   it('create_project input schema requires name and description and keeps id lists', () => {

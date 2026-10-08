@@ -15,6 +15,7 @@ import {
   type RawDataLake,
   type RawNotebook,
   type RawProject,
+  NOTEBOOK_ID_PATTERN,
 } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -135,8 +136,11 @@ const listNotebooksShape = {
   page: z.number().int().min(1).default(1).describe('1-based page number; request the next page when hasMore is true'),
 };
 
+const notebookId = (description: string) =>
+  z.string().regex(NOTEBOOK_ID_PATTERN, 'notebookId must be a 24-character hex ObjectId').describe(description);
+
 const getNotebookShape = {
-  notebookId: z.string().describe('The notebook (session) id'),
+  notebookId: notebookId('The notebook (session) id'),
 };
 
 const createNotebookShape = {
@@ -149,16 +153,16 @@ const createNotebookShape = {
 };
 
 const renameNotebookShape = {
-  notebookId: z.string().describe('The notebook (session) id'),
+  notebookId: notebookId('The notebook (session) id'),
   name: z.string().min(1).describe('The new name'),
 };
 
 const cloneNotebookShape = {
-  notebookId: z.string().describe('The notebook (session) id to clone'),
+  notebookId: notebookId('The notebook (session) id to clone'),
 };
 
 const deleteNotebookShape = {
-  notebookId: z.string().describe('The notebook (session) id to delete'),
+  notebookId: notebookId('The notebook (session) id to delete'),
   confirm: z.literal(true).describe('Must be true; the delete is permanent'),
 };
 

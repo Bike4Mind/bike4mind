@@ -13,8 +13,22 @@ import {
   supportedVoiceGenerationVendor,
   type ChatHistoryItemType,
   type QuestErrorCode,
+  type SessionDeleteResponse,
   type TTSRequest,
 } from '@bike4mind/common';
+
+export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
+
+/**
+ * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
+ * notebook the caller owns, so write paths refuse anything that is not an ObjectId before any request.
+ */
+function notebookPath(notebookId: string): string {
+  if (!NOTEBOOK_ID_PATTERN.test(notebookId)) {
+    throw new Error(`Invalid notebook id: ${JSON.stringify(notebookId)}`);
+  }
+  return `/api/sessions/${notebookId}`;
+}
 
 /**
  * A Bike4Mind notebook (session) as returned by the REST API. Only the fields the
@@ -196,16 +210,16 @@ export class B4mApiClient {
   }
 
   async renameNotebook(notebookId: string, name: string): Promise<RawNotebook> {
-    return this.client.put<RawNotebook>(`/api/sessions/${encodeURIComponent(notebookId)}`, { name });
+    return this.client.put<RawNotebook>(notebookPath(notebookId), { name });
   }
 
   /** Returns the new (cloned) notebook. */
   async cloneNotebook(notebookId: string): Promise<RawNotebook> {
-    return this.client.post<RawNotebook>(`/api/sessions/${encodeURIComponent(notebookId)}/clone`, {});
+    return this.client.post<RawNotebook>(`${notebookPath(notebookId)}/clone`, {});
   }
 
-  async deleteNotebook(notebookId: string): Promise<{ newLastNotebookId: string | null }> {
-    return this.client.delete<{ newLastNotebookId: string | null }>(`/api/sessions/${encodeURIComponent(notebookId)}`);
+  async deleteNotebook(notebookId: string): Promise<SessionDeleteResponse> {
+    return this.client.delete<SessionDeleteResponse>(notebookPath(notebookId), { maxRedirects: 0 });
   }
 
   /**
