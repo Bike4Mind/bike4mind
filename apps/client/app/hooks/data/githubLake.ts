@@ -96,17 +96,18 @@ function useLakeGitHubConnectionOptions(dataLakeId: string | undefined, enabled:
 /**
  * Mint the signed authorize URL for a lake (POST /api/data-lakes/:id/github-connection).
  * `ensureConnectorFed` has the server switch a curated lake to connector-fed in the same request, only
- * once the start is accepted, so the lake's origin and config history are refetched after it.
+ * once the start is accepted. The lake's origin and config history are then marked stale: the browser
+ * usually leaves for GitHub before a refetch lands, so they refresh on the next mount (the callback
+ * return, or Back), or right away if the handoff fails and the page stays.
  */
 export function useStartLakeGitHubConnect() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ dataLakeId, ensureConnectorFed }: { dataLakeId: string; ensureConnectorFed?: boolean }) => {
-      const response = ensureConnectorFed
-        ? await api.post<{ authorizeUrl: string }>(`/api/data-lakes/${dataLakeId}/github-connection`, {
-            ensureConnectorFed: true,
-          })
-        : await api.post<{ authorizeUrl: string }>(`/api/data-lakes/${dataLakeId}/github-connection`);
+      const response = await api.post<{ authorizeUrl: string }>(
+        `/api/data-lakes/${dataLakeId}/github-connection`,
+        ensureConnectorFed ? { ensureConnectorFed: true } : undefined
+      );
       return response.data;
     },
     onSuccess: (_data, { dataLakeId, ensureConnectorFed }) => {

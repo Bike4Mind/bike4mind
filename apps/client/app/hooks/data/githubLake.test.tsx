@@ -243,7 +243,7 @@ describe('useStartLakeGitHubConnect', () => {
       response = await result.current.mutateAsync({ dataLakeId: 'lake1' });
     });
 
-    expect(post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection');
+    expect(post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection', undefined);
     expect(response).toEqual(urls);
   });
 

@@ -38,7 +38,7 @@ describe('useBeginLakeGitHubConnect', () => {
     await act(async () => result.current.begin({ onFailed }));
 
     expect(onFailed).not.toHaveBeenCalled();
-    expect(api.post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection');
+    expect(api.post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection', undefined);
     expect(readGitHubLakeConnectHandoff()).toEqual({ dataLakeId: 'lake1' });
     expect(assign).toHaveBeenCalledWith(AUTHORIZE_URL);
   });
