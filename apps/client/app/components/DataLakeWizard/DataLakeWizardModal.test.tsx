@@ -67,6 +67,9 @@ vi.mock('@client/app/components/datalake/createLakeSources', async importOrigina
   ...(await importOriginal<typeof import('@client/app/components/datalake/createLakeSources')>()),
   useCreateLakeScope: () => ({ organizationId: undefined, isOrgOwnerOrManager: false }),
 }));
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => true }),
+}));
 // ConfigStep's embedding-cost estimate reads admin settings via react-query; stub it so this
 // wizard test needs no QueryClientProvider. Empty values are enough - the estimate renders
 // nothing without a resolved spendEnabled/budget/model, which is not what this file tests.
