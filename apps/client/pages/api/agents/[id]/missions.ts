@@ -2,8 +2,10 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { agentRepository } from '@bike4mind/database';
+import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentAccess, type AgentAccess, type AgentAccessShape } from '@server/agents/assertAgentAccess';
 import { rateLimit } from '@server/middlewares/rateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel - its subtree pulls the
 // Lambda-runtime import graph, which deadlocks module init under Next dev).
@@ -31,6 +33,29 @@ const CreateMissionInputSchema = z.object({
 // One body for a missing agent and one the caller cannot reach, so the response never confirms the id exists.
 const AGENT_NOT_FOUND_MESSAGE = 'Agent not found';
 
+type AccessDenial = 'not-found' | 'forbidden';
+
+// Not `assertAgentAccess` alone: its thrown NotFoundError renders with extra envelope fields, and a
+// missing id must stay byte-identical to a hidden one on these hand-written responses. Admins see any
+// agent that exists.
+function agentAccessDenial(
+  agent: AgentAccessShape | null | undefined,
+  userId: string,
+  isAdmin: boolean | undefined,
+  access: AgentAccess
+): AccessDenial | undefined {
+  if (!agent) return 'not-found';
+  if (isAdmin) return undefined;
+  try {
+    assertAgentAccess(agent, userId, access);
+    return undefined;
+  } catch (error) {
+    if (error instanceof NotFoundError) return 'not-found';
+    if (error instanceof ForbiddenError) return 'forbidden';
+    throw error;
+  }
+}
+
 // baseApi's scope gate is per route, so it admits either agents scope and each method asserts its own.
 const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
   .use(rateLimit({ limit: process.env.NODE_ENV === 'development' ? 30 : 5, windowMs: 60 * 1000 }))
@@ -42,12 +67,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     if (!b4mAgentId) return res.status(400).json({ error: 'agent id required' });
 
     const agent = await agentRepository.findById(b4mAgentId);
-    if (!agent) return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
-    // Read access mirrors GET /api/agents/[id]: owner, explicitly-shared, or
-    // admin. A strict `!==` (not `agent.userId &&`) means an ownerless org/
-    // system agent does NOT leak its mission roster to every authenticated user.
-    const isSharedWithUser = agent.users?.some((u: { userId: string }) => u.userId === userId);
-    if (agent.userId !== userId && !isSharedWithUser && !req.user?.isAdmin) {
+    if (agentAccessDenial(agent, userId, req.user?.isAdmin, 'view')) {
       return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
     }
 
@@ -74,6 +94,14 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
       return res.status(400).json({ error: 'Invalid request body', details: parsed.error.flatten() });
     }
     const input = parsed.data;
+
+    const agent = await agentRepository.findById(b4mAgentId);
+    const denial = agentAccessDenial(agent, userId, req.user?.isAdmin, 'own');
+    if (denial === 'not-found') return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
+    if (denial === 'forbidden') {
+      return res.status(403).json({ error: "You don't have permission to create missions for this agent" });
+    }
+
     const logger = new Logger({ metadata: { component: 'agent-missions', b4mAgentId } });
     const t0 = Date.now();
 

@@ -289,6 +289,17 @@ Create and manage API keys for programmatic access.
 | `AI_CHAT` | AI chat features |
 | `READ_PROJECTS` | View projects |
 | `WRITE_PROJECTS` | Create/modify projects |
+| `READ_AGENTS` | View agents and their missions |
+| `WRITE_AGENTS` | Create, modify, fund and delete agents, manage their embed keys, generate agent content, and transfer credits. Can spend your credits |
+| `ME_READ` | Read your own plan tier, credit balance, and entitlements |
+| `DATALAKE_READ` | List and browse data lakes you can already reach |
+| `DATALAKE_QUERY` | Run retrieval queries against a lake. Spends credits |
+| `DATALAKE_WRITE` | Create and update lakes, and attach, retag, or remove their files |
+| `DATALAKE_SHARE` | Change who can reach a lake (visibility and ownership) |
+| `HEARTH_READ` | List Hearth channels and replay their events |
+| `HEARTH_WRITE` | Append Hearth events, create channels, and advance actor cursors |
+| `MARKETING_REPORTS_READ` | Read published marketing reports |
+| `MARKETING_REPORTS_WRITE` | Create and update marketing reports |
 
 ### Rate Limiting
 

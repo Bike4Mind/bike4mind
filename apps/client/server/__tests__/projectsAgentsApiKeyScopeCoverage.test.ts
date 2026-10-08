@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync } from 'fs';
 import path from 'path';
-import { methodBlocks } from './scopeCoverageHelpers';
+import { extractRequiredScopesGate, methodBlocks, stripComments, tsFiles } from './scopeCoverageHelpers';
 
 /**
  * Every `/api/projects` and `/api/agents` door gates API keys on that family's scope
@@ -59,25 +59,24 @@ const FAMILIES: Family[] = [
   },
 ];
 
-function tsFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return entry.name === '__tests__' ? [] : tsFiles(full);
-    return /\.tsx?$/.test(entry.name) ? [full] : [];
-  });
-}
+// Every route in both trees declares its handler this way, so anchoring here keeps a dead gated
+// `baseApi(...)` next to an ungated exported handler from passing.
+const GATE_CALL = 'const handler = baseApi\\(';
 
-/** Strips both comment forms so a commented-out `requiredScopes` never counts as a real gate. */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-}
+const withoutStringLiterals = (source: string): string =>
+  source.replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\$]|\\.)*`/g, "''");
 
-/** Anchors to the `baseApi(...)` call itself so a mention anywhere else cannot satisfy the gate. */
-function extractRequiredScopesGate(source: string, prefix: Family['prefix']): string | undefined {
-  const gate = new RegExp(
-    `baseApi\\(\\{[^}]*requiredScopes:\\s*(${prefix}_(?:READ|WRITE|READ_OR_WRITE)_SCOPES)\\b[^}]*\\}\\)`
-  );
-  return stripComments(source).match(gate)?.[1];
+/**
+ * True when `body` calls `assertName(req` before its first `await`, so no repository or service
+ * call can run for a key that lacks the scope. String literals are blanked first so a quoted
+ * mention cannot stand in for the call.
+ */
+function assertsBeforeFirstAwait(body: string, assertName: string): boolean {
+  const code = withoutStringLiterals(body);
+  const callIndex = code.search(new RegExp(`\\b${assertName}\\(req\\b`));
+  if (callIndex === -1) return false;
+  const awaitIndex = code.search(/\bawait\b/);
+  return awaitIndex === -1 || callIndex < awaitIndex;
 }
 
 describe.each(FAMILIES)('every /api/$dir door gates API keys on a $dir scope', family => {
@@ -97,8 +96,9 @@ describe.each(FAMILIES)('every /api/$dir door gates API keys on a $dir scope', f
 
   it.each(routes)('%s', (relPath, file) => {
     const rawSource = readFileSync(file, 'utf8');
-    const gate = extractRequiredScopesGate(rawSource, family.prefix);
-    expect(gate, `declare baseApi({ requiredScopes: ${family.prefix}_*_SCOPES })`).toBeDefined();
+    const gate = extractRequiredScopesGate(rawSource, family.prefix, GATE_CALL);
+    expect(gate, `declare const handler = baseApi({ requiredScopes: ${family.prefix}_*_SCOPES })`).toBeDefined();
+    expect(stripComments(rawSource), `${relPath} must export the gated handler`).toMatch(/export default handler\b/);
 
     const expectedGate = family.expectedGates[relPath];
     expect(
@@ -120,15 +120,12 @@ describe.each(FAMILIES)('every /api/$dir door gates API keys on a $dir scope', f
       `${relPath}: no write handler found`
     ).toBe(true);
     for (const { method, body } of blocks) {
-      if (method === 'get') {
-        expect(body, `.get on a read-or-write route must assert ${family.dir}:read in-handler`).toMatch(
-          new RegExp(`assert${family.assertNoun}ReadScope\\(`)
-        );
-        continue;
-      }
-      expect(body, `.${method} on a read-or-write route must assert ${family.dir}:write in-handler`).toMatch(
-        new RegExp(`assert${family.assertNoun}WriteScope\\(`)
-      );
+      const isRead = method === 'get';
+      const assertName = `assert${family.assertNoun}${isRead ? 'Read' : 'Write'}Scope`;
+      expect(
+        assertsBeforeFirstAwait(body, assertName),
+        `.${method} on a read-or-write route must call ${assertName}(req) before its first await`
+      ).toBe(true);
     }
   });
 });
@@ -142,7 +139,7 @@ describe('the gate regex actually rejects a bad door', () => {
 
   it('fails a route with no requiredScopes at all', () => {
     const source = 'const handler = baseApi().get(async (req, res) => {});\nexport default handler;';
-    expect(extractRequiredScopesGate(source, 'PROJECTS')).toBeUndefined();
+    expect(extractRequiredScopesGate(source, 'PROJECTS', GATE_CALL)).toBeUndefined();
   });
 
   it('ignores a requiredScopes mention living only in a comment', () => {
@@ -151,12 +148,12 @@ describe('the gate regex actually rejects a bad door', () => {
       '/* baseApi({ requiredScopes: AGENTS_READ_SCOPES }) */',
       'const handler = baseApi({}).get(async (req, res) => {});',
     ].join('\n');
-    expect(extractRequiredScopesGate(source, 'AGENTS')).toBeUndefined();
+    expect(extractRequiredScopesGate(source, 'AGENTS', GATE_CALL)).toBeUndefined();
   });
 
   it('does not accept the other family scope constant', () => {
     const source = 'const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(async () => {});';
-    expect(extractRequiredScopesGate(source, 'AGENTS')).toBeUndefined();
+    expect(extractRequiredScopesGate(source, 'AGENTS', GATE_CALL)).toBeUndefined();
   });
 
   it('flags a mixed door whose later method forgot its own assert', () => {
@@ -167,5 +164,34 @@ describe('the gate regex actually rejects a bad door', () => {
     ].join('\n');
     const post = methodBlocks(source).find(block => block.method === 'post');
     expect(post?.body).not.toMatch(/assertAgentsWriteScope\(/);
+  });
+
+  it('rejects a gated baseApi sitting next to an ungated exported handler', () => {
+    const source = [
+      'const other = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES });',
+      'const handler = baseApi().get(async (req, res) => {});',
+      'export default handler;',
+    ].join('\n');
+    expect(extractRequiredScopesGate(source, 'AGENTS', GATE_CALL)).toBeUndefined();
+  });
+
+  it('accepts the assert as the first thing in a handler', () => {
+    const body = '.put(async (req, res) => { assertAgentsWriteScope(req); await repo.update(); })';
+    expect(assertsBeforeFirstAwait(body, 'assertAgentsWriteScope')).toBe(true);
+  });
+
+  it('rejects an assert placed after an await', () => {
+    const body = '.put(async (req, res) => { await repo.update({}); assertAgentsWriteScope(req); })';
+    expect(assertsBeforeFirstAwait(body, 'assertAgentsWriteScope')).toBe(false);
+  });
+
+  it('does not count an assert that only appears inside a string literal', () => {
+    const body = ".get(async (req, res) => { const note = 'assertAgentsReadScope(req)'; return res.json({}); })";
+    expect(assertsBeforeFirstAwait(body, 'assertAgentsReadScope')).toBe(false);
+  });
+
+  it('ignores angle brackets inside a string literal in the type arguments', () => {
+    const source = ".get<{ op: '>' }>(async () => {}).put(async () => {})";
+    expect(methodBlocks(source).map(({ method }) => method)).toEqual(['get', 'put']);
   });
 });
