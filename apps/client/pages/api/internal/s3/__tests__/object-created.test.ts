@@ -209,6 +209,8 @@ describe('POST /api/internal/s3/object-created', () => {
   // The scan is deliberately not awaited: holding MinIO's webhook on a full object download would
   // time it out and provoke a redelivery. A never-settling mock makes an `await` on that chain hang
   // this test, so it fails loudly instead of silently regressing to a blocking webhook.
+  // A short per-test timeout so an `await` regression fails on the contract, not as a generic hang
+  // against the 30s suite default.
   it('answers 200 before the upload-time scan settles', async () => {
     moderateFilesMock.mockImplementationOnce(() => new Promise(() => {}));
     const res = makeRes();
@@ -217,7 +219,7 @@ describe('POST /api/internal/s3/object-created', () => {
 
     expect(moderateFilesMock).toHaveBeenCalledTimes(1);
     expect(res.status).toHaveBeenCalledWith(200);
-  });
+  }, 2000);
 
   it('passes the ImageModerationEnabled setting through to the scan', async () => {
     getSettingsValueMock.mockImplementation(async (name: string) => name !== 'ImageModerationEnabled');
