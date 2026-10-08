@@ -41,4 +41,21 @@ describe('getUserEntitlements with a malformed NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS
     );
     await expect(getUserEntitlements(user)).resolves.toEqual(['some:key', 'base']);
   });
+
+  it('normalizes the key at parse time, so the raw registry rows carry canonical form', async () => {
+    // getUserEntitlements normalizes again downstream, so asserting only through it would not
+    // bind the parse-time `.map(normalizeTag)`. entitlementsForEmail reads the raw row values,
+    // the same values the verify-credit path consumes - a mixed-case env key must already be
+    // canonical here for those callers to match a gate.
+    await loadWithEnv(JSON.stringify([{ domain: 'Malformed.Example', entitlements: [' Some:Key '] }]));
+    const { entitlementsForEmail } = await import('@client/lib/entitlements/registry');
+    expect([...entitlementsForEmail('person@malformed.example', true)]).toEqual(['some:key']);
+  });
+
+  it('keeps a valid row when a non-object row sits next to it', async () => {
+    const { getUserEntitlements } = await loadWithEnv(
+      JSON.stringify([null, { domain: 'malformed.example', entitlements: ['some:key'] }])
+    );
+    await expect(getUserEntitlements(user)).resolves.toEqual(['some:key', 'base']);
+  });
 });
