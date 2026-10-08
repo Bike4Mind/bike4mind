@@ -18,7 +18,7 @@
     "sst": "sst",
     "build": "NODE_OPTIONS='--max-old-space-size=12288' next build",
     "postbuild": "node scripts/pruneTestRoutes.mjs --if-standalone .next/standalone/apps/client/.next",
-    "clean": "rm -rf node_modules/ .next/ .sst/ public/pdfjs public/pdf.worker*.mjs public/highs.wasm",
+    "clean": "rm -rf node_modules/ .next/ .sst/ public/pdfjs public/pdf.worker*.mjs public/pdfjs-assets-* public/highs.wasm",
     "start": "next start",
     "lint": "eslint .",
     "check:bundle-size": "node scripts/check-server-bundle-size.mjs",

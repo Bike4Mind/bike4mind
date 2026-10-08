@@ -36,6 +36,18 @@ import { createPdfWorkerFailureError, describePdfLoadError, type PdfLoadErrorDes
 // pdf.js caller that skips doing so can be hijacked via `globalThis.pdfjsWorker`.
 const PDF_WORKER_SRC = `/pdf.worker-${pdfjsLib.version}.min.mjs`;
 
+// Data files the worker fetches on demand, copied alongside it by scripts/copy-pdf-worker.mjs.
+// Missing ones are not an error to pdf.js: JPEG 2000 / JBIG2 images render blank, non-embedded
+// standard fonts fall back to a substitute and CJK text without embedded fonts goes missing.
+const PDF_ASSETS_BASE = `/pdfjs-assets-${pdfjsLib.version}`;
+const PDF_ASSET_URLS = {
+  wasmUrl: `${PDF_ASSETS_BASE}/wasm/`,
+  standardFontDataUrl: `${PDF_ASSETS_BASE}/standard_fonts/`,
+  cMapUrl: `${PDF_ASSETS_BASE}/cmaps/`,
+  cMapPacked: true,
+  iccUrl: `${PDF_ASSETS_BASE}/iccs/`,
+};
+
 if (typeof window !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
 }
@@ -114,7 +126,7 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
         // `port` as null-only. For a fresh port create() just constructs a new PDFWorker.
         const pdfWorker = pdfjsLib.PDFWorker.create({ port: webWorker });
         resources.pdfWorker = pdfWorker;
-        const loadingTask = pdfjsLib.getDocument({ url: file, worker: pdfWorker });
+        const loadingTask = pdfjsLib.getDocument({ url: file, worker: pdfWorker, ...PDF_ASSET_URLS });
         resources.loadingTask = loadingTask;
 
         // With an explicit port pdf.js has no startup handshake, so a worker script that fails to
