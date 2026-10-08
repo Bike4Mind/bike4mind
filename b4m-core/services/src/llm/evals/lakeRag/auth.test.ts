@@ -131,9 +131,23 @@ describe('resolveLakeRagAuth', () => {
     expect(calls.map(c => c.url.pathname)).toEqual(['/api/test/create-user', '/api/test/cleanup']);
   });
 
+  it('surfaces the create-user 5xx even when the sweep that follows also fails', async () => {
+    const fetchImpl = (async (input: URL | string) =>
+      String(input).includes('/api/test/create-user')
+        ? new Response('{"error":"boom"}', { status: 500 })
+        : new Response('{}', { status: 403 })) as typeof fetch;
+    const err = await resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl }).catch(
+      (e: unknown) => e
+    );
+    expect(String(err)).toMatch(/create-user -> 500/);
+    expect(String(err)).not.toMatch(/cleanup/);
+  });
+
   it('does not sweep on a 4xx create-user refusal', async () => {
     const { calls, fetchImpl } = fakeServer(403, { error: 'nope' });
-    await resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl }).catch(() => {});
+    await expect(resolveLakeRagAuth({ baseUrl: base, e2eCleanupSecret: 's3cret', fetch: fetchImpl })).rejects.toThrow(
+      /create-user -> 403/
+    );
     expect(calls.map(c => c.url.pathname)).toEqual(['/api/test/create-user']);
   });
 
