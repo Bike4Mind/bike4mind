@@ -1866,6 +1866,27 @@ describe('ChatCompletionProcess', () => {
 
           expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
         });
+
+        // Accepted residual: an OpenAI-family mixed round reports a native per-round
+        // 'tool_use' and the adapter recurses; if the follow-up reports no stop reason, the
+        // sticky 'tool_use' plus a flagged last tool suppresses the notice on an empty answer.
+        it('adds no notice when a mixed round leaves a stale tool_use and the follow-up is empty', async () => {
+          const searchTool = { toolSchema: { name: 'web_search', description: 'search', parameters: {} } };
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([searchTool, navTool(true)] as any); // any: minimal tool shape
+          setupTurn(async cb => {
+            const toolsUsed: Array<Record<string, unknown>> = [];
+            await cb(['Let me look that up.'], { toolsUsed });
+            toolsUsed.push({ name: 'web_search', arguments: '{}', id: 't1' });
+            toolsUsed.push({ name: 'navigate_view', arguments: '{}', id: 't2' });
+            await cb([], { toolsUsed, stopReason: 'tool_use' });
+            await cb(['\n\n'], { toolsUsed });
+            await cb([], { toolsUsed });
+          });
+
+          await runTurn();
+
+          expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+        });
       });
 
       it('adds no notice to a plain answer with no tool calls', async () => {

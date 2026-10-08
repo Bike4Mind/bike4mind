@@ -5131,8 +5131,10 @@ export class ChatCompletionProcess {
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
           producedNonTextDeliverable: producedNonTextDeliverable(),
-          // An adapter only ends a round on 'tool_use' via shouldEndTurnAfterTools; a normal
-          // tool round recurses, so the last stop reason is then the follow-up round's.
+          // An adapter only ends a turn on 'tool_use' via shouldEndTurnAfterTools; a normal tool
+          // round recurses. Known gap, accepted as narrow: OpenAI-family backends also report a
+          // per-round 'tool_use', and stopReason is sticky, so a follow-up that reports no stop
+          // reason after a mixed round ending in a flagged tool also skips the notice.
           endedOnAnswerTool:
             actualTokenUsage.stopReason === 'tool_use' &&
             echoToolsUsed.length > 0 &&
