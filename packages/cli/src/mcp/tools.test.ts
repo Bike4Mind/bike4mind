@@ -612,6 +612,25 @@ describe('sendMessage', () => {
     }
   });
 
+  it('keeps a caller interval longer than the slow interval past the fast window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const sleep = vi.fn(async (ms: number) => {
+        vi.setSystemTime(Date.now() + ms);
+      });
+      const getQuest = vi.fn();
+      for (let i = 0; i < 4; i++) getQuest.mockResolvedValueOnce({ id: 'q1', status: 'running' });
+      getQuest.mockResolvedValueOnce(doneQuest);
+
+      await sendMessage(chatClient(getQuest), { message: 'hi' }, { sleep, intervalMs: 10000 });
+
+      // The last wait is past the 30s fast window; a 10s override must not shorten to the 5s floor.
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([10000, 10000, 10000, 10000]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('treats a stopped quest as finished', async () => {
     const getQuest = vi
       .fn()
@@ -798,6 +817,29 @@ describe('generateImage', () => {
     expect(result.images).toHaveLength(1);
     expect(getQuest).toHaveBeenCalledTimes(5);
     expect(sleep).toHaveBeenCalledWith(7000);
+  });
+
+  it('polls at the fixed interval even past the chat fast window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const sleep = vi.fn(async (ms: number) => {
+        vi.setSystemTime(Date.now() + ms);
+      });
+      const getQuest = vi.fn();
+      for (let i = 0; i < 17; i++) getQuest.mockResolvedValueOnce({ id: 'q1', status: 'running' });
+      getQuest.mockResolvedValueOnce(doneQuest);
+      const client = mockClient({
+        generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1', sessionId: 'nb1' } }),
+        getQuest,
+      });
+
+      await generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, { sleep });
+
+      // Fixed interval: unlike chat, the image poll never backs off past the fast window.
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual(Array(17).fill(2000));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('includes the error code and quest ids when the render fails', async () => {
