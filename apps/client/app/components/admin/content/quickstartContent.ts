@@ -165,7 +165,7 @@ const quickstartLines = (baseUrl: string): string[] => [
   '',
   '## Full Reference',
   '',
-  'For complete endpoint documentation, request/response schemas, and advanced recipes,',
+  'For complete endpoint documentation and advanced recipes,',
   'see the generated API docs at `/api/v1/docs` (request/response schemas), the **API Reference**',
   'tab in the Admin panel (authentication, scopes, rate limits) or the API Cookbook.',
 ];
