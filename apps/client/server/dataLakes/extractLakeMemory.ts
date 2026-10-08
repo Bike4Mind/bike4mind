@@ -100,10 +100,9 @@ const CHUNK_PAGE_LIMIT = 1_000;
  * incremental scan is a later cost optimization).
  *
  * Best-effort throughout: a doc that will not read or extract simply contributes no beliefs. Embeddings
- * are best-effort too - a vectorless write stays lexically recallable, though PERMANENTLY so: nothing
- * backfills a vector onto an event written without one (`reembedMementos` re-encodes existing vectors
- * into a new space and skips vectorless events outright), so such a fact ranks on lexical overlap for
- * good. A re-scan is the only thing that gives it another chance at a vector.
+ * are best-effort too - a vectorless write stays lexically recallable, ranking on lexical overlap
+ * until a re-scan re-asserts it or an operator runs the ledger backfill
+ * (`POST /api/admin/mementos/reembed-ledger`).
  *
  * Interruptible by an erase: the run re-reads the lake's purge fence (IDataLake.lakeMemoryPurgedAt)
  * at every document boundary and stops without recording a continuation, so a purge issued while a
