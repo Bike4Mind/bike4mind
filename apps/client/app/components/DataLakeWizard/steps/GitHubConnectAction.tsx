@@ -3,7 +3,7 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import SyncIcon from '@mui/icons-material/Sync';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { acceptsConnectorContent } from '@bike4mind/common';
 import {
@@ -117,6 +117,11 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
   // Once the server switch lands, the lake prop reads connector-fed and the prompt must drop with it,
   // or a handoff failure after a successful switch leaves "Switch this lake?" over a switched lake.
   const promptingSwitch = confirmingSwitch && needsSwitch;
+  // Once the switch lands the lake prop reads connector-fed; drop the stored prompt so a later revert
+  // to curated cannot resurrect it with Connect disabled and nothing to click.
+  useEffect(() => {
+    if (!needsSwitch) setSwitchPromptLakeId(null);
+  }, [needsSwitch]);
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="github-connection-loading" />;

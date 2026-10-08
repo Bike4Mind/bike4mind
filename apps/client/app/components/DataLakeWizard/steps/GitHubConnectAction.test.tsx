@@ -517,6 +517,21 @@ describe('GitHubConnectAction on a lake that is not connector-fed', () => {
     expect(screen.getByTestId('github-connect-btn')).not.toBeDisabled();
   });
 
+  it('does not resurrect the switch prompt if the lake reverts to curated after the switch', () => {
+    const { rerender } = openPrompt({ id: 'lake1', origin: 'curated' });
+    expect(screen.getByTestId('github-switch-origin-prompt')).toBeInTheDocument();
+    const rerenderLake = (origin: 'curated' | 'connector-fed') =>
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <GitHubConnectAction lake={{ id: 'lake1', origin }} />
+        </CssVarsProvider>
+      );
+    rerenderLake('connector-fed');
+    expect(screen.queryByTestId('github-switch-origin-prompt')).not.toBeInTheDocument();
+    rerenderLake('curated');
+    expect(screen.queryByTestId('github-switch-origin-prompt')).not.toBeInTheDocument();
+  });
+
   it('starts the connect directly on a connector-fed lake, with no prompt and no switch', async () => {
     wrap(<GitHubConnectAction lake={FED_LAKE} />);
     await clickAndSettle('github-connect-btn');
