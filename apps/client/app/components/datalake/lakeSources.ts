@@ -8,11 +8,13 @@ import GitHubConnectAction from '@client/app/components/DataLakeWizard/steps/Git
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
+import { GITHUB_LAKE_ADMIN_FLAG, GITHUB_ORG_ONLY_REASON } from '@client/app/components/datalake/lakeSourceShared';
+
+export { GITHUB_ORG_ONLY_REASON } from '@client/app/components/datalake/lakeSourceShared';
 
 /** Must stay in sync with the server's LakeConnectorKind (server/dataLakes/assertLakeConnectorFree.ts). */
 export type LakeSourceKind = 'googleDrive' | 'github';
 
-export const GITHUB_ORG_ONLY_REASON = `GitHub repositories can only feed an organization ${DATA_LAKE}.`;
 export const LAKE_MANAGER_ONLY_REASON = `Only people who can manage this ${DATA_LAKE} can connect a source to it.`;
 
 /** The lake fields availability is decided from. Absent fields fail closed, as in canConnectLakeDrive. */
@@ -61,7 +63,7 @@ const github: LakeSource = {
   label: 'GitHub',
   hint: 'Sync a repository into this lake',
   Icon: GitHubIcon,
-  adminFlag: 'EnableDataLakeGitHub',
+  adminFlag: GITHUB_LAKE_ADMIN_FLAG,
   unavailableReason: lake => {
     if (!lake.organizationId) return GITHUB_ORG_ONLY_REASON;
     return lake.canManage ? undefined : LAKE_MANAGER_ONLY_REASON;

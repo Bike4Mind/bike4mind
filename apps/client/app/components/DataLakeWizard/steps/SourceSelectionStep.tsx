@@ -20,7 +20,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { useTheme } from '@mui/joy/styles';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
@@ -31,7 +31,14 @@ import { useWizardLakeSlug } from '@client/app/components/DataLakeWizard/useWiza
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
-import { createSourceRequiresUpload, useCreateLakeScope } from '@client/app/components/datalake/createLakeSources';
+import {
+  getCreateLakeSource,
+  resolveCreateLakeSourceAvailability,
+  useCreateLakeScope,
+} from '@client/app/components/datalake/createLakeSources';
+import { createSourceRequiresUpload } from '@client/app/components/datalake/createLakeSourceKinds';
+import { orgIdOfAccount } from '@client/app/components/datalake/lakeSourceShared';
+import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import LakeSourceConnectActions from './LakeSourceConnectActions';
 import DrivePendingConnectAction from './DrivePendingConnectAction';
 import DriveConnectUnavailableButton, { DRIVE_PERSONAL_OWNER_ONLY_REASON } from './DriveConnectUnavailableButton';
@@ -50,6 +57,7 @@ export default function SourceSelectionStep() {
   const createSource = useDataLakeWizardStore(s => s.createSource);
   const setCreateSource = useDataLakeWizardStore(s => s.setCreateSource);
   const createScope = useCreateLakeScope();
+  const { isAdminFeatureEnabled } = useFeatureEnabled();
   const setFiles = useDataLakeWizardStore(s => s.setFiles);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const config = useDataLakeWizardStore(s => s.config);
@@ -72,7 +80,7 @@ export default function SourceSelectionStep() {
   // naming a scope the lake won't land in.
   const { data: allLakes } = useGetDataLakes();
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
-  const scopeOrgId = selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+  const scopeOrgId = orgIdOfAccount(selectedAccount);
   const duplicateNameLake =
     targetLake || !config.name.trim()
       ? undefined
@@ -92,12 +100,11 @@ export default function SourceSelectionStep() {
   const includedFiles = allFiles.filter(f => !f.excluded);
   const includedSize = includedFiles.reduce((sum, f) => sum + f.size, 0);
 
-  // Set webkitdirectory attribute imperatively (non-standard, no JSX type)
-  useEffect(() => {
-    if (folderInputRef.current) {
-      folderInputRef.current.setAttribute('webkitdirectory', '');
-      folderInputRef.current.setAttribute('directory', '');
-    }
+  const setFolderInputRef = useCallback((input: HTMLInputElement | null) => {
+    folderInputRef.current = input;
+    if (!input) return;
+    input.setAttribute('webkitdirectory', '');
+    input.setAttribute('directory', '');
   }, []);
 
   const handleFilesSelected = useCallback(
@@ -180,9 +187,21 @@ export default function SourceSelectionStep() {
   // GitHub owns the whole screen: its connect creates the lake itself (name included) and leaves
   // the page, so none of the name/upload chrome below applies to it.
   if (createSource === 'github' && !targetLake) {
+    const availability = resolveCreateLakeSourceAvailability(
+      getCreateLakeSource('github'),
+      createScope,
+      isAdminFeatureEnabled
+    );
+    if (availability.status !== 'available' || !createScope.organizationId) {
+      return (
+        <Box data-testid="wizard-source-step" sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
+          <CreateSourceCards />
+        </Box>
+      );
+    }
     return (
       <Box data-testid="wizard-source-step" sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
-        <GitHubCreatePanel organizationId={createScope.organizationId ?? ''} onBack={() => setCreateSource(null)} />
+        <GitHubCreatePanel organizationId={createScope.organizationId} onBack={() => setCreateSource(null)} />
       </Box>
     );
   }
@@ -429,7 +448,8 @@ export default function SourceSelectionStep() {
 
       {/* Hidden file inputs */}
       <input
-        ref={folderInputRef}
+        ref={setFolderInputRef}
+        data-testid="wizard-folder-input"
         type="file"
         multiple
         style={{ display: 'none' }}

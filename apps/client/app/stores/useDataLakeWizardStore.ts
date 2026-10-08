@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { deriveTagPrefixFromLakeName, isReservedTagPrefix } from '@bike4mind/common';
 import type { DataLakeOrigin, DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
-import type { CreateLakeSourceKind } from '../components/datalake/createLakeSources';
+import type { CreateLakeSourceKind } from '../components/datalake/createLakeSourceKinds';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import {
   parseFilesToTree,
@@ -36,7 +36,7 @@ export interface OptionalSteps {
  * The wizard has no lake id to connect to while it is still collecting, so the selection is
  * carried here and the connect fires on commit (see useCreateLakeFromDrive for the fileless
  * case, useBatchUpload for files + Drive). Keeping it in wizard state is what makes abandoning
- * the wizard leave nothing behind - nothing has been created yet. Never set in append mode:
+ * the wizard leave nothing behind - nothing has been created yet. Append mode does not use it:
  * there the lake already exists, so DriveConnectAction connects immediately.
  */
 export interface PendingDriveFolder {
@@ -280,7 +280,7 @@ interface DataLakeWizardStore {
   /**
    * Which source the user picked on the create wizard's first screen, or null while the question is
    * still open. It decides the new lake's `origin` (see createLakeOrigin) and which panel the source
-   * step renders. Never set in append mode - an existing lake already declares its own origin.
+   * step renders. Append mode seeds `upload` because an existing lake already declares its own origin.
    */
   createSource: CreateLakeSourceKind | null;
   /** Drive folder chosen during create, connected on commit once the lake has an id. */
@@ -429,6 +429,9 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
             allFiles: [],
             pendingDriveFolder: null,
             optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
+            recoverableLake: null,
+            hashingProgress: { total: 0, completed: 0, status: 'idle' },
+            duplicateCheckResults: null,
           }
     ),
 

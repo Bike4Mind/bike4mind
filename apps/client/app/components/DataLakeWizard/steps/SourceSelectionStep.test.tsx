@@ -150,6 +150,16 @@ describe('SourceSelectionStep - the source cards', () => {
     expect(screen.getByTestId('create-source-card-github')).toBeEnabled();
   });
 
+  it('configures the folder picker when Upload mounts after the source cards', () => {
+    useDataLakeWizardStore.getState().openWizard();
+    renderStep();
+
+    fireEvent.click(screen.getByTestId('create-source-card-upload'));
+
+    expect(screen.getByTestId('wizard-folder-input')).toHaveAttribute('webkitdirectory', '');
+    expect(screen.getByTestId('wizard-folder-input')).toHaveAttribute('directory', '');
+  });
+
   it('hides GitHub entirely while EnableDataLakeGitHub is off', () => {
     asOrgOwner();
     gitHubFlag.current = false;
@@ -208,6 +218,17 @@ describe('SourceSelectionStep - the source cards', () => {
     fireEvent.click(screen.getByTestId('create-source-card-github'));
 
     expect(screen.getByTestId('github-create-panel')).toHaveAttribute('data-org', 'org-1');
+  });
+
+  it('does not mount the GitHub panel if a stale selection is no longer available', () => {
+    asOrgOwner();
+    pickSource('github');
+    gitHubFlag.current = false;
+
+    renderStep();
+
+    expect(screen.queryByTestId('github-create-panel')).toBeNull();
+    expect(screen.getByTestId('create-source-cards')).toBeInTheDocument();
   });
 
   it('returns to the cards from a chosen source, dropping what it had gathered', () => {

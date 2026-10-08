@@ -59,11 +59,14 @@ describe('useDataLakeWizardStore - the chosen create source', () => {
     expect(useDataLakeWizardStore.getState().createSource).toBe('upload');
   });
 
-  it('drops the files and the Drive folder the abandoned source gathered', () => {
+  it('drops all upload state the abandoned source gathered', () => {
     useDataLakeWizardStore.getState().setCreateSource('upload');
     useDataLakeWizardStore.setState({
       allFiles: [staleFile()],
       pendingDriveFolder: { driveFolderId: 'FOLDER1' },
+      recoverableLake: { id: 'lake-1', tagPrefix: 'old:', slug: 'old' },
+      hashingProgress: { total: 2, completed: 1, status: 'hashing' },
+      duplicateCheckResults: { duplicateCount: 1, checkedAt: 1 },
     });
 
     useDataLakeWizardStore.getState().setCreateSource('googleDrive');
@@ -72,6 +75,9 @@ describe('useDataLakeWizardStore - the chosen create source', () => {
     expect(s.createSource).toBe('googleDrive');
     expect(s.allFiles).toEqual([]);
     expect(s.pendingDriveFolder).toBeNull();
+    expect(s.recoverableLake).toBeNull();
+    expect(s.hashingProgress).toEqual({ total: 0, completed: 0, status: 'idle' });
+    expect(s.duplicateCheckResults).toBeNull();
   });
 
   it('keeps what the current source gathered when it is re-selected', () => {

@@ -8,8 +8,17 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import { useGetUserOrganizations } from '@client/app/hooks/data/organizations';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
-import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import type { LakeSourceAvailability } from '@client/app/components/datalake/lakeSources';
+import type { CreateLakeSourceKind } from '@client/app/components/datalake/createLakeSourceKinds';
+import {
+  GITHUB_LAKE_ADMIN_FLAG,
+  GITHUB_ORG_MANAGER_ONLY_REASON,
+  GITHUB_ORG_ONLY_REASON,
+  orgIdOfAccount,
+} from '@client/app/components/datalake/lakeSourceShared';
+
+export { createLakeOrigin, createSourceRequiresUpload } from '@client/app/components/datalake/createLakeSourceKinds';
+export type { CreateLakeSourceKind } from '@client/app/components/datalake/createLakeSourceKinds';
 
 /**
  * Where a lake being CREATED gets its content from - the first question the wizard asks.
@@ -20,11 +29,8 @@ import type { LakeSourceAvailability } from '@client/app/components/datalake/lak
  * lake yet and must resolve from the account scope the lake will be born into. Upload has no entry
  * there at all, since appending files needs no source declaration.
  */
-export type CreateLakeSourceKind = 'upload' | 'googleDrive' | 'github';
-
-export const GITHUB_CREATE_ORG_ONLY_REASON = `GitHub repositories can only feed an organization ${DATA_LAKE}. Switch to an organization account to connect one.`;
-export const GITHUB_CREATE_ORG_MANAGER_ONLY_REASON =
-  'Only an organization owner or manager can connect a GitHub repository.';
+export const GITHUB_CREATE_ORG_ONLY_REASON = GITHUB_ORG_ONLY_REASON;
+export const GITHUB_CREATE_ORG_MANAGER_ONLY_REASON = GITHUB_ORG_MANAGER_ONLY_REASON;
 
 /** The account scope a create lands in, which is what decides a source's availability. */
 export type CreateLakeScope = {
@@ -35,7 +41,7 @@ export type CreateLakeScope = {
    * admin. Mirrors the server's `verifyOrgAccess`, which is the gate the connect route gets held to.
    * Meaningless (and false) without an `organizationId`.
    */
-  canManageOrg: boolean;
+  isOrgOwnerOrManager: boolean;
 };
 
 export type CreateLakeSource = {
@@ -82,10 +88,10 @@ const github: CreateLakeSource = {
   hint: 'Sync a repository into the new lake, read-only',
   Icon: GitHubIcon,
   origin: 'connector-fed',
-  adminFlag: 'EnableDataLakeGitHub',
+  adminFlag: GITHUB_LAKE_ADMIN_FLAG,
   unavailableReason: scope => {
     if (!scope.organizationId) return GITHUB_CREATE_ORG_ONLY_REASON;
-    return scope.canManageOrg ? undefined : GITHUB_CREATE_ORG_MANAGER_ONLY_REASON;
+    return scope.isOrgOwnerOrManager ? undefined : GITHUB_CREATE_ORG_MANAGER_ONLY_REASON;
   },
 };
 
@@ -95,12 +101,6 @@ export const CREATE_LAKE_SOURCES: readonly CreateLakeSource[] = [upload, googleD
 const BY_KIND: Record<CreateLakeSourceKind, CreateLakeSource> = { upload, googleDrive, github };
 
 export const getCreateLakeSource = (kind: CreateLakeSourceKind): CreateLakeSource => BY_KIND[kind];
-
-/** The origin a lake created from this source declares. */
-export const createLakeOrigin = (kind: CreateLakeSourceKind): DataLakeOrigin => BY_KIND[kind].origin;
-
-/** A connector source feeds the lake itself, so it never asks the user for files. */
-export const createSourceRequiresUpload = (kind: CreateLakeSourceKind): boolean => kind === 'upload';
 
 export function resolveCreateLakeSourceAvailability(
   source: CreateLakeSource,
@@ -126,10 +126,10 @@ export type OfferedCreateLakeSource = {
 export function useCreateLakeScope(): CreateLakeScope {
   const currentUser = useUser(s => s.currentUser);
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
-  const organizationId = selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+  const organizationId = orgIdOfAccount(selectedAccount);
   const { data: organizations } = useGetUserOrganizations(currentUser?.id);
   const org = organizationId ? organizations?.find(o => o.id === organizationId) : undefined;
-  return { organizationId, canManageOrg: hasOrgUpdateAccess(currentUser, org) };
+  return { organizationId, isOrgOwnerOrManager: hasOrgUpdateAccess(currentUser, org) };
 }
 
 /** The sources to offer a create, in display order: every flagged-on source, available or disabled. */

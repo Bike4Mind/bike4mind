@@ -62,7 +62,7 @@ vi.mock('@client/app/components/DataLakeWizard/steps/GitHubCreatePanel', () => (
 }));
 vi.mock('@client/app/components/datalake/createLakeSources', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/components/datalake/createLakeSources')>()),
-  useCreateLakeScope: () => ({ organizationId: undefined, canManageOrg: false }),
+  useCreateLakeScope: () => ({ organizationId: undefined, isOrgOwnerOrManager: false }),
 }));
 // ConfigStep's embedding-cost estimate reads admin settings via react-query; stub it so this
 // wizard test needs no QueryClientProvider. Empty values are enough - the estimate renders

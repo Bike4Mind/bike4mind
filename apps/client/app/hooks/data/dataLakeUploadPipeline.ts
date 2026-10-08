@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, DataLakeStatus, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import { createLakeOrigin } from '@client/app/components/datalake/createLakeSources';
+import { createLakeOrigin } from '@client/app/components/datalake/createLakeSourceKinds';
 import type {
   DataLakeFormValues,
   PendingDriveFolder,
@@ -219,9 +219,8 @@ export async function createWizardLake(
   // Scope to the active account-switcher org (Personal -> undefined). activeOrgId reads the store
   // at call time, like the wizard config itself, so it can't go stale.
   const organizationId = activeOrgId();
-  // Same "read the store at call time" idiom as activeOrgId: both create callers (runBatchUpload,
-  // useCreateLakeFromDrive) already have a pendingDriveFolder in scope, so read it here rather
-  // than threading it through as a parameter both would just forward unchanged.
+  // Read the source at call time, like the active account, so a card change cannot leave a stale
+  // origin captured by either create caller.
   const { createSource } = useDataLakeWizardStore.getState();
   const res = await api.post<{ id: string; status?: DataLakeStatus; slug: string }>('/api/data-lakes', {
     name: config.name,
@@ -237,7 +236,7 @@ export async function createWizardLake(
     // source is born connector-fed rather than flipped on bind (see the schema comment on
     // CreateDataLakeRequestInput). Deriving it from the card rather than from a picked folder is
     // what makes a Drive lake connector-fed even when the user creates it before picking one.
-    // An unset source (append mode) omits it, and the server default ('curated') applies.
+    // A missing source omits it, preserving the server's curated default for legacy callers.
     ...(createSource ? { origin: createLakeOrigin(createSource) } : {}),
   } satisfies CreateDataLakeRequestInputType);
   return { id: res.data.id, status: res.data.status, slug: res.data.slug };
@@ -736,8 +735,8 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
 
     // A Drive folder picked during create is connected only HERE - after the lake exists and its
     // files have landed. Connecting any earlier would strand a connection row behind the rollback
-    // the total-failure branch above performs on the new lake. Never in append mode: there
-    // DriveConnectAction already connected on the spot.
+    // the total-failure branch above performs on the new lake. Append mode is excluded by the
+    // targetLake guard because DriveConnectAction already connected on the spot.
     if (!targetLake && pendingDriveFolder) {
       try {
         await connectPendingDriveFolder(dataLakeId, pendingDriveFolder);

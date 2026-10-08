@@ -17,9 +17,9 @@ const flagOff = () => false;
 const availability = (kind: CreateLakeSourceKind, scope: CreateLakeScope, isEnabled = flagOn) =>
   resolveCreateLakeSourceAvailability(getCreateLakeSource(kind), scope, isEnabled);
 
-const orgManager: CreateLakeScope = { organizationId: 'org-1', canManageOrg: true };
-const orgMember: CreateLakeScope = { organizationId: 'org-1', canManageOrg: false };
-const personal: CreateLakeScope = { canManageOrg: false };
+const orgManager: CreateLakeScope = { organizationId: 'org-1', isOrgOwnerOrManager: true };
+const orgMember: CreateLakeScope = { organizationId: 'org-1', isOrgOwnerOrManager: false };
+const personal: CreateLakeScope = { isOrgOwnerOrManager: false };
 
 describe('CREATE_LAKE_SOURCES', () => {
   it('offers upload, Drive and GitHub in that order', () => {

@@ -79,9 +79,7 @@ describe('GitHubCreatePanel - what gets synced', () => {
     fireEvent.click(screen.getByTestId('github-synced-files-toggle-btn'));
 
     const details = screen.getByTestId('github-synced-files-details');
-    for (const extension of GITHUB_LAKE_FILE_RULES.extensions) {
-      expect(details).toHaveTextContent(`.${extension}`);
-    }
+    expect(details).toHaveTextContent(GITHUB_LAKE_FILE_RULES.extensions.map(extension => `.${extension}`).join(', '));
     for (const name of GITHUB_LAKE_FILE_RULES.extensionlessNames) {
       expect(details).toHaveTextContent(name);
     }
