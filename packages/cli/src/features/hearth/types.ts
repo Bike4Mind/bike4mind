@@ -7,7 +7,7 @@
  * server-side from the authenticated session, never sent by the client).
  */
 import { z } from 'zod';
-import { actorKindSchema, hearthEventOriginSchema, selfClaimedActorKindSchema } from '@bike4mind/hearth';
+import { actorKindSchema, selfClaimedActorKindSchema } from '@bike4mind/hearth';
 
 export const HearthEventKindSchema = z.enum([
   'message',
@@ -60,8 +60,12 @@ export const HearthEventSchema = z.object({
   // events can come back without one. Outbound requests keep it required.
   machine: HearthMachineBodySchema.extend({ payload: z.unknown().optional() }).optional(),
   refs: HearthEventRefsSchema.prefault({}),
-  /** Server-set provenance; 'gateway' marks untrusted third-party input. */
-  origin: hearthEventOriginSchema.optional(),
+  /**
+   * Server-set provenance; 'gateway' marks untrusted third-party input. A plain
+   * string, not the enum, so a value added server-side later cannot make a
+   * released CLI drop the whole event.
+   */
+  origin: z.string().optional(),
   createdAt: z.string(),
 });
 export type HearthEvent = z.infer<typeof HearthEventSchema>;

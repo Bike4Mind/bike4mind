@@ -55,6 +55,15 @@ describe('HearthEventStream', () => {
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ machine: { schema: 's@1' } }));
   });
 
+  it('keeps an event whose origin value this CLI does not know yet', () => {
+    const { handlers, manager } = createMockWsManager();
+    stream.registerHandlers(manager);
+
+    handlers.get('hearth_event')!({ event: { ...validEvent, origin: 'future-origin' } });
+
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ origin: 'future-origin' }));
+  });
+
   it('still requires machine.payload on outbound post requests', () => {
     const request = { channelId: 'ch-1', kind: 'message', human: { text: 'hi', format: 'md' } };
     expect(PostEventRequestSchema.safeParse({ ...request, machine: { schema: 's@1' } }).success).toBe(false);
