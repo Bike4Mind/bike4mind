@@ -800,9 +800,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     const expiresInMs = TOKEN_EXPIRATION_MS - ageMs;
 
     if (expiresInMs > 0) {
-      pendingActionTools = ['confirm_pending_action', 'cancel_pending_action'];
+      pendingActionTools = ['cancel_pending_action'];
 
-      logger.debug('🔐 [PENDING ACTION] Found pending action, enabling confirm/cancel tools', {
+      logger.debug('🔐 [PENDING ACTION] Found pending action, enabling cancel tool', {
         questId: questWithPending._id,
         tool: pa.tool,
         expiresInMinutes: Math.round(expiresInMs / 60000),

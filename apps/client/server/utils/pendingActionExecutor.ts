@@ -8,6 +8,20 @@ import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind
 
 export { TOKEN_EXPIRATION_MS };
 
+/**
+ * Atomically takes the pending action off the quest so exactly one confirm can execute it: two
+ * concurrent clicks (or a click racing a retry) both read the action, but only one claim matches.
+ * Matching on `ts` binds the claim to the action the caller read, not a newer one that replaced it.
+ * Callers must claim BEFORE executing; the action is consumed even if execution then fails.
+ */
+export async function claimPendingAction(questId: string, pendingActionTs: number): Promise<boolean> {
+  const claimed = await Quest.findOneAndUpdate(
+    { _id: questId, 'pendingAction.ts': pendingActionTs },
+    { $unset: { pendingAction: 1 } }
+  );
+  return claimed !== null;
+}
+
 export interface PendingActionResult {
   success: boolean;
   message: string;
@@ -15,8 +29,8 @@ export interface PendingActionResult {
 
 /**
  * Execute a pending action stored on a Quest.
- * Extracted from handleConfirmAction in interactive.ts so both button clicks
- * and LLM tool calls can share the same execution logic.
+ * Called only from the Slack Confirm button handler (interactive.ts); model output must never
+ * reach this, since executing is what the human click authorizes.
  */
 export async function executePendingAction(
   questId: string,
@@ -39,6 +53,10 @@ export async function executePendingAction(
     });
     await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
     return { success: false, message: 'This action has expired. Please start the request again.' };
+  }
+
+  if (!(await claimPendingAction(questId, pendingAction.ts))) {
+    return { success: false, message: 'No pending action found \u2014 it may have already been processed.' };
   }
 
   logger.info('[PendingActionExecutor] Executing pending action', {
@@ -147,7 +165,6 @@ export async function executePendingAction(
         logger.error('[PendingActionExecutor] Failed to download file', {
           error: fileError instanceof Error ? fileError.message : String(fileError),
         });
-        await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
         return {
           success: false,
           message: `Failed to download file: ${fileError instanceof Error ? fileError.message : 'Unknown error'}`,
@@ -208,9 +225,6 @@ export async function executePendingAction(
       resultKeys: Object.keys(resultData || {}),
     });
 
-    // Clear pendingAction regardless of success/failure
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
-
     if (isSuccess) {
       const successMessage = buildSuccessMessage(pendingAction, resultData, url as string | undefined);
       return { success: true, message: successMessage };
@@ -224,8 +238,6 @@ export async function executePendingAction(
     logger.error('[PendingActionExecutor] Execution failed', {
       error: error instanceof Error ? error.message : String(error),
     });
-    // Clear pendingAction on unexpected errors too
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } }).catch(() => {});
     return {
       success: false,
       message: `Failed to execute: ${error instanceof Error ? error.message : String(error)}`,

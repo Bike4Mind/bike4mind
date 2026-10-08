@@ -139,12 +139,34 @@ export const generateTools = (
  * OpenAI requires 'properties' on object schemas - MCP tools like current_user
  * return { type: 'object' } without it, causing 400 errors.
  */
+/**
+ * MCP tool args only the confirm-button handlers may set. Those handlers call the MCP host
+ * directly, never through these generators, so a model-originated call carrying one is forged.
+ * Must stay in sync with `confirmationParams` in b4m-core/mcp/src/shared/schemas.ts.
+ */
+const SERVER_ONLY_MCP_ARG_KEYS: readonly string[] = ['_executeFromButton', '_confirmToken'];
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function stripServerOnlyArgs(args: unknown): unknown {
+  if (!isPlainObject(args)) return args;
+  return Object.fromEntries(Object.entries(args).filter(([key]) => !SERVER_ONLY_MCP_ARG_KEYS.includes(key)));
+}
+
 function normalizeToolParameters(rest: Record<string, unknown>): ICompletionOptionTools['toolSchema']['parameters'] {
   const rawParameters = rest?.input_schema ?? rest?.inputSchema ?? rest?.parameters;
-  if (rawParameters && typeof rawParameters === 'object') {
+  if (isPlainObject(rawParameters)) {
+    const properties = isPlainObject(rawParameters.properties)
+      ? stripServerOnlyArgs(rawParameters.properties)
+      : (rawParameters.properties ?? {});
+    const required = Array.isArray(rawParameters.required)
+      ? rawParameters.required.filter(key => typeof key !== 'string' || !SERVER_ONLY_MCP_ARG_KEYS.includes(key))
+      : rawParameters.required;
     return {
       ...rawParameters,
-      properties: (rawParameters as Record<string, unknown>).properties ?? {},
+      properties,
+      ...(required !== undefined ? { required } : {}),
     } as ICompletionOptionTools['toolSchema']['parameters'];
   }
   return {
@@ -230,7 +252,7 @@ export const generateMcpTools = async (
         // Use original tool name when calling the MCP server
         Logger.debug(`Calling ${originalToolName} tool via ${mcpData.serverName}`, args);
         try {
-          const toolResult = await mcpData.callTool(originalToolName, args);
+          const toolResult = await mcpData.callTool(originalToolName, stripServerOnlyArgs(args));
           const contentBlocks = (toolResult as any)?.content;
           if (Array.isArray(contentBlocks) && contentBlocks.length > 0) {
             const normalized = contentBlocks
@@ -312,7 +334,7 @@ export const generateMcpToolsFromCache = (
       toolFn: async (args: unknown) => {
         Logger.debug(`Calling ${originalToolName} tool via ${serverName}`, args);
         try {
-          const toolResult = await callTool(originalToolName, args);
+          const toolResult = await callTool(originalToolName, stripServerOnlyArgs(args));
           const contentBlocks = (toolResult as Record<string, unknown>)?.content;
           if (Array.isArray(contentBlocks) && contentBlocks.length > 0) {
             const normalized = contentBlocks

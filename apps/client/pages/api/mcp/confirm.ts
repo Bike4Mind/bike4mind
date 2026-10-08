@@ -8,6 +8,7 @@ import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { GitHubResource } from '@bike4mind/slack';
 import { JiraResource } from '@bike4mind/slack';
 import { ConfluenceResource } from '@bike4mind/slack';
@@ -100,6 +101,11 @@ const handler = baseApi().post(async (req, res) => {
     logger.info('[Web MCP Confirm] User cancelled action', { questId, tool: pendingAction.tool });
     await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
     return res.status(200).json({ success: true, message: 'Action cancelled' });
+  }
+
+  if (!(await claimPendingAction(questId, pendingAction.ts))) {
+    logger.warn('[Web MCP Confirm] Pending action already claimed', { questId });
+    return res.status(409).json({ error: 'This action has already been processed.' });
   }
 
   // Execute the MCP tool
@@ -266,8 +272,6 @@ const handler = baseApi().post(async (req, res) => {
       url,
       hasError: !!resultData?.error,
     });
-
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
 
     if (success) {
       // Build success message based on tool type
