@@ -13,9 +13,8 @@ type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;
 
 interface UpdateDataLakeAdapters extends LakeConfigAuditAdapters {
   // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
-  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
-  // per service), so nothing is spared by making it optional and a route that forgot to wire it
-  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // for recomputeLakeStats: every caller of this service is an API route, so nothing is spared
+  // by making it optional and a route that forgot to wire it would go dark silently - the one failure mode an audit must not have. Required here turns
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
