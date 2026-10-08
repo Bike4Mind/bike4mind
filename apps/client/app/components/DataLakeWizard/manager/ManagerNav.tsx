@@ -67,7 +67,7 @@ import { RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
-import { satisfiesTagPrefix } from '@bike4mind/common';
+import { countTagPaths, satisfiesTagPrefix } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
 import { normalizePrefix, prefixSegments } from './shared';
 import { EmptyHint, NavLifecycleSection, NavSectionHeader, NavSkeletons } from './navChrome';
@@ -152,15 +152,15 @@ export default function ManagerNav({
   const tree = useMemo(() => {
     if (!activeLake) return [];
     const prefix = normalizePrefix(activeLake.fileTagPrefix);
-    const tagCountMap = new Map<string, number>();
-    for (const file of articles) {
-      for (const tag of file.tags ?? []) {
-        if (tag.name.startsWith(prefix) && !tag.name.startsWith('datalake:')) {
-          tagCountMap.set(tag.name, (tagCountMap.get(tag.name) ?? 0) + 1);
-        }
-      }
-    }
-    return buildTagTree(Array.from(tagCountMap.entries()).map(([tag, count]) => ({ tag, count })));
+    return buildTagTree(
+      countTagPaths(
+        articles.map(file =>
+          (file.tags ?? [])
+            .map(tag => tag.name)
+            .filter(name => name.startsWith(prefix) && !name.startsWith('datalake:'))
+        )
+      )
+    );
   }, [articles, activeLake]);
 
   // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".

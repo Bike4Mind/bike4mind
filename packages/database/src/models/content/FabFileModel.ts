@@ -20,6 +20,7 @@ import {
   DocumentDateSource,
   FabFileSourceType,
   KnowledgeType,
+  countTagPathsByTagSet,
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
   UNCATEGORIZED_TAG_SUFFIX,
@@ -31,7 +32,7 @@ import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
 import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import BaseRepository, { withTransaction } from '@bike4mind/db-core';
-import { addLowercaseField } from '../../utils/documentdb-compat';
+import { addLowercaseField, USE_DOCUMENTDB } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import {
   buildFabFileSearchQuery,
@@ -48,12 +49,15 @@ import {
   LAKE_REPORTING_EXCLUDED_STATUS,
 } from '../../queries/dataLakeLifecycleScope';
 
+// Bare regex for aggregation expressions ($regexMatch); NOT_META_TAG below is the query-operator form.
+const META_TAG_REGEX = new RegExp(`^${DATALAKE_TAG_PREFIX}`);
+
 /**
  * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
  * to the namespace cannot leave a counter behind. Both tag counters exclude it: a meta-tag is
  * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
  */
-const NOT_META_TAG = { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`) };
+const NOT_META_TAG = { $not: META_TAG_REGEX };
 
 /**
  * The `$project` stage behind every MEMBERSHIP-dimension read, shared by the lake-wide scan
@@ -867,6 +871,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       restrictToDataLake?: boolean;
+      admitFileIds?: string[];
       /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
       lakeMemberships?: DataLakeMembershipScope[];
       skipOwnership?: boolean;
@@ -1270,8 +1275,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
-   * Counts tags matching specific prefixes across data-lake-accessible files.
-   * Used by the Data Lake Explorer to build the tag tree without fetching all articles.
+   * Counts tags matching specific prefixes across data-lake-accessible files, one row per tag-tree
+   * path. Used by the Data Lake Explorer to build the tag tree without fetching all articles.
+   *
+   * `count` is files tagged with exactly `tag`; `fileCount` is distinct files tagged with `tag` or
+   * anything under it. Rows include every ancestor path of a matched tag (`acme` and `acme:legal`
+   * for `acme:legal:a`), with `count: 0` when no file carries that path itself. buildTagTree reads
+   * `fileCount` for branch rows. The rows come from countTagPathsByTagSet (`@bike4mind/common`),
+   * which the client's Manager trees share.
    */
   async countDataLakeTagsByPrefix(
     userId: string,
@@ -1283,7 +1294,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
       lakeMemberships?: DataLakeMembershipScope[];
     }
-  ): Promise<{ tag: string; count: number }[]> {
+  ): Promise<{ tag: string; count: number; fileCount: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
     if (usablePrefixes.length === 0) return [];
 
@@ -1299,7 +1310,43 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const prefixPattern = usablePrefixes.map(p => escapeRegex(p)).join('|');
     const prefixRegex = new RegExp(`^(${prefixPattern})`);
 
-    const result = await this.fabFileModel.aggregate([
+    // Each file's matched tag names as a deduped set. The default path filters in place; DocumentDB
+    // compatibility mode unwinds instead, with the $unwind/$match pair the old per-tag counter ran there.
+    const ownTagSet: PipelineStage[] = USE_DOCUMENTDB()
+      ? [
+          { $unwind: '$tags' },
+          { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': NOT_META_TAG }] } },
+          { $group: { _id: '$_id', own: { $addToSet: '$tags.name' } } },
+        ]
+      : [
+          {
+            $project: {
+              own: {
+                $setUnion: [
+                  {
+                    $filter: {
+                      input: '$tags.name',
+                      cond: {
+                        // $regexMatch throws on a non-string input (the old $match skipped it); tags
+                        // are [Object] in the schema, so test the type first. $and short-circuits.
+                        $and: [
+                          { $eq: [{ $type: '$$this' }, 'string'] },
+                          { $regexMatch: { input: '$$this', regex: prefixRegex } },
+                          { $not: [{ $regexMatch: { input: '$$this', regex: META_TAG_REGEX } }] },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        ];
+
+    // The aggregate stops at one row per distinct tag set, weighted by how many files share it, and
+    // the path expansion runs in JS through the same countTagPathsByTagSet the client trees use, so
+    // the two cannot disagree. If an unordered set splits one tag set into two groups, counts still add.
+    const tagSets = await this.fabFileModel.aggregate<{ _id: unknown[]; files: number }>([
       {
         // Pre-unwind filter: use $elemMatch with the prefix regex so MongoDB can use
         // the tags.name index and skip non-data-lake files entirely before the $unwind
@@ -1316,12 +1363,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           tags: { $elemMatch: { name: { $regex: prefixRegex } } },
         },
       },
-      { $unwind: '$tags' },
-      { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': NOT_META_TAG }] } },
-      { $group: { _id: '$tags.name', count: { $sum: 1 } } },
-      { $project: { tag: '$_id', count: 1, _id: 0 } },
+      ...ownTagSet,
+      { $group: { _id: '$own', files: { $sum: 1 } } },
     ]);
-    return result;
+    // The compat path's $regex also matches a string INSIDE an array-valued name, which the default
+    // path's $type check rejects, so drop non-strings here to keep the two paths' rows identical.
+    return countTagPathsByTagSet(
+      tagSets.map(set => ({ tags: set._id.filter((tag): tag is string => typeof tag === 'string'), files: set.files }))
+    );
   }
 
   /**

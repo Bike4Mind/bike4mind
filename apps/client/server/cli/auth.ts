@@ -407,16 +407,19 @@ export type JwtRateLimitBucket = 'tools' | 'desktop';
 /**
  * Per-client caps for first-party clients that run a client-side tool loop against the
  * completions endpoint - one turn fans out into one completion per tool round, so their ceiling
- * has to be counted in rounds rather than turns. Matched on the User-Agent the client sets, the
- * same signal `resolveApiCompletionSource` uses for `b4m-cli/`.
+ * has to be counted in rounds rather than turns. Matched on the client signal from
+ * `resolveRequestClient` (User-Agent, then x-b4m-client), the same one `resolveApiCompletionSource`
+ * uses for `b4m-cli/`. Every HTTP completions route that rate-limits a JWT caller must pass it as
+ * `client`, or the per-client cap silently falls back to the default.
  *
  * Each entry carries its own bucket, and the limit and the key are read from the SAME match, so
  * a raised ceiling cannot spend a counter another surface reads. Without that, a desktop session
  * past 1000 would lock the same user's CLI out of its own 1000 until the window closed - see the
  * JwtRateLimitBucket note above.
  *
- * Only the ceiling moves. `source` is untouched, so desktop traffic stays recorded as source
- * `api` for credit and analytics - deliberately alongside third-party API clients, not as `cli`.
+ * Only the ceiling moves. A matched client never changes `source`, so credit and analytics keep
+ * the route's own source (`api` on the SSE route, `cli` on the WS route) - on the SSE route that is
+ * deliberately alongside third-party API clients, not as `cli`.
  */
 const JWT_RATE_LIMIT_BY_CLIENT: ReadonlyArray<{ pattern: RegExp; limit: number; bucket: JwtRateLimitBucket }> = [
   { pattern: /^b4m-desktop\//i, limit: 6000, bucket: 'desktop' },

@@ -31,7 +31,7 @@ export const GENERIC_PROCESSING_FAILURE_REPLY = 'Something went wrong while proc
  * The failure text as its own slot after whatever already streamed, with `reply` rebuilt from the
  * slots - the same shape as setErrorReply in ChatCompletionProcess. Writing only `reply` would lose
  * the failure from the poll body, which derives `reply` from visible slots when there are any
- * (questReplyText in server/utils/questPollBody.ts).
+ * (questReplyText in @bike4mind/common).
  */
 export function processingFailureReply(streamed: string[] | undefined): { reply: string; replies: string[] } {
   const visiblePartial = stripChoicesFromReplies(streamed ?? [])

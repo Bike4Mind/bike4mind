@@ -1,6 +1,14 @@
 import { baseApi } from './baseApi';
-import type { EndpointContract, PathParamsOf, QueryParamsOf, RequestBodyOf } from '@bike4mind/common';
+import {
+  BadRequestError,
+  isZodError,
+  type EndpointContract,
+  type PathParamsOf,
+  type QueryParamsOf,
+  type RequestBodyOf,
+} from '@bike4mind/common';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { fromZodError } from 'zod-validation-error';
 
 /**
  * EVERY registrar next-connect 0.13 exposes - patch all of them, not just the
@@ -73,6 +81,17 @@ export function nextRouteForContract<C extends EndpointContract>(
 
   const prelude: Handler[] = [];
 
+  const parse = <T>(schema: { parse(value: unknown): T }, value: unknown): T => {
+    try {
+      return schema.parse(value);
+    } catch (error) {
+      if (contract.validationErrorStatus === 400 && isZodError(error)) {
+        throw new BadRequestError(fromZodError(error).message);
+      }
+      throw error;
+    }
+  };
+
   // Prepended first so it runs BEFORE validation: a malformed body still counts
   // against the limiter (see the function-doc note on ordering).
   if (rateLimit) {
@@ -106,7 +125,7 @@ export function nextRouteForContract<C extends EndpointContract>(
 
   if (pathParamsSchema) {
     prelude.push((req, _res, next) => {
-      req.validatedParams = pathParamsSchema.parse(pick(req.query, pathParamsKeys)) as PathParamsOf<C>;
+      req.validatedParams = parse(pathParamsSchema, pick(req.query, pathParamsKeys)) as PathParamsOf<C>;
       next();
     });
   }
@@ -115,7 +134,7 @@ export function nextRouteForContract<C extends EndpointContract>(
   // same precedence reasoning: address/filter the resource before its payload.
   if (queryParamsSchema) {
     prelude.push((req, _res, next) => {
-      req.validatedQuery = queryParamsSchema.parse(omit(req.query, pathParamsKeys)) as QueryParamsOf<C>;
+      req.validatedQuery = parse(queryParamsSchema, omit(req.query, pathParamsKeys)) as QueryParamsOf<C>;
       next();
     });
   }
@@ -123,7 +142,7 @@ export function nextRouteForContract<C extends EndpointContract>(
   const requestSchema = contract.request;
   if (requestSchema) {
     prelude.push((req, _res, next) => {
-      req.validated = requestSchema.parse(req.body) as RequestBodyOf<C>;
+      req.validated = parse(requestSchema, req.body) as RequestBodyOf<C>;
       next();
     });
   }

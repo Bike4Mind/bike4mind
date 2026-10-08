@@ -1,4 +1,4 @@
-import type { IPromptContext } from '@bike4mind/common';
+import type { IPromptContext } from './types/entities/BriefcasePromptTypes';
 
 /**
  * Click-time template resolution for briefcase prompts. Pure and DOM-free so it

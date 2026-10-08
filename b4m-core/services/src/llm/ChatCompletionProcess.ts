@@ -101,6 +101,7 @@ import {
   type ICompletionOptions,
   PipelineTimer,
   resolveDeprecatedModelId,
+  isTurnEndingTool,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -240,6 +241,7 @@ import {
   shouldOfferSkillTool,
 } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
+import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 import {
   ContextTelemetryAlertsSchema,
   sanitizeTelemetryError,
@@ -250,6 +252,7 @@ import {
   ELISION_WARNING,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   DATA_LAKE_TOOL_NAMES,
+  libraryFlagForScope,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -2246,7 +2249,8 @@ export class ChatCompletionProcess {
         toRetrievalFilter(session),
         session.lakeScopeExplicit,
         vettedPreauthorizedLakeIds,
-        vetReaderConsentDatalakeTags(session, this.user.id)
+        vetReaderConsentDatalakeTags(session, this.user.id),
+        libraryFlagForScope(session)
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -2953,6 +2957,7 @@ export class ChatCompletionProcess {
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
+        attachedFileIds: [...new Set([...(session.knowledgeIds ?? []), ...sessionFabFileIds, ...messageFileIds])],
         fullyInlinedAttachmentIds,
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
@@ -2961,6 +2966,7 @@ export class ChatCompletionProcess {
         // not inherit the owner's consent to the reader opt-in prompt-injection arm.
         sessionReaderConsentDatalakeTags: vetReaderConsentDatalakeTags(session, this.user.id),
         sessionLakeScopeExplicit: session.lakeScopeExplicit,
+        sessionIncludeLibraryFiles: libraryFlagForScope(session),
         sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
         storage: this.storage,
@@ -3521,33 +3527,12 @@ export class ChatCompletionProcess {
           : [],
         mementos: featureContextMessages['mementos'],
         project: featureContextMessages['project'],
-        // Recently generated images - gives the model a handle to edit a prior
-        // generated image ("make it cartoonish"). Generated images persist as
-        // bare storage keys in quest.images with no fabFile record, so without
-        // this note the model can't reference them and either declines or (worse)
-        // claims success without calling a tool. Gated on edit_image reaching the
-        // built tool list, like the two prompts above: the requested list agrees today
-        // only because edit_image is never auto-added, which is exactly the assumption
-        // that broke the view registry once navigate_view became auto-added.
-        recentImages:
-          editImageAvailable && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
-            ? [
-                {
-                  role: 'system' as const,
-                  content: [
-                    '# Recently generated images',
-                    '',
-                    'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
-                    '',
-                    ...cacheInfo.recentGeneratedImages!.map(
-                      img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
-                    ),
-                    '',
-                    'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
-                  ].join('\n'),
-                },
-              ]
-            : [],
+        recentImages: buildRecentGeneratedImagesNote({
+          editImageAvailable,
+          sessionOwnerId: session.userId,
+          callerId: this.user.id,
+          recentImages: cacheInfo.recentGeneratedImages,
+        }),
         urls: urlMessages,
         attachedFiles: fabMessages,
         // Caller-supplied systemPrompt, reachable from both POST /api/chat and /api/ai/llm.
@@ -5130,6 +5115,14 @@ export class ChatCompletionProcess {
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
           producedNonTextDeliverable: producedNonTextDeliverable(),
+          // An adapter only ends a turn on 'tool_use' via shouldEndTurnAfterTools; a normal tool
+          // round recurses. Known gap, accepted as narrow: OpenAI-family backends also report a
+          // per-round 'tool_use', and stopReason is sticky, so a follow-up that reports no stop
+          // reason after a mixed round ending in a flagged tool also skips the notice.
+          endedOnAnswerTool:
+            actualTokenUsage.stopReason === 'tool_use' &&
+            echoToolsUsed.length > 0 &&
+            isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
         });
         if (incompleteAnswerNotice) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
@@ -6688,7 +6681,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     /** Already vetted against the request's authenticated principal by the caller - see ChatCompletionProcess's call site. */
     preauthorizedLakeIds?: string[],
     /** Already vetted against the request's authenticated principal by the caller (vetReaderConsentDatalakeTags). */
-    readerConsentDatalakeTags?: string[]
+    readerConsentDatalakeTags?: string[],
+    includeLibraryFiles?: boolean
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -6807,7 +6801,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
           retrievalFilter,
           preauthorizedLakeIds,
           lakeScopeExplicit,
-          readerConsentDatalakeTags
+          readerConsentDatalakeTags,
+          includeLibraryFiles
         )
       );
 
