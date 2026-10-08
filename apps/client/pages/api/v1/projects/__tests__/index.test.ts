@@ -7,7 +7,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ListProjectsResponseSchema, ProjectResourceSchema } from '@bike4mind/common';
+import { ListProjectsResponseSchema, ProjectEvents, ProjectResourceSchema } from '@bike4mind/common';
 
 const { mockListAccessibleAfterId, mockCreate, mockFindFiles, mockFindSessions, mockLogEvent } = vi.hoisted(() => ({
   mockListAccessibleAfterId: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
 vi.mock('@bike4mind/database', () => ({
   Project: {},
   projectRepository: { listAccessibleAfterId: mockListAccessibleAfterId, create: mockCreate },
@@ -200,9 +200,35 @@ describe('POST /api/v1/projects', () => {
 
   it('emits the same analytics events as the SPA route', async () => {
     await call({ method: 'POST', body });
-    const types = mockLogEvent.mock.calls.map(([event]) => (event as { type: string }).type);
-    expect(types).toHaveLength(3);
-    expect(new Set(types).size).toBe(3);
+    const projectId = '65a0000000000000000000ff';
+    expect(mockLogEvent).toHaveBeenCalledTimes(3);
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        type: ProjectEvents.CREATE_PROJECT,
+        metadata: expect.objectContaining({ projectId }),
+      }),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        type: ProjectEvents.ADD_SESSION,
+        metadata: expect.objectContaining({ projectId, contentId: SESSION_ID, contentType: 'session' }),
+      }),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        type: ProjectEvents.ADD_FILE,
+        metadata: expect.objectContaining({ projectId, contentId: FILE_ID, contentType: 'file' }),
+      }),
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('answers 422 for a name the caller already uses', async () => {

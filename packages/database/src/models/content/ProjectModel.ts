@@ -178,6 +178,9 @@ ProjectSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
 // is indexed).
 ProjectSchema.index({ 'users.userId': 1 });
 
+// Group-share arm of the same $or; the v1 list walks _id order and needs every arm indexed.
+ProjectSchema.index({ 'groups.groupId': 1 });
+
 // Unique constraint on project name per user (excluding soft-deleted projects).
 // Keyed on `deletedAt: null` (not `$exists: false`, which Mongo rejects in a
 // partial filter): softDeletePlugin defaults deletedAt to null on every live

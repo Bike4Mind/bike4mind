@@ -25,7 +25,10 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/utils/analyticsLog', () => ({
+  logEvent: vi.fn().mockResolvedValue(undefined),
+  logEventSafe: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
