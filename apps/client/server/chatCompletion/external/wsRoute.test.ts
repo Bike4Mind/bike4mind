@@ -37,9 +37,6 @@ vi.mock('@server/cli/auth', () => ({
   verifyJwtToken: vi.fn().mockResolvedValue({ id: 'u1' }),
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
   checkApiKeyRateLimitOrThrow: vi.fn().mockResolvedValue(undefined),
-  // Mirrors the real helper; its own behavior is covered in auth.test.ts.
-  resolveRateLimitClient: (headers: Record<string, string | undefined>) =>
-    headers['user-agent'] ?? headers['x-b4m-client'],
 }));
 
 vi.mock('@server/utils/logCompletionAnalytics', () => ({ logCompletionAnalytics: vi.fn() }));
@@ -63,7 +60,13 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => server?.close());
+afterAll(
+  () =>
+    new Promise<void>(resolve => {
+      if (server) server.close(() => resolve());
+      else resolve();
+    })
+);
 
 beforeEach(() => {
   vi.mocked(checkRateLimit).mockResolvedValue(undefined);
@@ -86,7 +89,7 @@ function postAs(headers: Record<string, string>) {
 
 describe('JWT rate limiting', () => {
   it('hands the calling client to the rate limiter, so its own cap applies', async () => {
-    await postAs({ 'user-agent': 'b4m-desktop/0.1.0' });
+    expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(400);
     expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'cli', { client: 'b4m-desktop/0.1.0' });
   });
 
