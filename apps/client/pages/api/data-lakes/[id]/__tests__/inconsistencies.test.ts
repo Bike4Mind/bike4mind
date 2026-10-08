@@ -175,6 +175,8 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     // Twice: the early gate keeps strangers from triggering detection, the in-transaction one serializes.
     expect(h.assertLakeWriteAccess).toHaveBeenCalledTimes(2);
     expect(h.assertLakeWriteAccess.mock.calls[0][0]).toBe('lake1');
+    // By id only: a slug skips a deleted lake and would resolve the next lake sharing it.
+    expect(h.assertLakeWriteAccess.mock.calls[0][3]).toEqual({ idOnly: true });
   });
 
   it('re-gates and records findings plus the summary inside the transaction, with no separate touch', async () => {

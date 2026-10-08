@@ -6,7 +6,7 @@ const h = vi.hoisted(() => ({
   // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
   tx: [] as string[],
   touchIfStable: vi.fn(),
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   approveDataLakeProposal: vi.fn(),
   declineDataLakeProposal: vi.fn(),
   restoreDataLakeProposal: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     approveDataLakeProposal: h.approveDataLakeProposal,
     declineDataLakeProposal: h.declineDataLakeProposal,
     restoreDataLakeProposal: h.restoreDataLakeProposal,
@@ -70,7 +70,7 @@ const makeRes = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   h.tx.length = 0;
-  h.assertLakeAccess.mockResolvedValue(LAKE);
+  h.assertLakeAccessById.mockResolvedValue(LAKE);
   h.findById.mockResolvedValue({ id: 'prop-1', dataLakeId: 'lake1' });
   // Mirrors the service's shape: gate-and-claim inside `serializeClaim`, the admission after it.
   h.approveDataLakeProposal.mockImplementation(
@@ -186,7 +186,7 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
   ] as const)(
     '%s: runs the gates and the write inside one transaction, then touches the resolved lake last',
     async (decision, writeFn) => {
-      h.assertLakeAccess.mockImplementation(async () => {
+      h.assertLakeAccessById.mockImplementation(async () => {
         h.tx.push('gate');
         return LAKE;
       });
@@ -219,7 +219,7 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
   );
 
   it('approve serializes the gate and claim with a lake touch, and admits only after commit', async () => {
-    h.assertLakeAccess.mockImplementation(async () => {
+    h.assertLakeAccessById.mockImplementation(async () => {
       h.tx.push('gate');
       return LAKE;
     });

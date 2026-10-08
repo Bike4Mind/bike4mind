@@ -2,14 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ForbiddenError } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   loadActiveLakeGrants: vi.fn(),
   canManageLake: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     loadActiveLakeGrants: h.loadActiveLakeGrants,
     canManageLake: h.canManageLake,
   },
@@ -25,16 +25,18 @@ const grants = [{ principalType: 'user', principalId: 'u1', role: 'curator' }];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.assertLakeAccess.mockResolvedValue(lake);
+  h.assertLakeAccessById.mockResolvedValue(lake);
   h.loadActiveLakeGrants.mockResolvedValue(grants);
   h.canManageLake.mockReturnValue(true);
 });
 
 describe('assertLakeResearchManage', () => {
-  it('returns the resolved lake for a manager, so callers scope by id rather than by slug', async () => {
+  // By id only: a slug skips a deleted lake and resolves the next lake sharing it, so a research
+  // write addressed by slug could land on (and spend money on) a lake the caller never meant.
+  it('resolves the path lake through the id-only gate and returns it for a manager', async () => {
     const { lake: resolved } = await assertLakeResearchManage(req(), 'my-lake', ctx);
     expect(resolved).toBe(lake);
-    expect(h.assertLakeAccess).toHaveBeenCalledWith('my-lake', expect.anything(), expect.anything());
+    expect(h.assertLakeAccessById).toHaveBeenCalledWith('my-lake', expect.anything(), expect.anything());
   });
 
   // The actor these routes need to record a History event, built once here (matching
@@ -75,13 +77,13 @@ describe('assertLakeResearchManage', () => {
 
   // Existence must never be probeable through a 403: the read gate answers not-found first.
   it('runs the read gate before the manage gate', async () => {
-    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessById.mockRejectedValue(new Error('Data lake not found'));
 
     await expect(assertLakeResearchManage(req(), 'someone-elses-lake', ctx)).rejects.toThrow(/not found/i);
     expect(h.canManageLake).not.toHaveBeenCalled();
   });
 
-  it('resolves manage against the RESOLVED lake and its own loaded grants, not the raw id-or-slug', async () => {
+  it('resolves manage against the RESOLVED lake and its own loaded grants, not the raw path id', async () => {
     await assertLakeResearchManage(req(), 'my-lake', ctx);
 
     expect(h.loadActiveLakeGrants).toHaveBeenCalledWith(lake, expect.anything());

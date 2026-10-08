@@ -178,6 +178,8 @@ describe('POST /api/data-lakes/:id/converge', () => {
   it('gates on rebuild access', async () => {
     await invoke('POST');
     expect(h.assertLakeRebuildAccess).toHaveBeenCalled();
+    // By id only: a slug skips a deleted lake and would resolve the next lake sharing it.
+    expect(h.assertLakeRebuildAccess.mock.calls[0][3]).toEqual({ idOnly: true });
   });
 
   // The whole point of the feature: re-enqueuing WITHOUT a chunkSize would let the handler

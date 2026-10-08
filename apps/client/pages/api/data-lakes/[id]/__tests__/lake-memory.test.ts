@@ -277,6 +277,12 @@ describe('POST /api/data-lakes/[id]/lake-memory', () => {
     expect(h.logAuditEvent).not.toHaveBeenCalled();
   });
 
+  it('resolves the lake by id only', async () => {
+    await invoke('POST');
+    // By id only: a slug skips a deleted lake and would resolve the next lake sharing it.
+    expect(h.assertLakeRebuildAccess.mock.calls[0][3]).toEqual({ idOnly: true });
+  });
+
   it('gates on rebuild access - a rejected assert never enqueues', async () => {
     h.assertLakeRebuildAccess.mockRejectedValue(
       new Error("You do not have permission to rebuild this data lake's passages")

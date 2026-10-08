@@ -100,7 +100,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // never reaches the touch (no updatedAt bump). Everything after (cap, enqueue, audit) is
     // external and runs after commit, because the callback re-runs on retry.
     const lake = await withTransaction(async () => {
-      const gated = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
+      const gated = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps, { idOnly: true });
 
       if (!platformEnabled) {
         throw new ConflictError('Lake memory is disabled platform-wide.');

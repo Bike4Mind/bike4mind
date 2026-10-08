@@ -352,3 +352,11 @@ export const assertLakeAccessById = async (
   ctx: AccessContext,
   adapters: AssertLakeAccessAdapters
 ): Promise<IDataLakeDocument> => (await resolveLakeAccessWithGrants(lakeId, ctx, adapters, { idOnly: true })).lake;
+
+/** `assertLakeAccessWithGrants` with the slug arms removed; see `assertLakeAccessById` for why. */
+export const assertLakeAccessWithGrantsById = (
+  lakeId: string,
+  ctx: AccessContext,
+  adapters: AssertLakeAccessWithGrantsAdapters
+): Promise<{ lake: IDataLakeDocument; grants: LakeGrant[] }> =>
+  resolveLakeAccessWithGrants(lakeId, ctx, adapters, { idOnly: true });

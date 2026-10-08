@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  */
 const h = vi.hoisted(() => ({
   touchIfStable: vi.fn(),
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   removeFileFromDataLake: vi.fn(),
   toAccessContext: vi.fn(),
@@ -51,7 +51,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     removeFileFromDataLake: h.removeFileFromDataLake,
     addFileToDataLake: vi.fn(),
@@ -81,7 +81,7 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId] - audit attribution', ()
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'owner', isAdmin: false, userTags: [] });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
     h.removeFileFromDataLake.mockResolvedValue({ success: true, fileCount: 1, totalSizeBytes: 10 });
   });
 

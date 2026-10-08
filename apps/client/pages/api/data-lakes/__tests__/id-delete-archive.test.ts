@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * the hourly re-sync poll forever. These pin the wiring, which nothing else can catch.
  */
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   archiveDataLake: vi.fn(),
   toAccessContext: vi.fn(),
@@ -61,7 +61,7 @@ vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     archiveDataLake: h.archiveDataLake,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
@@ -83,7 +83,7 @@ describe("DELETE /api/data-lakes/[id] - the archive door's Drive-connection port
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'owner', isAdmin: false, userTags: [] });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
     h.archiveDataLake.mockResolvedValue({ id: 'lake1', status: 'archived' });
     h.disableDriveConnectionForLake.mockResolvedValue(true);
     h.selfHostOpenSearchEnabled.mockReturnValue(false);

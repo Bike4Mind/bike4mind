@@ -73,7 +73,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
     const { group, removedFabFileIds } = await withTransaction(async () => {
-      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
       dataLakeService.assertLakeWritable(lake);

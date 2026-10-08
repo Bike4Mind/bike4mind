@@ -135,7 +135,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query;
     const { limit, confirm } = ConvergeInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
+    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps, { idOnly: true });
 
     const { report, wave } = await dataLakeService.planLakeConvergenceRun(
       lake,

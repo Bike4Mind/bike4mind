@@ -47,7 +47,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // The gate runs inside the transaction so a grant revoke committing mid-request collides on the
     // lake doc and the retry re-reads live grants.
     const result = await withTransaction(async () => {
-      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
       dataLakeService.assertLakeWritable(lake);
@@ -81,7 +81,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
     const result = await withTransaction(async () => {
-      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
       dataLakeService.assertLakeWritable(lake);

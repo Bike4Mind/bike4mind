@@ -188,6 +188,12 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
   });
 
+  it('resolves the path lake by id only', async () => {
+    await invoke('POST');
+    // By id only: a slug skips a deleted lake and would resolve the next lake sharing it.
+    expect(h.assertLakeRebuildAccess.mock.calls[0][3]).toEqual({ idOnly: true });
+  });
+
   it('still resets but does not touch when the lake is a fallback lake with no Mongo doc', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([{ fabFileId: 'f1', userId: 'u1' }]);
     h.isFallbackLake.mockReturnValue(true);

@@ -124,6 +124,19 @@ describe('assertFallbackLakeSettingsWriteAccess', () => {
     );
   });
 
+  // By id only: a DB lake sharing the registry slug must not be reached by the slug arm and turn the
+  // admin's settings write into an "its own settings editor" refusal on the wrong lake.
+  it('resolves the registry lake by id, never a DB lake sharing its slug', async () => {
+    const findBySlug = vi.fn().mockResolvedValue(lake({ id: 'real-id', slug: 'opti-knowledge' }));
+    const db = {
+      ...fallbackDb(),
+      dataLakes: { findById: vi.fn().mockResolvedValue(null), findBySlug, findBySlugAmongIds: vi.fn() },
+    };
+    const resolved = await assertFallbackLakeSettingsWriteAccess('opti-knowledge', ctx({ isAdmin: true }), { db });
+    expect(resolved.id).toBe('opti-knowledge');
+    expect(findBySlug).not.toHaveBeenCalled();
+  });
+
   it('assertLakeWritable itself still refuses a fallback lake (untouched by this gate)', () => {
     expect(() => assertLakeWritable({ id: 'opti-knowledge' })).toThrow(/read-only/i);
   });

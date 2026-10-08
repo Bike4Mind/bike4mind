@@ -55,8 +55,9 @@ export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
  * reserving its slug (create still disambiguates past it, and restore needs it back), but reaching
  * it by slug would let writes land on a lake the user deleted. By-id lookups are unaffected.
  * Hiding a lake from slugs does not 404 a slug request; it falls through to the next same-slug
- * lake the caller can reach. So the lifecycle route takes ids only (`assertLakeAccessById`), and
- * `deleting` stays resolvable so that other slug-addressed doors do not fall through any earlier.
+ * lake the caller can reach. So the manage and write routes under `pages/api/data-lakes/[id]/` take
+ * ids only (`assertLakeAccessById` and its siblings), and `deleting` stays resolvable so that the
+ * doors still addressed by slug (reads, the public v1 file routes) do not fall through any earlier.
  * Slug status does not keep writes off a `deleting` lake. The ingest doors gate on
  * `isLakeIngestable`; the tag-write doors (tag toggle, createFabFile, file PATCH, presigned upload)
  * and the PDF ingest script do not check status.

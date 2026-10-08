@@ -118,8 +118,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // retry re-runs the gates against live grants (see the SERIALIZATION note on grantLakeAccess).
     const updated = await withTransaction(async () => {
       // Gate first (org-aware, not-found-style denial) so this write path can't be used
-      // to probe existence or act cross-org - consistent with the lifecycle endpoint.
-      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      // to probe existence or act cross-org - consistent with the lifecycle endpoint, including its
+      // id-only resolution: a slug skips a deleted lake and would update the next lake sharing it.
+      const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
       dataLakeService.assertLakeWritable(lake);
@@ -141,7 +142,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     dataLakeService.assertLakeWritable(lake);

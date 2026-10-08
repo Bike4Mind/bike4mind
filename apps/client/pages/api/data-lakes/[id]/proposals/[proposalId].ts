@@ -40,11 +40,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const { decision, reason } = ReviewInput.parse(req.body);
     const ctx = await toAccessContext(req);
 
-    // The lake in the path is resolved and read-gated first so an id-or-slug still works and a
-    // stranger gets the usual not-found-style denial. The service re-resolves the lake from the
+    // The lake in the path is resolved (by id only, so a deleted lake's slug cannot land the review
+    // on another lake) and read-gated first, so a stranger gets the usual not-found-style denial. The service re-resolves the lake from the
     // PROPOSAL and gates management on that, so the path id can never widen authorization.
     const resolveLake = async () => {
-      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
 

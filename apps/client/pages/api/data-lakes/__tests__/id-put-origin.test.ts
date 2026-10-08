@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * rather than reaching the service with an undeclared value.
  */
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   updateDataLake: vi.fn(),
   toAccessContext: vi.fn(),
@@ -65,7 +65,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAcces
 // Real allowlist predicate on purpose - the whole point is which ids pass.
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     updateDataLake: h.updateDataLake,
   },
@@ -86,7 +86,7 @@ describe('PUT /api/data-lakes/[id] - origin', () => {
     vi.clearAllMocks();
     h.inTransaction.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'owner', isAdmin: false, userTags: [] });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
     h.updateDataLake.mockResolvedValue({ id: 'lake1', origin: 'connector-fed' });
   });
 
@@ -102,7 +102,7 @@ describe('PUT /api/data-lakes/[id] - origin', () => {
   });
 
   it('runs the gates and the write inside ONE transaction, so a retry re-reads the grants', async () => {
-    h.assertLakeAccess.mockImplementation(async () => {
+    h.assertLakeAccessById.mockImplementation(async () => {
       h.inTransaction.push('gate');
       return { id: 'lake1', createdByUserId: 'owner' };
     });

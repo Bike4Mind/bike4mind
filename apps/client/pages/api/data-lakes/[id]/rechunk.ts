@@ -110,7 +110,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query;
     const { limit, select } = RechunkInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
+    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps, { idOnly: true });
 
     let detected: dataLakeService.LakeRebuildTarget[];
     if (select === 'stale-embedding-space') {
