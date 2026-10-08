@@ -3,6 +3,7 @@ import {
   IAdminSettingsRepository,
   IScopedSetting,
   IScopedSettingsRepository,
+  isBlankSettingValue,
   ScopeRef,
   SettingKey,
   SettingScope,
@@ -284,8 +285,7 @@ async function resolveAll<K extends SettingKey>(
     // An unparseable platform row resolves to the coded default above, so it counts as not stored. So
     // does a blank one: a number schema's preprocess turns '' into the prefaulted default, not a choice.
     const raw = platformRecord[key];
-    const blank = typeof raw === 'string' && raw.trim() === '';
-    const stored = !!won || (key in platformRecord && !blank && def.schema.safeParse(raw).success);
+    const stored = !!won || (!isBlankSettingValue(raw) && def.schema.safeParse(raw).success);
     result.set(key, {
       value: value as SettingValue<K>,
       source,

@@ -1,5 +1,6 @@
 import {
   SettingKeySchema,
+  isBlankSettingValue,
   SreAgentConfig,
   SRE_SECRET_PLACEHOLDER,
   isMaskedSensitiveSettingValue,
@@ -32,13 +33,9 @@ const handler = baseApi().put(
 
     const key = SettingKeySchema.parse(req.body.key);
 
-    // A cleared forcedRetrievalMinSimilarityPct must DELETE the row, not store the default: unset
-    // resolves per embedding space, while a stored 75 is honored in every space (see
-    // readForcedRetrievalSettings in ChatCompletionFeatures). Without this the admin UI has no way back.
-    // hardDelete: a soft-deleted tombstone would swallow every later save, since the upsert below
-    // matches it without reviving it (softDeletePlugin in db-core/src/utils/mongo.ts).
-    const raw = req.body.value;
-    if (key === 'forcedRetrievalMinSimilarityPct' && (raw == null || (typeof raw === 'string' && raw.trim() === ''))) {
+    // Delete, not store the default, so the setting reads as unset again. hardDelete: the upsert below
+    // would match a soft-deleted tombstone without reviving it (softDeletePlugin, db-core/src/utils/mongo.ts).
+    if (settingsMap[key].clearDeletesRow && isBlankSettingValue(req.body.value)) {
       await AdminSettings.deleteOne({ settingName: key }, { hardDelete: true });
       invalidateSettingsCache(key);
       return res.json({ settingName: key, settingValue: settingsMap[key].defaultValue });

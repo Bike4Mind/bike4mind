@@ -38,6 +38,7 @@ vi.mock('@server/utils/publicSettingsArtifact', () => ({
 
 import handler from '../update';
 import { SENSITIVE_SETTING_MASK } from '@bike4mind/common';
+import { invalidateSettingsCache } from '@bike4mind/utils';
 
 /** Stage what findOneAndUpdate returns, mirroring a Mongoose doc (toObject + field access). */
 const stageWriteResult = (settingName: string, settingValue: unknown) => {
@@ -196,6 +197,7 @@ describe('settings/update cleared forced-retrieval absolute floor', () => {
   beforeEach(() => {
     findOneAndUpdate.mockReset();
     deleteOne.mockReset();
+    vi.mocked(invalidateSettingsCache).mockClear();
   });
 
   // A stored 75 is honored in every embedding space, so clearing the field must remove the row
@@ -204,7 +206,15 @@ describe('settings/update cleared forced-retrieval absolute floor', () => {
     const res = await runHandler('forcedRetrievalMinSimilarityPct', value);
     expect(deleteOne).toHaveBeenCalledWith({ settingName: 'forcedRetrievalMinSimilarityPct' }, { hardDelete: true });
     expect(findOneAndUpdate).not.toHaveBeenCalled();
+    expect(invalidateSettingsCache).toHaveBeenCalledWith('forcedRetrievalMinSimilarityPct');
     expect(res.settingValue).toBe(75);
+  });
+
+  it('rejects without invalidating the cache or upserting when the delete fails', async () => {
+    deleteOne.mockRejectedValue(new Error('db down'));
+    await expect(runHandler('forcedRetrievalMinSimilarityPct', '')).rejects.toThrow('db down');
+    expect(invalidateSettingsCache).not.toHaveBeenCalled();
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('still stores an explicit 75', async () => {

@@ -3443,6 +3443,45 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect(injected).toEqual([0, 1]);
   });
 
+  it('a settings outage resolves the absolute floor per embedding space, not the ada-002 75', async () => {
+    // Overlay off so the read itself throws into the outer catch (the scoped resolver never throws).
+    // All three clear the 85% relative cutoff (0.595) and 3-small's 58%; a fallback to 75 keeps none.
+    const ctx = makeCtx({ scores: [0.7, 0.66, 0.62], withScopedOverlay: false });
+    ctx.db.adminSettings.getSettingsValue = vi.fn(async (key: string) => {
+      if (key === 'defaultEmbeddingModel') return 'text-embedding-3-small';
+      throw new Error('settings store unavailable');
+    });
+    ctx.db.adminSettings.findBySettingName = vi.fn(async () => {
+      throw new Error('settings store unavailable');
+    });
+    const { injected } = await run(ctx);
+    expect(injected).toEqual([0, 1, 2]);
+  });
+
+  it("warns when a configured absolute floor sits above the space's measured floor", async () => {
+    const ctx = makeCtx({
+      scores: [0.9, 0.7, 0.6],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+    });
+    await run(ctx);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'configured absolute floor 75% is above the 58% measured for embedding space "text-embedding-3-small"'
+      )
+    );
+  });
+
+  it('does not warn when a configured absolute floor is at or below the measured floor', async () => {
+    const ctx = makeCtx({
+      scores: [0.9, 0.7, 0.6],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '58' },
+    });
+    await run(ctx);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('configured absolute floor')
+    );
+  });
+
   it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {
     // An admin who clears the field can leave '   ' behind, and `Number('   ')` is 0 - the
     // DISABLED value for this floor - so without the trim in `nonNegativeIntOr` a cleared row

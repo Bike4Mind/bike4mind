@@ -852,6 +852,20 @@ interface BaseSetting {
    * adding this field changes no existing consumer.
    */
   scope?: SettingScopeConfig;
+  /**
+   * A blank save DELETES the platform row instead of storing the declared default, so the setting
+   * reads as unset again (see `isBlankSettingValue` and apps/client/pages/api/settings/update.ts).
+   * Only for a setting whose consumer treats unset differently from its default's own number.
+   */
+  clearDeletesRow?: boolean;
+}
+
+/**
+ * A missing, null or whitespace-only stored value. A number setting's schema rewrites it into the
+ * declared default, so it means "unset", not a choice of that default.
+ */
+export function isBlankSettingValue(raw: unknown): boolean {
+  return raw == null || (typeof raw === 'string' && raw.trim() === '');
 }
 
 function makeStringSetting(
@@ -988,7 +1002,7 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
     // substitutes only on the raw value it receives, so chaining it outside would feed the
     // rewritten undefined into z.coerce.number() and fail with a NaN instead of defaulting.
     schema: z.preprocess(
-      val => (val === null || (typeof val === 'string' && val.trim() === '') ? undefined : val),
+      val => (isBlankSettingValue(val) ? undefined : val),
       numberSchema.prefault(config.defaultValue ?? 0)
     ),
   };
@@ -3845,6 +3859,8 @@ export const settingsMap = {
     order: 10,
     // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+    // Unset resolves per embedding space; a stored value, 75 included, is honored in every space.
+    clearDeletesRow: true,
   }),
   forcedRetrievalSpreadFloorPct: makeNumberSetting({
     key: 'forcedRetrievalSpreadFloorPct',
@@ -4985,7 +5001,7 @@ export const SEARCH_BUDGET_SETTING_KEYS = [
  * Every setting the forced-retrieval merge resolves, in one list - the sibling of
  * {@link SEARCH_BUDGET_SETTING_KEYS} for the other read that resolves settings for one retrieval
  * turn. `readForcedRetrievalSettings` (ChatCompletionFeatures.ts, b4m-core/services) resolves these
- * through `resolveScopedSettingValues`, and the guard in settings.test.ts loops this list to assert
+ * through `resolveScopedSettingEntries`, and the guard in settings.test.ts loops this list to assert
  * none of them declares a Lake rung: one turn scans an uncapped SET of lakes into a single pool, so
  * no single lake can key a narrower rung (#2572).
  *

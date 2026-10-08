@@ -60,6 +60,7 @@ import {
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_SETTING_KEYS,
   settingsMap,
+  isBlankSettingValue,
   backgroundScoreOf,
   citationTagDescription,
   compareForcedRetrievalRank,
@@ -1819,6 +1820,20 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
 }
 
 /**
+ * `forcedRetrievalMinSimilarityPct`'s twin of {@link forcedRetrievalFloorPct}, except an unusable value
+ * lands on unset (per embedding space) rather than the coded 75, which is an ada-002 number.
+ */
+function forcedRetrievalConfiguredAbsolutePct(raw: unknown, logger: Logger): number | undefined {
+  if (raw === undefined) return undefined;
+  const pct = Number(raw);
+  if (Number.isFinite(pct) && pct >= 0 && pct <= 100) return pct;
+  logger.warn(
+    `\u{1F512} Forced retrieval: forcedRetrievalMinSimilarityPct ${JSON.stringify(raw)} is unusable; resolving per embedding space`
+  );
+  return undefined;
+}
+
+/**
  * The absolute floor to grade THIS turn's candidates against, given what the operator configured and
  * which embedding space the scores were actually produced in.
  *
@@ -1853,9 +1868,19 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
  * nothing about whether every scored chunk really lives there.
  */
 function resolveForcedRetrievalAbsoluteFloor(configuredPct: number | undefined, space: string, logger: Logger): number {
-  if (configuredPct !== undefined) return configuredPct / 100;
-
   const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
+  if (configuredPct !== undefined) {
+    // Honored, but above the measured floor it can reject the space's whole band (75 on
+    // text-embedding-3-small returns nothing on every query), so say so every turn it applies.
+    if (spacePct !== undefined && configuredPct > spacePct) {
+      logger.warn(
+        `\u{1F512} Forced retrieval: configured absolute floor ${configuredPct}% is above the ${spacePct}% ` +
+          `measured for embedding space "${space}" and may reject every chunk; clear it to use the measured floor`
+      );
+    }
+    return configuredPct / 100;
+  }
+
   if (spacePct !== undefined) {
     if (spacePct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) {
       logger.log(
@@ -2585,16 +2610,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // which is not known until the candidate files have voted on one, mid-scan. See
         // `resolveForcedRetrievalAbsoluteFloor`.
         // `undefined` = no rung stored a parseable value. Both read paths schema-parse (1..100), so
-        // the >100 guard is a backstop only.
-        configuredAbsolutePct:
-          absolute === undefined
-            ? undefined
-            : forcedRetrievalFloorPct(
-                absolute,
-                FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
-                'forcedRetrievalMinSimilarityPct',
-                this.logger
-              ),
+        // the range guard is a backstop only.
+        configuredAbsolutePct: forcedRetrievalConfiguredAbsolutePct(absolute, this.logger),
       };
     } catch (err) {
       // Names every key, because one read failure degrades all three at once and an operator
@@ -2701,10 +2718,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     ]);
     // A blank row is unset too: the schema would preprocess it into the same manufactured 75.
     const raw = absoluteRow?.settingValue;
-    const parsed =
-      raw == null || (typeof raw === 'string' && raw.trim() === '')
-        ? undefined
-        : settingsMap.forcedRetrievalMinSimilarityPct.schema.safeParse(raw);
+    const parsed = isBlankSettingValue(raw)
+      ? undefined
+      : settingsMap.forcedRetrievalMinSimilarityPct.schema.safeParse(raw);
     return { charBudget, relative, absolute: parsed?.success ? parsed.data : undefined, spread };
   }
 
