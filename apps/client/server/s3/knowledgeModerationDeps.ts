@@ -14,7 +14,7 @@ import type { Types } from 'mongoose';
  * (re-scans files an earlier attempt left stranded on 'pending'). All must claim/persist/release
  * identically - the claim is the single mutual-exclusion point between them - so the wiring lives
  * here once. The claim is an atomic pending|null -> scanning CAS, so only one runner can ever flip a
- * given row out of 'pending' - the callers here (and any concurrent upload-path scan) cannot
+ * given row out of 'pending' - the callers here (and any concurrent hosted upload-path scan) cannot
  * double-process it. The hosted upload-time scan (server/s3/objectCreated.ts) guards differently (it
  * never writes the interim 'scanning' state), so this is a parallel guarantee, not the identical
  * mechanism.
