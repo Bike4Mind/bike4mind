@@ -97,6 +97,7 @@ const ReleaseNoteEditDialog: React.FC<Props> = ({ note, onClose }) => {
                   sx={{ flex: 1 }}
                   value={item.text}
                   onChange={event => updateItem(index, { text: event.target.value })}
+                  slotProps={{ input: { 'data-testid': 'release-note-edit-item-input' } }}
                 />
                 <IconButton
                   aria-label="Remove item"

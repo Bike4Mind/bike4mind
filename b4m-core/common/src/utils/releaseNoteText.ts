@@ -1,4 +1,5 @@
 // Customer-copy hygiene shared by the workers release-notes generator and the admin release-notes edit route.
+// Leak prevention only: this does not sanitize HTML or script URLs, so renderers must treat the text as untrusted.
 // Two or more digits so ordinary copy such as "#1" and "GPT-4" survives.
 const PR_REF = /^#\d{2,}$/;
 const TICKET_KEY = /^[A-Za-z]{2,10}-\d{2,}$/;
