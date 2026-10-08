@@ -88,6 +88,9 @@ const mockAuth = vi.hoisted(() => ({
   verifyJwtToken: vi.fn(),
   checkApiKeyRateLimitOrThrow: vi.fn(),
   checkRateLimit: vi.fn(),
+  // Mirrors the real helper; its own behavior is covered in auth.test.ts.
+  resolveRateLimitClient: (headers: Record<string, string | undefined>) =>
+    headers['user-agent'] ?? headers['x-b4m-client'],
 }));
 vi.mock('@server/cli/auth', () => mockAuth);
 
