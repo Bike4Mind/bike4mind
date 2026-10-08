@@ -173,9 +173,18 @@ Register the trust config in the same run. Adding `federatedIdp` to an existing 
 
 There is no admin UI or API for registration yet.
 
-A stock self-hosted stack does not expose the completions API (`/api/ai/v1/completions`) on its public origin, so your app's completion calls return 404. Uncomment the `@completions` block in `selfhost/caddy/Caddyfile` and set `CHAT_COMPLETION_PUBLIC_URL=https://<your-domain>` in `.env.selfhost`.
+A stock self-hosted stack does not expose the completions API (`/api/ai/v1/completions`) on its public origin, so your app's completion calls return 404. Add this route inside the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (see [the sample in the Caddyfile](https://github.com/bike4mind/bike4mind/blob/main/selfhost/caddy/Caddyfile)):
 
-Set `OAUTH_RSA_PRIVATE_KEY` (a base64-encoded PKCS8 PEM) to the same value on every instance. Without it, each process generates its own signing key at startup, so ID tokens stop verifying after a restart and verify only intermittently across replicas.
+```caddyfile
+@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
+handle @completions {
+	reverse_proxy chatcompletion:8080
+}
+```
+
+Keep it a `handle` block: a bare `reverse_proxy @completions` loses to the catch-all and still 404s. Then change `CHAT_COMPLETION_PUBLIC_URL` in `.env.selfhost` from its `http://localhost:8788` default to `https://<your-domain>`, so the CLI is pointed at the public origin too.
+
+Set `OAUTH_RSA_PRIVATE_KEY` (a base64-encoded RSA private key PEM) to the same value on every instance. Generate one with `openssl genrsa 2048 | base64 | tr -d '\n'`. Without it, each process generates its own signing key at startup, so ID tokens stop verifying after a restart and verify only intermittently across replicas.
 
 ### Hosted B4M
 
@@ -215,8 +224,9 @@ The ID token must still be valid when you exchange it. Once it expires, re-autho
 | 403 `invalid_scope`           | a requested scope is not `ai:generate` or `me:read`, or is not allowed for this client                                 |
 | 401 `invalid_grant`           | the ID token is invalid or expired, or its subject is not a B4M user                                                   |
 | 400 `invalid_request`         | the body is malformed, `scope` is empty, or the user has reached their cap on API keys                                 |
-| 429                           | rate limited (300 per minute per client, and per IP); honour `Retry-After`                                             |
-| 503 `temporarily_unavailable` | B4M could not check the user's consent; retry with backoff                                                             |
+| 429                           | rate limited (300 per minute per client, and per IP); the per-client limit sends `Retry-After`                         |
+| 503 `temporarily_unavailable` | B4M could not look up this user's consent; retry that user after a short delay (no `Retry-After`)                      |
+| other 5xx                     | an unexpected B4M failure; retry with backoff, and do not ask the user to re-authorize                                 |
 
 The per-client and per-IP limits return different 429 bodies, so branch on the status, not the `error` field.
 
@@ -232,7 +242,7 @@ Every successful exchange **revokes the previous key** minted for the same user 
 
 - **Expiry skew.** Re-mint shortly before `expires_in` runs out (for example 60 seconds early), not after a request fails.
 - **Default lifetime.** If `expires_in` is ever missing, assume the 900-second default rather than caching forever.
-- **Negative cache.** After a 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request. Either the user needs to sign in or consent again, or your client is misconfigured (`invalid_client`, `invalid_scope`); log the `error` code to tell which. After a 429 or 503, back off for `Retry-After` seconds when it is present.
+- **Negative cache.** After a 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request. Either the user needs to sign in or consent again, or your client is misconfigured (`invalid_client`, `invalid_scope`); log the `error` code to tell which. A 429 or 5xx is different. A 429 is client-wide, so pause every mint for its `Retry-After` seconds (or a default when it is absent). A 5xx is a B4M-side failure (a 503 affects only that user) and carries no `Retry-After`; retry that user after a short delay, and do not ask them to re-authorize.
 - **Timeout.** Bound the exchange call with a timeout so a slow B4M does not hang your request path.
 - **One re-mint.** If B4M rejects a cached key, mint once and retry once. If that fails too, surface the error. Re-mint only if the rejected key is still the cached one: if another request already replaced it, use the replacement, or your re-mint revokes it.
 
@@ -254,9 +264,10 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 - `code: "insufficient_credits"`: the user is out of credits. Prompt them to top up their B4M balance.
 - `code: "spend_cap_exceeded"`: reserved. The key hit an admin-set spending ceiling, so topping up does not help. Keys from the exchange do not carry a cap today, so you should not see it, but handle it defensively.
-- `code` absent: an unclassified failure (including a rejected key, a rate limit or an invalid body). Show `message` and log `requestId`.
+- `code` absent: an unclassified failure (including a rejected key, a rate limit or an invalid body). Show `message` and log `requestId`. A rate limit has no `Retry-After` here (the headers were already sent), so back off before retrying.
+- Any other `code`: a classified failure your app has no special handling for. Treat it like an absent `code`.
 
-The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. The stream ends with `data: [DONE]`; if it ends without one, the reply is incomplete. A `stopReason` of `max_tokens` on the last event means the reply was cut off.
+The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete. A `stopReason` of `max_tokens` on the last event means the reply was cut off. Any other `stopReason` that is not a clean finish (`end_turn`, `stop`, `tool_use`, `stop_sequence`), such as `degenerate_repetition`, `refusal` or a provider-specific value, means the reply is not usable even though `[DONE]` still arrives.
 
 Branch on `code`, never on `message`, which is prose and can change. The HTTP status tells you nothing here, and the public API never returns 402. (The JSON, non-streaming B4M APIs report the same condition as HTTP 422 with `errorCode: "insufficient_credits"`.)
 
@@ -377,12 +388,13 @@ type CachedKey = { key: string; expiresAt: number };
 const keys = new Map<string, CachedKey>();
 const inFlight = new Map<string, { idToken: string; promise: Promise<string> }>(); // userId -> mint in progress
 // Keyed by ID token, so a fresh sign-in is not blocked by a failure on the old token.
-const failures = new Map<string, number>(); // idToken -> retry-after timestamp
+const failures = new Map<string, { until: number; reason: 'auth' | 'unavailable' }>();
 let clientBackoffUntil = 0; // a 429 from the exchange pauses minting for every user
 
 const SKEW_MS = 60_000;
 const DEFAULT_TTL_S = 900;
 const NEGATIVE_TTL_MS = 60_000;
+const RETRY_5XX_MS = 5_000;
 
 // Every mint revokes the user's previous key, so concurrent callers share one in-flight
 // mint, and a caller whose key was rejected passes it as rejectedKey so it re-mints only if
@@ -407,9 +419,11 @@ async function getUserKey(userId: string, idToken: string, { rejectedKey = '' } 
 async function mintKey(userId: string, idToken: string): Promise<string> {
   const now = Date.now();
   // O(n) per mint; use a TTL cache if you track many failed tokens.
-  for (const [token, until] of failures) if (until <= now) failures.delete(token);
+  for (const [token, f] of failures) if (f.until <= now) failures.delete(token);
   if (clientBackoffUntil > now) throw new Error('B4M asked us to back off; retry later');
-  if (failures.has(idToken)) throw new Error('Exchange recently failed; re-authorize the user');
+  const failure = failures.get(idToken);
+  if (failure?.reason === 'auth') throw new Error('Exchange recently failed; re-authorize the user');
+  if (failure) throw new Error('B4M temporarily unavailable; retry later');
 
   const res = await fetch(`${B4M}/api/oauth/ai-token`, {
     method: 'POST',
@@ -423,14 +437,15 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
     signal: AbortSignal.timeout(10_000),
   });
   if (res.status === 401 || res.status === 403) {
-    failures.set(idToken, Date.now() + NEGATIVE_TTL_MS);
+    failures.set(idToken, { until: Date.now() + NEGATIVE_TTL_MS, reason: 'auth' });
     keys.delete(userId);
   } else if (res.status === 429) {
     const retryAfterS = Number(res.headers.get('Retry-After')) || NEGATIVE_TTL_MS / 1000;
     clientBackoffUntil = Date.now() + retryAfterS * 1000;
-  } else if (res.status === 503) {
-    // This user's consent lookup failed; retry them later without pausing everyone.
-    failures.set(idToken, Date.now() + NEGATIVE_TTL_MS);
+  } else if (res.status >= 500) {
+    // A B4M-side failure (503: this user's consent lookup failed): retry them shortly, without
+    // pausing everyone or asking them to re-authorize. 5xx responses carry no Retry-After.
+    failures.set(idToken, { until: Date.now() + RETRY_5XX_MS, reason: 'unavailable' });
   }
   if (!res.ok) throw new Error(`ai-token exchange failed: ${res.status}`);
 
@@ -451,6 +466,12 @@ class TruncatedReplyError extends Error {
     super('Reply was cut off at max_tokens');
   }
 }
+class UnusableReplyError extends Error {
+  constructor(readonly stopReason: string) {
+    super(`Reply ended early: ${stopReason}`);
+  }
+}
+const CLEAN_STOP_REASONS = new Set(['end_turn', 'stop', 'tool_use', 'stop_sequence']);
 
 async function checkBalance(key: string): Promise<Response> {
   return fetch(`${B4M}/api/v1/credits`, { headers: { Authorization: `Bearer ${key}` } });
@@ -466,9 +487,9 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
     key = await getUserKey(userId, idToken, { rejectedKey: key });
     pre = await checkBalance(key);
   }
-  if (!pre.ok) throw new Error(`Balance check failed: ${pre.status}`);
-  const { balance } = await pre.json();
-  if (balance <= 0) console.warn(`User ${userId} shows a zero balance; the completion may be refused`);
+  if (pre.status === 401) throw new Error('B4M rejected a freshly minted key');
+  if (!pre.ok) console.warn(`Balance check failed (${pre.status}); continuing, it is advisory`);
+  else if ((await pre.json()).balance <= 0) console.warn(`User ${userId} shows a zero balance`);
 
   const res = await fetch(`${B4M}/api/ai/v1/completions`, {
     method: 'POST',
@@ -497,6 +518,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
       if (data === '[DONE]') {
         const reply = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         if (stopReason === 'max_tokens') throw new TruncatedReplyError(reply);
+        if (stopReason && !CLEAN_STOP_REASONS.has(stopReason)) throw new UnusableReplyError(stopReason);
         return reply;
       }
       const event = JSON.parse(data);
@@ -513,7 +535,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
 }
 ```
 
-Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `SpendCapError`, tell them a B4M spending cap was reached (topping up will not help). On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens` (or omit it, which lets B4M size the ceiling; recommended for reasoning models).
+Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `SpendCapError`, tell them a B4M spending cap was reached (topping up will not help). On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens`. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling. On `UnusableReplyError` (for example `degenerate_repetition` or `refusal`), do not show the text; retry or tell the user the reply failed.
 
 ## Further reading
 
