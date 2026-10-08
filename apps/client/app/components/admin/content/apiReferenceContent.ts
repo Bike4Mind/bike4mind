@@ -111,9 +111,9 @@ These endpoints are defined by a contract, and their full request/response refer
 the [generated API docs](/api/v1/docs) (raw spec: \`/api/v1/openapi.json\`, which a generator can
 use to build a typed client). They are deliberately not repeated here, so the two cannot disagree.
 
-- Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions\`
+- Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions[/{id}]\`
 - Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`
-- Files and data lakes: \`/api/v1/files\`, \`/api/v1/files/{id}\`, \`/api/v1/data-lakes\`
+- Files and data lakes: \`/api/v1/files\`, \`/api/v1/files/{id}\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
 - Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
@@ -169,6 +169,8 @@ Nested keys use bracket syntax (parsed with \`qs\`), for example \`pagination[pa
 | options[textSearch] | boolean | Use text search for \`search\` |
 | options[excludeContent] | boolean | Omit file content from the results |
 
+**Query-parameter gotchas.** \`pagination\` and \`order\` are all-or-nothing: send every key of a nested object or omit the object entirely, or the request is a 422 (the documented defaults apply only when you omit the object). Boolean params are coerced, so any non-empty value - including \`false\` - enables them; omit the key to disable. Array params need a repeated key or the \`[]\` suffix (\`filters[tags][]=a\`); a single bare value is rejected.
+
 The response is \`{ data, hasMore, total }\`, where \`data\` is the page of files.
 
 #### Trigger Chunking
@@ -205,7 +207,7 @@ Initiates the chunking and embedding pipeline for a file.
 
 ### Sessions (Notebooks)
 
-Listing and updating sessions is covered by the generated docs (see above). The routes below are
+Session create, list, get, update and delete are covered by the generated docs (see above). The routes below are
 still hand-written.
 
 | Method | Endpoint | Description |
@@ -352,7 +354,6 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 | \`streamed_chat_completion\` | Server -> Client | Streamed chat reply: the quest's partial or final \`reply\`, its \`status\` and, on failure, \`type: "error"\` |
 | \`generation_job_updated\` | Server -> Client | A generation job's \`state\`, \`progress\` and \`output\` changed |
 | \`update_file_chunk_vector_status\` | Server -> Client | A file's chunking / vectorizing status changed (\`ongoing\`, \`complete\`, \`failed\`) |
-| \`inbox_refetch\` | Server -> Client | Inbox changed; refetch it |
 
 ---
 
