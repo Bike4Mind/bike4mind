@@ -1,4 +1,4 @@
-import type { ChatToolCall, ChatUsage } from '@shared/chat';
+import type { ChatToolCall, ChatUsage, ModelPhase } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, autoCompactThreshold } from '@shared/contextLimit';
 import { pendingCodePhrase, type PendingCode } from './codeStream';
 import { activePhrase } from './toolRows';
@@ -122,7 +122,7 @@ export function formatTokens(count: number): string {
  */
 export function describeActivity(
   calls: readonly ChatToolCall[],
-  hasText: boolean,
+  phase: ModelPhase | null,
   pending: PendingCode | null = null
 ): string {
   if (calls.some(call => call.status === 'awaiting-approval')) return 'Waiting for your answer...';
@@ -133,9 +133,13 @@ export function describeActivity(
     return only.progress?.trim() || activePhrase(only.name);
   }
   if (running.length > 1) return 'Running tools...';
+  // Named as the tool it will be while the model is still writing the call: the call's
+  // arguments (a whole file, for an edit) are what takes the time, not running it.
+  if (phase?.kind === 'writing-tool') return activePhrase(phase.name);
   if (pending) return pendingCodePhrase(pending);
 
-  return hasText ? 'Responding...' : 'Thinking...';
+  // Waiting reads as thinking too: a model that hides its reasoning sends nothing while it thinks.
+  return phase?.kind === 'responding' ? 'Responding...' : 'Thinking...';
 }
 
 /** The whole line, dot-separated, as one string - which is also how a test can read it. */

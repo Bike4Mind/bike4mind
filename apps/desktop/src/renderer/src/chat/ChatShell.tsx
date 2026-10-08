@@ -284,7 +284,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const liveText = inFlight ? (roundsOf(inFlight).at(-1)?.text ?? '') : '';
   const activity = describeActivity(
     inFlight?.toolCalls ?? [],
-    (inFlight?.content.length ?? 0) > 0,
+    conversation.phase,
     presentReply(liveText, true).pending
   );
 

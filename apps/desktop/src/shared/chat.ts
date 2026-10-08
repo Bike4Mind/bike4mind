@@ -959,12 +959,25 @@ export interface ChatSession extends ChatSessionMeta {
  *
  * 'usage' is non-terminal too: several arrive during one reply, each carrying the running total.
  */
+/**
+ * What the model is doing in the round in flight, as far as its stream shows.
+ *
+ * `waiting` is a request out and nothing back: a reasoning model that hides its reasoning (GPT)
+ * spends its whole think here. `writing-tool` is a call the model has opened but not finished -
+ * the arguments of a large call (a whole file, a long command) take tens of seconds to write.
+ * A tool actually running is not a phase; ChatToolCall.status says that.
+ */
+export type ModelPhase =
+  { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
+
 export type ChatStreamEvent =
   | { type: 'start'; sessionId: string; messageId: string }
   | { type: 'delta'; sessionId: string; messageId: string; text: string }
   | { type: 'tool-start'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-end'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-progress'; sessionId: string; messageId: string; callId: string; text: string }
+  /** What the model is doing in the round in flight; sent on change only. Status, never stored. */
+  | { type: 'phase'; sessionId: string; messageId: string; phase: ModelPhase }
   /** Readable reasoning, streamed ahead of the round's prose. Stored, not drawn; see ChatReplyRound.reasoning. */
   | { type: 'reasoning'; sessionId: string; messageId: string; text: string }
   /**

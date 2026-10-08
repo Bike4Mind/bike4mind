@@ -12,6 +12,7 @@ import {
   type ModelInfo,
   type ReasoningEffort,
   type CacheUsageStats,
+  type ToolStarted,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
@@ -1499,10 +1500,14 @@ export class OpenAIBackend implements ICompletionBackend {
         }
       }
 
+      let toolStarted: ToolStarted | undefined;
       chunk?.choices.forEach((c: ChatCompletionChunk.Choice) => {
         if (!isO1Model) {
           c.delta.tool_calls?.forEach((tool: ChatCompletionChunk.Choice.Delta.ToolCall) => {
             func[tool.index] ||= { parameters: '' };
+            if (!func[tool.index].name && tool.function?.name) {
+              toolStarted = { name: tool.function.name, id: tool.id ?? undefined };
+            }
             func[tool.index].name ||= tool.function?.name;
             func[tool.index].id ||= tool.id;
             func[tool.index].parameters += tool.function?.arguments || '';
@@ -1527,6 +1532,7 @@ export class OpenAIBackend implements ICompletionBackend {
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
+        ...(toolStarted ? { toolStarted } : {}),
       });
     }
 
@@ -2060,6 +2066,13 @@ export class OpenAIBackend implements ICompletionBackend {
           outputTokens: accumOutputTokens + outputTokens,
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         });
+      } else if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
+        await callback([], {
+          ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+          outputTokens: accumOutputTokens + outputTokens,
+          toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+          toolStarted: { name: event.item.name, id: event.item.call_id },
+        });
       } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
         finalResponse = event.response;
       } else if (event.type === 'response.failed') {
@@ -2069,8 +2082,8 @@ export class OpenAIBackend implements ICompletionBackend {
       } else if (event.type === 'error') {
         throw new Error(`OpenAI Responses stream error for ${model}: ${event.message}`);
       }
-      // Every other event (response.output_item.added, response.function_call_arguments.delta,
-      // reasoning summary events, etc.) is intentionally ignored: the terminal Response captured
+      // Every other event (response.function_call_arguments.delta, reasoning summary events,
+      // etc.) is intentionally ignored: the terminal Response captured
       // above carries fully-assembled output items, so function_call arguments and reasoning are
       // read from finalResponse below. Do NOT also accumulate tool arguments from the *.delta
       // events here - that would double-append against the terminal item's complete arguments.

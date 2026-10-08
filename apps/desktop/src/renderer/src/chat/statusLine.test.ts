@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatMessage, ChatReplyRound, ChatToolCall, ChatToolStatus } from '@shared/chat';
+import type { ChatMessage, ChatReplyRound, ChatToolCall, ChatToolStatus, ModelPhase } from '@shared/chat';
 import {
   contextPercent,
   contextTokens,
@@ -151,43 +151,67 @@ describe('statusFields with usage', () => {
 });
 
 describe('describeActivity', () => {
+  const RESPONDING: ModelPhase = { kind: 'responding' };
+  const writing = (name: string): ModelPhase => ({ kind: 'writing-tool', name });
+
+  it('names the tool the model is still writing a call to, whatever the tool', () => {
+    expect(describeActivity([], RESPONDING, null)).toBe('Responding...');
+    expect(describeActivity([], writing('file_edit'))).toBe('Editing files...');
+    expect(describeActivity([], writing('bash_execute'))).toBe(
+      describeActivity([call('bash_execute', 'running')], null)
+    );
+    expect(describeActivity([], writing('session_spawn'))).toBe('Starting a session...');
+  });
+
+  it('says thinking, not responding, when a later round goes back to thinking', () => {
+    expect(describeActivity([call('file_read', 'done')], { kind: 'thinking' })).toBe('Thinking...');
+    expect(describeActivity([call('file_read', 'done')], { kind: 'waiting' })).toBe('Thinking...');
+  });
+
+  it('lets an approval or a running tool outrank a call still being written', () => {
+    expect(describeActivity([call('file_read', 'running')], writing('file_edit'))).toBe('Reading files...');
+    expect(describeActivity([call('file_write', 'awaiting-approval')], writing('file_edit'))).toBe(
+      'Waiting for your answer...'
+    );
+  });
+
   it('names code being written instead of calling it responding', () => {
-    expect(describeActivity([], true, { kind: 'artifact', title: 'Dashboard' })).toBe(
+    expect(describeActivity([], RESPONDING, { kind: 'artifact', title: 'Dashboard' })).toBe(
       'Creating an artifact: Dashboard...'
     );
-    expect(describeActivity([], true, { kind: 'code' })).toBe('Writing code...');
+    expect(describeActivity([], RESPONDING, { kind: 'code' })).toBe('Writing code...');
   });
 
   it('still lets a running tool or an approval outrank code being written', () => {
-    expect(describeActivity([call('file_read', 'running')], true, { kind: 'code' })).not.toBe('Writing code...');
-    expect(describeActivity([call('file_write', 'awaiting-approval')], true, { kind: 'code' })).toBe(
+    expect(describeActivity([call('file_read', 'running')], RESPONDING, { kind: 'code' })).not.toBe('Writing code...');
+    expect(describeActivity([call('file_write', 'awaiting-approval')], RESPONDING, { kind: 'code' })).toBe(
       'Waiting for your answer...'
     );
   });
 
   it('puts a blocked approval ahead of everything else', () => {
-    expect(describeActivity([call('bash_execute', 'awaiting-approval'), call('file_read', 'running')], false)).toBe(
+    expect(describeActivity([call('bash_execute', 'awaiting-approval'), call('file_read', 'running')], null)).toBe(
       'Waiting for your answer...'
     );
   });
 
   it('names the one tool being waited on', () => {
-    expect(describeActivity([call('file_read', 'running')], false)).toBe('Reading files...');
+    expect(describeActivity([call('file_read', 'running')], null)).toBe('Reading files...');
   });
 
   it('prefers the progress line a running tool reports to the generic phrase', () => {
-    expect(describeActivity([call('generate_image', 'running', 'rendering, 40%')], false)).toBe('rendering, 40%');
+    expect(describeActivity([call('generate_image', 'running', 'rendering, 40%')], null)).toBe('rendering, 40%');
   });
 
   it('does not try to name several at once', () => {
-    expect(describeActivity([call('file_read', 'running'), call('grep_search', 'running')], false)).toBe(
+    expect(describeActivity([call('file_read', 'running'), call('grep_search', 'running')], null)).toBe(
       'Running tools...'
     );
   });
 
   it('distinguishes a reply being written from one not started', () => {
-    expect(describeActivity([call('file_read', 'done')], true)).toBe('Responding...');
-    expect(describeActivity([], false)).toBe('Thinking...');
+    expect(describeActivity([call('file_read', 'done')], RESPONDING)).toBe('Responding...');
+    expect(describeActivity([], null)).toBe('Thinking...');
   });
 });
 

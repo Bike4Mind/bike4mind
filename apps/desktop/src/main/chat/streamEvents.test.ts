@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { addUsage, foldUsage, parseStreamEvent } from './streamEvents';
 
+describe('toolStarted', () => {
+  it('survives parsing on a content frame', () => {
+    expect(parseStreamEvent({ type: 'content', text: '', toolStarted: { name: 'file_write', id: 'c1' } })).toEqual({
+      type: 'content',
+      text: '',
+      toolStarted: { name: 'file_write', id: 'c1' },
+    });
+  });
+});
+
 describe('usage parsing', () => {
   it('keeps the cache counts and the credits the server sends', () => {
     const event = parseStreamEvent({

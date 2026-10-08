@@ -10,6 +10,7 @@ import type {
   ChatSessionStatus,
   ChatSessionSummary,
   CreateCodeSessionRequest,
+  ModelPhase,
   ReasoningEffortSetting,
   UpdateProjectRequest,
 } from '@shared/chat';
@@ -250,6 +251,8 @@ export interface ConversationController {
   streaming: boolean;
   /** Elapsed clock and server-reported cost of the turn in flight; null when none is. */
   turn: TurnProgress | null;
+  /** What the model is doing in the round in flight; null between rounds and outside a turn. */
+  phase: ModelPhase | null;
   /** A first turn waiting on its worktree, before `turn` exists. Null otherwise. */
   preparing: WorkspaceProgress | null;
   sendError: string | null;
@@ -318,6 +321,7 @@ export function useConversation(
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [turn, setTurn] = useState<TurnProgress | null>(null);
+  const [phase, setPhase] = useState<ModelPhase | null>(null);
   const [preparing, setPreparing] = useState<WorkspaceProgress | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -356,6 +360,7 @@ export function useConversation(
     setQueued([]);
     setCommandProgress(null);
     setPreparing(null);
+    setPhase(null);
     if (!sessionId) {
       setSession(null);
       setMessages([]);
@@ -446,6 +451,8 @@ export function useConversation(
         event.type === 'tool-progress';
       if (live) {
         if (event.sessionId !== activeSessionId.current) return;
+        // The call has arrived, so the tool's own status takes over; the next round sends a phase anew.
+        if (event.type === 'tool-start') setPhase(null);
         queued.push(event);
         frame ??= requestAnimationFrame(flushLive);
         // rAF is paused in a hidden or occluded window; without this the reply stalls until the
@@ -464,7 +471,13 @@ export function useConversation(
       }
       if (event.sessionId !== activeSessionId.current) return;
 
+      if (event.type === 'phase') {
+        setPhase(event.phase);
+        return;
+      }
+
       if (event.type === 'start') {
+        setPhase(null);
         setPreparing(null);
         setStreaming(true);
         setTurn({ startedAt: Date.now(), tokens: null });
@@ -514,6 +527,7 @@ export function useConversation(
 
       setStreaming(false);
       setTurn(null);
+      setPhase(null);
       setMessages(current => {
         // Absent when this window opened in the gap between main dropping its live copy and
         // storing the reply; the terminal event is then the only copy it will get.
@@ -858,6 +872,7 @@ export function useConversation(
     messages,
     streaming,
     turn,
+    phase,
     preparing,
     sendError,
     notice,

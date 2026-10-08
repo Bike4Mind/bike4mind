@@ -53,6 +53,7 @@ import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
+import { createPhaseTracker } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -1750,6 +1751,10 @@ export class ChatService {
         await this.clearStaleResults(session, toolCalls, produced, wire, replyId);
 
         const probe = this.deps.turnTiming ? createRoundProbe(roundIndex === 0 ? turnStartedAt : undefined) : undefined;
+        const setPhase = createPhaseTracker(phase =>
+          this.emit({ type: 'phase', sessionId, messageId: replyId, phase })
+        );
+        setPhase({ kind: 'waiting' });
         const failure = await streamRound(
           api.getAxiosInstance(),
           serverConfig.endpoint,
@@ -1772,10 +1777,15 @@ export class ChatService {
               const split = splitThinking.push(event.text);
               // An empty split is either a bare thinking marker or text the filter is holding
               // back as a possible partial marker; only the first is a thinking frame.
-              probe?.frame(
-                split.text ? 'text' : split.reasoning ? 'reasoning' : THINK_MARKER.test(event.text) ? 'marker' : 'text'
-              );
+              const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
+              probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
+              if (split.text) setPhase({ kind: 'responding' });
+              else if (split.reasoning || marker) setPhase({ kind: 'thinking' });
               append(split);
+            }
+            if (event.toolStarted) {
+              probe?.frame('toolStart');
+              setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
             }
             if (event.type === 'tool_use') {
               probe?.frame('toolUse');

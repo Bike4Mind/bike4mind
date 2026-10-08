@@ -21,7 +21,7 @@ export function startRoundTimer(now: () => number = Date.now) {
  * What one stream frame carried. `marker` is a frame with text in it but nothing to show: the
  * bare `<think>` / `</think>` around a thinking block whose text the provider omitted.
  */
-export type RoundFrameKind = 'meta' | 'marker' | 'reasoning' | 'text' | 'toolUse';
+export type RoundFrameKind = 'meta' | 'marker' | 'reasoning' | 'text' | 'toolStart' | 'toolUse';
 
 export interface RoundPhases {
   /** Desktop work between the turn starting and this request going out; first round only. */
@@ -32,6 +32,7 @@ export interface RoundPhases {
   firstMarkerMs?: number;
   firstReasoningMs?: number;
   firstTextMs?: number;
+  firstToolStartMs?: number;
   firstToolUseMs?: number;
   endMs: number;
   /** The longest silence the status line saw, counted from the request going out. */
@@ -40,13 +41,15 @@ export interface RoundPhases {
   frames: number;
 }
 
-type FirstFrameKey = 'firstMetaMs' | 'firstMarkerMs' | 'firstReasoningMs' | 'firstTextMs' | 'firstToolUseMs';
+type FirstFrameKey =
+  'firstMetaMs' | 'firstMarkerMs' | 'firstReasoningMs' | 'firstTextMs' | 'firstToolStartMs' | 'firstToolUseMs';
 
 const FIRST_KEY: Record<RoundFrameKind, FirstFrameKey> = {
   meta: 'firstMetaMs',
   marker: 'firstMarkerMs',
   reasoning: 'firstReasoningMs',
   text: 'firstTextMs',
+  toolStart: 'firstToolStartMs',
   toolUse: 'firstToolUseMs',
 };
 

@@ -14,6 +14,7 @@ import {
   type CacheUsageStats,
   type ResponseFormat,
   type StreamChannel,
+  type ToolStarted,
 } from '@bike4mind/common';
 import type { AnthropicEffort } from './thinkingParams';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
@@ -327,6 +328,8 @@ export type CompletionInfo = {
    * instead of scanning content for markers that are themselves model text.
    */
   channel?: StreamChannel;
+  /** A tool call the provider has just opened; see CompletionInfo.toolStarted in @bike4mind/common. */
+  toolStarted?: ToolStarted;
   inputTokens?: number;
   outputTokens?: number;
   creditsUsed?: number;

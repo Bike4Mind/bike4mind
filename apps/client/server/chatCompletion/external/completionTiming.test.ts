@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { classifyChunk, createCompletionTiming } from './completionTiming';
 
 describe('classifyChunk', () => {
+  it('tells a tool call opening from the finished call', () => {
+    expect(classifyChunk([], { toolStarted: { name: 'file_write' } })).toBe('toolStart');
+    expect(classifyChunk([], { toolsUsed: [{ name: 'file_write' }] })).toBe('toolUse');
+  });
+
   it('tells an empty thinking marker from readable reasoning', () => {
     expect(classifyChunk(['<think>'], { channel: 'reasoning' })).toBe('reasoningMarker');
     expect(classifyChunk(['', '</think>'], { channel: 'reasoning' })).toBe('reasoningMarker');

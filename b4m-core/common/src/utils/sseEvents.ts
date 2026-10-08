@@ -46,6 +46,14 @@ export interface SSEContentEvent {
    * chunks and whenever the provider reports nothing.
    */
   stopReason?: string;
+  /** See CompletionInfo.toolStarted. First-party only: buildPublicSSEEvent does not forward it. */
+  toolStarted?: ToolStarted;
+}
+
+/** A tool call the model has begun writing; its arguments are still streaming. */
+export interface ToolStarted {
+  name: string;
+  id?: string;
 }
 
 export interface SSEErrorEvent {
@@ -109,6 +117,13 @@ export interface CompletionInfo {
    * the field and keep receiving it. See {@link StreamChannel}.
    */
   channel?: StreamChannel;
+  /**
+   * Set on the frame an adapter emits the moment the provider opens a tool call, long before
+   * the call is complete: a large tool input (a whole file) takes the model tens of seconds to
+   * write, and the finished call in `toolsUsed` arrives only at the end. Lets a client name
+   * what is coming instead of showing a silence. Carries no text.
+   */
+  toolStarted?: ToolStarted;
 }
 
 /**
@@ -169,6 +184,10 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
 
   if (info?.stopReason) {
     event.stopReason = info.stopReason;
+  }
+
+  if (info?.toolStarted) {
+    event.toolStarted = { name: info.toolStarted.name, id: info.toolStarted.id };
   }
 
   return event;

@@ -192,6 +192,8 @@ const CompletionContentEventSchema = z.object({
   stopReason: z.string().optional(),
   // Complete assistant message incl. reasoning blocks (Anthropic extended thinking with tools).
   thinking: z.array(z.any()).optional(),
+  // A tool call the model has begun writing; see CompletionInfo.toolStarted.
+  toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
 });
 
 /**

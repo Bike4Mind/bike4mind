@@ -148,6 +148,22 @@ describe('buildSSEEvent', () => {
   });
 });
 
+describe('toolStarted', () => {
+  const info = { toolStarted: { name: 'file_write', id: 'call_1' } };
+
+  it('reaches a first-party stream as an empty content frame', () => {
+    expect(buildSSEEvent([], info)).toEqual({
+      type: 'content',
+      text: '',
+      toolStarted: { name: 'file_write', id: 'call_1' },
+    });
+  });
+
+  it('stays off the public stream, which names no tools', () => {
+    expect(buildPublicSSEEvent([], info)).not.toHaveProperty('toolStarted');
+  });
+});
+
 describe('buildMetaEvent', () => {
   it('builds a meta event carrying the request id', () => {
     expect(buildMetaEvent('req-123')).toEqual({ type: 'meta', requestId: 'req-123' });

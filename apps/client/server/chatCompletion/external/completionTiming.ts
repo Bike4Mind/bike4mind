@@ -13,12 +13,13 @@ export const COMPLETION_TIMING_ENABLED = process.env.B4M_COMPLETION_TIMING === '
 type Phase = 'authed' | 'rateLimited' | 'completionStarted';
 
 /** What one chunk carried, as the desktop will see it once it is an SSE frame. */
-export type ChunkKind = 'reasoningMarker' | 'reasoning' | 'text' | 'toolUse' | 'usageOnly';
+export type ChunkKind = 'reasoningMarker' | 'reasoning' | 'text' | 'toolStart' | 'toolUse' | 'usageOnly';
 
 const FIRST_KEY: Record<ChunkKind, string> = {
   reasoningMarker: 'first_reasoningMarker',
   reasoning: 'first_reasoning',
   text: 'first_text',
+  toolStart: 'first_toolStart',
   toolUse: 'first_toolUse',
   usageOnly: 'first_usageOnly',
 };
@@ -32,6 +33,7 @@ export interface CompletionTimingSummary {
 
 export function classifyChunk(text: (string | null | undefined)[], info?: CompletionInfo): ChunkKind {
   if (info?.toolsUsed && info.toolsUsed.length > 0) return 'toolUse';
+  if (info?.toolStarted) return 'toolStart';
   const content = text[1] || text[0] || '';
   if (info?.channel === 'reasoning') {
     // The Anthropic adapter opens and closes every thinking block with a bare marker, and with

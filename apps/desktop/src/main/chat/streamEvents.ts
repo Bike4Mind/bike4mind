@@ -35,6 +35,10 @@ const toolUseSchema = z.object({
   id: z.string().optional(),
 });
 
+// A tool call the model has begun writing, ahead of the finished call. See toolStarted in
+// CompletionInfo (@bike4mind/common).
+const toolStartedSchema = z.object({ name: z.string(), id: z.string().optional() });
+
 export const streamEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('content'),
@@ -42,6 +46,7 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     usage: usageSchema.optional(),
     credits: creditsSchema.optional(),
     stopReason: z.string().optional(),
+    toolStarted: toolStartedSchema.optional(),
   }),
   z.object({
     type: z.literal('tool_use'),
@@ -53,6 +58,7 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     usage: usageSchema.optional(),
     credits: creditsSchema.optional(),
     stopReason: z.string().optional(),
+    toolStarted: toolStartedSchema.optional(),
   }),
   z.object({
     type: z.literal('error'),
