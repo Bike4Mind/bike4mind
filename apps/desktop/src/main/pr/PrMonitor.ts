@@ -16,6 +16,8 @@ import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
 import type { PrGithub } from './github';
 import { shouldAutoArchive } from './autoArchive';
+import { desktopMergeReadiness } from './autoMerge';
+import { mergeMethodFor } from './github';
 import { POLL_MS, pollDelay } from './pollSchedule';
 
 /** Branches a PR lookup is never made for: a PR "for main" is someone else's fork, not this session's work. */
@@ -84,6 +86,14 @@ interface Live {
   inflight: Promise<void> | null;
   failures: number;
   timer?: unknown;
+  /** What the bar says about auto-merge: why it is waiting, or why it stopped. */
+  mergeNote?: string;
+  /** An option change in progress; a read landing meanwhile leaves the automations alone. */
+  changing?: boolean;
+  /** A merge this app started and has not heard back on. */
+  merging?: boolean;
+  /** Read sooner than the cadence says, once: after a push or a merge something is about to change. */
+  nudge?: number;
 }
 
 /**
@@ -195,7 +205,7 @@ export class PrMonitor {
       void this.bind(sessionId, ref, 'shell').catch(err => this.deps.logger.warn(`PR: bind failed: ${err}`));
       return;
     }
-    if (PUSH_COMMAND.test(command) && this.live.has(sessionId)) this.arm(sessionId, AFTER_PUSH_MS);
+    if (PUSH_COMMAND.test(command) && this.live.has(sessionId)) this.nudge(sessionId, AFTER_PUSH_MS);
   }
 
   /** The user pasted a URL. Always replaces what was there, unless auto-merge is armed on it. */
@@ -254,11 +264,137 @@ export class PrMonitor {
   async setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult> {
     const binding = await this.deps.store.get(sessionId);
     if (!binding || binding.dismissed) return { ok: false, error: 'This conversation has no pull request.' };
-    if (option !== 'autoArchive') return { ok: false, error: 'Not available yet.' };
-    await this.deps.store.set(sessionId, { ...binding, autoArchive: enabled });
+    let result: PrActionResult = { ok: true };
+    if (option === 'autoArchive') {
+      await this.deps.store.set(sessionId, { ...binding, autoArchive: enabled });
+    } else if (option === 'autoMerge') {
+      result = await this.changeAutoMerge(sessionId, enabled);
+    } else {
+      result = { ok: false, error: 'Not available yet.' };
+    }
     await this.schedule(sessionId);
     await this.publish(sessionId);
+    return result;
+  }
+
+  /**
+   * Arm or disarm auto-merge for this PR. Merging is irreversible, so the box only ever moves
+   * after the change has actually happened: arming waits for GitHub to accept `--auto`, and
+   * disarming waits for `--disable-auto` to succeed (or for GitHub to show nothing armed).
+   */
+  private async changeAutoMerge(sessionId: string, enabled: boolean): Promise<PrActionResult> {
+    const live = this.entry(sessionId);
+    if (live.changing) return { ok: false, error: 'Still applying the last change.' };
+    live.changing = true;
+    try {
+      // A read already under way answers for the state before this change; let it land first.
+      await live.inflight;
+      return enabled ? await this.armAutoMerge(sessionId) : await this.disarmAutoMerge(sessionId);
+    } finally {
+      live.changing = false;
+    }
+  }
+
+  private async armAutoMerge(sessionId: string): Promise<PrActionResult> {
+    await this.read(sessionId);
+    const live = this.entry(sessionId);
+    const snapshot = live.snapshot;
+    const binding = await this.deps.store.get(sessionId);
+    if (!binding || !snapshot) return { ok: false, error: live.error ?? 'Could not read the pull request.' };
+    if (snapshot.state !== 'OPEN') return { ok: false, error: 'The pull request is not open.' };
+    const method = mergeMethodFor(snapshot);
+    if (!method) return { ok: false, error: 'This repository allows no merge method.' };
+
+    if (snapshot.repoSettings.autoMergeAllowed) {
+      try {
+        await this.withGh(() => this.deps.github.enableAutoMerge(binding, method));
+      } catch (err) {
+        return { ok: false, error: `GitHub refused auto-merge: ${this.noteGhFailure(err)}` };
+      }
+      await this.deps.store.set(sessionId, { ...binding, autoMerge: true, autoMergeMode: 'github' });
+      delete live.mergeNote;
+      // Not `changing` any more: this read should reconcile, which covers GitHub having merged
+      // straight away because the PR was already clean.
+      live.changing = false;
+      await this.read(sessionId);
+      return { ok: true };
+    }
+
+    await this.deps.store.set(sessionId, { ...binding, autoMerge: true, autoMergeMode: 'desktop' });
+    live.changing = false;
+    await this.reconcileAutoMerge(sessionId, snapshot);
     return { ok: true };
+  }
+
+  private async disarmAutoMerge(sessionId: string): Promise<PrActionResult> {
+    const live = this.entry(sessionId);
+    const binding = await this.deps.store.get(sessionId);
+    if (!binding?.autoMerge) return { ok: true };
+    if (live.merging) return { ok: false, error: 'A merge is already under way and cannot be called back.' };
+    if (binding.autoMergeMode === 'github') {
+      try {
+        await this.withGh(() => this.deps.github.disableAutoMerge(binding));
+      } catch (err) {
+        // `--disable-auto` fails when nothing is armed any more; only that case may uncheck the box.
+        await this.read(sessionId);
+        if (live.snapshot?.autoMergeArmed !== false) {
+          return { ok: false, error: `Could not turn off auto-merge: ${this.noteGhFailure(err)}` };
+        }
+      }
+    }
+    await this.deps.store.set(sessionId, { ...binding, autoMerge: false });
+    delete live.mergeNote;
+    return { ok: true };
+  }
+
+  /**
+   * After a read: keep the stored auto-merge flag honest, and in desktop mode merge once the PR
+   * is ready. Skipped while the user is mid-change, whose own path does this afterwards.
+   */
+  private async reconcileAutoMerge(sessionId: string, snapshot: PrSnapshot): Promise<void> {
+    const live = this.entry(sessionId);
+    if (live.changing || live.merging) return;
+    const binding = await this.deps.store.get(sessionId);
+    if (!binding?.autoMerge) return;
+
+    if (snapshot.state !== 'OPEN') {
+      await this.deps.store.set(sessionId, { ...binding, autoMerge: false });
+      delete live.mergeNote;
+      return;
+    }
+
+    if (binding.autoMergeMode === 'github') {
+      if (snapshot.autoMergeArmed) {
+        delete live.mergeNote;
+        return;
+      }
+      // GitHub disarms it on its own - a push from someone without write access, a base change.
+      await this.deps.store.set(sessionId, { ...binding, autoMerge: false });
+      live.mergeNote = 'GitHub turned auto-merge off for this PR.';
+      return;
+    }
+
+    const readiness = desktopMergeReadiness(snapshot);
+    if (!readiness.ready) {
+      live.mergeNote = readiness.reason;
+      return;
+    }
+    live.merging = true;
+    live.mergeNote = 'Merging...';
+    void this.publish(sessionId);
+    try {
+      await this.withGh(() => this.deps.github.merge(binding, readiness.method, snapshot.headSha));
+      this.deps.logger.debug(`PR: merged #${snapshot.number} (${readiness.method}) for ${sessionId}`);
+      delete live.mergeNote;
+    } catch (err) {
+      // Disarmed rather than retried: a refused merge is GitHub saying something changed, and
+      // trying again on every poll would be this app pushing at a door the user did not open.
+      await this.deps.store.set(sessionId, { ...binding, autoMerge: false });
+      live.mergeNote = `Auto-merge stopped: ${this.noteGhFailure(err)}`;
+    } finally {
+      live.merging = false;
+    }
+    live.nudge = 2_000;
   }
 
   async refresh(sessionId: string): Promise<void> {
@@ -292,6 +428,13 @@ export class PrMonitor {
     }, wait);
   }
 
+  /** Read again within `ms`, unless reading has stopped. Applied by the next schedule, which a running read will make. */
+  protected nudge(sessionId: string, ms: number): void {
+    const live = this.entry(sessionId);
+    live.nudge = Math.min(live.nudge ?? ms, ms);
+    if (!live.inflight) void this.schedule(sessionId);
+  }
+
   protected disarm(sessionId: string): void {
     const live = this.live.get(sessionId);
     if (live?.timer === undefined) return;
@@ -318,8 +461,10 @@ export class PrMonitor {
         !snapshot || snapshot.mergeable === 'UNKNOWN' || snapshot.checks.some(check => check.bucket === 'pending'),
       failures: live?.failures ?? 0,
     });
+    const nudge = live?.nudge;
+    if (live) delete live.nudge;
     if (delay === null) this.disarm(sessionId);
-    else this.arm(sessionId, delay);
+    else this.arm(sessionId, nudge === undefined ? delay : Math.min(delay, nudge));
   }
 
   /**
@@ -418,6 +563,7 @@ export class PrMonitor {
       this.deps.logger.debug(`PR: #${snapshot.number} is ${snapshot.state.toLowerCase()}; archiving ${sessionId}`);
       await this.deps.chat.archive(sessionId).catch(err => this.deps.logger.warn(`PR: archive failed: ${err}`));
     }
+    await this.reconcileAutoMerge(sessionId, snapshot);
   }
 
   /** Records a missing or signed-out gh as app-wide state, and returns the line to show. */
@@ -443,7 +589,10 @@ export class PrMonitor {
       gh: this.gh,
       ...(live?.error ? { error: live.error } : {}),
       refreshing: !!live?.inflight,
-      autoMerge: { mode: null },
+      autoMerge: {
+        mode: binding?.autoMerge ? (binding.autoMergeMode ?? 'github') : null,
+        ...(live?.mergeNote ? { note: live.mergeNote } : {}),
+      },
       autoFix: { status: 'off', attempts: binding?.autoFixAttempts ?? 0, max: 0 },
     };
   }

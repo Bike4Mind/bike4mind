@@ -35,6 +35,11 @@ export interface PrBinding extends PrRef {
   dismissed?: boolean;
   autoFix?: boolean;
   autoMerge?: boolean;
+  /**
+   * Who merges: GitHub's own auto-merge, armed with `gh pr merge --auto`, or this app, for a repo
+   * that does not allow it. See desktopMergeReadiness for the rules the second one follows.
+   */
+  autoMergeMode?: 'github' | 'desktop';
   autoArchive?: boolean;
   /** Auto-fix turns started for this PR, persisted so a relaunch does not refill the budget. */
   autoFixAttempts?: number;

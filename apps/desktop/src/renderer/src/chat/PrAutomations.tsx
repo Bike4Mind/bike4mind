@@ -4,6 +4,15 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { PrActionResult, PrBarState, PrOption } from '@shared/pullRequest';
 
+/** One line under the auto-merge box saying who merges and what it is waiting for. */
+export function autoMergeDescription(state: PrBarState): string {
+  const who =
+    state.autoMerge.mode === 'desktop'
+      ? 'This app merges once it is approved, every check has passed and there are no conflicts, while the app is running.'
+      : 'Armed on GitHub, which merges once branch protection is satisfied.';
+  return state.autoMerge.note ? `${who} ${state.autoMerge.note}` : who;
+}
+
 /**
  * The automation checkboxes under the popover's divider. Each one is consent for this PR only,
  * and each change is confirmed by main before the box moves: the box shows what main holds.
@@ -28,8 +37,24 @@ export function PrAutomations({
       .finally(() => setBusy(null));
   };
 
+  const snapshot = state.snapshot;
+  const noMethod = !!snapshot && snapshot.repoSettings.allowedMethods.length === 0;
+
   return (
     <Stack spacing={0.75} data-testid="pr-ci-automations">
+      <Checkbox
+        size="sm"
+        label="Auto-merge when ready"
+        checked={binding.autoMerge === true}
+        disabled={busy !== null || noMethod}
+        onChange={event => toggle('autoMerge', event.target.checked)}
+        slotProps={{ input: { 'data-testid': 'pr-ci-automerge-checkbox' } }}
+      />
+      {binding.autoMerge && (
+        <Typography level="body-xs" textColor="text.tertiary" sx={{ pl: 3.5 }} data-testid="pr-ci-automerge-note">
+          {autoMergeDescription(state)}
+        </Typography>
+      )}
       <Checkbox
         size="sm"
         label="Auto-archive on merge or close"

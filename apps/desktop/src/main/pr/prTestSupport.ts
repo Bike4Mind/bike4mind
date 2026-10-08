@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PrBarState, PrCheck, PrRef, PrSnapshot } from '@shared/pullRequest';
+import type { PrBarState, PrCheck, PrMergeMethod, PrRef, PrSnapshot } from '@shared/pullRequest';
 import type { PrGithub } from './github';
 import { PrBindingStore } from './PrBindingStore';
 
@@ -56,18 +56,18 @@ export function fakeGithub(initial: PrSnapshot = snapshot()) {
       calls.push(`branch:${branch}`);
       return null as string | null;
     },
-    enableAutoMerge: async () => {
-      calls.push('enable-auto');
+    enableAutoMerge: async (_ref: PrRef, method: PrMergeMethod) => {
+      calls.push(`enable-auto:${method}`);
     },
-    disableAutoMerge: async () => {
+    disableAutoMerge: async (_ref: PrRef) => {
       calls.push('disable-auto');
     },
-    merge: async (_ref: PrRef, method: string, sha: string) => {
+    merge: async (_ref: PrRef, method: PrMergeMethod, sha: string) => {
       calls.push(`merge:${method}:${sha}`);
     },
   };
   return {
-    github: github as unknown as PrGithub & typeof github,
+    github: github as unknown as PrGithub,
     calls,
     answer(value: PrSnapshot | Error) {
       next = value;

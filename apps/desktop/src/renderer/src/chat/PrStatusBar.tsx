@@ -9,7 +9,7 @@ import type { PrActionResult, PrBarState, PrOption } from '@shared/pullRequest';
 import { CloseIcon, ExternalLinkIcon, PullRequestIcon, ReloadIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { ghFixLine, lifecycleLabel, middleTruncate } from './prBarModel';
-import { PrAutomations } from './PrAutomations';
+import { PrAutomations, autoMergeDescription } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
 
 const BRANCH_MAX_CHARS = 44;
@@ -152,6 +152,14 @@ export function PrStatusBar({
           <Chip size="sm" variant="soft" color="danger" data-testid="pr-bar-conflicts">
             Conflicts
           </Chip>
+        )}
+
+        {binding.autoMerge && snapshot?.state === 'OPEN' && (
+          <Tooltip title={autoMergeDescription(state)} size="sm" variant="soft" placement="top">
+            <Chip size="sm" variant="soft" color="primary" data-testid="pr-bar-automerge-armed">
+              Auto-merge
+            </Chip>
+          </Tooltip>
         )}
 
         {snapshot && !fix && snapshot.state === 'OPEN' && (

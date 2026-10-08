@@ -159,7 +159,8 @@ describe('PrMonitor polling', () => {
   it('reads soon after the agent pushes to a bound PR', async () => {
     const { store, clock, monitor } = setup(snapshot({ checks: [check('Build', 'pass')] }));
     await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });
-    await monitor.refresh(SESSION);
+    await monitor.watch(1, SESSION);
+    await settle();
     monitor.observeToolEnd(SESSION, {
       id: 'c',
       name: 'bash_execute',
@@ -167,6 +168,7 @@ describe('PrMonitor polling', () => {
       status: 'done',
       preview: 'Everything up-to-date',
     });
-    expect(clock.delays()).toContain(15_000);
+    await settle();
+    expect(clock.delays()).toEqual([15_000]);
   });
 });
