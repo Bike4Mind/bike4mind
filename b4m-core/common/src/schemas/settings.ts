@@ -858,6 +858,8 @@ interface BaseSetting {
    * Only for a setting whose consumer treats unset differently from its default's own number.
    */
   clearDeletesRow?: boolean;
+  /** What a `clearDeletesRow` setting resolves to while unset, shown by the admin UI in place of a value. */
+  unsetLabel?: string;
 }
 
 /**
@@ -3862,6 +3864,7 @@ export const settingsMap = {
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
     // Unset resolves per embedding space; a stored value, 75 included, is honored in every space.
     clearDeletesRow: true,
+    unsetLabel: 'per embedding space',
   }),
   forcedRetrievalSpreadFloorPct: makeNumberSetting({
     key: 'forcedRetrievalSpreadFloorPct',

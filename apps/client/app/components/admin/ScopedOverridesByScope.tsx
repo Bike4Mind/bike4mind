@@ -27,7 +27,8 @@ function describeOverride(
   platformValue: string | undefined
 ): string {
   if (storedValue === undefined) {
-    const platform = platformValue === undefined ? 'unset, per embedding space' : displayValue(setting, platformValue);
+    const unset = setting.unsetLabel ? `unset, ${setting.unsetLabel}` : 'unset';
+    const platform = platformValue === undefined ? unset : displayValue(setting, platformValue);
     return isSettableHere ? `no override at this rung (platform: ${platform})` : 'not settable at this rung';
   }
   return isSettableHere

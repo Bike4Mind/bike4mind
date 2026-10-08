@@ -116,7 +116,9 @@ const AdminSettingInputField = ({
   // so Save stays disabled. Without this the field reads as dirty the moment it is focused
   // and an empty write becomes one click away (saveValue guards the write itself as well).
   const isUntouchedClearedSecret = setting.isSensitive === true && value === '' && !secretEdited;
-  const isDirty = value !== defaultValue && !isUntouchedClearedSecret;
+  // clearDeletesRow: an emptied field is unset, so typing into an unset field and deleting it again is no edit.
+  const comparable = setting.clearDeletesRow && value === '' ? null : value;
+  const isDirty = comparable !== defaultValue && !isUntouchedClearedSecret;
   const showsStoredSecretMask = setting.isSensitive === true && isMaskedSensitiveSettingValue(value);
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
 
@@ -216,7 +218,7 @@ const AdminSettingInputField = ({
                   type="number"
                   // clearDeletesRow with no row: the blank field is the "unset" state, not a missing
                   // value. Name what it resolves to so an admin can tell it from a stored default.
-                  placeholder={setting.clearDeletesRow ? 'per embedding space' : undefined}
+                  placeholder={setting.clearDeletesRow ? setting.unsetLabel : undefined}
                   // A cleared field is kept as '' rather than coerced: Number('') is 0, which
                   // the server would store as a real zero instead of letting makeNumberSetting's
                   // empty-string preprocess fall back to the setting's own default.
