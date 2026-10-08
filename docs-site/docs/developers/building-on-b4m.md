@@ -206,8 +206,7 @@ The ID token must still be valid when you exchange it. Once it expires, re-autho
 | 401 `invalid_client`          | unknown `client_id` or wrong secret                                                                                    |
 | 403 `access_denied`           | the client has no trust config, the user has not consented to these scopes, or the user has not accepted the B4M terms |
 | 403 `invalid_scope`           | a requested scope is not allowed for this client                                                                       |
-| 401 `invalid_grant`           | the ID token is invalid or expired                                                                                     |
-| 401                           | the token's subject is not a B4M user                                                                                  |
+| 401 `invalid_grant`           | the ID token is invalid or expired, or its subject is not a B4M user                                                   |
 | 429 `temporarily_unavailable` | rate limited (300 per minute per client, and per IP); honour `Retry-After`                                             |
 | 400 `invalid_request`         | the user has reached their cap on API keys                                                                             |
 
@@ -244,7 +243,7 @@ Revoking your app's access in B4M stops new exchanges, but a key already minted 
 ```
 
 - `code: "insufficient_credits"`: the user is out of credits. Prompt them to top up their B4M balance.
-- `code: "spend_cap_exceeded"`: the user is solvent but a spending cap was reached.
+- `code: "spend_cap_exceeded"`: the user is solvent, but the key hit an admin-set spending ceiling. Topping up does not help; the cap has to be raised.
 - `code` absent: an unclassified failure (including a rejected key). Show `message` and log `requestId`.
 
 Branch on `code`, never on `message`, which is prose and can change. The HTTP status tells you nothing here, and B4M never returns 402. (The JSON, non-streaming B4M APIs report the same condition as HTTP 422 with `errorCode: "insufficient_credits"`.)
@@ -405,6 +404,7 @@ async function getUserKey(userId: string, idToken: string, { force = false } = {
 
 ```ts
 class OutOfCreditsError extends Error {}
+class SpendCapError extends Error {}
 
 async function checkBalance(key: string): Promise<Response> {
   return fetch(`${B4M}/api/v1/credits`, { headers: { Authorization: `Bearer ${key}` } });
@@ -448,7 +448,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
       const event = JSON.parse(data);
       if (event.type === 'error') {
         if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
-        if (event.code === 'spend_cap_exceeded') throw new OutOfCreditsError(event.message);
+        if (event.code === 'spend_cap_exceeded') throw new SpendCapError(event.message);
         throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
       }
       if (event.type === 'content') text += event.text;
@@ -458,7 +458,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
 }
 ```
 
-Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance.
+Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `SpendCapError`, tell them a B4M spending cap was reached (topping up will not help).
 
 ## Further reading
 

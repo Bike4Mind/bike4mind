@@ -5,7 +5,7 @@
  * Run once per product to get a client_id + client_secret.
  *
  * Usage (from repo root):
- *   MONGODB_URI=<uri> CLIENT_NAME=VibesWire REDIRECT_URIS="https://..." \
+ *   MONGODB_URI=<uri> CLIENT_NAME="My App" REDIRECT_URIS="https://..." \
  *     npx tsx packages/scripts/src/seed-oauth-client.ts
  *
  * To register a Pattern-A *federated* client (one allowed to mint per-user
@@ -158,7 +158,7 @@ async function main() {
   if (!mongoUri) throw new Error('MONGODB_URI env var required');
 
   const clientName = process.env.CLIENT_NAME;
-  if (!clientName) throw new Error('CLIENT_NAME env var required (e.g. "VibesWire")');
+  if (!clientName) throw new Error('CLIENT_NAME env var required (e.g. "My App")');
 
   const redirectUrisRaw = process.env.REDIRECT_URIS;
   if (!redirectUrisRaw) throw new Error('REDIRECT_URIS env var required (comma-separated)');
