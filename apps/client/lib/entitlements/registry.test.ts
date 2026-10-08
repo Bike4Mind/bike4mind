@@ -11,6 +11,7 @@ import {
   resolveEntitlements,
   signupCreditsForEmail,
   signupCreditsForKeys,
+  SIGNUP_CREDITS,
   KNOWN_ENTITLEMENT_KEYS,
   unknownEntitlementKeys,
   BYPASS_EXEMPT_ENTITLEMENTS,
@@ -133,6 +134,22 @@ describe('implied-entitlement invariants', () => {
       for (const key of row.alsoGrant) {
         expect(known.has(key), `'${key}' is not a known key`).toBe(true);
         expect(key).not.toBe(row.ifHeld);
+      }
+    }
+  });
+
+  // `signupCreditsForKeys` zeroes a key another held key implies, so an implying
+  // key must be worth at least as much as anything it implies - otherwise a
+  // bundle would under-pay versus holding the implied key directly.
+  it('every implying key pays at least as much signup credits as the keys it implies', () => {
+    for (const row of __registryRows.impliedRows) {
+      const sourceCredits = SIGNUP_CREDITS.get(normalizeTag(row.ifHeld)) ?? 0;
+      for (const key of row.alsoGrant) {
+        const impliedCredits = SIGNUP_CREDITS.get(normalizeTag(key)) ?? 0;
+        expect(
+          sourceCredits,
+          `'${row.ifHeld}' (${sourceCredits}) must pay >= its implied '${key}' (${impliedCredits})`
+        ).toBeGreaterThanOrEqual(impliedCredits);
       }
     }
   });
