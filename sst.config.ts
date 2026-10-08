@@ -1,5 +1,7 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import { resolveDefaultLogging } from '@bike4mind/infra';
+
 export default $config({
   app(input) {
     // `production` and `shared-dev` are the permanent stages: state is retained and
@@ -67,7 +69,6 @@ export default $config({
     //    `Could not resolve "@huggingface/transformers"`.
     // (Registered before any Function is created so the transform applies to all.)
     const ALWAYS_EXTERNAL = ['isolated-vm', '@huggingface/transformers', 'onnxruntime-node'];
-    const DEFAULT_LOG_RETENTION: '1 month' | '1 week' = $app.stage === 'production' ? '1 month' : '1 week';
     $transform(sst.aws.Function, args => {
       args.nodejs = $output(args.nodejs).apply(nodejs => {
         const esbuild = { ...(nodejs?.esbuild ?? {}) };
@@ -78,12 +79,9 @@ export default $config({
         return { ...nodejs, esbuild: { ...esbuild, external } };
       });
       // Default log retention where a Function sets none (SST's own default is "1 month").
-      // Explicit retention wins; `logging: false` and a custom `logGroup` (SST rejects both) are left alone.
-      args.logging = $output(args.logging).apply(logging =>
-        logging === false || logging?.logGroup || logging?.retention
-          ? logging
-          : { ...logging, retention: DEFAULT_LOG_RETENTION }
-      );
+      // dev and every other non-production stage deliberately get 1 week, so this is a
+      // `production` check rather than PRODUCTION_STAGES.
+      args.logging = $output(args.logging).apply(logging => resolveDefaultLogging(logging, $app.stage));
     });
 
     // Watch for changes in the core packages and rebuild them.
