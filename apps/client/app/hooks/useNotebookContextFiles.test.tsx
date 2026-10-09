@@ -112,7 +112,9 @@ describe('useNotebookContextFiles', () => {
     });
     expect(ids(optimisticId)).toEqual([]);
     expect(mockMutateAsync).not.toHaveBeenCalled();
-    expect(mockToastInfo).toHaveBeenCalledWith('Wait for this notebook to finish saving, then attach the file.');
+    expect(mockToastInfo).toHaveBeenCalledWith(
+      'This notebook is still saving, so the file was not pinned to it. Pin it once saving finishes.'
+    );
   });
 
   it('writes once when the same file is added twice before the first write lands', async () => {
