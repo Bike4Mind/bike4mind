@@ -469,7 +469,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'customize' ? (
-        <CustomizeScreen onClose={() => setScreen('conversation')} />
+        <CustomizeScreen sessionId={activeId} onClose={() => setScreen('conversation')} />
       ) : screen === 'settings' ? (
         <SettingsScreen auth={auth ?? null} onClose={() => setScreen('conversation')} />
       ) : (
