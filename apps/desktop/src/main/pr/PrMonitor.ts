@@ -3,7 +3,9 @@ import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
   isFinishedState,
   parsePullRequestUrl,
+  prDisplayState,
   pullRequestFromShell,
+  samePrSummary,
   samePullRequest,
   type PrActionResult,
   type PrAutoFixStatus,
@@ -15,6 +17,8 @@ import {
   type PrOption,
   type PrRef,
   type PrSnapshot,
+  type PrSummary,
+  type PrSummaryEvent,
 } from '@shared/pullRequest';
 import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
@@ -82,6 +86,8 @@ export interface PrMonitorDeps {
   github: PrGithub;
   chat: PrChatHooks;
   emit(state: PrBarState): void;
+  /** The sidebar's per-conversation PR icon changed. Sent only on a change. */
+  emitSummary?(event: PrSummaryEvent): void;
   logger: PrMonitorLogger;
   now?: () => number;
   timers?: PrTimers;
@@ -144,6 +150,8 @@ export class PrMonitor {
   private queuedReads: QueuedRead[] = [];
   private batchTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly timers: PrTimers;
+  /** What the sidebar was last told, per conversation; built on first use. */
+  private sidebar: Map<string, PrSummary> | null = null;
 
   constructor(protected readonly deps: PrMonitorDeps) {
     this.timers = deps.timers ?? realTimers;
@@ -473,6 +481,7 @@ export class PrMonitor {
     this.live.delete(sessionId);
     this.branchLookups.delete(sessionId);
     await this.deps.store.set(sessionId, null);
+    await this.pushSummary(sessionId, null);
   }
 
   dispose(): void {
@@ -652,12 +661,14 @@ export class PrMonitor {
     const current = (await this.deps.store.get(sessionId)) ?? binding;
     const archiving = shouldAutoArchive(current, snapshot.state);
     const finished = isFinishedState(snapshot.state);
-    if (current.lastState !== snapshot.state || archiving || finished || current.finalSnapshot) {
+    const draftChanged = (current.lastDraft === true) !== snapshot.isDraft;
+    if (current.lastState !== snapshot.state || draftChanged || archiving || finished || current.finalSnapshot) {
       const { finalSnapshot: _previous, ...rest } = current;
       // Recorded before archiving, so a crash in between errs toward not archiving twice.
       await this.deps.store.set(sessionId, {
         ...rest,
         lastState: snapshot.state,
+        lastDraft: snapshot.isDraft,
         ...(archiving ? { archivedOnClose: true } : {}),
         // Without checks: a finished bar draws none, and every launch reads this file whole.
         ...(finished ? { finalSnapshot: { ...forTheBar(snapshot), checks: [] } } : {}),
@@ -770,7 +781,7 @@ export class PrMonitor {
   protected async state(sessionId: string, known?: PrBinding | null): Promise<PrBarState> {
     const binding = known === undefined ? await this.deps.store.get(sessionId) : known;
     const live = this.live.get(sessionId);
-    const snapshot = live?.snapshot ?? binding?.finalSnapshot ?? null;
+    const snapshot = this.snapshotFor(sessionId, binding);
     return {
       sessionId,
       binding: binding && !binding.dismissed ? withoutFinal(binding) : null,
@@ -791,9 +802,54 @@ export class PrMonitor {
     };
   }
 
+  /** The read the bar draws from; the sidebar's summary reads the same one so the two agree. */
+  private snapshotFor(sessionId: string, binding: PrBinding | null): PrBarSnapshot | null {
+    return this.live.get(sessionId)?.snapshot ?? binding?.finalSnapshot ?? null;
+  }
+
+  /**
+   * The sidebar's view of a conversation's PR, from what is already in hand. Falls back to the
+   * state stored at the last read for a conversation not read since launch, and to nothing for
+   * one never read at all. A dismissed bar keeps its icon: the PR is still this session's.
+   */
+  private summaryOf(sessionId: string, binding: PrBinding | null): PrSummary | null {
+    if (!binding) return null;
+    const snapshot = this.snapshotFor(sessionId, binding);
+    if (snapshot) return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft) };
+    if (!binding.lastState) return null;
+    return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft) };
+  }
+
+  private async sidebarSummaries(): Promise<Map<string, PrSummary>> {
+    if (this.sidebar) return this.sidebar;
+    const built = new Map<string, PrSummary>();
+    for (const [sessionId, binding] of await this.deps.store.all()) {
+      const summary = this.summaryOf(sessionId, binding);
+      if (summary) built.set(sessionId, summary);
+    }
+    this.sidebar ??= built;
+    return this.sidebar;
+  }
+
+  /** Every conversation's PR icon, for a window that just opened. Reads the binding file, never GitHub. */
+  async summaries(): Promise<PrSummaryEvent[]> {
+    return [...(await this.sidebarSummaries())].map(([sessionId, summary]) => ({ sessionId, summary }));
+  }
+
+  private async pushSummary(sessionId: string, binding: PrBinding | null): Promise<void> {
+    const known = await this.sidebarSummaries();
+    const next = this.summaryOf(sessionId, binding);
+    if (samePrSummary(known.get(sessionId), next)) return;
+    if (next) known.set(sessionId, next);
+    else known.delete(sessionId);
+    this.deps.emitSummary?.({ sessionId, summary: next });
+  }
+
   protected async publish(sessionId: string): Promise<void> {
     if (this.disposed) return;
-    this.deps.emit(await this.state(sessionId));
+    const binding = await this.deps.store.get(sessionId);
+    this.deps.emit(await this.state(sessionId, binding));
+    await this.pushSummary(sessionId, binding);
   }
 }
 

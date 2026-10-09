@@ -6,12 +6,13 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
-import type { PrActionResult, PrBarState, PrOption } from '@shared/pullRequest';
-import { CloseIcon, ExternalLinkIcon, MergedIcon, PullRequestClosedIcon, PullRequestIcon, ReloadIcon } from './icons';
+import { prDisplayState, type PrActionResult, type PrBarState, type PrOption } from '@shared/pullRequest';
+import { CloseIcon, ExternalLinkIcon, PullRequestIcon, ReloadIcon } from './icons';
 import { contentColumnSx } from './layout';
-import { MERGED_COLOR, ghFixLine, lifecycleLabel, middleTruncate, timeAgo } from './prBarModel';
+import { ghFixLine, lifecycleLabel, middleTruncate, timeAgo } from './prBarModel';
 import { PrAutomations, autoFixDescription, autoMergeDescription } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
+import { PrStateIcon, prStateColor } from './prStateStyle';
 
 const BRANCH_MAX_CHARS = 44;
 
@@ -56,7 +57,8 @@ export function PrStatusBar({
   const merged = snapshot?.state === 'MERGED';
   const closed = snapshot?.state === 'CLOSED';
   const finished = merged || closed;
-  const mergedColor = MERGED_COLOR[theme.palette.mode === 'dark' ? 'dark' : 'light'];
+  const displayState = snapshot ? prDisplayState(snapshot.state, snapshot.isDraft) : null;
+  const mergedColor = prStateColor('merged', theme.palette.mode === 'dark' ? 'dark' : 'light');
   const mergedAgo = merged && snapshot.mergedAt ? timeAgo(snapshot.mergedAt, Date.now()) : null;
 
   return (
@@ -79,19 +81,10 @@ export function PrStatusBar({
           minWidth: 0,
         }}
       >
-        {merged ? (
-          <Box sx={{ display: 'flex', color: mergedColor, flexShrink: 0 }} data-testid="pr-bar-merged-icon">
-            <MergedIcon />
-          </Box>
-        ) : closed ? (
-          <Box
-            sx={{ display: 'flex', color: 'danger.plainColor', opacity: 0.7, flexShrink: 0 }}
-            data-testid="pr-bar-closed-icon"
-          >
-            <PullRequestClosedIcon />
-          </Box>
+        {displayState ? (
+          <PrStateIcon state={displayState} testId={`pr-bar-${displayState}-icon`} />
         ) : (
-          <Box sx={{ display: 'flex', color: 'text.tertiary', flexShrink: 0 }}>
+          <Box sx={{ display: 'flex', color: 'text.tertiary', flexShrink: 0 }} data-testid="pr-bar-reading-icon">
             <PullRequestIcon />
           </Box>
         )}

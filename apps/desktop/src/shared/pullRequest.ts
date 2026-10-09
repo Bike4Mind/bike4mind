@@ -47,6 +47,8 @@ export interface PrBinding extends PrRef {
   autoFixHandled?: string[];
   /** The state at the last successful read; what an auto-archive transition is measured from. */
   lastState?: PrState;
+  /** Whether that read found a draft, so the sidebar can tell draft from open without a read. */
+  lastDraft?: boolean;
   /** Set when auto-archive has fired, so it fires once even if the user unarchives. */
   archivedOnClose?: boolean;
   /**
@@ -137,6 +139,34 @@ export type PrBarSnapshot = Omit<PrSnapshot, 'threads' | 'changeRequests'>;
 /** Merged or closed: nothing reads it on its own any more. A closed PR can still be refreshed by hand. */
 export function isFinishedState(state: PrState | undefined): state is 'MERGED' | 'CLOSED' {
   return state === 'MERGED' || state === 'CLOSED';
+}
+
+/**
+ * The four states the bar and the sidebar draw. Both derive it here from the same snapshot, so
+ * a conversation's sidebar icon and its bar cannot disagree. A closed draft is closed.
+ */
+export type PrDisplayState = 'open' | 'draft' | 'merged' | 'closed';
+
+export function prDisplayState(state: PrState, isDraft = false): PrDisplayState {
+  if (state === 'MERGED') return 'merged';
+  if (state === 'CLOSED') return 'closed';
+  return isDraft ? 'draft' : 'open';
+}
+
+/** What the sidebar shows for one conversation's PR. Built from stored and in-memory state only. */
+export interface PrSummary {
+  number: number;
+  state: PrDisplayState;
+}
+
+/** main -> renderer push; `summary` null means the conversation no longer has a PR to show. */
+export interface PrSummaryEvent {
+  sessionId: string;
+  summary: PrSummary | null;
+}
+
+export function samePrSummary(a: PrSummary | null | undefined, b: PrSummary | null | undefined): boolean {
+  return a?.number === b?.number && a?.state === b?.state;
 }
 
 /** Whether `gh` can be used at all. Anything but 'ok' replaces the bar's content with a fix-it line. */

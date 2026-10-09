@@ -41,7 +41,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
-import type { PrActionResult, PrBarState, PrOption } from './pullRequest';
+import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SkillsState } from './skills';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
@@ -230,6 +230,10 @@ export const IPC_CHANNELS = {
   prSetOption: 'pr:set-option',
   /** main -> renderer push; one conversation's bar changed. */
   prStateChanged: 'pr:state-changed',
+  /** The sidebar's PR icons. The read is of stored state only and never reaches GitHub. */
+  prGetSummaries: 'pr:get-summaries',
+  /** main -> renderer push; one conversation's sidebar PR icon changed. */
+  prSummaryChanged: 'pr:summary-changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -633,6 +637,9 @@ export interface DesktopApi {
      */
     setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult>;
     onStateChanged(listener: (state: PrBarState) => void): () => void;
+    /** Every conversation's PR icon for the sidebar, from what main already knows. */
+    getSummaries(): Promise<PrSummaryEvent[]>;
+    onSummaryChanged(listener: (event: PrSummaryEvent) => void): () => void;
   };
   shell: {
     /**

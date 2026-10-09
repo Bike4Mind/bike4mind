@@ -16,12 +16,6 @@ export function ghFixLine(gh: PrGhStatus): string | null {
   return null;
 }
 
-/**
- * GitHub's merged purple for each mode. Joy's palette has no purple, and its nearest token
- * (primary blue) would read as "open", the opposite of what a merged bar should say.
- */
-export const MERGED_COLOR = { light: '#8250df', dark: '#a371f7' } as const;
-
 /** "5m ago", "3d ago", or a date once it is old enough that a count stops meaning much. */
 export function timeAgo(iso: string, now: number): string | null {
   const then = Date.parse(iso);

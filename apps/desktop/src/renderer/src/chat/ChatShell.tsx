@@ -26,7 +26,7 @@ import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { PrStatusBar } from './PrStatusBar';
-import { usePullRequest } from './usePullRequest';
+import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { SettingsScreen } from './SettingsPanel';
 import { TodoPanel } from './TodoPanel';
@@ -168,6 +168,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const skills = useSkills(activeId);
   const catalog = useModelCatalog();
   const statuses = useSessionStatuses();
+  const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
   // Window chrome, so it is remembered per machine rather than per conversation. Seeded from
@@ -445,6 +446,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         loading={loading}
         activeId={activeId}
         statuses={statuses}
+        prSummaries={prSummaries}
         collapsed={collapsed}
         onToggleCollapsed={() => setCollapsed(current => !current)}
         onSelect={sessionId => {

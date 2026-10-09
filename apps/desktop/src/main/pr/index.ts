@@ -29,6 +29,7 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
     github: new PrGithub(runGh),
     logger,
     emit: (state: PrBarState) => send(IPC_CHANNELS.prStateChanged, state),
+    emitSummary: event => send(IPC_CHANNELS.prSummaryChanged, event),
     chat: {
       isCode: async sessionId => (await store.get(sessionId))?.mode === 'code',
       project: async sessionId => {
@@ -62,6 +63,7 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
     }
     return monitor.watch(sender.id, typeof sessionId === 'string' ? sessionId : null);
   });
+  ipcMain.handle(IPC_CHANNELS.prGetSummaries, () => monitor.summaries());
   ipcMain.handle(IPC_CHANNELS.prBind, (_event, sessionId: unknown, url: unknown) =>
     typeof sessionId === 'string' && typeof url === 'string'
       ? monitor.bindManual(sessionId, url)

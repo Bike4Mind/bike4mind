@@ -365,9 +365,9 @@ export function SlidersIcon() {
 }
 
 /** A conversation's pull request, on the bar above the composer. */
-export function PullRequestIcon() {
+export function PullRequestIcon({ size }: { size?: number } = {}) {
   return (
-    <Glyph>
+    <Glyph size={size}>
       <circle cx="4.5" cy="3.8" r="1.6" />
       <circle cx="4.5" cy="12.2" r="1.6" />
       <circle cx="11.5" cy="12.2" r="1.6" />
@@ -377,9 +377,9 @@ export function PullRequestIcon() {
 }
 
 /** A merged pull request: the branch has joined its base. */
-export function MergedIcon() {
+export function MergedIcon({ size }: { size?: number } = {}) {
   return (
-    <Glyph>
+    <Glyph size={size}>
       <circle cx="4.5" cy="3.8" r="1.6" />
       <circle cx="4.5" cy="12.2" r="1.6" />
       <circle cx="11.5" cy="9" r="1.6" />
@@ -389,9 +389,9 @@ export function MergedIcon() {
 }
 
 /** A pull request closed without merging. */
-export function PullRequestClosedIcon() {
+export function PullRequestClosedIcon({ size }: { size?: number } = {}) {
   return (
-    <Glyph>
+    <Glyph size={size}>
       <circle cx="4.5" cy="3.8" r="1.6" />
       <circle cx="4.5" cy="12.2" r="1.6" />
       <circle cx="11.5" cy="12.2" r="1.6" />

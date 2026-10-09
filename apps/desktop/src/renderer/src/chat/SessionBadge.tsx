@@ -2,6 +2,8 @@ import Box from '@mui/joy/Box';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import type { ChatSessionStatus } from '@shared/chat';
+import type { PrSummary } from '@shared/pullRequest';
+import { PR_STATE_LABEL, PrStateIcon } from './prStateStyle';
 import { STATUS_LABEL } from './sessionStatus';
 
 const sweep = keyframes({ from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } });
@@ -19,9 +21,14 @@ const BADGE_SIZE = 14;
  *
  * Idle keeps the reference's small hollow dot, so a quiet sidebar stays quiet and only a row
  * that is actually doing something draws the eye.
+ *
+ * An idle session with a PR shows the PR's icon in place of the dot, coloured as its bar is. A
+ * live status outranks it: the spinner and the needs-you square say something is happening
+ * NOW, which the PR, a standing fact, can wait behind until the turn ends.
  */
-export function SessionBadge({ status }: { status: ChatSessionStatus }) {
-  const label = STATUS_LABEL[status];
+export function SessionBadge({ status, pr }: { status: ChatSessionStatus; pr?: PrSummary | undefined }) {
+  const showPr = status === 'done' && pr !== undefined;
+  const label = showPr ? `PR #${pr.number} - ${PR_STATE_LABEL[pr.state]}` : STATUS_LABEL[status];
 
   return (
     <Box
@@ -29,6 +36,7 @@ export function SessionBadge({ status }: { status: ChatSessionStatus }) {
       title={label}
       data-testid="session-status-badge"
       data-status={status}
+      data-pr-state={showPr ? pr.state : undefined}
       sx={{
         position: 'relative',
         width: BADGE_SIZE,
@@ -73,7 +81,9 @@ export function SessionBadge({ status }: { status: ChatSessionStatus }) {
         </>
       )}
 
-      {status === 'done' && (
+      {showPr && <PrStateIcon state={pr.state} size={BADGE_SIZE} />}
+
+      {status === 'done' && !showPr && (
         <Box
           sx={{ width: 6, height: 6, borderRadius: '50%', border: '1px solid', borderColor: 'neutral.outlinedBorder' }}
         />

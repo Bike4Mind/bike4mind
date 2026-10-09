@@ -22,6 +22,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import type { PrSummary } from '@shared/pullRequest';
 import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
 import { ArtifactIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon } from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
@@ -103,6 +104,7 @@ interface RowProps {
   session: ChatSessionSummary;
   activeId: string | null;
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  prSummaries: ReadonlyMap<string, PrSummary>;
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
@@ -133,9 +135,19 @@ function useTitleClipped(title: string) {
   return { ref, clipped };
 }
 
-function SessionRow({ session, activeId, statuses, onSelect, onDelete, onTogglePin, onToggleArchived }: RowProps) {
+function SessionRow({
+  session,
+  activeId,
+  statuses,
+  prSummaries,
+  onSelect,
+  onDelete,
+  onTogglePin,
+  onToggleArchived,
+}: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const status = statuses.get(session.id) ?? 'done';
+  const pr = prSummaries.get(session.id);
   const needsAction = status === 'needs-action';
   const { ref: titleRef, clipped } = useTitleClipped(session.title);
 
@@ -199,9 +211,10 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
         }}
         data-testid="chat-session-item"
         data-session-status={status}
+        data-session-pr-state={pr?.state}
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
-          <SessionBadge status={status} />
+          <SessionBadge status={status} pr={pr} />
           {/* Between Joy's body-sm and body-xs: at body-xs the row matches its own group header,
               which is bold, so the header outweighs the content it labels. The weight is spelled
               out because Joy's body-xs level carries fontWeight md, which drew every title
@@ -411,6 +424,7 @@ export function SessionList({
   loading,
   activeId,
   statuses,
+  prSummaries,
   collapsed,
   onToggleCollapsed,
   onSelect,
@@ -430,6 +444,8 @@ export function SessionList({
   activeId: string | null;
   /** What each session is doing, pushed from main. Absent means idle. */
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  /** Each session's PR, pushed from main. Absent means no PR to show. */
+  prSummaries: ReadonlyMap<string, PrSummary>;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onSelect: (sessionId: string) => void;
@@ -503,7 +519,7 @@ export function SessionList({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const rowProps = { activeId, statuses, onSelect, onDelete, onTogglePin, onToggleArchived };
+  const rowProps = { activeId, statuses, prSummaries, onSelect, onDelete, onTogglePin, onToggleArchived };
 
   if (collapsed) {
     return (
