@@ -4,7 +4,7 @@ import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { QueryClient } from '@tanstack/react-query';
 import perfLogger from './performanceLogger';
-import { replaceQueryData, setOptimisticQueryData, updateSingleQueryDataFast } from './react-query';
+import { replaceQueryData, setOptimisticQueryData, updateSingleQueryDataFast, type Optimistic } from './react-query';
 import { useStreamingState } from '../hooks/useStreamingState';
 
 function getErrorMessage(error: unknown): string {
@@ -73,7 +73,7 @@ export function createOptimisticPromptBubble(
   // survives until the real Quest replaces the bubble.
   routingSource?: IChatHistoryItemDocument['routingSource']
 ) {
-  const optimisticQuest: IChatHistoryItemDocument & { _optimistic: true } = {
+  const optimisticQuest: Optimistic<IChatHistoryItemDocument> = {
     id: `optimistic-quest-${sessionId}-${Date.now()}`,
     sessionId,
     type: 'message',
@@ -178,10 +178,11 @@ export function appendReplyToLatestOptimisticBubble(
       // without waiting for the change-stream to deliver the persisted Quest.
       // creditsUsed rides the same path so the credits chip appears on
       // completion instead of only after the change-stream Quest lands.
-      const patched: IChatHistoryItemDocument = {
+      const patched: Optimistic<IChatHistoryItemDocument> = {
         ...page.data[idx],
         replies: [reply],
         updatedAt: new Date(),
+        _optimistic: true,
         ...(agentExecutionId ? { agentExecutionId } : {}),
         ...(typeof creditsUsed === 'number' ? { creditsUsed } : {}),
         ...(mementoIds?.length
@@ -207,10 +208,7 @@ export function appendReplyToLatestOptimisticBubble(
  * exact same id/shape; the later createOptimisticQuest then replaces it in place instead
  * of creating a duplicate.
  */
-export function buildOptimisticQuest(
-  sessionId: string,
-  prompt: string
-): IChatHistoryItemDocument & { _optimistic: true } {
+export function buildOptimisticQuest(sessionId: string, prompt: string): Optimistic<IChatHistoryItemDocument> {
   return {
     id: `optimistic-quest-${sessionId}`,
     sessionId,
@@ -325,7 +323,7 @@ export async function updateOptimisticQuest(
       if (!queryData || !('pages' in queryData)) continue;
       const hasQuest = queryData.pages.some(page => page.data.some(q => q.id === questId));
       if (hasQuest) {
-        const failedQuest: IChatHistoryItemDocument = {
+        const failedQuest: Optimistic<IChatHistoryItemDocument> = {
           id: questId,
           sessionId: '',
           type: 'message',
@@ -335,6 +333,7 @@ export async function updateOptimisticQuest(
           timestamp: new Date(),
           createdAt: new Date(),
           updatedAt: new Date(),
+          _optimistic: true,
         };
         updateSingleQueryDataFast(queryClient, queryKey, 'write', failedQuest, {
           keysAllowedToCreate: [],

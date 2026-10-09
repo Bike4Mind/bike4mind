@@ -5,8 +5,11 @@ import {
   swapOptimisticPromptBubbleId,
   createOptimisticPromptBubble,
   appendReplyToLatestOptimisticBubble,
+  buildOptimisticQuest,
+  createOptimisticQuest,
   updateOptimisticQuest,
 } from './llm';
+import { updateSingleQueryDataFast } from './react-query';
 
 const sessionId = 'sess_abc';
 const queryKey = ['quests', 'session', sessionId];
@@ -51,6 +54,7 @@ describe('createOptimisticPromptBubble routingSource (live badge)', () => {
     const quests = readQuests(qc);
     expect(quests).toHaveLength(1);
     expect(quests[0].routingSource).toBe('complexity');
+    expect(quests[0]).toMatchObject({ _optimistic: true });
   });
 
   it('omits routingSource for a normal (quest_processor) send', () => {
@@ -89,6 +93,55 @@ describe('appendReplyToLatestOptimisticBubble creditsUsed (live chip)', () => {
     const qc = seedQueryClient([makeQuest({ id: 'optimistic-quest-1', replies: [] })]);
     appendReplyToLatestOptimisticBubble(qc, sessionId, 'the answer', 'exec_1');
     expect(readQuests(qc)[0].creditsUsed).toBeUndefined();
+  });
+
+  it.each(['before', 'after'])('lets the persisted document win when an insert arrives %s the id swap', order => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'do the thing');
+    const serverInsert = makeQuest({
+      id: 'real_quest_id',
+      updatedAt: new Date('2025-01-01'),
+      prompt: 'do the thing',
+    });
+
+    if (order === 'before') {
+      updateSingleQueryDataFast(qc, queryKey, 'write', serverInsert, { keysAllowedToCreate: [queryKey] });
+    }
+    swapOptimisticPromptBubbleId(qc, sessionId, 'real_quest_id');
+    if (order === 'after') {
+      updateSingleQueryDataFast(qc, queryKey, 'write', serverInsert, { keysAllowedToCreate: [queryKey] });
+    }
+    appendReplyToLatestOptimisticBubble(qc, sessionId, 'client reply', 'exec_1');
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      { ...serverInsert, replies: ['server reply'], creditsUsed: 42 },
+      { keysAllowedToCreate: [] }
+    );
+
+    expect(readQuests(qc).find(quest => quest.id === 'real_quest_id')).toMatchObject({
+      replies: ['server reply'],
+      creditsUsed: 42,
+    });
+  });
+});
+
+describe('optimistic quest marker', () => {
+  it('marks buildOptimisticQuest output', () => {
+    expect(buildOptimisticQuest(sessionId, 'hello')).toMatchObject({ _optimistic: true });
+  });
+
+  it('keeps the marker on createOptimisticQuest errors', async () => {
+    const qc = seedQueryClient([]);
+
+    await expect(
+      createOptimisticQuest(qc, sessionId, 'hello', async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+
+    expect(readQuests(qc)[0]).toMatchObject({ _optimistic: true, status: 'done' });
   });
 });
 

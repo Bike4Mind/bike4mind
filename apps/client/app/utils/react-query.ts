@@ -10,6 +10,23 @@ import { SubscriptionCallbackFunction } from '../hooks/useCollection';
 import { useWebsocket } from '@/app/contexts/WebsocketContext';
 import { uniqBy } from 'lodash';
 
+type CacheTimestamp = Date | string | number;
+export type Optimistic<T> = T & { _optimistic: true };
+
+const getCacheTimestamp = (entry: { updatedAt?: CacheTimestamp; lastUpdated?: CacheTimestamp }): number | null => {
+  const value = entry.updatedAt ?? entry.lastUpdated;
+  return value ? new Date(value).getTime() : null;
+};
+
+const mergeCacheEntry = <T extends { updatedAt?: CacheTimestamp; lastUpdated?: CacheTimestamp; _optimistic?: boolean }>(
+  existing: T,
+  incoming: T
+): T => {
+  const merged = { ...existing, ...incoming };
+  if (!incoming._optimistic && getCacheTimestamp(incoming) !== null) delete merged._optimistic;
+  return merged;
+};
+
 /**
  * This function is used to update the cached data that exists in the react-query cache.
  * It handles updating both infinite queries and regular queries, supporting write and delete operations.
@@ -136,23 +153,12 @@ export const updateSingleQueryDataFast = <
     canCreateAt?: (queryKey: readonly unknown[], data: T) => boolean;
   }
 ) => {
-  // Fallback-aware timestamp getter (prefers updatedAt, falls back to lastUpdated)
-  const getTs = (obj: any): number | null => {
-    const v = obj?.updatedAt ?? obj?.lastUpdated;
-    return v ? new Date(v).getTime() : null;
-  };
-
+  // Client and server clocks cannot be compared while the cached entry remains optimistic.
   const shouldApplyUpdate = (existing: T, existingUpdatedAt: number | null, newUpdatedAt: number | null) =>
     (existing._optimistic && !data._optimistic) ||
     !existingUpdatedAt ||
     !newUpdatedAt ||
     newUpdatedAt >= existingUpdatedAt;
-
-  const mergeUpdate = (existing: T): T => {
-    const merged = { ...existing, ...data };
-    if (!data._optimistic) delete merged._optimistic;
-    return merged;
-  };
 
   queryClient.setQueryData<InfiniteData<{ data: T[] }, { page: number }> | T[] | T | PaginatedResponse<T>>(
     queryKey,
@@ -164,7 +170,7 @@ export const updateSingleQueryDataFast = <
         (options.canCreateAt?.(queryKey, data) ?? true);
 
       // Pre-calculate timestamp once instead of in loops.
-      const newUpdatedAt = getTs(data);
+      const newUpdatedAt = getCacheTimestamp(data);
       const cacheTime = Date.now();
 
       if ('pages' in currentData) {
@@ -184,11 +190,11 @@ export const updateSingleQueryDataFast = <
             if (itemIndex >= 0) {
               itemFound = true;
               const existingItem = page.data[itemIndex];
-              const existingUpdatedAt = getTs(existingItem);
+              const existingUpdatedAt = getCacheTimestamp(existingItem);
 
               if (shouldApplyUpdate(existingItem, existingUpdatedAt, newUpdatedAt)) {
                 const updatedData = [...page.data];
-                updatedData[itemIndex] = { ...mergeUpdate(existingItem), cachedUpdate: cacheTime } as any;
+                updatedData[itemIndex] = { ...mergeCacheEntry(existingItem, data), cachedUpdate: cacheTime } as any;
                 return { ...page, data: updatedData };
               }
             }
@@ -222,10 +228,10 @@ export const updateSingleQueryDataFast = <
 
           if (itemIndex >= 0) {
             const existingItem = currentData.data[itemIndex];
-            const existingUpdatedAt = getTs(existingItem);
+            const existingUpdatedAt = getCacheTimestamp(existingItem);
 
             if (shouldApplyUpdate(existingItem, existingUpdatedAt, newUpdatedAt)) {
-              updatedData[itemIndex] = { ...mergeUpdate(existingItem), cachedUpdate: cacheTime } as any;
+              updatedData[itemIndex] = { ...mergeCacheEntry(existingItem, data), cachedUpdate: cacheTime } as any;
             }
           } else if (allowCreate) {
             updatedData = [{ ...data, cachedUpdate: cacheTime } as any, ...currentData.data];
@@ -245,10 +251,10 @@ export const updateSingleQueryDataFast = <
 
           if (itemIndex >= 0) {
             const existingItem = currentData[itemIndex];
-            const existingUpdatedAt = getTs(existingItem);
+            const existingUpdatedAt = getCacheTimestamp(existingItem);
 
             if (shouldApplyUpdate(existingItem, existingUpdatedAt, newUpdatedAt)) {
-              updatedData[itemIndex] = mergeUpdate(existingItem);
+              updatedData[itemIndex] = mergeCacheEntry(existingItem, data);
             }
           } else if (allowCreate) {
             updatedData = [data, ...currentData];
@@ -256,10 +262,10 @@ export const updateSingleQueryDataFast = <
           return updatedData;
         }
       } else if ((currentData as any).id === (data as any).id) {
-        const existingUpdatedAt = getTs(currentData as any);
+        const existingUpdatedAt = getCacheTimestamp(currentData as T);
 
         if (shouldApplyUpdate(currentData as T, existingUpdatedAt, newUpdatedAt)) {
-          return mergeUpdate(currentData as T);
+          return mergeCacheEntry(currentData as T, data);
         }
       }
 
@@ -563,8 +569,7 @@ export const replaceQueryData = async <
         if (itemIndex >= 0) {
           const existing = page.data.find(item => item.id === replaceId);
           const updatedData = [...page.data];
-          const updatedItem = { ...existing, ...data, id: data.id };
-          if (!data._optimistic) delete updatedItem._optimistic;
+          const updatedItem = { ...mergeCacheEntry(existing as T, data), id: data.id };
           updatedData[itemIndex] = updatedItem;
           return { ...page, data: uniqBy(updatedData, 'id') };
         }
