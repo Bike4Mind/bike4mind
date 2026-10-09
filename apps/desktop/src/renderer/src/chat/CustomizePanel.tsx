@@ -92,7 +92,9 @@ function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSumm
 
 function SkillsSettings({ sessionId }: { sessionId: string | null }) {
   const { skills } = useSkills(sessionId);
-  const userSkills = skills.filter(skill => skill.source === 'global');
+  const userSkills = skills.filter(
+    skill => skill.source === 'global' && /[\\/]\.claude[\\/]skills[\\/]/.test(skill.filePath)
+  );
 
   return (
     <Stack spacing={2.5} data-testid="skills-settings">
