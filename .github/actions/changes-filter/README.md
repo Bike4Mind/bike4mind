@@ -18,10 +18,12 @@ docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
 |---|---|
 | `deployable` | `'true'` to run test + deploy, `'false'` to skip. Fails **open** (`true`) when the diff range can't be resolved. |
 | `docs-changed` | `'true'` when the changeset touches `docs-site/` or the help tooling in `packages/scripts/help/`. Fails **open** (`true`) on an unresolved range. Gates the `help-docs` job. |
+| `published-changed` | `'true'` when the changeset touches b4m-core, the lockfile or the check and its fixture. Fails **open** (`true`) on an unresolved range. Gates the `published-dts` job. |
 
-The two are orthogonal: a docs-only PR is `deployable=false, docs-changed=true`;
-a code+docs PR is `true, true`; a `.changeset` or root-`README` change is
-`false, false`.
+`deployable` and `docs-changed` are orthogonal: a docs-only PR is
+`deployable=false, docs-changed=true`; a code+docs PR is `true, true`; a
+`.changeset` or root-`README` change is `false, false`. `published-changed` is a
+third, independent signal.
 
 ## Why this and not `paths-ignore` / a marketplace action
 
@@ -108,6 +110,7 @@ is what turns that into a local build instead of a red leg. That pairing is enfo
 |---|---|---|
 | `exclude-paths` | curated docs/config list | Newline-separated **git pathspecs**. If every changed file matches one, `deployable=false`. Blank lines and `#` comments ignored. |
 | `docs-paths` | `docs-site/**`, `packages/scripts/help/**` | INCLUDE-form pathspecs defining the docs site for `docs-changed`. Includes the help tooling, so a change to those scripts runs the `help-docs` guard that covers them. |
+| `published-paths` | `b4m-core/**`, `pnpm-lock.yaml`, `scripts/check-published-dts.mjs`, `scripts/fixtures/dangling-dts/**` | INCLUDE-form pathspecs the published declaration check covers, for `published-changed`. |
 
 ## Gotchas baked into the default list
 
@@ -122,10 +125,10 @@ is what turns that into a local build instead of a red leg. That pairing is enfo
 
 ## Fail-open posture
 
-Every uncertain state resolves to "deploy + build docs": unresolved diff range
+Every uncertain state resolves to "deploy + build docs + check published declarations": unresolved diff range
 (new branch, force-push, all-zero before-SHA, missing/failed merge-base) or a
 `git diff` that errors after range validation → `deployable=true`,
-`docs-changed=true`. A `changes` job that crashed without writing outputs would
+`docs-changed=true`, `published-changed=true`. A `changes` job that crashed without writing outputs would
 look identical to a skip to the downstream `if:` checks, so failing open trades one
 unnecessary deploy for never silently dropping one.
 

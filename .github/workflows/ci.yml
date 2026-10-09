@@ -31,14 +31,15 @@ concurrency:
 
 jobs:
   # Changes gate: evaluate the changeset that fired this run (whole-PR
-  # merge-base diff on pull_request, push range on push) and emit two
-  # orthogonal signals: `deployable` (run the build/test legs) and `docs-changed`
+  # merge-base diff on pull_request, push range on push) and emit three
+  # orthogonal signals: `deployable` (run the build/test legs), `published-changed`
+  # (gates `published-dts` below) and `docs-changed`
   # (gates `help-docs` below - the Docusaurus build verification was removed
   # because this repo carries only docs-site markdown, not the site
   # scaffolding, but the help guards still have to run on a docs-only change).
   # Cheap, always runs, so the required checks always have a status to
   # report. Logic + the default exclude list live in the local composite
-  # action. Fails open on both.
+  # action. Fails open on all three.
   changes:
     # Root of the whole DAG.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
@@ -47,11 +48,12 @@ jobs:
     outputs:
       deployable: ${{ steps.filter.outputs.deployable }}
       docs-changed: ${{ steps.filter.outputs.docs-changed }}
+      published-changed: ${{ steps.filter.outputs.published-changed }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Detect deployable / docs changes
+      - name: Detect deployable / docs / published changes
         id: filter
         uses: ./.github/actions/changes-filter
 
@@ -965,6 +967,71 @@ jobs:
       - name: Generate the help index
         run: pnpm --filter @bike4mind/scripts help:build-index
 
+  # Type-checks the packed @bike4mind/* declarations as a consumer would (see
+  # scripts/check-published-dts.mjs). Needs core-build for the dist/ it packs.
+  published-dts:
+    name: Published Declarations
+    needs: [changes, core-build]
+    if: needs.changes.outputs.published-changed == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Download core build artifacts
+        id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
+          path: .
+        continue-on-error: true
+
+      - name: Build bike4mind core packages (fallback)
+        if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
+
+      # The consumer install has no lockfile, so the key tracks the manifests being packed instead.
+      - name: Cache npm downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-published-dts-${{ hashFiles('b4m-core/*/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-published-dts-
+
+      - name: Check published declarations
+        run: node scripts/check-published-dts.mjs
+
   # verify-docs-build removed: the Docusaurus scaffolding (docs-site/package.json,
   # lockfile, config) is not tracked in this repo, so the build can never succeed
   # here and was failing the required CI Complete check on every docs-touching PR.
@@ -978,7 +1045,8 @@ jobs:
   # of this repo to the internal deployer, so there is no deploy to gate; this
   # job re-exposes one stable check that turns red if any CI leg failed.
   #
-  # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e/help-docs)
+  # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e/help-docs/
+  # published-dts)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e, and a skipped
   # required check counts as passing). This surfaces typecheck/lint/cli-e2e
@@ -991,7 +1059,7 @@ jobs:
   # ============================================================
   ci-complete:
     name: CI Complete
-    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs]
+    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs, published-dts]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
@@ -1005,11 +1073,12 @@ jobs:
           TEST: ${{ needs.test.result }}
           CLI_E2E: ${{ needs.cli-e2e.result }}
           HELP_DOCS: ${{ needs.help-docs.result }}
+          PUBLISHED_DTS: ${{ needs.published-dts.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS published-dts=$PUBLISHED_DTS"
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1
