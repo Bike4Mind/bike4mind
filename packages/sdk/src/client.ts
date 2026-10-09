@@ -34,6 +34,8 @@ export type CallArgs<K extends OperationId> = ([PathParams<K>] extends [never]
       : { body?: JsonBody<K> }) & {
     signal?: AbortSignal;
     headers?: Record<string, string>;
+    // e.g. 'manual' so a destructive call never follows a redirect onto another resource.
+    redirect?: RequestInit['redirect'];
   };
 
 // Makes the args parameter optional exactly when the operation has nothing required.
@@ -105,6 +107,7 @@ interface RequestArgs {
   body?: unknown;
   signal?: AbortSignal;
   headers?: Record<string, string>;
+  redirect?: RequestInit['redirect'];
 }
 
 const ABSOLUTE_URL = /^https?:\/\//i;
@@ -149,6 +152,7 @@ export function createClient(options: ClientOptions) {
       headers,
       body,
       signal: args.signal,
+      ...(args.redirect ? { redirect: args.redirect } : {}),
     });
     if (!response.ok) throw await B4mApiError.fromResponse(response);
     return response;
@@ -273,7 +277,9 @@ export function createClient(options: ClientOptions) {
       } catch (error) {
         const tooLarge = error instanceof B4mApiError && error.status === 413 ? error : undefined;
         const data = tooLarge?.body as Schemas['synthesizeSpeechResponse413'] | undefined;
-        if (!tooLarge || !data?.saved || typeof data.fabFileId !== 'string') throw error;
+        if (!tooLarge || !data?.saved || typeof data.fabFileId !== 'string' || typeof data.provider !== 'string') {
+          throw error;
+        }
         const fallbackFrom = tooLarge.headers.get('x-b4m-tts-provider-fallback-from');
         const result: TtsResult = { kind: 'saved-too-large', data: { ...data, fabFileId: data.fabFileId } };
         if (fallbackFrom) result.fallbackFrom = fallbackFrom;
