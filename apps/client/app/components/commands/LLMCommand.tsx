@@ -298,8 +298,7 @@ export async function handleLLMCommand(
         (typeof window !== 'undefined' && window.location.pathname.startsWith('/opti'));
 
       // Fire rapid reply if it's an opti-surface session, complex, or has files. `fabFileIds`
-      // is built from `workBenchFiles`, so the workbench check covers the file case. A
-      // tool-directed launch opts out (see `skipRapidReply`).
+      // is built from `workBenchFiles`, so the workbench check covers the file case.
       if (!skipRapidReply && (isOptiSession || queryComplexity === 'complex' || workBenchFiles.length > 0)) {
         perfLogger.log(
           `🚀 [RapidReply] Firing rapid reply request (complexity: ${queryComplexity}, opti: ${isOptiSession}, questId: ${questId || 'none'})`
@@ -329,7 +328,9 @@ export async function handleLLMCommand(
           })
           .finally(() => releaseBlank?.());
       } else {
-        perfLogger.log(`🚀 [RapidReply] Skipped (complexity: ${queryComplexity}, no files)`);
+        perfLogger.log(
+          `🚀 [RapidReply] Skipped (complexity: ${queryComplexity}, files: ${workBenchFiles.length}, skipRapidReply: ${!!skipRapidReply})`
+        );
       }
 
       const { data } = await api.post<

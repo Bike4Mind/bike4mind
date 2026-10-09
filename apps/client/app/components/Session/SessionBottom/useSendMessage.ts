@@ -726,7 +726,7 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
-    // A briefcase launch is a scripted instruction to the main model, not a question to ack.
+    // Tool-directed send: see LLMCommandArgs.skipRapidReply.
     const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0;
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
