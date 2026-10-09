@@ -31,6 +31,7 @@ function makeHolderRepo(state: { currentCredits: number }) {
 }
 
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   creditLotRepository: {
     findByOwner: vi.fn(async (ownerId: string, ownerType: CreditHolderType) =>
       fakeLots
@@ -57,7 +58,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 // Imports after mocks
-import { processHolder } from './creditLotSweep';
+import { processHolder, runCreditLotSweep } from './creditLotSweep';
+import { CreditLot, creditLotRepository } from '@bike4mind/database';
 
 const OWNER_ID = 'user1';
 const NOW = new Date('2026-06-01T00:00:00.000Z');
@@ -160,6 +162,52 @@ describe('creditLotSweep - processHolder', () => {
     expect(txRows).toHaveLength(txCountAfterFirstRun);
   });
 
+  it.each([CreditHolderType.Organization, CreditHolderType.Agent])('expires lots owned by %s', async ownerType => {
+    const state = ownerType === CreditHolderType.Organization ? orgState : agentState;
+    state.currentCredits = 100;
+    const lot = addLot({ ownerType, expiresAt: new Date('2000-01-01T00:00:00Z') });
+    expect(await processHolder({ ownerId: OWNER_ID, ownerType }, NOW, logger)).toEqual({
+      expiredLots: 1,
+      expiredCredits: 100,
+    });
+    expect(state.currentCredits).toBe(0);
+    expect(lot.consumedAssigned).toBe(100);
+    expect(txRows).toEqual([expect.objectContaining({ ownerId: OWNER_ID, ownerType, credits: -100 })]);
+  });
+
+  it('retains a settled expiry after an absolute balance top-up', async () => {
+    userState.currentCredits = 300;
+    const stale = addLot({ amount: 100, expiresAt: new Date('2000-01-01T00:00:00Z') });
+    expect(await processHolder({ ownerId: OWNER_ID, ownerType: CreditHolderType.User }, NOW, logger)).toEqual({
+      expiredLots: 1,
+      expiredCredits: 100,
+    });
+    expect(await processHolder({ ownerId: OWNER_ID, ownerType: CreditHolderType.User }, NOW, logger)).toEqual({
+      expiredLots: 0,
+      expiredCredits: 0,
+    });
+    expect(userState.currentCredits).toBe(200);
+    expect(stale.consumedAssigned).toBe(100);
+    expect(txRows).toHaveLength(1);
+  });
+
+  it.each([
+    { consumedAssigned: -20, expiredCredits: 100, expiredLots: 1, balance: 0 },
+    { consumedAssigned: 200, expiredCredits: 0, expiredLots: 0, balance: 100 },
+  ])(
+    'bounds a stale persisted assignment of $consumedAssigned',
+    async ({ consumedAssigned, expiredCredits, expiredLots, balance }) => {
+      userState.currentCredits = 100;
+      const stale = addLot({ consumedAssigned, expiresAt: new Date('2000-01-01T00:00:00Z') });
+      expect(await processHolder({ ownerId: OWNER_ID, ownerType: CreditHolderType.User }, NOW, logger)).toEqual({
+        expiredLots,
+        expiredCredits,
+      });
+      expect(stale.consumedAssigned).toBe(100);
+      expect(userState.currentCredits).toBe(balance);
+    }
+  );
+
   it('leaves non-stale lots alone even when fully assigned by consumption', async () => {
     userState.currentCredits = 0;
     // Won't be reached because currentCredits <= 0 skips entirely - use a small
@@ -173,5 +221,57 @@ describe('creditLotSweep - processHolder', () => {
     expect(future.consumedAssigned).toBe(99);
     expect(txRows).toHaveLength(0); // not stale - no expiry action
     expect(userState.currentCredits).toBe(1); // untouched
+  });
+});
+
+describe('connection-independent credit lot sweep', () => {
+  beforeEach(() => {
+    fakeLots.length = 0;
+    txRows.length = 0;
+    userState.currentCredits = 100;
+    vi.clearAllMocks();
+  });
+
+  it('continues after a failed holder and preserves the hosted summary', async () => {
+    const holder = { ownerId: OWNER_ID, ownerType: CreditHolderType.User };
+    addLot({ amount: 100, expiresAt: new Date('2000-01-01T00:00:00Z') });
+    vi.mocked(CreditLot.aggregate)
+      .mockResolvedValueOnce([{ _id: { ...holder, ownerId: 'failed-holder' } }, { _id: holder }])
+      .mockResolvedValueOnce([]);
+    vi.mocked(creditLotRepository.findByOwner).mockRejectedValueOnce(new Error('fixture read failure'));
+    expect(await runCreditLotSweep(new Logger())).toEqual({
+      holdersProcessed: 2,
+      holdersFailed: 1,
+      expiredLots: 1,
+      expiredCredits: 100,
+    });
+    expect(userState.currentCredits).toBe(0);
+    expect(txRows).toHaveLength(1);
+  });
+
+  it('keeps paging after a complete 500-holder batch', async () => {
+    userState.currentCredits = 0;
+    const holder = { ownerId: OWNER_ID, ownerType: CreditHolderType.User };
+    vi.mocked(CreditLot.aggregate)
+      .mockResolvedValueOnce(
+        Array.from({ length: 500 }, (_, index) => ({
+          _id: { ...holder, ownerId: `holder-${String(index).padStart(3, '0')}` },
+        }))
+      )
+      .mockResolvedValueOnce([{ _id: { ...holder, ownerId: 'holder-500' } }])
+      .mockResolvedValueOnce([]);
+    expect(await runCreditLotSweep(new Logger())).toEqual({
+      holdersProcessed: 501,
+      holdersFailed: 0,
+      expiredLots: 0,
+      expiredCredits: 0,
+    });
+    expect(CreditLot.aggregate).toHaveBeenNthCalledWith(2, [
+      { $group: { _id: { ownerId: '$ownerId', ownerType: '$ownerType' } } },
+      { $sort: { '_id.ownerId': 1, '_id.ownerType': 1 } },
+      { $skip: 500 },
+      { $limit: 500 },
+    ]);
+    expect(txRows).toHaveLength(0);
   });
 });

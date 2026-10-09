@@ -1059,6 +1059,14 @@ An explicit HTTP authentication or payload rejection restores a paused resume fo
 
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
 
+### Daily credit-lot expiry
+
+The worker reconciles credit-lot consumption and expires unassigned stale credits at 04:00 UTC, using the same sweep as the hosted cron. The shared sweep groups holders in 500-holder pages and isolates failures per holder. It requires MongoDB transactions; the supplied Compose Mongo runs as a replica set. Standalone Mongo fails closed without a nontransactional fallback. No model provider, CloudWatch or hosted database reconnect is invoked by the local task.
+
+Each holder is read again inside its transaction, including retries. Balance deductions, expiry ledger entries and lot assignments commit together; a failed write rolls them all back. Concurrent attempts on the same holder retry from its fresh balance. Settled stale-lot consumption never decreases after a balance adjustment, so replay does not expire the same credits again; unexpired lots retain the existing FIFO recalculation. Other successfully processed holders retain their committed results. A partial failure rejects the local task after all holders have been visited; the hosted handler retains its existing 200 response and per-holder counts. The sweep does not delete holders, lots or transactions.
+
+There is no startup run. Starting after 04:00 waits until the next day; an exact-boundary start runs that slot. Delayed ticks coalesce missed days, and an active local run does not overlap. Shutdown waits within the worker's existing grace period; an interrupted holder transaction cannot commit partially. This schedule has no cross-worker scheduler lock, although per-holder transactions protect its accounting writes. A restart after today's boundary does not retry the missed daily slot.
+
 ### Daily lake health trends
 
 The worker records health snapshots for active data lakes at 06:00 UTC, using the same bounded sweep as hosted deployments and without CloudWatch metrics. It does not run this sweep at startup. Starting after the daily boundary waits until the next day; a delayed timer runs only the latest due slot, with at most one scheduled attempt per UTC day. An overlapping run consumes the slot without starting another sweep. Shutdown waits up to the worker's existing 20-second grace period; a sweep still running then is abandoned. Completed lakes keep their snapshots, while unvisited lakes retain their older check timestamps and sort first at the next 06:00 UTC run. A restart after today's boundary does not retry that day's missed snapshots.
