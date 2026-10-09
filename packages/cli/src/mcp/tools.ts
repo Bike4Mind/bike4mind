@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
-import { isAxiosError } from 'axios';
 import {
   DEFAULT_TTS_PROVIDER,
   GENERATED_IMAGE_EXTENSION_RE,
@@ -15,9 +14,10 @@ import {
   type TTSRequest,
 } from '@bike4mind/common';
 import {
+  apiErrorRetryAfterSeconds,
+  apiErrorStatus,
   B4mApiClient,
   mapApiError,
-  parseRetryAfterSeconds,
   type QuestResponse,
   type RawDataLake,
   type RawNotebook,
@@ -312,7 +312,7 @@ export async function createNotebook(
   client: B4mApiClient,
   args: { name?: string; projectId?: string; dataLakeId?: string }
 ) {
-  // POST /api/sessions/create hard-requires a name; default to the web app's
+  // POST /api/v1/sessions hard-requires a name; default to the web app's
   // convention when the caller omits one so a nameless create still succeeds.
   return client.createNotebook({ ...args, name: args.name ?? 'New Notebook' });
 }
@@ -468,10 +468,10 @@ const replyText = (q: QuestResponse) => questReplyText(q, joinReplySlots) ?? '';
 const questRef = (questId: string, notebookId?: string) =>
   `quest ${questId}${notebookId ? `, notebook ${notebookId}` : ''}`;
 
-const isRateLimited = (err: unknown) => isAxiosError(err) && err.response?.status === 429;
+const isRateLimited = (err: unknown) => apiErrorStatus(err) === 429;
 
 const isPermanentApiError = (err: unknown) => {
-  const status = isAxiosError(err) ? err.response?.status : undefined;
+  const status = apiErrorStatus(err);
   return status === 401 || status === 403 || status === 404;
 };
 
@@ -512,8 +512,7 @@ async function pollQuest(
     } catch (err) {
       // The per-minute key limit is shared with other calls, so a 429 says nothing about the quest.
       if (isRateLimited(err)) {
-        retryAfterMs =
-          (parseRetryAfterSeconds(isAxiosError(err) && err.response?.headers?.['retry-after']) ?? 0) * 1000;
+        retryAfterMs = (apiErrorRetryAfterSeconds(err) ?? 0) * 1000;
       } else {
         failures += 1;
         if (isPermanentApiError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) {

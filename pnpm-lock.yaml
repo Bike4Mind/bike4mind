@@ -2056,6 +2056,9 @@ importers:
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../../b4m-core/observability
+      '@bike4mind/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       '@bike4mind/services':
         specifier: workspace:*
         version: link:../../b4m-core/services
