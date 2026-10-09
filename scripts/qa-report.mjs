@@ -203,6 +203,55 @@ export function latencyMetric(fileName, json) {
   return metric;
 }
 
+/**
+ * The Aggregate step in e2e-ai-latency.yml fails the run on a latency breach after Playwright
+ * passed, so the breach has to reach /status as a failed test. Mirrors that step's per-cell rule
+ * (over threshold, no threshold, or an abandoned gated prompt); keep the two in sync.
+ */
+export function latencyGateTest(fileName, json) {
+  if (typeof json?.model !== 'string') return null;
+  const avg = typeof json.averageResponseTimeSec === 'number' ? json.averageResponseTimeSec : 0;
+  const threshold = typeof json.thresholdSec === 'number' ? json.thresholdSec : undefined;
+  const abandoned = (Array.isArray(json.results) ? json.results : []).filter(
+    r => r?.incomplete === true && r.measuresDeliverable !== true
+  ).length;
+  if (threshold !== undefined && (avg === 0 || (avg <= threshold && abandoned === 0))) return null;
+  const label = `${path.basename(fileName, '-results.json')} [${json.model}]`;
+  let error = `avg ${avg.toFixed(2)}s, ${threshold === undefined ? 'no threshold declared' : `threshold ${threshold}s`}`;
+  if (abandoned > 0) error += `, ${abandoned} prompt(s) never finished`;
+  return gateTest(`latency-gate::${label}`, `Latency gate: ${label}`, error);
+}
+
+function gateTest(testKey, title, error) {
+  return { testKey, title, status: 'failed', durationMs: 0, retries: 0, error, artifacts: [], attachments: [] };
+}
+
+/** Fallback when the workflow reports a breach but no cell file explains it. */
+export const LATENCY_GATE_FALLBACK = gateTest(
+  'latency-gate',
+  'Latency gate',
+  'Latency gate failed; the Aggregate step summary in CI names the cell.'
+);
+
+export function applyLatencyGate(parsed, gateTests) {
+  const tests = gateTests.length > 0 ? gateTests : [{ ...LATENCY_GATE_FALLBACK }];
+  parsed.tests.unshift(...tests);
+  parsed.counts.failed += tests.length;
+  parsed.counts.ran += tests.length;
+  parsed.counts.total += tests.length;
+}
+
+async function loadLatencyGateTests(latencyDir, log) {
+  if (!latencyDir) return [];
+  const files = await findFiles(latencyDir, n => n.endsWith('-results.json') && !n.endsWith('-pw-results.json'));
+  const tests = [];
+  for (const file of files) {
+    const test = latencyGateTest(file, await readJson(file, log));
+    if (test) tests.push(test);
+  }
+  return tests;
+}
+
 const UPLOAD_BATCH = 200; // QA_MAX_UPLOADS_PER_CALL
 const REPORT_MAX_FILES = 1000;
 const PUT_CONCURRENCY = 8;
@@ -524,6 +573,9 @@ export async function main(argv, env, deps = {}) {
     // No results file means the job died before Playwright reported: still post it (infra-error).
     const parsed = parts.length > 0 ? mergeParsed(parts) : parseResults({});
     if (args.countsOut) await fs.writeFile(args.countsOut, JSON.stringify(parsed.counts));
+
+    // QA_LATENCY_BREACH is the Aggregate step's skip-aware verdict; never re-derive it here.
+    if (env.QA_LATENCY_BREACH === 'true') applyLatencyGate(parsed, await loadLatencyGateTests(args.latencyDir, log));
 
     const metrics = await loadMetrics(args, log);
     let reportPrefix;

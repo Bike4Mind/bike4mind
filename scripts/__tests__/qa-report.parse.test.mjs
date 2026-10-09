@@ -8,6 +8,8 @@ import {
   creditsMetrics,
   CREDITS_THRESHOLD,
   ERROR_MAX_CHARS,
+  applyLatencyGate,
+  latencyGateTest,
   latencyMetric,
   mergeParsed,
   parseResults,
@@ -159,5 +161,39 @@ describe('metric adapters', () => {
     expect(
       latencyMetric('/x/a-results.json', { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 0 })
     ).toBeNull();
+  });
+});
+
+describe('latency gate', () => {
+  const file = '/x/ai-latency-short-answers-results.json';
+
+  it('fails a cell over its threshold and passes one under it', () => {
+    expect(latencyGateTest(file, { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 7.25 })).toMatchObject({
+      testKey: 'latency-gate::ai-latency-short-answers [model-x]',
+      status: 'failed',
+      error: 'avg 7.25s, threshold 5s',
+    });
+    expect(latencyGateTest(file, { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 5 })).toBeNull();
+  });
+
+  it('fails an under-threshold cell that abandoned a gated prompt', () => {
+    const results = [{ incomplete: true }, { incomplete: true, measuresDeliverable: true }, {}];
+    expect(
+      latencyGateTest(file, { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 2, results })?.error
+    ).toBe('avg 2.00s, threshold 5s, 1 prompt(s) never finished');
+  });
+
+  it('treats no data as no verdict and a missing threshold as a breach, like the Aggregate step', () => {
+    expect(latencyGateTest(file, { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 0 })).toBeNull();
+    expect(latencyGateTest(file, { model: 'model-x', averageResponseTimeSec: 3 })?.error).toBe(
+      'avg 3.00s, no threshold declared'
+    );
+  });
+
+  it('turns a passed run failed, falling back to one gate test when no cell explains the breach', () => {
+    const parsed = { tests: [], counts: { passed: 2, failed: 0, skipped: 0, notStarted: 0, ran: 2, total: 2 } };
+    applyLatencyGate(parsed, []);
+    expect(parsed.tests.map(t => t.testKey)).toEqual(['latency-gate']);
+    expect(parsed.counts).toMatchObject({ failed: 1, ran: 3, total: 3 });
   });
 });
