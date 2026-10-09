@@ -5,7 +5,7 @@ import { DiscoveredLink } from '@bike4mind/common';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { getFabFileByIdFromServer } from '@client/app/utils/filesAPICalls';
-import { useSessions } from '@client/app/contexts/SessionsContext';
+import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 
 interface ResearchTaskDiscoveredLinkProps {
@@ -15,7 +15,7 @@ interface ResearchTaskDiscoveredLinkProps {
 
 const ResearchTaskDiscoveredLink: FC<ResearchTaskDiscoveredLinkProps> = ({ link, getFabFileId }) => {
   const relevanceValue = (link.relevance ?? 0) * 100;
-  const { currentSessionId } = useSessions();
+  const activeNotebook = useActiveNotebook();
   const { addToNotebookContext } = useNotebookContextFiles();
   const [isAttaching, setIsAttaching] = useState(false);
 
@@ -27,15 +27,19 @@ const ResearchTaskDiscoveredLink: FC<ResearchTaskDiscoveredLinkProps> = ({ link,
 
   async function handleAttachFile() {
     const fabFileId = link.researchDataId ? getFabFileId(link.researchDataId) : undefined;
-    if (!fabFileId || !currentSessionId) return;
+    if (!fabFileId) return;
+    if (!activeNotebook.onScreen) {
+      toast.info('Open a notebook to attach this file to it.');
+      return;
+    }
 
     setIsAttaching(true);
     try {
       const fabFile = await fetchFabFile(fabFileId);
-      // addToNotebookContext rolls back and toasts its own failure.
-      if (fabFile) await addToNotebookContext(currentSessionId, fabFile);
-    } catch (error) {
-      console.error('Failed to attach research file', error);
+      if (!fabFile) return;
+      await addToNotebookContext(activeNotebook.sessionId, fabFile).catch(() => {
+        // Already rolled back and surfaced by the hook.
+      });
     } finally {
       setIsAttaching(false);
     }
@@ -45,8 +49,9 @@ const ResearchTaskDiscoveredLink: FC<ResearchTaskDiscoveredLinkProps> = ({ link,
     try {
       return await getFabFileByIdFromServer(fabFileId);
     } catch (error) {
+      console.error('Failed to load research file', error);
       toast.error('Could not load that file');
-      throw error;
+      return null;
     }
   }
 
@@ -185,6 +190,7 @@ const ResearchTaskDiscoveredLink: FC<ResearchTaskDiscoveredLinkProps> = ({ link,
               sx={{ gap: '5px' }}
               onClick={handleAttachFile}
               loading={isAttaching}
+              data-testid="research-link-attach-btn"
             >
               <AttachFile />
             </Button>

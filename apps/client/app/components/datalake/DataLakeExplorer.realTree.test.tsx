@@ -13,6 +13,9 @@ const { fetchCalls, tagCountsState } = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
   useNotebookContextFiles: () => ({ addToNotebookContext: vi.fn() }),
 }));
+vi.mock('@client/app/hooks/useActiveNotebook', () => ({
+  useActiveNotebook: () => ({ onScreen: true, sessionId: 'sess-1' }),
+}));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
   useSessions: () => ({

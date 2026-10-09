@@ -9,10 +9,11 @@ import { isOptimisticId } from '@client/app/utils/llm';
  * The write path for a notebook's context files (`session.knowledgeIds`).
  *
  * The composer, file-manager, Data Lake [+], research-task and Knowledge-editor create
- * paths write through here. The older idiom they replaced computed the new id list from a
- * captured `currentSession`, which loses a concurrent write, and persisted through a fire-and-forget helper that swallowed
- * failures - a silent no-op is the worst possible outcome for a feature whose entire
- * symptom is a file quietly missing from context.
+ * paths write through here (the browser surfaces gate on useActiveNotebook first). The
+ * older idiom they replaced computed the new id list from a captured `currentSession`,
+ * which loses a concurrent write, and persisted through a fire-and-forget helper that
+ * swallowed failures - a silent no-op is the worst possible outcome for a feature whose
+ * entire symptom is a file quietly missing from context.
  *
  * It is NOT yet the only writer. Roughly a dozen other surfaces still set
  * `knowledgeIds` through `setCurrentSession` (Drive add, file browser, artifact and

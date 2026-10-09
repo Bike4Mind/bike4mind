@@ -5,14 +5,16 @@ import type { IResearchDataWithFiles } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ResearchTaskFile from './File';
 
-const { addToNotebookContext, sessionState } = vi.hoisted(() => ({
+const { addToNotebookContext, activeNotebook, toastInfo } = vi.hoisted(() => ({
   addToNotebookContext: vi.fn(),
-  sessionState: { currentSessionId: 'sess-1' as string | null },
+  activeNotebook: {
+    value: { onScreen: true, sessionId: 'sess-1' } as { onScreen: boolean; sessionId?: string | null },
+  },
+  toastInfo: vi.fn(),
 }));
 
-vi.mock('@client/app/contexts/SessionsContext', () => ({
-  useSessions: () => ({ currentSessionId: sessionState.currentSessionId }),
-}));
+vi.mock('@client/app/hooks/useActiveNotebook', () => ({ useActiveNotebook: () => activeNotebook.value }));
+vi.mock('sonner', () => ({ toast: { info: toastInfo, error: vi.fn(), success: vi.fn() } }));
 vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
   useNotebookContextFiles: () => ({ addToNotebookContext, isPending: () => false }),
 }));
@@ -37,7 +39,7 @@ const renderFile = () =>
 describe('ResearchTaskFile attach', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    sessionState.currentSessionId = 'sess-1';
+    activeNotebook.value = { onScreen: true, sessionId: 'sess-1' };
     addToNotebookContext.mockResolvedValue(true);
   });
 
@@ -49,19 +51,29 @@ describe('ResearchTaskFile attach', () => {
     );
   });
 
-  it('contains a failed persist (the writer has already rolled back and toasted)', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    addToNotebookContext.mockRejectedValueOnce(new Error('PUT failed'));
+  it('attaches with a null session id on /new', async () => {
+    activeNotebook.value = { onScreen: true, sessionId: null };
     renderFile();
     fireEvent.click(screen.getByTestId('research-file-attach-btn'));
-    await waitFor(() => expect(errSpy).toHaveBeenCalledWith('Failed to attach research file', expect.any(Error)));
-    errSpy.mockRestore();
+    await waitFor(() =>
+      expect(addToNotebookContext).toHaveBeenCalledWith(null, expect.objectContaining({ id: 'file-1' }))
+    );
   });
 
-  it('does nothing without a notebook to attach to', () => {
-    sessionState.currentSessionId = null;
+  it('tells the user to open a notebook when none is on screen', () => {
+    activeNotebook.value = { onScreen: false };
     renderFile();
     fireEvent.click(screen.getByTestId('research-file-attach-btn'));
     expect(addToNotebookContext).not.toHaveBeenCalled();
+    expect(toastInfo).toHaveBeenCalledWith('Open a notebook to attach this file to it.');
+  });
+
+  it('contains a failed persist (the writer has already rolled back and toasted)', async () => {
+    addToNotebookContext.mockRejectedValueOnce(new Error('PUT failed'));
+    renderFile();
+    fireEvent.click(screen.getByTestId('research-file-attach-btn'));
+    await waitFor(() => expect(addToNotebookContext).toHaveBeenCalled());
+    // Flush the rejected promise's microtasks; an uncontained rejection fails the run.
+    await new Promise(resolve => setTimeout(resolve, 0));
   });
 });
