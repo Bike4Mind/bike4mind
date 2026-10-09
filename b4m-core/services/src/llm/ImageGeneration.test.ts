@@ -741,6 +741,22 @@ describe('ImageGenerationService.process (prompt truncation)', () => {
 
 describe('ImageGenerationService.process (usage event on a charged generation)', () => {
   const PNG_DATA_URL = 'data:image/png;base64,AAAA';
+  const primaryImage = {
+    id: 'primary',
+    filePath: 'fab/primary.png',
+    mimeType: 'image/png',
+    moderationStatus: 'clean',
+  };
+  const gptImageModelInfo = {
+    id: ImageModels.GPT_IMAGE_2,
+    type: 'image',
+    name: ImageModels.GPT_IMAGE_2,
+    backend: ModelBackend.OpenAI,
+    contextWindow: 10000,
+    max_tokens: 10000,
+    supportsImageVariation: true,
+    pricing: { 1: { input: 0, output: 0 } },
+  } as unknown as ModelInfo;
   const geminiModelInfo = {
     id: ImageModels.GEMINI_2_5_FLASH_IMAGE,
     type: 'image',
@@ -758,7 +774,15 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       model = ImageModels.GEMINI_2_5_FLASH_IMAGE,
       n,
       recentMessages = [],
-    }: { model?: ImageModels; n?: number; recentMessages?: unknown[] } = {}
+      fabFileIds,
+      useRealCreditValidator = false,
+    }: {
+      model?: ImageModels;
+      n?: number;
+      recentMessages?: unknown[];
+      fabFileIds?: string[];
+      useRealCreditValidator?: boolean;
+    } = {}
   ) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as any;
     const service = new ImageGenerationService({
@@ -771,7 +795,9 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
         },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
-        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+        fabFiles: {
+          findAccessibleInIds: vi.fn(async () => (fabFileIds?.includes(primaryImage.id) ? [primaryImage] : [])),
+        },
         creditTransactions: { create: vi.fn() },
         ...(record ? { usageEvents: { record } } : {}),
       },
@@ -781,10 +807,12 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
         upload: vi.fn().mockResolvedValue('generated/output.png'),
         getSignedUrl: vi.fn().mockResolvedValue(PNG_DATA_URL),
       } as any,
-      fabFileStorage: {} as any,
+      fabFileStorage: { getSignedUrl: vi.fn().mockResolvedValue(PNG_DATA_URL) } as any,
       wsHttpsUrl: 'https://ws.example.com',
     } as any);
-    (service as any).validateUserCredits = vi.fn(async () => ({ requiredCredits: 40, usdCost: 0.04 }));
+    if (!useRealCreditValidator) {
+      (service as any).validateUserCredits = vi.fn(async () => ({ requiredCredits: 40, usdCost: 0.04 }));
+    }
 
     await service.process({
       body: {
@@ -794,6 +822,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
         prompt: 'a red bicycle',
         model,
         ...(n === undefined ? {} : { n }),
+        fabFileIds,
       } as any,
       logger: silentLogger,
     });
@@ -835,6 +864,30 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       expect.objectContaining({ requestId: 'quest1', feature: 'image_generation', creditsCharged: 40 })
     );
     expect(landed).toBe(true);
+  });
+
+  it('deducts the selected primary image input cost on a GPT generation', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([gptImageModelInfo]);
+    const record = vi.fn(async () => undefined);
+
+    const quest = await runCharged(record, {
+      model: ImageModels.GPT_IMAGE_2,
+      fabFileIds: [primaryImage.id],
+      useRealCreditValidator: true,
+    });
+    const expectedCredits = estimateImageCredits(gptImageModelInfo, 1, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: OMITTED_QUALITY_TIER,
+      inputImageCount: 1,
+    }).requiredCredits;
+
+    expect(quest.status).toBe('done');
+    expect(quest.creditsUsed).toBe(expectedCredits);
+    expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: expectedCredits, model: ImageModels.GPT_IMAGE_2 }),
+      expect.anything()
+    );
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expectedCredits }));
   });
 
   it('records the billed image count as units when Kontext is asked for several', async () => {
