@@ -273,7 +273,8 @@ function BranchChip({
                     placement="right"
                   >
                     {/* The outsized shrink factor makes the mark give up its width before the
-                        branch name does, down to the floor where its folder still reads. */}
+                        branch name does, down to a floor that keeps the icon and a few letters;
+                        the tooltip has the full path. */}
                     <Box
                       sx={{
                         ml: 'auto',
