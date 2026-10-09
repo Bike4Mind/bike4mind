@@ -3,8 +3,7 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import SyncIcon from '@mui/icons-material/Sync';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-import { useState } from 'react';
-import { isAxiosError } from 'axios';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { acceptsConnectorContent } from '@bike4mind/common';
 import {
@@ -15,7 +14,6 @@ import {
   type LakeGitHubConnection,
 } from '@client/app/hooks/data/githubLake';
 import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGitHubConnect';
-import { useUpdateDataLake } from '@client/app/hooks/data/dataLakes';
 import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectionDisplay';
 import { getServerErrorField } from '@client/app/utils/error';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
@@ -100,7 +98,8 @@ function GitHubSyncSummary({ connection }: { connection: LakeGitHubConnection })
  * Callers gate this on EnableDataLakeGitHub and canConnectLakeDrive (org + manage), as for Drive.
  *
  * The start route refuses a lake that is not connector-fed (githubLakeConnection.ts), so a curated or
- * unknown origin asks to switch it first; an absent origin reads as curated, the stored default.
+ * unknown origin asks to switch it first; an absent origin reads as curated, the stored default. The
+ * switch rides on the start request (`ensureConnectorFed`), so a refused start leaves the origin alone.
  */
 export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLake }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
@@ -114,8 +113,14 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
   const { begin: beginConnect, isPending: connecting } = useBeginLakeGitHubConnect(lake.id);
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
-  const updateLake = useUpdateDataLake({ notifySuccess: false });
   const needsSwitch = !acceptsConnectorContent(lake.origin);
+  // List-backed callers drop the prompt once the refetched lake reads connector-fed. The wizard's
+  // targetLake is a snapshot, so a handoff failure after an accepted switch clears it explicitly
+  // (onFailed with no error).
+  const promptingSwitch = confirmingSwitch && needsSwitch;
+  useEffect(() => {
+    if (!needsSwitch) setSwitchPromptLakeId(null);
+  }, [needsSwitch]);
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="github-connection-loading" />;
@@ -148,14 +153,14 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
           variant="outlined"
           color="neutral"
           startDecorator={<GitHubIcon />}
-          loading={connecting && !confirmingSwitch}
-          disabled={confirmingSwitch}
+          loading={connecting && !promptingSwitch}
+          disabled={promptingSwitch}
           onClick={() => (needsSwitch ? setSwitchPromptLakeId(lake.id) : beginConnect())}
           sx={{ alignSelf: 'flex-start' }}
         >
           Connect GitHub
         </Button>
-        {confirmingSwitch && (
+        {promptingSwitch && (
           <Stack gap={0.5} data-testid="github-switch-origin-prompt">
             <Typography level="body-sm">Switch this lake to connector-fed to connect a repository?</Typography>
             <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
@@ -168,29 +173,17 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
                 size="sm"
                 variant="soft"
                 color="primary"
-                loading={updateLake.isPending || connecting}
-                onClick={() => {
-                  const lakeId = lake.id;
-                  // The update hook toasts its own failure; the connect only starts once the origin is written.
-                  updateLake.mutate(
-                    { id: lakeId, origin: 'connector-fed' },
-                    {
-                      onSuccess: () => {
-                        setSwitchPromptLakeId(null);
-                        // Undo the switch if the start is refused, so a failed connect does not leave the
-                        // lake connector-fed with nothing connected. Abandoning GitHub's page keeps it: the
-                        // user confirmed the switch, and the lake's origin chip shows it. A 409 means another
-                        // connector (or someone else's connect) holds the lake, which needs connector-fed.
-                        beginConnect({
-                          onFailed: error => {
-                            if (isAxiosError(error) && error.response?.status === 409) return;
-                            updateLake.mutate({ id: lakeId, origin: 'curated' });
-                          },
-                        });
-                      },
-                    }
-                  );
-                }}
+                loading={connecting}
+                // The begin hook toasts a refusal. Abandoning GitHub's page keeps the switch: the user
+                // confirmed it, and the lake's origin chip shows it.
+                onClick={() =>
+                  beginConnect({
+                    ensureConnectorFed: true,
+                    onFailed: e => {
+                      if (e === undefined) setSwitchPromptLakeId(null);
+                    },
+                  })
+                }
               >
                 Switch and connect
               </Button>
@@ -199,7 +192,7 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
                 size="sm"
                 variant="plain"
                 color="neutral"
-                disabled={updateLake.isPending || connecting}
+                disabled={connecting}
                 onClick={() => setSwitchPromptLakeId(null)}
               >
                 Cancel

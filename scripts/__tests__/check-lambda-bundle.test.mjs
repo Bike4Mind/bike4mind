@@ -131,9 +131,9 @@ describe('listInfraSources', () => {
 
 describe('resolveHandlerFile', () => {
   it('strips the export name and finds the source file', () => {
-    const exists = existsIn(new Set(['apps/workers/src/cron/warmer.ts']));
-    expect(resolveHandlerFile(repoRoot, 'apps/workers/src/cron/warmer.dispatch', exists)).toBe(
-      'apps/workers/src/cron/warmer.ts'
+    const exists = existsIn(new Set(['apps/workers/src/cron/creditLotSweep.ts']));
+    expect(resolveHandlerFile(repoRoot, 'apps/workers/src/cron/creditLotSweep.dispatch', exists)).toBe(
+      'apps/workers/src/cron/creditLotSweep.ts'
     );
   });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { gaBootstrapScript } from './gaConsentBootstrap';
-import { CONSENT_KEY, DECISION_COOKIE, REGION_COOKIE, resolveConsent } from './consentRegion';
+import { DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
+import { CONSENT_KEY, resolveConsent } from './consentRegion';
 
 function clearCookies() {
   for (const entry of document.cookie.split('; ')) {

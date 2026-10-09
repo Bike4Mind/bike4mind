@@ -787,7 +787,7 @@ export async function fetchAndProcessPreviousMessages(
     return acc;
   }, new Array<IMessage>());
 
-  // Surface recently generated images so a follow-up turn can edit them
+  // Surface recently generated images so a follow-up turn can edit or animate them
   // ("make it cartoonish"). Generated images persist as bare storage keys in
   // quest.images with no fabFile record, so the model otherwise has no handle on
   // them. Newest first, capped, and filtered to actual image files (quest.images

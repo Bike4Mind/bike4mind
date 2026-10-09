@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHmac } from 'crypto';
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   purgeDataLakeDocument: vi.fn(),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
@@ -53,7 +53,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     purgeDataLakeDocument: h.purgeDataLakeDocument,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
@@ -132,7 +132,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake', datalakeTag: 'datalake:sales' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake', datalakeTag: 'datalake:sales' });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.selfHostOpenSearchEnabled.mockReturnValue(false);
     // The real service files the receipt through `onReceipt` before returning; the mock has to do
@@ -156,8 +156,8 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   };
 
   it('purges against the RESOLVED lake and returns the receipt verbatim', async () => {
-    // The route accepts an id OR a slug; handing the service the raw query value would address
-    // the wrong lake for a slug - and here that means destroying the wrong file.
+    // The service must get the gate's resolved lake.id, never the raw query value (which differs
+    // here on purpose) - forwarding the wrong value here means destroying the wrong file.
     const { res, json } = makeRes();
     await call(req({ id: 'my-lake', fabFileId: FILE_ID }), res);
 
@@ -177,7 +177,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     const { res } = makeRes();
     await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
 
-    expect(h.assertLakeAccess.mock.calls[0][2].db.dataLakeAccessGrants).toBeDefined();
+    expect(h.assertLakeAccessById.mock.calls[0][2].db.dataLakeAccessGrants).toBeDefined();
     expect(h.purgeDataLakeDocument.mock.calls[0][0]).toEqual({
       userId: 'u1',
       isAdmin: false,
@@ -460,7 +460,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   });
 
   it('refuses a lake the caller cannot even see, before touching anything', async () => {
-    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessById.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
     await expect(call(req({ id: 'nope', fabFileId: FILE_ID }), res)).rejects.toThrow('Data lake not found');
     expect(h.purgeDataLakeDocument).not.toHaveBeenCalled();

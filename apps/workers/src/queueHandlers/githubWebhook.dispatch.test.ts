@@ -49,10 +49,6 @@ vi.mock('@server/integrations/github/handlers', () => ({
   getHandler: vi.fn().mockReturnValue(mockHandler),
 }));
 
-vi.mock('@server/utils/warmer', () => ({
-  handleWarmerInvocation: vi.fn().mockReturnValue(false),
-}));
-
 // Import after mocking
 import { dispatch } from './githubWebhook';
 import { mcpServerRepository, cacheRepository } from '@bike4mind/database';

@@ -2,8 +2,9 @@ import type { SubQuestStatus } from '@bike4mind/common';
 
 /**
  * The one glyph/label vocabulary for a sub-quest status, shared by the client-side export
- * (app/utils/questExport.ts) and the queued server-side export
- * (server/queueHandlers/questExport.ts).
+ * (apps/client/app/utils/questExport.ts) and the queued server-side export
+ * (apps/workers/src/queueHandlers/questExport.ts). It lives in apps/client/shared because
+ * apps/workers may not import apps/client/app.
  *
  * Both maps used to be declared separately in those two files. Being `Record<SubQuestStatus, …>`
  * meant a NEW status failed the build in both - but a changed GLYPH on one side drifted silently,
