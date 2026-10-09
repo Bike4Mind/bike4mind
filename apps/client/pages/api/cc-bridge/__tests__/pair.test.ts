@@ -122,8 +122,7 @@ describe('POST /api/cc-bridge/pair', () => {
     expect(refs.create).not.toHaveBeenCalled();
   });
 
-  // The schema comment says control characters are disallowed, but `\s` in the regex admits them.
-  it.fails('rejects a label containing a newline or tab', async () => {
+  it('rejects a label containing a newline or tab', async () => {
     const { res, run } = call({ user: tavernUser, body: { deviceLabel: 'ok\nnext\tlabel' } });
     await run();
     expect(res._getStatusCode()).toBe(400);
