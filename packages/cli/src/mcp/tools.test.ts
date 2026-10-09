@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import { B4mApiError } from '@bike4mind/sdk';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { B4mApiClient } from './b4mApiClient';
@@ -471,14 +472,9 @@ describe('tool handlers', () => {
   });
 });
 
-const axiosError = (status: number, opts: { headers?: Record<string, string> } = {}) =>
-  new AxiosError('request failed', undefined, {} as InternalAxiosRequestConfig, {}, {
-    status,
-    statusText: '',
-    data: {},
-    headers: opts.headers ?? {},
-    config: {} as InternalAxiosRequestConfig,
-  } as AxiosResponse);
+// getQuest and cloneNotebook go through @bike4mind/sdk, so their failures are B4mApiErrors.
+const apiError = (status: number, opts: { headers?: Record<string, string> } = {}) =>
+  new B4mApiError(status, {}, new Headers(opts.headers));
 
 describe('sendMessage', () => {
   const noSleep = { sleep: vi.fn().mockResolvedValue(undefined) };
@@ -820,7 +816,7 @@ describe('generateImage', () => {
   });
 
   it('keeps polling through a transient poll failure', async () => {
-    const getQuest = vi.fn().mockRejectedValueOnce(axiosError(502)).mockResolvedValueOnce(doneQuest);
+    const getQuest = vi.fn().mockRejectedValueOnce(apiError(502)).mockResolvedValueOnce(doneQuest);
     const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
 
     const result = await generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep);
@@ -829,7 +825,7 @@ describe('generateImage', () => {
   });
 
   it('gives up after repeated poll failures', async () => {
-    const getQuest = vi.fn().mockRejectedValue(axiosError(502));
+    const getQuest = vi.fn().mockRejectedValue(apiError(502));
     const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
 
     await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
@@ -839,7 +835,7 @@ describe('generateImage', () => {
   });
 
   it('does not count a 429 toward the failure limit and honors Retry-After', async () => {
-    const limited = axiosError(429, { headers: { 'retry-after': '7' } });
+    const limited = apiError(429, { headers: { 'retry-after': '7' } });
     const getQuest = vi
       .fn()
       .mockRejectedValueOnce(limited)
@@ -898,7 +894,7 @@ describe('generateImage', () => {
   });
 
   it('fails immediately on a permanent poll error', async () => {
-    const getQuest = vi.fn().mockRejectedValue(axiosError(403));
+    const getQuest = vi.fn().mockRejectedValue(apiError(403));
     const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
 
     await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
@@ -1060,13 +1056,7 @@ describe('registerTools', () => {
   });
 
   it('clone_notebook surfaces a 429 with its Retry-After', async () => {
-    const err = new AxiosError('failed', undefined, {} as InternalAxiosRequestConfig, {}, {
-      status: 429,
-      statusText: '',
-      data: {},
-      headers: { 'retry-after': '42' },
-      config: {} as InternalAxiosRequestConfig,
-    } as AxiosResponse);
+    const err = apiError(429, { headers: { 'retry-after': '42' } });
     const tools = collectTools(mockClient({ cloneNotebook: vi.fn().mockRejectedValue(err) }));
 
     const result = await tools.get('clone_notebook')!({ notebookId: NB_ID });
