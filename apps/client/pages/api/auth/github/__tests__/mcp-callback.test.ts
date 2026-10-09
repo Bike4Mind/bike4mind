@@ -310,4 +310,20 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
     expect(global.fetch).toHaveBeenCalled();
     expectLeafUpdate('octocat', OCTOCAT.id);
   });
+
+  it('stamps the confirmed-empty marker after a successful tool discovery', async () => {
+    mockFindOne.mockResolvedValue(
+      existingServer({ ...OCTOCAT, githubUserId: OCTOCAT.id, connectedAt: STALE, webhooks: { github: WEBHOOK } })
+    );
+    stubGitHub(OCTOCAT);
+    vi.mocked(invokeMcpHandler).mockResolvedValue([]);
+
+    await run();
+
+    // Update #1 is the reconnect write (which clears the marker); #2 is the tool-cache stamp.
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ id: 'server-1', tools: [], toolSchemas: [], toolSchemasFetchedAt: expect.any(Date) })
+    );
+  });
 });
