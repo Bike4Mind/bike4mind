@@ -766,11 +766,15 @@ jobs:
   test:
     name: Run Tests
     needs: [changes, test-shards]
-    # Run whenever the gate said deployable (always() within that, so a failed
+    # Run whenever the gate said deployable (!cancelled() within that, so a failed
     # shard is still caught by the assertion below). On a non-deployable run the
     # shards were skipped, so this aggregator skips too — a skipped required
     # check counts as passing, instead of failing on skipped shards.
-    if: always() && needs.changes.outputs.deployable == 'true'
+    # Not `always()`: that also runs in a run cancelled by cancel-in-progress, where the
+    # cancelled shards fail the assertion and post a false red for a SHA nothing tested.
+    # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator.
+    if: |
+      !cancelled() && needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
@@ -1055,6 +1059,10 @@ jobs:
   # failures (none of which are individually required checks) through the one
   # required "CI Complete" check instead of letting them pass silently.
   #
+  # `!cancelled()` rather than `always()`: in a run cancelled by cancel-in-progress the unfinished
+  # legs end `cancelled`, not the literal `failure`, so `always()` reported a false green on the
+  # required check with nothing tested. Gated this way the job itself ends `cancelled`.
+  #
   # NOTE: this job name IS the required-check context. Renaming it must happen
   # in lockstep with editing both rulesets, or a required check with no matching
   # job hangs every PR.
@@ -1062,7 +1070,7 @@ jobs:
   ci-complete:
     name: CI Complete
     needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs, published-dts]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - name: Report CI result
