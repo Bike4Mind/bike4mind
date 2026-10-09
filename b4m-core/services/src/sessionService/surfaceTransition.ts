@@ -1,6 +1,6 @@
 import {
   BadRequestError,
-  canUseSurface,
+  canCopyWithinSurface,
   checkSurfaceTransition,
   ForbiddenError,
   getWorkspaceSurface,
@@ -34,11 +34,19 @@ export async function assertSurfaceTransition(
 }
 
 /**
- * The surface a clone or fork of a session in `sourceSurface` is created in, in the form
+ * The surface a clone, fork or snip of a session in `sourceSurface` is created in, in the form
  * createSession takes. An absent `targetSurface` inherits the source's home, except that a
- * registered workspace the caller cannot use (e.g. a share holder without its entitlement) falls
- * back to the main list, so the copy never lands somewhere its owner cannot open. A surface this
- * repo does not register is inherited unchanged.
+ * registered workspace the caller cannot copy within (`canCopyWithinSurface`, e.g. a share holder
+ * with neither its entitlement nor a copy grant for it) falls back to the main list. A surface this
+ * repo does not register is inherited unchanged. A present `targetSurface` is a transition and
+ * needs full use of the destination.
+ *
+ * That the copy never lands somewhere its owner cannot open is guaranteed here only for callers who
+ * can use the workspace. A copy grant keeps the copy in the workspace for a caller who cannot, and
+ * nothing in this function checks that the granted key opens it. That is an obligation on whoever
+ * declares the grant: the workspace's route and API gates must admit the same key (apps/client
+ * `PremiumWorkspaceCopyEntitlements`, cross-checked at codegen), or the copy leaves the main list
+ * for a workspace its owner is turned away from.
  */
 export async function resolveCopySurface(
   sourceSurface: string | null | undefined,
@@ -48,7 +56,7 @@ export async function resolveCopySurface(
   if (targetSurface === undefined) {
     if (!sourceSurface || !getWorkspaceSurface(sourceSurface)) return sourceSurface || undefined;
     const user = resolveSurfaceAccess ? await resolveSurfaceAccess() : null;
-    return canUseSurface(user, sourceSurface) ? sourceSurface : undefined;
+    return canCopyWithinSurface(user, sourceSurface) ? sourceSurface : undefined;
   }
   return (await assertSurfaceTransition(sourceSurface, targetSurface, resolveSurfaceAccess)) ?? undefined;
 }
