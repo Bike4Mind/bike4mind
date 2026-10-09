@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   buildThinkingParams,
+  planReasoningEffort,
   reasonsWithinOutputBudget,
   resolveOutputMaxTokens,
+  THINKING_ANSWER_HEADROOM_TOKENS,
 } from './thinkingParams';
 import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
 
@@ -398,5 +400,80 @@ describe('resolveOutputMaxTokens', () => {
     it('still honors an explicit budget on Bedrock DeepSeek R1', () => {
       expect(resolve(8192, deepseekR1Bedrock)).toBe(8192);
     });
+  });
+});
+
+describe('planReasoningEffort', () => {
+  const adaptive = (id: string): ModelInfo => ({ ...baseModelInfo, id, thinkingStyle: 'adaptive' });
+  const legacy: ModelInfo = { ...baseModelInfo, id: ChatModels.CLAUDE_4_5_SONNET };
+
+  describe('adaptive models', () => {
+    it('turns thinking off with `disabled` where the model accepts it', () => {
+      expect(
+        planReasoningEffort(ChatModels.CLAUDE_5_SONNET, adaptive(ChatModels.CLAUDE_5_SONNET), 'none', 800)
+      ).toEqual({
+        kind: 'off',
+        thinking: { type: 'disabled' },
+      });
+    });
+
+    it('uses `between_tools` for Sonnet 5.5, which rejects `disabled`', () => {
+      const id = ChatModels.CLAUDE_5_5_SONNET_BEDROCK;
+      expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
+        kind: 'off',
+        thinking: { type: 'between_tools' },
+      });
+    });
+
+    it('falls back to the lowest effort on a model with no off switch', () => {
+      const id = ChatModels.CLAUDE_5_5_OPUS;
+      expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
+        kind: 'adaptive',
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'low' },
+      });
+    });
+
+    it.each([
+      ['minimal', 'low'],
+      ['low', 'low'],
+      ['medium', 'medium'],
+      ['high', 'high'],
+      ['xhigh', 'xhigh'],
+    ] as const)('maps %s to effort %s', (requested, expected) => {
+      const plan = planReasoningEffort(ChatModels.CLAUDE_5_OPUS, adaptive(ChatModels.CLAUDE_5_OPUS), requested, 800);
+      expect(plan).toEqual({ kind: 'adaptive', thinking: { type: 'adaptive' }, output_config: { effort: expected } });
+    });
+  });
+
+  describe('legacy models', () => {
+    it('leaves the request alone for `none`, since they do not think unless asked', () => {
+      expect(planReasoningEffort(legacy.id, legacy, 'none', 8192)).toEqual({ kind: 'default' });
+    });
+
+    it('maps effort to a thinking budget', () => {
+      expect(planReasoningEffort(legacy.id, legacy, 'medium', 8192)).toEqual({
+        kind: 'budget',
+        thinking: { type: 'enabled', budget_tokens: 4096 },
+        temperature: 1,
+      });
+    });
+
+    it('clamps the budget under max_tokens instead of raising max_tokens', () => {
+      const plan = planReasoningEffort(legacy.id, legacy, 'high', 8192);
+      expect(plan).toMatchObject({
+        kind: 'budget',
+        thinking: { budget_tokens: 8192 - THINKING_ANSWER_HEADROOM_TOKENS },
+      });
+    });
+
+    it('skips thinking when even the minimum budget cannot fit', () => {
+      expect(planReasoningEffort(legacy.id, legacy, 'low', 800)).toEqual({ kind: 'default' });
+    });
+  });
+
+  it('leaves a model that cannot think alone', () => {
+    const noThinking: ModelInfo = { ...baseModelInfo, id: ChatModels.CLAUDE_3_5_HAIKU_ANTHROPIC, can_think: false };
+    expect(planReasoningEffort(noThinking.id, noThinking, 'high', 8192)).toEqual({ kind: 'default' });
   });
 });

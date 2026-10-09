@@ -100,7 +100,7 @@ export const CompletionRequestSchema = z.object({
       tools: z.array(CompletionToolSchema).optional(),
       response_format: ResponseFormatSchema.optional(),
       reasoningEffort: CompletionReasoningEffortSchema.optional().describe(
-        'Reasoning effort hint. Honoured only by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only) and DeepSeek adapters; Kimi and DeepSeek map it onto their own scale. Silently ignored by every other adapter (Anthropic, Gemini, Bedrock, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
+        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models a thinking budget that cannot fit under `max_tokens` is skipped. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
       ),
     })
     .optional(),

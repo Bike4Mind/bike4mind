@@ -4,6 +4,7 @@ import {
   NO_TEMPERATURE_MODELS,
   REASONING_SUPPORTED_MODELS,
   type ModelInfo,
+  type ReasoningEffort,
 } from '@bike4mind/common';
 
 /**
@@ -14,7 +15,10 @@ import {
  */
 export type ThinkingConfig =
   | { thinking: { type: 'enabled'; budget_tokens: number }; output_config?: never }
-  | { thinking: { type: 'adaptive' }; output_config: { effort: 'high' | 'medium' | 'low' } };
+  | { thinking: { type: 'adaptive' }; output_config: { effort: AnthropicEffort } };
+
+/** The `output_config.effort` levels every adaptive model in the catalogs accepts. */
+export type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
 /**
  * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
@@ -199,7 +203,7 @@ export function buildThinkingParams(
   modelInfo: ModelInfo,
   budgetTokens: number,
   currentMaxTokens: number,
-  effort: 'high' | 'medium' | 'low' = 'high'
+  effort: AnthropicEffort = 'high'
 ): ThinkingResult {
   const isAdaptive = modelInfo.thinkingStyle === 'adaptive';
   const rejectsTemperature = NO_TEMPERATURE_MODELS.has(model);
@@ -233,5 +237,97 @@ export function buildThinkingParams(
     },
     maxTokens,
     temperature: rejectsTemperature ? 'delete' : 1,
+  };
+}
+
+/**
+ * How each adaptive model turns thinking off, for the ids that can. Omitting `thinking`
+ * does not do it: Sonnet 5 and Opus 5 then think adaptively at the default effort.
+ * Opus 5.5 and the Fable line 400 on any off switch, so they are absent and a `none`
+ * request runs them at the lowest effort instead.
+ */
+const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_tools'> = new Map([
+  [ChatModels.CLAUDE_4_7_OPUS, 'disabled'],
+  [ChatModels.CLAUDE_4_7_OPUS_BEDROCK, 'disabled'],
+  [ChatModels.CLAUDE_4_8_OPUS, 'disabled'],
+  [ChatModels.CLAUDE_4_8_OPUS_BEDROCK, 'disabled'],
+  [ChatModels.CLAUDE_5_SONNET, 'disabled'],
+  [ChatModels.CLAUDE_5_SONNET_BEDROCK, 'disabled'],
+  [ChatModels.CLAUDE_5_OPUS, 'disabled'],
+  [ChatModels.CLAUDE_5_OPUS_BEDROCK, 'disabled'],
+  // Sonnet 5.5 rejects `disabled`; `between_tools` is its off switch.
+  [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'between_tools'],
+]);
+
+/** Legacy `budget_tokens` per effort; `high` matches the chat path's 16K default. */
+const LEGACY_EFFORT_BUDGET_TOKENS: Record<AnthropicEffort, number> = {
+  low: 1024,
+  medium: 4096,
+  high: 16_000,
+  xhigh: 32_000,
+};
+
+/** The API rejects a legacy thinking budget below this. */
+export const LEGACY_THINKING_MIN_BUDGET_TOKENS = 1024;
+
+/**
+ * What a caller's `reasoningEffort` does to an Anthropic request.
+ *
+ * - `off`: send this `thinking` switch and no effort.
+ * - `adaptive`: send `thinking: adaptive` plus this effort.
+ * - `budget`: send this legacy budget; the API then needs temperature 1 (or none) and no top_p.
+ * - `default`: leave the request as it is.
+ *
+ * None of them touch max_tokens: a caller who names a budget gets exactly that budget.
+ */
+export type ReasoningEffortPlan =
+  | { kind: 'off'; thinking: { type: 'disabled' | 'between_tools' } }
+  | { kind: 'adaptive'; thinking: { type: 'adaptive' }; output_config: { effort: AnthropicEffort } }
+  | { kind: 'budget'; thinking: { type: 'enabled'; budget_tokens: number }; temperature: 1 | 'delete' }
+  | { kind: 'default' };
+
+function toAnthropicEffort(effort: Exclude<ReasoningEffort, 'none'>): AnthropicEffort {
+  return effort === 'minimal' ? 'low' : effort;
+}
+
+/**
+ * Maps the provider-neutral `reasoningEffort` onto an Anthropic model.
+ *
+ * `none` switches thinking off where the model allows it, and otherwise asks for the
+ * lowest effort the model accepts. A legacy budget is clamped to fit under max_tokens
+ * with answer headroom. If even the minimum budget does not fit, thinking stays off
+ * rather than raising the caller's max_tokens.
+ */
+export function planReasoningEffort(
+  model: string,
+  modelInfo: ModelInfo,
+  effort: ReasoningEffort,
+  maxTokens: number
+): ReasoningEffortPlan {
+  if (!modelInfo.can_think) return { kind: 'default' };
+
+  if (modelInfo.thinkingStyle === 'adaptive') {
+    if (effort === 'none') {
+      const offSwitch = ADAPTIVE_THINKING_OFF_SWITCH.get(model);
+      return offSwitch
+        ? { kind: 'off', thinking: { type: offSwitch } }
+        : { kind: 'adaptive', thinking: { type: 'adaptive' }, output_config: { effort: 'low' } };
+    }
+    return { kind: 'adaptive', thinking: { type: 'adaptive' }, output_config: { effort: toAnthropicEffort(effort) } };
+  }
+
+  // Legacy models do not think unless asked, so `none` is already their default.
+  if (effort === 'none') return { kind: 'default' };
+
+  const budgetTokens = Math.min(
+    LEGACY_EFFORT_BUDGET_TOKENS[toAnthropicEffort(effort)],
+    maxTokens - THINKING_ANSWER_HEADROOM_TOKENS
+  );
+  if (budgetTokens < LEGACY_THINKING_MIN_BUDGET_TOKENS) return { kind: 'default' };
+
+  return {
+    kind: 'budget',
+    thinking: { type: 'enabled', budget_tokens: budgetTokens },
+    temperature: NO_TEMPERATURE_MODELS.has(model) ? 'delete' : 1,
   };
 }
