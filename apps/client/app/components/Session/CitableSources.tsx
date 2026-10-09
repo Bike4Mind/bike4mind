@@ -74,6 +74,27 @@ const conflictingTitlesOf = (source: CitableSource, titleById: Map<string, strin
   return unnamed > 0 ? [...named, `${unnamed} further source${unnamed === 1 ? '' : 's'}`] : named;
 };
 
+const conflictIdsOf = (source: CitableSource): string[] => {
+  const ids = source.metadata?.conflictsWith;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+};
+
+/**
+ * Side the conflict tooltip opens on, chosen so it does not cover the partner it names. Chips are
+ * full-width and stack, and conflicts are stamped symmetrically, so the lower chip of an adjacent
+ * pair opens downward. A chip with partners both above and below keeps `top`: no side clears both.
+ * A partner hidden behind Show More is not adjacent, since it is not rendered.
+ */
+export const conflictPlacementOf = (
+  source: CitableSource,
+  above: CitableSource | undefined,
+  below: CitableSource | undefined
+): 'top' | 'bottom' => {
+  const ids = conflictIdsOf(source);
+  const isPartner = (chip: CitableSource | undefined) => !!chip?.id && ids.includes(chip.id);
+  return isPartner(above) && !isPartner(below) ? 'bottom' : 'top';
+};
+
 /**
  * Label (and optional full-list tooltip) for an internal chip's origin.
  *
@@ -102,9 +123,21 @@ const internalLabelOf = (source: CitableSource): { label: string; title?: string
   return { label: DATA_LAKE };
 };
 
-const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[] }> = ({
+interface CitableSourceItemProps {
+  source: CitableSource;
+  conflictingTitles: string[];
+  conflictPlacement: 'top' | 'bottom';
+  /** Outlined while another chip's conflict tooltip names this one. */
+  highlighted: boolean;
+  onConflictTooltipChange: (open: boolean) => void;
+}
+
+const CitableSourceItem: FC<CitableSourceItemProps> = ({
   source,
   conflictingTitles,
+  conflictPlacement,
+  highlighted,
+  onConflictTooltipChange,
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const navigate = useNavigate();
@@ -191,6 +224,7 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
       type={renderAsButton ? 'button' : undefined}
       href={!renderAsButton ? source.url : undefined}
       data-testid="citable-source-chip"
+      data-conflict-highlighted={highlighted || undefined}
       onClick={handleClick}
       target={!renderAsButton && source.url ? '_blank' : undefined}
       rel={!renderAsButton && source.url ? 'noopener noreferrer' : undefined}
@@ -214,6 +248,11 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
         borderWidth: 1,
         borderStyle: 'solid',
         borderColor: theme.palette.reading.cardLine,
+        // The ring doubles the border without changing the chip's size, so nothing below shifts.
+        ...(highlighted && {
+          borderColor: theme.palette.warning.outlinedBorder,
+          boxShadow: `0 0 0 1px ${theme.palette.warning.outlinedBorder}`,
+        }),
         transition: 'all 0.2s ease-in-out',
         cursor: source.url ? 'pointer' : 'default',
         // A source with nowhere to go does not lift: the same hover on a dead row is a
@@ -292,11 +331,9 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
               </Typography>
             </Tooltip>
           )}
-          {/* Both badges below pin placement="top": chips are full-width and stack, so Joy's
-              default bottom lands the box on the next chip down. Note this does not clear the
-              conflict case entirely - conflicts are stamped symmetrically, so the lower chip of
-              a pair now opens over the partner above it. No placement clears both on a stacked
-              list; removing it needs a design change, not a prop (#3290). */}
+          {/* Chips are full-width and stack, so Joy's default bottom lands a tooltip on the next
+              chip down. The truncation badge names no other chip and always opens on top; the
+              conflict badge picks its side per chip, away from its partner (conflictPlacementOf). */}
           {isTruncated && (
             <Tooltip
               size="sm"
@@ -312,13 +349,22 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             </Tooltip>
           )}
           {conflictTooltip && (
-            <Tooltip size="sm" placement="top" title={conflictTooltip}>
+            <Tooltip
+              size="sm"
+              placement={conflictPlacement}
+              title={conflictTooltip}
+              onOpen={() => onConflictTooltipChange(true)}
+              onClose={() => onConflictTooltipChange(false)}
+            >
               <ConflictIcon
                 data-testid="citable-conflict-badge"
-                // The Tooltip only names the conflict to a reader who can hover it. titleAccess is
-                // what puts the same sentence on the accessibility tree (SvgIcon renders it as
-                // <title> and drops its default aria-hidden), so the signal is not sight-only.
-                titleAccess={conflictTooltip}
+                // Named on the accessibility tree so the signal is not sight-only. Not via
+                // titleAccess: the <title> it renders raises a second, native browser tooltip below
+                // the cursor, which covers the partner chip underneath. aria-hidden is overridden
+                // because SvgIcon hides any icon without titleAccess.
+                role="img"
+                aria-label={conflictTooltip}
+                aria-hidden={false}
                 sx={{ fontSize: '0.9rem', color: 'warning.500', flexShrink: 0 }}
               />
             </Tooltip>
@@ -360,6 +406,9 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
  */
 const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
   const [expanded, setExpanded] = useState(false);
+  // Partners of the conflict badge whose tooltip is open, keyed by that chip so a late close from
+  // the badge just left cannot clear the highlight of the one just entered.
+  const [openConflict, setOpenConflict] = useState<{ owner: string; ids: string[] } | null>(null);
   // Citables accumulate across multiple tool calls (e.g. several search_knowledge_base
   // invocations returning overlapping files), so the same source can appear more than
   // once. Dedupe by a stable identity before rendering - otherwise repeated ids produce
@@ -409,13 +458,23 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
           block-level siblings collapse to the larger of the two, so this value alone is what
           shows. */}
       <Stack spacing={1} sx={{ mb: '16px' }}>
-        {visible.map((source, index) => (
-          <CitableSourceItem
-            key={source.id || source.url || index}
-            source={source}
-            conflictingTitles={conflictingTitlesOf(source, titleById)}
-          />
-        ))}
+        {visible.map((source, index) => {
+          const key = String(source.id || source.url || index);
+          return (
+            <CitableSourceItem
+              key={key}
+              source={source}
+              conflictingTitles={conflictingTitlesOf(source, titleById)}
+              conflictPlacement={conflictPlacementOf(source, visible[index - 1], visible[index + 1])}
+              highlighted={!!source.id && !!openConflict?.ids.includes(source.id)}
+              onConflictTooltipChange={open =>
+                setOpenConflict(current =>
+                  open ? { owner: key, ids: conflictIdsOf(source) } : current?.owner === key ? null : current
+                )
+              }
+            />
+          );
+        })}
       </Stack>
 
       <ExpandCollapseButton
