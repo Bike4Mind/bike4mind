@@ -112,7 +112,7 @@ interface RequestArgs {
 
 const ABSOLUTE_URL = /^https?:\/\//i;
 
-export function buildUrl(baseUrl: string, path: string, params?: object, query?: object): string {
+function buildUrl(baseUrl: string, path: string, params?: object, query?: object): string {
   const values = (params ?? {}) as Record<string, unknown>;
   const resolved = path.replace(/\{([^}]+)\}/g, (_, name: string) => {
     const value = values[name];
