@@ -233,15 +233,41 @@ describe('CitableSources conflict badge', () => {
     expect(screen.getByRole('img', { name: /May disagree with Q3 Revenue\.pdf/ })).toBeInTheDocument();
   });
 
-  it('hedges the claim rather than asserting a contradiction', () => {
+  it('hedges the claim once under the list rather than asserting a contradiction', () => {
     // The detector's own contract: a finding is "worth a human's eye", never proven. Wording that
     // overclaims here would be the one place that contract is broken, since this is the only
     // surface a non-technical reader sees it on.
-    // One badged chip, so the hedge resolves to a single element: the wording is identical on every
-    // badge, and a two-chip fixture would match both.
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a']),
+    ]);
+
+    expect(screen.getAllByTestId('citable-sources-conflict-note')).toHaveLength(1);
+    expect(screen.getByTestId('citable-sources-conflict-note')).toHaveTextContent(/not a proven contradiction/);
+  });
+
+  it('keeps the caveat out of the tooltip, so the box stays one line', () => {
+    // The caveat tripled the tooltip's height, which is what made it cover the chip it names.
     renderChips([lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']), lakeChip('file-b', 'Annual Report.pdf')]);
 
-    expect(screen.getByRole('img', { name: /not a proven contradiction/ })).toBeInTheDocument();
+    expect(screen.getByTestId('citable-conflict-badge')).toHaveAttribute(
+      'aria-label',
+      'May disagree with Annual Report.pdf.'
+    );
+  });
+
+  it('shows no caveat when no rendered chip is badged', () => {
+    renderChips([
+      lakeChip('file-x', 'Support Hours.md'),
+      lakeChip('file-y', 'Billing FAQ.md'),
+      lakeChip('file-z', 'Release Notes.md'),
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a']),
+    ]);
+
+    expect(screen.queryByTestId('citable-sources-conflict-note')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('citable-sources-show-more-btn'));
+    expect(screen.getByTestId('citable-sources-conflict-note')).toBeInTheDocument();
   });
 
   it('leaves an unmarked source unbadged', () => {
@@ -258,6 +284,7 @@ describe('CitableSources conflict badge', () => {
     renderChips([lakeChip('file-a', 'Q3 Revenue.pdf'), lakeChip('file-b', 'Annual Report.pdf')]);
 
     expect(screen.queryByTestId('citable-conflict-badge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('citable-sources-conflict-note')).not.toBeInTheDocument();
   });
 
   it('keeps the badge when the partner is not among the rendered chips', () => {
