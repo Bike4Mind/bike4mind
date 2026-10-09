@@ -60,6 +60,15 @@ export function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+/** Disclosure for a row that expands downward in place: points down closed, up open. */
+export function DisclosureIcon({ open }: { open: boolean }) {
+  return (
+    <Glyph>
+      <path d={open ? 'M4 10l4-4 4 4' : 'M4 6l4 4 4-4'} />
+    </Glyph>
+  );
+}
+
 /** The caret on a split button, which points at the menu it opens rather than at its own state. */
 export function CaretDownIcon() {
   return (
