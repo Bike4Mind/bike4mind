@@ -10,7 +10,12 @@ const skills = vi.hoisted(() => ({
   state: {
     skills: [
       { name: 'my-review', description: 'Review my changes', source: 'project', filePath: '/repo/.claude/SKILL.md' },
-      { name: 'commit', description: 'Create a commit', source: 'global', filePath: '/home/.bike4mind/commit.md' },
+      {
+        name: 'chrome-browser',
+        description: 'Use the browser extension',
+        source: 'global',
+        filePath: '/home/.claude/skills/chrome-browser/SKILL.md',
+      },
     ] as SkillSummary[],
     projectDirectory: '/repo',
     untrustedProject: null as string | null,
@@ -43,7 +48,12 @@ describe('the Customize screen', () => {
     document.body.replaceChildren();
     skills.state.skills = [
       { name: 'my-review', description: 'Review my changes', source: 'project', filePath: '/repo/.claude/SKILL.md' },
-      { name: 'commit', description: 'Create a commit', source: 'global', filePath: '/home/.bike4mind/commit.md' },
+      {
+        name: 'chrome-browser',
+        description: 'Use the browser extension',
+        source: 'global',
+        filePath: '/home/.claude/skills/chrome-browser/SKILL.md',
+      },
     ];
   });
 
@@ -61,12 +71,17 @@ describe('the Customize screen', () => {
     expect(groups[0]).toHaveTextContent('Your custom skills');
     expect(groups[0]).toHaveTextContent('/my-review');
     expect(groups[1]).toHaveTextContent('Bike4Mind skills');
-    expect(groups[1]).toHaveTextContent('/commit');
+    expect(groups[1]).toHaveTextContent('/chrome-browser');
   });
 
   it('shows an explicit empty state for either skill group', () => {
     skills.state.skills = [
-      { name: 'commit', description: 'Create a commit', source: 'global', filePath: '/home/.bike4mind/commit.md' },
+      {
+        name: 'chrome-browser',
+        description: 'Use the browser extension',
+        source: 'global',
+        filePath: '/home/.claude/skills/chrome-browser/SKILL.md',
+      },
     ];
     renderScreen();
     expect(container).toHaveTextContent('No custom skills found for this project.');

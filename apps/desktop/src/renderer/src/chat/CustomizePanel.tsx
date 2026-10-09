@@ -92,8 +92,8 @@ function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSumm
 
 function SkillsSettings({ sessionId }: { sessionId: string | null }) {
   const { skills, untrustedProject } = useSkills(sessionId);
-  const bike4MindSkills = skills.filter(skill => /[\\/]\.bike4mind[\\/]/.test(skill.filePath));
-  const customSkills = skills.filter(skill => !bike4MindSkills.includes(skill));
+  const customSkills = skills.filter(skill => skill.name.startsWith('my-'));
+  const bike4MindSkills = skills.filter(skill => !skill.name.startsWith('my-'));
 
   return (
     <Stack spacing={2.5} data-testid="skills-settings">
