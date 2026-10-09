@@ -22,6 +22,7 @@ import {
   deleteFileContract,
   getFileContract,
   listFilesContract,
+  isZodError,
   updateFileContract,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
@@ -454,6 +455,17 @@ describe('PATCH /api/v1/files/{id}', () => {
     expect(body).toMatchObject({ id: FILE_ID, file_name: 'renamed.png', download_url: null });
   });
 
+  // Only a denial is answered from `updated`; anything else (a signing failure, a DB error) must
+  // surface as a 500, not a 200 that silently drops the download URL.
+  it('rethrows a re-read failure that is not a denial', async () => {
+    const signFailed = new Error('sign failed');
+    mockLoadAccessibleFabFile.mockRejectedValue(signFailed);
+    const { req, res } = patch(FILE_ID, { file_name: 'r.png' });
+
+    await expect(callHandler(getHandler, req, res)).rejects.toBe(signFailed);
+    expect(res._isEndCalled()).toBe(false);
+  });
+
   it('treats an empty body as a no-op update that returns the file', async () => {
     const { req, res } = patch(FILE_ID, {});
 
@@ -468,11 +480,24 @@ describe('PATCH /api/v1/files/{id}', () => {
     ['an empty file name', { file_name: '' }],
     ['a file name over 255 characters', { file_name: 'a'.repeat(256) }],
     ['notes over 10,000 characters', { notes: 'a'.repeat(10_001) }],
-  ])('rejects %s before updating', async (_label, body) => {
+  ])('rejects %s with a validation error (422) before updating', async (_label, body) => {
     const { req, res } = patch(FILE_ID, body);
 
-    await expect(callHandler(getHandler, req, res)).rejects.toThrow();
+    // errorHandler (stubbed out here) maps a ZodError to 422 - see defineNextRoute.test.ts.
+    await expect(callHandler(getHandler, req, res)).rejects.toSatisfy(isZodError);
     expect(mockUpdateFabFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a 255-character file name', { file_name: 'a'.repeat(255) }, { fileName: 'a'.repeat(255) }],
+    ['10,000-character notes', { notes: 'a'.repeat(10_000) }, { notes: 'a'.repeat(10_000) }],
+  ])('accepts %s at the limit', async (_label, body, mapped) => {
+    const { req, res } = patch(FILE_ID, body);
+
+    await callHandler(getHandler, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateFabFile).toHaveBeenCalledWith(req.user, { id: FILE_ID, ...mapped }, expect.anything());
   });
 
   it('404s a malformed id without updating', async () => {

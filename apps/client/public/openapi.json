@@ -14195,7 +14195,7 @@
       "patch": {
         "operationId": "updateFile",
         "summary": "Update a file",
-        "description": "Renames a file you can edit or changes its notes: a file you own, or one shared with you with write permission. Omitted fields are left unchanged. Unknown body fields are rejected.",
+        "description": "Renames a file you can edit or changes its notes: a file you own, or one shared with you with edit (`update`) permission. Omitted fields are left unchanged. Unknown body fields are rejected. `download_url` is null in the response when you can edit the file but not read it.",
         "tags": [
           "Files"
         ],

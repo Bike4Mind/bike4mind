@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { FileEvents } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
+import { logEventSafe } from '@server/utils/analyticsLog';
 
 const h = vi.hoisted(() => ({
   findUpdateAccessById: vi.fn(),
@@ -259,10 +261,16 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
 
   it('does not change tags and never looks a lake up when tags is omitted (a rename)', async () => {
     const previousTags = [{ name: 'notes', strength: 1 }];
-    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags, filePath: 'key.txt' }));
     const { res } = makeRes();
 
     await run({ fileName: 'renamed.txt' }, res);
+
+    expect(logEventSafe).toHaveBeenCalledWith(
+      expect.objectContaining({ type: FileEvents.UPDATE_FILE, metadata: { fileId: FILE_ID, fileContent: 'key.txt' } }),
+      expect.anything(),
+      expect.anything()
+    );
 
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
     // The route always sends the `tags` key (see update.ts's `!== undefined` guard comment), so

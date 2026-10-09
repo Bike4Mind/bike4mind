@@ -45,7 +45,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.WRITE_FILES,
     label: 'Write Files',
     description: 'Upload and modify files',
-    endpoints: ['POST /api/v1/files', 'GET /api/v1/files', 'GET /api/v1/files/:id', 'PATCH|DELETE /api/v1/files/:id'],
+    endpoints: ['POST /api/v1/files', 'PATCH|DELETE /api/v1/files/:id'],
   },
   {
     value: ApiKeyScope.AI_GENERATE,

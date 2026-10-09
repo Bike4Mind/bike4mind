@@ -4,7 +4,8 @@ import { generationJobRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getGenerationJobEngine } from '@server/generationJobs/wiring';
 import { findOwnVideoJob } from '@server/videoGenerations/findOwnVideoJob';
-import { mapperDeps, perUserRateLimit } from '@server/videoGenerations/routeDeps';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
+import { mapperDeps } from '@server/videoGenerations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const handler = nextRouteForContract(cancelVideoGenerationContract, {

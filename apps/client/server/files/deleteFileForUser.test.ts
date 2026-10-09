@@ -80,7 +80,8 @@ describe('deleteFileForUser', () => {
   });
 
   it('logs UNSHARE_FILE with the owner for a sharee, and deducts nothing', async () => {
-    mockFindById.mockResolvedValue({ userId: 'owner', tags: [] });
+    // Lake-tagged, so the no-recompute assertion below would fail if a sharee's unshare moved stats.
+    mockFindById.mockResolvedValue({ userId: 'owner', tags: [{ name: 'datalake:orga:acme' }] });
     deleteResolves('unshared', 0, { userId: 'owner' });
 
     expect(await deleteFileForUser(req, FILE_ID)).toBe('unshared');

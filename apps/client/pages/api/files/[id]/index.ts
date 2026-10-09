@@ -70,22 +70,28 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       logger: req.logger,
     });
 
-    const updatedFabFile = await updateFileForUser(req, ctx.administeredOrgIds, {
-      id: fabFileId,
-      type: req.body.type as KnowledgeType,
-      fileName: req.body.fileName as string,
-      mimeType: req.body.mimeType as string,
-      fileContent: req.body.fileContent,
-      system: req.body.system,
-      systemPriority: req.body.systemPriority,
-      sessionId: req.body.sessionId,
-      notes: req.body.notes,
-      // Pass through null so "unset primary" clears the field; ?? undefined
-      // would coalesce null to undefined and get dropped from the $set.
-      primaryTag: req.body.primaryTag,
-      tags: req.body.tags,
-      error: req.body.error,
-    });
+    const updatedFabFile = await updateFileForUser(
+      req,
+      ctx.administeredOrgIds,
+      {
+        id: fabFileId,
+        type: req.body.type as KnowledgeType,
+        fileName: req.body.fileName as string,
+        mimeType: req.body.mimeType as string,
+        fileContent: req.body.fileContent,
+        system: req.body.system,
+        systemPriority: req.body.systemPriority,
+        sessionId: req.body.sessionId,
+        notes: req.body.notes,
+        error: req.body.error,
+      },
+      {
+        // Pass through null so "unset primary" clears the field; ?? undefined
+        // would coalesce null to undefined and get dropped from the $set.
+        primaryTag: req.body.primaryTag,
+        tags: req.body.tags,
+      }
+    );
 
     return res.json(updatedFabFile);
   })

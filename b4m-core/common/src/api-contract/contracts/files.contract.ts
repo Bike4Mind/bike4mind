@@ -173,7 +173,8 @@ export const updateFileContract = defineEndpoint({
   summary: 'Update a file',
   description:
     'Renames a file you can edit or changes its notes: a file you own, or one shared with you with ' +
-    'write permission. Omitted fields are left unchanged. Unknown body fields are rejected.',
+    'edit (`update`) permission. Omitted fields are left unchanged. Unknown body fields are rejected. ' +
+    '`download_url` is null in the response when you can edit the file but not read it.',
   tags: ['Files'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.WRITE_FILES],
