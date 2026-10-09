@@ -12,7 +12,7 @@ import Tabs from '@mui/joy/Tabs';
 import Typography from '@mui/joy/Typography';
 import type { SkillSummary } from '@shared/skills';
 import { entryAttentionChip, EntrySection, type ConfigEntry } from './ConfigEntry';
-import { CloseIcon, ServerIcon, SlidersIcon } from './icons';
+import { CloseIcon, ServerIcon, SlidersIcon, SparkIcon } from './icons';
 import { McpServersSettings } from './McpServersSettings';
 import { NavItem } from './SessionList';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
@@ -24,40 +24,69 @@ const CUSTOMIZE_INTRO = 'What tools the app can reach.';
 
 function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSummary[]; empty: string }) {
   return (
-    <Sheet variant="outlined" sx={{ borderRadius: 'sm', px: 1.5, py: 1.25 }} data-testid="skill-group">
-      <Typography level="title-sm">{title}</Typography>
+    <Box component="section" data-testid="skill-group">
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
+        <Typography level="title-sm">{title}</Typography>
+        <Chip size="sm" variant="soft" color="neutral">
+          {skills.length}
+        </Chip>
+      </Stack>
       {skills.length === 0 ? (
-        <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.75 }}>
-          {empty}
-        </Typography>
+        <Sheet variant="soft" sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}>
+          <Typography level="body-sm" textColor="text.tertiary">
+            {empty}
+          </Typography>
+        </Sheet>
       ) : (
-        <List size="sm" sx={{ mt: 0.5, '--ListItem-paddingX': 0 }}>
+        <List
+          size="sm"
+          sx={{
+            p: 0,
+            '--ListItem-paddingX': 0,
+            '& > li + li': { borderTop: '1px solid', borderColor: 'divider' },
+          }}
+        >
           {skills.map(skill => (
-            <ListItem key={`${skill.source}:${skill.name}`} data-testid="customize-skill-row">
-              <Box sx={{ minWidth: 0, flex: 1 }}>
-                <Stack direction="row" spacing={0.75} alignItems="baseline">
-                  <Typography level="title-sm" noWrap>
-                    /{skill.name}
-                  </Typography>
-                  {skill.argumentHint && (
-                    <Typography level="body-xs" textColor="text.tertiary" noWrap>
-                      {skill.argumentHint}
+            <ListItem key={`${skill.source}:${skill.name}`} sx={{ py: 1.25 }} data-testid="customize-skill-row">
+              <Stack direction="row" spacing={1.25} sx={{ minWidth: 0, width: '100%', alignItems: 'center' }}>
+                <Sheet
+                  variant="outlined"
+                  sx={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 'sm',
+                    flexShrink: 0,
+                    display: 'grid',
+                    placeItems: 'center',
+                    color: 'text.tertiary',
+                  }}
+                >
+                  <SparkIcon />
+                </Sheet>
+                <Box sx={{ minWidth: 0, flex: 1 }}>
+                  <Stack direction="row" spacing={0.75} alignItems="baseline" sx={{ minWidth: 0 }}>
+                    <Typography level="title-sm" noWrap>
+                      /{skill.name}
                     </Typography>
-                  )}
-                  <Box sx={{ flex: 1 }} />
-                  <Chip size="sm" variant="soft" color={skill.source === 'project' ? 'warning' : 'neutral'}>
-                    {skill.source}
-                  </Chip>
-                </Stack>
-                <Typography level="body-xs" textColor="text.tertiary">
-                  {skill.description}
-                </Typography>
-              </Box>
+                    {skill.argumentHint && (
+                      <Typography level="body-xs" textColor="text.tertiary" noWrap>
+                        {skill.argumentHint}
+                      </Typography>
+                    )}
+                  </Stack>
+                  <Typography level="body-sm" textColor="text.secondary" noWrap title={skill.description}>
+                    {skill.description}
+                  </Typography>
+                </Box>
+                <Chip size="sm" variant="plain" color={skill.source === 'project' ? 'warning' : 'neutral'}>
+                  {skill.source === 'project' ? 'Project' : 'Global'}
+                </Chip>
+              </Stack>
             </ListItem>
           ))}
         </List>
       )}
-    </Sheet>
+    </Box>
   );
 }
 
@@ -67,7 +96,7 @@ function SkillsSettings({ sessionId }: { sessionId: string | null }) {
   const customSkills = skills.filter(skill => !bike4MindSkills.includes(skill));
 
   return (
-    <Stack spacing={1.25} data-testid="skills-settings">
+    <Stack spacing={2.5} data-testid="skills-settings">
       {untrustedProject && (
         <Typography level="body-xs" textColor="warning.500">
           Project skills are hidden until this project is trusted.
@@ -179,9 +208,18 @@ export function CustomizeScreen({ onClose, sessionId = null }: { onClose: () => 
         </Stack>
       </Box>
 
-      <Tabs defaultValue={0} sx={{ flex: 1, minHeight: 0 }}>
-        <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-          <TabList sx={{ ...contentColumnSx }}>
+      <Tabs defaultValue={0} sx={{ flex: 1, minHeight: 0, bgcolor: 'transparent' }}>
+        <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', py: 1 }}>
+          <TabList
+            variant="plain"
+            sx={{
+              ...contentColumnSx,
+              gap: 0.5,
+              bgcolor: 'transparent',
+              '& .MuiTab-root': { borderRadius: 'md', minHeight: 34, px: 1.5 },
+              '& .Mui-selected': { bgcolor: 'background.level1', boxShadow: 'sm' },
+            }}
+          >
             <Tab data-testid="customize-skills-tab">Skills</Tab>
             <Tab data-testid="customize-mcp-tab">MCP</Tab>
           </TabList>
