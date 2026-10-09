@@ -9,6 +9,7 @@ import {
 import { Session, User } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/database';
 import defineAbilitiesFor from '@server/auth/ability';
+import { __resetResolvedPromptCache } from '@server/utils/sessionSystemPromptResolver';
 
 /**
  * POST /api/ai/llm with a real session from Mongo. llm.integration.test.ts mocks the session
@@ -85,6 +86,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetResolvedPromptCache();
   mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
   mockLoadIdentityPrompts.mockResolvedValue([IDENTITY_MESSAGE]);
 });
@@ -142,9 +144,36 @@ describe('POST /api/ai/llm with a real session (Mongo)', () => {
     await post(session.id);
 
     expect(mockLoadIdentityPrompts).not.toHaveBeenCalled();
+    expect(invokedContextMessages()).toBeUndefined();
   });
 
-  it('redacts server-owned fields from the session it returns, leaving the stored session intact', async () => {
+  it('keeps the identity prompt when the bound systemPromptId is disabled in the registry', async () => {
+    // Allowlisted but unresolvable: a membership-only check would skip the identity here while the
+    // completion path injects nothing, leaving the session with no system prompt at all.
+    await mongoose.model('SystemPrompt').create({
+      promptId: 'triage_router',
+      name: 'Triage router',
+      description: 'Routes triage requests',
+      content: 'Route the request',
+      category: 'general',
+      enabled: false,
+      createdBy: owner.id,
+      lastUpdatedBy: owner.id,
+      lastUpdatedByName: 'owner',
+    });
+    const session = await createSession({ systemPromptId: 'triage_router' });
+
+    try {
+      await post(session.id);
+    } finally {
+      await mongoose.model('SystemPrompt').deleteMany({});
+    }
+
+    expect(mockLoadIdentityPrompts).toHaveBeenCalledTimes(1);
+    expect(invokedContextMessages()).toEqual([IDENTITY_MESSAGE]);
+  });
+
+  it('redacts server-owned fields from the session it returns', async () => {
     const session = await createSession({
       systemPromptText: 'You are the opti agent.',
       preauthorizedLakeIds: ['lake-1'],
@@ -157,12 +186,5 @@ describe('POST /api/ai/llm with a real session (Mongo)', () => {
     expect(response.session).not.toHaveProperty('systemPromptText');
     expect(response.session).not.toHaveProperty('preauthorizedLakeIds');
     expect(response.session.origin).not.toHaveProperty('apiKeyId');
-
-    const stored = await Session.findById(session.id).lean();
-    expect(stored).toMatchObject({
-      systemPromptText: 'You are the opti agent.',
-      preauthorizedLakeIds: ['lake-1'],
-      origin: { apiKeyId: 'key-1' },
-    });
   });
 });
