@@ -37,6 +37,7 @@ import {
   listVideoModelsContract,
 } from './videoGeneration.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
+import { listProjectsContract, getProjectContract, createProjectContract } from './projects.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -83,4 +84,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createVoiceSessionContract,
   endVoiceSessionContract,
   listWhatsNewContract,
+  listProjectsContract,
+  getProjectContract,
+  createProjectContract,
 ];

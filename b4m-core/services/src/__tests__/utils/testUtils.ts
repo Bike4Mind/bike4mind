@@ -57,6 +57,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   updateWithUpdateAccess: vi.fn(async (_user, data) => data as IProjectDocument),
   findByIdAndUserId: vi.fn(),
   searchAccessible: vi.fn(),
+  listAccessibleAfterId: vi.fn(),
   removeSession: vi.fn(),
   findAllBySessionId: vi.fn(),
 });
