@@ -41,8 +41,6 @@ type DayRange = (typeof DAY_RANGES)[number];
 const ALL = 'all';
 type SourceFilter = CompletionSource | typeof ALL;
 type EndpointSourceFilter = ApiKeyCompletionSource | typeof ALL;
-// The endpoint log's TTL; the endpoint route always spans it.
-const ENDPOINT_WINDOW_DAYS = 90;
 type OwnerTypeFilter = UsageOwnerType | typeof ALL;
 
 const OWNER_TYPE_OPTIONS: { value: OwnerTypeFilter; label: string }[] = [
@@ -191,7 +189,7 @@ const EndpointSection: React.FC<{
   error: unknown;
 }> = ({ source, onSourceChange, data, isLoading, error }) => {
   const chartData = useMemo(
-    () => zeroFillDailySeries(data?.endpoints.overTime ?? [], data?.windowDays ?? 0, d => d.requests),
+    () => (data ? zeroFillDailySeries(data.endpoints.overTime, data.windowDays, d => d.requests) : []),
     [data]
   );
 
@@ -225,9 +223,8 @@ const EndpointSection: React.FC<{
       </Stack>
       <Typography level="body-xs" color="neutral" sx={{ mb: 2 }}>
         From the API-key request log, which records api and cli traffic only.
-        {source !== ALL
-          ? ' Filtering excludes requests logged before source and owner type were recorded.'
-          : ''} Last {data?.windowDays ?? ENDPOINT_WINDOW_DAYS} days, independent of the filters above.
+        {source !== ALL ? ' Filtering excludes requests logged before source was recorded.' : ''}{' '}
+        {data ? `Last ${data.windowDays} days, independent of the filters above.` : 'Independent of the filters above.'}
       </Typography>
 
       {error ? (
