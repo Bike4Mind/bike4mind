@@ -42,13 +42,7 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * - Per-minute counter: 60 second TTL
  * - Per-day counter: 24 hour TTL
  *
- * Headers added to response:
- * - X-RateLimit-Limit-Minute: Max requests per minute
- * - X-RateLimit-Remaining-Minute: Remaining requests this minute
- * - X-RateLimit-Reset-Minute: Unix timestamp when minute limit resets
- * - X-RateLimit-Limit-Day: Max requests per day
- * - X-RateLimit-Remaining-Day: Remaining requests today
- * - X-RateLimit-Reset-Day: Unix timestamp when day limit resets
+ * Sets every header in API_KEY_RATE_LIMIT_HEADERS (b4m-core/common/src/apiKeyRateLimitHeaders.ts).
  */
 export const apiKeyRateLimit =
   (options: ApiKeyRateLimitOptions = {}): RequestHandler =>

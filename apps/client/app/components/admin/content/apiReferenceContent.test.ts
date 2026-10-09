@@ -133,4 +133,10 @@ describe('API reference facts shared with the generated docs', () => {
     expect(publicSection).toContain('Async jobs');
     expect(publicSection).not.toContain('(or the job resource) until it is terminal');
   });
+
+  it('points at the generated docs for the reads exempt from the per-day ceiling', () => {
+    const rateLimits = section('### Rate Limits');
+    expect(rateLimits).toMatch(/exempt from the per-day ceiling/);
+    expect(rateLimits).toContain('[generated API docs](/api/v1/docs)');
+  });
 });

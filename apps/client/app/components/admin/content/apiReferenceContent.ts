@@ -110,6 +110,9 @@ A request rejected for a bad key (\`401\`) or a missing scope (\`403\`) never re
 and carries none of these headers. Exceeding a ceiling returns \`429 Too Many Requests\` with a
 \`Retry-After\` header giving the seconds to wait before retrying.
 
+Some reads and job polls are exempt from the per-day ceiling and count only against the
+per-minute one; the Rate limits section of the [generated API docs](/api/v1/docs) lists them.
+
 ---
 
 ## Public endpoints (generated docs)
@@ -320,8 +323,9 @@ Versioned content artifacts generated during conversations (code, documents, dia
 
 ## Error Handling
 
-Public endpoints share one JSON error envelope, described in the Errors section of the
-[generated API docs](/api/v1/docs); each generated operation lists the statuses it can return.
+Public endpoints share one JSON error envelope and one status table (400 vs 422 and the rest),
+both described in the Errors section of the [generated API docs](/api/v1/docs); each generated
+operation lists the statuses it can return.
 Older hand-written routes may not follow the envelope exactly.
 
 When an access token expires the API answers 401. Exchange the refresh token at

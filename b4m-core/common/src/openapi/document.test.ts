@@ -241,6 +241,25 @@ describe('buildOpenApiDocument', () => {
     expect(new Set(describedHeaders)).toEqual(new Set(expectedHeaders));
   });
 
+  it('names the poll target of every operation that answers 202 in the Async jobs section', () => {
+    const description: string = doc.info.description;
+    const asyncJobs = description.slice(description.indexOf('## Async jobs'), description.indexOf('## Versioning'));
+    const queued = Object.entries(doc.paths as Record<string, Record<string, { responses?: object }>>)
+      .filter(([, item]) => Object.values(item).some(op => op.responses && '202' in op.responses))
+      .map(([path]) => path);
+    expect(queued.length).toBeGreaterThan(0);
+    for (const path of queued) {
+      expect(asyncJobs).toContain(`GET ${path}/{id}`);
+    }
+  });
+
+  it('states the shared 400-vs-422 split in the Errors section', () => {
+    const description: string = doc.info.description;
+    const errors = description.slice(description.indexOf('## Errors'), description.indexOf('## Async jobs'));
+    expect(errors).toContain('malformed JSON body is `400`');
+    expect(errors).toContain('fails schema validation is `422`');
+  });
+
   it('gives every tag used by an operation a top-level description', () => {
     const declared = new Set(doc.tags.map((tag: { name: string }) => tag.name));
     const used = Object.values(doc.paths).flatMap(pathItem =>

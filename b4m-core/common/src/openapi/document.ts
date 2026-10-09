@@ -104,6 +104,10 @@ function infoDescription(): string {
       'tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and ' +
       'the body for each.',
     '',
+    'The shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a ' +
+      'missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown ' +
+      'resource is `404` and an exceeded rate limit is `429`.',
+    '',
     '## Async jobs',
     'Work that is not provably fast is queued and polled rather than held open:',
     '- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, ' +
@@ -116,6 +120,8 @@ function infoDescription(): string {
       'the reply is ready.',
     '- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll ' +
       '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
+    '- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll ' +
+      '`GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly.',

@@ -545,7 +545,7 @@ function buildHeaders(params: BuildHeadersParams): RateLimitResult['headers'] {
     'X-RateLimit-Limit-Day': reportedDayLimit,
     'X-RateLimit-Remaining-Day': Math.min(reportedDayLimit, Math.max(0, dayLimit - dayCount)),
     'X-RateLimit-Reset-Day': Math.floor(dayResetAt / 1000),
-  } satisfies RateLimitResult['headers'];
+  };
 }
 
 /**
