@@ -19,6 +19,7 @@ import { useDataLakeSurface } from '@client/app/components/datalake/surfaceToken
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import useSetIncludeLibraryFiles from '@client/app/hooks/useSetIncludeLibraryFiles';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
@@ -178,6 +179,7 @@ export default function DataLakeExplorer({
   const pendingLakeTags = usePendingLakeScope(s => s.lakeTags);
   const setPendingLakeTags = usePendingLakeScope(s => s.setLakeTags);
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const { addToNotebookContext } = useNotebookContextFiles();
   // Files currently attached to the chat's prompt - drives the tree's persistent highlight, so a
   // file stays marked "already added" regardless of which action attached it (View or the menu's
   // Attach) or how far the user has since navigated the tree (#1693).
@@ -232,14 +234,30 @@ export default function DataLakeExplorer({
     [setWorkBenchFiles]
   );
 
+  // Resolves whether the file was newly attached. An existing session must persist
+  // knowledgeIds: a workbench-only add rides one send as fabFileIds, then drops out of context.
+  // A freshly minted session was created already holding the file, so the workbench suffices.
+  const attachToSession = useCallback(
+    async (file: IFabFileDocument): Promise<boolean> => {
+      if (currentSessionId) return addToNotebookContext(currentSessionId, file);
+      const sessionId = await ensureSessionId(file);
+      if (!sessionId) return false;
+      return addToWorkBench(sessionId, file);
+    },
+    [currentSessionId, addToNotebookContext, ensureSessionId, addToWorkBench]
+  );
+
   const attachFileToChat = useCallback(
     async (file: IFabFileDocument) => {
-      const sessionId = await ensureSessionId(file);
-      if (!sessionId) return;
-      addToWorkBench(sessionId, file);
+      try {
+        if (!(await attachToSession(file))) return;
+      } catch {
+        // addToNotebookContext already rolled back and told the user.
+        return;
+      }
       toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
     },
-    [ensureSessionId, addToWorkBench]
+    [attachToSession]
   );
 
   // View opens the file in the KnowledgeViewer on both hosts - and ONLY that. It must not
