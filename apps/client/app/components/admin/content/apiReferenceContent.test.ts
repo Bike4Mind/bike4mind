@@ -25,23 +25,9 @@ describe('API reference scopes table', () => {
     }
   });
 
-  it('documents every scope an endpoint section says it requires', () => {
-    const listed = tableScopes();
-    const requiredLines = API_REFERENCE_CONTENT.split('\n').filter(line =>
-      /^\*\*Required API-key scope\b[^*]*:\*\*/.test(line)
-    );
-    // Only the tokens after the label: the "scope for refineText" form names an endpoint, not a scope.
-    const required = requiredLines.flatMap(line =>
-      [...line.slice(line.indexOf(':**')).matchAll(/`([^`]+)`/g)].map(match => match[1])
-    );
-
-    // Pin both label forms (plain and "scope for X"); the tokens alone would not catch a dropped line.
-    expect(requiredLines).toHaveLength(2);
-    expect(requiredLines.some(line => line.includes('for `refineText`'))).toBe(true);
-    expect(required).toContain('notebooks:read');
-    for (const scope of required) {
-      expect(listed).toContain(scope);
-    }
+  // Scope requirements live in the generated docs now; a hand-written one would drift from its contract.
+  it('states no endpoint scope requirement by hand', () => {
+    expect(API_REFERENCE_CONTENT).not.toMatch(/^\*\*Required API-key scope\b/m);
   });
 
   it('leaves dedicated-flow scopes out of the table', () => {

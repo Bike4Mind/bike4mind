@@ -111,14 +111,19 @@ These endpoints are defined by a contract, and their full request/response refer
 the [generated API docs](/api/v1/docs) (raw spec: \`/api/v1/openapi.json\`, which a generator can
 use to build a typed client). They are deliberately not repeated here, so the two cannot disagree.
 
-- Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions[/{id}]\`
-- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`
+- Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
+  \`/api/v1/agent-executions[/{id}]\`
+- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`
+- Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
+  \`/api/v1/artifacts/{id}/versions[/{version}]\`
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
   delete), \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
+- Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
 - Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
+- Release notes: \`/api/v1/whats-new\` (public, no key needed)
 
 Image, video and chat work is asynchronous: the create call returns a quest or job, and you poll
 \`GET /api/v1/quests/{id}\` (or the job resource) until it is terminal.
@@ -129,38 +134,6 @@ Image, video and chat work is asynchronous: the create call returns a quest or j
 
 The sections below are still hand-written. Each row was checked against its route file, but
 treat the handler as authoritative.
-
-### Quest files
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/quests/[id]/files | Files generated or referenced during quest processing |
-
-**Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access).
-
----
-
-### Sessions (Notebooks)
-
-Session create, list, get, update and delete are covered by the generated docs (see above). The routes below are
-still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/sessions/[id]/clone | Clone a session |
-| GET | /api/sessions/[id]/files | List session files |
-| POST | /api/sessions/semantic-search | Semantic search across sessions |
-| GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
-| PUT | /api/sessions/[id]/chat/[messageId] | Update a message |
-| DELETE | /api/sessions/[id]/chat/[messageId] | Delete a message |
-
-#### Release Notes
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/whats-new | Published release notes, newest first (public, cursor-paginated, cached) |
-
----
 
 ### Projects
 
@@ -224,46 +197,6 @@ Custom AI agents with configurable personas, system prompts, and tool access.
 | POST | /api/agents/[id]/enhance-field | AI-enhance a specific field |
 | POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
 | POST | /api/agents/create-from-context | Create agent from conversation context |
-
----
-
-### AI Services
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/ai/transcribe | Audio/video to text (Whisper) |
-| POST | /api/ai/refineText | Refine and improve text |
-
-**Required API-key scope for \`refineText\`:** \`ai:generate\`.
-
----
-
-### Artifacts
-
-Versioned content artifacts generated during conversations (code, documents, diagrams).
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/artifacts | List artifacts |
-| POST | /api/artifacts | Create artifact |
-| GET | /api/artifacts/[id] | Get artifact |
-| PUT | /api/artifacts/[id] | Update artifact |
-| DELETE | /api/artifacts/[id] | Delete artifact |
-| GET | /api/artifacts/[id]/versions | List artifact versions |
-| POST | /api/artifacts/[id]/versions | Add an artifact version |
-| GET | /api/artifacts/[id]/versions/[version] | Get specific version |
-| GET | /api/artifacts/search | Search artifacts |
-| GET | /api/artifacts/types | List artifact types |
-
----
-
-### Tools
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/tools/web-search | Web search |
-| POST | /api/tools/web-fetch | Fetch web page content |
-| POST | /api/tools/weather | Get weather data |
 
 ---
 
