@@ -2,7 +2,14 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { FabFile, Quest, Session, User, defineAbilitiesFor as dbDefineAbilitiesFor } from '@bike4mind/database';
+import {
+  FabFile,
+  Quest,
+  Session,
+  User,
+  fabFileRepository,
+  defineAbilitiesFor as dbDefineAbilitiesFor,
+} from '@bike4mind/database';
 import { KnowledgeType, Permission, type IUserDocument } from '@bike4mind/common';
 import { configureSlackPackage, sendMessageToNotebookAndGetResponse } from '@bike4mind/slack';
 import defineAbilitiesFor from '@server/auth/ability';
@@ -88,6 +95,37 @@ describe('file ids attached to an existing session persist across turns', () => 
 
     await getOrCreateSession({ sessionId: session.id, fabFileIds: [pdf], user: owner, ability, logger });
     expect(await knowledgeIds(session.id)).toEqual([]);
+  });
+
+  it('keeps a detach the user makes while the attach turn is in flight', async () => {
+    const owner = await createUser('owner');
+    const kept = await createFile(owner.id, 'application/pdf');
+    const detached = await createFile(owner.id, 'application/pdf');
+    const incoming = await createFile(owner.id, 'application/pdf');
+    const session = await createSession({ userId: owner.id, name: 'nb', knowledgeIds: [kept, detached] });
+
+    // The user detaches `detached` in another tab between this turn's read of knowledgeIds and its
+    // write. The metadata lookup sits inside that window, so interpose the detach there.
+    const findMetadata = fabFileRepository.findMetadataByIds.bind(fabFileRepository);
+    const spy = vi.spyOn(fabFileRepository, 'findMetadataByIds').mockImplementationOnce(async (ids, cap) => {
+      await Session.updateOne({ _id: session.id }, { $pull: { knowledgeIds: detached } });
+      return findMetadata(ids, cap);
+    });
+
+    try {
+      await getOrCreateSession({
+        sessionId: session.id,
+        fabFileIds: [incoming],
+        persistFabFileIds: true,
+        user: owner,
+        ability: defineAbilitiesFor(owner),
+        logger,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await knowledgeIds(session.id)).toEqual([kept, incoming]);
   });
 
   it('a read-only sharee gets NotFound and knowledgeIds is unchanged', async () => {
