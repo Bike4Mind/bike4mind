@@ -2,9 +2,14 @@ import { createParser } from 'eventsource-parser';
 
 /**
  * Yield each server-sent event's `data` from a fetch body, until `[DONE]`, the end of the stream, or `signal`
- * aborts (which throws the signal's reason). Breaking out of the loop early cancels the body.
+ * aborts (which throws the signal's reason). `onDone` is called when `[DONE]` is seen, so a caller can tell it
+ * from a truncated stream. Breaking out of the loop early cancels the body.
  */
-export async function* parseSse(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<string> {
+export async function* parseSse(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+  onDone?: () => void
+): AsyncGenerator<string> {
   const queue: string[] = [];
   const parser = createParser({ onEvent: event => queue.push(event.data) });
   const reader = body.getReader();
@@ -21,7 +26,10 @@ export async function* parseSse(body: ReadableStream<Uint8Array>, signal?: Abort
       parser.feed(done ? decoder.decode() : decoder.decode(value, { stream: true }));
       while (queue.length > 0) {
         const data = queue.shift() as string;
-        if (data === '[DONE]') return;
+        if (data === '[DONE]') {
+          onDone?.();
+          return;
+        }
         yield data;
       }
       if (done) {

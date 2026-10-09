@@ -42,7 +42,7 @@ const project = await b4m.call('getProject', { params: { id: projectId } });
 await b4m.call('deleteProject', { params: { id: projectId } }); // 204: resolves undefined
 ```
 
-`call` returns the parsed JSON body. For a binary or streamed body, `raw(operationId, args)` returns the 2xx `Response` itself. `operations` maps each id to its `{ method, path }`.
+`call` returns the parsed JSON body. A non-JSON 2xx body (for example the default binary audio from `synthesizeSpeech`) throws; use `raw` or the `tts`/`music`/`soundEffects` helpers. For a binary or streamed body, `raw(operationId, args)` returns the 2xx `Response` itself. `operations` maps each id to its `{ method, path }`.
 
 ## Stream a completion
 
@@ -56,7 +56,7 @@ for await (const event of b4m.completions({
 }
 ```
 
-A failure before the stream starts throws `B4mApiError`. A server `{ type: 'error' }` event is yielded, not thrown. Pass `{ signal }` to cancel, or `{ url }` to stream from a different endpoint.
+A failure before the stream starts throws `B4mApiError`. A server `{ type: 'error' }` event is yielded, not thrown. Pass `{ signal }` to cancel, or `{ url }` to stream from a different endpoint. An absolute `url` receives the same `Authorization` header, so pass only an origin you trust. A stream that ends without `[DONE]` and without an error event throws.
 
 ## Chat and image jobs
 
