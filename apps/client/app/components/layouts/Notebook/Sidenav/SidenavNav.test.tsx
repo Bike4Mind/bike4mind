@@ -13,12 +13,13 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * page, so its row could never appear on its own. Feature FLAGS still gate, and
  * still fail closed.
  */
-const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock, navItems } = vi.hoisted(() => ({
+const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock, navItems, entitlements } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
   useGearsNavSignalMock: vi.fn(),
   useVideoModelsMock: vi.fn(),
   // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
-  navItems: [] as Array<{ path: string; label: string; icon?: ComponentType }>,
+  navItems: [] as Array<{ path: string; label: string; icon?: ComponentType; requireEntitlement?: string }>,
+  entitlements: [] as string[],
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -34,8 +35,8 @@ vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => undefined })
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => false }));
 // SidenavNav gates the Bob row on entitlements via useEntitlements (react-query useQuery).
 // This suite renders SidenavNav without a QueryClientProvider, so stub the hook like the
-// others rather than mount a client - the Bob gate is not what these Hearth tests exercise.
-vi.mock('@client/app/hooks/data/entitlements', () => ({ useEntitlements: () => ({ data: [] }) }));
+// others rather than mount a client; the Bob row tests set what the user holds.
+vi.mock('@client/app/hooks/data/entitlements', () => ({ useEntitlements: () => ({ data: entitlements }) }));
 // The meetings row is gated the same way, through a hook that wraps useEntitlements, so it needs
 // its own stub rather than riding on the one above.
 vi.mock('@client/app/hooks/data/meetings', () => ({ useMeetingsAccess: () => false }));
@@ -79,6 +80,7 @@ beforeEach(() => {
   useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 0 });
   useVideoModelsMock.mockReturnValue({ data: [] });
   navItems.length = 0;
+  entitlements.length = 0;
 });
 
 describe('SidenavNav feature rows', () => {
@@ -167,6 +169,16 @@ describe('SidenavNav Bob row', () => {
     renderNav();
     expect(bobRow()).toContainElement(screen.getByTestId('contributed-nav-icon'));
     expect(screen.queryByTestId('Diversity3OutlinedIcon')).not.toBeInTheDocument();
+  });
+
+  it('stays hidden when the nav item is gated on an entitlement the user lacks, and shows once they hold it', () => {
+    navItems.push({ path: '/bob', label: 'Bob', requireEntitlement: 'test-entitlement' });
+    renderNav();
+    expect(bobRow()).not.toBeInTheDocument();
+
+    entitlements.push('test-entitlement');
+    renderNav();
+    expect(bobRow()).toBeInTheDocument();
   });
 
   it('falls back to the stock icon when the nav item has none', () => {
