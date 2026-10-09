@@ -53,7 +53,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   const execute = parsed.data.execute;
   const after = parsed.data.after ?? undefined;
 
-  const totals = { total: 0, alreadyCurrent: 0, truncated: 0, reembedded: 0, backfilled: 0, noFact: 0, failed: 0 };
+  const totals = {
+    total: 0,
+    alreadyCurrent: 0,
+    truncated: 0,
+    reembedded: 0,
+    backfilled: 0,
+    noFact: 0,
+    noProviderKey: 0,
+    failed: 0,
+  };
   const failedPrincipals: Array<PrincipalCursor & { error: string }> = [];
   const failedEvents: string[] = [];
 
@@ -82,7 +91,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         execute ? { limit: budget } : { dryRun: true }
       );
       for (const key of Object.keys(totals) as Array<keyof typeof totals>) totals[key] += stats[key];
-      if (execute) spent += stats.backfilled + stats.reembedded + stats.failed;
+      if (execute) spent += stats.providerCalls;
       for (const error of stats.errors) {
         if (failedEvents.length >= MAX_REPORTED_EVENT_FAILURES) break;
         failedEvents.push(`${label} ${error}`);
@@ -100,6 +109,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
           ...target,
           error: `no progress within provider budget${stats.errors[0] ? `: ${stats.errors[0]}` : ''}`,
         });
+      } else if (stats.noProviderKey > 0) {
+        // Its embeds cost no budget, so the rest of the page still runs; listed so the operator knows
+        // it stays on every walk until the owner has a provider key.
+        failedPrincipals.push({ ...target, error: `no provider key for owner ${target.ownerUserId}` });
       }
     } catch (err) {
       failedPrincipals.push({ ...target, error: err instanceof Error ? err.message : String(err) });
