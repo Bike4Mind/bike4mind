@@ -668,7 +668,8 @@ export class ToolBuilder {
       modelInfo,
       n || 1,
       // Runtime tool args are untyped strings; the calculator narrows by model backend.
-      { model: toolModel, size, quality } as CostInput,
+      // edit_image sends its one source image as input; image_generation sends none.
+      { model: toolModel, size, quality, inputImageCount: toolName === 'edit_image' ? 1 : 0 } as CostInput,
       this.deps.logger,
       organization
     );

@@ -299,7 +299,7 @@ export class ImageEditService {
   private async validateUserCredits(
     user: IUserDocument,
     model: string,
-    imageParams: Pick<ImageEditBody, 'size' | 'quality'>,
+    imageParams: Pick<ImageEditBody, 'size' | 'quality'> & { inputImageCount?: number },
     logger: Logger,
     organization?: IOrganizationDocument | null
   ) {
@@ -558,7 +558,8 @@ export class ImageEditService {
         const { requiredCredits, usdCost } = await this.validateUserCredits(
           user,
           model,
-          { size, quality },
+          // The primary image plus the de-duped references; the mask is not an input image.
+          { size, quality, inputImageCount: 1 + new Set(referenceImageFabFileIds ?? []).size },
           logger,
           organization
         );

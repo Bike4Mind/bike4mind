@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { ImageModels, ModelBackend, usdToCredits, type ModelInfo } from '@bike4mind/common';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
 import { resolveAggregateToolModel } from '../settleToolCredits';
+import { estimateImageCredits } from '../../imageCost';
+import { estimateGeneratedMediaUsd } from '../agentToolMediaCost';
 
 // Drives the REAL reserveImageCredits -> validateUserCredits -> computeImageUsdCostPerImage
 // chain that onToolStart delegates to. The edit_image tool's own tests mock context.onStart,
@@ -112,6 +114,22 @@ describe('ToolBuilder.reserveImageCredits - edit_image billing targets', () => {
     );
 
     expect(toolCreditsMap.get('edit_image')?.[0]).toBeGreaterThan(0);
+  });
+
+  // Matches estimateGeneratedMediaUsd (the agent-mode rail), so both rails bill an edit's one
+  // source image and nothing for a generation.
+  it.each([
+    ['edit_image', 1],
+    ['image_generation', 0],
+  ] as const)('%s holds %i input image(s)', async (toolName, inputImageCount) => {
+    const { builder, toolCreditsMap } = makeBuilder();
+    const data = { model: ImageModels.GPT_IMAGE_1_5, n: 1, quality: 'high', size: '1024x1024' };
+
+    await builder.reserveImageCredits(toolName, data, true, null, quest(), saveQuest, AVAILABLE_MODELS);
+
+    const expected = estimateImageCredits(AVAILABLE_MODELS[2], 1, { ...data, inputImageCount } as never);
+    expect(toolCreditsMap.get(toolName)).toEqual([expected.requiredCredits]);
+    expect(estimateGeneratedMediaUsd(toolName, data, AVAILABLE_MODELS)).toBe(expected.usdCost);
   });
 });
 

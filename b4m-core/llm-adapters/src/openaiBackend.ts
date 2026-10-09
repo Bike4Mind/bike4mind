@@ -1567,13 +1567,13 @@ export class OpenAIBackend implements ICompletionBackend {
         }
       }
 
-      let toolStarted: ToolStarted | undefined;
+      const startedTools: ToolStarted[] = [];
       chunk?.choices.forEach((c: ChatCompletionChunk.Choice) => {
         if (!isO1Model) {
           c.delta.tool_calls?.forEach((tool: ChatCompletionChunk.Choice.Delta.ToolCall) => {
             func[tool.index] ||= { parameters: '' };
             if (!func[tool.index].name && tool.function?.name) {
-              toolStarted = { name: tool.function.name, id: tool.id ?? undefined };
+              startedTools.push({ name: tool.function.name, id: tool.id ?? func[tool.index].id });
             }
             func[tool.index].name ||= tool.function?.name;
             func[tool.index].id ||= tool.id;
@@ -1591,6 +1591,10 @@ export class OpenAIBackend implements ICompletionBackend {
         }
       });
 
+      for (const toolStarted of startedTools) {
+        await callback([], { toolStarted });
+      }
+
       // Always call the callback to maintain streaming, even during tool processing.
       // Emit accumulated total + this turn's running tokens so wrappedOnChunk
       // (assign-not-add) ends each turn at the cumulative cross-turn total.
@@ -1600,7 +1604,6 @@ export class OpenAIBackend implements ICompletionBackend {
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
-        ...(toolStarted ? { toolStarted } : {}),
       });
     }
 
