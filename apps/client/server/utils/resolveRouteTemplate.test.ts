@@ -29,6 +29,14 @@ describe('resolveRouteTemplate', () => {
     expect(resolveRouteTemplate(req('/api/items/1?n=1', { n: '1' }))).toBe('/api/items/1');
   });
 
+  it('still templates a catch-all whose name collides with a query key', () => {
+    expect(resolveRouteTemplate(req('/a/tok123?path=1', { path: ['tok123'] }))).toBe('/a/[...path]');
+  });
+
+  it('still templates a single param whose name collides with a differing query value', () => {
+    expect(resolveRouteTemplate(req('/api/agents/abc?id=zzz', { id: 'abc' }))).toBe('/api/agents/[id]');
+  });
+
   it('decodes percent-encoded segments when matching params', () => {
     expect(resolveRouteTemplate(req('/api/tags/a%20b', { tag: 'a b' }))).toBe('/api/tags/[tag]');
   });
