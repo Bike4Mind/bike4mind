@@ -41,6 +41,7 @@ export const apiKeyAnomalyDetection = (): RequestHandler => {
     // Use IP address and endpoint already extracted by apiKeyAuth
     const ipAddress = usageInfo?.ipAddress || 'unknown';
     const endpoint = usageInfo?.endpoint || resolveRouteTemplate(req);
+    const pathname = (req.originalUrl || req.url || '').split(/[?#]/, 1)[0];
 
     // Run after response finishes so detection never blocks or slows the request.
     res.once('finish', () => {
@@ -49,6 +50,7 @@ export const apiKeyAnomalyDetection = (): RequestHandler => {
         keyId: apiKeyInfo.keyId,
         ipAddress,
         endpoint,
+        pathname,
         timestamp: new Date(),
       };
 
