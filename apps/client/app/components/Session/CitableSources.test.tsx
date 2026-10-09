@@ -293,7 +293,7 @@ describe('CitableSources conflict badge', () => {
  * Chips render full-width and stack, so a tooltip on Joy's default `bottom` opens over the chip
  * below. The detector stamps conflicts symmetrically (retrievalConflictNote.ts), so both chips of a
  * pair are badged and each tooltip names the other: a single fixed side covers one partner. The
- * conflict tooltip therefore picks its side per chip, away from the partner it names (#3313).
+ * conflict tooltip therefore picks its side per chip, away from the partner it names.
  */
 describe('CitableSources badge tooltip placement', () => {
   const lakeChip = (id: string, title: string, conflictsWith?: string[]): CitableSource => ({
@@ -332,10 +332,13 @@ describe('CitableSources badge tooltip placement', () => {
     return placement;
   };
 
-  const badgeOf = (title: string) =>
-    screen
+  const badgeOf = (title: string) => {
+    const badge = screen
       .getAllByTestId('citable-conflict-badge')
-      .find(b => b.closest('[data-testid="citable-source-chip"]')?.textContent?.includes(title))!;
+      .find(b => b.closest('[data-testid="citable-source-chip"]')?.textContent?.includes(title));
+    if (!badge) throw new Error(`no conflict badge for ${title}`);
+    return badge;
+  };
 
   it('opens each half of an adjacent pair away from the other', async () => {
     renderChips([
@@ -426,6 +429,32 @@ describe('CitableSources badge tooltip placement', () => {
     fireEvent.click(screen.getByTestId('citable-sources-show-more-btn'));
     expect(screen.queryByText('Annual Report.pdf')).not.toBeInTheDocument();
     expect(isHighlighted('Q3 Revenue.pdf')).toBe(false);
+  });
+
+  it('keeps the newer badge outline when the previous badge reports its close late', async () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-c']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-d']),
+      lakeChip('file-c', 'Board Deck.pdf', ['file-a']),
+      lakeChip('file-d', 'Support Hours.md', ['file-b']),
+    ]);
+    fireEvent.click(screen.getByTestId('citable-sources-show-more-btn'));
+    const isHighlighted = (title: string) =>
+      screen
+        .getAllByTestId('citable-source-chip')
+        .find(chip => chip.textContent?.includes(title))
+        ?.getAttribute('data-conflict-highlighted') === 'true';
+
+    const first = badgeOf('Q3 Revenue.pdf');
+    await openTooltip(first);
+    fireEvent.mouseOver(badgeOf('Annual Report.pdf'));
+    await waitFor(() => expect(isHighlighted('Support Hours.md')).toBe(true));
+
+    // Joy closes the badge just left on its own timer, which can land after the next badge opened.
+    fireEvent.mouseLeave(first);
+    await waitFor(() => expect(screen.getAllByRole('tooltip')).toHaveLength(1));
+    expect(isHighlighted('Board Deck.pdf')).toBe(false);
+    expect(isHighlighted('Support Hours.md')).toBe(true);
   });
 
   it('opens the truncation tooltip above', async () => {
