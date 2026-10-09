@@ -109,4 +109,11 @@ describe('POST /api/sessions/[id]/chat/stop-reply', () => {
     await expect(mockRefs.handler!(req, res)).rejects.toThrow('Invalid questId');
     expect(stopReply).not.toHaveBeenCalled();
   });
+
+  it('rejects an object-shaped questId with the same 400', async () => {
+    const { req, res } = post('session-1', { questId: { _bsontype: 'ObjectId' } });
+
+    await expect(mockRefs.handler!(req, res)).rejects.toThrow('Invalid questId');
+    expect(stopReply).not.toHaveBeenCalled();
+  });
 });

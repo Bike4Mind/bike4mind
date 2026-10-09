@@ -24,12 +24,12 @@ import {
 
 export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
 
+const STOP_REPLY_TIMEOUT_MS = 10 * 1000;
+
 /**
  * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
  * notebook the caller owns, so write paths refuse anything that is not an ObjectId before any request.
  */
-const STOP_REPLY_TIMEOUT_MS = 10 * 1000;
-
 function notebookPath(notebookId: string): string {
   if (!NOTEBOOK_ID_PATTERN.test(notebookId)) {
     throw new Error(`Invalid notebook id: ${JSON.stringify(notebookId)}`);

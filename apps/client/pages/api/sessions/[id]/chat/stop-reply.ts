@@ -13,7 +13,7 @@ const handler = baseApi().post(
       throw new NotFoundError('Session not found');
     }
     const { questId } = req.body;
-    if (questId !== undefined && !isValidObjectId(questId)) {
+    if (questId !== undefined && (typeof questId !== 'string' || !isValidObjectId(questId))) {
       throw new BadRequestError('Invalid questId');
     }
 
