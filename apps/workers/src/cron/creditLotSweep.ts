@@ -1,6 +1,7 @@
 /**
  * Reconciles lifetime lot consumption and expires unassigned stale credits.
  * Holder balance, expiry audit and lot assignments commit together.
+ * See CreditLotTypes.ts and creditLotAssignment.ts for the accounting invariant.
  */
 
 import { Context } from 'aws-lambda';
@@ -72,9 +73,8 @@ export async function processHolder(
 
       for (const { lot, consumedAssigned } of assigned) {
         const isStale = lot.expiresAt.getTime() <= now.getTime();
-        // Balance top-ups must not reopen consumption settled on an expired lot.
-        const settled = Math.min(lot.amount, Math.max(0, lot.consumedAssigned));
-        let finalConsumedAssigned = isStale ? Math.max(consumedAssigned, settled) : consumedAssigned;
+        // Live assignments can reverse on a refund; only a stale-run stamp settles them.
+        let finalConsumedAssigned = isStale && lot.settledAt ? lot.amount : consumedAssigned;
         const remaining = lot.amount - finalConsumedAssigned;
 
         if (isStale && remaining > 0) {
@@ -104,8 +104,12 @@ export async function processHolder(
           finalConsumedAssigned = lot.amount;
         }
 
-        if (finalConsumedAssigned !== lot.consumedAssigned) {
-          const updated = await creditLotRepository.update({ id: lot.id, consumedAssigned: finalConsumedAssigned });
+        if (finalConsumedAssigned !== lot.consumedAssigned || (isStale && !lot.settledAt)) {
+          const updated = await creditLotRepository.update({
+            id: lot.id,
+            consumedAssigned: finalConsumedAssigned,
+            ...(isStale && !lot.settledAt ? { settledAt: now } : {}),
+          });
           if (!updated) throw new Error('Failed to update credit lot');
         }
       }

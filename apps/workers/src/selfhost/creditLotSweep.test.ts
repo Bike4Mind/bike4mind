@@ -29,6 +29,17 @@ describe('local credit expiry schedule', () => {
     run.mockResolvedValueOnce({ holdersProcessed: 2, holdersFailed: 1 });
     await expect(task()).rejects.toThrow('Credit lot sweep failed for 1 holder(s)');
   });
+  it('resolves when every holder succeeds', async () => {
+    let task!: () => Promise<void>;
+    registerCreditLotSweep({
+      registerDailyUtcTask: (_name, _hour, fn) => {
+        task = fn;
+      },
+    });
+    run.mockResolvedValueOnce({ holdersProcessed: 2, holdersFailed: 0 });
+    await expect(task()).resolves.toBeUndefined();
+  });
+
   it('waits for 04:00 UTC instead of bootstrapping', async () => {
     vi.setSystemTime(new Date('2026-09-30T03:59:00Z'));
     worker.start();

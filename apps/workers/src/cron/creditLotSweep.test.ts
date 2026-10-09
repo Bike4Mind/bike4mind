@@ -10,6 +10,7 @@ interface FakeLot {
   amount: number;
   consumedAssigned: number;
   expiresAt: Date;
+  settledAt?: Date;
 }
 
 const { fakeLots, userState, orgState, agentState, txRows } = vi.hoisted(() => ({
@@ -31,6 +32,7 @@ function makeHolderRepo(state: { currentCredits: number }) {
 }
 
 vi.mock('@bike4mind/database', () => ({
+  connectDB: vi.fn(),
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   creditLotRepository: {
     findByOwner: vi.fn(async (ownerId: string, ownerType: CreditHolderType) =>
@@ -38,11 +40,16 @@ vi.mock('@bike4mind/database', () => ({
         .filter(l => l.ownerId === ownerId && l.ownerType === ownerType)
         .sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime())
     ),
-    update: vi.fn(async ({ id, consumedAssigned }: { id: string; consumedAssigned: number }) => {
-      const lot = fakeLots.find(l => l.id === id);
-      if (lot) lot.consumedAssigned = consumedAssigned;
-      return lot ?? null;
-    }),
+    update: vi.fn(
+      async ({ id, consumedAssigned, settledAt }: { id: string; consumedAssigned: number; settledAt?: Date }) => {
+        const lot = fakeLots.find(l => l.id === id);
+        if (lot) {
+          lot.consumedAssigned = consumedAssigned;
+          if (settledAt) lot.settledAt = settledAt;
+        }
+        return lot ?? null;
+      }
+    ),
   },
   creditTransactionRepository: {
     createTransaction: vi.fn(async (type: string, data: Record<string, unknown>) => {
@@ -57,8 +64,11 @@ vi.mock('@bike4mind/database', () => ({
   CreditLot: { aggregate: vi.fn() },
 }));
 
+vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://fixture/%STAGE%' } }));
+vi.mock('sst', () => ({ Resource: { App: { stage: 'fixture' } } }));
+
 // Imports after mocks
-import { processHolder, runCreditLotSweep } from './creditLotSweep';
+import { handler, processHolder, runCreditLotSweep } from './creditLotSweep';
 import { CreditLot, creditLotRepository } from '@bike4mind/database';
 
 const OWNER_ID = 'user1';
@@ -193,9 +203,9 @@ describe('creditLotSweep - processHolder', () => {
 
   it.each([
     { consumedAssigned: -20, expiredCredits: 100, expiredLots: 1, balance: 0 },
-    { consumedAssigned: 200, expiredCredits: 0, expiredLots: 0, balance: 100 },
+    { consumedAssigned: 200, expiredCredits: 100, expiredLots: 1, balance: 0 },
   ])(
-    'bounds a stale persisted assignment of $consumedAssigned',
+    'recalculates an unmarked stale assignment of $consumedAssigned',
     async ({ consumedAssigned, expiredCredits, expiredLots, balance }) => {
       userState.currentCredits = 100;
       const stale = addLot({ consumedAssigned, expiresAt: new Date('2000-01-01T00:00:00Z') });
@@ -247,6 +257,25 @@ describe('connection-independent credit lot sweep', () => {
     });
     expect(userState.currentCredits).toBe(0);
     expect(txRows).toHaveLength(1);
+  });
+
+  it('preserves the hosted 200 envelope and exact summary keys', async () => {
+    vi.mocked(CreditLot.aggregate).mockResolvedValueOnce([]);
+    const response = await handler(
+      undefined as never,
+      {
+        awsRequestId: 'fixture-request',
+        functionName: 'fixture',
+        functionVersion: 'fixture',
+      } as import('aws-lambda').Context
+    );
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({
+      holdersProcessed: 0,
+      holdersFailed: 0,
+      expiredLots: 0,
+      expiredCredits: 0,
+    });
   });
 
   it('keeps paging after a complete 500-holder batch', async () => {

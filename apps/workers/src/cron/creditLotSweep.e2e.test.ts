@@ -78,6 +78,7 @@ describe('credit expiry atomic persisted effects', () => {
         failureAt === 'missing lot stamp' ? 'Failed to update credit lot' : 'fixture'
       );
       expect(await persisted(holder)).toEqual({ balance: 100, assigned: 0, transactions: [] });
+      expect((await CreditLot.findById(holder.lotId).lean())?.settledAt).toBeUndefined();
 
       vi.restoreAllMocks();
       expect(await processHolder(holder, now, logger)).toEqual({ expiredLots: 1, expiredCredits: 100 });
@@ -178,10 +179,66 @@ describe('credit expiry atomic persisted effects', () => {
     expect((await Organization.findById(holder.ownerId).lean())?.currentCredits).toBe(0);
   });
 
+  it('stamps a fully consumed stale lot even without a new deduction', async () => {
+    const holder = await seedHolder(100, 100);
+    await CreditLot.create({
+      ownerId: holder.ownerId,
+      ownerType: holder.ownerType,
+      source: 'promo',
+      amount: 100,
+      consumedAssigned: 0,
+      expiresAt: new Date(now.getTime() + 86_400_000),
+    });
+    await CreditLot.updateOne({ _id: holder.lotId }, { consumedAssigned: 100 });
+    expect(await processHolder(holder, now, logger)).toEqual({ expiredLots: 0, expiredCredits: 0 });
+    expect((await CreditLot.findById(holder.lotId).lean())?.settledAt).toEqual(now);
+    await userRepository.incrementCredits(holder.ownerId, 100);
+    expect(await processHolder(holder, new Date(now.getTime() + 1), logger)).toEqual({
+      expiredLots: 0,
+      expiredCredits: 0,
+    });
+    expect(await persisted(holder)).toMatchObject({ balance: 200, assigned: 100, transactions: [] });
+    expect((await CreditLot.findById(holder.lotId).lean())?.settledAt).toEqual(now);
+  });
+
   it('leaves a zero-balance holder and zero-amount promo lot intact', async () => {
     const holder = await seedHolder(0, 0);
     expect(await processHolder(holder, now, logger)).toEqual({ expiredLots: 0, expiredCredits: 0 });
     expect(await persisted(holder)).toEqual({ balance: 0, assigned: 0, transactions: [] });
+  });
+
+  it.each([
+    { initialBalance: 120, provisional: 80, refund: 60, expiredCredits: 80 },
+    { initialBalance: 100, provisional: 100, refund: 80, expiredCredits: 80 },
+  ])('recalculates a live assignment of $provisional after a refund before expiry', async fixture => {
+    const holder = await seedHolder(fixture.initialBalance, 100, now);
+    await CreditLot.create({
+      ownerId: holder.ownerId,
+      ownerType: holder.ownerType,
+      source: 'pack',
+      amount: 100,
+      consumedAssigned: 0,
+      expiresAt: new Date(now.getTime() + 86_400_000),
+    });
+    expect(await processHolder(holder, new Date(now.getTime() - 1), logger)).toEqual({
+      expiredLots: 0,
+      expiredCredits: 0,
+    });
+    expect(await persisted(holder)).toMatchObject({ assigned: fixture.provisional, transactions: [] });
+    await userRepository.incrementCredits(holder.ownerId, fixture.refund);
+    expect(await processHolder(holder, now, logger)).toEqual({
+      expiredLots: 1,
+      expiredCredits: fixture.expiredCredits,
+    });
+    const after = await persisted(holder);
+    expect((await CreditLot.findById(holder.lotId).lean())?.settledAt).toEqual(now);
+    expect(after).toMatchObject({ balance: 100, assigned: 100 });
+    expect(after.transactions).toHaveLength(1);
+    expect(after.transactions[0].credits).toBe(-fixture.expiredCredits);
+    expect(await processHolder(holder, now, logger)).toEqual({ expiredLots: 0, expiredCredits: 0 });
+    expect((await persisted(holder)).transactions.map(row => String(row._id))).toEqual(
+      after.transactions.map(row => String(row._id))
+    );
   });
 
   it('does not expire the same lot again when the balance exceeds recorded grants', async () => {
@@ -203,6 +260,7 @@ describe('credit expiry atomic persisted effects', () => {
     expect(repeated).toMatchObject({ balance: 200, assigned: 100 });
     expect(repeated.transactions.map(row => String(row._id))).toEqual(first.transactions.map(row => String(row._id)));
     expect((await CreditLot.findById(future._id).lean())?.consumedAssigned).toBe(0);
+    expect((await CreditLot.findById(holder.lotId).lean())?.settledAt).toEqual(now);
   });
 
   it('fails closed on a standalone database without changing balances, lots or ledger', async () => {
@@ -214,6 +272,7 @@ describe('credit expiry atomic persisted effects', () => {
       const holder = await seedHolder();
       await expect(processHolder(holder, now, logger)).rejects.toMatchObject({ code: 20 });
       expect(await persisted(holder)).toEqual({ balance: 100, assigned: 0, transactions: [] });
+      expect((await CreditLot.findById(holder.lotId).lean())?.settledAt).toBeUndefined();
     } finally {
       await mongoose.disconnect();
       await standalone.stop({ doCleanup: false });
