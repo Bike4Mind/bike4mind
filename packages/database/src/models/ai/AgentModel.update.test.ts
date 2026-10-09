@@ -60,6 +60,8 @@ describe('a soft-deleted agent', () => {
 
     expect(await agentRepository.findById(agent.id)).toBeNull();
     expect((await agentRepository.listAccessibleAfterId('user-me', { limit: 10 })).data).toEqual([]);
+    // Raw driver read, past the soft-delete query filter: the row survives, marked deleted.
+    expect((await Agent.collection.findOne({ _id: agent._id }))?.deletedAt).toBeInstanceOf(Date);
   });
 });
 
