@@ -37,6 +37,12 @@ describe('resolveRouteTemplate', () => {
     expect(resolveRouteTemplate(req('/api/agents/abc?id=zzz', { id: 'abc' }))).toBe('/api/agents/[id]');
   });
 
+  it('does not let a repeated query key spoof a catch-all template', () => {
+    expect(resolveRouteTemplate(req('/api/admin/integration-status?z=api&z=admin', { z: ['api', 'admin'] }))).toBe(
+      '/api/admin/integration-status'
+    );
+  });
+
   it('decodes percent-encoded segments when matching params', () => {
     expect(resolveRouteTemplate(req('/api/tags/a%20b', { tag: 'a b' }))).toBe('/api/tags/[tag]');
   });
