@@ -97,6 +97,12 @@ describe('call', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('passes redirect through to fetch', async () => {
+    const { client, request } = setup(json({ newLastNotebookId: null }));
+    await client.call('deleteSession', { params: { id: 'n1' }, redirect: 'manual' });
+    expect(request().init.redirect).toBe('manual');
+  });
+
   it('returns undefined for a 204', async () => {
     const { client } = setup(new Response(null, { status: 204 }));
     expect(await client.call('deleteProject', { params: { id: 'p1' } })).toBeUndefined();
@@ -304,6 +310,11 @@ describe('audio', () => {
       data: { error: 'too large', provider: 'elevenlabs', saved: true, fabFileId: 'fab9' },
       fallbackFrom: 'openai',
     });
+  });
+
+  it('tts: rethrows a 413 whose body does not match the 413 schema', async () => {
+    const { client } = setup(json({ error: 'too large', saved: true, fabFileId: 'fab9' }, { status: 413 }));
+    await expect(client.tts({ text: 'long' })).rejects.toMatchObject({ status: 413 });
   });
 
   it('tts: rethrows a 413 without a saved copy', async () => {
