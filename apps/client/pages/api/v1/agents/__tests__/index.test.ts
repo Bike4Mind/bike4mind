@@ -7,7 +7,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { AgentResourceSchema, ListAgentsResponseSchema } from '@bike4mind/common';
+import { AgentResourceSchema, ListAgentsResponseSchema, TRIGGER_WORD_ERROR_MESSAGE } from '@bike4mind/common';
 
 const { mockListAccessibleAfterId, mockCreate, mockCountByUserId, mockFindUser, mockIncrementCredits } = vi.hoisted(
   () => ({
@@ -191,6 +191,16 @@ describe('GET /api/v1/agents', () => {
     expect(second.next_cursor).toBeNull();
   });
 
+  it('answers an empty final page for a cursor past the last id', async () => {
+    mockListAccessibleAfterId.mockResolvedValue({ data: [], hasMore: false });
+    const { encodeCursor } = await import('@server/utils/cursorPagination');
+
+    const res = await call({ method: 'GET', query: { cursor: encodeCursor('v1.agents', 'ffffffffffffffffffffffff') } });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ data: [], next_cursor: null });
+  });
+
   it('rejects an out-of-range limit and a malformed or foreign cursor with a 422, before reading', async () => {
     expect((await errorOf({ method: 'GET', query: { limit: '0' } })).name).toBe('ZodError');
     expect((await errorOf({ method: 'GET', query: { cursor: 'not-a-cursor' } })).statusCode).toBe(422);
@@ -260,11 +270,25 @@ describe('POST /api/v1/agents', () => {
 
   it.each([
     ['an unknown model', { preferred_model: 'not-a-model' }, 'Invalid model'],
-    ['a malformed trigger word', { trigger_words: ['-bad-'] }, ''],
+    ['a malformed trigger word', { trigger_words: ['-bad-'] }, TRIGGER_WORD_ERROR_MESSAGE],
   ])('answers 422 for %s', async (_label, extra, message) => {
     const error = await errorOf({ method: 'POST', body: { name: 'x', ...extra } });
     expect(error.statusCode).toBe(422);
     expect(error.message).toContain(message);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a whitespace-only name', async () => {
+    expect((await errorOf({ method: 'POST', body: { name: '   ' } })).name).toBe('ZodError');
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 rather than 422 when the caller user is missing', async () => {
+    mockFindUser.mockResolvedValue(null);
+
+    const error = await errorOf({ method: 'POST', body: { name: 'x' } });
+
+    expect(error).toMatchObject({ statusCode: 400, message: 'User not found' });
     expect(mockCreate).not.toHaveBeenCalled();
   });
 

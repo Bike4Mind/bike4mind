@@ -78,6 +78,9 @@ const agentDoc = (overrides: Record<string, unknown> = {}) => ({
   users: [{ userId: 'sharee', permissions: ['read'] }],
   groups: [],
   currentCredits: 777,
+  preferredModel: 'gpt-4o',
+  temperature: 0.7,
+  maxTokens: 2048,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
   updatedAt: new Date('2026-01-02T00:00:00.000Z'),
   ...overrides,
@@ -114,10 +117,13 @@ async function errorOf(method: 'GET' | 'PATCH' | 'DELETE', id: string, body?: ob
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindById.mockImplementation(async (id: string) => AGENTS[id] ?? null);
-  mockUpdate.mockImplementation(async ({ id, ...changes }: Record<string, unknown>) => ({
-    ...AGENTS[id as string],
-    ...changes,
-  }));
+  mockUpdate.mockImplementation(
+    async ({ id, ...changes }: Record<string, unknown>, options: { unset?: string[] } = {}) => {
+      const doc: Record<string, unknown> = { ...AGENTS[id as string], ...changes };
+      for (const field of options.unset ?? []) delete doc[field];
+      return doc;
+    }
+  );
   mockClaimCredits.mockResolvedValue(0);
   mockUpdateMany.mockResolvedValue(undefined);
 });
@@ -175,6 +181,27 @@ describe('PATCH /api/v1/agents/{id}', () => {
       { id: AGENT_ID, name: 'x' },
       { new: true, unset: ['preferredModel', 'temperature', 'maxTokens'] }
     );
+    expect(res._getJSONData()).toMatchObject({ name: 'x', preferred_model: null, temperature: null, max_tokens: null });
+  });
+
+  it('answers an empty body with the agent unchanged', async () => {
+    const res = await call('PATCH', AGENT_ID, {});
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdate).toHaveBeenCalledWith({ id: AGENT_ID }, { new: true });
+    expect(res._getJSONData()).toMatchObject({ name: 'Researcher', preferred_model: 'gpt-4o', temperature: 0.7 });
+  });
+
+  it('rejects a whitespace-only name and an empty description', async () => {
+    for (const body of [{ name: '   ' }, { description: '' }, { description: '  ' }]) {
+      expect((await errorOf('PATCH', AGENT_ID, body)).name).toBe('ZodError');
+    }
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('names a tool-list error under the caller spelling', async () => {
+    const tools = Array.from({ length: 101 }, (_, i) => `t${i}`);
+    expect((await errorOf('PATCH', AGENT_ID, { denied_tools: tools })).message).toContain('denied_tools');
   });
 
   it.each([
@@ -217,6 +244,36 @@ describe('DELETE /api/v1/agents/{id}', () => {
     expect(res._getData()).toBe('');
     expect(mockClaimCredits).toHaveBeenCalledWith(AGENT_ID);
     expect(mockDelete).toHaveBeenCalledWith(AGENT_ID);
+  });
+
+  it("clears only this agent from users' Slack settings", async () => {
+    await call('DELETE', AGENT_ID);
+
+    expect(mockUpdateMany).toHaveBeenCalledWith(
+      { 'slackSettings.customAgentId': AGENT_ID },
+      { $unset: { 'slackSettings.customAgentId': '' } }
+    );
+  });
+
+  it('still answers 204 when the Slack cleanup fails after the delete', async () => {
+    mockUpdateMany.mockRejectedValueOnce(new Error('mongo down'));
+
+    const res = await call('DELETE', AGENT_ID);
+
+    expect(res._getStatusCode()).toBe(204);
+    expect(mockDelete).toHaveBeenCalledWith(AGENT_ID);
+  });
+
+  it.each([
+    ['crediting the owner', mockAddCredits],
+    ['debiting the agent', mockSubtractCredits],
+  ])('keeps the agent when %s fails during the refund', async (_label, failing) => {
+    mockClaimCredits.mockResolvedValue(40);
+    failing.mockRejectedValueOnce(new Error('ledger down'));
+
+    expect((await errorOf('DELETE', AGENT_ID))?.message).toBe('ledger down');
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(mockUpdateMany).not.toHaveBeenCalled();
   });
 
   it('returns the agent credits to the owner before deleting', async () => {

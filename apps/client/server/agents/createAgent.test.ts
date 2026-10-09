@@ -2,18 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   findById: vi.fn(),
+  incrementCredits: vi.fn(),
   countByUserId: vi.fn(),
   agentCreate: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: h.findById, incrementCredits: vi.fn() },
+  userRepository: { findById: h.findById, incrementCredits: h.incrementCredits },
   agentRepository: { countByUserId: h.countByUserId, create: h.agentCreate },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 
 import { AGENT_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
 import { createAgent } from './createAgent';
+import { AgentValidationError } from '@server/utils/agentValidation';
 
 describe('createAgent', () => {
   beforeEach(() => {
@@ -50,5 +52,25 @@ describe('createAgent', () => {
 
     expect(agent).toMatchObject({ id: 'agent-1', name: 'Agent', userId: 'user-1', useOwnCredits: false });
     expect(userCredits).toBe(0);
+  });
+
+  it('refuses an allocation above the balance without debiting or creating', async () => {
+    h.countByUserId.mockResolvedValue(0);
+
+    const error = await createAgent({ name: 'Agent', useOwnCredits: true, currentCredits: 5 }, 'user-1').catch(e => e);
+
+    expect(error).toMatchObject({ name: 'BadRequestError', message: expect.stringContaining('Insufficient credits') });
+    expect(h.incrementCredits).not.toHaveBeenCalled();
+    expect(h.agentCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the user does not exist', async () => {
+    h.findById.mockResolvedValue(null);
+
+    const error = await createAgent({ name: 'Agent' }, 'user-1').catch(e => e);
+
+    expect(error).toMatchObject({ statusCode: 400, message: 'User not found' });
+    expect(error).not.toBeInstanceOf(AgentValidationError);
+    expect(h.agentCreate).not.toHaveBeenCalled();
   });
 });
