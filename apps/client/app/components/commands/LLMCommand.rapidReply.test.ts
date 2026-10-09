@@ -113,6 +113,12 @@ describe('handleLLMCommand - skipRapidReply', () => {
     expect(firedRapidReply()).toBe(false);
   });
 
+  it('leaves no blank-ack registration for a skipped id-less send', async () => {
+    while (blankRapidReplies.claim());
+    await handleLLMCommand({ ...complexArgs(true), currentSession: null });
+    expect(blankRapidReplies.claim()).toBe(false);
+  });
+
   it('keeps the flag out of the request params', async () => {
     await handleLLMCommand(optiArgs(true));
     const llmCall = post.mock.calls.find(([url]) => url !== '/api/ai/rapid-reply');
