@@ -885,34 +885,7 @@ export class ImageGenerationService {
         });
       }
 
-      // Validate credits before proceeding
       let usageCostUsd = 0;
-      if (adminSettingsEnforceCredits && model && !!this.db.creditTransactions) {
-        const { requiredCredits, usdCost } = await this.validateUserCredits(
-          user,
-          modelInfo,
-          billedN,
-          {
-            model,
-            size: effectiveSize,
-            quality: mapQualityForModel(model, quality),
-            // The primary is picked after this hold (selectInputImage), so hold one whenever
-            // a workbench upload or history carry-forward could send it - over-holding by one
-            // beats under-billing. References are de-duped as resolveReferenceImages does.
-            inputImageCount:
-              new Set(referenceImageFabFileIds ?? []).size +
-              (fabFileIds?.length ||
-              requiresImageInput(model) ||
-              (modelInfo.supportsImageVariation && intent === 'continuation')
-                ? 1
-                : 0),
-          },
-          logger,
-          organization
-        );
-        quest.creditsUsed = requiredCredits;
-        usageCostUsd = usdCost;
-      }
 
       // Encode the prompt to tokens
       const promptTokens = await this.tokenizer.encodeTokens(prompt, model);
@@ -981,6 +954,27 @@ export class ImageGenerationService {
         intent,
         logger,
       });
+
+      // Validated after selectInputImage so the input images billed are the ones actually sent:
+      // the primary (if any) plus every resolved reference. With no primary the first reference
+      // is promoted into its slot, which referenceImages already counts.
+      if (adminSettingsEnforceCredits && model && !!this.db.creditTransactions) {
+        const { requiredCredits, usdCost } = await this.validateUserCredits(
+          user,
+          modelInfo,
+          billedN,
+          {
+            model,
+            size: effectiveSize,
+            quality: mapQualityForModel(model, quality),
+            inputImageCount: (fileImage?.filePath ? 1 : 0) + referenceImages.length,
+          },
+          logger,
+          organization
+        );
+        quest.creditsUsed = requiredCredits;
+        usageCostUsd = usdCost;
+      }
 
       // Choose the appropriate service based on the model
       const isBFLModel = Object.values(BFL_IMAGE_MODELS).includes(model as any);

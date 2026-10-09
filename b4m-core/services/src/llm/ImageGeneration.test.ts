@@ -1036,20 +1036,33 @@ describe('ImageGenerationService.process (GPT-Image omitted-quality pin)', () =>
 });
 
 describe('ImageGenerationService.process (size normalization)', () => {
-  const makeProcessService = () => {
+  type FakeFile = { id: string; filePath: string; mimeType: string; moderationStatus: string };
+  const cleanFile = (id: string, mimeType = 'image/png'): FakeFile => ({
+    id,
+    filePath: `fab/${id}`,
+    mimeType,
+    moderationStatus: 'clean',
+  });
+
+  const makeProcessService = (files: FakeFile[] = [], recentMessages: unknown[] = []) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
     return new ImageGenerationService({
       db: {
-        quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
+        quests: {
+          findById: vi.fn(async () => quest as any),
+          update: vi.fn(),
+          updateMany: vi.fn(),
+          getMostRecentChatHistory: vi.fn(async () => recentMessages),
+        },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
-        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+        fabFiles: { findAccessibleInIds: vi.fn(async (ids: string[]) => files.filter(f => ids.includes(f.id))) },
         creditTransactions: {},
       },
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),
-      storage: {} as any,
-      fabFileStorage: {} as any,
+      storage: { getSignedUrl: vi.fn(async (key: string) => `https://storage.example.com/${key}`) } as any,
+      fabFileStorage: { getSignedUrl: vi.fn(async (key: string) => `https://fab.example.com/${key}`) } as any,
       wsHttpsUrl: 'https://ws.example.com',
     } as any);
   };
@@ -1058,7 +1071,12 @@ describe('ImageGenerationService.process (size normalization)', () => {
     model: ImageModels,
     backend: ModelBackend,
     size?: string,
-    bodyExtra: Record<string, unknown> = {}
+    bodyExtra: Record<string, unknown> = {},
+    { files = [], recentMessages = [], supportsImageVariation = false } = {} as {
+      files?: FakeFile[];
+      recentMessages?: unknown[];
+      supportsImageVariation?: boolean;
+    }
   ) => {
     vi.mocked(getAvailableModels).mockResolvedValue([
       {
@@ -1068,14 +1086,14 @@ describe('ImageGenerationService.process (size normalization)', () => {
         backend,
         contextWindow: 10000,
         max_tokens: 10000,
-        supportsImageVariation: false,
+        supportsImageVariation: supportsImageVariation,
         pricing: { 1: { input: 0, output: 0 } },
       } as unknown as ModelInfo,
     ]);
     mockGeminiGenerate.mockReset();
     mockGeminiGenerate.mockResolvedValue([]); // empty images short-circuits storage/moderation
 
-    const service = makeProcessService();
+    const service = makeProcessService(files, recentMessages);
     const validateUserCredits = vi
       .spyOn(service as any, 'validateUserCredits')
       .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
@@ -1158,27 +1176,63 @@ describe('ImageGenerationService.process (size normalization)', () => {
     expect(billed).toMatchObject({ size: '1024x1024' });
   });
 
+  const refs = [cleanFile('a'), cleanFile('b')];
+
   it('holds each unique reference image as an input image', async () => {
-    const { billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI, undefined, {
-      referenceImageFabFileIds: ['a', 'a', 'b'],
-    });
+    const { billed } = await generateWith(
+      ImageModels.GPT_IMAGE_2,
+      ModelBackend.OpenAI,
+      undefined,
+      { referenceImageFabFileIds: ['a', 'a', 'b'] },
+      { files: refs }
+    );
     expect(billed?.inputImageCount).toBe(2);
   });
 
   it('holds the workbench primary on top of the references', async () => {
-    const { billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI, undefined, {
-      fabFileIds: ['primary'],
-      referenceImageFabFileIds: ['a', 'b'],
-    });
+    const { billed } = await generateWith(
+      ImageModels.GPT_IMAGE_2,
+      ModelBackend.OpenAI,
+      undefined,
+      { fabFileIds: ['primary'], referenceImageFabFileIds: ['a', 'b'] },
+      { files: [cleanFile('primary'), ...refs], supportsImageVariation: true }
+    );
     expect(billed?.inputImageCount).toBe(3);
   });
 
-  it('holds only the references when no primary can be sent', async () => {
-    const { billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI, undefined, {
-      intent: 'continuation',
-      referenceImageFabFileIds: ['a', 'b'],
-    });
-    expect(billed?.inputImageCount).toBe(2);
+  // The client sends every workbench file id, so a PDF on the workbench must not be billed as
+  // an input image when nothing is actually sent.
+  it('holds no primary for a workbench file that is not an image', async () => {
+    const { billed } = await generateWith(
+      ImageModels.GPT_IMAGE_2,
+      ModelBackend.OpenAI,
+      undefined,
+      { fabFileIds: ['doc'] },
+      { files: [cleanFile('doc', 'application/pdf')], supportsImageVariation: true }
+    );
+    expect(billed?.inputImageCount).toBe(0);
+  });
+
+  it('holds the carried-forward history image on a continuation', async () => {
+    const { billed } = await generateWith(
+      ImageModels.GPT_IMAGE_2,
+      ModelBackend.OpenAI,
+      undefined,
+      { intent: 'continuation' },
+      { recentMessages: [{ id: 'm1', images: ['prior.png'] }], supportsImageVariation: true }
+    );
+    expect(billed?.inputImageCount).toBe(1);
+  });
+
+  it('holds no primary on a continuation with no prior image', async () => {
+    const { billed } = await generateWith(
+      ImageModels.GPT_IMAGE_2,
+      ModelBackend.OpenAI,
+      undefined,
+      { intent: 'continuation' },
+      { supportsImageVariation: true }
+    );
+    expect(billed?.inputImageCount).toBe(0);
   });
 
   it('holds no input images for a plain text-to-image request', async () => {
