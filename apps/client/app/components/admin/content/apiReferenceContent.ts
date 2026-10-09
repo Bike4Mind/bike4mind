@@ -106,9 +106,11 @@ key carry the current state of both windows:
 
 ${API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\`: ${API_KEY_RATE_LIMIT_HEADERS[header]}`).join('\n')}
 
-A request rejected for a bad key (\`401\`) or a missing scope (\`403\`) never reaches the limiter
-and carries none of these headers. Exceeding a ceiling returns \`429 Too Many Requests\` with a
-\`Retry-After\` header giving the seconds to wait before retrying.
+A request refused at the route scope gate (\`403\`) or for a bad key (\`401\`) never reaches the
+limiter and carries none of these headers. Exceeding a ceiling returns \`429 Too Many Requests\` with
+a \`Retry-After\` header giving the seconds to wait before retrying; the streaming completions
+endpoint (\`POST /api/ai/v1/completions\`) opens its event stream first, so an exceeded ceiling
+arrives there as an in-stream \`error\` event rather than a \`429\`.
 
 Some reads and job polls are exempt from the per-day ceiling and count only against the
 per-minute one; the Rate limits section of the [generated API docs](/api/v1/docs) lists them.
@@ -356,7 +358,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 3. **Leverage RAG with file context.** Attach \`fileIds\` to chat requests to ground AI responses in your uploaded documents. Files must be chunked first via \`POST /api/files/chunk\`.
 
-4. **Handle 429s gracefully.** On a 429, wait the number of seconds in the \`Retry-After\` header before retrying. \`X-RateLimit-Reset-Minute\` and \`X-RateLimit-Reset-Day\` give each window's reset time in Unix epoch seconds.
+4. **Handle 429s gracefully.** On a 429, wait the number of seconds in the \`Retry-After\` header before retrying. Each window's \`Reset\` header, listed under Rate Limits, gives its reset time in Unix epoch seconds.
 
 5. **Use Zod schemas for validation.** All request bodies are validated with Zod schemas on the server. Match the expected schema to avoid 422 errors. Shared schemas are in \`@bike4mind/common\`.
 
