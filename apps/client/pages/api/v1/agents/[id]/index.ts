@@ -17,14 +17,11 @@ import { validateAgentUpdate } from '@server/utils/agentValidation';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { deleteAgent } from '@server/agents/deleteAgent';
 import { toPublicAgent } from '@server/agents/toPublicAgent';
-import { toV1AgentError } from '@server/agents/v1AgentErrors';
+import { toV1AgentError, v1FieldLabel } from '@server/agents/v1AgentErrors';
 
 // Named so every agent id shares one bucket per method instead of one per pathname.
 const perUserRateLimit = (bucket: string) =>
   rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
-
-// validateAgentUpdate names the stored camelCase field; a v1 error names the caller's spelling.
-const V1_FIELD_NAMES: Record<string, string> = { allowedTools: 'allowed_tools', deniedTools: 'denied_tools' };
 
 // A malformed or unknown id, a soft-deleted agent and a system/org agent all come back null or
 // ownerless from findById, so assertAgentAccess answers 404 for every one of them.
@@ -69,7 +66,7 @@ const updateRoute = nextRouteForContract(updateAgentContract, {
   const reset = (['preferredModel', 'temperature', 'maxTokens'] as const).filter(field => fields[field] === null);
   const changes: Partial<IAgent> = Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null));
   try {
-    validateAgentUpdate(changes, field => V1_FIELD_NAMES[field] ?? field);
+    validateAgentUpdate(changes, v1FieldLabel);
   } catch (error) {
     throw toV1AgentError(error);
   }

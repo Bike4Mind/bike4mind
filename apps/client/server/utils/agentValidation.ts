@@ -158,8 +158,8 @@ export function validateTriggerWords(value: unknown): string[] | undefined {
 }
 
 /**
- * Validates and normalizes the fields of an agent update in place, for PUT /api/agents/[id] and
- * PATCH /api/v1/agents/[id]. Only fields present on `agentData` are checked. `label` renames a field
+ * Validates and normalizes the fields of an agent body in place, for PUT /api/agents/[id],
+ * PATCH /api/v1/agents/[id] and createAgent (both POST routes). Only fields present on `agentData` are checked. `label` renames a field
  * in an error message, so the v1 route can name its snake_case spelling.
  */
 export function validateAgentUpdate(agentData: Partial<IAgent>, label: (field: string) => string = field => field) {

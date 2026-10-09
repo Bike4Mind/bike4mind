@@ -199,9 +199,9 @@ describe('PATCH /api/v1/agents/{id}', () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
-  it('names a tool-list error under the caller spelling', async () => {
+  it.each([['allowed_tools'], ['denied_tools']])('names a %s error under the caller spelling', async field => {
     const tools = Array.from({ length: 101 }, (_, i) => `t${i}`);
-    expect((await errorOf('PATCH', AGENT_ID, { denied_tools: tools })).message).toContain('denied_tools');
+    expect((await errorOf('PATCH', AGENT_ID, { [field]: tools })).message).toMatch(new RegExp(`^${field} `));
   });
 
   it.each([

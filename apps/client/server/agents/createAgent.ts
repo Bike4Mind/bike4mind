@@ -4,62 +4,26 @@ import {
   IAgent,
   IAgentCapabilities,
   IAgentDocument,
-  supportedChatModels,
-  supportedImageModels,
   UserLevelType,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import {
-  AgentValidationError,
-  validateToolList,
-  validateMaxIterations,
-  validateDefaultThoroughness,
-  validateStringList,
-  validateDefaultVariables,
-  validateTriggerWords,
-} from '@server/utils/agentValidation';
+import { AgentValidationError, validateAgentUpdate } from '@server/utils/agentValidation';
 
 /**
  * Validates and creates an agent owned by `userId`, enforcing the per-tier agent cap and, when
  * `useOwnCredits` is set, debiting the allocation from the owner in the same transaction.
  * Shared by POST /api/agents and POST /api/v1/agents. Throws BadRequestError on any rejection: an
  * AgentValidationError for an invalid body field, and the tier cap carries `errorCode: agent_limit_reached`.
+ * `label` renames a field in an error message (see validateAgentUpdate).
  */
-export async function createAgent(agentData: Partial<IAgent>, userId: string) {
+export async function createAgent(agentData: Partial<IAgent>, userId: string, label?: (field: string) => string) {
   // Validate required fields
   if (!agentData.name) {
     throw new AgentValidationError('Agent name is required');
   }
 
-  // Validate model config fields
-  if (agentData.preferredModel && !supportedChatModels.safeParse(agentData.preferredModel).success) {
-    throw new AgentValidationError(`Invalid model: ${agentData.preferredModel}`);
-  }
-  if (agentData.preferredImageModel && !supportedImageModels.safeParse(agentData.preferredImageModel).success) {
-    throw new AgentValidationError(`Invalid image model: ${agentData.preferredImageModel}`);
-  }
-  if (agentData.temperature !== undefined && (agentData.temperature < 0 || agentData.temperature > 2)) {
-    throw new AgentValidationError('Temperature must be between 0 and 2');
-  }
-  if (agentData.maxTokens !== undefined && (agentData.maxTokens < 1 || agentData.maxTokens > 128000)) {
-    throw new AgentValidationError('Max tokens must be between 1 and 128000');
-  }
-
-  // Reject malformed trigger words before they reach MongoDB - the chat
-  // mention parser can't read handles with leading/trailing hyphens or
-  // non-alphanumeric chars beyond `_-`, and persisting one is a silent
-  // routing failure for the user.
-  const validatedTriggerWords = validateTriggerWords(agentData.triggerWords);
-
-  // Orchestration fields - bound shape and length to prevent a malformed
-  // caller writing unbounded blobs to MongoDB.
-  const validatedAllowedTools = validateToolList(agentData.allowedTools, 'allowedTools');
-  const validatedDeniedTools = validateToolList(agentData.deniedTools, 'deniedTools');
-  const validatedMaxIterations = validateMaxIterations(agentData.maxIterations);
-  const validatedDefaultThoroughness = validateDefaultThoroughness(agentData.defaultThoroughness);
-  const validatedDefaultVariables = validateDefaultVariables(agentData.defaultVariables);
-  const validatedExclusiveMcpServers = validateStringList(agentData.exclusiveMcpServers, 'exclusiveMcpServers');
-  const validatedFallbackModels = validateStringList(agentData.fallbackModels, 'fallbackModels');
+  // Normalizes agentData in place, so the fields below read the validated values.
+  validateAgentUpdate(agentData, label);
 
   // Always use a default description if empty or undefined
   // This ensures the MongoDB schema validation passes
@@ -67,7 +31,7 @@ export async function createAgent(agentData: Partial<IAgent>, userId: string) {
 
   // Parse capabilities if provided as an object
   let capabilitiesObj: IAgentCapabilities = {
-    triggerWords: validatedTriggerWords || ['@help'],
+    triggerWords: agentData.triggerWords || ['@help'],
     responseStyle: 'friendly',
     specialBehaviors: [],
   };
@@ -142,7 +106,7 @@ export async function createAgent(agentData: Partial<IAgent>, userId: string) {
       description,
       userId: userId,
       ...(agentData.projectId && { projectId: agentData.projectId }),
-      triggerWords: validatedTriggerWords || ['@help'],
+      triggerWords: agentData.triggerWords || ['@help'],
       isPublic: agentData.isPublic || false,
       capabilities: [
         JSON.stringify({
@@ -158,13 +122,13 @@ export async function createAgent(agentData: Partial<IAgent>, userId: string) {
       ...(agentData.maxTokens !== undefined && { maxTokens: agentData.maxTokens }),
       // Orchestration fields. Presence of ANY field routes the agent through
       // the ReAct executor with the inline permission card.
-      ...(validatedAllowedTools && { allowedTools: validatedAllowedTools }),
-      ...(validatedDeniedTools && { deniedTools: validatedDeniedTools }),
-      ...(validatedMaxIterations && { maxIterations: validatedMaxIterations }),
-      ...(validatedDefaultThoroughness && { defaultThoroughness: validatedDefaultThoroughness }),
-      ...(validatedDefaultVariables && { defaultVariables: validatedDefaultVariables }),
-      ...(validatedExclusiveMcpServers && { exclusiveMcpServers: validatedExclusiveMcpServers }),
-      ...(validatedFallbackModels && { fallbackModels: validatedFallbackModels }),
+      ...(agentData.allowedTools && { allowedTools: agentData.allowedTools }),
+      ...(agentData.deniedTools && { deniedTools: agentData.deniedTools }),
+      ...(agentData.maxIterations && { maxIterations: agentData.maxIterations }),
+      ...(agentData.defaultThoroughness && { defaultThoroughness: agentData.defaultThoroughness }),
+      ...(agentData.defaultVariables && { defaultVariables: agentData.defaultVariables }),
+      ...(agentData.exclusiveMcpServers && { exclusiveMcpServers: agentData.exclusiveMcpServers }),
+      ...(agentData.fallbackModels && { fallbackModels: agentData.fallbackModels }),
       personality: {
         majorMotivation: agentData.personality?.majorMotivation || 'Helping users',
         minorMotivation: agentData.personality?.minorMotivation || 'Learning',

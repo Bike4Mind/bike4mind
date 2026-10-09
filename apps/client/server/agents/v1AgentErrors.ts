@@ -12,3 +12,8 @@ export function toV1AgentError(error: unknown): unknown {
   }
   return error;
 }
+
+// The shared validators name the stored camelCase field; a v1 error names the caller's snake_case spelling.
+const V1_FIELD_NAMES: Record<string, string> = { allowedTools: 'allowed_tools', deniedTools: 'denied_tools' };
+
+export const v1FieldLabel = (field: string) => V1_FIELD_NAMES[field] ?? field;
