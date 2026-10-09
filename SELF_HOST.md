@@ -833,6 +833,25 @@ Publishing stages each bundle under a temporary `drafts/` prefix in the artifact
 
 Notebook exports are written under `exports/` in the FabFile bucket and downloaded via a short-lived signed URL; `createbuckets` sets a MinIO lifecycle rule that expires them after 1 day. On a different S3 backend, add an equivalent 1-day rule on the `exports/` prefix of that bucket.
 
+### Browser downloads from a private object store
+
+QuestMaster ZIP exports opt into `S3Storage.getSignedUrl` with `audience: 'browser'`. With the default container endpoint, the returned URL contains the internal MinIO hostname, which a browser cannot resolve. Set the optional `S3_PRESIGN_ENDPOINT` in the environment of both the app and workers to the S3 API origin the browser can reach. `AWS_ENDPOINT_URL_S3` stays on the private backend endpoint for uploads, metadata reads, downloads and default server-side signed URLs. `S3_PRESIGN_ENDPOINT` must be an absolute HTTP or HTTPS URL. If the signing override is unset, the existing signing behavior is unchanged.
+
+For the local Compose evaluation stack, MinIO's API is already published on loopback port 9000. Add this to `.env.selfhost`, then recreate the app and worker services so both receive the new environment:
+
+```bash
+AWS_ENDPOINT_URL_S3=http://minio:9000
+S3_PRESIGN_ENDPOINT=http://localhost:9000
+```
+
+If `MINIO_HOST_PORT` is changed, use that host port in `S3_PRESIGN_ENDPOINT`. The signing origin is the API port, not MinIO's console port 9001.
+
+For the Kubernetes evaluation chart, follow the [chart installation guide](selfhost/kubernetes/README.md). Its default `config.S3_PRESIGN_ENDPOINT` and MinIO API port-forward match `http://localhost:19000`; override the config value for the browser's actual object-store origin.
+
+For a remote browser, use a trusted HTTPS S3 API origin that routes to the same backend and bucket namespace. A reverse proxy must preserve the signed host, path and query. Sign that origin directly; changing the hostname of an already signed URL invalidates its signature. Keep the backing service private, and configure the object store's CORS policy for the browser origin if using cross-origin fetches or PUT uploads.
+
+This override covers only explicit browser-audience calls to `S3Storage.getSignedUrl`, currently the two QuestMaster ZIP completion paths. Default callers, including server-side file and image fetchers, retain the private endpoint. Routes that construct their own S3 client and call the SDK presigner directly do not use this override; it does not establish parity for every file upload or download path.
+
 ## Share your instance with friends (secure internet exposure)
 
 The self-host stack is built for local, single-host use: it comes up on `localhost` with no authentication on its backing services. To let a few trusted people reach it, you have two supported paths (and a no-third-party variant of the first):
@@ -1058,6 +1077,14 @@ HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the
 An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
 
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
+
+### Daily credit-lot expiry
+
+The worker reconciles credit-lot consumption and expires unassigned stale credits at 04:00 UTC, using the same sweep as the hosted cron. The shared sweep groups holders in 500-holder pages and isolates failures per holder. It requires MongoDB transactions; the supplied Compose Mongo runs as a replica set. Standalone Mongo fails closed without a nontransactional fallback. No model provider, CloudWatch or hosted database reconnect is invoked by the local task.
+
+Each holder is read again inside its transaction, including retries. Balance deductions, expiry ledger entries and lot assignments commit together; a failed write rolls them all back. Concurrent attempts on the same holder retry from its fresh balance. An optional settledAt stamp distinguishes stale-run retirement from provisional live FIFO assignments. Refunds can lower unexpired assignments; once stamped, replay preserves the retired lot and its original stamp. Historical unmarked lots are recalculated from the current balance on their first stale run; no settlement is inferred from consumedAssigned and no backfill runs. Other successfully processed holders retain their committed results. After all holders have been visited, the scheduler catches a partial-failure error and logs the task as failed; no retry occurs until the next 04:00 UTC slot. The hosted handler retains its existing 200 response and per-holder counts. The sweep does not delete holders, lots or transactions.
+
+There is no startup run. Starting after 04:00 waits until the next day; an exact-boundary start runs that slot. Delayed ticks coalesce missed days, and an active local run does not overlap. Shutdown waits within the worker's existing grace period; an interrupted holder transaction cannot commit partially. This schedule has no cross-worker scheduler lock, although per-holder transactions protect its accounting writes. A restart after today's boundary does not retry the missed daily slot.
 
 ### Daily lake health trends
 

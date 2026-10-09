@@ -26,9 +26,10 @@ import { readDefaultSpecs, readJobCondition, readJobs, readNeeds, readSteps } fr
  * `always()` is called out separately because it is the tempting spelling and the wrong one: it
  * is the one status-check function that stays true through run cancellation, and PR runs are
  * cancel-in-progress. A superseded push would cancel the run and still leave this job holding a
- * runner for an install plus a full core build. Sibling jobs that use `always()` (the `test`
- * aggregator, `ci-complete`) only echo and assert, so the scope here is jobs that pair it with
- * the expensive core-build download.
+ * runner for an install plus a full core build. The `test` aggregator and `ci-complete` are
+ * pinned off `always()` for a different reason (false red/green on a cancelled run) in
+ * checkCancelledRunGates.test.ts, so the scope here is jobs that pair it with the core-build
+ * download.
  *
  * Text-matched rather than YAML-parsed, following checkClientTestShards.test.ts's precedent: the
  * repo carries no YAML parser dependency and the assertions wanted are over literal expressions.

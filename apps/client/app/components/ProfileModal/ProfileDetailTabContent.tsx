@@ -19,14 +19,11 @@ import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { AdminPanelSettings, Storage } from '@mui/icons-material';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import { useGetSubscriptionPlans, useStripePortal } from '@client/app/hooks/data/stripe';
+import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
+import { useOpenUserStripePortal } from '@client/app/components/subscription/useOpenUserStripePortal';
 import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy';
-import {
-  isDelinquentSubscriptionStatus,
-  pickDisplayedSubscription,
-  SubscriptionOwnerType,
-} from '@client/lib/subscriptions/types';
+import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@client/lib/subscriptions/types';
 import { useToggleShowCreditsUsed } from '@client/app/hooks/data/user';
 
 function centsToDollars(cents: number | undefined) {
@@ -179,8 +176,7 @@ const SubscriptionCard = () => {
   const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
   const { t } = useTranslation();
   const theme = useTheme();
-  const stripePortal = useStripePortal();
-  const { currentUser } = useUser();
+  const stripePortal = useOpenUserStripePortal();
   const subscriptions = useGetSubscriptions({ enabled: true });
   // Non-terminal, not just active: a past_due user still holds this plan, and this
   // is the gate that decides whether the corner button opens Stripe's portal (where
@@ -288,17 +284,8 @@ const SubscriptionCard = () => {
             }}
             onClick={() => {
               // If user has an active subscription, open the stripe portal
-              if (subscription && currentUser) {
-                stripePortal.mutate(
-                  { ownerType: SubscriptionOwnerType.User, ownerId: currentUser.id },
-                  {
-                    // Store the return path only on success so a failed mutation doesn't leave an
-                    // orphaned key that causes a spurious redirect on the next "/" load.
-                    onSuccess: () => {
-                      sessionStorage.setItem('__stripe_return', window.location.pathname);
-                    },
-                  }
-                );
+              if (subscription && stripePortal.isAvailable) {
+                stripePortal.open();
                 return;
               }
 

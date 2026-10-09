@@ -96,6 +96,11 @@ export interface PremiumNavDescriptor {
   requireEntitlement?: string;
   /** Show only when the user carries the tag; OR with `requireEntitlement` when both set. */
   requireFeatureTag?: string;
+  /**
+   * `true` -> also render the item as a row in the primary notebook sidebar (SidenavNav), under the
+   * same visibility rule. Omitted -> the "More" flyout only. Use for a product's main launch point.
+   */
+  sidebar?: boolean;
 }
 
 /**
@@ -184,6 +189,33 @@ export interface PremiumRouteIndexing {
  * identity change. Never declare one that also matches a core key.
  */
 export type PremiumLocalStorageKeyPrefixes = string[];
+
+/**
+ * Extra entitlements, per registered workspace id, whose holders may fork, snip or clone a session
+ * that lives in that workspace and keep the copy there. Contributed as literal data in
+ * `b4mContributions.workspaceCopyEntitlements` (`{ "<surface id>": ["<entitlement key>"] }`) and
+ * enforced by `canCopyWithinSurface` (@bike4mind/common surfaces.ts) on the server and in the
+ * clone/fork menus alike.
+ *
+ * Core cannot hold this table without naming an overlay's workspace, so the overlay declares it.
+ * A grant only keeps a copy where its source already lives: creating a session in the workspace,
+ * moving one into it, or naming it as an explicit copy target still needs the workspace's own
+ * `requiredEntitlement`. An id this repo does not register as a workspace is inert.
+ *
+ * Every granted key must also pass the workspace's own route gate AND its API gates. A kept copy
+ * carries the workspace's surface, so it leaves the main list; if those gates then turn its owner
+ * away, the owner holds a session no list shows and no page opens. Core cannot see those gates, so
+ * the overlay declares them alongside the grants, as data of the same shape, in
+ * `b4mContributions.workspaceGateEntitlements`: every key the workspace's route and API gates admit
+ * (the route descriptor's `requireEntitlement`, plus whatever an in-page or API check accepts).
+ * Codegen fails the build when a package grants a key that its own gate declaration for that
+ * workspace does not list. The declaration is the overlay's promise, so keep it in step with the
+ * gates themselves; widening the gates and declaring a grant belong in the same change.
+ *
+ * DATA, like `PremiumLocalStorageKeyPrefixes`: read straight out of package.json, so server-side
+ * enforcement sees it without importing overlay code. Grants from several overlays are merged.
+ */
+export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly string[]>>;
 
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {

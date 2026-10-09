@@ -39,13 +39,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.READ_FILES,
     label: 'Read Files',
     description: 'Download and view files',
-    endpoints: ['GET /api/v1/files/:id'],
+    endpoints: ['GET /api/v1/files', 'GET /api/v1/files/:id'],
   },
   {
     value: ApiKeyScope.WRITE_FILES,
     label: 'Write Files',
     description: 'Upload and modify files',
-    endpoints: ['POST /api/v1/files'],
+    endpoints: ['POST /api/v1/files', 'PATCH|DELETE /api/v1/files/:id'],
   },
   {
     value: ApiKeyScope.AI_GENERATE,
@@ -113,7 +113,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.READ_AGENTS,
     label: 'Read Agents',
     description: 'View agents',
-    endpoints: ['GET /api/agents', 'GET /api/agents/:id', 'GET /api/agents/:id/missions'],
+    endpoints: [
+      'GET /api/agents',
+      'GET /api/agents/:id',
+      'GET /api/agents/:id/missions',
+      'GET /api/v1/agents',
+      'GET /api/v1/agents/:id',
+    ],
   },
   {
     value: ApiKeyScope.WRITE_AGENTS,
@@ -131,6 +137,10 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/agents/:id/generate-description',
       'POST /api/agents/:id/generate-system-prompt',
       'POST /api/agents/:id/enhance-field',
+      'POST /api/v1/agents',
+      'GET /api/v1/agents',
+      'GET /api/v1/agents/:id',
+      'PATCH|DELETE /api/v1/agents/:id',
     ],
   },
   {

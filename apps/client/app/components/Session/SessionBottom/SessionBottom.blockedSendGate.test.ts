@@ -23,4 +23,15 @@ describe('SessionBottom - blocked-send gate is scoped to reply-choice sends', ()
     const sendPromptCallback = source.slice(source.indexOf('const sendPromptCallback ='));
     expect(sendPromptCallback).toContain('sendBlockedReason: options?.respectBlockedState ? sendBlockedReason : null,');
   });
+
+  it('a refused reply-choice click toasts every reason, while Enter keeps the composer gate', () => {
+    expect(source).toContain('createBlockedSendToastGate({ toastEveryReason: true })');
+    const handleEditorSubmit = source.slice(
+      source.indexOf('const handleEditorSubmit ='),
+      source.indexOf('const sendPromptCallback =')
+    );
+    expect(handleEditorSubmit).toContain('shouldToastBlockedSend,');
+    const sendPromptCallback = source.slice(source.indexOf('const sendPromptCallback ='));
+    expect(sendPromptCallback).toContain('shouldToastBlockedSend: shouldToastBlockedClick,');
+  });
 });
