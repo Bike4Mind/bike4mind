@@ -13,11 +13,13 @@ export const OAUTH_FEDERATED_SUBJECT_SOURCES = ['identities', 'sub'] as const;
  */
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-export const oauthRedirectUriSchema = z
+const redirectUriBaseSchema = z
   .string()
   .trim()
   .min(1, 'Redirect URI is required')
-  .max(2048, 'Redirect URI is too long')
+  .max(2048, 'Redirect URI is too long');
+
+export const oauthRedirectUriSchema = redirectUriBaseSchema
   .refine(value => {
     try {
       const url = new URL(value);
@@ -35,7 +37,9 @@ export const oauthRedirectUriSchema = z
       return true;
     }
   }, 'Redirect URI must not contain credentials')
-  .refine(value => !value.includes('#'), 'Redirect URI must not contain a fragment');
+  .refine(value => !value.includes('#'), 'Redirect URI must not contain a fragment')
+  // new URL() strips tabs/newlines, so the parsed host can look fine while the stored string never exact-matches.
+  .refine(value => !/\s/.test(value), 'Redirect URI must not contain whitespace');
 
 const httpsUrlSchema = z
   .string()
@@ -106,11 +110,18 @@ export function resolveOAuthFederatedIdp(
   return { issuer, audience, providerName, ...(jwksUri ? { jwksUri } : {}) };
 }
 
-const redirectUrisSchema = z
-  .array(oauthRedirectUriSchema)
-  .min(1, 'At least one redirect URI is required')
-  .max(20, 'Too many redirect URIs')
-  .refine(uris => new Set(uris).size === uris.length, 'Redirect URIs must be unique');
+const redirectUrisList = <T extends z.ZodType<string>>(item: T) =>
+  z
+    .array(item)
+    .min(1, 'At least one redirect URI is required')
+    .max(20, 'Too many redirect URIs')
+    .refine(uris => new Set(uris).size === uris.length, 'Redirect URIs must be unique');
+
+const redirectUrisSchema = redirectUrisList(oauthRedirectUriSchema);
+
+// Update keeps URIs a legacy client already stores, so only the shape is checked here;
+// updateOAuthClient applies oauthRedirectUriSchema to the newly-added ones.
+const storedRedirectUriSchema = redirectUriBaseSchema;
 
 /**
  * Create payload. `clientType` defaults to the non-privileged relying-party class; first-party is
@@ -128,7 +139,7 @@ export const createOAuthClientSchema = z
 /** Update payload: name, type and trust config are fixed at registration. */
 export const updateOAuthClientSchema = z
   .object({
-    redirectUris: redirectUrisSchema.optional(),
+    redirectUris: redirectUrisList(storedRedirectUriSchema).optional(),
     isActive: z.boolean().optional(),
   })
   .strict()

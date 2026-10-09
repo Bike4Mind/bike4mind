@@ -214,6 +214,99 @@ describe('updateOAuthClient', () => {
   });
 });
 
+describe('updateOAuthClient legacy redirect URIs', () => {
+  const seedLegacy = async () => {
+    const { client } = await createOAuthClient(base);
+    await OAuthClientModel.updateOne({ _id: client.id }, { $set: { redirectUris: ['com.example.app:/oauth'] } });
+    return client;
+  };
+
+  it('keeps a stored legacy URI while a new https one is added', async () => {
+    const client = await seedLegacy();
+    const { after } = await updateOAuthClient(client.id, {
+      redirectUris: ['com.example.app:/oauth', 'https://app.example.test/cb'],
+    });
+    expect(after.redirectUris).toEqual(['com.example.app:/oauth', 'https://app.example.test/cb']);
+  });
+
+  it('still rejects a newly-added non-loopback http URI', async () => {
+    const client = await seedLegacy();
+    await expect(
+      updateOAuthClient(client.id, { redirectUris: ['com.example.app:/oauth', 'http://app.example.test/cb'] })
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('updateOAuthClient redirect URI edge cases', () => {
+  const seedLegacy = async () => {
+    const { client } = await createOAuthClient(base);
+    await OAuthClientModel.updateOne({ _id: client.id }, { $set: { redirectUris: ['com.example.app:/oauth'] } });
+    return client;
+  };
+
+  it('answers ConflictError (409) when the stored list changes between the read and the write', async () => {
+    const { client } = await createOAuthClient(base);
+    const realFindById = OAuthClientModel.findById.bind(OAuthClientModel);
+    vi.spyOn(OAuthClientModel, 'findById').mockImplementationOnce(
+      (id: unknown) =>
+        ({
+          exec: async () => {
+            const doc = await realFindById(id as string).exec();
+            await OAuthClientModel.updateOne({ _id: client.id }, { $set: { redirectUris: ['com.other.app:/oauth'] } });
+            return doc;
+          },
+        }) as never
+    );
+
+    await expect(
+      updateOAuthClient(client.id, { redirectUris: ['https://app.example.test/cb2'] })
+    ).rejects.toMatchObject({ name: 'ConflictError', statusCode: 409 });
+    vi.restoreAllMocks();
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.redirectUris).toEqual(['com.other.app:/oauth']);
+  });
+
+  it('still answers NotFoundError when the client is deleted between the read and the write', async () => {
+    const { client } = await createOAuthClient(base);
+    const realFindById = OAuthClientModel.findById.bind(OAuthClientModel);
+    vi.spyOn(OAuthClientModel, 'findById').mockImplementationOnce(
+      (id: unknown) =>
+        ({
+          exec: async () => {
+            const doc = await realFindById(id as string).exec();
+            await OAuthClientModel.deleteOne({ _id: client.id });
+            return doc;
+          },
+        }) as never
+    );
+    await expect(
+      updateOAuthClient(client.id, { redirectUris: ['https://app.example.test/cb2'] })
+    ).rejects.toBeInstanceOf(NotFoundError);
+    vi.restoreAllMocks();
+  });
+
+  it('does not guard an isActive-only update on the redirect list', async () => {
+    const { client } = await createOAuthClient(base);
+    const { after } = await updateOAuthClient(client.id, { isActive: false });
+    expect(after.isActive).toBe(false);
+  });
+
+  it('rejects re-adding a legacy URI after it was removed in an earlier update', async () => {
+    const client = await seedLegacy();
+    await updateOAuthClient(client.id, { redirectUris: ['https://app.example.test/cb'] });
+    await expect(
+      updateOAuthClient(client.id, { redirectUris: ['https://app.example.test/cb', 'com.example.app:/oauth'] })
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('treats a case variant of a stored legacy URI as new and rejects it', async () => {
+    const client = await seedLegacy();
+    await expect(updateOAuthClient(client.id, { redirectUris: ['COM.example.app:/oauth'] })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+  });
+});
+
 describe('listOAuthClients', () => {
   it('returns every client, newest first, without any secret material', async () => {
     const first = await createOAuthClient({ ...base, name: 'First' });

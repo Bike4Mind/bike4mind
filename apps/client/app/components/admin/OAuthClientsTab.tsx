@@ -178,7 +178,12 @@ export default function OAuthClientsTab() {
   // The secret is held in state and in the create/rotate mutation result; both are cleared when the modal closes (gcTime 0).
   const [secretResult, setSecretResult] = useState<{ result: OAuthClientWithSecret; rotated: boolean } | null>(null);
 
-  const { data: clients = [], isPending } = useQuery({ queryKey: [QUERY_KEY], queryFn: fetchOAuthClients });
+  const {
+    data: clients = [],
+    isPending,
+    isError,
+    error: listError,
+  } = useQuery({ queryKey: [QUERY_KEY], queryFn: fetchOAuthClients });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
 
   const createMutation = useMutation({
@@ -256,7 +261,17 @@ export default function OAuthClientsTab() {
 
       {isPending && <LinearProgress sx={{ mb: 1 }} />}
 
-      {!isPending && clients.length === 0 ? (
+      {isError && clients.length > 0 && (
+        <Alert color="warning" variant="soft" sx={{ mb: 1 }} data-testid="oauth-clients-refresh-error">
+          {`Could not refresh OAuth clients, showing the last loaded list: ${getErrorMessage(listError)}`}
+        </Alert>
+      )}
+
+      {isError && clients.length === 0 ? (
+        <Alert color="danger" variant="soft" data-testid="oauth-clients-load-error">
+          {`Could not load OAuth clients: ${getErrorMessage(listError)}`}
+        </Alert>
+      ) : !isPending && clients.length === 0 ? (
         <Sheet variant="soft" sx={{ borderRadius: 'md', py: 6, px: 3, textAlign: 'center' }}>
           <Typography level="title-md" data-testid="oauth-clients-empty">
             No OAuth clients registered yet

@@ -6,6 +6,7 @@ import {
   ConflictError,
   NotFoundError,
   createOAuthClientSchema,
+  oauthRedirectUriSchema,
   resolveOAuthFederatedIdp,
   updateOAuthClientSchema,
   type CreateOAuthClientInput,
@@ -142,10 +143,30 @@ export async function updateOAuthClient(
   input: UpdateOAuthClientInput
 ): Promise<{ before: OAuthClientView; after: OAuthClientView }> {
   const data = updateOAuthClientSchema.parse(input);
-  const before = toOAuthClientView(await findClientOrThrow(id));
+  const current = await findClientOrThrow(id);
+  const before = toOAuthClientView(current);
 
-  const doc = await OAuthClientModel.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }).exec();
-  if (!doc) throw new NotFoundError('OAuth client not found');
+  // Legacy clients may hold URIs today's rules reject; keep those, but hold anything new to the strict rules.
+  const stored = new Set(before.redirectUris);
+  for (const uri of data.redirectUris?.filter(u => !stored.has(u)) ?? []) {
+    const parsed = oauthRedirectUriSchema.safeParse(uri);
+    if (!parsed.success)
+      throw new BadRequestError(`${uri}: ${parsed.error.issues[0]?.message ?? 'invalid redirect URI'}`);
+  }
+
+  // Exact-match the list we validated against, so a concurrent edit cannot slip an unchecked URI past it.
+  const filter = data.redirectUris ? { _id: id, redirectUris: before.redirectUris } : { _id: id };
+  const doc = await OAuthClientModel.findOneAndUpdate(
+    filter,
+    { $set: data },
+    { new: true, runValidators: true }
+  ).exec();
+  if (!doc) {
+    if (data.redirectUris && (await OAuthClientModel.exists({ _id: id }))) {
+      throw new ConflictError('Redirect URIs changed while saving; reload and try again');
+    }
+    throw new NotFoundError('OAuth client not found');
+  }
 
   return { before, after: toOAuthClientView(doc) };
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, NotFoundError } from '@bike4mind/common';
 
 const { handlers, configs, db, logAuditEvent } = vi.hoisted(() => ({
   configs: {} as Record<string, unknown>,
@@ -47,11 +47,11 @@ const view = (over: Record<string, unknown> = {}) => ({
 });
 const SECRET = 'rotated-plaintext-secret';
 
-function makeReqRes(method: string, over: { user?: unknown; body?: unknown } = {}) {
+function makeReqRes(method: string, over: { user?: unknown; body?: unknown; query?: unknown } = {}) {
   const { req, res } = createMocks({ method });
   (req as { user?: unknown }).user = 'user' in over ? over.user : { isAdmin: true, id: 'admin-1', username: 'root' };
   (req as { body?: unknown }).body = over.body ?? {};
-  (req as { query?: unknown }).query = { id: 'c1' };
+  (req as { query?: unknown }).query = over.query ?? { id: 'c1' };
   return { req, res };
 }
 
@@ -106,6 +106,36 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
     );
   });
 
+  it('audits re-activating an inactive client as its own event', async () => {
+    db.updateOAuthClient.mockResolvedValue({ before: view({ isActive: false }), after: view() });
+    const { req, res } = makeReqRes('PATCH', { body: { isActive: true } });
+    await handlers.update.patch(req, res);
+    expect(logAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'OAUTH_CLIENT_ACTIVATED' }),
+      undefined
+    );
+  });
+
+  it('audits an unchanged isActive as a plain update', async () => {
+    db.updateOAuthClient.mockResolvedValue({ before: view(), after: view() });
+    const { req, res } = makeReqRes('PATCH', { body: { isActive: true } });
+    await handlers.update.patch(req, res);
+    expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'OAUTH_CLIENT_UPDATED' }), undefined);
+  });
+
+  it.each([{}, { id: ['a', 'b'] }])('rejects a missing or non-string id %j with 400', async query => {
+    const { req, res } = makeReqRes('PATCH', { body: { isActive: false }, query });
+    await expect(handlers.update.patch(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(db.updateOAuthClient).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 and writes no audit event when the client does not exist', async () => {
+    db.updateOAuthClient.mockRejectedValue(new NotFoundError('OAuth client not found'));
+    const { req, res } = makeReqRes('PATCH', { body: { isActive: false } });
+    await expect(handlers.update.patch(req, res)).rejects.toMatchObject({ statusCode: 404 });
+    expect(logAuditEvent).not.toHaveBeenCalled();
+  });
+
   it('rejects a body that tries to change anything but redirect URIs and active state', async () => {
     const { req, res } = makeReqRes('PATCH', { body: { clientType: 'first-party' } });
     await expect(handlers.update.patch(req, res)).rejects.toMatchObject({ statusCode: 400 });
@@ -133,5 +163,25 @@ describe('POST /api/admin/oauth-clients/[id]/rotate-secret', () => {
       undefined
     );
     expect(JSON.stringify(logAuditEvent.mock.calls)).not.toContain(SECRET);
+  });
+
+  it.each([{}, { id: ['a', 'b'] }])('rejects a missing or non-string id %j with 400', async query => {
+    const { req, res } = makeReqRes('POST', { query });
+    await expect(handlers.rotate.post(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(db.rotateOAuthClientSecret).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 and writes no audit event when the client does not exist', async () => {
+    db.rotateOAuthClientSecret.mockRejectedValue(new NotFoundError('OAuth client not found'));
+    const { req, res } = makeReqRes('POST');
+    await expect(handlers.rotate.post(req, res)).rejects.toMatchObject({ statusCode: 404 });
+    expect(logAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 and writes no audit event when the client is public', async () => {
+    db.rotateOAuthClientSecret.mockRejectedValue(new BadRequestError('public client'));
+    const { req, res } = makeReqRes('POST');
+    await expect(handlers.rotate.post(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(logAuditEvent).not.toHaveBeenCalled();
   });
 });

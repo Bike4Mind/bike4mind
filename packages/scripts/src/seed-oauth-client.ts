@@ -31,10 +31,14 @@
  *   FEDERATED_ISSUER="https://<b4m-app-url>" \
  *   [FEDERATED_AUDIENCE="<this client_id>"] \
  *   FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks"
+ *
+ * REDIRECT_URIS is comma-separated. Each URI must be an absolute https URL; http is
+ * allowed only for localhost, 127.0.0.1 and [::1]. No fragment, userinfo or whitespace.
  */
 
 import { ConflictError, type OAuthFederatedIdpInput } from '@bike4mind/common';
 import { createOAuthClient, mongoose, OAuthClientModel } from '@bike4mind/database';
+import { ZodError } from 'zod';
 import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 
 /**
@@ -42,17 +46,17 @@ import { isDirectInvocation } from '../utils/isDirectInvocation.js';
  * including the `sub` audience defaulting to the generated client_id, live in
  * resolveOAuthFederatedIdp so this script and the admin page enforce the same ones.
  */
-export function readFederatedIdpEnv(): OAuthFederatedIdpInput | undefined {
-  const rawSubjectSource = process.env.FEDERATED_SUBJECT_SOURCE || undefined;
+export function readFederatedIdpEnv(env: NodeJS.ProcessEnv = process.env): OAuthFederatedIdpInput | undefined {
+  const rawSubjectSource = env.FEDERATED_SUBJECT_SOURCE || undefined;
   if (rawSubjectSource && rawSubjectSource !== 'identities' && rawSubjectSource !== 'sub') {
     throw new Error(`FEDERATED_SUBJECT_SOURCE must be 'identities' or 'sub', got '${rawSubjectSource}'`);
   }
   const subjectSource = rawSubjectSource as OAuthFederatedIdpInput['subjectSource'];
   const input: OAuthFederatedIdpInput = {
-    issuer: process.env.FEDERATED_ISSUER || undefined,
-    audience: process.env.FEDERATED_AUDIENCE || undefined,
-    providerName: process.env.FEDERATED_PROVIDER_NAME || undefined,
-    jwksUri: process.env.FEDERATED_JWKS_URI || undefined,
+    issuer: env.FEDERATED_ISSUER || undefined,
+    audience: env.FEDERATED_AUDIENCE || undefined,
+    providerName: env.FEDERATED_PROVIDER_NAME || undefined,
+    jwksUri: env.FEDERATED_JWKS_URI || undefined,
     subjectSource,
   };
   return Object.values(input).some(Boolean) ? input : undefined;
@@ -63,8 +67,8 @@ export function readFederatedIdpEnv(): OAuthFederatedIdpInput | undefined {
  * (scope/audience-bound token, no first-party session). Registering a first-party client - one
  * B4M owns - is the rare case and must be opted into explicitly with CLIENT_TYPE=first-party.
  */
-export function resolveClientType(): 'first-party' | 'relying-party' {
-  const raw = process.env.CLIENT_TYPE;
+export function resolveClientType(env: NodeJS.ProcessEnv = process.env): 'first-party' | 'relying-party' {
+  const raw = env.CLIENT_TYPE;
   if (!raw) return 'relying-party';
   if (raw !== 'first-party' && raw !== 'relying-party') {
     throw new Error(`CLIENT_TYPE must be 'first-party' or 'relying-party', got '${raw}'`);
@@ -72,36 +76,72 @@ export function resolveClientType(): 'first-party' | 'relying-party' {
   return raw;
 }
 
-async function main() {
-  const mongoUri = process.env.MONGODB_URI;
+export type SeedResult =
+  | { status: 'created'; client: Awaited<ReturnType<typeof createOAuthClient>>['client']; clientSecret: string }
+  | { status: 'exists'; name: string; clientId?: string };
+
+/** Registers the client described by env; a duplicate name resolves to 'exists', anything else rejects. */
+export async function runSeed(env: NodeJS.ProcessEnv = process.env): Promise<SeedResult> {
+  const mongoUri = env.MONGODB_URI;
   if (!mongoUri) throw new Error('MONGODB_URI env var required');
 
-  const clientName = process.env.CLIENT_NAME;
+  const clientName = env.CLIENT_NAME;
   if (!clientName) throw new Error('CLIENT_NAME env var required (e.g. "My App")');
 
-  const redirectUrisRaw = process.env.REDIRECT_URIS;
+  const redirectUrisRaw = env.REDIRECT_URIS;
   if (!redirectUrisRaw) throw new Error('REDIRECT_URIS env var required (comma-separated)');
-  const redirectUris = redirectUrisRaw.split(',').map(u => u.trim());
+  const redirectUris = redirectUrisRaw
+    .split(',')
+    .map(u => u.trim())
+    .filter(Boolean);
 
-  const federatedIdpInput = readFederatedIdpEnv();
-  const clientType = resolveClientType();
+  const federatedIdpInput = readFederatedIdpEnv(env);
+  const clientType = resolveClientType(env);
 
   await mongoose.connect(mongoUri);
-
-  let created;
   try {
-    created = await createOAuthClient({ name: clientName, redirectUris, clientType, federatedIdp: federatedIdpInput });
+    const { client, clientSecret } = await createOAuthClient({
+      name: clientName,
+      redirectUris,
+      clientType,
+      federatedIdp: federatedIdpInput,
+    });
+    return { status: 'created', client, clientSecret };
   } catch (error) {
     if (!(error instanceof ConflictError)) throw error;
     const existing = await OAuthClientModel.findOne({ name: clientName.trim() }).exec();
-    console.log(`\nClient "${clientName}" already exists:`);
-    console.log('  client_id:', existing?.clientId);
-    console.log('\nRotate its secret or edit it from the admin OAuth Clients page instead.\n');
+    return { status: 'exists', name: clientName.trim(), clientId: existing?.clientId };
+  } finally {
     await mongoose.disconnect();
-    process.exit(0);
+  }
+}
+
+export function formatZodError(error: ZodError): string {
+  return error.issues
+    .map(issue => `  - ${issue.path.length ? `${issue.path.join('.')}: ` : ''}${issue.message}`)
+    .join('\n');
+}
+
+export async function main(): Promise<void> {
+  let result: SeedResult;
+  try {
+    result = await runSeed();
+  } catch (err) {
+    if (err instanceof ZodError) console.error(`Invalid input:\n${formatZodError(err)}`);
+    else console.error(err);
+    process.exit(1);
+    return;
   }
 
-  const { client, clientSecret } = created;
+  if (result.status === 'exists') {
+    console.log(`\nClient "${result.name}" already exists:`);
+    console.log('  client_id:', result.clientId);
+    console.log('\nRotate its secret or edit it from the admin OAuth Clients page instead.\n');
+    process.exit(0);
+    return;
+  }
+
+  const { client, clientSecret } = result;
   const federatedIdp = client.federatedIdp;
   console.log('\n✅ OAuth client registered!\n');
   console.log('  client_id    :', client.clientId);
@@ -119,16 +159,11 @@ async function main() {
   }
   console.log(`\nSet these SST secrets in ${client.name}:`);
   console.log(`  sst secret set B4mOAuthClientId "${client.clientId}"`);
-  console.log(`  sst secret set B4mOAuthClientSecret "${clientSecret}"`);
+  console.log('  sst secret set B4mOAuthClientSecret "<the client_secret above>"');
   console.log('\n⚠️  The client_secret will NOT be shown again.\n');
-
-  await mongoose.disconnect();
 }
 
-// Run only when executed directly (npx tsx ...), not when a test imports resolveClientType.
+// Run only when executed directly (npx tsx ...), not when a test imports main.
 if (isDirectInvocation(import.meta.url)) {
-  main().catch(err => {
-    console.error(err);
-    process.exit(1);
-  });
+  void main();
 }

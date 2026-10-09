@@ -20,6 +20,8 @@ describe('oauthRedirectUriSchema', () => {
     'http://localhost.evil.test/cb',
     'https://user:pass@app.example.test/cb',
     'https://user@app.example.test/cb',
+    'http://local\thost:3000/cb',
+    'https://app.example.test/c b',
   ])('rejects %s', uri => expect(oauthRedirectUriSchema.safeParse(uri).success).toBe(false));
 });
 

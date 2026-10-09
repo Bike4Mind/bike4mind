@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { toast } from 'sonner';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -51,7 +52,8 @@ const client = {
 const SECRET = 'shown-once-secret';
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // Not resetAllMocks: that also wipes global setup mocks (matchMedia) the theme provider needs.
+  for (const fn of [...Object.values(api), copy, toast.success, toast.error]) vi.mocked(fn).mockReset();
   api.fetchOAuthClients.mockResolvedValue([client]);
 });
 
@@ -219,6 +221,69 @@ describe('OAuthClientsTab', () => {
     await waitFor(() =>
       expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', { redirectUris: ['https://app.example.test/new'] })
     );
+  });
+
+  it('re-activates an inactive client directly, without the deactivate confirmation', async () => {
+    api.fetchOAuthClients.mockResolvedValue([{ ...client, isActive: false }]);
+    api.updateOAuthClient.mockResolvedValue(client);
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-toggle-b4m_my_app_0011aabb'));
+    await waitFor(() => expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', { isActive: true }));
+    expect(screen.queryByTestId('oauth-client-deactivate-modal')).not.toBeInTheDocument();
+  });
+
+  it('keeps the edit modal open and shows the error when saving redirect URIs fails', async () => {
+    api.updateOAuthClient.mockRejectedValue(new Error('Redirect URI must not contain whitespace'));
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-edit-b4m_my_app_0011aabb'));
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    expect(await screen.findByTestId('oauth-client-edit-error')).toHaveTextContent(/must not contain whitespace/);
+    expect(screen.getByTestId('oauth-client-edit-modal')).toBeInTheDocument();
+  });
+
+  it('toasts the error and shows no secret modal when rotation fails', async () => {
+    api.rotateOAuthClientSecret.mockRejectedValue(new Error('rotate failed'));
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-rotate-b4m_my_app_0011aabb'));
+    fireEvent.click(screen.getByTestId('oauth-client-rotate-confirm-btn'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('rotate failed'));
+    expect(screen.queryByTestId('oauth-client-secret-modal')).not.toBeInTheDocument();
+  });
+
+  it('toasts the error when deactivation fails', async () => {
+    api.updateOAuthClient.mockRejectedValue(new Error('deactivate failed'));
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-toggle-b4m_my_app_0011aabb'));
+    fireEvent.click(screen.getByTestId('oauth-client-deactivate-confirm-btn'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('deactivate failed'));
+    expect(screen.getByTestId('oauth-client-deactivate-modal')).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('shows a load error instead of the empty state when the list fetch fails', async () => {
+    api.fetchOAuthClients.mockRejectedValue(new Error('Forbidden'));
+    renderTab();
+    expect(await screen.findByTestId('oauth-clients-load-error')).toHaveTextContent(/Forbidden/);
+    expect(screen.queryByTestId('oauth-clients-empty')).not.toBeInTheDocument();
+  });
+
+  it('keeps the table and shows a non-blocking warning when a background refetch fails', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CssVarsProvider theme={appTheme}>
+          <OAuthClientsTab />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    await screen.findByTestId('oauth-client-row-b4m_my_app_0011aabb');
+
+    api.fetchOAuthClients.mockRejectedValue(new Error('Gateway timeout'));
+    await queryClient.refetchQueries({ queryKey: ['admin-oauth-clients'] });
+
+    expect(await screen.findByTestId('oauth-clients-refresh-error')).toHaveTextContent(/Gateway timeout/);
+    expect(screen.getByTestId('oauth-client-row-b4m_my_app_0011aabb')).toBeInTheDocument();
+    expect(screen.queryByTestId('oauth-clients-load-error')).not.toBeInTheDocument();
   });
 
   it('hides rotate for a public (PKCE) client', async () => {
