@@ -1,5 +1,6 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
 
 function wireModel(overrides: Record<string, unknown> = {}) {
@@ -130,5 +131,47 @@ describe('ModelCatalog', () => {
     });
 
     expect((await catalog.list()).error).toMatch(/sign in/i);
+  });
+});
+
+describe('ModelCatalog.listVideoModels', () => {
+  const gemini = publicVideoModel('gemini-omni-1.1-flash');
+
+  function catalogWith(get: ReturnType<typeof vi.fn>) {
+    return new ModelCatalog({
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+    });
+  }
+
+  it('reads the usable video models once and serves the turns after from cache', async () => {
+    const get = vi.fn().mockResolvedValue({ models: [gemini] });
+    const catalog = catalogWith(get);
+
+    expect((await catalog.listVideoModels()).map(model => model.id)).toEqual([gemini.id]);
+    await catalog.listVideoModels();
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith('/api/v1/video-models', expect.objectContaining({ timeout: expect.any(Number) }));
+  });
+
+  it('caches "none" and a failure only briefly, so neither costs every turn a round trip', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const get = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('offline'))
+        .mockResolvedValue({ models: [gemini] });
+      const catalog = catalogWith(get);
+
+      expect(await catalog.listVideoModels()).toEqual([]);
+      expect(await catalog.listVideoModels()).toEqual([]);
+      expect(get).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(61_000);
+      expect((await catalog.listVideoModels()).map(model => model.id)).toEqual([gemini.id]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

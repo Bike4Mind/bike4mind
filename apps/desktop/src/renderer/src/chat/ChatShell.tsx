@@ -42,6 +42,7 @@ import { contextTokens, describeActivity, latestReply, writingProse, type Compos
 import { useAccountCredits } from './useAccountCredits';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
+import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
 import { useConversation, useModelCatalog, useSessionStatuses, useSessions } from './useChat';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
@@ -163,6 +164,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // transcript under this one's id until the read lands.
   const opening = settling || (!!activeId && conversation.session?.id !== activeId);
   const background = useBackgroundProcesses(activeId);
+  const videoJobs = useVideoJobs(activeId);
   const skills = useSkills(activeId);
   const catalog = useModelCatalog();
   const statuses = useSessionStatuses();
@@ -527,64 +529,66 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           {opening ? (
             <Box sx={{ flex: 1 }} data-testid="chat-thread-opening" />
           ) : (
-            <MessageThread
-              // Remounted per conversation, so its window and scroll start over and nothing it
-              // set going outlives the conversation it was for. Prefixed because PrStatusBar, a
-              // sibling, is keyed on the bare id: two siblings sharing a key leave one of them
-              // mounted in the DOM after React drops it.
-              key={`thread-${activeId ?? 'none'}`}
-              messages={conversation.messages}
-              sessionId={activeId}
-              // What stands in for the transcript when there is no session to have one. It is the
-              // only control on screen that starts one from here, so it is a button and not a
-              // sentence pointing at the sidebar: the header above says what the state is, this
-              // says what to do about it, and the composer's placeholder names the same step.
-              noSession={
-                <Stack spacing={1.5} alignItems="center">
-                  <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
-                    {mode === 'code'
-                      ? 'Start a Code session to run a task here.'
-                      : 'Start a conversation to send your first message.'}
-                  </Typography>
-                  <Button
-                    size="sm"
-                    variant="soft"
-                    loading={creatingCode}
-                    onClick={() => void onCreate()}
-                    data-testid="chat-start-session-btn"
-                  >
-                    {mode === 'code' ? 'New Code session' : 'New conversation'}
-                  </Button>
-                </Stack>
-              }
-              // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
-              // one parked at the approval gate - is still running, and Continue must not be
-              // offered on top of it.
-              streaming={turnOpen}
-              onRespond={conversation.respondToApproval}
-              onMove={background.moveToBackground}
-              onContinue={() => void conversation.continueReply()}
-              status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
-              // At the foot of the thread rather than above the composer: a background command is
-              // something this conversation started, so it reads as the last thing that happened
-              // in it. It scrolls with the transcript, which is the trade - the panel is reached
-              // from the bottom of the thread, not from a bar that is always on screen.
-              footer={
-                <>
-                  {/* The turn line's own slot only exists once a reply does, and the worktree is
+            <VideoJobsContext.Provider value={videoJobs}>
+              <MessageThread
+                // Remounted per conversation, so its window and scroll start over and nothing it
+                // set going outlives the conversation it was for. Prefixed because PrStatusBar, a
+                // sibling, is keyed on the bare id: two siblings sharing a key leave one of them
+                // mounted in the DOM after React drops it.
+                key={`thread-${activeId ?? 'none'}`}
+                messages={conversation.messages}
+                sessionId={activeId}
+                // What stands in for the transcript when there is no session to have one. It is the
+                // only control on screen that starts one from here, so it is a button and not a
+                // sentence pointing at the sidebar: the header above says what the state is, this
+                // says what to do about it, and the composer's placeholder names the same step.
+                noSession={
+                  <Stack spacing={1.5} alignItems="center">
+                    <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                      {mode === 'code'
+                        ? 'Start a Code session to run a task here.'
+                        : 'Start a conversation to send your first message.'}
+                    </Typography>
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      loading={creatingCode}
+                      onClick={() => void onCreate()}
+                      data-testid="chat-start-session-btn"
+                    >
+                      {mode === 'code' ? 'New Code session' : 'New conversation'}
+                    </Button>
+                  </Stack>
+                }
+                // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
+                // one parked at the approval gate - is still running, and Continue must not be
+                // offered on top of it.
+                streaming={turnOpen}
+                onRespond={conversation.respondToApproval}
+                onMove={background.moveToBackground}
+                onContinue={() => void conversation.continueReply()}
+                status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                // At the foot of the thread rather than above the composer: a background command is
+                // something this conversation started, so it reads as the last thing that happened
+                // in it. It scrolls with the transcript, which is the trade - the panel is reached
+                // from the bottom of the thread, not from a bar that is always on screen.
+                footer={
+                  <>
+                    {/* The turn line's own slot only exists once a reply does, and the worktree is
                       cut before there is one; this sits where that line will appear. */}
-                  {!conversation.turn && conversation.preparing && (
-                    <Box data-testid="chat-workspace-status">
-                      <TurnStatus
-                        turn={{ startedAt: conversation.preparing.since, tokens: null }}
-                        activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
-                      />
-                    </Box>
-                  )}
-                  <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
-                </>
-              }
-            />
+                    {!conversation.turn && conversation.preparing && (
+                      <Box data-testid="chat-workspace-status">
+                        <TurnStatus
+                          turn={{ startedAt: conversation.preparing.since, tokens: null }}
+                          activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
+                        />
+                      </Box>
+                    )}
+                    <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
+                  </>
+                }
+              />
+            </VideoJobsContext.Provider>
           )}
 
           <TodoPanel todos={plan} turnOpen={turnOpen} />

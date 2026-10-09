@@ -50,6 +50,7 @@ async function harness(options: { imageModels?: string[]; remoteSessionId?: stri
     cdnUrl: '',
     notebookName: 'New chat',
     listImageModels: async () => options.imageModels ?? ['gpt-image-2', 'gpt-image-1-mini'],
+    listVideoModels: async () => [],
     getRemoteSessionId: () => options.remoteSessionId,
     setRemoteSessionId: setRemote,
   };

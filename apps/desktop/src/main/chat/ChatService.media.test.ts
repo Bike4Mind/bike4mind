@@ -7,6 +7,7 @@ import type { ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
+import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
@@ -88,6 +89,20 @@ describe('ChatService generation tools', () => {
       'ask_user',
       'request_directory',
     ]);
+  });
+
+  it('declares generate_video only when the server lists a video model this caller can use', async () => {
+    await build({ media: true, roots: [] });
+    apiGet.mockImplementation(async (path: string) =>
+      path === '/api/v1/video-models'
+        ? { models: [publicVideoModel('gemini-omni-1.1-flash')] }
+        : { cdnUrl: '/api/app-files/serve' }
+    );
+    const { id } = await service.createSession();
+    await service.send(id, 'make me a clip');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+
+    expect(declaredTools()).toContain('generate_video');
   });
 
   it('declares no generation tools when the app has nowhere to put the result', async () => {

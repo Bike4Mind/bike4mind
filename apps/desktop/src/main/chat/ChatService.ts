@@ -86,6 +86,7 @@ import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
+import type { VideoJobScheduler } from './media/VideoJobScheduler';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import type { ModelMemory } from './ModelPreference';
@@ -300,6 +301,11 @@ export interface ChatServiceDeps {
   dependencies?: DependencyInstaller;
   /** Where generated images and audio land. Absent in tests, which then have no generation tools. */
   media?: MediaStore;
+  /**
+   * Follows video jobs after the tool that started them has returned. Absent in tests that do
+   * not exercise video; generate_video then refuses rather than start a job nothing follows.
+   */
+  videoJobs?: VideoJobScheduler;
   /**
    * The user's MCP servers. Absent in tests and in a build without them, which then declares no
    * MCP tools at all - the same "an undeclared tool is a cleaner no" rule the local tools follow.
@@ -597,6 +603,8 @@ export class ChatService {
   }
 
   setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
+    // Stops polling only; opening the conversation again lists its cards, which resumes them.
+    if (archived) this.deps.videoJobs?.stopSession(sessionId);
     return this.deps.store.setArchived(sessionId, archived);
   }
 
@@ -1102,6 +1110,8 @@ export class ChatService {
     await this.deps.attachments?.deleteSession(sessionId);
     // The generated media goes with it: nothing else references those files once the
     // conversation that displayed them is gone, and they are the largest thing this app writes.
+    // Video polling stops first, so a download landing afterwards cannot recreate the folder.
+    this.deps.videoJobs?.forgetSession(sessionId);
     await this.deps.media?.forgetSession(sessionId);
     await this.deps.store.delete(sessionId);
     this.deps.activity?.forget(sessionId);
@@ -1136,6 +1146,7 @@ export class ChatService {
     for (const controller of this.active.values()) controller.abort();
     this.active.clear();
     this.deps.approvals?.dispose();
+    this.deps.videoJobs?.dispose();
   }
 
   /**
@@ -1737,6 +1748,10 @@ export class ChatService {
       // Re-resolved after a round in which the user added a folder; see DirectoryTurn.
       let { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
+      // Started now and awaited where the tool list is built, so it overlaps the reads below.
+      // Asked every turn that can generate, from a short cache: a server with no video model gets
+      // no generate_video at all rather than one that fails when called.
+      const videoModelsRead = media ? media.listVideoModels().catch(() => []) : Promise.resolve([]);
       const host = this.buildHostContext(session);
       // Not tied to `host`: a page is keyed on the conversation id and its screenshots are
       // stored under the same id in userData, so nothing here wants a project. Every
@@ -1786,11 +1801,13 @@ export class ChatService {
       const skills: SkillContext | undefined = skillCatalog
         ? { available: () => skillCatalog.forModel(skillRoot) }
         : undefined;
+      const videoModels = await videoModelsRead;
       const toolsFor = (granted: readonly string[]) =>
         toolsForRequest({
           modelId: session.model,
           roots: granted,
           media: !!media,
+          video: videoModels,
           host: !!host,
           explore: !!explore,
           browser: !!browser,
@@ -2584,6 +2601,7 @@ export class ChatService {
 
       setArchived: async (sessionId, archived) => {
         if (!(await addressable(sessionId))) return null;
+        if (archived) this.deps.videoJobs?.stopSession(sessionId);
         const updated = await this.deps.store.setArchived(sessionId, archived);
         return updated ? this.toHostView(updated) : null;
       },
@@ -3005,6 +3023,8 @@ export class ChatService {
       cdnUrl,
       notebookName: session.title,
       listImageModels: () => models?.listImageModels() ?? Promise.resolve([]),
+      listVideoModels: async () => (await models?.listVideoModels()) ?? [],
+      ...(this.deps.videoJobs ? { videoJobs: this.deps.videoJobs } : {}),
       getRemoteSessionId: () => remoteSessionId,
       setRemoteSessionId: async value => {
         remoteSessionId = value;

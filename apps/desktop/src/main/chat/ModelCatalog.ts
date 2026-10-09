@@ -1,5 +1,7 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import type { VideoModel } from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
+import { parseVideoModels } from './media/videoModels';
 import { supportsReasoningEffort } from './reasoningEffort';
 
 /**
@@ -18,6 +20,17 @@ const MODELS_PATH = '/api/models';
  * cached server-side for 60s, so a miss here is cheap.
  */
 const CACHE_TTL_MS = 5 * 60_000;
+
+/**
+ * The video list decides whether a turn offers generate_video at all, so it is read at the start
+ * of every turn that can generate. An empty or failed answer is cached too, but briefly: a server
+ * with no video provider must not cost each turn a round trip, and a blip must not hide the tool
+ * for the full TTL.
+ */
+const VIDEO_EMPTY_TTL_MS = 60_000;
+
+/** Bounds what that read can add to a turn's start. */
+const VIDEO_MODELS_TIMEOUT_MS = 5_000;
 
 /** The subset of `ModelInfo` this client reads. Extra fields on the wire are ignored. */
 interface WireModel {
@@ -56,6 +69,8 @@ export class ModelCatalog {
 
   /** Separate from `cache` because the two views are read on different paths; see listImageModels. */
   private imageCache: { environmentUrl: string; models: string[]; expiresAt: number } | null = null;
+
+  private videoCache: { environmentUrl: string; models: VideoModel[]; expiresAt: number } | null = null;
 
   constructor(private readonly deps: ModelCatalogDeps) {}
 
@@ -131,7 +146,36 @@ export class ModelCatalog {
     }
     return models;
   }
+
+  /**
+   * Video models this caller can use right now, from `/api/v1/video-models`: enabled by the
+   * admin, registered on this deployment, and backed by a provider key. Empty when there are
+   * none, which is what keeps generate_video off the tool list rather than failing when called.
+   */
+  async listVideoModels(): Promise<VideoModel[]> {
+    const environmentUrl = this.deps.getEnvironmentUrl();
+    const hit = this.videoCache;
+    if (hit && hit.environmentUrl === environmentUrl && Date.now() < hit.expiresAt) return hit.models;
+
+    const api = this.deps.getApiClient();
+    if (!api) return [];
+
+    let models: VideoModel[] = [];
+    try {
+      models = parseVideoModels(await api.get<unknown>(VIDEO_MODELS_PATH, { timeout: VIDEO_MODELS_TIMEOUT_MS }));
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: video model lookup failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    }
+    this.videoCache = {
+      environmentUrl,
+      models,
+      expiresAt: Date.now() + (models.length > 0 ? CACHE_TTL_MS : VIDEO_EMPTY_TTL_MS),
+    };
+    return models;
+  }
 }
+
+const VIDEO_MODELS_PATH = '/api/v1/video-models';
 
 /** Image-generation model ids from the server's catalog, in the order it listed them. */
 export function selectImageModels(wire: unknown): string[] {

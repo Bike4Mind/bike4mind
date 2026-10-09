@@ -1,8 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import {
+  ASPECT_RATIOS,
   DEFAULT_MUSIC_LENGTH_MS,
   DEFAULT_MUSIC_MODEL_ID,
   ImageModels,
+  RESOLUTION_TIERS,
   TTS_MAX_INPUT_CHARS,
+  type VideoModel,
   type VoiceGenerationVendor,
 } from '@bike4mind/common';
 import {
@@ -14,6 +18,14 @@ import {
 } from '../media/audioGeneration';
 import { generateImage } from '../media/imageGeneration';
 import { MediaToolError } from '../media/MediaApiClient';
+import { resolveInputImage, uploadInputImage, type VideoInputImage } from '../media/videoInput';
+import {
+  describeVideoModel,
+  planVideoRequest,
+  resolveVideoModel,
+  typicalRenderSeconds,
+  type VideoPlan,
+} from '../media/videoModels';
 import {
   optionalNumber,
   requireString,
@@ -21,10 +33,11 @@ import {
   type MediaContext,
   type ToolContext,
   type ToolDefinition,
+  type ToolSchema,
 } from './types';
 
 /**
- * Why all four of these are gated behind the approval the shell tools use.
+ * Why every one of these is gated behind the approval the shell tools use.
  *
  * The local tools are gated for SAFETY - a command runs code on the machine. These are gated
  * for COST: every one of them spends the user's credits at a provider, and unlike a bad file
@@ -175,9 +188,11 @@ export const generateImageTool: ToolDefinition = {
       for (const item of outcome.media) context.report?.media(item);
 
       const sizes = outcome.media.map(item => formatBytes(item.byteLength)).join(', ');
+      const ids = outcome.media.map(item => item.url.split('/').pop()).join(', ');
       return (
         `Generated ${outcome.media.length} image(s) with ${model} (${sizes}) and displayed them to the user. ` +
-        'You cannot see the result, so do not describe what it depicts - ask the user if you need to know.'
+        'You cannot see the result, so do not describe what it depicts - ask the user if you need to know. ' +
+        `Image id(s): ${ids} (pass one as generate_video's inputGeneratedImage to animate it, when that tool is offered).`
       );
     });
   },
@@ -370,6 +385,178 @@ export const generateMusicTool: ToolDefinition = {
         audioDeps(context, media)
       );
       return describeAudio(context, outcome, `${Math.round(lengthMs / 1000)}s of music`);
+    });
+  },
+};
+
+/** Credits as the approval card and the result text say them. */
+function formatCredits(credits: number): string {
+  return credits.toLocaleString('en-US');
+}
+
+function optionalSetting(input: Record<string, unknown>, key: string): string | undefined {
+  return optionalString(input, key)?.trim() || undefined;
+}
+
+interface VideoCall {
+  plan: VideoPlan;
+  image: VideoInputImage | undefined;
+}
+
+/**
+ * Everything the approval card states, worked out the same way at approval and at run time:
+ * the model resolved against what the server offers now, the settings filled from its defaults
+ * and checked with the shared validator, the input image resolved within the shared folders.
+ * Re-done at run time because a folder can be revoked, or the server's list change, while the
+ * card is on screen.
+ */
+async function prepareVideo(input: Record<string, unknown>, context: ToolContext): Promise<VideoCall> {
+  const media = requireMedia(context);
+  const model = resolveVideoModel(await media.listVideoModels(), optionalString(input, 'model'));
+  const image = await resolveInputImage(
+    optionalString(input, 'inputGeneratedImage'),
+    optionalString(input, 'inputImagePath'),
+    context,
+    media.store
+  );
+  const plan = planVideoRequest(model, {
+    prompt: requireString(input, 'prompt'),
+    durationSeconds: optionalNumber(input, 'durationSeconds'),
+    aspectRatio: optionalSetting(input, 'aspectRatio'),
+    resolution: optionalSetting(input, 'resolution'),
+    withImage: !!image,
+  });
+  return { plan, image };
+}
+
+function describeSettings({ request, model }: VideoPlan): string {
+  return `a ${request.durationSeconds}s ${request.aspectRatio} ${request.resolution} video with ${model.display_name}`;
+}
+
+/**
+ * The tool's schema for this turn, built from the models the server offers right now - the same
+ * thing the web chat's tool does, so the model can only name a model it may use.
+ */
+export function generateVideoSchema(models: readonly VideoModel[]): ToolSchema {
+  const union = <T extends string>(ordered: readonly T[], pick: (model: VideoModel) => readonly string[]): T[] =>
+    ordered.filter(value => models.some(model => pick(model).includes(value)));
+  return {
+    name: 'generate_video',
+    description: [
+      'Start generating a short video clip on the Bike4Mind server. Costs the user credits, which they approve first.',
+      'Returns as soon as the job is queued: the clip renders in the background and appears in the conversation as a',
+      'card the user can play. You do not receive the video and are not told when it finishes - do not wait for it,',
+      'poll for it, or promise a result time beyond the estimate. Settings a model does not support are refused, not',
+      'adjusted. Available models:',
+      ...models.map(model => `- ${describeVideoModel(model)}`),
+    ].join('\n'),
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'What the clip should show.' },
+        model: {
+          type: 'string',
+          enum: models.map(model => model.id),
+          description: 'Video model id. Omit for this deployment default.',
+        },
+        durationSeconds: {
+          type: 'number',
+          description: 'Clip length in seconds; must fit the chosen model. Omit for its default.',
+        },
+        aspectRatio: { type: 'string', enum: union(ASPECT_RATIOS, model => model.aspect_ratios) },
+        resolution: { type: 'string', enum: union(RESOLUTION_TIERS, model => model.resolutions) },
+        inputGeneratedImage: {
+          type: 'string',
+          description:
+            'Animate an image generate_image made earlier in THIS conversation (image-to-video): pass the exact id it ' +
+            'reported. Set this or inputImagePath, never both. Omit both for text-to-video.',
+        },
+        inputImagePath: {
+          type: 'string',
+          description:
+            'Animate a PNG, JPEG or WebP file inside the shared folders (image-to-video). It is uploaded first.',
+        },
+      },
+      required: ['prompt'],
+    },
+  };
+}
+
+export const generateVideoTool: ToolDefinition = {
+  // Replaced per turn by generateVideoSchema; this copy is only what findTool resolves the name with.
+  schema: generateVideoSchema([]),
+
+  async approval(input, context) {
+    const { plan, image } = await prepareVideo(input, context);
+    const { request, model, estimatedCredits } = plan;
+    const cost =
+      estimatedCredits === null
+        ? 'Its cost could not be estimated here.'
+        : `Estimated cost: about ${formatCredits(estimatedCredits)} credits.`;
+    const source = image
+      ? `Animates ${image.kind === 'generated' ? 'the generated image' : image.path}, which is uploaded to your Bike4Mind files first.\n`
+      : '';
+
+    return {
+      detail:
+        `Generate ${describeSettings(plan)} (${model.id}).\n` +
+        `${cost} This spends credits on your Bike4Mind account; a failed or cancelled job is not charged.\n` +
+        source +
+        '\n' +
+        excerpt(request.prompt),
+      key:
+        `generate_video:${model.id}:${request.durationSeconds}:${request.aspectRatio}:${request.resolution}:` +
+        `${image ? `${image.kind}:${image.path}` : ''}:${request.prompt}`,
+    } satisfies ApprovalPrompt;
+  },
+
+  async run(input, context) {
+    const media = requireMedia(context);
+    const { videoJobs } = media;
+    const sessionId = context.sessionId;
+    if (!videoJobs || !sessionId) throw new Error('Video jobs cannot be followed here, so none was started.');
+    const { plan, image } = await prepareVideo(input, context);
+    const progress = (text: string) => context.report?.progress(text);
+
+    return reporting(context, async () => {
+      const inputImageFileId = image
+        ? await uploadInputImage(image, media.client, context.signal, progress)
+        : undefined;
+      if (context.signal.aborted) throw new MediaToolError('The generation was stopped.');
+
+      progress('Starting the video job...');
+      const { request, model, estimatedCredits } = plan;
+      const callId = context.callId ?? randomUUID();
+      const job = await media.client.createVideoGeneration(
+        {
+          model: model.id,
+          prompt: request.prompt,
+          mode: request.mode,
+          duration_seconds: request.durationSeconds,
+          aspect_ratio: request.aspectRatio,
+          resolution: request.resolution,
+          ...(inputImageFileId ? { input_image_file_id: inputImageFileId } : {}),
+        },
+        // Per call, so a retried submit of this call returns its job instead of starting a second bill.
+        `desktop-video:${callId}`
+      );
+      await videoJobs.track({
+        sessionId,
+        callId,
+        job,
+        modelName: model.display_name,
+        estimatedCredits: estimatedCredits ?? 0,
+      });
+
+      const reserved = job.credits.reserved ?? estimatedCredits;
+      const render = typicalRenderSeconds(model.id);
+      return [
+        `Started video job ${job.id}: ${describeSettings(plan)}` +
+          (reserved !== null ? `, ${formatCredits(reserved)} credits reserved.` : '.'),
+        `It renders on the server in the background${render ? ` (typically about ${render}s)` : ''} and appears in this`,
+        'conversation as a card the user can play, cancel or save. You will not see it and will not be told when it',
+        'finishes: do not wait for it, check on it, or promise a time beyond that estimate.',
+      ].join(' ');
     });
   },
 };

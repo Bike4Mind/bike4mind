@@ -1,7 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage, type WebContents } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  nativeImage,
+  safeStorage,
+  shell,
+  type WebContents,
+} from 'electron';
 import { ChatModels } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
@@ -42,7 +52,10 @@ import { ChatService } from './ChatService';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
+import { MediaApiClient } from './media/MediaApiClient';
 import { MediaStore } from './media/MediaStore';
+import { VideoJobScheduler } from './media/VideoJobScheduler';
+import { VideoJobStore } from './media/VideoJobStore';
 import { MessageQueue } from './MessageQueue';
 import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
@@ -301,6 +314,20 @@ export function registerChat(auth: AuthService): RegisteredChat {
     if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
   };
 
+  const videoJobs = new VideoJobScheduler({
+    store: new VideoJobStore(media),
+    media,
+    connection: () => {
+      const api = auth.getApiClient();
+      const scope = sessionScopeFor(auth.getState());
+      return api && scope
+        ? { client: new MediaApiClient(api), scope: `${scope.environmentUrl}|${scope.accountId}` }
+        : null;
+    },
+    emit: (sessionId, job) => broadcast({ type: 'video-job', sessionId, job }),
+    logger,
+  });
+
   // Constructed here rather than beside ArtifactPublisher because it needs `send`, which is
   // declared above. Note what it is NOT given: no hook into the turn, no tool registration.
   // Publishing happens only when the IPC handler below is invoked from the publish button.
@@ -367,6 +394,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     foreground,
     dependencies: new DependencyInstaller(background),
     media,
+    videoJobs,
     activity,
     mcp,
     browser,
@@ -643,6 +671,41 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.toolsRevokeAccess, async (_event, root: string) => ({
     roots: await access.revoke(root),
   }));
+
+  ipcMain.handle(IPC_CHANNELS.chatListVideoJobs, (_event, sessionId: string) => videoJobs.list(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatCancelVideoJob, (_event, sessionId: string, jobId: string) =>
+    videoJobs.cancel(sessionId, jobId)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatRecheckVideoJob, (_event, sessionId: string, jobId: string) =>
+    videoJobs.recheck(sessionId, jobId)
+  );
+  // Open and Save act on the local copy only, resolved by job id: nothing the renderer passes
+  // names a path, so neither can be pointed at another file.
+  ipcMain.handle(IPC_CHANNELS.chatOpenVideo, async (_event, sessionId: string, jobId: string) => {
+    const file = await videoJobs.localFile(sessionId, jobId);
+    if (file) await shell.openPath(file.path);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatSaveVideo, async (event, sessionId: string, jobId: string) => {
+    const file = await videoJobs.localFile(sessionId, jobId);
+    if (!file) return false;
+    const extension = file.mimeType === 'video/webm' ? 'webm' : 'mp4';
+    const options = {
+      defaultPath: join(app.getPath('downloads'), `video-${jobId}.${extension}`),
+      filters: [{ name: 'Video', extensions: [extension] }],
+    };
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+    if (picked.canceled || !picked.filePath) return false;
+    await copyFile(file.path, picked.filePath);
+    return true;
+  });
+  // The link is copied here rather than returned, so a signed storage URL never enters the renderer.
+  ipcMain.handle(IPC_CHANNELS.chatCopyVideoLink, async (_event, sessionId: string, jobId: string) => {
+    const link = await videoJobs.freshLink(sessionId, jobId);
+    if (!link.ok) return link;
+    clipboard.writeText(link.url);
+    return { ok: true, expiresAt: link.expiresAt };
+  });
 
   return { service, background, mcp, browser, pullRequests };
 }

@@ -1,6 +1,7 @@
 import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { MAX_MEDIA_BYTES, MediaStore, parseMediaUrl } from './MediaStore';
 
@@ -70,5 +71,40 @@ describe('MediaStore', () => {
     expect(await readdir(base)).toEqual([]);
     // Idempotent: deleting a conversation that generated nothing must not throw.
     await expect(media.forgetSession(SESSION)).resolves.toBeUndefined();
+  });
+});
+
+describe('MediaStore.saveStream', () => {
+  it('streams a clip to disk and serves it back from the same folder', async () => {
+    const { store: media } = await store();
+    const saved = await media.saveStream(
+      SESSION,
+      Readable.from([Buffer.from('ftyp'), Buffer.from('mdat')]),
+      'video/mp4',
+      1024
+    );
+
+    expect(saved).toMatchObject({ mimeType: 'video/mp4', byteLength: 8 });
+    expect(saved.url).toMatch(/\.mp4$/);
+    expect(await media.locate(SESSION, saved.name)).toMatchObject({ size: 8, mimeType: 'video/mp4' });
+  });
+
+  it('refuses a clip over the cap and leaves no partial file behind', async () => {
+    const { store: media, base } = await store();
+    await expect(
+      media.saveStream(SESSION, Readable.from([Buffer.alloc(600), Buffer.alloc(600)]), 'video/mp4', 1024)
+    ).rejects.toThrow(/too large/);
+    expect(await readdir(join(base, SESSION))).toEqual([]);
+  });
+
+  it('refuses a type it would not serve', async () => {
+    const { store: media } = await store();
+    await expect(media.saveStream(SESSION, Readable.from(['x']), 'text/html', 1024)).rejects.toThrow(/Cannot display/);
+  });
+
+  it('locates only names it generated', async () => {
+    const { store: media } = await store();
+    expect(await media.locate(SESSION, 'video-jobs.json')).toBeNull();
+    expect(await media.locate(SESSION, '../other/x.mp4')).toBeNull();
   });
 });

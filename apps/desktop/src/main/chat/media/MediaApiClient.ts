@@ -1,7 +1,15 @@
-import axios, { isAxiosError } from 'axios';
+import type { Readable } from 'node:stream';
+import axios, { isAxiosError, type AxiosError } from 'axios';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
+  CreateFileUploadResponseSchema,
+  FileResponseSchema,
+  VideoGenerationSchema,
   ttsBase64ResponseSchema,
+  type CreateFileUploadResponse,
+  type CreateVideoGenerationBody,
+  type FileResponse,
+  type VideoGeneration,
   type MusicRequest,
   type SoundEffectsRequest,
   type TTSRequest,
@@ -17,6 +25,9 @@ import type { ChatToolNotice } from '@shared/chat';
  * provider standing in for the one that was asked for. See ChatToolNotice.
  */
 export class MediaToolError extends Error {
+  /** The HTTP status behind it, when there was one; the video poller backs off differently per status. */
+  status?: number;
+
   constructor(
     message: string,
     readonly notice?: ChatToolNotice
@@ -73,6 +84,8 @@ const TIMEOUT_MS = {
   audio: 180_000,
   /** A few megabytes over whatever link the deployment is on. */
   download: 60_000,
+  /** A clip can run to tens of megabytes; this bounds a stalled transfer, not a slow one. */
+  video: 300_000,
 };
 
 /**
@@ -145,6 +158,110 @@ export class MediaApiClient {
       };
     } catch (error) {
       throw toMediaError(error, 'Downloading the generated image');
+    }
+  }
+
+  /**
+   * Start a video job. Returns as soon as it is queued; the clip renders server-side.
+   * `idempotencyKey` makes a retried submit of the same call return the same job, not a second bill.
+   */
+  async createVideoGeneration(body: CreateVideoGenerationBody, idempotencyKey: string): Promise<VideoGeneration> {
+    try {
+      const response = await this.api.post<unknown>('/api/v1/video-generations', body, {
+        timeout: TIMEOUT_MS.submit,
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+      return VideoGenerationSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Video generation');
+    }
+  }
+
+  async getVideoGeneration(jobId: string, signal?: AbortSignal): Promise<VideoGeneration> {
+    try {
+      const response = await this.api.get<unknown>(`/api/v1/video-generations/${encodeURIComponent(jobId)}`, {
+        timeout: TIMEOUT_MS.download,
+        signal,
+      });
+      return VideoGenerationSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Reading the video job');
+    }
+  }
+
+  async cancelVideoGeneration(jobId: string): Promise<VideoGeneration> {
+    try {
+      const response = await this.api.post<unknown>(
+        `/api/v1/video-generations/${encodeURIComponent(jobId)}/cancel`,
+        {},
+        { timeout: TIMEOUT_MS.download }
+      );
+      return VideoGenerationSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Cancelling the video');
+    }
+  }
+
+  /**
+   * Upload an image as a file of the user's, for image-to-video: register it, then PUT the bytes
+   * to the URL that answers. The PUT carries no app credential - the URL is the capability - and
+   * a self-hosted server answers with a same-origin path, resolved here against the backend.
+   */
+  async uploadFile(fileName: string, mimeType: string, bytes: Buffer): Promise<CreateFileUploadResponse> {
+    let upload: CreateFileUploadResponse;
+    try {
+      upload = CreateFileUploadResponseSchema.parse(
+        await this.api.post<unknown>(
+          '/api/v1/files',
+          { file_name: fileName, mime_type: mimeType, file_size: bytes.length },
+          { timeout: TIMEOUT_MS.download }
+        )
+      );
+    } catch (error) {
+      throw toMediaError(error, 'Uploading the input image');
+    }
+    try {
+      const target = new URL(upload.upload_url, this.api.getAxiosInstance().defaults.baseURL ?? undefined);
+      await axios.put(target.toString(), bytes, {
+        headers: { 'Content-Type': mimeType },
+        timeout: TIMEOUT_MS.download,
+        maxBodyLength: Infinity,
+      });
+    } catch (error) {
+      throw toMediaError(error, 'Uploading the input image');
+    }
+    return upload;
+  }
+
+  async getFile(fileId: string): Promise<FileResponse> {
+    try {
+      return FileResponseSchema.parse(
+        await this.api.get<unknown>(`/api/v1/files/${encodeURIComponent(fileId)}`, { timeout: TIMEOUT_MS.download })
+      );
+    } catch (error) {
+      throw toMediaError(error, 'Checking the input image');
+    }
+  }
+
+  /**
+   * Open a finished clip for streaming to disk. Same origin rule as `fetchGenerated`: a signed
+   * absolute URL is fetched bare so the access token never reaches storage, and a relative one
+   * is this backend's own file route. Anything but http(s) is refused outright.
+   */
+  async openVideoDownload(url: string, signal: AbortSignal): Promise<{ stream: Readable; contentType: string }> {
+    const absolute = /^https?:\/\//i.test(url);
+    if (!absolute && (!url.startsWith('/') || url.startsWith('//'))) {
+      throw new MediaToolError('The server returned a video address this app will not load.');
+    }
+    try {
+      const config = { responseType: 'stream' as const, timeout: TIMEOUT_MS.video, signal };
+      const response = absolute
+        ? await axios.get<Readable>(url, config)
+        : await this.api.getAxiosInstance().get<Readable>(url, config);
+      const header = response.headers['content-type'];
+      return { stream: response.data, contentType: typeof header === 'string' ? header : '' };
+    } catch (error) {
+      throw toMediaError(error, 'Downloading the video');
     }
   }
 
@@ -263,38 +380,44 @@ export function toMediaError(error: unknown, action: string): MediaToolError {
   if (error instanceof MediaToolError) return error;
 
   if (isAxiosError(error)) {
-    const status = error.response?.status;
-    const body = (error.response?.data ?? {}) as ApiErrorBody;
-    const detail = body.error || body.message;
-
-    if (body.errorCode === 'insufficient_credits') {
-      return new MediaToolError(detail || 'There are not enough credits on this account to generate that.', {
-        kind: 'insufficient-credits',
-        text: detail || 'Not enough credits. Nothing was generated and nothing was charged.',
-      });
-    }
-    // Two spellings of the same capability gap: /api/ai/tts tags a 401, while the sound-effects
-    // and music routes answer 503 on purpose (the caller IS authenticated - the key is missing
-    // server-side, and telling them to sign in again would never fix it).
-    if (body.errorCode === 'provider_not_configured' || status === 503) {
-      return new MediaToolError(
-        detail || 'This server has no provider key configured for that, so it cannot be generated here.'
-      );
-    }
-    if (status === 413) {
-      return new MediaToolError(
-        body.fabFileId
-          ? `${action} succeeded but the result is too large to return here. It was saved to the file browser as ${body.fabFileId}.`
-          : `${action} succeeded but the result is too large to return here.`
-      );
-    }
-    if (status === 401 || status === 403) {
-      return new MediaToolError(`${action} was refused by the server (${status}). ${detail ?? ''}`.trim());
-    }
-    if (detail) return new MediaToolError(`${action} failed: ${detail}`);
-    if (status) return new MediaToolError(`${action} failed with HTTP ${status}.`);
-    return new MediaToolError(`${action} failed: ${error.message}`);
+    const mapped = fromAxiosError(error, action);
+    mapped.status = error.response?.status;
+    return mapped;
   }
 
   return new MediaToolError(`${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+function fromAxiosError(error: AxiosError, action: string): MediaToolError {
+  const status = error.response?.status;
+  const body = (error.response?.data ?? {}) as ApiErrorBody;
+  const detail = body.error || body.message;
+
+  if (body.errorCode === 'insufficient_credits') {
+    return new MediaToolError(detail || 'There are not enough credits on this account to generate that.', {
+      kind: 'insufficient-credits',
+      text: detail || 'Not enough credits. Nothing was generated and nothing was charged.',
+    });
+  }
+  // Two spellings of the same capability gap: /api/ai/tts tags a 401, while the sound-effects
+  // and music routes answer 503 on purpose (the caller IS authenticated - the key is missing
+  // server-side, and telling them to sign in again would never fix it).
+  if (body.errorCode === 'provider_not_configured' || status === 503) {
+    return new MediaToolError(
+      detail || 'This server has no provider key configured for that, so it cannot be generated here.'
+    );
+  }
+  if (status === 413) {
+    return new MediaToolError(
+      body.fabFileId
+        ? `${action} succeeded but the result is too large to return here. It was saved to the file browser as ${body.fabFileId}.`
+        : `${action} succeeded but the result is too large to return here.`
+    );
+  }
+  if (status === 401 || status === 403) {
+    return new MediaToolError(`${action} was refused by the server (${status}). ${detail ?? ''}`.trim());
+  }
+  if (detail) return new MediaToolError(`${action} failed: ${detail}`);
+  if (status) return new MediaToolError(`${action} failed with HTTP ${status}.`);
+  return new MediaToolError(`${action} failed: ${error.message}`);
 }

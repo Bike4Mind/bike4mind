@@ -1,4 +1,5 @@
 import type { CustomCommand } from '@bike4mind/cli/skills';
+import type { VideoModel } from '@bike4mind/common';
 import type {
   ChatApprovalOption,
   ChatDiff,
@@ -17,6 +18,7 @@ import type { CompletionStreamEvent } from '../streamEvents';
 import type { MemoryStore } from '../project/memory';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
+import type { VideoJobScheduler } from '../media/VideoJobScheduler';
 import type { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 
@@ -38,6 +40,10 @@ export interface MediaContext {
   notebookName: string;
   /** Image models this deployment offers. Lazy: a turn with no image generation never asks. */
   listImageModels(): Promise<string[]>;
+  /** Video models this caller can use; cached, and read at turn start to decide whether to offer the tool. */
+  listVideoModels(): Promise<VideoModel[]>;
+  /** Records and follows a created video job. Absent where nothing can follow one. */
+  videoJobs?: Pick<VideoJobScheduler, 'track'>;
   getRemoteSessionId(): string | undefined;
   setRemoteSessionId(remoteSessionId: string): Promise<void>;
 }

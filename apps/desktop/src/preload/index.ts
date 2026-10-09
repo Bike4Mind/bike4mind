@@ -140,6 +140,15 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatStopBackground, sessionId, processId),
     moveCommandToBackground: (sessionId: string, callId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatMoveToBackground, sessionId, callId),
+    listVideoJobs: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListVideoJobs, sessionId),
+    cancelVideoJob: (sessionId: string, jobId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCancelVideoJob, sessionId, jobId),
+    recheckVideoJob: (sessionId: string, jobId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRecheckVideoJob, sessionId, jobId),
+    openVideo: (sessionId: string, jobId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatOpenVideo, sessionId, jobId),
+    saveVideo: (sessionId: string, jobId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSaveVideo, sessionId, jobId),
+    copyVideoLink: (sessionId: string, jobId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCopyVideoLink, sessionId, jobId),
     onStreamEvent: listener => {
       const handler = (_event: unknown, streamEvent: ChatStreamEvent) => listener(streamEvent);
       ipcRenderer.on(IPC_CHANNELS.chatStreamEvent, handler);

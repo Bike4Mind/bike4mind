@@ -27,6 +27,8 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionSummary,
   ChatStreamEvent,
+  ChatVideoJob,
+  ChatVideoLinkResult,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
   ProjectInspection,
@@ -118,6 +120,12 @@ export const IPC_CHANNELS = {
   chatReadBackground: 'chat:read-background',
   chatStopBackground: 'chat:stop-background',
   chatMoveToBackground: 'chat:move-to-background',
+  chatListVideoJobs: 'chat:list-video-jobs',
+  chatCancelVideoJob: 'chat:cancel-video-job',
+  chatRecheckVideoJob: 'chat:recheck-video-job',
+  chatOpenVideo: 'chat:open-video',
+  chatSaveVideo: 'chat:save-video',
+  chatCopyVideoLink: 'chat:copy-video-link',
   /** main -> renderer push; reply tokens as they arrive. */
   chatStreamEvent: 'chat:stream-event',
   /**
@@ -500,6 +508,21 @@ export interface DesktopApi {
      * already holds. Never rejects; see ChatMoveToBackgroundResult.
      */
     moveCommandToBackground(sessionId: string, callId: string): Promise<ChatMoveToBackgroundResult>;
+    /**
+     * The conversation's video jobs, oldest first. Asking also resumes polling for any that are
+     * unfinished, which is how a job outlives a restart: it picks up when its card is next shown.
+     */
+    listVideoJobs(sessionId: string): Promise<ChatVideoJob[]>;
+    /** Ask the server to cancel; the job's next state arrives as a 'video-job' event. */
+    cancelVideoJob(sessionId: string, jobId: string): Promise<void>;
+    /** Look again at a job polling gave up on. */
+    recheckVideoJob(sessionId: string, jobId: string): Promise<void>;
+    /** Open the downloaded clip in the system's default player. */
+    openVideo(sessionId: string, jobId: string): Promise<void>;
+    /** Save the downloaded clip where the user picks. False when they cancel. */
+    saveVideo(sessionId: string, jobId: string): Promise<boolean>;
+    /** Copy a freshly signed server link to the clipboard; it expires, so the result says when. */
+    copyVideoLink(sessionId: string, jobId: string): Promise<ChatVideoLinkResult>;
     /** Subscribe to reply progress; returns the unsubscribe. */
     onStreamEvent(listener: (event: ChatStreamEvent) => void): () => void;
     /**

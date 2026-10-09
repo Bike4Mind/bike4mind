@@ -1,3 +1,5 @@
+import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import { protocol } from 'electron';
 import { MEDIA_SCHEME, parseMediaUrl, type MediaStore } from './MediaStore';
 
@@ -21,25 +23,71 @@ export function registerMediaScheme(): void {
 /**
  * Serve stored media to the renderer. Must run after the app is ready.
  *
- * The whole body is returned rather than streamed: these files are a few megabytes at most
- * (MediaStore refuses larger), and a complete response with a Content-Length is enough for
- * Chromium to seek inside an audio element.
+ * Streamed from disk and range-aware: a video element seeks with Range requests and will not
+ * scrub without a 206, and reading a whole clip into memory per request would make a thread of
+ * videos expensive to open.
  */
 export function registerMediaProtocol(store: MediaStore): void {
-  protocol.handle(MEDIA_SCHEME, async request => {
-    const parsed = parseMediaUrl(request.url);
-    if (!parsed) return new Response('Not found', { status: 404 });
+  protocol.handle(MEDIA_SCHEME, request => serveMedia(store, request));
+}
 
-    const file = await store.read(parsed.sessionId, parsed.name);
-    if (!file) return new Response('Not found', { status: 404 });
+export async function serveMedia(store: MediaStore, request: Request): Promise<Response> {
+  const parsed = parseMediaUrl(request.url);
+  if (!parsed) return new Response('Not found', { status: 404 });
 
-    return new Response(new Uint8Array(file.bytes), {
-      status: 200,
-      headers: {
-        'Content-Type': file.mimeType,
-        'Content-Length': String(file.bytes.length),
-        'Cache-Control': 'no-store',
-      },
-    });
+  const file = await store.locate(parsed.sessionId, parsed.name);
+  if (!file) return new Response('Not found', { status: 404 });
+
+  const headers: Record<string, string> = {
+    'Content-Type': file.mimeType,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-store',
+  };
+  const range = parseRange(request.headers.get('range'), file.size);
+  if (range === 'unsatisfiable') {
+    return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${file.size}` } });
+  }
+
+  const { start, end } = range ?? { start: 0, end: file.size - 1 };
+  const body = file.size === 0 ? null : bodyOf(createReadStream(file.path, { start, end }));
+  return new Response(body, {
+    status: range ? 206 : 200,
+    headers: {
+      ...headers,
+      'Content-Length': String(file.size === 0 ? 0 : end - start + 1),
+      ...(range ? { 'Content-Range': `bytes ${start}-${end}/${file.size}` } : {}),
+    },
   });
+}
+
+// Node's web stream type and the DOM one Response is typed against are the same object at runtime.
+const bodyOf = (stream: ReturnType<typeof createReadStream>): ReadableStream =>
+  Readable.toWeb(stream) as unknown as ReadableStream;
+
+/**
+ * One `bytes=` range, or null to send the whole file. Multi-range requests are answered whole,
+ * which RFC 9110 allows; no media element sends one.
+ */
+export function parseRange(
+  header: string | null,
+  size: number
+): { start: number; end: number } | 'unsatisfiable' | null {
+  const match = header?.match(/^bytes=(\d*)-(\d*)$/);
+  if (!match) return null;
+  const [, from, to] = match;
+  if (from === '' && to === '') return null;
+
+  let start: number;
+  let end: number;
+  if (from === '') {
+    const suffix = Number(to);
+    if (suffix === 0) return 'unsatisfiable';
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(from);
+    end = to === '' ? size - 1 : Math.min(Number(to), size - 1);
+  }
+  if (start >= size || start > end) return 'unsatisfiable';
+  return { start, end };
 }

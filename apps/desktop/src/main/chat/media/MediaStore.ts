@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 /**
  * Private scheme the renderer loads generated media over.
@@ -36,6 +39,8 @@ const EXTENSION_BY_MIME: Record<string, string> = {
   'audio/aac': 'aac',
   'audio/flac': 'flac',
   'audio/x-flac': 'flac',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
 };
 
 /** First mime listed for an extension wins, so a stored file reads back as one canonical type. */
@@ -134,6 +139,64 @@ export class MediaStore {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Stream a download to disk, for files too large to hold in memory - a video clip.
+   *
+   * Written under a temporary name and renamed only once complete, so a download cut short by
+   * a quit or a cap never leaves a truncated file the protocol handler would serve as a clip.
+   */
+  async saveStream(sessionId: string, source: Readable, mimeType: string, maxBytes: number): Promise<StoredMedia> {
+    const extension = EXTENSION_BY_MIME[normalizeMime(mimeType)];
+    if (!extension) throw new Error(`Cannot display ${mimeType || 'an unknown media type'}.`);
+
+    const directory = this.sessionDirectory(sessionId);
+    await mkdir(directory, { recursive: true });
+    const name = `${randomUUID()}.${extension}`;
+    const partial = join(directory, `${name}.part`);
+
+    let byteLength = 0;
+    source.on('data', (chunk: Buffer) => {
+      byteLength += chunk.length;
+      if (byteLength > maxBytes) {
+        source.destroy(
+          new Error(`The file is over ${Math.round(maxBytes / 1024 / 1024)}MB, which is too large to keep.`)
+        );
+      }
+    });
+    try {
+      await pipeline(source, createWriteStream(partial));
+      if (byteLength === 0) throw new Error('The server returned an empty file.');
+      await rename(partial, join(directory, name));
+    } catch (error) {
+      await rm(partial, { force: true });
+      throw error;
+    }
+
+    return { name, url: mediaUrl(sessionId, name), mimeType: MIME_BY_EXTENSION[extension], byteLength };
+  }
+
+  /**
+   * Where a stored file is, for serving it in ranges and for Open/Save. Same refusal rules as
+   * `read`: null for any name this store did not generate.
+   */
+  async locate(sessionId: string, name: string): Promise<{ path: string; size: number; mimeType: string } | null> {
+    if (!SESSION_ID_PATTERN.test(sessionId) || !NAME_PATTERN.test(name)) return null;
+    const path = join(this.sessionDirectory(sessionId), name);
+    try {
+      const info = await stat(path);
+      if (!info.isFile()) return null;
+      const extension = name.slice(name.lastIndexOf('.') + 1);
+      return { path, size: info.size, mimeType: MIME_BY_EXTENSION[extension] ?? 'application/octet-stream' };
+    } catch {
+      return null;
+    }
+  }
+
+  /** The conversation's own folder, for per-conversation records kept beside its media. */
+  directoryFor(sessionId: string): string {
+    return this.sessionDirectory(sessionId);
   }
 
   /** Drop everything a conversation generated. Called when the conversation is deleted. */

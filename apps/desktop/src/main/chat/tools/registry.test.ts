@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { publicVideoModel } from '../media/__fixtures__/videoModels';
 import { findTool, isOfferedEditTool, toolsForRequest } from './registry';
 import type { ToolSchema } from './types';
 
@@ -28,6 +29,21 @@ describe('toolsForRequest', () => {
     expect(declared).toContain('generate_image');
     expect(declared).toContain('session_spawn');
     expect(declared).toContain('mcp__notion_search');
+  });
+
+  it('declares generate_video only when the server offers a video model', () => {
+    const gemini = publicVideoModel('gemini-omni-1.1-flash');
+    expect(names({ roots: [], media: true, host: false })).not.toContain('generate_video');
+    expect(names({ roots: [], media: true, host: false, video: [] })).not.toContain('generate_video');
+    expect(names({ roots: [], media: false, host: false, video: [gemini] })).not.toContain('generate_video');
+
+    const [video] = toolsForRequest({ roots: [], media: true, host: false, video: [gemini] }).filter(
+      entry => entry.toolSchema.name === 'generate_video'
+    );
+    // The schema names only what this server offers, so the model cannot ask for anything else.
+    expect(video.toolSchema.parameters.properties.model).toMatchObject({ enum: ['gemini-omni-1.1-flash'] });
+    expect(video.toolSchema.parameters.properties.aspectRatio).toMatchObject({ enum: ['16:9', '9:16'] });
+    expect(findTool('generate_video')).toBeDefined();
   });
 
   it('keeps MCP tools when every built-in family is off', () => {

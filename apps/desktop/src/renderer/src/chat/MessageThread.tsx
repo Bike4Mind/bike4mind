@@ -19,6 +19,7 @@ import { callsIn, roundsOf } from './replyRounds';
 import { describeReplyCost, formatCreditsSpent } from './statusLine';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
+import { OrphanVideoJobs } from './VideoJobCard';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
 const BUDGET_STOP_LABELS: Record<string, string> = {
@@ -728,6 +729,7 @@ export function MessageThread({
         {streaming && status && last && !(last.role === 'assistant' && !last.relay && !last.system) && (
           <Box>{status}</Box>
         )}
+        <OrphanVideoJobs messages={messages} />
         {footer}
         {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
             scrolled past rather than brought into view. */}

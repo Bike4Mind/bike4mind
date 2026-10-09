@@ -21,6 +21,7 @@ import { DirectoryRequestCard } from './DirectoryRequestCard';
 import { ChevronIcon } from './icons';
 import { MediaAttachments } from './MediaAttachment';
 import { QuestionCard, QuestionSummary } from './QuestionCard';
+import { VideoJobsForCall } from './VideoJobCard';
 import {
   diffTotals,
   groupToolCalls,
@@ -560,11 +561,14 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
         <Box key={call.id}>
           {call.notice && <NoticeBanner notice={call.notice} />}
           <MediaAttachments media={call.media ?? []} />
+          {call.name === GENERATE_VIDEO_TOOL_NAME && <VideoJobsForCall callId={call.id} />}
         </Box>
       ))}
     </Box>
   );
 }
+
+const GENERATE_VIDEO_TOOL_NAME = 'generate_video';
 
 export function ToolCallList({
   calls,

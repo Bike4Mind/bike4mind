@@ -5,7 +5,15 @@ import { BROWSER_TOOLS } from './browserTools';
 import { exploreTool } from './exploreTool';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, sessionSpawn } from './hostTools';
-import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
+import type { VideoModel } from '@bike4mind/common';
+import {
+  generateImageTool,
+  generateMusicTool,
+  generateSoundEffectTool,
+  generateSpeechTool,
+  generateVideoSchema,
+  generateVideoTool,
+} from './mediaTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { requestDirectory } from './requestDirectoryTool';
 import { bashExecute } from './shellTools';
@@ -115,6 +123,7 @@ const BY_NAME = new Map(
     applyPatch,
     exploreTool,
     ...MEDIA_TOOLS,
+    generateVideoTool,
     ...HOST_TOOLS,
     ...BROWSER_TOOLS,
     ...MEMORY_TOOLS,
@@ -149,6 +158,11 @@ export function findTool(name: string): ToolDefinition | undefined {
 export function toolsForRequest(options: {
   roots: readonly string[];
   media: boolean;
+  /**
+   * The video models the server offers this caller. generate_video is declared only when there
+   * is at least one, with them in its schema, so a server without video has no tool to fail.
+   */
+  video?: readonly VideoModel[];
   /** A Code session's project binding. Without one the host tools have nothing to scope to. */
   host: boolean;
   /**
@@ -186,6 +200,7 @@ export function toolsForRequest(options: {
   ];
   return [
     ...available.map(tool => ({ toolSchema: tool.schema })),
+    ...(options.media && options.video?.length ? [{ toolSchema: generateVideoSchema(options.video) }] : []),
     ...(options.mcp ?? []).map(toolSchema => ({ toolSchema })),
   ];
 }

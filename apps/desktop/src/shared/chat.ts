@@ -9,7 +9,7 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
-import type { ValidationViolation } from '@bike4mind/common';
+import type { GenerationJobState, ValidationViolation } from '@bike4mind/common';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
@@ -102,6 +102,51 @@ export interface ChatToolNotice {
   kind: 'insufficient-credits' | 'provider-substituted';
   text: string;
 }
+
+export type ChatVideoJobState = GenerationJobState;
+
+/**
+ * A server-side video generation started from this conversation, as its card draws it.
+ *
+ * Stored per conversation by VideoJobStore the moment the server accepts the job, NOT on the
+ * tool call: a reply is only written when its turn settles, and a billed job whose card died
+ * with a crashed turn is the failure this exists to prevent. The card finds its row by `callId`;
+ * a job whose row never made it to disk is drawn at the foot of the thread instead.
+ */
+export interface ChatVideoJob {
+  /** The server's job id. */
+  id: string;
+  callId: string;
+  modelId: string;
+  modelName: string;
+  prompt: string;
+  durationSeconds: number;
+  aspectRatio: string;
+  resolution: string;
+  /** What the approval card estimated, from the shared estimateCost rules. */
+  estimatedCredits: number;
+  /** What the server reserved, once it said. */
+  reservedCredits?: number;
+  state: ChatVideoJobState;
+  /** 0-1 while running, when the provider reports it. */
+  progress?: number;
+  /**
+   * Set on a succeeded job whose file is not playable yet ('pending_scan') or never will be
+   * ('unavailable'). Absent once the clip is local.
+   */
+  availability?: 'pending_scan' | 'unavailable';
+  /** The finished clip, downloaded into this app's media folder; never the server's URL. */
+  media?: { url: string; mimeType: string; byteLength: number };
+  /** The server's public error text, or why this app could not finish fetching the clip. */
+  error?: string;
+  /** Polling gave up on a job that never settled; the card offers to look again. */
+  stalled?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What the card's Copy link button got back. */
+export type ChatVideoLinkResult = { ok: true; expiresAt: string | null } | { ok: false; message: string };
 
 /**
  * One tool the model asked for, and what running it produced.
@@ -1022,6 +1067,8 @@ export type ChatStreamEvent =
       text: string;
     }
   | { type: 'background-status'; sessionId: string; process: BackgroundProcessInfo }
+  /** A video job changed. Like the background events it outlives its turn and has no `messageId`. */
+  | { type: 'video-job'; sessionId: string; job: ChatVideoJob }
   /**
    * A whole message appeared in a conversation without anyone typing it: today only a spawned
    * session reporting back to the one that started it.
