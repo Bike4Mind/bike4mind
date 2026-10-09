@@ -43,6 +43,16 @@ describe('resolveRouteTemplate', () => {
     );
   });
 
+  it('keeps a static prefix when a param value repeats an earlier static segment', () => {
+    expect(resolveRouteTemplate(req('/api/admin/gears/admin', { key: 'admin' }))).toBe('/api/admin/gears/[key]');
+  });
+
+  it('keeps a static prefix when catch-all values repeat earlier static segments', () => {
+    expect(resolveRouteTemplate(req('/api/admin/qa/api/admin', { path: ['api', 'admin'] }))).toBe(
+      '/api/admin/qa/[...path]'
+    );
+  });
+
   it('decodes percent-encoded segments when matching params', () => {
     expect(resolveRouteTemplate(req('/api/tags/a%20b', { tag: 'a b' }))).toBe('/api/tags/[tag]');
   });
