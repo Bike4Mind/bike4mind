@@ -319,6 +319,17 @@ describe('the browser pane resize handle', () => {
     expect(paneWidth()).toBe(BROWSER_PANE_WIDTH + 100);
   });
 
+  it('does not store a click on the handle over a wider width chosen on a bigger window', () => {
+    window.localStorage.setItem('b4m.browserPane.width', '800');
+    setViewport(1400);
+    mount();
+    expect(paneWidth()).toBe(588);
+    press(800);
+    release();
+    expect(window.localStorage.getItem('b4m.browserPane.width')).toBe('800');
+    expect(setPane).not.toHaveBeenCalledWith(expect.objectContaining({ bounds: null }));
+  });
+
   it('goes back to the default on a double-click', () => {
     window.localStorage.setItem('b4m.browserPane.width', '800');
     mount();

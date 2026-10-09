@@ -58,7 +58,7 @@ export function ResizeHandle({
   onDraggingChange: (dragging: boolean) => void;
   sx: { left: number } | { right: number };
 }) {
-  const drag = useRef<{ x: number; from: number; to: number } | null>(null);
+  const drag = useRef<{ x: number; from: number; to: number; moved: boolean } | null>(null);
   const grow = edge === 'right' ? 1 : -1;
 
   useEffect(() => {
@@ -67,6 +67,7 @@ export function ResizeHandle({
     const onMove = (event: PointerEvent) => {
       const current = drag.current;
       if (!current) return;
+      current.moved = true;
       current.to = clamp(current.from + grow * (event.clientX - current.x));
       onWidth(current.to);
     };
@@ -74,7 +75,9 @@ export function ResizeHandle({
       const current = drag.current;
       drag.current = null;
       onDraggingChange(false);
-      if (current) onCommit(current.to);
+      // A press that never moved is a click, or half a double-click: committing it would store
+      // the width as clamped to this window over the one the user chose on a bigger one.
+      if (current?.moved) onCommit(current.to);
     };
 
     // The pointer spends the drag over the transcript, which selects text and draws an I-beam.
@@ -105,7 +108,7 @@ export function ResizeHandle({
     } catch {
       // No such pointer (synthesised input): the window listeners carry the drag on their own.
     }
-    drag.current = { x: event.clientX, from: width, to: width };
+    drag.current = { x: event.clientX, from: width, to: width, moved: false };
     onDraggingChange(true);
   };
 
