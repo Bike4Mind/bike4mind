@@ -102,7 +102,7 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
   }
 
   async getSettingsValue<K extends SettingKey>(settingName: K): Promise<SettingValue<K> | undefined> {
-    const setting = decryptSettingInPlace(await this.findOne({ settingName }));
+    const setting = await this.findOne({ settingName }); // findOne already decrypts via lean path
     const value = settingsMap?.[settingName]?.schema?.safeParse(setting?.settingValue);
 
     if (value.success) {
