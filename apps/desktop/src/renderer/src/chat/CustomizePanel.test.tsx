@@ -85,10 +85,12 @@ const text = (node: Element | null | undefined) => node?.textContent?.replace(/\
 const isVisible = (node: HTMLElement | null) => {
   if (!node?.isConnected) return false;
   for (let el: HTMLElement | null = node; el; el = el.parentElement) {
-    const style = getComputedStyle(el);
-    if (el.hidden || style.display === 'none' || style.opacity === '0') return false;
+    const { display, visibility, opacity } = getComputedStyle(el);
+    if (el.hidden || display === 'none' || visibility === 'hidden' || visibility === 'collapse' || opacity === '0') {
+      return false;
+    }
   }
-  return !['hidden', 'collapse'].includes(getComputedStyle(node).visibility);
+  return true;
 };
 
 describe('the Customize screen', () => {
