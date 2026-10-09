@@ -102,4 +102,22 @@ describe('AdminSettingsSchema toJSON/toObject chokepoint', () => {
     const all = await adminSettingsRepository.findAll();
     expect(all.find(s => s.settingName === 'groqDemoKey')?.settingValue).toBe(plaintext);
   });
+
+  it('findAllByTag returns plaintext for a sensitive setting', async () => {
+    const plaintext = 'sk-bytag-trusted-path-77777';
+    const ciphertext = encryptSecret(plaintext, KEY);
+    await AdminSettings.create({ settingName: 'anthropicDemoKey', settingValue: ciphertext, tags: ['ai'] });
+
+    const byTag = await adminSettingsRepository.findAllByTag('ai');
+    expect(byTag.find(s => s.settingName === 'anthropicDemoKey')?.settingValue).toBe(plaintext);
+  });
+
+  it('getSettingsValue returns plaintext for a sensitive setting', async () => {
+    const plaintext = 'sk-getsettingsvalue-test-88888';
+    const ciphertext = encryptSecret(plaintext, KEY);
+    await AdminSettings.create({ settingName: 'anthropicDemoKey', settingValue: ciphertext });
+
+    const result = await adminSettingsRepository.getSettingsValue('anthropicDemoKey');
+    expect(result).toBe(plaintext);
+  });
 });

@@ -94,6 +94,13 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
     return result.map(r => decryptSettingInPlace(r as IAdminSettings & { settingName: string }));
   }
 
+  // Override BaseRepository.findOne which calls .toJSON() and would trigger the masking
+  // transform. Lean path bypasses the transform; decryptSettingInPlace restores plaintext.
+  async findOne(filter: Record<string, unknown>) {
+    const result = await this.model.findOne(filter).lean({ virtuals: true });
+    return decryptSettingInPlace(result as (IAdminSettings & { settingName: string }) | null);
+  }
+
   async getSettingsValue<K extends SettingKey>(settingName: K): Promise<SettingValue<K> | undefined> {
     const setting = decryptSettingInPlace(await this.findOne({ settingName }));
     const value = settingsMap?.[settingName]?.schema?.safeParse(setting?.settingValue);
