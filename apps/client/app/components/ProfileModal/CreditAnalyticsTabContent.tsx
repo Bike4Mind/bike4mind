@@ -112,6 +112,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const genericDeductTransactions = sortedTransactions.filter(t => t.type === 'generic_deduct');
     const textUsageTransactions = sortedTransactions.filter(t => t.type === 'text_generation_usage');
     const completionApiUsageTransactions = sortedTransactions.filter(t => t.type === 'completion_api_usage');
+    const decisionUsageTransactions = sortedTransactions.filter(t => t.type === 'decision_usage');
     const imageUsageTransactions = sortedTransactions.filter(t => t.type === 'image_generation_usage');
     const imageEditUsageTransactions = sortedTransactions.filter(t => t.type === 'image_edit_usage');
     const voiceUsageTransactions = sortedTransactions.filter(t => t.type === 'realtime_voice_usage');
@@ -126,6 +127,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...genericDeductTransactions,
       ...textUsageTransactions,
       ...completionApiUsageTransactions,
+      ...decisionUsageTransactions,
       ...imageUsageTransactions,
       ...imageEditUsageTransactions,
       ...voiceUsageTransactions,
@@ -210,6 +212,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const speechToTextUsageDailyData = new Map<string, { x: string; y: number }>();
     const textToSpeechUsageDailyData = new Map<string, { x: string; y: number }>();
     const soundEffectsUsageDailyData = new Map<string, { x: string; y: number }>();
+    const decisionUsageDailyData = new Map<string, { x: string; y: number }>();
     const musicUsageDailyData = new Map<string, { x: string; y: number }>();
     const creditsAddedDailyData = new Map<string, { x: string; y: number }>(); // Combined purchases, subscriptions, and generic adds
     const allUsageDailyData = new Map<string, { x: string; y: number }>(); // Combined all usage types including generic deducts
@@ -245,6 +248,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     processTransactionType(textToSpeechUsageTransactions, textToSpeechUsageDailyData);
     processTransactionType(soundEffectsUsageTransactions, soundEffectsUsageDailyData);
     processTransactionType(musicUsageTransactions, musicUsageDailyData);
+    processTransactionType(decisionUsageTransactions, decisionUsageDailyData);
 
     // Create combined credits added (purchases + subscriptions + generic adds)
     [...purchaseTransactions, ...subscriptionTransactions, ...genericAddTransactions].forEach(transaction => {
@@ -261,6 +265,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...genericDeductTransactions,
       ...textUsageTransactions,
       ...completionApiUsageTransactions,
+      ...decisionUsageTransactions,
       ...imageUsageTransactions,
       ...imageEditUsageTransactions,
       ...voiceUsageTransactions,
@@ -298,6 +303,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
         textToSpeechUsageDailyData,
         soundEffectsUsageDailyData,
         musicUsageDailyData,
+        decisionUsageDailyData,
         creditsAddedDailyData,
         allUsageDailyData,
       ].forEach(dataMap => {
@@ -327,6 +333,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const textToSpeechUsageDataPoints = sortDataPoints(textToSpeechUsageDailyData);
     const soundEffectsUsageDataPoints = sortDataPoints(soundEffectsUsageDailyData);
     const musicUsageDataPoints = sortDataPoints(musicUsageDailyData);
+    const decisionUsageDataPoints = sortDataPoints(decisionUsageDailyData);
     const creditsAddedDataPoints = sortDataPoints(creditsAddedDailyData);
     const allUsageDataPoints = sortDataPoints(allUsageDailyData);
 
@@ -466,6 +473,14 @@ const CreditAnalyticsTabContent: React.FC = () => {
           // this chart - success[400] already belongs to the subscriptions series,
           // and the chart has no legend to disambiguate a collision.
           color: theme.palette.warning[300],
+        });
+      }
+
+      if (decisionUsageDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'decision_usage',
+          data: decisionUsageDataPoints,
+          color: theme.palette.neutral[400],
         });
       }
 
@@ -980,6 +995,8 @@ const CreditAnalyticsTabContent: React.FC = () => {
                       return 'Sound Effects';
                     case 'music_generation_usage':
                       return 'Music Generation';
+                    case 'decision_usage':
+                      return 'Decisions';
                     case 'usage':
                       return t('credits.credits_used');
                     case 'credits_added':

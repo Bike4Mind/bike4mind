@@ -85,7 +85,7 @@ function infoDescription(): string {
     '## Credits',
     'Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the ' +
       "caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, " +
-      'which accepts `ai:chat` and `ai:generate` too. A synchronous call that cannot be paid for fails with ' +
+      'which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with ' +
       '`422` and ' +
       '`errorCode: "insufficient_credits"`. On a queued job the same code arrives on the polled result instead ' +
       '(see Async jobs), so check both places.',

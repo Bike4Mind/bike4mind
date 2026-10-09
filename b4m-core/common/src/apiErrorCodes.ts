@@ -48,6 +48,15 @@ export const API_ERROR_CODES = [
   'cancelled',
   'idempotency_key_reused',
   'invalid_idempotency_key',
+  // Decisions (POST /api/v1/decisions); see DECISIONS_ERROR_CODES.
+  /** The provider stayed overloaded or timed out through our one retry; the response carries Retry-After. */
+  'provider_overloaded',
+  /** The input exceeded the model's context window, as reported by the provider. */
+  'context_length_exceeded',
+  /** A request exceeded a per-model cap; `param` names the field and the message names the cap. */
+  'limit_exceeded',
+  /** The model cannot accept this input type (e.g. an image on a text-only model). */
+  'unsupported_input',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

@@ -4,6 +4,7 @@ import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
 import { CompletionSseErrorEventSchema } from './schemas/cliCompletions';
 import { VIDEO_GENERATION_API_ERROR_CODES, VIDEO_JOB_PUBLIC_ERROR_CODES } from './schemas/videoGenerations';
+import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 
 /**
  * The `satisfies readonly ApiErrorCode[]` on each narrowing tuple is what actually
@@ -34,6 +35,7 @@ describe('API_ERROR_CODES', () => {
       TTS_ERROR_CODES,
       VIDEO_GENERATION_API_ERROR_CODES,
       VIDEO_JOB_PUBLIC_ERROR_CODES,
+      DECISIONS_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     const emitted = new Set<string>([...NARROWING_TUPLES.flat(), API_KEY_USER_CAP_ERROR_CODE]);

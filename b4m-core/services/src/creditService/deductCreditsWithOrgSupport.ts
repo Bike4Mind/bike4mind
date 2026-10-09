@@ -94,6 +94,18 @@ export interface DeductMusicGenerationCreditsParams extends DeductCreditsCommonP
 }
 
 /**
+ * Parameters for decision credit deduction. Quest-less: POST /api/v1/decisions
+ * is a stateless synchronous call, so it extends the common base.
+ */
+export interface DeductDecisionCreditsParams extends DeductCreditsCommonParams {
+  type: 'decision_usage';
+  inputTokens: number;
+  outputTokens: number;
+  /** Present for API key auth, undefined for JWT */
+  apiKeyId?: string;
+}
+
+/**
  * Union type of all deduction parameter types
  */
 export type DeductCreditsParams =
@@ -102,7 +114,8 @@ export type DeductCreditsParams =
   | DeductVideoGenerationCreditsParams
   | DeductTextGenerationCreditsParams
   | DeductSoundEffectsCreditsParams
-  | DeductMusicGenerationCreditsParams;
+  | DeductMusicGenerationCreditsParams
+  | DeductDecisionCreditsParams;
 
 /**
  * Database adapters required for credit deduction.
@@ -216,6 +229,15 @@ export async function deductCreditsWithOrgSupport(
   } else if (type === 'music_generation_usage') {
     // Quest-less: music generation has no questId.
     transactionParams = { ...baseParams, type: 'music_generation_usage' };
+  } else if (type === 'decision_usage') {
+    // Quest-less: decisions have no questId.
+    transactionParams = {
+      ...baseParams,
+      type: 'decision_usage',
+      inputTokens: params.inputTokens,
+      outputTokens: params.outputTokens,
+      apiKeyId: params.apiKeyId,
+    };
   } else {
     // Quest-scoped image/edit/video types; questId is guaranteed by their param shape.
     transactionParams = {
