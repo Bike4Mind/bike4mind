@@ -3,7 +3,7 @@ import { RequestHandler } from 'express';
 import { checkApiKeyRateLimit, type RateLimitCounter } from '@server/utils/apiKeyRateLimitCheck';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, API_KEY_RATE_LIMIT_HEADER_NAMES } from '@bike4mind/common';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
 export interface ApiKeyRateLimitOptions {
@@ -77,13 +77,9 @@ export const apiKeyRateLimit =
         { meterDailyLimit, counter: options.counter }
       );
 
-      // Add rate limit headers to response
-      res.setHeader('X-RateLimit-Limit-Minute', result.headers['X-RateLimit-Limit-Minute']);
-      res.setHeader('X-RateLimit-Remaining-Minute', result.headers['X-RateLimit-Remaining-Minute']);
-      res.setHeader('X-RateLimit-Reset-Minute', result.headers['X-RateLimit-Reset-Minute']);
-      res.setHeader('X-RateLimit-Limit-Day', result.headers['X-RateLimit-Limit-Day']);
-      res.setHeader('X-RateLimit-Remaining-Day', result.headers['X-RateLimit-Remaining-Day']);
-      res.setHeader('X-RateLimit-Reset-Day', result.headers['X-RateLimit-Reset-Day']);
+      for (const header of API_KEY_RATE_LIMIT_HEADER_NAMES) {
+        res.setHeader(header, result.headers[header]);
+      }
 
       // If rate limit exceeded, set Retry-After header and throw error
       if (!result.allowed) {

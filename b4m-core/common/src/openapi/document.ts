@@ -2,6 +2,11 @@ import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
 import { API_KEY_RATE_LIMIT_DEFAULTS } from '../types/entities/UserApiKeyTypes';
+import {
+  API_KEY_RATE_LIMIT_HEADERS,
+  API_KEY_RATE_LIMIT_HEADER_NAMES,
+  type ApiKeyRateLimitHeader,
+} from '../apiKeyRateLimitHeaders';
 
 // Importing these modules is what registers their schemas/paths against the
 // shared registry (side-effect imports). Keep them before generateDocument().
@@ -285,22 +290,17 @@ const REQUEST_ID_HEADER_SPEC = {
 
 /**
  * The rate-limit headers `apiKeyRateLimit` actually sets - two windows, six
- * headers. These names are load-bearing: a client reading the unwindowed
- * `X-RateLimit-Limit` gets `undefined`. Must stay in sync with
- * apps/client/server/middlewares/apiKeyRateLimit.ts.
+ * headers, derived from API_KEY_RATE_LIMIT_HEADERS (apiKeyRateLimitHeaders.ts).
+ * These names are load-bearing: a client reading the unwindowed
+ * `X-RateLimit-Limit` gets `undefined`.
  */
 const INTEGER_HEADER = { type: 'integer' as const };
-const RATE_LIMIT_HEADER_SPEC = {
-  'X-RateLimit-Limit-Minute': { description: 'Request quota per minute.', schema: INTEGER_HEADER },
-  'X-RateLimit-Remaining-Minute': { description: 'Requests remaining in the current minute.', schema: INTEGER_HEADER },
-  'X-RateLimit-Reset-Minute': {
-    description: 'Unix epoch (seconds) when the minute window resets.',
-    schema: INTEGER_HEADER,
-  },
-  'X-RateLimit-Limit-Day': { description: 'Request quota per day.', schema: INTEGER_HEADER },
-  'X-RateLimit-Remaining-Day': { description: 'Requests remaining in the current day.', schema: INTEGER_HEADER },
-  'X-RateLimit-Reset-Day': { description: 'Unix epoch (seconds) when the day window resets.', schema: INTEGER_HEADER },
-};
+const RATE_LIMIT_HEADER_SPEC = Object.fromEntries(
+  API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => [
+    header,
+    { description: API_KEY_RATE_LIMIT_HEADERS[header], schema: INTEGER_HEADER },
+  ])
+) as Record<ApiKeyRateLimitHeader, { description: string; schema: typeof INTEGER_HEADER }>;
 
 /**
  * The failures `registerContract` INJECTS carry no rate-limit headers:
