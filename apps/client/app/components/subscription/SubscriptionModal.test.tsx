@@ -182,6 +182,15 @@ describe('SubscriptionModal', () => {
       expect(screen.getByRole('button', { name: 'Cancel Subscription' })).toHaveClass('MuiButton-variantOutlined');
     });
 
+    it('stays available on a plan that is canceled but not yet ended, so the user can resume it', () => {
+      subscriptions = [subRow({ status: 'active', canceledAt: new Date('2026-01-15T00:00:00Z') })];
+
+      renderModal();
+
+      expect(manageButton()).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Subscription ends on/ })).toBeDisabled();
+    });
+
     it('is not offered to a non-subscriber', () => {
       subscriptions = [];
 

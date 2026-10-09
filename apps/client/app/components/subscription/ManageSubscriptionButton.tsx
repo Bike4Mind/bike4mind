@@ -4,10 +4,10 @@ import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { Button } from '@mui/joy';
 import { useTranslation } from 'react-i18next';
 
-interface ManageSubscriptionButtonProps {
+type ManageSubscriptionButtonProps = {
   /** Solid when the plan's payment failed: fixing the card is the action the user needs. */
   isPrimaryAction: boolean;
-}
+};
 
 const ManageSubscriptionButton = ({ isPrimaryAction }: ManageSubscriptionButtonProps) => {
   const { t } = useTranslation();
