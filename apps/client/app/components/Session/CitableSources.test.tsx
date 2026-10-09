@@ -392,6 +392,42 @@ describe('CitableSources badge tooltip placement', () => {
     expect(highlighted()).toEqual([]);
   });
 
+  it('opens the last visible chip bottom when its other partner is collapsed behind Show More', async () => {
+    renderChips([
+      lakeChip('file-x', 'Support Hours.md'),
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b', 'file-c']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a', 'file-c']),
+      lakeChip('file-c', 'Board Deck.pdf', ['file-a', 'file-b']),
+    ]);
+
+    // Board Deck is below Annual Report but not rendered, so only the partner above is in the way.
+    expect(screen.queryByText('Board Deck.pdf')).not.toBeInTheDocument();
+    expect(await placementOf(badgeOf('Annual Report.pdf'))).toBe('bottom');
+  });
+
+  it('clears the outline when the open badge is collapsed away without closing', async () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-d']),
+      lakeChip('file-b', 'Support Hours.md'),
+      lakeChip('file-c', 'Billing FAQ.md'),
+      lakeChip('file-d', 'Annual Report.pdf', ['file-a']),
+    ]);
+    const isHighlighted = (title: string) =>
+      screen
+        .getAllByTestId('citable-source-chip')
+        .find(chip => chip.textContent?.includes(title))
+        ?.getAttribute('data-conflict-highlighted') === 'true';
+
+    fireEvent.click(screen.getByTestId('citable-sources-show-more-btn'));
+    await openTooltip(badgeOf('Annual Report.pdf'));
+    expect(isHighlighted('Q3 Revenue.pdf')).toBe(true);
+
+    // A click fires no mouseleave, as with a tap on touch, so the tooltip never reports a close.
+    fireEvent.click(screen.getByTestId('citable-sources-show-more-btn'));
+    expect(screen.queryByText('Annual Report.pdf')).not.toBeInTheDocument();
+    expect(isHighlighted('Q3 Revenue.pdf')).toBe(false);
+  });
+
   it('opens the truncation tooltip above', async () => {
     renderWith({ sourceSystem: 'web_fetch', contentLength: 50000, truncated: true, cap: 50000 });
 

@@ -1,4 +1,4 @@
-import { FC, useMemo, useState } from 'react';
+import { FC, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Stack, Tooltip, Typography } from '@mui/joy';
 import {
   Language as WebIcon,
@@ -141,6 +141,13 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const navigate = useNavigate();
+  // Joy never fires onClose when an open tooltip unmounts (e.g. Show less after a tap on touch),
+  // which would leave the partner outlined. The ref keeps the cleanup on the latest callback.
+  const onConflictTooltipChangeRef = useRef(onConflictTooltipChange);
+  useEffect(() => {
+    onConflictTooltipChangeRef.current = onConflictTooltipChange;
+  });
+  useEffect(() => () => onConflictTooltipChangeRef.current(false), []);
   // Opt-in host overrides: when a surface provides onCitationClick (any source) or
   // onInternalCitationClick (relative URLs only), the click is handled in-surface instead of
   // navigating. onCitationClick wins when both are set. Default (no provider) keeps the existing
