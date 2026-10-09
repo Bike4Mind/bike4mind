@@ -302,10 +302,10 @@ export async function assertLakeAdmission(
   // `forceReportOnly` skips the settings read entirely (an empty enforcing set), rather than
   // resolving it and discarding the result - the restore path's whole point is that this call
   // grades nothing as enforceable, so there is nothing for that read to inform.
-  const [resolvedMembers, enforcingLakeIds] = await Promise.all([
-    resolveMemberTargets(members, resolved),
-    forceReportOnly ? Promise.resolve(new Set<string>()) : resolveEnforcingLakes(declaring, resolved),
-  ]);
+  // Sequential, not Promise.all: the manage-write routes call this inside `withTransaction`, and the
+  // ambient session a Mongo transaction carries does not accept concurrent operations.
+  const resolvedMembers = await resolveMemberTargets(members, resolved);
+  const enforcingLakeIds = forceReportOnly ? new Set<string>() : await resolveEnforcingLakes(declaring, resolved);
 
   const verdict = decideLakeAdmission(resolvedMembers, requirements, enforcingLakeIds);
   if (verdict.status === 'admitted') {

@@ -1,16 +1,18 @@
-import { IMAGE_MODELS, ImageModels, VIDEO_MODELS, VideoModels } from '../models';
+import { IMAGE_MODELS, ImageModels } from '../models';
 import { EXTENDED_GPT_IMAGE_QUALITIES, OPENAI_IMAGE_MODELS, type ExtendedGptImageQuality } from '../schemas/openai';
 import { GEMINI_IMAGE_MODELS, type GeminiImageModel } from '../schemas/gemini';
 import { BFL_IMAGE_MODELS, type BFLImageModel } from '../schemas/bfl';
 import { normalizeEntitlementKey } from '../constants/dataLakes';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
+import { VIDEO_MODEL_IDS, type VideoModelId } from '../video/catalog';
 
 export const isImageModel = (model: string): model is ImageModels => {
   return IMAGE_MODELS.includes(model as ImageModels);
 };
 
-export const isVideoModel = (model: string): model is VideoModels => {
-  return VIDEO_MODELS.includes(model as VideoModels);
+// Public export with callers outside this repo: keep it when the video catalog changes.
+export const isVideoModel = (model: string): model is VideoModelId => {
+  return (VIDEO_MODEL_IDS as readonly string[]).includes(model);
 };
 
 type GptImageModelId = (typeof OPENAI_IMAGE_MODELS)[number];
@@ -97,6 +99,14 @@ export function isGPTImage25Model(model?: string | null): boolean {
  */
 export function rejectsTransparentBackground(model?: string | null): boolean {
   return isGPTImage2Model(model) && !isGPTImage25Model(model);
+}
+
+/**
+ * True for models that render a real alpha channel for background: 'transparent' (gpt-image-1.x
+ * and the 2.5 models). Every other provider ignores the field and returns an opaque image.
+ */
+export function supportsTransparentBackground(model?: string | null): boolean {
+  return isGPTImageModel(model) && !rejectsTransparentBackground(model);
 }
 
 export const isExtendedGptImageQuality = (quality: unknown): quality is ExtendedGptImageQuality =>
@@ -230,11 +240,8 @@ export const IMAGES_PER_EDIT_REQUEST = 1;
 
 /**
  * Reference ("style anchor") images a single gpt-image request may carry, on top of the
- * primary input image. OpenAI's images.edit accepts up to 16 for the gpt-image family, but
- * the cap here is deliberately lower: OpenAIImageCostCalculator prices output only (tier x
- * size) and image credits are never reconciled after the call, so every input image OpenAI
- * bills as input tokens is unbilled margin. At 4 that leak is a rounding error; at 16 it is
- * roughly a free high-tier render per request. Raise it only together with an input-image
- * term in OpenAIImageCostCalculator.
+ * primary input image: 15 references + the primary = OpenAI's documented 16-image images.edit
+ * limit for the gpt-image family. Each one is billed as input tokens, which the credit hold
+ * prices through OpenAIImageCostCalculator.getInputImageCost - keep the two together.
  */
-export const MAX_REFERENCE_IMAGES = 4;
+export const MAX_REFERENCE_IMAGES = 15;

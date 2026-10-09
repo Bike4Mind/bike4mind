@@ -98,7 +98,7 @@ describe('agentExecutionAbandonedSweep - handler', () => {
     const result = await handler();
 
     expect(result).toMatchObject({ status: 'OK', marked: 1, questsSettled: 1 });
-    expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY }]);
+    expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null }]);
   });
 
   it('logs a non-empty sweep at error level so the ERROR subscription forwards it to Slack', async () => {
@@ -191,7 +191,9 @@ describe('agentExecutionAbandonedSweep - handler', () => {
 
         expect(second.questsSettled).toBe(1);
         expect(settlementMarkers.has('exec1')).toBe(false);
-        expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY }]);
+        expect(updates).toEqual([
+          { id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null },
+        ]);
       } finally {
         vi.useRealTimers();
       }

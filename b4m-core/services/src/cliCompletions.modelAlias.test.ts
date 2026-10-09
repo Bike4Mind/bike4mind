@@ -52,6 +52,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
+import { BadRequestError, ChatModels } from '@bike4mind/common';
 import { executeCompletion } from './cliCompletions';
 
 function buildDb() {
@@ -104,9 +105,19 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
   it('raises the original, unaliased id when the model is genuinely unknown', async () => {
     const { db } = buildDb();
 
-    await expect(executeCompletion({ ...baseParams, model: 'not-a-real-model', db })).rejects.toThrow(
-      'Failed to create LLM backend for model: not-a-real-model'
+    const rejection = executeCompletion({ ...baseParams, model: 'not-a-real-model', db });
+    await expect(rejection).rejects.toThrow('Failed to create LLM backend for model: not-a-real-model');
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it('raises a plain Error, not caller input, for a catalogued model whose backend is unavailable', async () => {
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: ChatModels.CLAUDE_4_SONNET_BEDROCK, db });
+    await expect(rejection).rejects.toThrow(
+      `Failed to create LLM backend for model: ${ChatModels.CLAUDE_4_SONNET_BEDROCK}`
     );
+    await expect(rejection).rejects.not.toBeInstanceOf(BadRequestError);
   });
 
   // A plain-object alias map would return Object.prototype members (the Object

@@ -863,7 +863,7 @@ function pickPrimaryProvider(
 }
 
 /**
- * Returns [lead, backup] for the chat tool's hedged search. The lead is exactly what
+ * Returns [lead, backup] for searchWithHedge. The lead is exactly what
  * resolveWebSearchProvider picks: the admin's WebSearchProvider choice, or under 'auto' SerpAPI
  * when a key is set, else SearXNG. The backup is the other provider when it is configured too. An
  * unconfigured explicit choice yields no lead at all; it is never quietly replaced by the other.

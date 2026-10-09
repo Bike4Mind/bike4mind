@@ -17,13 +17,16 @@ import {
   lakeAccessEventRepository,
   organizationRepository,
   projectRepository,
+  questRepository,
   scopedSettingsRepository,
+  sessionRepository,
   userRepository,
 } from '@bike4mind/database';
 import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from './resolveBackend';
@@ -80,6 +83,8 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
       ),
     ]);
 
+    // No organizationId: a charter carries only its owner, so lake tools here stay personal. Inferring an
+    // org from a linked agent would let a background mission write into an org the owner never chose.
     const toolDeps: ToolBuilderDeps = {
       userId: ownerUserId,
       user: owner,
@@ -99,9 +104,14 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        // Owner lookup for edit_image's generated-image keys (resolveOwnedGeneratedImageUrl). Narrow on
+        // purpose: the whole repo would also enable incrementImageCount, which this host never wired.
+        quests: questRepository,
+        sessions: { findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository) },
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        ...lakeWriteToolDb,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),

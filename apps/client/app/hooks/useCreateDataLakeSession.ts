@@ -22,7 +22,7 @@ import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
  * the first message was already dispatched against every reachable lake.
  */
 export default function useCreateDataLakeSession() {
-  const { setCurrentSession, setCurrentSessionId } = useSessions();
+  const { setCurrentSession, setCurrentSessionId, workBenchAgents = [] } = useSessions();
   const { projectId: routerProjectId } = useSearch({ strict: false }) as { projectId?: string };
   const location = useLocation();
   const navigate = useNavigate();
@@ -39,6 +39,7 @@ export default function useCreateDataLakeSession() {
         {
           name: 'New Notebook',
           forceKnowledgeRetrieval: true,
+          includeLibraryFiles: false,
           // lakeScopeExplicit rides along so the server stores the choice as deliberate. Sent only
           // when a scope was actually picked: an empty pair here would mean "grounds on no lake",
           // which is the opposite of the unscoped session this creates by default.
@@ -47,6 +48,9 @@ export default function useCreateDataLakeSession() {
           // adoption rehydrates the workbench FROM the session's knowledgeIds, so a file added
           // client-side after creation loses that race on slower adoption paths.
           ...(extras?.knowledgeIds?.length ? { knowledgeIds: extras.knowledgeIds } : {}),
+          // Agents attached on /new, as useCreateNewSession sends them: send clears the
+          // workbench, so a session born without them runs every later turn agentless.
+          ...(workBenchAgents.length ? { agentIds: workBenchAgents.map(a => a.id) } : {}),
           ...(routerProjectId ? { projectId: routerProjectId } : {}),
         },
         { timeout: SEND_REQUEST_TIMEOUT_MS }
@@ -85,6 +89,7 @@ export default function useCreateDataLakeSession() {
       setCurrentSession,
       setCurrentSessionId,
       setPendingLakeTags,
+      workBenchAgents,
     ]
   );
 }

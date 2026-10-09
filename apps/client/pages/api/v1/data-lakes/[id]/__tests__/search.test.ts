@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
+  BadRequestError,
   DataLakeSearchResponseSchema,
   NotFoundError,
   insufficientCreditsError,
@@ -88,6 +89,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 const { default: handler } = await import('@pages/api/v1/data-lakes/[id]/search');
+const { default: errorHandler } = await import('@server/middlewares/errorHandler');
 // Captured before any beforeEach clears it: the limiter is built once, at module load.
 const rateLimitOptionsAtLoad: unknown = mockRateLimitOptions.mock.calls[0]?.[0];
 
@@ -226,6 +228,23 @@ describe('POST /api/v1/data-lakes/{id}/search', () => {
       statusCode: 422,
       additionalInfo: { errorCode: 'insufficient_credits' },
     });
+  });
+
+  it("answers the core's billing-owner refusal with the documented 400", async () => {
+    mockRunSearch.mockRejectedValue(
+      new BadRequestError(
+        'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
+      )
+    );
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'target' }, body: { query: 'refund policy' } });
+    Object.assign(req, { user: { id: 'u1' }, logger });
+    // baseApi is mocked to a bare chain, so hand the rejection to the real errorHandler the way
+    // baseApi's onError does.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the contract router's param type carries prelude-only fields
+    await (handler as any)(req, res).catch((err: unknown) => errorHandler(err, req as never, res as never));
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toMatchObject({ error: expect.stringMatching(/no longer a member/) });
   });
 
   it('rejects an invalid body with a validation error before any lookup', async () => {

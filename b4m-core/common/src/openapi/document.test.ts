@@ -169,6 +169,24 @@ describe('buildOpenApiDocument', () => {
     }
   });
 
+  it('sends a request body in code samples only when the operation declares one', () => {
+    const sessionPath = doc.paths['/api/sessions/{id}'];
+    const sources = (op: typeof completions) =>
+      op['x-codeSamples'].map((s: { source: string }) => s.source) as string[];
+    // DELETE and GET declare no requestBody, so no sample sends Content-Type or a `{}` body.
+    for (const op of [sessionPath.delete, sessionPath.get]) {
+      expect(op.requestBody).toBeUndefined();
+      for (const source of sources(op)) {
+        expect(source).not.toContain('Content-Type');
+        expect(source).not.toContain('B4M_REQUEST_BODY');
+        expect(source).not.toContain('JSON.stringify');
+        expect(source).not.toContain('json=');
+      }
+    }
+    // PUT on the same path declares one, so its samples still carry it.
+    for (const source of sources(sessionPath.put)) expect(source).toContain('knowledgeIds');
+  });
+
   it('sources the code-sample URL from the same env as servers() (B4M_OPENAPI_PROD_URL)', () => {
     const original = process.env.B4M_OPENAPI_PROD_URL;
     process.env.B4M_OPENAPI_PROD_URL = 'https://api.test.example';
@@ -262,6 +280,13 @@ describe('buildOpenApiDocument', () => {
     expect(doc.components.schemas.synthesizeSpeechResponse413.properties.name).toBeUndefined();
   });
 
+  it('documents the oversized-audio 303 as a bodiless redirect with a Location header', () => {
+    const redirect = doc.paths['/api/ai/tts'].post.responses['303'];
+    expect(redirect).toBeDefined();
+    expect(redirect.content).toBeUndefined();
+    expect(redirect.headers.Location).toBeDefined();
+  });
+
   it('publishes the WINDOWED rate-limit header names the middleware actually sets', () => {
     // The unwindowed spelling is what the spec used to publish; nothing sets it,
     // so a client coding against it reads undefined.
@@ -289,6 +314,7 @@ describe('buildOpenApiDocument', () => {
       ['/api/sessions/{id}', 'put'],
       ['/api/v1/me', 'get'],
       ['/api/v1/credits', 'get'],
+      ['/api/v1/models', 'get'],
     ];
     for (const [path, method] of baseApiServed) {
       const headers = doc.paths[path][method].responses['200'].headers;

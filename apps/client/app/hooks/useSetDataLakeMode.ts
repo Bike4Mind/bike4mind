@@ -21,13 +21,22 @@ export default function useSetDataLakeMode() {
   return (next: boolean) => {
     setEnabled(next);
     if (!currentSession) return;
-    setCurrentSession({ ...currentSession, forceKnowledgeRetrieval: next });
+    // ON defaults the caller's library off only when they never chose; OFF writes nothing, so a
+    // later ON finds their choice intact. OFF alone re-admits the library whatever the flag says
+    // (libraryFlagForScope keys on Data Lakes mode).
+    const libraryChoice = next && currentSession.includeLibraryFiles === undefined ? false : undefined;
+    const libraryPatch = libraryChoice === undefined ? {} : { includeLibraryFiles: libraryChoice };
+    setCurrentSession({ ...currentSession, forceKnowledgeRetrieval: next, ...libraryPatch });
     // Send ONLY the flipped field. Echoing the whole cached session would make the server
     // treat a stale knowledgeIds as an authoritative overwrite - re-adding a file another
     // actor removed and fanning it out to projects - which is far outside what a UI toggle
     // promises. The update schema is optional-per-field, so a minimal payload is complete.
     updateSession(
-      { id: currentSession.id, forceKnowledgeRetrieval: next },
+      {
+        id: currentSession.id,
+        forceKnowledgeRetrieval: next,
+        ...(libraryChoice === undefined ? {} : { includeLibraryFilesChoice: libraryChoice }),
+      },
       {
         onError: () => {
           setEnabled(!next);

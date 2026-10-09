@@ -6,15 +6,17 @@
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getImageEdit } from '@server/queueHandlers/imageEdit';
+import { getImageEdit } from '@server/imageGenerations/imageEdit';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { editImageContract } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
+import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 
 const handler = nextRouteForContract(editImageContract).post(async (req, res) => {
   const { callbackUrl, ...body } = req.validated;
+  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
   // Reject a session the caller can't write to before the service appends a quest to it.

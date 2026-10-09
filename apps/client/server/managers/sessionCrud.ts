@@ -2,6 +2,7 @@ import defineAbilitiesFor, { Ability } from '@server/auth/ability';
 import { accessibleBy } from '@casl/mongoose';
 import {
   agentRepository,
+  cacheRepository,
   compareMongoIds,
   favoriteRepository,
   mongoose,
@@ -11,6 +12,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { NotFoundError } from '@server/utils/errors';
+import { getFilesStorage } from '@server/utils/storage';
 import {
   Permission,
   ISessionDocument,
@@ -18,6 +20,7 @@ import {
   ISession,
   ISessionOrigin,
   IUserDocument,
+  resolveAttachScope,
   SessionListFilters,
 } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -68,8 +71,20 @@ export interface GetOrCreateSessionParams {
   ability?: Ability;
   /** Logger instance */
   logger: Logger;
-  /** Fab file IDs if session should be associated with fab files */
+  /** Per-turn files; seeds knowledge on a new session. */
   fabFileIds?: string[];
+  /**
+   * Internal: on an existing session, also persist the new notebook-scope fabFileIds to knowledgeIds
+   * (best-effort, never propagated to projects). Set only by callers that know the ids were newly
+   * attached (Slack uploads); never wire it from a request body - a browser sends its whole
+   * workbench, so a stale tab would re-add a file another tab removed.
+   */
+  persistFabFileIds?: boolean;
+  /**
+   * Agents to attach to a newly created session only; ignored for an existing one. Authorized in
+   * `sessionService.createSession`, which drops ids the caller cannot access.
+   */
+  agentIds?: string[];
   /** Stamped on a newly created session only (see resolveSessionOrigin); ignored for an existing one. */
   origin?: ISessionOrigin;
 }
@@ -108,12 +123,39 @@ export interface GetOrCreateSessionResult {
  * ```
  */
 export async function getOrCreateSession(params: GetOrCreateSessionParams): Promise<GetOrCreateSessionResult> {
-  const { sessionId: reqSessionId, sessionName, projectId, user, ability, logger, fabFileIds, origin } = params;
+  const {
+    sessionId: reqSessionId,
+    sessionName,
+    projectId,
+    user,
+    ability,
+    logger,
+    fabFileIds,
+    persistFabFileIds,
+    agentIds,
+    origin,
+  } = params;
   const userId = user.id;
 
   const asyncPromises: Promise<unknown>[] = [];
   let session: ISessionDocument | null;
   let wasCreated = false;
+
+  const lakeAdapters = {
+    // Imported at CALL time: the resolver's graph reaches the entitlement and Mongoose layers,
+    // and it is only needed when files are actually attached.
+    // Lets the lake-tag derivation see lake-membership files - an ownership/share reader cannot
+    // follow the creator-identity widening an organization lake uses. Request-free variant: this
+    // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
+    resolveLakeAccess: async () =>
+      (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, { logger }),
+    // The attachment door's lake arms, so a supplied lake file passes the access check.
+    resolveAttachmentLakeAccess: async () =>
+      (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
+        user,
+        logger
+      )(),
+  };
 
   if (reqSessionId) {
     // Resolve an existing session through an access-scoped lookup, never a bare findById -
@@ -131,12 +173,59 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           ...accessibleBy(ability, Permission.update).ofType(SessionModel),
         })
       : await sessionRepository.findByIdAndUserId(reqSessionId, userId);
+
+    // Persist the notebook-scope files fabFileIds adds - otherwise a file rides this turn only (later
+    // turns read session.knowledgeIds). Images stay per-turn: a notebook image is re-sent as base64
+    // every turn (see resolveAttachScope). Never propagated to projects: an automatic attach is not
+    // consent to share. Best-effort: this turn still carries every id as a per-turn session file.
+    const known = new Set((session?.knowledgeIds ?? []).map(id => String(id).toLowerCase()));
+    const addedIds = persistFabFileIds
+      ? [...new Set((fabFileIds ?? []).map(id => id.toLowerCase()))].filter(id => !known.has(id))
+      : [];
+    if (session && addedIds.length > 0) {
+      try {
+        const { data, hasMore } = await fabFileRepository.findMetadataByIds(addedIds);
+        if (hasMore)
+          logger.warn('fabFileIds exceed the metadata cap; persisting the first page', { sessionId: session.id });
+        // findMetadataByIds includes soft-deleted rows; those must not come back as knowledge.
+        const notebook = new Set(
+          data
+            .filter(file => !file.deletedAt && resolveAttachScope('auto', file.mimeType) === 'notebook')
+            .map(file => String(file.id))
+        );
+        const notebookIds = addedIds.filter(id => notebook.has(id));
+        if (notebookIds.length > 0) {
+          session = await sessionService.updateSession(
+            user,
+            // Add-only: `known` was read before the metadata lookup, so writing the full list back
+            // would undo a detach the user made in the meantime.
+            { id: session.id, knowledgeIds: notebookIds, knowledgeIdsMode: 'add', propagateToProjects: false },
+            {
+              db: {
+                sessions: sessionRepository,
+                projects: projectRepository,
+                fabFiles: fabFileRepository,
+                caches: cacheRepository,
+              },
+              logger,
+              ...lakeAdapters,
+              storage: getFilesStorage(),
+            }
+          );
+        }
+      } catch (error) {
+        logger.warn('Failed to persist fabFileIds to session knowledge', { sessionId: session.id, error });
+      }
+    }
   } else {
     const createdSession = await sessionService.createSession(
       user,
       {
         name: sessionName ?? 'New Notebook',
+        // Every attached file, images included, on purpose: the user started the notebook with them
+        // (matches createSessionForFile).
         knowledgeIds: fabFileIds ?? [],
+        agentIds: agentIds ?? [],
         projectId,
       },
       {
@@ -146,21 +235,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           fabFiles: fabFileRepository,
           agents: agentRepository,
         },
-        // Imported at CALL time: the resolver's graph reaches the entitlement and Mongoose layers,
-        // and it is only needed when files are actually attached.
-        // Lets the lake-tag derivation see lake-membership files - an ownership/share reader cannot
-        // follow the creator-identity widening an organization lake uses. Request-free variant: this
-        // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
-        resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, {
-            logger,
-          }),
-        // The attachment door's lake arms, so a supplied lake file passes the access check.
-        resolveAttachmentLakeAccess: async () =>
-          (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
-            user,
-            logger
-          )(),
+        ...lakeAdapters,
       },
       { origin }
     );

@@ -1,5 +1,7 @@
-import type { IModelDiscoveryStateRepository, ModelBackend } from '@bike4mind/common';
+import { ModelBackend, bedrockFoundationIdOf } from '@bike4mind/common';
+import type { IModelDiscoveryStateRepository } from '@bike4mind/common';
 import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
+import { isTerminal } from './lifecyclePlan';
 
 export interface AbsencePlan {
   /** Models a successful authoritative source listed this run. */
@@ -13,6 +15,11 @@ export interface AbsencePlan {
    * "everything from that provider vanished".
    */
   frozenBackends: string[];
+  /**
+   * Live Bedrock profile ids whose foundation id a covered listing omitted: neither sighted nor
+   * missed. Deprecated/retired ones are left out.
+   */
+  frozenProfileIds: string[];
 }
 
 export interface AbsenceInput {
@@ -29,10 +36,18 @@ export interface AbsenceInput {
  * one. No catalog lifecycle transition is derived from absence here - graduation
  * to deprecated after K misses spanning 48h is Phase 4, and it reads these
  * counters rather than recomputing them.
+ *
+ * The Bedrock listing (`ListFoundationModels`) is authoritative for foundation
+ * ids only: a region-prefixed inference profile is never in it, so a profile id
+ * is sighted through its foundation id when that was listed, and otherwise left
+ * frozen rather than counted as missed. Absence therefore never retires a profile
+ * id; its sunset must arrive through a typed lifecycle that names the profile id
+ * directly - the seed catalog or an aggregator feed - not this bare-id listing.
  */
 export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceInput): AbsencePlan {
   const sighted: string[] = [];
   const missed: string[] = [];
+  const frozenProfileIds: string[] = [];
   const seenBackends = new Set<string>();
 
   for (const [modelId, resolved] of base) {
@@ -40,6 +55,13 @@ export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceI
     if (backend) seenBackends.add(backend);
     if (sightedModelIds.has(modelId)) {
       sighted.push(modelId);
+      continue;
+    }
+    const foundationId = backend === ModelBackend.Bedrock ? bedrockFoundationIdOf(modelId) : null;
+    if (foundationId !== null) {
+      if (sightedModelIds.has(foundationId)) sighted.push(modelId);
+      // An already-sunset profile id is not a maintenance gap, so it would only bury the real ones.
+      else if (coveredBackends.has(ModelBackend.Bedrock) && !isTerminal(resolved)) frozenProfileIds.push(modelId);
       continue;
     }
     // Absence is only evidence when someone successfully listed that backend.
@@ -53,7 +75,7 @@ export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceI
   }
 
   const frozenBackends = [...seenBackends].filter(backend => !coveredBackends.has(backend)).sort();
-  return { sighted: sighted.sort(), missed: missed.sort(), frozenBackends };
+  return { sighted: sighted.sort(), missed: missed.sort(), frozenBackends, frozenProfileIds: frozenProfileIds.sort() };
 }
 
 export async function applyAbsence(

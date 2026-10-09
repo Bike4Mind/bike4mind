@@ -15,7 +15,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { isOperationalBillingEnabled } from './isOperationalBillingEnabled';
-import { buildEarlyStopStamp } from '../llm/earlyStopStamp';
+import { usageEventStatusForFinish } from '../llm/earlyStopStamp';
 
 /** The non-chat AI spend this helper records: operational-model calls and query embeddings. */
 export type OperationalUsageFeature = Extract<UsageEventFeature, 'operations' | 'embedding'>;
@@ -167,8 +167,8 @@ export async function recordOperationalUsage(
     settledBasis: 'local',
     costUsd: params.costUsd,
     creditsCharged,
-    // Same refund key the chat/CLI completion paths record: see buildEarlyStopStamp.
-    status: buildEarlyStopStamp(params.finishReason)?.usageEventStatus ?? 'ok',
+    // Same refund key the chat/CLI completion paths record: see usageEventStatusForFinish.
+    status: usageEventStatusForFinish(params.finishReason),
     latencyMs: params.latencyMs,
     // Same origin as this call's ledger write above (params.source ?? 'system').
     source: params.source ?? 'system',

@@ -50,3 +50,23 @@ export function deriveTagPrefixFromLakeName(name: string): string {
   if (!stem) return '';
   return `${stem}:`;
 }
+
+/** How many `-N` candidates previewDataLakeTagPrefix tries before giving up (attempt 0 is the base). */
+export const MAX_TAG_PREFIX_SUFFIX_ATTEMPTS = 50;
+
+/**
+ * `acme:` -> `acme-1:`, `docs:legal:` -> `docs:legal-1:`, cut so the result still fits
+ * MAX_TAG_PREFIX_LENGTH. Attempt 0 is the base. Numbering mirrors the slug's `-N` (createDataLake's
+ * withDisambiguatingSuffix), so a recreated lake reads `acme-1` / `acme-1:`. Shared by
+ * previewDataLakeTagPrefix, the create_data_lake tool's retry and the wizard store's re-derive.
+ */
+export function withTagPrefixSuffix(basePrefix: string, attempt: number): string {
+  if (attempt === 0) return basePrefix;
+  const suffix = `-${attempt}`;
+  // Room comes from `suffix.length`, not a literal: attempts 10+ carry a longer suffix.
+  const stem = basePrefix
+    .slice(0, -1)
+    .slice(0, MAX_TAG_PREFIX_LENGTH - 1 - suffix.length)
+    .replace(/-+$/, '');
+  return `${stem}${suffix}:`;
+}

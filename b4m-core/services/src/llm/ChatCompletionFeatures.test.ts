@@ -7,19 +7,26 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
+  mergeLakeFirstListing,
+  resetForcedRetrievalFloorWarnings,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
+import { sessionExcludesLibrary } from './tools/base/resolveSessionLakeAccess';
+import type { ToolContext } from './tools/base/types';
+import type { ResolvedLakeAccessSet } from '../dataLakeService/narrowLakeAccessToSession';
 import {
   UNLIMITED_HISTORY_COUNT,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_SETTING_KEYS,
   LAKE_RECALL_K_DEFAULT,
+  libraryFlagForScope,
   SettingScopeLevel,
+  settingsMap,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
-import type { CitableSource, ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
+import type { CitableSource, ISessionDocument, IChatHistoryItemDocument, SettingKey } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 // Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
@@ -78,6 +85,12 @@ const makeArgs = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+// getSettingsByNames caches process-wide, and so does the over-floor warn-once set; each test's
+// fixture must not see the last one's rows or warnings.
+beforeEach(() => {
+  invalidateSettingsCache();
+  resetForcedRetrievalFloorWarnings();
+});
 describe('ContextSummarizationFeature', () => {
   let contextSummarizeSession: ReturnType<typeof vi.fn>;
   let feature: ContextSummarizationFeature;
@@ -471,6 +484,7 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
           getSettingsValue: vi.fn((setting: string) =>
             Promise.resolve(setting === 'forcedRetrievalCharBudget' ? overrides.charBudget : undefined)
           ),
+          findAll: vi.fn().mockResolvedValue([]),
         },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
@@ -1004,6 +1018,11 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
           getSettingsValue: vi.fn(async (name: string) =>
             opts.settings && name in opts.settings ? opts.settings[name] : opts.defaultEmbeddingModel
           ),
+          // The absolute floor's plain-path read (getSettingsByNames' cached path): a row exists only
+          // for a key the fixture sets.
+          findAll: vi.fn(async () =>
+            Object.entries(opts.settings ?? {}).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+          ),
         },
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
@@ -1473,6 +1492,37 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     // An explicit value is not an unresolved one - nothing here warrants the loud error the
     // unmeasured-space case above logs.
     expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
+  });
+
+  it('an explicit 75 is honored in a measured space, not read as "unset"', async () => {
+    // 75 is also the setting's declared default, which used to double as the "nobody chose this"
+    // signal. A stored row is a choice: the 0.707 chunk clears 3-small's 58% but not the typed 75%.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'borderline relevant content', vector: [1, 1] }],
+      settings: { forcedRetrievalMinSimilarityPct: 75 },
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('does not cover this');
+    const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
+    expect(logs).not.toContain('resolved for embedding space');
+  });
+
+  it('an explicit 75 is honored in an unmeasured space instead of dropping to relative-only', async () => {
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-large', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'weakly related content', vector: [1, 4] }],
+      settings: { forcedRetrievalMinSimilarityPct: 75 },
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('does not cover this');
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('no measured absolute floor')
+    );
   });
 
   it('a no-match over a PARTIALLY scanned library must not harden into "no coverage"', async () => {
@@ -3292,18 +3342,169 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     //
     // withScopedOverlay: false to reach the direct getSettingsValue read, whose mock here returns
     // the stored string unparsed. The scoped resolver would apply the schema and hand back the
-    // default, so the guard would never be exercised.
+    // default, so the guard would never be exercised. Pinned on the relative floor: the absolute
+    // one's plain-path read now schema-parses too (see the next test).
     const ctx = makeCtx({
       scores: [1.0, 0.9, 0.8, 0.76],
-      platform: { forcedRetrievalMinSimilarityPct: '2000' },
+      platform: { forcedRetrievalRelativeFloorPct: '2000' },
       withScopedOverlay: false,
     });
     const { injected } = await run(ctx);
-    // Absolute floor back at its 75 default, so the relative floor still does the ranking.
+    // Relative floor back at its 85 default.
     expect(injected).toEqual([0, 1]);
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
-      expect.stringContaining('forcedRetrievalMinSimilarityPct')
+      expect.stringContaining('forcedRetrievalRelativeFloorPct')
     );
+  });
+
+  // 3-small's measured floor is 58%, so 0.7 and 0.6 survive it but not an explicit 75. The
+  // relative floor is off so only the absolute floor decides.
+  const smallSpace = { defaultEmbeddingModel: 'text-embedding-3-small', forcedRetrievalRelativeFloorPct: '0' };
+
+  // A blank row would otherwise preprocess into the schema's prefaulted 75 and read as explicit.
+  for (const withScopedOverlay of [true, false]) {
+    it.each(['2000', '', '  '])(
+      `an unparseable or blank stored absolute floor (%j) resolves as unset, per embedding space (overlay: ${withScopedOverlay})`,
+      async stored => {
+        const { injected } = await run(
+          makeCtx({
+            scores: [0.9, 0.7, 0.6],
+            platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: stored },
+            withScopedOverlay,
+          })
+        );
+        expect(injected).toEqual([0, 1, 2]);
+      }
+    );
+  }
+
+  it('an unset absolute floor resolves per embedding space and logs which', async () => {
+    const ctx = makeCtx({ scores: [0.9, 0.7, 0.6], platform: smallSpace });
+    const { injected } = await run(ctx);
+    expect(injected).toEqual([0, 1, 2]);
+    expect((ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+      expect.stringContaining('absolute floor 58% resolved for embedding space "text-embedding-3-small"')
+    );
+  });
+
+  it('a missing platform row on the plain read path is unset, not the declared 75', async () => {
+    const ctx = makeCtx({ scores: [0.9, 0.7, 0.6], platform: smallSpace, withScopedOverlay: false });
+    ctx.db.adminSettings.getSettingsValue = vi.fn(async (key: string) =>
+      key in smallSpace ? smallSpace[key as keyof typeof smallSpace] : settingsMap[key as SettingKey]?.defaultValue
+    );
+    const { injected } = await run(ctx);
+    expect(injected).toEqual([0, 1, 2]);
+  });
+
+  // Inject the RAW absolute value past the schema both read paths run (1..100), which is the only
+  // way to reach the backstop's own contract. `relative: 0` so only the absolute floor decides.
+  const stubForcedRetrievalRead = (absolute: unknown) =>
+    vi
+      .spyOn(
+        KnowledgeRetrievalFeature.prototype as unknown as { readForcedRetrievalSettings: () => Promise<unknown> },
+        'readForcedRetrievalSettings'
+      )
+      .mockResolvedValue({ charBudget: undefined, relative: 0, absolute, spread: undefined });
+
+  it('rejects an out-of-range configured absolute floor as unusable and resolves per space', async () => {
+    // Defense-in-depth, not production-reachable: a stored 2000 is sanitized upstream. Without the
+    // guard it becomes a floor of 20.0 that no similarity clears, starving every Data-Lake turn.
+    const spy = stubForcedRetrievalRead(2000);
+    try {
+      const ctx = makeCtx({ scores: [0.9, 0.7, 0.6], platform: smallSpace });
+      const { injected } = await run(ctx);
+      expect(injected).toEqual([0, 1, 2]);
+      expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+        expect.stringContaining('is unusable')
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reads a null configured absolute floor as unset, not as a floor of 0', async () => {
+    // `Number(null)` is 0, which a lower bound of 0 accepted and then DISABLED the absolute floor -
+    // the opposite of "unset, resolve per space". The blank check must precede the numeric range.
+    // 0.5 and 0.3 sit below 3-small's measured 58% but clear a floor of 0, so this kills that mutant.
+    const spy = stubForcedRetrievalRead(null);
+    try {
+      const ctx = makeCtx({ scores: [0.9, 0.5, 0.3], platform: smallSpace });
+      const { injected } = await run(ctx);
+      expect(injected).toEqual([0]);
+      expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('is unusable')
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  for (const absolute of [0, '0']) {
+    it(`rejects a configured absolute floor of ${JSON.stringify(absolute)} as unusable and resolves per space`, async () => {
+      // The setting's min is 1: a 0 is a cleared field, not "no absolute floor".
+      const spy = stubForcedRetrievalRead(absolute);
+      try {
+        const ctx = makeCtx({ scores: [0.9, 0.5, 0.3], platform: smallSpace });
+        const { injected } = await run(ctx);
+        expect(injected).toEqual([0]);
+        expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+          expect.stringContaining('is unusable')
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }
+
+  for (const [absolute, expected] of [
+    [1, [0, 1, 2]],
+    [100, []],
+  ] as const) {
+    it(`honors the inclusive limit ${absolute} as a configured absolute floor`, async () => {
+      const spy = stubForcedRetrievalRead(absolute);
+      try {
+        const ctx = makeCtx({ scores: [0.9, 0.5, 0.3], platform: smallSpace });
+        const { injected } = await run(ctx);
+        expect(injected).toEqual(expected);
+        expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
+          expect.stringContaining('is unusable')
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }
+
+  for (const withScopedOverlay of [true, false]) {
+    it(`a platform value of 75 is an explicit floor in every space (overlay: ${withScopedOverlay})`, async () => {
+      const { injected } = await run(
+        makeCtx({
+          scores: [0.9, 0.7, 0.6],
+          platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+          withScopedOverlay,
+        })
+      );
+      expect(injected).toEqual([0]);
+    });
+  }
+
+  it('an organization override of 75 wins over a different platform value', async () => {
+    const ctx = makeCtx({
+      scores: [0.9, 0.7, 0.6],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '20' },
+    });
+    (ctx.db as { scopedSettings: { findOverrides: ReturnType<typeof vi.fn> } }).scopedSettings.findOverrides = vi.fn(
+      async () => [
+        {
+          scopeLevel: SettingScopeLevel.Organization,
+          scopeId: 'org1',
+          settingName: 'forcedRetrievalMinSimilarityPct',
+          settingValue: '75',
+        },
+      ]
+    );
+    const { injected } = await run(ctx);
+    expect(injected).toEqual([0]);
   });
 
   it('applies platform values on a host with no scoped overlay wired', async () => {
@@ -3338,6 +3539,47 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     // Degrades to FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT rather than to "no floor" or a throw.
     expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
     expect(injected).toEqual([0, 1]);
+  });
+
+  it('a settings outage resolves the absolute floor per embedding space, not the ada-002 75', async () => {
+    // Overlay off so the read itself throws into the outer catch (the scoped resolver never throws).
+    // All three clear the 85% relative cutoff (0.595) and 3-small's 58%; a fallback to 75 keeps none.
+    const ctx = makeCtx({ scores: [0.7, 0.66, 0.62], withScopedOverlay: false });
+    ctx.db.adminSettings.getSettingsValue = vi.fn(async (key: string) => {
+      if (key === 'defaultEmbeddingModel') return 'text-embedding-3-small';
+      throw new Error('settings store unavailable');
+    });
+    ctx.db.adminSettings.findAll = vi.fn(async () => {
+      throw new Error('settings store unavailable');
+    });
+    const { injected } = await run(ctx);
+    expect(injected).toEqual([0, 1, 2]);
+  });
+
+  it("warns once per process when a configured absolute floor sits above the space's measured floor", async () => {
+    const turn = async () => {
+      const ctx = makeCtx({
+        scores: [0.9, 0.7, 0.6],
+        platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+      });
+      await run(ctx);
+      return (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn.mock.calls.filter(c =>
+        String(c[0]).includes('configured absolute floor 75% is above the 58% measured for embedding space')
+      ).length;
+    };
+    expect(await turn()).toBe(1);
+    expect(await turn()).toBe(0);
+  });
+
+  it('does not warn when a configured absolute floor is at or below the measured floor', async () => {
+    const ctx = makeCtx({
+      scores: [0.9, 0.7, 0.6],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '58' },
+    });
+    await run(ctx);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('configured absolute floor')
+    );
   });
 
   it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {
@@ -4031,6 +4273,161 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
       expect.anything(),
       expect.objectContaining({ restrictToDataLake: false })
     );
+  });
+
+  describe('includeLibraryFiles', () => {
+    const build = (ctx: ReturnType<typeof makeCtx>, tags: string[], flag: boolean | undefined) =>
+      new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        tags,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        flag
+      );
+
+    // Unset keeps the pre-flag rule (only a named lake excludes the library); a set flag wins.
+    it.each([
+      ['a named lake', ['datalake:acme'], undefined, true],
+      ['a named lake', ['datalake:acme'], false, true],
+      ['a named lake', ['datalake:acme'], true, false],
+      ['all lakes', [], undefined, false],
+      ['all lakes', [], false, true],
+      ['all lakes', [], true, false],
+      ['a content tag', ['legal:review'], undefined, false],
+      ['a content tag', ['legal:review'], false, true],
+      ['a content tag', ['legal:review'], true, false],
+    ])('scopes %s with flag %s to restrictToDataLake: %s', async (_, tags, flag, restrict) => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      await build(ctx, tags as string[], flag as boolean | undefined).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+        'viewer-1',
+        '',
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ restrictToDataLake: restrict })
+      );
+    });
+
+    // Forced retrieval and the knowledge tools must answer "is the library excluded?" identically,
+    // or a turn grounds lake-only while the tool the model calls re-admits the library.
+    // Tags derived from attaching a lake file carry no pick marker, so they never exclude.
+    const picked = { forceKnowledgeRetrieval: true };
+    it.each<[string, string[], Parameters<typeof libraryFlagForScope>[0], boolean]>([
+      ['a legacy lake chat (named lake, Data Lakes mode on)', ['datalake:acme'], picked, true],
+      ['a lake picked in the picker', ['datalake:acme'], { lakeScopeExplicit: true }, true],
+      ['a lake named by its file-tag prefix', ['acme:'], picked, true],
+      ['a plain chat with an attached lake file (derived tags)', ['datalake:acme'], {}, false],
+      ['a plain chat', [], picked, false],
+      ['a content-tag session', ['legal:review'], picked, false],
+    ])(
+      'forced retrieval and the knowledge tools agree for %s with the flag unset',
+      async (_, tags, session, excluded) => {
+        const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+        const flag = libraryFlagForScope(session);
+        await build(ctx, tags, flag).getContextMessages(
+          makeQuest(),
+          embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+          'anything'
+        );
+        const ownerAccess = {
+          dataLakeTags: [LAKE_DOC.datalakeTag],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [LAKE_DOC.fileTagPrefix],
+          lakes: [{ ...LAKE_DOC, membership: { kind: 'owned' }, source: 'dynamic' }],
+        } as unknown as ResolvedLakeAccessSet;
+        const toolExcludes = await sessionExcludesLibrary(
+          { sessionRetrievalTags: tags, sessionIncludeLibraryFiles: flag } as ToolContext,
+          () => Promise.resolve(ownerAccess)
+        );
+
+        expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+          'viewer-1',
+          '',
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ restrictToDataLake: excluded })
+        );
+        expect(toolExcludes).toBe(excluded);
+      }
+    );
+
+    it('abstains as no_lakes for an all-lakes session excluding the library with no lake to reach', async () => {
+      const ctx = makeCtx({ dataLakes: [] });
+      const quest = makeQuest();
+      await build(ctx, [], false).getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('no_lakes');
+      expect(ctx.logger.error).not.toHaveBeenCalled();
+      expect(ctx.db.fabfiles.search).not.toHaveBeenCalled();
+    });
+
+    it('keeps lake files ahead of a personal library large enough to fill the listing when the flag is on', async () => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      const lakeFile = { id: 'lake-1', fileName: 'zz-lake.pdf', tags: [{ name: 'datalake:acme' }] };
+      const library = Array.from({ length: 100 }, (_, i) => ({
+        id: `lib-${i}`,
+        fileName: `a-${String(i).padStart(3, '0')}.pdf`,
+        tags: [],
+      }));
+      // Emulates the DB: the union sorts by name and stops at the page size, so the lake file is cut.
+      ctx.db.fabfiles.search = vi.fn((...args: unknown[]) => {
+        const restrict = (args[5] as { restrictToDataLake: boolean }).restrictToDataLake;
+        return Promise.resolve(restrict ? { data: [lakeFile], hasMore: false } : { data: library, hasMore: true });
+      });
+      await build(ctx, ['datalake:acme'], true).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      const scanned = ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]);
+      expect(scanned[0]).toBe('lake-1');
+      expect(scanned).toHaveLength(100);
+      expect(scanned).not.toContain('lib-99');
+    });
+
+    it('lists only once, without the lake-first pass, when the flag is unset', async () => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      await build(ctx, ['datalake:acme'], undefined).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-admits the library for a named lake this caller can no longer reach when the flag is on', async () => {
+      const ctx = makeCtx({ dataLakes: [] });
+      await build(ctx, ['datalake:unreachable'], true).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+        'viewer-1',
+        '',
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ restrictToDataLake: false })
+      );
+    });
   });
 
   it('degrades to the abstention block instead of throwing when the underlying search fails', async () => {
@@ -4859,5 +5256,38 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     expect(content).not.toContain('Uptime is 95%.');
     expect(content).toContain('Uptime is 99.9%.');
     expect(content).not.toContain(CONFLICT_NOTE);
+  });
+});
+
+describe('mergeLakeFirstListing', () => {
+  const row = (id: string) => ({ id });
+
+  it('keeps a lake file that the union also returned exactly once, in its lake slot', () => {
+    const merged = mergeLakeFirstListing(
+      { data: [row('lake-1')], hasMore: false },
+      { data: [row('a'), row('lake-1'), row('b')], hasMore: false },
+      10
+    );
+    expect(merged.data.map(r => r.id)).toEqual(['lake-1', 'a', 'b']);
+    expect(merged.hasMore).toBe(false);
+  });
+
+  it('reports hasMore when the merged rows overflow the cap though neither listing did', () => {
+    const merged = mergeLakeFirstListing(
+      { data: [row('l1'), row('l2')], hasMore: false },
+      { data: [row('a'), row('b')], hasMore: false },
+      3
+    );
+    expect(merged.data.map(r => r.id)).toEqual(['l1', 'l2', 'a']);
+    expect(merged.hasMore).toBe(true);
+  });
+
+  it('reports no more when the merged rows exactly fill the cap', () => {
+    const merged = mergeLakeFirstListing(
+      { data: [row('l1')], hasMore: false },
+      { data: [row('a')], hasMore: false },
+      2
+    );
+    expect(merged.hasMore).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
+import { checkRateLimit } from '@server/cli/auth';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.
@@ -70,6 +71,9 @@ vi.mock('@server/utils/logCompletionAnalytics', () => ({
 
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
+const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
+
 import { registerExternalRoutes } from './sseRoute';
 import { CompletionStreamEventSchema, spendCapExceededError } from '@bike4mind/common';
 
@@ -112,6 +116,41 @@ function post(body: unknown = COMPLETION) {
   });
 }
 
+/** Same POST, but with the caller's headers under test instead of the api-key default. */
+function postAs(headers: Record<string, string>, body: unknown = COMPLETION) {
+  return fetch(`${baseUrl}/api/ai/v1/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * The JWT branch, which is what carries a client's own rate-limit tier. The suite's default auth
+ * is an api key, so without this stub the branch never runs and the wiring below is unasserted.
+ */
+describe('JWT rate limiting', () => {
+  beforeEach(() => mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' }));
+
+  it('hands the calling client to the rate limiter, so its own cap applies', async () => {
+    expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
+    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'api', { client: 'b4m-desktop/0.1.0' });
+  });
+
+  /**
+   * User-Agent wins, and x-b4m-client is only consulted when there is none - the same precedence
+   * `resolveApiCompletionSource` uses, so the tier and the source attribution cannot disagree.
+   *
+   * Worth knowing: the fallback is nullish, so a transport that sets a User-Agent of its own
+   * reaches the limiter under that name and never consults x-b4m-client. Node's fetch sends
+   * `node`, which is what this asserts. A client wanting its own tier must set the User-Agent.
+   */
+  it('prefers the User-Agent over x-b4m-client, which the transport can therefore mask', async () => {
+    expect((await postAs({ 'x-b4m-client': 'b4m-desktop/0.1.0' })).status).toBe(200);
+    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'api', { client: 'node' });
+  });
+});
+
 /** Every JSON `data:` frame in an SSE body, `[DONE]` excluded. */
 function frames(body: string): Record<string, unknown>[] {
   return body
@@ -133,6 +172,26 @@ function errorFrame(body: string) {
 }
 
 describe('POST /api/ai/v1/completions', () => {
+  it('never streams reasoning text to the caller', async () => {
+    mockExecuteCompletion.mockImplementationOnce(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['<think>'], { channel: 'reasoning' });
+        await params.onChunk(['private reasoning'], {
+          channel: 'reasoning',
+          toolsUsed: [{ name: 'search', arguments: '{}' }],
+        });
+        await params.onChunk(['</think>'], { channel: 'reasoning' });
+        await params.onChunk(['', 'hello'], { outputTokens: 5 });
+      }
+    );
+    const body = await (await post()).text();
+    // Join every frame, not just content: a reasoning frame in a tool loop goes out as tool_use.
+    const text = frames(body)
+      .map(f => f.text)
+      .join('');
+    expect(text).toBe('hello');
+  });
+
   it('streams content and terminates with [DONE]', async () => {
     const res = await post();
     expect(res.status).toBe(200);
@@ -192,6 +251,10 @@ describe('POST /api/ai/v1/completions', () => {
     const text = await res.text();
     expect(errorFrame(text).code).toBeUndefined();
     expect(text).not.toContain('"code"');
+    expect(mockEmitProcessingFailed).toHaveBeenCalledWith(
+      'cli-sse',
+      expect.objectContaining({ message: 'model backend blew up' })
+    );
   });
 
   it('reports an unclassified auth failure in-band with no classifier', async () => {
@@ -200,5 +263,7 @@ describe('POST /api/ai/v1/completions', () => {
     expect(res.status).toBe(200);
     expect(errorFrame(await res.text()).code).toBeUndefined();
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    // A caller's auth failure is handled in-band before the catch; it is not a processing failure.
+    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
   });
 });

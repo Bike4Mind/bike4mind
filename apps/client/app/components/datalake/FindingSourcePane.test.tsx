@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { LakeFindingSource } from '@bike4mind/common';
@@ -38,10 +38,13 @@ const source: LakeFindingSource = {
   excerpt: 'ARR reached $4.2M in Q1.',
 };
 
-const renderPane = (over: Partial<LakeFindingSource> = {}) =>
+const renderPane = (
+  over: Partial<LakeFindingSource> = {},
+  props: Partial<React.ComponentProps<typeof FindingSourcePane>> = {}
+) =>
   render(
     <TestWrapper>
-      <FindingSourcePane source={{ ...source, ...over }} />
+      <FindingSourcePane source={{ ...source, ...over }} {...props} />
     </TestWrapper>
   );
 
@@ -117,5 +120,38 @@ describe('FindingSourcePane', () => {
 
     expect(screen.queryByTestId('markdown-viewer')).not.toBeInTheDocument();
     expect(screen.queryByTestId('finding-source-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('offers no retired marker or restore action for a document still in ranking', () => {
+    renderPane({}, { onReturnToRanking: vi.fn() });
+
+    expect(screen.queryByTestId('finding-source-superseded-chip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('finding-source-return-to-ranking-btn')).not.toBeInTheDocument();
+  });
+
+  it('marks a superseded document and returns it to ranking on click', () => {
+    const onReturnToRanking = vi.fn();
+    renderPane({}, { superseded: true, onReturnToRanking });
+
+    expect(screen.getByTestId('finding-source-superseded-chip')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('finding-source-return-to-ranking-btn'));
+    expect(onReturnToRanking).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the restore button while the unsupersede is in flight', () => {
+    const onReturnToRanking = vi.fn();
+    renderPane({}, { superseded: true, onReturnToRanking, returning: true });
+
+    const button = screen.getByTestId('finding-source-return-to-ranking-btn');
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onReturnToRanking).not.toHaveBeenCalled();
+  });
+
+  it('shows the retired marker but no restore button when the caller cannot undo the ruling', () => {
+    renderPane({}, { superseded: true });
+
+    expect(screen.getByTestId('finding-source-superseded-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('finding-source-return-to-ranking-btn')).not.toBeInTheDocument();
   });
 });

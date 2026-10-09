@@ -8,6 +8,7 @@ import type {
 import { DECIDABLE_GROUP_MEMBERS, buildDuplicateGroups, membersRemovedByDecision } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { lakeMembershipScope } from './lakeMembershipScope';
+import { recomputeLakeStats } from './recomputeLakeStats';
 import { recordMembershipDecision } from './recordMembershipDecision';
 import { removeFileFromDataLake } from './removeFileFromDataLake';
 import type { MembershipActor } from './lakeMembership';
@@ -73,7 +74,7 @@ export interface ApplyAdmissionDecisionResult {
 
 export async function applyAdmissionDecision(
   actor: MembershipActor,
-  lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
+  lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId'>,
   input: ApplyAdmissionDecisionInput,
   adapters: ApplyAdmissionDecisionAdapters
 ): Promise<ApplyAdmissionDecisionResult> {
@@ -111,12 +112,15 @@ export async function applyAdmissionDecision(
 
   const removeFabFileIds = membersRemovedByDecision(group, input.decision, input.keptFabFileId);
   const removedFabFileIds: string[] = [];
-  // Sequential, not concurrent: each removal recomputes the lake's stats, and two of those racing
-  // would have one overwrite the other's count. Slow only in the number of copies of ONE name.
+  // Sequential, not concurrent: the route runs this inside `withTransaction`, whose ambient session
+  // rejects concurrent operations. Stats are recomputed ONCE after the loop rather than per removal:
+  // a group can hold up to DECIDABLE_GROUP_MEMBERS copies, and a lake-wide aggregate per copy inside
+  // one transaction can outrun the transaction's lifetime.
   for (const fabFileId of removeFabFileIds) {
-    await removeFileFromDataLake(actor, lake.id, fabFileId, adapters);
+    await removeFileFromDataLake(actor, lake.id, fabFileId, adapters, { deferStatsRecompute: true });
     removedFabFileIds.push(fabFileId);
   }
+  if (removedFabFileIds.length > 0) await recomputeLakeStats(lake, adapters);
 
   return { group, removedFabFileIds };
 }

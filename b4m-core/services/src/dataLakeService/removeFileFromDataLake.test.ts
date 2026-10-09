@@ -143,4 +143,14 @@ describe('removeFileFromDataLake', () => {
       statsUpdated: false,
     });
   });
+
+  it('a deferred recompute skips the aggregate but still mints the restore record', async () => {
+    const { db, logger, order } = makeAdapters();
+
+    const result = await removeFileFromDataLake(actor, 'lake1', 'f1', { db, logger }, { deferStatsRecompute: true });
+
+    expect(order).toEqual(['pullTagsByFabFileId', 'upsertRemoval']);
+    expect(db.fabFiles.computeDataLakeStats).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ restoreTokenMinted: true, statsUpdated: false });
+  });
 });

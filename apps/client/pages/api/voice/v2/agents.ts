@@ -1,8 +1,9 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { adminSettingsRepository, agentRepository } from '@bike4mind/database';
 import { ForbiddenError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 
-const handler = baseApi().get(async (_req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).get(async (_req, res) => {
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['voiceV2Enabled'] });
 
   if (!getSettingsValue('voiceV2Enabled', settings)) {

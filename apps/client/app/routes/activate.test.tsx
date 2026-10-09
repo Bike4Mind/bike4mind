@@ -27,12 +27,14 @@ const verifyState: {
   isSuccess: boolean;
   isPending: boolean;
   error: unknown;
+  data: { device_info: { client_name: string } } | undefined;
   mutateImpl: (vars: unknown, opts: { onSuccess?: (d: unknown) => void; onError?: (e: unknown) => void }) => void;
 } = {
   isError: false,
   isSuccess: false,
   isPending: false,
   error: null,
+  data: undefined,
   mutateImpl: () => {},
 };
 const mockMutate = vi.fn((vars, opts) => verifyState.mutateImpl(vars, opts));
@@ -43,6 +45,7 @@ vi.mock('../hooks/data/device-auth', () => ({
     isSuccess: verifyState.isSuccess,
     isPending: verifyState.isPending,
     error: verifyState.error,
+    data: verifyState.data,
   }),
 }));
 
@@ -66,6 +69,7 @@ describe('ActivatePage', () => {
     verifyState.isSuccess = false;
     verifyState.isPending = false;
     verifyState.error = null;
+    verifyState.data = undefined;
     verifyState.mutateImpl = () => {};
   });
 
@@ -95,6 +99,28 @@ describe('ActivatePage', () => {
 
     expect(screen.getByText('Code not found or expired')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /review and accept policies/i })).not.toBeInTheDocument();
+  });
+
+  // The success copy names the client the server reported, so a user who started the flow from
+  // one app is not told to return to another. The name comes from the server's display map, not
+  // from a slug the page formats itself.
+  it.each([['B4M CLI'], ['B4M Desktop']])('names %s on the success screen', clientName => {
+    verifyState.isSuccess = true;
+    verifyState.data = { device_info: { client_name: clientName } };
+    renderPage();
+
+    expect(screen.getByTestId('activate-success-return-text')).toHaveTextContent(
+      `You can close this window and return to ${clientName}.`
+    );
+  });
+
+  it('falls back to whatever the server called the client', () => {
+    verifyState.isSuccess = true;
+    verifyState.data = { device_info: { client_name: 'b4m-unknown' } };
+    renderPage();
+
+    expect(screen.getByTestId('activate-success-return-text')).toHaveTextContent('return to b4m-unknown.');
+    expect(screen.queryByRole('button', { name: /approve device/i })).not.toBeInTheDocument();
   });
 
   it('routes to /accept-policies when Approve Device hits the consent gate', () => {

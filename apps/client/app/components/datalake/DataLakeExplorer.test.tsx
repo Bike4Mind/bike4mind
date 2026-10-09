@@ -11,6 +11,12 @@ import useSessionLayoutStore from '@client/app/hooks/useSessionLayout';
 // the deferred-creation seam (useCreateDataLakeSession) reads it back.
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
 import DataLakeExplorer, { buildLakePrefixLookup } from './DataLakeExplorer';
+import type { DataLakeUncategorized } from './DataLakeTreeView';
+
+const U = '__uncategorized__';
+const NAV_PATHS = [[U], ['lakea'], ['lakea', U], ['acme', 'legal'], ['docs', 'alpha']];
+const nav = (path: string[]) => fireEvent.click(screen.getByTestId(`mock-nav-${path.join('/')}`));
+const tree = () => screen.getByTestId('mock-tree');
 
 // Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
 // and an external-chat host must never have its `layout` touched. setSessionLayout is spied to
@@ -54,6 +60,8 @@ const {
   removeFileLakeIds: [] as Array<string | null>,
   // Mutable so delete-gating tests can vary the accessible-lake list per-test.
   lakesState: {
+    isLoading: false,
+    isError: false,
     value: [
       { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
     ] as unknown[],
@@ -107,23 +115,30 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
 
 // Mutable so a test can supply a real tag tree to navigate into; empty by default, which is
 // what every other test here expects.
-const { tagCountsState, uncategorizedState } = vi.hoisted(() => ({
+const { tagCountsState, uncategorizedState, articleParams } = vi.hoisted(() => ({
   tagCountsState: {
     tagCounts: [] as { tag: string; count: number }[],
+    // The membership-scoped tree for a lake selection. null stands in for a server that agrees
+    // with the unscoped payload (the explorer's prefix belt still narrows it).
+    scoped: null as { tag: string; count: number }[] | null,
+    scopedLoading: false,
+    scopedError: false,
+    scopedLakeIds: [] as string[][],
     total: 0,
     lakeFileCounts: {} as Record<string, number>,
     uncategorizedFileCounts: {} as Record<string, number>,
-    totalUncategorized: 0,
   },
   // The bucket's file list, fetched lazily by the explorer once the bucket is opened. `enabled`
   // records what the hook was called with, so a test can assert the fetch stays off until then.
   uncategorizedState: {
     files: [] as { id: string; fileName: string }[],
     enabled: [] as boolean[],
-    mergedFiles: [] as { id: string; fileName: string }[],
-    mergedEnabled: [] as boolean[],
+    lakeIds: [] as Array<string | null>,
+    total: undefined as number | undefined,
     isError: false,
+    isLoading: undefined as boolean | undefined,
   },
+  articleParams: [] as Array<{ tags?: string[]; lakeId?: string[] } | null | undefined>,
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -135,25 +150,37 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
       totalLakeFileCount: tagCountsState.total,
       lakeFileCounts: tagCountsState.lakeFileCounts,
       uncategorizedFileCounts: tagCountsState.uncategorizedFileCounts,
-      totalUncategorizedFileCount: tagCountsState.totalUncategorized,
     },
     isLoading: false,
     isError: false,
   }),
+  // Mirrors the real hook's `enabled: lakeIds.length > 0`: a disabled query is never loading.
+  useGetScopedDataLakeTagCounts: (_source: string, lakeIds: string[]) => {
+    if (lakeIds.length > 0) tagCountsState.scopedLakeIds.push([...lakeIds]);
+    return {
+      data:
+        lakeIds.length > 0 && !tagCountsState.scopedLoading
+          ? { tagCounts: tagCountsState.scoped ?? tagCountsState.tagCounts }
+          : undefined,
+      isLoading: lakeIds.length > 0 && tagCountsState.scopedLoading,
+      isError: lakeIds.length > 0 && tagCountsState.scopedError,
+    };
+  },
   // Records whether the query would actually RUN, mirroring the hook's own `enabled && !!lakeId`
-  // gate: in the all-lakes scope the explorer still calls this (hooks are unconditional) with a
-  // null lake, and counting that as a fetch would misread a disabled query as a live one.
+  // gate: the explorer calls this unconditionally, with a null id whenever there is no bucket lake
+  // (merged root, multi-lake scope), and counting that as a fetch would misread a disabled query.
   useGetDataLakeUncategorizedFiles: (lakeId: string | null, enabled: boolean) => {
     uncategorizedState.enabled.push(enabled && !!lakeId);
-    return { data: { data: uncategorizedState.files }, isLoading: false, isError: uncategorizedState.isError };
+    if (enabled && lakeId) uncategorizedState.lakeIds.push(lakeId);
+    return {
+      data: { data: uncategorizedState.files, total: uncategorizedState.total },
+      isLoading: uncategorizedState.isLoading ?? false,
+      isError: uncategorizedState.isError,
+    };
   },
-  // id query (deep-link) resolves to a file; the merged Uncategorized bucket resolves to its own
-  // fixture (and records that it was enabled); tag query resolves empty.
-  useGetDataLakeArticles: (params?: { id?: string; uncategorized?: boolean } | null) => {
-    if (params?.uncategorized) {
-      uncategorizedState.mergedEnabled.push(true);
-      return { data: { data: uncategorizedState.mergedFiles }, isLoading: false };
-    }
+  // id query (deep-link) resolves to a file; tag query resolves empty.
+  useGetDataLakeArticles: (params?: { id?: string; tags?: string[]; lakeId?: string[] } | null) => {
+    articleParams.push(params);
     return {
       data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
       isLoading: false,
@@ -162,7 +189,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: lakesState.value }),
   useGetDataLakesWithRetrievability: (sessionId: string | null | undefined) => {
     lakesHookSessionIds.push(sessionId);
-    return { data: lakesState.value };
+    return { data: lakesState.value, isLoading: lakesState.isLoading, isError: lakesState.isError };
   },
   useRemoveFileFromDataLake: (lakeId: string | null) => {
     removeFileLakeIds.push(lakeId);
@@ -187,6 +214,11 @@ vi.mock('./DataLakeRailViewer', () => ({
 // admin settings cache; mirror manageKnowledge.test's stubs for that chain.
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => true, isFeatureEnabled: () => true, isLoading: false }),
+}));
+// The lake-empty state polls a GitHub lake's sync, which needs a QueryClient this suite never mounts.
+vi.mock('@client/app/hooks/data/githubLake', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/hooks/data/githubLake')>()),
+  useLakeGitHubConnection: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector?: (s: { isAdmin: boolean; currentUser: { id: string } }) => unknown) =>
@@ -235,6 +267,11 @@ vi.mock('@client/app/hooks/useSetLakeScope', () => ({
     sessionState.listeners.forEach(listener => listener());
   },
 }));
+// Its persist logic is covered in useSetIncludeLibraryFiles.test; mocked to keep this harness QueryClient-free.
+const { libraryToggle } = vi.hoisted(() => ({ libraryToggle: { included: false, toggle: vi.fn() } }));
+vi.mock('@client/app/hooks/useSetIncludeLibraryFiles', () => ({
+  default: () => ({ included: libraryToggle.included, isPending: false, toggle: libraryToggle.toggle }),
+}));
 vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError, success: toastSuccess } }));
 
 // Stub the tree so we can trigger the row actions deterministically and read the highlight
@@ -255,8 +292,9 @@ vi.mock('./DataLakeChatTree', () => ({
     tree: { segment: string }[];
     lakeForPath?: (path: string[]) => { name: string; datalakeTag: string } | undefined;
     lakeFileCounts?: Record<string, number>;
-    uncategorized?: { files: { id: string }[]; count: number };
+    uncategorized?: Pick<DataLakeUncategorized, 'count' | 'depth'> & { files: { id: string }[] };
     isError?: boolean;
+    isLoading?: boolean;
   }) => {
     const file = {
       id: 'file-123',
@@ -271,13 +309,16 @@ vi.mock('./DataLakeChatTree', () => ({
         data-can-delete={String(props.canDeleteFile(file))}
         data-drop-hint={props.dropHint ?? ''}
         data-segments={props.tree.map(n => n.segment).join(',')}
+        data-child-segments={props.tree.flatMap(n => n.children.map(c => `${n.segment}:${c.segment}`)).join(',')}
         data-error={String(!!props.isError)}
+        data-loading={String(!!props.isLoading)}
         data-lake-labels={JSON.stringify({
           'acme:legal': props.lakeForPath?.(['acme', 'legal'])?.name ?? null,
           lakea: props.lakeForPath?.(['lakea'])?.name ?? null,
         })}
         data-lake-counts={JSON.stringify(props.lakeFileCounts ?? null)}
         data-uncategorized-count={props.uncategorized ? String(props.uncategorized.count) : ''}
+        data-uncategorized-depth={props.uncategorized?.depth === undefined ? '' : String(props.uncategorized.depth)}
         data-uncategorized-files={(props.uncategorized?.files ?? []).map(f => f.id).join(',')}
       >
         {props.subHeader}
@@ -294,9 +335,15 @@ vi.mock('./DataLakeChatTree', () => ({
         <button data-testid="mock-navigate-back" onClick={() => props.onNavigate([])}>
           back
         </button>
-        <button data-testid="mock-open-bucket" onClick={() => props.onNavigate(['__uncategorized__'])}>
-          open bucket
-        </button>
+        {NAV_PATHS.map(path => (
+          <button
+            key={path.join('/')}
+            data-testid={`mock-nav-${path.join('/')}`}
+            onClick={() => props.onNavigate(path)}
+          >
+            nav
+          </button>
+        ))}
         {props.onClose && (
           <button data-testid="mock-close" onClick={props.onClose}>
             close
@@ -380,7 +427,7 @@ describe('DataLakeExplorer chat-first surface', () => {
     renderExplorer();
 
     expect(lakesHookSessionIds).toContain('sess-1');
-    expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-active-scope-unsearchable-lake-1')).toBeInTheDocument();
   });
 
   it('renders chatSlot in the right pane', () => {
@@ -726,7 +773,66 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
   });
   afterEach(() => {
     tagCountsState.tagCounts = [];
+    tagCountsState.scoped = null;
+    tagCountsState.scopedLoading = false;
+    tagCountsState.scopedError = false;
+    tagCountsState.scopedLakeIds = [];
     tagCountsState.total = 0;
+  });
+
+  // Prefixes are unique per creator only, so two creators' lakes can both use `docs`. The unscoped
+  // payload is merged by prefix and cannot tell them apart; the selected lake's tree has to come
+  // from the server's membership-scoped count.
+  it("builds a selected lake's tree from the scoped count, not another creator's same-prefix lake", () => {
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'docs', canManage: true },
+      { id: 'lake-2', name: 'Lake B', datalakeTag: 'datalake:lake-b', fileTagPrefix: 'docs', canManage: false },
+    ];
+    tagCountsState.tagCounts = [
+      { tag: 'docs:alpha', count: 1 },
+      { tag: 'docs:beta', count: 1 },
+    ];
+    tagCountsState.scoped = [{ tag: 'docs:alpha', count: 1 }];
+    renderExplorer();
+
+    expect(tree()).toHaveAttribute('data-child-segments', 'docs:alpha,docs:beta');
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+    expect(tree()).toHaveAttribute('data-child-segments', 'docs:alpha');
+    expect(tagCountsState.scopedLakeIds.at(-1)).toEqual(['lake-1']);
+
+    fireEvent.click(screen.getByTestId('mock-nav-docs/alpha'));
+    expect(articleParams).toContainEqual({ tags: ['docs:alpha'], lakeId: ['lake-1'], limit: 50 });
+  });
+
+  it('shows the tree as loading, not the empty-lake CTA, while the scoped count is in flight', () => {
+    tagCountsState.scopedLoading = true;
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    expect(tree()).toHaveAttribute('data-loading', 'true');
+    expect(screen.queryByTestId('datalake-tree-empty')).not.toBeInTheDocument();
+  });
+
+  // A failed scoped read leaves no tree data, and with an empty lake that would read as the
+  // "lake is empty" CTA; the failure has to surface as the tree's error state instead.
+  it('shows the tree error, not the empty-lake CTA, when the scoped count fails', () => {
+    tagCountsState.tagCounts = [];
+    tagCountsState.total = 0;
+    tagCountsState.scopedError = true;
+    renderExplorer();
+
+    expect(tree()).toHaveAttribute('data-error', 'false');
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    expect(tree()).toHaveAttribute('data-error', 'true');
+    expect(screen.queryByTestId('datalake-tree-empty')).not.toBeInTheDocument();
   });
 
   it('offers the lake picker in the tree, opening on the all-lakes scope', () => {
@@ -787,6 +893,32 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     // Add files is a manage capability; Configure deep-links the manager either way.
     expect(screen.getByTestId('datalake-selected-lake-addfiles-btn')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-selected-lake-manage-btn')).toBeInTheDocument();
+  });
+
+  it('names a single scoped lake on the strip once, beside a My files toggle, with actions below', () => {
+    libraryToggle.toggle.mockClear();
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+    expect(screen.getByTestId('datalake-active-scope-chip-lake-1')).toHaveTextContent('Lake A');
+    // Removing the only lake would widen the scope to every lake.
+    expect(screen.queryByTestId('datalake-active-scope-remove-lake-1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-selected-lake-header')).not.toHaveTextContent('Lake A');
+
+    const myFiles = screen.getByTestId('datalake-active-scope-myfiles-chip');
+    expect(myFiles).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(myFiles);
+    expect(libraryToggle.toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the all-lakes scope with its My files choice and no Clear once a session exists', () => {
+    renderExplorer();
+
+    expect(screen.getByTestId('datalake-active-scope-all')).toHaveTextContent('All data lakes');
+    expect(screen.getByTestId('datalake-active-scope-myfiles-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-active-scope-clear-btn')).not.toBeInTheDocument();
   });
 
   // Clicked, not just asserted present: the strip's handlers come from the wizard store, so a
@@ -870,6 +1002,10 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
       uncategorizedState.files = [{ id: 'loose-1', fileName: 'no-tags.pdf' }];
       uncategorizedState.enabled = [];
       uncategorizedState.isError = false;
+      uncategorizedState.total = undefined;
+      uncategorizedState.lakeIds = [];
+      uncategorizedState.isLoading = false;
+      articleParams.length = 0;
     });
     afterEach(() => {
       tagCountsState.uncategorizedFileCounts = {};
@@ -885,15 +1021,7 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
       renderExplorer();
       scopeToLakeA();
 
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '1');
-    });
-
-    it('offers no merged bucket when every lake member is categorized somewhere', () => {
-      // The per-lake figure is 1 here, and the merged one is 0 - that file is filed under another
-      // lake's branch, so the merged tree already reaches it and must not offer it twice.
-      renderExplorer();
-
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '');
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '1');
     });
 
     it('offers no bucket for a scoped lake whose members are all categorized', () => {
@@ -901,36 +1029,79 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
       renderExplorer();
       scopeToLakeA();
 
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '');
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '');
     });
 
-    it('offers the MERGED bucket in the all-lakes scope, sized by the distinct cross-lake count', () => {
-      // Not a sum of the per-lake figures: a file categorized in one lake is already reachable
-      // under that lake's branch in the merged tree, so the server hands down its own number.
-      tagCountsState.totalUncategorized = 4;
+    it('offers no root bucket in the all-lakes scope, only inside a lake folder', () => {
       renderExplorer();
 
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '4');
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '');
 
-      tagCountsState.totalUncategorized = 0;
+      nav(['lakea']);
+
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '1');
+      expect(tree()).toHaveAttribute('data-uncategorized-depth', '1');
     });
 
-    it('reads the merged bucket from the cross-lake browse, which has no lake-scope parameter', () => {
-      tagCountsState.totalUncategorized = 1;
-      uncategorizedState.mergedFiles = [{ id: 'merged-1', fileName: 'loose.pdf' }];
-      uncategorizedState.mergedEnabled = [];
+    it("reads that lake's own bucket files, by its id, once opened from the merged tree", () => {
       renderExplorer();
+      nav(['lakea']);
 
-      expect(uncategorizedState.mergedEnabled).toHaveLength(0);
-      fireEvent.click(screen.getByTestId('mock-open-bucket'));
-
-      expect(uncategorizedState.mergedEnabled.at(-1)).toBe(true);
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', 'merged-1');
-      // The per-lake route stays untouched in this scope - it cannot express "every lake".
       expect(uncategorizedState.enabled.every(on => !on)).toBe(true);
 
-      tagCountsState.totalUncategorized = 0;
-      uncategorizedState.mergedFiles = [];
+      nav(['lakea', U]);
+
+      expect(uncategorizedState.lakeIds.at(-1)).toBe('lake-1');
+      expect(tree()).toHaveAttribute('data-uncategorized-files', 'loose-1');
+    });
+
+    it('counts the opened bucket by the fetched total, so the row cannot say 0 while files are listed', () => {
+      tagCountsState.uncategorizedFileCounts = { 'datalake:lake-a': 0 };
+      uncategorizedState.total = 3;
+      renderExplorer();
+      nav(['lakea', U]);
+
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '3');
+    });
+
+    it('shows the tree loading while the opened bucket is still fetching', () => {
+      uncategorizedState.isLoading = true;
+      renderExplorer();
+      nav(['lakea', U]);
+
+      expect(tree()).toHaveAttribute('data-loading', 'true');
+    });
+
+    it('a closed row shows the tag-count figure, not a cached fetched total', () => {
+      uncategorizedState.total = 3;
+      renderExplorer();
+      nav(['lakea']);
+
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '1');
+    });
+
+    it('skips the leaf articles fetch in a lake folder that holds only its bucket', () => {
+      renderExplorer();
+      nav(['lakea']);
+
+      expect(articleParams.some(p => p?.tags?.includes('lakea'))).toBe(false);
+    });
+
+    it('keeps the bucket open at count 0 in the merged view, with its depth and lake id', () => {
+      tagCountsState.uncategorizedFileCounts = { 'datalake:lake-a': 0 };
+      renderExplorer();
+      nav(['lakea', U]);
+
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '0');
+      expect(tree()).toHaveAttribute('data-uncategorized-depth', '1');
+      expect(uncategorizedState.lakeIds.at(-1)).toBe('lake-1');
+    });
+
+    it('keeps a lake-scoped bucket at the root, with no depth', () => {
+      renderExplorer();
+      scopeToLakeA();
+
+      expect(tree()).toHaveAttribute('data-uncategorized-depth', '');
     });
 
     it('tells the tree a failed bucket read failed, rather than letting it render as empty', () => {
@@ -941,11 +1112,11 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
       renderExplorer();
       scopeToLakeA();
 
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-error', 'false');
+      expect(tree()).toHaveAttribute('data-error', 'false');
 
-      fireEvent.click(screen.getByTestId('mock-open-bucket'));
+      nav([U]);
 
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-error', 'true');
+      expect(tree()).toHaveAttribute('data-error', 'true');
     });
 
     it('fetches the bucket files only once it is opened, not to render its count', () => {
@@ -954,12 +1125,12 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
 
       // The count alone renders the row, so the list must stay unfetched until someone opens it.
       expect(uncategorizedState.enabled.every(on => !on)).toBe(true);
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', '');
+      expect(tree()).toHaveAttribute('data-uncategorized-files', '');
 
-      fireEvent.click(screen.getByTestId('mock-open-bucket'));
+      nav([U]);
 
       expect(uncategorizedState.enabled.at(-1)).toBe(true);
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', 'loose-1');
+      expect(tree()).toHaveAttribute('data-uncategorized-files', 'loose-1');
     });
   });
 
@@ -973,7 +1144,7 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     renderExplorer();
 
     expect(screen.getByTestId('datalake-lake-picker-label')).toHaveTextContent('Lake B');
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakeb');
+    expect(tree()).toHaveAttribute('data-segments', 'lakeb');
   });
 
   it('calls the deliberate empty scope what it is, rather than the all-lakes scope it inverts', () => {
@@ -1034,14 +1205,84 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
     renderExplorer();
 
     expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'all-lakes-empty');
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', '');
+    expect(tree()).toHaveAttribute('data-segments', '');
   });
 
   describe('lake-prefix lookup handed to the tree', () => {
+    beforeEach(() => {
+      uncategorizedState.enabled = [];
+      uncategorizedState.lakeIds = [];
+      lakesState.isLoading = false;
+      lakesState.isError = false;
+    });
     afterEach(() => {
       tagCountsState.tagCounts = [];
       tagCountsState.total = 0;
       tagCountsState.lakeFileCounts = {};
+      tagCountsState.uncategorizedFileCounts = {};
+    });
+
+    const LEGAL = { id: 'l1', name: 'Legal Vault', datalakeTag: 'datalake:legal', fileTagPrefix: 'acme:legal:' };
+
+    it('offers no bucket at all when two lakes are selected, and never enables the per-lake fetch', () => {
+      lakesState.value = [
+        { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+        { id: 'lake-2', name: 'Lake B', datalakeTag: 'datalake:lake-b', fileTagPrefix: 'lakeb', canManage: true },
+      ];
+      sessionState.current = {
+        id: 'sess-1',
+        retrievalTags: ['datalake:lake-a', 'datalake:lake-b'],
+        lakeScopeExplicit: true,
+      };
+      tagCountsState.uncategorizedFileCounts = { 'datalake:lake-a': 2, 'datalake:lake-b': 2 };
+      renderExplorer();
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '');
+
+      nav(['lakea']);
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '');
+      nav(['lakea', U]);
+      expect(uncategorizedState.enabled.every(on => !on)).toBe(true);
+    });
+
+    it('pins a multi-segment lake prefix bucket at its full path depth', () => {
+      lakesState.value = [{ ...LEGAL, canManage: true }];
+      tagCountsState.uncategorizedFileCounts = { 'datalake:legal': 4 };
+      renderExplorer();
+
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '');
+      nav(['acme', 'legal']);
+
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '4');
+      expect(tree()).toHaveAttribute('data-uncategorized-depth', '2');
+    });
+
+    it('offers no bucket at a prefix two lakes share', () => {
+      lakesState.value = [
+        { ...LEGAL, canManage: true },
+        { ...LEGAL, id: 'l2', name: 'Legal Copy', datalakeTag: 'datalake:legal2', canManage: true },
+      ];
+      tagCountsState.uncategorizedFileCounts = { 'datalake:legal': 4, 'datalake:legal2': 4 };
+      renderExplorer();
+      nav(['acme', 'legal']);
+
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '');
+    });
+
+    it('waits on the lake list instead of rendering an empty bucket when it is opened first', () => {
+      lakesState.isLoading = true;
+      renderExplorer();
+      expect(tree()).toHaveAttribute('data-loading', 'false');
+
+      nav(['lakea', U]);
+      expect(tree()).toHaveAttribute('data-loading', 'true');
+    });
+
+    it('surfaces a failed lake list as an error while the bucket is open', () => {
+      lakesState.isError = true;
+      renderExplorer();
+      nav(['lakea', U]);
+
+      expect(tree()).toHaveAttribute('data-error', 'true');
     });
 
     it('maps a multi-segment prefix by its full path to the lake name', () => {
@@ -1053,11 +1294,11 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
       tagCountsState.lakeFileCounts = { 'datalake:legal': 2 };
       renderExplorer();
 
-      expect(JSON.parse(screen.getByTestId('mock-tree').dataset.lakeLabels!)).toEqual({
+      expect(JSON.parse(tree().dataset.lakeLabels!)).toEqual({
         'acme:legal': 'Legal Vault',
         lakea: null,
       });
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-lake-counts', '{"datalake:legal":2}');
+      expect(tree()).toHaveAttribute('data-lake-counts', '{"datalake:legal":2}');
     });
 
     it('leaves a prefix shared by two accessible lakes unmapped while mapping a unique one', () => {
@@ -1073,7 +1314,7 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
       tagCountsState.total = 3;
       renderExplorer();
 
-      expect(JSON.parse(screen.getByTestId('mock-tree').dataset.lakeLabels!)).toEqual({
+      expect(JSON.parse(tree().dataset.lakeLabels!)).toEqual({
         'acme:legal': 'Legal Vault',
         lakea: null,
       });
@@ -1082,7 +1323,12 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
 });
 
 describe('buildLakePrefixLookup', () => {
-  const lake = (name: string, datalakeTag: string, fileTagPrefix: string) => ({ name, datalakeTag, fileTagPrefix });
+  const lake = (name: string, datalakeTag: string, fileTagPrefix: string) => ({
+    id: datalakeTag,
+    name,
+    datalakeTag,
+    fileTagPrefix,
+  });
   const entries = (m: Map<string, { name: string }>) => Object.fromEntries([...m].map(([k, v]) => [k, v.name]));
 
   it('keys a lake by its normalized prefix path', () => {

@@ -2,7 +2,13 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
+import {
+  withTransaction,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+} from '@bike4mind/database';
+import { NotFoundError } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -21,12 +27,23 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const { batchId } = req.query as { batchId: string };
 
     const ctx = await toAccessContext(req);
-    const result = await dataLakeService.dismissTaxonomySuggestion(ctx, batchId, {
-      db: {
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        batches: dataLakeBatchRepository,
-      },
+    // The service gates on the batch's lake itself; running it inside the transaction is what lets a
+    // grant revoke committing mid-request collide on the lake doc and re-run the gate.
+    const result = await withTransaction(async () => {
+      const dismissal = await dataLakeService.dismissTaxonomySuggestion(ctx, batchId, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          batches: dataLakeBatchRepository,
+        },
+      });
+
+      // The service returns only { success }, so the lake id comes from a re-read of the batch it just gated on.
+      const batch = await dataLakeBatchRepository.findById(batchId);
+      if (!batch) throw new NotFoundError('Batch not found');
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(batch.dataLakeId);
+      return dismissal;
     });
 
     return res.json(result);

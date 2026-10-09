@@ -67,12 +67,12 @@ async function run() {
   await questNodeRepository.setExecution(node.id, { agentExecutionId: EXEC_ID });
 
   // Two artifacts shaped exactly as persistAgentArtifacts writes them.
-  const artifactFixture = (id: string, type: string, title: string) => ({
+  const artifactFixture = (id: string, type: string, title: string, userId = `${RUN}-user`) => ({
     id,
     type,
     title,
     sourceQuestId: QUEST_ID,
-    userId: `${RUN}-user`,
+    userId,
     version: 1,
     // Required by the schema; the join under test touches none of them.
     contentId: new mongoose.Types.ObjectId(),
@@ -83,13 +83,15 @@ async function run() {
   await Artifact.create([
     artifactFixture(`${RUN}-art-1`, 'react', 'Counter'),
     artifactFixture(`${RUN}-art-2`, 'code', 'Helper'),
+    artifactFixture(`${RUN}-planted`, 'code', 'Planted', `${RUN}-other-user`),
   ]);
 
   console.log('1. the run -> artifact join resolves against real rows');
   const fresh = (await questNodeRepository.getNode(node.id))!;
-  const first = await linkNodeArtifacts([fresh], runs(QUEST_ID), logger);
+  const first = await linkNodeArtifacts([fresh], runs(QUEST_ID), `${RUN}-user`, logger);
   const found = first.get(node.id) ?? [];
   check('both artifacts found for the node', found.length === 2, `got ${found.length}`);
+  check('another user\'s artifact on the same quest is not joined', !found.some(a => a.id === `${RUN}-planted`));
   check('projection carries type and title', Boolean(found[0]?.type && found[0]?.title), JSON.stringify(found[0]));
 
   console.log('\n2. the ids are persisted onto the node');
@@ -98,13 +100,13 @@ async function run() {
 
   console.log('\n3. a second read writes nothing but still renders');
   const before = (await QuestNode.findById(node.id).lean<{ updatedAt: Date }>())!.updatedAt.getTime();
-  const second = await linkNodeArtifacts([linked], runs(QUEST_ID), logger);
+  const second = await linkNodeArtifacts([linked], runs(QUEST_ID), `${RUN}-user`, logger);
   const after = (await QuestNode.findById(node.id).lean<{ updatedAt: Date }>())!.updatedAt.getTime();
   check('still returns them for display', (second.get(node.id) ?? []).length === 2);
   check('no write on a steady-state read', before === after, 'updatedAt moved');
 
   console.log('\n4. a run with no quest id is a no-op');
-  const none = await linkNodeArtifacts([linked], runs(null), logger);
+  const none = await linkNodeArtifacts([linked], runs(null), `${RUN}-user`, logger);
   check('nothing returned', none.size === 0);
 
   console.log('\n5. the index the join relies on exists');

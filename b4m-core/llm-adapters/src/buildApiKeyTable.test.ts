@@ -69,21 +69,29 @@ describe('buildApiKeyTable', () => {
   });
 
   it('feeds the listing gate, so a mapped key makes its backend usable', () => {
-    const ctx = { apiKeys: buildApiKeyTable(ALL_KEYS), isSelfHost: false };
+    const ctx = { apiKeys: buildApiKeyTable(ALL_KEYS), isSelfHost: false, bedrockReachable: true };
     expect(resolveListingKey(ModelBackend.Kimi, ctx)).toBe('sk-moonshot');
     expect(isBackendUsable(ModelBackend.Kimi, ctx)).toBe(true);
 
-    const without = { apiKeys: buildApiKeyTable({ ...ALL_KEYS, kimi: null }), isSelfHost: false };
+    const without = {
+      apiKeys: buildApiKeyTable({ ...ALL_KEYS, kimi: null }),
+      isSelfHost: false,
+      bedrockReachable: true,
+    };
     expect(isBackendUsable(ModelBackend.Kimi, without)).toBe(false);
   });
 
   it('gates DeepSeek on its own key, which LISTING_KIND has to name', () => {
     // Marked anything but 'keyed' in LISTING_KIND, DeepSeek fails closed and silently: a valid key
     // and a working adapter still list nothing.
-    const ctx = { apiKeys: buildApiKeyTable(ALL_KEYS), isSelfHost: false };
+    const ctx = { apiKeys: buildApiKeyTable(ALL_KEYS), isSelfHost: false, bedrockReachable: true };
     expect(isBackendUsable(ModelBackend.DeepSeek, ctx)).toBe(true);
 
-    const without = { apiKeys: buildApiKeyTable({ ...ALL_KEYS, deepseek: null }), isSelfHost: false };
+    const without = {
+      apiKeys: buildApiKeyTable({ ...ALL_KEYS, deepseek: null }),
+      isSelfHost: false,
+      bedrockReachable: true,
+    };
     expect(isBackendUsable(ModelBackend.DeepSeek, without)).toBe(false);
   });
 });
@@ -111,7 +119,10 @@ describe('apiKeyTableForBackend', () => {
 
 describe('getAvailableModels with a Moonshot key', () => {
   it('lists the direct Kimi models, which is what the picker route was missing', async () => {
-    const models = await getAvailableModels(buildApiKeyTable({ kimi: 'sk-moonshot' }), { isSelfHost: true });
+    const models = await getAvailableModels(buildApiKeyTable({ kimi: 'sk-moonshot' }), {
+      isSelfHost: true,
+      bedrockReachable: false,
+    });
     const kimiIds = models.filter(m => m.backend === ModelBackend.Kimi).map(m => String(m.id));
 
     expect(kimiIds).toEqual(
@@ -123,21 +134,24 @@ describe('getAvailableModels with a Moonshot key', () => {
   });
 
   it('lists none of them without the key', async () => {
-    const models = await getAvailableModels(buildApiKeyTable({}), { isSelfHost: true });
+    const models = await getAvailableModels(buildApiKeyTable({}), { isSelfHost: true, bedrockReachable: false });
     expect(models.some(m => m.backend === ModelBackend.Kimi)).toBe(false);
   });
 });
 
 describe('getAvailableModels with a DeepSeek key', () => {
   it('lists the direct DeepSeek models', async () => {
-    const models = await getAvailableModels(buildApiKeyTable({ deepseek: 'sk-deepseek' }), { isSelfHost: true });
+    const models = await getAvailableModels(buildApiKeyTable({ deepseek: 'sk-deepseek' }), {
+      isSelfHost: true,
+      bedrockReachable: false,
+    });
     const ids = models.filter(m => m.backend === ModelBackend.DeepSeek).map(m => String(m.id));
 
     expect(ids).toEqual(expect.arrayContaining(['deepseek-flash', 'deepseek-v4-pro']));
   });
 
   it('lists none of them without the key', async () => {
-    const models = await getAvailableModels(buildApiKeyTable({}), { isSelfHost: true });
+    const models = await getAvailableModels(buildApiKeyTable({}), { isSelfHost: true, bedrockReachable: false });
     expect(models.some(m => m.backend === ModelBackend.DeepSeek)).toBe(false);
   });
 });

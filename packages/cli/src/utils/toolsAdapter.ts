@@ -125,6 +125,24 @@ class CliLogger extends Logger {
 interface AgentContext {
   currentAgent: any | null; // ReActAgent instance
   observationQueue: Array<{ toolName: string; result: unknown }>; // Queue observations to add after actions
+  /** Called (synchronously, must not block) after a file-writing tool succeeds, with the path as the tool received it. */
+  onFileChanged?: (filePath: string) => void;
+}
+
+// Must stay in sync with the success strings returned by the core editLocalFile
+// and createFile tools; a denial or failure returns a different string.
+const FILE_WRITE_SUCCESS = /^File (edited|created|overwritten) successfully: /;
+const FILE_WRITE_TOOLS = new Set(['edit_local_file', 'create_file']);
+
+function notifyFileChanged(
+  agentContext: AgentContext,
+  toolName: string,
+  args: Record<string, unknown>,
+  result: string
+): void {
+  if (!agentContext.onFileChanged || !FILE_WRITE_TOOLS.has(toolName)) return;
+  if (typeof args.path !== 'string' || !FILE_WRITE_SUCCESS.test(result)) return;
+  agentContext.onFileChanged(args.path);
 }
 
 /**
@@ -289,6 +307,7 @@ export function wrapToolWithPermission(
           showPermissionPrompt
         );
         agentContext.observationQueue.push({ toolName, result });
+        notifyFileChanged(agentContext, toolName, execArgs, result);
         // Process-hook (host action_required signal): a tool finished - clear the
         // block sentinel (matcher "*").
         void getProcessHooks()?.firePostToolUse(toolName);

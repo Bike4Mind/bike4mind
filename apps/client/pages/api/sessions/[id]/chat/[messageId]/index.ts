@@ -66,7 +66,12 @@ const handler = baseApi()
   .put(
     asyncHandler<{}, any, any, { id?: string; messageId?: string }>(async (req, res) => {
       const { id: sessionId, messageId } = req.query;
-      const updates = req.body as { reply?: string; replies?: string[]; selectedChoiceIndex?: unknown };
+      const updates = req.body as {
+        reply?: string;
+        replies?: string[];
+        selectedChoiceIndex?: unknown;
+        pinned?: unknown;
+      };
       const userId = req.user?.id;
 
       const session = await sessionRepository.findById(sessionId!);
@@ -95,6 +100,10 @@ const handler = baseApi()
 
       if (Array.isArray(updates.replies) && updates.replies.every(item => typeof item === 'string')) {
         allowedUpdates.replies = updates.replies;
+      }
+
+      if (typeof updates.pinned === 'boolean') {
+        allowedUpdates.pinned = updates.pinned;
       }
 
       // Only the pick is writable, never the options, and only once: the options are what the server

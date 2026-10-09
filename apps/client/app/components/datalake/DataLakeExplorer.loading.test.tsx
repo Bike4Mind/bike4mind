@@ -26,6 +26,17 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     isLoading: false,
     isError: false,
   }),
+  // Stands in for the server's membership-scoped count; the explorer's prefix belt narrows it.
+  useGetScopedDataLakeTagCounts: () => ({
+    data: {
+      tagCounts: [
+        { tag: 'docs:policy', count: 2 },
+        { tag: 'docs:policy:v2', count: 5 },
+      ],
+    },
+    isLoading: false,
+    isError: false,
+  }),
   useGetDataLakeUncategorizedFiles: () => ({ data: undefined, isLoading: false }),
   useGetDataLakeArticles: (params?: { tags?: string[] } | null) => {
     const tag = params?.tags?.[0];
@@ -48,6 +59,9 @@ vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
 }));
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => vi.fn() }));
 vi.mock('@client/app/hooks/useSetLakeScope', () => ({ default: () => vi.fn() }));
+vi.mock('@client/app/hooks/useSetIncludeLibraryFiles', () => ({
+  default: () => ({ included: false, isPending: false, toggle: vi.fn() }),
+}));
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/layouts/Notebook', () => ({
   useNotebookLayout: (sel: (s: { openSideNav: boolean }) => unknown) => sel({ openSideNav: true }),

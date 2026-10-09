@@ -12,41 +12,21 @@ import {
   Table,
   ToggleButtonGroup,
   Typography,
-  useTheme,
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { CreditHolderType, UNCLASSIFIED_SOURCE, type UsageOwnerType } from '@bike4mind/common';
 import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatCredits, formatUsd, numberCell } from '../utils/format';
 import { useOwnerUsage } from '../hooks/useOwnerUsage';
+import { zeroFillDailySeries } from '../utils/dailySeries';
+import { DailyAreaChart } from './DailyAreaChart';
 import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
 
 const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];
 
 type OrgOption = { id: string; name: string };
-
-/**
- * Zero-fill every day in the window so the burn chart draws gaps as flat rather
- * than connecting non-adjacent active days into a misleading straight line.
- * Days are UTC to match the aggregation's $dateToString bucketing.
- */
-const buildBurnSeries = (overTime: { day: string; creditsCharged: number }[], days: number) => {
-  const byDay = new Map(overTime.map(d => [d.day, d.creditsCharged]));
-  const today = new Date();
-  // days + 1 points spanning today-days .. today (UTC). The aggregation's window
-  // start is a rolling `now - days*24h`, whose calendar day is `today - days`;
-  // include that leading day or its (partial) spend drops off the chart while
-  // still counting in the totals, leaving the bars unable to reconcile.
-  return Array.from({ length: days + 1 }, (_, i) => {
-    const d = new Date(today);
-    d.setUTCDate(d.getUTCDate() - (days - i));
-    const day = d.toISOString().slice(0, 10);
-    return { day, credits: byDay.get(day) ?? 0 };
-  });
-};
 
 /**
  * One owner's AI spend: a credits burn chart over the selected window plus
@@ -59,7 +39,6 @@ const buildBurnSeries = (overTime: { day: string; creditsCharged: number }[], da
  * A User owner is always pinned to `ownerId` (no picker).
  */
 export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: string }> = ({ ownerType, ownerId }) => {
-  const theme = useTheme();
   const isOrg = ownerType === CreditHolderType.Organization;
   const showOrgPicker = isOrg && !ownerId;
 
@@ -92,7 +71,7 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
   const { data, isLoading, isFetching, error, refetch } = useOwnerUsage(ownerType, activeOwnerId, days);
 
   const hasUsage = (data?.totals.requests ?? 0) > 0;
-  const chartData = useMemo(() => buildBurnSeries(data?.overTime ?? [], days), [data, days]);
+  const chartData = useMemo(() => zeroFillDailySeries(data?.overTime ?? [], days, d => d.creditsCharged), [data, days]);
 
   return (
     <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="usage-dashboard">
@@ -189,29 +168,13 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
                 No usage in this window.
               </Typography>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
-                  <XAxis dataKey="day" tick={{ fontSize: 11 }} minTickGap={24} />
-                  <YAxis tick={{ fontSize: 11 }} width={56} />
-                  <Tooltip
-                    formatter={value => [formatCredits(Number(value) || 0), 'Credits']}
-                    contentStyle={{
-                      background: theme.palette.background.surface,
-                      border: `1px solid ${theme.palette.divider}`,
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="credits"
-                    stroke={theme.palette.primary[500]}
-                    fill={theme.palette.primary.softBg}
-                    strokeWidth={2}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              <DailyAreaChart
+                data={chartData}
+                valueLabel="Credits"
+                formatValue={formatCredits}
+                color="primary"
+                height={260}
+              />
             )}
           </Box>
 

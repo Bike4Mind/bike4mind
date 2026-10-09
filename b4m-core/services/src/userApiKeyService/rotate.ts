@@ -7,6 +7,7 @@ import { KEY_PREFIX_LENGTH } from './constants';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
+import { computeKeyDigest } from './keyDigest';
 
 const rotateUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -45,13 +46,14 @@ export interface RotateUserApiKeyResult {
 /**
  * Generate a new secure API key maintaining the same prefix format
  */
-function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string } {
+function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string; keyDigest: string } {
   const randomPart = randomBytes(16).toString('hex'); // 32 chars
   const key = `b4m_live_${randomPart}`;
   const keyPrefix = key.substring(0, KEY_PREFIX_LENGTH);
   const keyHash = bcrypt.hashSync(key, 12);
+  const keyDigest = computeKeyDigest(key);
 
-  return { key, keyPrefix, keyHash };
+  return { key, keyPrefix, keyHash, keyDigest };
 }
 
 /**
@@ -117,15 +119,16 @@ export const rotateUserApiKey = async (
     );
   }
 
-  const { key, keyPrefix, keyHash } = generateNewApiKey();
+  const { key, keyPrefix, keyHash, keyDigest } = generateNewApiKey();
 
   apiKey.keyHash = keyHash;
+  apiKey.keyDigest = keyDigest;
   apiKey.keyPrefix = keyPrefix;
   if (reOwned) {
     apiKey.userId = userId;
   }
 
-  await db.userApiKeys.update({ id: apiKey.id, keyHash, keyPrefix, ...(reOwned ? { userId } : {}) });
+  await db.userApiKeys.update({ id: apiKey.id, keyHash, keyDigest, keyPrefix, ...(reOwned ? { userId } : {}) });
 
   const callbackSigningSecret = reOwned ? generateCallbackSigningSecret() : undefined;
   if (callbackSigningSecret) {

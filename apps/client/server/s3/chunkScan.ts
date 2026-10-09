@@ -69,7 +69,7 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  * BY DESIGN (audio is never vectorizable; images are passed to models as URLs; video has no
  * extraction path and falls to the unsupported-type default), so sweeping them would burn the
  * per-run cap on no-op queue round-trips and stamp historical media files with a misleading
- * `noExtractableTextAt`. Query must stay in sync with isAudioMimeType and
+ * `noExtractableTextAt`. Query must stay in sync with isMediaOnlyMimeType (audio + video) and
  * SmartChunker.chunkImage / chunkFile's default branch.
  *
  * TWO exceptions, and they are why the exclusion is an `$or` arm rather than a flat key.

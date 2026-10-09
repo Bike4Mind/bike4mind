@@ -33,7 +33,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.WRITE_NOTEBOOKS,
     label: 'Write Notebooks',
     description: 'Create and modify notebooks',
-    endpoints: ['POST /api/v1/sessions', 'PUT /api/sessions/:id'],
+    endpoints: ['POST /api/v1/sessions', 'GET /api/sessions/:id', 'PUT /api/sessions/:id', 'DELETE /api/sessions/:id'],
   },
   {
     value: ApiKeyScope.READ_FILES,
@@ -55,33 +55,89 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/v1/image-generations',
       'POST /api/v1/image-edits',
       'POST /api/v1/video-generations',
+      'GET /api/v1/video-generations',
+      'GET /api/v1/video-generations/:id',
+      'POST /api/v1/video-generations/:id/cancel',
+      'GET /api/v1/video-models',
       'POST /api/v1/embeddings',
+      'GET /api/v1/voice/voices',
+      'POST /api/v1/voice/sessions',
+      'POST /api/v1/voice/sessions/:id/end',
       'GET /api/v1/quests/:id',
       'GET /api/v1/credits',
+      'GET /api/v1/models',
     ],
   },
   {
     value: ApiKeyScope.AI_CHAT,
     label: 'AI Chat',
     description: 'Use AI chat features',
-    endpoints: ['POST /api/ai/llm', 'GET /api/v1/quests/:id', 'GET /api/v1/credits'],
+    endpoints: ['POST /api/ai/llm', 'GET /api/v1/quests/:id', 'GET /api/v1/credits', 'GET /api/v1/models'],
   },
   {
     value: ApiKeyScope.READ_PROJECTS,
     label: 'Read Projects',
     description: 'View projects',
-    endpoints: ['GET /api/projects'],
+    endpoints: [
+      'GET /api/projects',
+      'GET /api/projects/:id',
+      'GET /api/projects/:id/files',
+      'GET /api/projects/:id/sessions',
+      'GET /api/projects/:id/invites',
+      'GET /api/v1/projects',
+      'GET /api/v1/projects/:id',
+    ],
   },
   {
     value: ApiKeyScope.WRITE_PROJECTS,
     label: 'Write Projects',
-    description: 'Create and modify projects',
-    endpoints: ['POST /api/projects', 'PUT /api/projects/:id'],
+    description: 'Create, modify, share and delete projects',
+    endpoints: [
+      'POST /api/projects',
+      'PUT /api/projects/:id',
+      'DELETE /api/projects/:id',
+      'POST|DELETE /api/projects/:id/files',
+      'POST|DELETE /api/projects/:id/sessions',
+      'POST /api/projects/:id/invites',
+      'DELETE /api/projects/:id/members',
+      'POST|DELETE /api/projects/:id/systemPrompts',
+      'POST /api/projects/:id/systemPrompts/toggle',
+      'DELETE /api/projects/removeNonExistintFiles',
+      'POST /api/v1/projects',
+      'GET /api/v1/projects',
+      'GET /api/v1/projects/:id',
+      'PATCH|DELETE /api/v1/projects/:id',
+    ],
+  },
+  {
+    value: ApiKeyScope.READ_AGENTS,
+    label: 'Read Agents',
+    description: 'View agents',
+    endpoints: ['GET /api/agents', 'GET /api/agents/:id', 'GET /api/agents/:id/missions'],
+  },
+  {
+    value: ApiKeyScope.WRITE_AGENTS,
+    label: 'Write Agents',
+    description: 'Create, modify, fund and delete agents, and run the agent-authoring assistants',
+    endpoints: [
+      'POST /api/agents',
+      'PUT /api/agents/:id',
+      'DELETE /api/agents/:id',
+      'POST /api/agents/create-from-context',
+      'POST /api/agents/:id/missions',
+      'POST /api/agents/:id/transfer-credits',
+      'GET /api/agents/:id/embed-keys',
+      'POST /api/agents/:id/generate-avatar',
+      'POST /api/agents/:id/generate-description',
+      'POST /api/agents/:id/generate-system-prompt',
+      'POST /api/agents/:id/enhance-field',
+    ],
   },
   {
     value: ApiKeyScope.ME_READ,
     label: 'Account: Read',
-    description: "Read the key owner's own plan tier, credit balance, and entitlements",
+    // Keep in sync with the me:read consent label in app/routes/oauth/consentScopes.ts.
+    description: "Read the key owner's own name, plan tier, subscription, credit balance, and entitlements",
     endpoints: ['GET /api/v1/me', 'GET /api/v1/credits'],
   },
   {
@@ -118,26 +174,25 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.OPTIHASHI_READ,
     label: 'OptiHashi: Read',
     description: 'Inspect OptiHashi problems, runs, and run artifacts without commissioning any compute',
-    endpoints: [
-      'GET /api/premium-optihashi/quantum/runs',
-      'GET /api/premium-optihashi/quantum/runs/:id',
-      'GET /api/premium-optihashi/quantum/problems',
-    ],
+    endpoints: ['OptiHashi run and problem reads'],
   },
   {
     value: ApiKeyScope.OPTIHASHI_COMPUTE,
     label: 'OptiHashi: Compute',
     description: 'Submit OptiHashi compute runs and cancel them. Spends credits - grant only to keys that must solve',
-    endpoints: [
-      'POST /api/premium-optihashi/quantum/qwork/submit',
-      'POST /api/premium-optihashi/quantum/runs/:id/cancel',
-    ],
+    endpoints: ['OptiHashi run submit and cancel'],
   },
   {
     value: ApiKeyScope.DATALAKE_READ,
     label: 'Data Lakes: Read',
     description: 'List and browse data lakes the key owner can already reach',
-    endpoints: ['GET /api/data-lakes', 'GET /api/data-lakes/:id'],
+    endpoints: [
+      'GET /api/v1/data-lakes',
+      'GET /api/v1/data-lakes/:id',
+      'GET /api/v1/data-lakes/:id/files/:file_id',
+      'GET /api/data-lakes',
+      'GET /api/data-lakes/:id',
+    ],
   },
   {
     value: ApiKeyScope.DATALAKE_QUERY,
@@ -206,6 +261,22 @@ export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScope> = new Set(
 export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
   s => !DEDICATED_FLOW_SCOPES.has(s.value)
 );
+
+/**
+ * Premium scopes, only usable when the OptiHashi overlay is mounted. Every surface that
+ * lists GENERIC_MODAL_API_KEY_SCOPES must go through genericApiKeyScopesFor (or the
+ * useGenericApiKeyScopes hook) so they stay hidden from users without OptiHashi access.
+ */
+export const OPTI_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
+  ApiKeyScope.OPTIHASHI_READ,
+  ApiKeyScope.OPTIHASHI_COMPUTE,
+]);
+
+const GENERIC_SCOPES_WITHOUT_OPTI = GENERIC_MODAL_API_KEY_SCOPES.filter(s => !OPTI_API_KEY_SCOPES.has(s.value));
+
+/** The generic scopes a viewer may see; `hasOptiAccess` is the useOptiAccess verdict. Returns a stable reference. */
+export const genericApiKeyScopesFor = (hasOptiAccess: boolean): ApiKeyScopeOption[] =>
+  hasOptiAccess ? GENERIC_MODAL_API_KEY_SCOPES : GENERIC_SCOPES_WITHOUT_OPTI;
 
 /**
  * Scopes no mint route may ever issue: they are granted by a flow of their own

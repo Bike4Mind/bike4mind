@@ -10,7 +10,8 @@ deducts (both below) - and the whole floor is gated on the `enforceCredits` admi
 (except the embed path, which is settings-free).
 
 This matters because org-wide balance is the only bound on *aggregate* spend. The per-member cap
-(`maxCreditsPerMember`) limits any single member but scales with headcount; once orgs self-serve
+(`maxCreditsPerMember`, overridable per member via `userDetails[].maxCredits`) is a UTC
+calendar-month budget that limits any single member but scales with headcount; once orgs self-serve
 which members reach the expensive execution paths (#1237), the balance is what caps total exposure.
 
 ## Where the floor is enforced (evidence)
@@ -80,7 +81,9 @@ Three independent layers, all keyed on the org balance when the request is org-b
   settlement clamp downstream (see "Consistency across spend paths"). Pre-existing and unchanged;
   called out here so the clamp is not read as covering it.
 - **Per-member cap** (`maxCreditsPerMember`) is a documented check-then-act TOCTOU (off-by-one under
-  concurrency: `deductCreditsWithOrgSupport.ts:155`). That is the *per-member* axis, not the
+  concurrency). Its monthly reset is lazy: reads treat a stale `periodStart` as 0 spent
+  (`memberCreditCap.ts`) and the settlement write resets the row atomically
+  (`OrganizationRepository.updateUserDetails`), so there is no reset job. That is the *per-member* axis, not the
   org-wide balance, and does not affect the balance floor.
 
 ## Regression coverage

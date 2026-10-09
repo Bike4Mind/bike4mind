@@ -8,6 +8,9 @@ import {
   IUserNote,
   IModerationHit,
   UserModerationStatus,
+  MFA_MAX_FAILED_ATTEMPTS,
+  MFA_LOCKOUT_DURATION_MS,
+  MFA_ATTEMPT_RESET_WINDOW_MS,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query } from 'mongoose';
@@ -253,6 +256,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
   }
 
+  /** Null the active-org pointer of every user on the org (org delete). */
+  async clearOrganizationPointer(organizationId: string): Promise<void> {
+    await this.model.updateMany({ organizationId }, { $set: { organizationId: null } });
+  }
+
   /** Add one group id to one user (idempotent via $addToSet). */
   async addGroupToUser(userId: string, groupId: string): Promise<void> {
     await this.model.updateOne({ _id: userId }, { $addToSet: { groups: groupId } });
@@ -369,17 +377,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * Uses a two-stage MongoDB aggregation pipeline update so the increment and lockout write
    * are a single atomic operation - a read-modify-write would allow concurrent requests to
    * each read the same count and undercount failures, defeating the 3-strike lockout.
-   *
-   * Policy constants are co-located with the DB method rather than imported from the auth
-   * package (which depends on this package) to keep the dependency direction correct.
-   * They must match `MAX_FAILED_ATTEMPTS` / `LOCKOUT_DURATION_MS` / `ATTEMPT_RESET_WINDOW_MS`
-   * in `b4m-core/auth/src/mfaService/utils.ts`.
    */
   async atomicRecordMfaFailedAttempt(userId: string): Promise<IUserDocument | null> {
-    const MFA_MAX_FAILED_ATTEMPTS = 3;
-    const MFA_LOCKOUT_DURATION_MS = 15 * 60 * 1000;
-    const MFA_ATTEMPT_RESET_WINDOW_MS = 60 * 60 * 1000;
-
     const now = new Date();
     const lockoutUntil = new Date(now.getTime() + MFA_LOCKOUT_DURATION_MS);
 

@@ -37,6 +37,9 @@ const rotateUserApiKey = vi.hoisted(() =>
 const revokeUserApiKey = vi.hoisted(() => vi.fn().mockResolvedValue({ name: 'k' }));
 vi.mock('@bike4mind/services', () => ({ userApiKeyService: { rotateUserApiKey, revokeUserApiKey } }));
 
+const notifyApiKeyRotationReown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyRotationReown }));
+
 const userApiKeyRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const organizationRepository = vi.hoisted(() => ({ findIdsAdministeredBy: vi.fn() }));
@@ -110,6 +113,44 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
       { keyId: 'key-1' },
       expect.objectContaining({ callerScopes: [] })
     );
+  });
+
+  it('calls the re-own notifier with previousOwnerUserId and key name when set', async () => {
+    rotateUserApiKey.mockResolvedValueOnce({
+      id: 'key-1',
+      name: 'k',
+      keyPrefix: 'b4m_live_x',
+      key: 'b4m_live_secret',
+      previousOwnerUserId: 'minter',
+    });
+    const { req, res } = post('key-1');
+    await mockRefs.rotateHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(notifyApiKeyRotationReown).toHaveBeenCalledWith('minter', 'k', req.logger);
+  });
+
+  it('skips the re-own notifier when previousOwnerUserId is absent', async () => {
+    const { req, res } = post('key-1');
+    await mockRefs.rotateHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(notifyApiKeyRotationReown).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 with the credential when the notifier does not settle within 5s', async () => {
+    rotateUserApiKey.mockResolvedValueOnce({
+      id: 'key-1', name: 'k', keyPrefix: 'b4m_live_x',
+      key: 'b4m_live_secret', previousOwnerUserId: 'minter',
+    });
+    // Never-settling notifier simulates a stalled SMTP host.
+    notifyApiKeyRotationReown.mockReturnValueOnce(new Promise(() => {}));
+    vi.useFakeTimers();
+    const { req, res } = post('key-1');
+    const handlerP = mockRefs.rotateHandler!(req, res) as Promise<unknown>;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await handlerP;
+    vi.useRealTimers();
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.parse(res._getData()).key).toBe('b4m_live_secret');
   });
 });
 

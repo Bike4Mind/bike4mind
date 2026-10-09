@@ -41,17 +41,20 @@ function stubDeps(overrides: Partial<PersistAgentArtifactsDeps> = {}): PersistAg
  */
 function storeBackedDeps(options: { failAfterContentWrite?: boolean } = {}) {
   const contents = new Set<string>();
-  const artifacts = new Map<string, string>(); // artifactId -> questId
+  const artifacts = new Map<string, { questId: string; userId: string }>();
   let failNext = options.failAfterContentWrite ?? false;
 
   const deps: PersistAgentArtifactsDeps = {
     isArtifactsEnabled: vi.fn().mockResolvedValue(true),
     artifactExists: vi.fn(async (id: string) => artifacts.has(id)),
-    countQuestArtifacts: vi.fn(async (questId: string) => [...artifacts.values()].filter(q => q === questId).length),
+    countQuestArtifacts: vi.fn(
+      async (questId: string, userId: string) =>
+        [...artifacts.values()].filter(a => a.questId === questId && a.userId === userId).length
+    ),
     clearPartialArtifact: vi.fn(async (id: string) => {
       contents.delete(id);
     }),
-    createArtifact: vi.fn(async (_userId: string, payload: { id: string; sourceQuestId: string }) => {
+    createArtifact: vi.fn(async (userId: string, payload: { id: string; sourceQuestId: string }) => {
       if (contents.has(payload.id)) {
         throw Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
       }
@@ -60,7 +63,7 @@ function storeBackedDeps(options: { failAfterContentWrite?: boolean } = {}) {
         failNext = false;
         throw new Error('lambda died after the content write');
       }
-      artifacts.set(payload.id, payload.sourceQuestId);
+      artifacts.set(payload.id, { questId: payload.sourceQuestId, userId });
     }),
   };
 
@@ -320,6 +323,48 @@ describe('persistAgentArtifacts', () => {
     await persist(reactArtifact('foo'), deps);
 
     expect(deps.createArtifact).not.toHaveBeenCalled();
+  });
+
+  // Another user can stamp their own artifact with this quest id, so only the
+  // run's user's rows may count toward "already persisted".
+  it("counts only the run user's rows toward the quest gate", async () => {
+    const deps = stubDeps();
+
+    await persist(reactArtifact('foo'), deps);
+
+    expect(deps.countQuestArtifacts).toHaveBeenCalledWith(QUEST_ID, USER_ID);
+  });
+
+  it("still writes when only another user's row carries the quest id", async () => {
+    const { deps, artifacts } = storeBackedDeps();
+    artifacts.set('planted', { questId: QUEST_ID, userId: 'someone-else' });
+
+    await persist(reactArtifact('foo'), deps);
+
+    expect(deps.createArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it('queries the real quest gate with the run user in the filter', async () => {
+    const count = vi.fn().mockResolvedValue(1);
+    vi.doMock('@bike4mind/database', () => ({
+      artifactRepository: { count },
+      adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+    }));
+    vi.resetModules();
+    const { persistAgentArtifacts: persistWithDefaultDeps } = await import('./persistAgentArtifacts');
+
+    await persistWithDefaultDeps({
+      replyText: reactArtifact('foo'),
+      questId: QUEST_ID,
+      questCreatedAtMs: QUEST_CREATED_AT_MS,
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      executionId: EXECUTION_ID,
+      logger,
+    });
+
+    expect(count).toHaveBeenCalledWith({ sourceQuestId: QUEST_ID, userId: USER_ID });
+    vi.doUnmock('@bike4mind/database');
   });
 
   // A driver error that crossed a serialization boundary arrives as a plain

@@ -1,10 +1,17 @@
-import { ApiKeyType, generateSoundEffectContract, SoundGenerationVendor } from '@bike4mind/common';
+import {
+  ApiKeyType,
+  shouldPersistGeneratedAudio,
+  generateSoundEffectContract,
+  SoundGenerationVendor,
+} from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
 // The stored key type each vendor needs. Resolved per-user first, then falling
 // back to the admin-configured key (getEffectiveApiKey), so the feature works
@@ -26,7 +33,7 @@ const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
 // generateSoundEffectContract (the same source of truth that drives the OpenAPI
 // spec); `req.validated` is the parsed, typed body.
 const handler = nextRouteForContract(generateSoundEffectContract).post(async (req, res) => {
-  const { provider, text, durationSeconds, promptInfluence, format } = req.validated;
+  const { provider, text, durationSeconds, promptInfluence, format, encoding, preview } = req.validated;
   const userId = req.user?.id;
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
@@ -61,6 +68,7 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 
   const sessionId = `sound-effects-${userId}-${Date.now()}`;
+  const source = resolveRequestUsageSource(req);
 
   // Analytics is never part of the billing path: one usage event per provider
   // call (ok or error), independent of enforceCredits and of whether the charge
@@ -76,8 +84,8 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
         feature: 'sound_effects',
         provider,
         model: provider,
-        // Matches this call's ledger write (deductCreditsWithOrgSupport, source: 'api').
-        source: 'api',
+        // Matches this call's ledger write (deductCreditsWithOrgSupport).
+        source,
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,
@@ -113,40 +121,29 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     type: 'sound_effects_usage',
     sessionId,
     model: provider,
-    source: 'api',
+    source,
   });
 
   recordUsage('ok', creditsCharged, usdCost);
 
-  // Persist a browsable copy of the generated audio (on by default; opt out via
-  // the saveGeneratedAudio preference). Best-effort: a save failure (e.g. over
-  // quota) never blocks returning the audio the caller was already charged for.
-  if (userId && (req.user?.preferences?.saveGeneratedAudio ?? true)) {
-    const save = await persistGeneratedAudio({
-      userId,
-      audio,
-      contentType,
-      format,
-      source: 'sound-effect',
-      text,
-      logger: req.logger,
-    });
-    res.setHeader('X-B4M-Audio-Saved', String(save.saved));
-    if (save.saved) {
-      res.setHeader('X-B4M-Audio-Fab-File-Id', save.fabFileId);
-      res.setHeader('X-B4M-Audio-File-Name', save.fileName);
-      // Forward the signed URL minted at creation. Non-image audio gets a working URL
-      // immediately (createFabFile), whereas re-resolving it via GET /api/files/:id
-      // fails closed until the async moderation scan flips moderationStatus to 'clean'
-      // (isImageServeable gates every mime type) - so callers must use this URL, not
-      // re-fetch one. Absent only in the rare case createFabFile minted no URL.
-      if (save.fileUrl) res.setHeader('X-B4M-Audio-File-Url', save.fileUrl);
-    }
-  }
+  // Best-effort browsable copy (on by default; opt out via the saveGeneratedAudio
+  // preference or `preview`): a save failure never blocks returning audio the
+  // caller was already charged for.
+  const save =
+    userId &&
+    shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
+      ? await persistGeneratedAudio({
+          userId,
+          audio,
+          contentType,
+          format,
+          source: 'sound-effect',
+          text,
+          logger: req.logger,
+        })
+      : undefined;
 
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Length', audio.length);
-  return res.send(audio);
+  return deliverGeneratedAudio(res, { audio, contentType, encoding: encoding ?? 'binary', save, logger: req.logger });
 });
 
 export const config = {

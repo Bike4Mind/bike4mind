@@ -11,6 +11,7 @@ import {
   mementoEmbeddingIsCurrent,
   toMementoVector,
 } from '@bike4mind/common';
+import type { Principal } from '@bike4mind/memory';
 import { createKeyProvider, decryptFact, decryptVector, encryptVector } from './factCipher';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { apiKeyService } from '@bike4mind/services';
@@ -111,7 +112,7 @@ export async function reembedMementosForUser(
     } catch (err) {
       // Leave it stale rather than half-written: it stays excluded from vector search, which is the
       // safe state, and the next run retries it. Recorded in errors (mirroring
-      // migrateLedgerVectorsForUser's own errors: string[]) so the caller can surface WHICH memento
+      // migrateLedgerVectorsForPrincipal's own errors: string[]) so the caller can surface WHICH memento
       // needs attention instead of only a count.
       stats.failed += 1;
       const message = `memento ${String(memento._id)}: ${err instanceof Error ? err.message : String(err)}`;
@@ -124,16 +125,20 @@ export async function reembedMementosForUser(
 }
 
 /**
- * Migrate a user's LEDGER vectors into the current space.
+ * Give one principal's LEDGER events a current-space vector: backfill events written without one, and
+ * migrate ones left in an older space. Works for any principal kind; `ownerUserId` is the DEK owner,
+ * whose effective keys pay for the embeds (matching the lake writers).
  *
- * Needed because the ledger cannot be re-embedded the way a memento can - it is append-only, and its
- * vector is the ONLY copy for a belief V2 learned on its own (no V1 twin exists to fall back on). If
- * they are left in the old space the space-id gate correctly refuses them and that memory goes quiet.
+ * Needed because the ledger vector is the ONLY copy for a belief V2 learned on its own (no V1 twin to
+ * fall back on). Vectorless events are written by design when no provider key is available
+ * (`createMementoEmbedder`); left that way they rank on lexical overlap for good.
  *
- * Rewriting them in place is legitimate: the embedding is deliberately outside the chain hash, so the
- * tamper-evidence is untouched (see `rewriteEmbedding`).
+ * Rewriting in place is legitimate: the embedding is deliberately outside the chain hash, so the
+ * tamper-evidence is untouched (see `rewriteEmbedding`, which also refuses shredded events).
  *
- * TWO PATHS, and the distinction is the whole point:
+ * THREE PATHS, and the distinction between the last two is the whole point:
+ *
+ *   - NO vector: embed the fact. The backfill.
  *
  *   - the vector's source space is KNOWN (stamped as full-width text-embedding-3-small): a Matryoshka
  *     truncation is a valid pure projection of it. Free - no API call.
@@ -145,28 +150,48 @@ export async function reembedMementosForUser(
  *     current makes every read path trust it. Learned the hard way: the first cut of this migration
  *     did exactly that, and a real user's woodworking memory dropped out of its own recall.
  *
- * Idempotent: an event already in the current space is skipped.
+ * Idempotent: an event already in the current space is skipped. `limit` caps PROVIDER calls (embeds,
+ * successful or not), never truncations; `providerCalls` is how many were made and `stoppedAtLimit` says
+ * the principal has more to do. An event that needs an embed while the owner has no provider key counts
+ * as `noProviderKey`, not `failed`: no call was made, so it spends no budget. `embedderError` carries
+ * why the embedding service could not be built (also recorded once in `errors`), so a caller reports
+ * the real cause rather than assuming a missing key. A dry run makes no provider call and no write, and
+ * its counts mean "would".
  */
-export async function migrateLedgerVectorsForUser(userId: string): Promise<{
+export async function migrateLedgerVectorsForPrincipal(
+  target: { principal: Principal; ownerUserId: string },
+  opts: { dryRun?: boolean; limit?: number } = {}
+): Promise<{
   total: number;
   alreadyCurrent: number;
   truncated: number;
   reembedded: number;
-  noVector: number;
+  backfilled: number;
+  noFact: number;
+  noProviderKey: number;
   failed: number;
+  providerCalls: number;
+  embedderError: string | null;
+  stoppedAtLimit: boolean;
   errors: string[];
 }> {
+  const { principal, ownerUserId } = target;
   const keys = createKeyProvider(memoryPrincipalKeyRepository);
-  const dek = await keys.getDek({ kind: 'user', id: userId });
+  const dek = await keys.getDek(principal);
 
-  const events = await memoryLedgerRepository.listChain('user', userId, userId);
+  const events = await memoryLedgerRepository.listChain(principal.kind, principal.id, ownerUserId);
   const stats = {
     total: events.length,
     alreadyCurrent: 0,
     truncated: 0,
     reembedded: 0,
-    noVector: 0,
+    backfilled: 0,
+    noFact: 0,
+    noProviderKey: 0,
     failed: 0,
+    providerCalls: 0,
+    embedderError: null as string | null,
+    stoppedAtLimit: false,
     errors: [] as string[],
   };
 
@@ -174,68 +199,88 @@ export async function migrateLedgerVectorsForUser(userId: string): Promise<{
   // the correct end state, not an error.
   if (!dek) return stats;
 
-  const embeddingService = await createMementoEmbeddingService(userId);
+  const limit = opts.limit ?? Infinity;
+  // Built on the first embed only, so a principal with no provider key still gets its free truncations.
+  // undefined = not built yet, null = could not be built (no provider key).
+  let service: Awaited<ReturnType<typeof createMementoEmbeddingService>> | null | undefined;
 
   for (const event of events) {
-    if (!event.embeddingCipher || !event.embeddingIv || !event.embeddingTag) {
-      stats.noVector += 1;
+    if (event.shredded || event.kind === 'retract') continue;
+    const tag = `event ${event.hash.slice(0, 12)}`;
+
+    // Same read as toMemoryEvent (ledgerMemoryStore.ts): legacy plaintext, else the ciphered fact.
+    const fact =
+      event.factCipher && event.factIv && event.factTag
+        ? decryptFact(dek, { cipher: event.factCipher, iv: event.factIv, tag: event.factTag })
+        : event.fact;
+    if (!fact?.trim()) {
+      stats.noFact += 1;
       continue;
     }
-    if (event.embeddingModel === MEMENTO_EMBEDDING_ID) {
+
+    const hasVector = Boolean(event.embeddingCipher && event.embeddingIv && event.embeddingTag);
+    if (hasVector && event.embeddingModel === MEMENTO_EMBEDDING_ID) {
       stats.alreadyCurrent += 1;
       continue;
     }
 
     try {
       let vector: number[] | null = null;
-      let viaTruncation = false;
-
-      if (event.embeddingModel === MEMENTO_EMBEDDING_MODEL) {
-        // Known: full-width vector from the current model. Truncation is a valid projection of it.
+      if (hasVector && event.embeddingModel === MEMENTO_EMBEDDING_MODEL) {
         const full = decryptVector(dek, {
-          cipher: event.embeddingCipher,
-          iv: event.embeddingIv,
-          tag: event.embeddingTag,
+          cipher: event.embeddingCipher!,
+          iv: event.embeddingIv!,
+          tag: event.embeddingTag!,
         });
-        if (full?.length) {
-          vector = toMementoVector(full);
-          viaTruncation = true;
-        }
+        if (full?.length) vector = toMementoVector(full);
       }
 
+      const arm = vector ? 'truncated' : hasVector ? 'reembedded' : 'backfilled';
+      if (!vector && stats.providerCalls >= limit) {
+        stats.stoppedAtLimit = true;
+        break;
+      }
+      if (opts.dryRun) {
+        stats[arm] += 1;
+        if (!vector) stats.providerCalls += 1;
+        continue;
+      }
       if (!vector) {
-        // Unknown provenance - the only honest move is to recompute the vector from the fact itself.
-        const fact = decryptFact(dek, {
-          cipher: event.factCipher!,
-          iv: event.factIv!,
-          tag: event.factTag!,
-        });
-        if (!fact?.trim()) {
-          stats.failed += 1;
-          stats.errors.push(`event ${event.hash.slice(0, 12)}: no readable fact to re-embed from`);
+        if (service === undefined) {
+          try {
+            service = await createMementoEmbeddingService(ownerUserId);
+          } catch (err) {
+            // Recorded once: a missing key would otherwise repeat the same message for every event.
+            service = null;
+            stats.embedderError = err instanceof Error ? err.message : String(err);
+            stats.errors.push(`owner ${ownerUserId}: ${stats.embedderError}`);
+          }
+        }
+        if (!service) {
+          stats.noProviderKey += 1;
           continue;
         }
-        vector = toMementoVector(await embeddingService.generateEmbedding(fact));
+        stats.providerCalls += 1;
+        vector = toMementoVector(await service.generateEmbedding(fact));
       }
 
       const sealed = encryptVector(dek, vector);
-      const modified = await memoryLedgerRepository.rewriteEmbedding('user', userId, userId, event.hash, {
-        cipher: sealed.cipher,
-        iv: sealed.iv,
-        tag: sealed.tag,
-        model: MEMENTO_EMBEDDING_ID,
-      });
+      const modified = await memoryLedgerRepository.rewriteEmbedding(
+        principal.kind,
+        principal.id,
+        ownerUserId,
+        event.hash,
+        { cipher: sealed.cipher, iv: sealed.iv, tag: sealed.tag, model: MEMENTO_EMBEDDING_ID }
+      );
       if (modified === 0) {
         stats.failed += 1;
-        stats.errors.push(`event ${event.hash.slice(0, 12)}: no document matched the rewrite`);
+        stats.errors.push(`${tag}: no document matched the rewrite`);
         continue;
       }
-
-      if (viaTruncation) stats.truncated += 1;
-      else stats.reembedded += 1;
+      stats[arm] += 1;
     } catch (err) {
       stats.failed += 1;
-      stats.errors.push(`event ${event.hash.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+      stats.errors.push(`${tag}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

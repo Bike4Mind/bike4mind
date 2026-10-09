@@ -37,7 +37,7 @@ vi.mock('../../di/registry', () => ({
   }),
 }));
 
-vi.mock('@bike4mind/services/llm', () => ({
+vi.mock('@bike4mind/services/llm/ChatCompletionInvoke', () => ({
   ChatCompletionInvoke: vi.fn().mockImplementation(() => ({
     invoke: vi.fn().mockResolvedValue({}),
   })),

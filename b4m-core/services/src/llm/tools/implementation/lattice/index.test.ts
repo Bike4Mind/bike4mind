@@ -219,9 +219,8 @@ describe('Lattice tools - failed writes report success: false', () => {
 });
 
 /**
- * These tools share `isModelOwner` with `latticeModelService.getModelForWrite` rather than
- * comparing raw, so a same-org non-owner - who CAN now read the model over HTTP - still cannot
- * make the subagent write to it.
+ * These tools delegate to `getModelForWrite`, so a same-org non-owner - who CAN read the model
+ * over HTTP via `getModel` - is still rejected at the write gate (`isModelOwner`).
  */
 describe('Lattice tools - org sharing does not confer write authority', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -231,6 +230,10 @@ describe('Lattice tools - org sharing does not confer write authority', () => {
     const update = vi.fn().mockResolvedValue(null);
     const context = {
       userId: 'colleague',
+      // organizationId on user so canReadModel admits them at the READ gate --
+      // without this the colleague is rejected before isModelOwner is checked,
+      // and the write-gate predicate is never exercised.
+      user: { organizationId: orgId },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       db: {
         latticeModels: {
@@ -249,6 +252,18 @@ describe('Lattice tools - org sharing does not confer write authority', () => {
     return { context, update };
   };
 
+  it('lattice_add_entity refuses a same-org non-owner', async () => {
+    const { context, update } = makeOrgContext();
+    const result = await latticeAddEntityTool.implementation(context).toolFn({
+      modelId: MODEL_ID,
+      name: 'Injected',
+      type: 'line_item',
+      initialValues: [],
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(JSON.parse(result).success).toBe(false);
+  });
+
   it('lattice_set_value refuses a same-org non-owner', async () => {
     const { context, update } = makeOrgContext();
     const result = await latticeSetValueTool.implementation(context).toolFn({
@@ -256,6 +271,17 @@ describe('Lattice tools - org sharing does not confer write authority', () => {
       entityName: 'Revenue',
       attributeKey: 'value',
       value: '999',
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(JSON.parse(result).success).toBe(false);
+  });
+
+  it('lattice_create_rule refuses a same-org non-owner', async () => {
+    const { context, update } = makeOrgContext();
+    const result = await latticeCreateRuleTool.implementation(context).toolFn({
+      modelId: MODEL_ID,
+      name: 'Margin',
+      formula: 'Margin = Revenue - Costs',
     });
     expect(update).not.toHaveBeenCalled();
     expect(JSON.parse(result).success).toBe(false);

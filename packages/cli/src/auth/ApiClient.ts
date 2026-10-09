@@ -1,4 +1,5 @@
 import axios, { isAxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import { isProviderKeyFailure } from './providerKeyFailure';
 import { ConfigStore } from '../storage/ConfigStore';
 import { OAuthClient } from './OAuthClient';
 import { logger } from '../utils/Logger';
@@ -115,6 +116,12 @@ export class ApiClient {
         // API-key auth has no refresh token to rotate, so a 401 is terminal - skip
         // the JWT refresh dance and let the caller surface it.
         if (this.apiKey) {
+          return Promise.reject(error);
+        }
+
+        // Pass a provider-key 401 through untouched, including on the post-refresh retry, so
+        // it is not mistaken for a revoked session.
+        if (error.response?.status === 401 && isProviderKeyFailure(error.response.data)) {
           return Promise.reject(error);
         }
 

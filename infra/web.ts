@@ -9,7 +9,7 @@ import {
   uploadCompleteFunction,
   notebookImportFunction,
 } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, TEST_VIDEO_PROVIDER_ENVIRONMENT } from './constants';
 import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
 // web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
 // not import agentExecutor (the agent_execute route is declared the other way
@@ -31,7 +31,7 @@ import {
   generationCallbackQueue,
   imageEditQueue,
   imageGenerationQueue,
-  videoGenerationQueue,
+  generationJobQueue,
   researchEngineQueue,
   agentProactiveMessageQueue,
   slackExportQueue,
@@ -66,7 +66,7 @@ import {
   generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
-  videoGenerationDLQ,
+  generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   whatsNewHighlightsQueueDLQ,
@@ -95,6 +95,8 @@ import {
   optihashiRunCompletionQueueDLQ,
   bobRunQueue,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueue,
+  libreoncologyAudioRenderQueueDLQ,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
@@ -122,9 +124,9 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'generation-callback': generationCallbackQueueDLQ.url,
     'image-generation': imageGenerationDLQ.url,
     'image-edit': imageEditDLQ.url,
-    'video-generation': videoGenerationDLQ.url,
+    'generation-job': generationJobDLQ.url,
     'research-engine': researchEngineQueueDLQ.url,
-    'whats-new-generation': whatsNewGenerationQueueDLQ.url,
+    'release-notes': whatsNewGenerationQueueDLQ.url,
     'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
     'notebook-curation': notebookCurationQueueDLQ.url,
     'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
@@ -146,6 +148,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'agent-continuation': agentContinuationQueueDLQ.url,
     'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
     'bob-run': bobRunQueueDLQ.url,
+    'libreoncology-audio-render': libreoncologyAudioRenderQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
     'data-lake-research': dataLakeResearchQueueDLQ.url,
@@ -184,7 +187,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     generationCallbackQueue: generationCallbackQueue.url,
     imageGenerationQueue: imageGenerationQueue.url,
     imageEditQueue: imageEditQueue.url,
-    videoGenerationQueue: videoGenerationQueue.url,
+    generationJobQueue: generationJobQueue.url,
     researchEngineQueue: researchEngineQueue.url,
     agentProactiveMessageQueue: agentProactiveMessageQueue.url,
     slackExportQueue: slackExportQueue.url,
@@ -207,6 +210,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     agentContinuationQueue: agentContinuationQueue.url,
     optihashiRunCompletionQueue: optihashiRunCompletionQueue.url,
     bobRunQueue: bobRunQueue.url,
+    libreoncologyAudioRenderQueue: libreoncologyAudioRenderQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
     dataLakeResearchQueue: dataLakeResearchQueue.url,
@@ -223,7 +227,10 @@ export const web = new sst.aws.Nextjs(
   'frontend',
   {
     path: 'apps/client',
-    openNextVersion: '3.9.16',
+    // Coupled to the `next` version in apps/client/package.json. next >=16.3.8 keys the response
+    // cache by a scoped route-cache key; OpenNext <4.1.7 seeds and looks up the bare pathname, so
+    // every prerendered route misses and runs its handler in the Lambda (e.g. /serwist/sw.js 500s).
+    openNextVersion: '4.1.8',
 
     vpc: lambdaVpc,
     router: router ? { instance: router } : undefined,
@@ -419,8 +426,11 @@ export const web = new sst.aws.Nextjs(
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
       NEXT_PUBLIC_WEBSOCKET_URL: websocketApi.url,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
+      // Optional https URL of another deployment's GET /api/v1/whats-new, served ahead of local notes.
+      WHATS_NEW_FEED_URL: process.env.WHATS_NEW_FEED_URL || '',
       // Locks the server function URL to the router (apps/client/proxy.ts 403s requests without the
       // matching header). Not under `sst dev`: Next runs locally there and nothing comes via CloudFront.
       // DISABLE_ORIGIN_VERIFY='true' ships the router stamp without the gate: use it on a stage's first

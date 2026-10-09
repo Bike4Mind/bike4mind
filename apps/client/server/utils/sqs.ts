@@ -1,4 +1,5 @@
 import {
+  ChangeMessageVisibilityCommand,
   DeleteMessageCommand,
   GetQueueAttributesCommand,
   ReceiveMessageCommand,
@@ -159,3 +160,17 @@ export const getQueueAttributes = async (
     approximateNotVisibleCount: parseInt(response.Attributes?.ApproximateNumberOfMessagesNotVisible ?? '0', 10),
   };
 };
+
+export async function changeMessageVisibility(
+  queueUrl: string,
+  receiptHandle: string,
+  timeoutSeconds: number
+): Promise<void> {
+  await createSqsClient().send(
+    new ChangeMessageVisibilityCommand({
+      QueueUrl: queueUrl,
+      ReceiptHandle: receiptHandle,
+      VisibilityTimeout: timeoutSeconds,
+    })
+  );
+}

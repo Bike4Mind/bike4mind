@@ -32,7 +32,7 @@ export async function loadGraphDetail(graph: IQuestGraphDocument, logger: Logger
 
   const nodes = await reconcileQuestNodes(stored, runs, logger);
   const statusById = new Map<string, NodeStatus>(nodes.map(n => [n.id, n.status]));
-  const artifactsByNode = await linkNodeArtifacts(nodes, runs, logger);
+  const artifactsByNode = await linkNodeArtifacts(nodes, runs, graph.userId, logger);
 
   return {
     graph: toQuestGraphWire(graph),

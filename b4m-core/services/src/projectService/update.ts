@@ -1,4 +1,3 @@
-import { Logger } from '@bike4mind/observability';
 import { IProjectRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -33,7 +32,6 @@ export const update = async (userId: string, parameters: UpdateProjectParameters
 
     updatedAt: new Date(),
   };
-  Logger.globalInstance.log('updatedProject1', updatedProject, '123');
 
   await db.projects.update({ id: project.id, ...updatedFields, updatedAt: updatedProject.updatedAt });
 

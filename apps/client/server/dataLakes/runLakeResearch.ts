@@ -10,7 +10,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { apiKeyService, dataLakeResearchService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
-import { resolveWebSearchProvider } from '@bike4mind/services/llm';
+import { resolveWebSearchProviders, searchWithHedge } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -50,9 +50,9 @@ export interface ResearchRunOutcome {
  */
 async function fetchSourceForProposal(url: string, logger: Logger) {
   try {
-    const { title, textContent, mimeType } = await fetchAndParseURL(url, { logger });
+    const { title, textContent, mimeType, finalUrl } = await fetchAndParseURL(url, { logger });
     const isExtractableText = typeof textContent === 'string' && mimeType.startsWith('text/');
-    return { title, text: isExtractableText ? textContent : undefined };
+    return { title, finalUrl, text: isExtractableText ? textContent : undefined };
   } catch (error) {
     // Fail-soft per candidate: a dead link, a 403 or an SSRF refusal costs this one source, never
     // the run. The loop counts it as `fetchFailed` so the total is visible on the run card.
@@ -236,7 +236,7 @@ export async function runLakeResearch(
   let executionSucceeded = false;
 
   try {
-    const provider = await resolveWebSearchProvider(keyAdapters);
+    const [provider, backup] = await resolveWebSearchProviders(keyAdapters);
     if (!provider) {
       // Not thrown: an unconfigured deployment is an operator fact, not a transient fault, and
       // throwing would burn three SQS deliveries and a DLQ entry on a message that can never
@@ -282,7 +282,7 @@ export async function runLakeResearch(
 
     const ports: dataLakeResearchService.ResearchRunPorts = {
       search: async (query, maxResults, recencyDays) => {
-        const hits = await provider.search(query, maxResults, { recencyDays });
+        const { results: hits } = await searchWithHedge(provider, backup, query, maxResults, { recencyDays });
         return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));
       },
       judge: candidate =>

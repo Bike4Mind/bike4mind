@@ -8,7 +8,7 @@ const LAKE = {
 };
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   resolveCanManageLake: vi.fn(async () => true),
   applyAdmissionDecision: vi.fn(async () => ({
@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   // A plain array, not a spy: the middleware is applied once when the module is imported, and
   // `vi.clearAllMocks()` in beforeEach would erase that call before any test could assert on it.
   featureFlags: [] as string[],
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -39,14 +41,20 @@ vi.mock('@server/middlewares/featureFlag', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     resolveCanManageLake: h.resolveCanManageLake,
     applyAdmissionDecision: h.applyAdmissionDecision,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    h.tx.push('enter');
+    const out = await fn();
+    h.tx.push('exit');
+    return out;
+  },
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   lakeMembershipDecisionRepository: {},
@@ -81,7 +89,9 @@ beforeEach(() => {
   // clearAllMocks resets calls, NOT implementations - the built-in-lake test installs a throwing
   // one, which otherwise leaks into every test declared after it.
   h.assertLakeWritable.mockImplementation(() => undefined);
-  h.assertLakeAccess.mockResolvedValue(LAKE);
+  h.tx.length = 0;
+  h.touchIfStable.mockImplementation(async () => (h.tx.push('touch'), true));
+  h.assertLakeAccessById.mockResolvedValue(LAKE);
   h.resolveCanManageLake.mockResolvedValue(true);
   h.applyAdmissionDecision.mockResolvedValue({
     group: { fileName: 'policy.md', tier: 'fileName', bucket: 'differing', members: [], memberCount: 2 },
@@ -183,10 +193,40 @@ describe('POST /api/data-lakes/:id/membership-decisions', () => {
 
   it('validates the body BEFORE resolving the lake, so a bad body cannot probe existence', async () => {
     await expect(invoke(makeReq({}), makeRes())).rejects.toThrow();
-    expect(h.assertLakeAccess).not.toHaveBeenCalled();
+    expect(h.assertLakeAccessById).not.toHaveBeenCalled();
   });
 
   it('is gated on the data-lakes feature flag', () => {
     expect(h.featureFlags).toContain('EnableDataLakes');
+  });
+});
+
+describe('POST serialization against a concurrent revoke', () => {
+  const body = { fileName: 'policy.md', decision: 'keep-newest' };
+
+  it('runs the gates and the decision inside the transaction, then touches the lake last', async () => {
+    h.assertLakeAccessById.mockImplementation(async () => (h.tx.push('access'), LAKE));
+    h.resolveCanManageLake.mockImplementation(async () => (h.tx.push('manage'), true));
+    h.applyAdmissionDecision.mockImplementation(async () => {
+      h.tx.push('decide');
+      return {
+        group: { fileName: 'policy.md', tier: 'fileName', bucket: 'differing', members: [], memberCount: 2 },
+        removedFabFileIds: ['old-1'],
+      };
+    });
+
+    await invoke(makeReq(body), makeRes());
+
+    expect(h.tx).toEqual(['enter', 'access', 'manage', 'decide', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith(LAKE.id);
+  });
+
+  it('neither decides nor touches when the manage gate refuses', async () => {
+    h.resolveCanManageLake.mockResolvedValue(false);
+
+    await expect(invoke(makeReq(body), makeRes())).rejects.toThrow(/permission to resolve duplicates/);
+
+    expect(h.applyAdmissionDecision).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

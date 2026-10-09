@@ -44,6 +44,7 @@ const h = vi.hoisted(() => ({
   keys: [] as any[],
   deleteMutate: vi.fn(),
   createResult: { key: 'b4m_live_newkey123' } as Partial<CreateUserApiKeyResponse>,
+  createMutate: vi.fn(),
   signingSecretMutate: vi.fn(),
   signingSecretResult: {
     id: 'key-1',
@@ -51,12 +52,18 @@ const h = vi.hoisted(() => ({
     callbackSigningSecret: 'whsec_rotated999',
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
+  hasOptiAccess: false,
 }));
+
+vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
   useGetUserApiKeys: () => ({ data: h.keys, isLoading: false, error: null, refetch: vi.fn() }),
   useCreateUserApiKey: ({ onSuccess }: { onSuccess?: (result: Partial<CreateUserApiKeyResponse>) => void } = {}) => ({
-    mutate: () => onSuccess?.(h.createResult),
+    mutate: (data: unknown) => {
+      h.createMutate(data);
+      onSuccess?.(h.createResult);
+    },
     isPending: false,
   }),
   useRotateUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
@@ -183,6 +190,24 @@ describe('UserApiKeysTab - callback signing secret', () => {
     expect(screen.getByDisplayValue('whsec_fresh123')).toBeInTheDocument();
   });
 
+  it('shows a runnable test snippet that uses this origin and a Bearer header without repeating the key', () => {
+    h.keys = [activeKey];
+    renderTab();
+
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'New key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+
+    const snippet = screen.getByTestId('api-key-created-snippet').textContent!;
+    expect(snippet).toContain(`${window.location.origin}/api/chat`);
+    expect(snippet).toContain('-H "Authorization: Bearer $B4M_API_KEY"');
+    expect(snippet).not.toContain('X-API-Key');
+    expect(snippet).not.toContain('your-deployment.example.com');
+    expect(snippet).not.toContain('b4m_live_newkey123');
+  });
+
   it('does not render a signing secret block when the create response lacks one', () => {
     h.createResult = { key: 'b4m_live_newkey123' };
     h.keys = [activeKey];
@@ -230,5 +255,148 @@ describe('UserApiKeysTab - callback signing secret', () => {
 
     fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
     expect(h.signingSecretMutate).toHaveBeenCalledWith('key-3');
+  });
+});
+
+describe('UserApiKeysTab - API docs links', () => {
+  // Relative on purpose: each deployment (preview, self-host) serves its own spec.
+  const expectSameOriginDocsLink = (element: HTMLElement) => {
+    expect(element).toHaveAttribute('href', '/api/v1/docs');
+    expect(element).toHaveAttribute('target', '_blank');
+    expect(element.getAttribute('rel')).toContain('noopener');
+  };
+
+  beforeEach(() => {
+    h.keys = [activeKey];
+  });
+
+  it('links the header API Docs button to the same-origin docs', () => {
+    renderTab();
+
+    expectSameOriginDocsLink(screen.getByTestId('api-keys-open-docs-btn'));
+  });
+
+  it('links the API Documentation tab to the same-origin docs', () => {
+    renderTab();
+    fireEvent.click(screen.getByText('API Documentation'));
+
+    expectSameOriginDocsLink(screen.getByTestId('api-keys-docs-reference-link'));
+  });
+});
+
+describe('UserApiKeysTab - premium scopes', () => {
+  const PREMIUM = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];
+  const openScopeDocs = () => {
+    renderTab();
+    fireEvent.click(screen.getByText('API Documentation'));
+    fireEvent.click(screen.getByText('Scopes'));
+    // Anchors the negative case: the scope list itself rendered.
+    expect(screen.getByText(ApiKeyScope.AI_CHAT)).toBeInTheDocument();
+  };
+
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.createMutate.mockClear();
+  });
+
+  it('keeps the premium scopes out of the New-Key modal and its Full access preset without Opti access', () => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    expect(screen.getByTestId(`api-key-scope-${ApiKeyScope.AI_CHAT}`)).toBeInTheDocument();
+    for (const scope of PREMIUM) expect(screen.queryByTestId(`api-key-scope-${scope}`)).toBeNull();
+
+    // Joy puts a clickable Chip's onClick on its inner action button.
+    fireEvent.click(screen.getByTestId('api-key-preset-full').querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Full key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+
+    const { scopes } = h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] };
+    expect(scopes).toContain(ApiKeyScope.AI_CHAT);
+    for (const scope of PREMIUM) expect(scopes).not.toContain(scope);
+  });
+
+  it('re-seeds the Read-only default when Opti access resolves after mount', () => {
+    const view = renderTab();
+    h.hasOptiAccess = true;
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <UserApiKeysTab />
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Read key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+
+    const { scopes } = h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] };
+    expect(scopes).toContain(ApiKeyScope.OPTIHASHI_READ);
+    expect(scopes).not.toContain(ApiKeyScope.OPTIHASHI_COMPUTE);
+  });
+
+  const rerenderTab = (view: ReturnType<typeof renderTab>) =>
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <UserApiKeysTab />
+      </CssVarsProvider>
+    );
+
+  const submitKey = (name: string) => {
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, { target: { value: name } });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+  };
+
+  it('drops the premium scopes from a Full access selection when Opti access is revoked', () => {
+    h.hasOptiAccess = true;
+    const view = renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.click(screen.getByTestId('api-key-preset-full').querySelector('button')!);
+    h.hasOptiAccess = false;
+    rerenderTab(view);
+
+    const scopes = submitKey('Revoked key');
+    expect(scopes).toContain(ApiKeyScope.AI_CHAT);
+    for (const scope of PREMIUM) expect(scopes).not.toContain(scope);
+  });
+
+  it('drops the premium scopes from a custom selection when Opti access is revoked', () => {
+    h.hasOptiAccess = true;
+    const view = renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    // Read-only plus one extra scope: a custom set that still holds optihashi:read.
+    fireEvent.click(screen.getByTestId(`api-key-scope-${ApiKeyScope.AI_CHAT}`).querySelector('button')!);
+    h.hasOptiAccess = false;
+    rerenderTab(view);
+
+    const scopes = submitKey('Revoked custom key');
+    expect(scopes).toContain(ApiKeyScope.AI_CHAT);
+    for (const scope of PREMIUM) expect(scopes).not.toContain(scope);
+  });
+
+  it('keeps a custom selection when Opti access resolves after the user picked scopes', () => {
+    const view = renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.click(screen.getByTestId(`api-key-scope-${ApiKeyScope.AI_CHAT}`).querySelector('button')!);
+    h.hasOptiAccess = true;
+    rerenderTab(view);
+
+    const scopes = submitKey('Custom key');
+    expect(scopes).toContain(ApiKeyScope.AI_CHAT);
+    for (const scope of PREMIUM) expect(scopes).not.toContain(scope);
+  });
+
+  it('leaves the premium scopes out of the scope docs without Opti access', () => {
+    openScopeDocs();
+    for (const scope of PREMIUM) expect(screen.queryByText(scope)).toBeNull();
+  });
+
+  it('documents the premium scopes with Opti access', () => {
+    h.hasOptiAccess = true;
+    openScopeDocs();
+    for (const scope of PREMIUM) expect(screen.getByText(scope)).toBeInTheDocument();
   });
 });

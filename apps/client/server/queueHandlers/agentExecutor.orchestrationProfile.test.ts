@@ -1,9 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { IAgent, OrchestrationDefaults } from '@bike4mind/common';
+import {
+  DATA_LAKE_TOOL_NAMES,
+  OrchestrationDefaultsSchema,
+  type IAgent,
+  type OrchestrationDefaults,
+} from '@bike4mind/common';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
   pickEffectiveEnabledTools,
+  hasApprover,
+  mcpSessionDisabledTools,
   type ResolvedOrchestrationProfile,
 } from './agentExecutor.orchestrationProfile';
 // Import the REAL schema (not a local mirror) so this regression test breaks
@@ -11,6 +18,9 @@ import {
 // would make the test stay green while the bug returns. Pulled from the pure
 // schema module so we don't drag the executor's Mongo/AWS deps into the test.
 import { StartExecutionSchema } from './agentExecutor.schemas';
+import { classifyToolPermission } from './agentExecutorUtils/toolPermissions';
+import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
+import { applySessionToolPolicy } from './agentExecutor.sessionToolPolicy';
 
 const ADMIN_DEFAULTS: OrchestrationDefaults = {
   allowedTools: ['web_search', 'file_read', 'coordinate_task'],
@@ -357,19 +367,19 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
   const SMART_TOOLS = ['deep_research', 'chess_engine', 'web_scrape'];
 
   it('keeps BOTH the user picks and the org toolbelt', () => {
-    const result = pickEffectiveEnabledTools(SMART_TOOLS, synthetic, true);
+    const result = pickEffectiveEnabledTools(SMART_TOOLS, synthetic, { payloadIsAmbient: true });
     for (const tool of SMART_TOOLS) expect(result).toContain(tool);
     for (const tool of synthetic.allowedTools) expect(result).toContain(tool);
     expect(result).toEqual([...new Set(result)]);
   });
 
   it('is exactly the union, with nothing invented beyond it', () => {
-    const result = pickEffectiveEnabledTools(SMART_TOOLS, synthetic, true);
+    const result = pickEffectiveEnabledTools(SMART_TOOLS, synthetic, { payloadIsAmbient: true });
     expect(new Set(result)).toEqual(new Set([...SMART_TOOLS, ...synthetic.allowedTools]));
   });
 
   it('dedupes a pick that is already in the org toolbelt', () => {
-    const result = pickEffectiveEnabledTools(['web_search', 'deep_research'], synthetic, true);
+    const result = pickEffectiveEnabledTools(['web_search', 'deep_research'], synthetic, { payloadIsAmbient: true });
     expect(result.filter(t => t === 'web_search')).toHaveLength(1);
   });
 
@@ -380,7 +390,7 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
       ...synthetic,
       deniedTools: ['deep_research', 'recharts'],
     };
-    const result = pickEffectiveEnabledTools(SMART_TOOLS, profile, true);
+    const result = pickEffectiveEnabledTools(SMART_TOOLS, profile, { payloadIsAmbient: true });
     expect(result).not.toContain('deep_research');
     expect(result).not.toContain('recharts');
     expect(result).toContain('chess_engine');
@@ -392,7 +402,7 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
     // config itself to avoid handing back a tool the admin removed org-wide. Here the base IS
     // the profile the executor resolved, so a narrowed toolbelt is honored by construction.
     const narrowed: ResolvedOrchestrationProfile = { ...synthetic, allowedTools: ['web_search'] };
-    const result = pickEffectiveEnabledTools(['deep_research'], narrowed, true);
+    const result = pickEffectiveEnabledTools(['deep_research'], narrowed, { payloadIsAmbient: true });
     expect(new Set(result)).toEqual(new Set(['deep_research', 'web_search']));
     expect(result).not.toContain('recharts');
     expect(result).not.toContain('image_generation');
@@ -404,11 +414,15 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
     // is that the executor no longer WARNS about an ambient payload here, because every
     // agentless send ships one and the warn is meant to flag a pinned selection being voided.
     const exclusive: ResolvedOrchestrationProfile = { ...synthetic, toolsetIsExclusive: true };
-    expect(pickEffectiveEnabledTools(SMART_TOOLS, exclusive, true)).toEqual(synthetic.allowedTools);
-    expect(pickEffectiveEnabledTools(SMART_TOOLS, exclusive, false)).toEqual(synthetic.allowedTools);
+    expect(pickEffectiveEnabledTools(SMART_TOOLS, exclusive, { payloadIsAmbient: true })).toEqual(
+      synthetic.allowedTools
+    );
+    expect(pickEffectiveEnabledTools(SMART_TOOLS, exclusive, { payloadIsAmbient: false })).toEqual(
+      synthetic.allowedTools
+    );
   });
 
-  it('REPLACES rather than unions for a persisted agent that curated its own allowedTools', () => {
+  it('keeps the curated allowedTools, ignoring an ambient payload, for an agent that curated its own', () => {
     // A curated whitelist is a deliberate statement about THIS agent, so ambient chat picks
     // must not widen it. The client pins such a selection anyway (`resolveDispatchTools` sends
     // the agent's whitelist with the ambient flag off), so this is belt-and-braces.
@@ -417,7 +431,19 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
       isSynthetic: false,
       allowedToolsFromDefaults: false,
     };
-    expect(pickEffectiveEnabledTools(SMART_TOOLS, curated, true)).toEqual(SMART_TOOLS);
+    expect(pickEffectiveEnabledTools(SMART_TOOLS, curated, { payloadIsAmbient: true })).toEqual(curated.allowedTools);
+  });
+
+  it('returns the curated list, not the payload, when an ambient payload meets a curated profile', () => {
+    const curated: ResolvedOrchestrationProfile = {
+      ...synthetic,
+      allowedTools: ['mermaid_chart', 'file_read'],
+      isSynthetic: false,
+      allowedToolsFromDefaults: false,
+    };
+    const result = pickEffectiveEnabledTools(SMART_TOOLS, curated, { payloadIsAmbient: true });
+    expect(result).toEqual(['mermaid_chart', 'file_read']);
+    for (const tool of SMART_TOOLS) expect(result).not.toContain(tool);
   });
 
   it('UNIONS for a persisted agent whose allowedTools only fell back to admin defaults', () => {
@@ -430,7 +456,7 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
       isSynthetic: false,
       allowedToolsFromDefaults: true,
     };
-    const result = pickEffectiveEnabledTools(SMART_TOOLS, defaultsBacked, true);
+    const result = pickEffectiveEnabledTools(SMART_TOOLS, defaultsBacked, { payloadIsAmbient: true });
     expect(new Set(result)).toEqual(new Set([...SMART_TOOLS, ...synthetic.allowedTools]));
   });
 
@@ -452,7 +478,7 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
       isSynthetic: false,
       allowedToolsFromDefaults: true,
     };
-    const result = pickEffectiveEnabledTools(['moon_phase'], mentionedAgent, true);
+    const result = pickEffectiveEnabledTools(['moon_phase'], mentionedAgent, { payloadIsAmbient: true });
     expect(result).toContain('moon_phase');
     for (const orgTool of ['web_search', 'retrieve_knowledge_content', 'recharts', 'mermaid_chart']) {
       expect(result).toContain(orgTool);
@@ -460,8 +486,8 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
   });
 
   it('falls through to the profile for an ambient payload that is empty or absent', () => {
-    expect(pickEffectiveEnabledTools([], synthetic, true)).toEqual(synthetic.allowedTools);
-    expect(pickEffectiveEnabledTools(undefined, synthetic, true)).toEqual(synthetic.allowedTools);
+    expect(pickEffectiveEnabledTools([], synthetic, { payloadIsAmbient: true })).toEqual(synthetic.allowedTools);
+    expect(pickEffectiveEnabledTools(undefined, synthetic, { payloadIsAmbient: true })).toEqual(synthetic.allowedTools);
   });
 
   it('matches what the client-side union produced, for a readable non-empty org toolbelt', () => {
@@ -478,9 +504,9 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
     const denied = new Set(profile.deniedTools);
     const clientSideBase = profile.allowedTools.filter(t => !denied.has(t));
     const legacyClientUnion = [...new Set([...SMART_TOOLS, ...clientSideBase])];
-    const legacyResult = pickEffectiveEnabledTools(legacyClientUnion, profile, false);
+    const legacyResult = pickEffectiveEnabledTools(legacyClientUnion, profile, { payloadIsAmbient: false });
 
-    const serverSideResult = pickEffectiveEnabledTools(SMART_TOOLS, profile, true);
+    const serverSideResult = pickEffectiveEnabledTools(SMART_TOOLS, profile, { payloadIsAmbient: true });
     expect(new Set(serverSideResult)).toEqual(new Set(legacyResult));
   });
 
@@ -492,12 +518,148 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
     // agent brings nothing of its own", and the user's explicit selection still reaches the
     // run. An admin who wants a tool off org-wide denies it.
     const emptied: ResolvedOrchestrationProfile = { ...synthetic, allowedTools: [] };
-    expect(pickEffectiveEnabledTools(SMART_TOOLS, emptied, true)).toEqual(SMART_TOOLS);
+    expect(pickEffectiveEnabledTools(SMART_TOOLS, emptied, { payloadIsAmbient: true })).toEqual(SMART_TOOLS);
 
     const emptiedAndDenied: ResolvedOrchestrationProfile = {
       ...emptied,
       deniedTools: SMART_TOOLS,
     };
-    expect(pickEffectiveEnabledTools(SMART_TOOLS, emptiedAndDenied, true)).toEqual([]);
+    expect(pickEffectiveEnabledTools(SMART_TOOLS, emptiedAndDenied, { payloadIsAmbient: true })).toEqual([]);
+  });
+});
+
+describe('pickEffectiveEnabledTools - data lake pairing', () => {
+  const SAVE = 'save_content_to_data_lake';
+  // The admin-default belt: the one belt pairing may widen.
+  const base: ResolvedOrchestrationProfile = {
+    id: 'synthetic',
+    name: 'Defaults',
+    allowedTools: ['web_search', SAVE],
+    deniedTools: ['bash_execute'],
+    maxIterations: { quick: 3, medium: 10, very_thorough: 20 },
+    defaultThoroughness: 'medium',
+    isSynthetic: true,
+  };
+  const curated: ResolvedOrchestrationProfile = { ...base, id: 'agent-1', name: 'Lake agent', isSynthetic: false };
+
+  it('pairs list and create with save on an interactive run over the default belt', () => {
+    expect(pickEffectiveEnabledTools(undefined, base, { hasApprover: true })).toEqual([
+      'web_search',
+      SAVE,
+      'list_my_data_lakes',
+      'create_data_lake',
+    ]);
+    const fromDefaults = { ...curated, allowedToolsFromDefaults: true };
+    expect(
+      pickEffectiveEnabledTools(['web_fetch'], fromDefaults, { payloadIsAmbient: true, hasApprover: true })
+    ).toEqual(['web_fetch', 'web_search', SAVE, 'list_my_data_lakes', 'create_data_lake']);
+  });
+
+  it('never pairs create without an approver, so a headless run is not ended on no_approver', () => {
+    expect(pickEffectiveEnabledTools(undefined, base, { hasApprover: false })).toEqual([
+      'web_search',
+      SAVE,
+      'list_my_data_lakes',
+    ]);
+  });
+
+  it('never widens an explicit selection: curated belt, exclusive belt, or pinned payload', () => {
+    expect(pickEffectiveEnabledTools(undefined, curated, { hasApprover: true })).toEqual(['web_search', SAVE]);
+    expect(
+      pickEffectiveEnabledTools(
+        ['web_fetch'],
+        { ...base, toolsetIsExclusive: true },
+        { payloadIsAmbient: true, hasApprover: true }
+      )
+    ).toEqual(['web_search', SAVE]);
+    expect(pickEffectiveEnabledTools([SAVE], base, { payloadIsAmbient: false, hasApprover: true })).toEqual([SAVE]);
+    const named = { ...curated, allowedTools: [SAVE, 'list_my_data_lakes', 'create_data_lake'] };
+    expect(pickEffectiveEnabledTools(undefined, named, { hasApprover: true })).toEqual(named.allowedTools);
+  });
+
+  it('pairs without duplicating a companion already present', () => {
+    const profile = { ...base, deniedTools: [], allowedTools: ['create_data_lake', SAVE] };
+    expect(pickEffectiveEnabledTools(undefined, profile, { hasApprover: true })).toEqual([
+      'create_data_lake',
+      SAVE,
+      'list_my_data_lakes',
+    ]);
+  });
+
+  it('leaves a belt without save unchanged', () => {
+    expect(
+      pickEffectiveEnabledTools(undefined, { ...base, allowedTools: ['web_search'] }, { hasApprover: true })
+    ).toEqual(['web_search']);
+  });
+
+  it('keeps an explicitly denied companion denied', () => {
+    const profile = { ...base, deniedTools: ['create_data_lake'] };
+    expect(pickEffectiveEnabledTools(undefined, profile, { hasApprover: true })).toEqual([
+      'web_search',
+      SAVE,
+      'list_my_data_lakes',
+    ]);
+  });
+
+  it('pairs nothing in when save itself is denied', () => {
+    const profile = { ...base, deniedTools: [SAVE] };
+    expect(pickEffectiveEnabledTools(undefined, profile, { hasApprover: true })).toEqual(['web_search']);
+  });
+
+  it('pairs nothing in under the admin default denylist', () => {
+    const defaults = OrchestrationDefaultsSchema.parse({});
+    const profile = { ...base, allowedTools: [...defaults.allowedTools, SAVE], deniedTools: defaults.deniedTools };
+    const result = pickEffectiveEnabledTools(undefined, profile, { hasApprover: true });
+    for (const tool of [SAVE, 'list_my_data_lakes', 'create_data_lake']) {
+      expect(result).not.toContain(tool);
+    }
+  });
+
+  it('does not widen approval: a paired create still needs its own permission', () => {
+    // Approvals come from the raw payload in startAgentExecution, never from the paired belt.
+    const approvedTools = [SAVE];
+    const belt = pickEffectiveEnabledTools(undefined, { ...base, deniedTools: [] }, { hasApprover: true });
+    expect(belt).toContain('create_data_lake');
+    expect(classifyToolPermission(SAVE, approvedTools, [])).toBe('allowed');
+    expect(classifyToolPermission('create_data_lake', approvedTools, [])).toBe('needs_approval');
+  });
+
+  it('lets the scope denials strip every lake tool after pairing', () => {
+    const belt = pickEffectiveEnabledTools(undefined, base, { hasApprover: true });
+    const result = applySessionToolPolicy({
+      toolNames: belt,
+      session: {},
+      profileDeniedTools: base.deniedTools,
+      hasAttachments: false,
+      scopeDeniedTools: DATA_LAKE_TOOL_NAMES,
+    });
+    expect(result).toEqual(['web_search']);
+  });
+});
+
+describe('hasApprover', () => {
+  it.each([
+    [HEADLESS_CONNECTION_ID, false],
+    ['', false],
+    [undefined, false],
+    [null, false],
+    ['conn-123', true],
+  ])('hasApprover(%j) is %s', (connectionId, expected) => {
+    expect(hasApprover(connectionId)).toBe(expected);
+  });
+});
+
+describe('mcpSessionDisabledTools', () => {
+  it('replays the persisted profile denials when the live profile is absent (continuation)', () => {
+    expect(mcpSessionDisabledTools(['a'], undefined, ['b'])).toEqual(['a', 'b']);
+  });
+
+  it('prefers the live profile denials over the persisted ones', () => {
+    expect(mcpSessionDisabledTools(['a'], ['c'], ['b'])).toEqual(['a', 'c']);
+  });
+
+  it('dedupes and tolerates everything being absent', () => {
+    expect(mcpSessionDisabledTools(['a'], ['a'], undefined)).toEqual(['a']);
+    expect(mcpSessionDisabledTools(undefined, undefined, undefined)).toEqual([]);
   });
 });

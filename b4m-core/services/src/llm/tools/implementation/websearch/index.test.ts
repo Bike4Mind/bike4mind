@@ -715,6 +715,17 @@ describe('webSearchTool - hedged backup and cache', () => {
     expect(calls(fetchStub, isSearxng)).toBe(1);
   });
 
+  it('hedges when performWebSearch is called without resolved providers', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }], searxng: searxngHit });
+
+    const result = await performWebSearch(mockAdapters, { query: 'q' });
+
+    expect(result.formattedResults).toContain('searx.example');
+    expect(result.citables.some(c => c.url === 'https://searx.example')).toBe(true);
+    expect(calls(fetchStub, isSearxng)).toBe(1);
+  });
+
   it('backs an explicit SearXNG lead up with SerpAPI', async () => {
     configure('searxng');
     const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });

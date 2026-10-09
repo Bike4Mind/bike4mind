@@ -12,6 +12,7 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
+  ListSessionsByUserQuery,
   SearchOptions,
   SESSION_ORIGIN_CHANNELS,
   SessionListFilters,
@@ -77,6 +78,31 @@ export function sessionListFilterQuery(filters: SessionListFilters = {}): Record
   return q;
 }
 
+/** The own-list filter shared by searchByUserId (offset, SPA) and listByUserId (cursor, public API). */
+function ownSessionListQuery(
+  userId: string,
+  search: string | undefined,
+  surface: string | undefined,
+  filters: SessionListFilters = {}
+): Record<string, unknown> {
+  // Surface scoping: a specific surface returns only that product's sessions; otherwise the main
+  // list excludes product-surface sessions ({ surface: null } matches null OR absent).
+  const q: Record<string, unknown> = { userId, surface: surface ? surface : null };
+
+  Object.assign(q, sessionListFilterQuery(filters));
+
+  if (search) {
+    // Search name, summary, and tags via $or for better discovery.
+    const escapedSearch = escapeRegex(search);
+    q['$or'] = [
+      { name: { $regex: escapedSearch, $options: 'si' } },
+      { summary: { $regex: escapedSearch, $options: 'si' } },
+      { 'tags.name': { $regex: escapedSearch, $options: 'si' } },
+    ];
+  }
+  return q;
+}
+
 export interface ISessionModel extends Model<ISessionDocument> {}
 
 const SessionSchema = new Schema<ISession, ISessionModel, {}>(
@@ -101,6 +127,8 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     // DELIBERATELY no default: absent must stay distinguishable from false, since `retrievalTags`
     // itself hydrates to [] either way. See SessionTypes.lakeScopeExplicit.
     lakeScopeExplicit: { type: Boolean, required: false },
+    // No default: unset falls back to the lake selection (see effectiveIncludeLibraryFiles).
+    includeLibraryFiles: { type: Boolean, required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
     // by pages/api/v1/sessions/index.ts, as a separate authorized write AFTER its own canManageLake
@@ -360,6 +388,28 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     );
   }
 
+  /**
+   * updateWithUpdateAccess that ADDS `knowledgeIds` ($addToSet) instead of `$set`-ing the whole list,
+   * so a detach or attach that lands between the caller's read and this write survives it.
+   */
+  async addKnowledgeIdsWithUpdateAccess(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<Omit<ISessionDocument, 'knowledgeIds'>> & { id: string },
+    knowledgeIds: string[],
+    opts?: { includeGlobalWrite?: boolean }
+  ): Promise<ISessionDocument | null> {
+    // `knowledgeIds` is written by the `$addToSet` below, so it must not also reach the `$set` - a
+    // hydrated doc passes the parameter type structurally. `__v` is stripped by _plainUpdate.
+    const { id, knowledgeIds: _replacedList, ...setData } = data as typeof data & { knowledgeIds?: unknown };
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this._plainUpdate(
+      { _id: convertId(id), deletedAt: null, $or: updateAccessArms(user, opts) },
+      setData as Record<string, unknown>,
+      undefined,
+      { $addToSet: { knowledgeIds: { $each: knowledgeIds } } }
+    );
+  }
+
   async upsertByOpenaiConversationId(openaiConversationId: string, update: Partial<ISession>) {
     // Scope the match to the owner: the conversation id is client-controlled (it comes
     // straight from the uploaded export), so without userId a forged id colliding with
@@ -426,26 +476,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     surface?: string,
     filters: SessionListFilters = {}
   ) {
-    const q: Record<string, unknown> = {
-      userId: userId,
-    };
-
-    // Surface scoping: a specific surface returns only that product's sessions;
-    // otherwise the main list excludes product-surface sessions ({ surface: null }
-    // matches docs where the field is null OR absent).
-    q.surface = surface ? surface : null;
-
-    Object.assign(q, sessionListFilterQuery(filters));
-
-    if (search) {
-      // Search name, summary, and tags via $or for better discovery.
-      const escapedSearch = escapeRegex(search);
-      q['$or'] = [
-        { name: { $regex: escapedSearch, $options: 'si' } },
-        { summary: { $regex: escapedSearch, $options: 'si' } },
-        { 'tags.name': { $regex: escapedSearch, $options: 'si' } },
-      ];
-    }
+    const q = ownSessionListQuery(userId, search, surface, filters);
 
     const { pagination, orderBy } = options || {};
 
@@ -465,6 +496,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       data: sessionsWithCounts,
       hasMore,
     };
+  }
+  async listByUserId({ userId, search, surface, filters, beforeId, limit }: ListSessionsByUserQuery) {
+    // A non-ObjectId cursor id can never bound a page; callers validate it first (422), so this
+    // only keeps a stray one from surfacing as a BSON cast 500.
+    if (beforeId !== undefined && !mongoose.isObjectIdOrHexString(beforeId)) return [];
+    const q = ownSessionListQuery(userId, search, surface, filters);
+    if (beforeId !== undefined) q._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+    return this.sessionModel.find(q).sort({ _id: -1 }).limit(limit);
   }
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
@@ -736,6 +775,10 @@ SessionSchema.index({ deletedAt: 1, userId: 1, lastUpdated: -1 });
 
 // Session list filtered by origin (sidebar "Only API" / "Hide API"); see sessionListFilterQuery.
 SessionSchema.index({ deletedAt: 1, userId: 1, 'origin.channel': 1, lastUpdated: -1 });
+
+// Keyset pagination for GET /api/v1/sessions (listByUserId): equality on deletedAt/userId, then an
+// index-ordered walk of _id, so a page reads limit+1 rows instead of sorting every session the user has.
+SessionSchema.index({ deletedAt: 1, userId: 1, _id: -1 });
 
 // Optimize permission and sharing queries
 SessionSchema.index({ deletedAt: 1, 'users.permissions': 1, 'users.userId': 1 });

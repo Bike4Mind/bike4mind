@@ -49,6 +49,13 @@ export enum AdminConfigAuditEvents {
   SECURITY_SCAN_SCHEDULE_TRIGGERED = 'SECURITY_SCAN_SCHEDULE_TRIGGERED',
   SECURITY_SCAN_SCHEDULE_FAILED = 'SECURITY_SCAN_SCHEDULE_FAILED',
   SECURITY_SCAN_SCHEDULE_SKIPPED = 'SECURITY_SCAN_SCHEDULE_SKIPPED',
+
+  // OAuth client registry (admin OAuth Clients page). Metadata never carries the secret.
+  OAUTH_CLIENT_CREATED = 'OAUTH_CLIENT_CREATED',
+  OAUTH_CLIENT_UPDATED = 'OAUTH_CLIENT_UPDATED',
+  OAUTH_CLIENT_SECRET_ROTATED = 'OAUTH_CLIENT_SECRET_ROTATED',
+  OAUTH_CLIENT_DEACTIVATED = 'OAUTH_CLIENT_DEACTIVATED',
+  OAUTH_CLIENT_ACTIVATED = 'OAUTH_CLIENT_ACTIVATED',
 }
 
 export enum AdminOrgAuditEvents {
@@ -75,6 +82,10 @@ export enum AdminOrgAuditEvents {
   // the group, but the membership write lands later in sharingService/accept.ts under the
   // recipient's id. Without this event the grant side of that pair has no actor recorded.
   ORG_GROUP_INVITE_CREATED = 'ORG_GROUP_INVITE_CREATED',
+  // A change to the monthly per-member credit budget - the org default or one member's override.
+  // Metadata carries the target (`memberUserId` absent for the default) and before/after values,
+  // so "who raised this member's limit" is answerable.
+  ORG_MEMBER_CREDIT_BUDGET_UPDATED = 'ORG_MEMBER_CREDIT_BUDGET_UPDATED',
 }
 
 export enum DataLakeAuditEvents {

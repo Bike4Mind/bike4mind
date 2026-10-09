@@ -17,6 +17,8 @@ const mockClearPendingGate = vi.fn();
 const mockApprovePendingPermission = vi.fn();
 const mockDenyPendingPermission = vi.fn();
 const mockRememberDecision = vi.fn();
+const mockFindActiveBySessionId = vi.fn();
+const mockUpdateConnectionId = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -29,6 +31,8 @@ vi.mock('@bike4mind/database', () => ({
     clearPendingGate: (...args: unknown[]) => mockClearPendingGate(...args),
     approvePendingPermission: (...args: unknown[]) => mockApprovePendingPermission(...args),
     denyPendingPermission: (...args: unknown[]) => mockDenyPendingPermission(...args),
+    findActiveBySessionId: (...args: unknown[]) => mockFindActiveBySessionId(...args),
+    updateConnectionId: (...args: unknown[]) => mockUpdateConnectionId(...args),
   },
   sessionToolApprovalRepository: {
     rememberDecision: (...args: unknown[]) => mockRememberDecision(...args),
@@ -94,7 +98,10 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-import { handlePermissionResponse, handleGateResponse } from './agentExecute';
+import { ApiKeyScope } from '@bike4mind/common';
+import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
+import { startAgentExecution } from '@server/utils/startAgentExecution';
+import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
 
@@ -594,5 +601,146 @@ describe('permission resume preparation failure', () => {
     expect(mockRestoreRejectedResume).not.toHaveBeenCalled();
     await handlePermissionResponse(baseCmd(), 'user-1', 'conn-1', 'http://ws', noopLogger as never);
     expect(mockLambdaSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('start command credential threading', () => {
+  const startEvent = (accessToken: string) => ({
+    requestContext: { connectionId: 'conn-1', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({
+      accessToken,
+      action: 'agent_execute',
+      command: 'start',
+      sessionId: 's1',
+      questId: 'q1',
+      query: 'go',
+      model: 'm',
+    }),
+  });
+
+  beforeEach(() => {
+    vi.mocked(startAgentExecution)
+      .mockReset()
+      .mockResolvedValue({ ok: true } as never);
+  });
+
+  it('hands the verified key to the run as apiKeyInfo for a b4m_live_ key', async () => {
+    const key = { keyId: 'key-1', userId: 'user-1', scopes: [ApiKeyScope.AI_CHAT] };
+    vi.mocked(verifyApiKey).mockResolvedValueOnce(key as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('b4m_live_x'), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.apiKeyInfo).toBe(key);
+  });
+
+  it('drops the key credential when its rate-limit check throws, so the JWT fallback runs unscoped', async () => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+    } as never);
+    vi.mocked(checkApiKeyRateLimitOrThrow).mockRejectedValueOnce(new Error('rate limited'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-2' } as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('jwt'), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.userId).toBe('user-2');
+    expect(input.apiKeyInfo).toBeUndefined();
+  });
+
+  it('never takes a key credential from the message body', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    const event = startEvent('jwt');
+    event.body = JSON.stringify({
+      ...JSON.parse(event.body),
+      apiKeyId: 'spoofed',
+      scopeDeniedTools: [],
+      apiKeyInfo: { keyId: 'spoofed', scopes: Object.values(ApiKeyScope) },
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(event, {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.apiKeyInfo).toBeUndefined();
+    expect(input).not.toHaveProperty('apiKeyId');
+    expect(input).not.toHaveProperty('scopeDeniedTools');
+  });
+
+  it('passes no key credential for a session JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('jwt'), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.apiKeyInfo).toBeUndefined();
+  });
+});
+
+describe('reconnect command', () => {
+  const reconnectEvent = (target: { executionId?: string; sessionId?: string }) => ({
+    requestContext: { connectionId: 'conn-1', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({ accessToken: 'jwt', action: 'agent_execute', command: 'reconnect', ...target }),
+  });
+
+  const sentPayloads = () =>
+    mockApiGwSend.mock.calls.map(([cmd]) => JSON.parse((cmd as { input: { Data: Buffer } }).input.Data.toString()));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiGwSend.mockResolvedValue(undefined);
+    vi.mocked(verifyApiKey).mockRejectedValue(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1' } as never);
+  });
+
+  it('echoes the execution sessionId on a found run, so the client never has to correlate', async () => {
+    mockFindActiveBySessionId.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
+
+    expect(sentPayloads()).toEqual([
+      expect.objectContaining({
+        action: 'reconnect_result',
+        found: true,
+        executionId: 'exec-1',
+        sessionId: 'session-1',
+      }),
+    ]);
+  });
+
+  it('echoes the stored sessionId when asked by executionId alone', async () => {
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()[0]).toMatchObject({ found: true, sessionId: 'session-1' });
+  });
+
+  it('sends a bare found:false when no run exists', async () => {
+    mockFindActiveBySessionId.mockResolvedValueOnce(null);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
+
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
+  });
+
+  it("does not disclose another user's run, its id or its session", async () => {
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, userId: 'someone-else', status: 'running' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
+    expect(mockUpdateConnectionId).not.toHaveBeenCalled();
   });
 });

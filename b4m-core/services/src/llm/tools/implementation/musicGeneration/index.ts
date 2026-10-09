@@ -7,6 +7,7 @@ import {
   MAX_MUSIC_LENGTH_MS,
   MIN_MUSIC_LENGTH_MS,
   MusicGenerationVendor,
+  shouldPersistGeneratedAudio,
 } from '@bike4mind/common';
 import { aiMusicService } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
@@ -103,18 +104,26 @@ export const musicGenerationTool: ToolDefinition = {
       // browser <audio> element can play it.
       const storedPath = await context.imageGenerateStorage.upload(audio, filename, { ContentType: contentType });
 
-      // Keep a browsable copy in the Knowledge Base (best-effort). AUDIO type so it is
-      // never chunked/vectorized/attached to a completion.
-      await persistGeneratedFileAsFabFile(context, {
-        fileName: `generated-music-${filename.slice(0, 8)}.${ext}`,
-        mimeType: contentType,
-        content: audio,
-        type: KnowledgeType.AUDIO,
-        tags: [
-          { name: 'generated', strength: 1 },
-          { name: 'music', strength: 1 },
-        ],
-      });
+      // Browsable Knowledge Base copy, honoring the user's saveGeneratedAudio preference
+      // like the direct audio endpoints. The upload above is not gated: it powers the player.
+      // AUDIO type so it is never chunked/vectorized/attached to a completion.
+      if (
+        shouldPersistGeneratedAudio({
+          userId: context.userId,
+          saveGeneratedAudio: context.user?.preferences?.saveGeneratedAudio,
+        })
+      ) {
+        await persistGeneratedFileAsFabFile(context, {
+          fileName: `generated-music-${filename.slice(0, 8)}.${ext}`,
+          mimeType: contentType,
+          content: audio,
+          type: KnowledgeType.AUDIO,
+          tags: [
+            { name: 'generated', strength: 1 },
+            { name: 'music', strength: 1 },
+          ],
+        });
+      }
 
       // Reserve + record the charge now that generation succeeded (host settles
       // toolCreditsMap at quest end and appends the path to quest.images). The failure

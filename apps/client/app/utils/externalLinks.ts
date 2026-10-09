@@ -17,6 +17,9 @@ export const ExternalLinks = {
   blog: getWebsiteUrl('blog'),
   changelog: getWebsiteUrl('changelog'),
   about: getWebsiteUrl('about'),
+  // Same-origin paths, not WEBSITE_URL: each deployment (preview, self-host) serves its own spec.
+  apiDocs: '/api/v1/docs',
+  openApiSpec: '/api/v1/openapi.json',
 };
 
 /**

@@ -1,0 +1,28 @@
+{{- $defaults := .Files.Get "files/default-env.yaml" | fromYaml -}}
+{{- if gt (len .Release.Name) 35 }}{{ fail "Release name must be at most 35 characters" }}{{ end -}}
+{{- if .Values.agentExecutor.enabled -}}
+{{- $_ := set $defaults "AGENT_EXECUTOR_SERVICE" (printf "http://%s-agentexecutor:8080" .Release.Name) -}}
+{{- end -}}
+{{- $config := mergeOverwrite $defaults .Values.config -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  annotations:
+    selfhost.bike4mind.com/runtime-revision: {{ dict "initializationRevision" .Values.initializationRevision "existingSecret" .Values.existingSecret | toJson | sha256sum | quote }}
+data:
+{{- range $key, $value := $config }}
+  {{ $key }}: {{ tpl ($value | toString) $ | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-scripts
+data:
+  mongo-dns-guard.sh: |
+{{ .Files.Get "files/mongo-dns-guard.sh" | indent 4 }}
+  elasticmq.conf: |
+{{ .Files.Get "files/elasticmq.conf" | replace `host = "sqs"` (printf `host = "%s-sqs"` .Release.Name) | indent 4 }}
+  buckets.sh: |
+{{ .Files.Get "files/buckets.sh" | indent 4 }}

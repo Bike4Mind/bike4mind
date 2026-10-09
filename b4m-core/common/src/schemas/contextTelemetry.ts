@@ -215,6 +215,12 @@ export const LatencyPercentilesSchema = z.object({
 export const PerformanceTelemetrySchema = z.object({
   totalResponseTimeMs: z.number(),
   firstTokenTimeMs: z.number().optional(),
+  /**
+   * Elapsed ms until the first chunk of any kind, hidden thinking included. Paired with
+   * firstTokenTimeMs so computeAnomalies can tell a never-rendered turn (streamed, nothing
+   * visible) from one that never streamed at all - see ttfvtState in @bike4mind/common.
+   */
+  firstChunkTimeMs: z.number().optional(),
   contextRetrievalMs: z.number().optional(),
   modelInferenceMs: z.number().optional(),
   toolExecutionMs: z.number().optional(),

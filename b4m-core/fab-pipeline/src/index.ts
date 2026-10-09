@@ -5,6 +5,7 @@ export * from './chunk';
 export { acceptDocumentDate, type ExtractedDocumentDate } from './documentDate';
 export * from './embeddings';
 export * from './ingest';
+export { isPlaceholderTitle } from './pageTitle';
 export * from './ssrfProtection';
 export * from './storage';
 export { BaseSearchIndex } from './dataLake/BaseSearchIndex';

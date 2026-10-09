@@ -20,13 +20,20 @@ vi.mock('../resolveActiveOrg', () => ({
   resolveActiveOrg: (...a: unknown[]) => mockResolveActiveOrg(...a),
 }));
 
-import { verifyOrgAccess, verifyOrgOwner, verifyOrgMembership, resolveBillingOrgId } from '../orgAccess';
+import {
+  verifyOrgAccess,
+  verifyOrgAdminRead,
+  verifyOrgOwner,
+  verifyOrgMembership,
+  resolveBillingOrgId,
+} from '../orgAccess';
 
 // Valid 24-hex ObjectId strings (pass Types.ObjectId round-trip validation).
 const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
 const MANAGER = '650000000000000000000222';
 const STRANGER = '650000000000000000000333';
+const APPOINTED_ADMIN = '650000000000000000000555';
 const OTHER_ORG = '650000000000000000000def';
 
 const org = { id: ORG, userId: OWNER, managerId: MANAGER };
@@ -134,6 +141,79 @@ describe('verifyOrgAccess', () => {
   it('404s a non-admin when the org does not exist', async () => {
     mockFindById.mockResolvedValue(null);
     await expect(verifyOrgAccess({ id: OWNER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+/**
+ * The read-tier sibling of verifyOrgAccess: admits an appointed org admin too, and reports whether the
+ * caller would pass the write gate as `canManage`.
+ */
+describe('verifyOrgAdminRead', () => {
+  const orgWithAdmins = { ...org, adminUserIds: [APPOINTED_ADMIN] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindById.mockResolvedValue(orgWithAdmins);
+  });
+
+  it.each([
+    { orgId: 'not-an-object-id', why: 'malformed string' },
+    { orgId: '', why: 'empty string' },
+    { orgId: undefined as unknown as string, why: 'absent' },
+  ])('rejects an invalid org id without touching the DB: $why', async ({ orgId }) => {
+    await expect(verifyOrgAdminRead({ id: OWNER, isAdmin: false }, orgId)).rejects.toBeInstanceOf(BadRequestError);
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { who: 'owner', user: { id: OWNER, isAdmin: false } },
+    { who: 'manager', user: { id: MANAGER, isAdmin: false } },
+    { who: 'platform admin', user: { id: STRANGER, isAdmin: true } },
+  ])('admits the $who and reports canManage', async ({ user }) => {
+    await expect(verifyOrgAdminRead(user, ORG)).resolves.toEqual({ org: orgWithAdmins, canManage: true });
+  });
+
+  // The whole point of the tier: the appointed admin passes the read gate but not verifyOrgAccess.
+  it('admits an appointed admin for reading but reports canManage false', async () => {
+    await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toEqual({
+      org: orgWithAdmins,
+      canManage: false,
+    });
+    await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('matches an appointed admin stored as a legacy ObjectId rather than a string', async () => {
+    mockFindById.mockResolvedValue({ ...org, adminUserIds: [{ toString: () => APPOINTED_ADMIN }] });
+    await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toMatchObject({
+      canManage: false,
+    });
+  });
+
+  // The read tier restates the write gate's owner/manager/platform-admin condition, so this pins
+  // `canManage` to exactly "verifyOrgAccess would admit this caller" and fails if the two drift.
+  it.each([
+    { who: 'owner', user: { id: OWNER, isAdmin: false } },
+    { who: 'manager', user: { id: MANAGER, isAdmin: false } },
+    { who: 'platform admin', user: { id: STRANGER, isAdmin: true } },
+    { who: 'appointed admin', user: { id: APPOINTED_ADMIN, isAdmin: false } },
+  ])('reports canManage exactly when verifyOrgAccess admits the $who', async ({ user }) => {
+    const { canManage } = await verifyOrgAdminRead(user, ORG);
+    const admittedByWriteGate = await verifyOrgAccess(user, ORG).then(
+      () => true,
+      () => false
+    );
+    expect(canManage).toBe(admittedByWriteGate);
+  });
+
+  it('404s a user with no standing, including when the org predates adminUserIds', async () => {
+    await expect(verifyOrgAdminRead({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+    mockFindById.mockResolvedValue(org);
+    await expect(verifyOrgAdminRead({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('404s a missing org with the same error as an unauthorized caller', async () => {
+    mockFindById.mockResolvedValue(null);
+    await expect(verifyOrgAdminRead({ id: OWNER, isAdmin: false }, OTHER_ORG)).rejects.toBeInstanceOf(NotFoundError);
   });
 });
 

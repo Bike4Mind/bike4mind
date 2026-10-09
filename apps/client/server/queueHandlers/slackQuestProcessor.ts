@@ -37,10 +37,8 @@ import {
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
-  lakeMembershipRemovalRepository,
 } from '@bike4mind/database';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 
@@ -66,12 +64,12 @@ import {
   slackToolDefinitions,
   createPendingActionToolDefs,
   SlackClient,
-  buildConfirmationButtons,
   formatPreviewFromParams,
   processMarkdownForSlack,
   splitTextIntoBlocks,
 } from '@bike4mind/slack';
-import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { buildPendingActionButtons } from '@server/integrations/slack/pendingActionButtons';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
@@ -155,11 +153,7 @@ export const getStaticOptions = () => {
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
-      // Read by save_content_to_data_lake (-> addFileToDataLake). Without them that tool answers
-      // "not available on this surface" rather than failing mid-write.
-      lakeMembershipRemovals: lakeMembershipRemovalRepository,
-      lakeConfigChangeEvents: lakeConfigAuditDb.lakeConfigChangeEvents,
-      lakeMembershipChangeEvents: lakeMembershipAuditDb.lakeMembershipChangeEvents,
+      ...lakeWriteToolDb,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
@@ -315,7 +309,12 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
   // ChatCompletionProcess saves the error as the quest reply before rethrowing, so reuse
   // it as the detail line when present - it is the same text the web client shows.
   const detail = quest.type === 'error' && quest.reply ? quest.reply : null;
-  const text = detail ? `${SLACK_PROCESSING_FAILURE_TEXT}\n\n> ${detail}` : SLACK_PROCESSING_FAILURE_TEXT;
+  // Slack blockquotes are per-line, so every line needs its own marker.
+  const quotedDetail = detail
+    ?.split(/\r?\n/)
+    .map(line => `> ${line}`)
+    .join('\n');
+  const text = quotedDetail ? `${SLACK_PROCESSING_FAILURE_TEXT}\n\n${quotedDetail}` : SLACK_PROCESSING_FAILURE_TEXT;
 
   if (messageTs) {
     try {
@@ -334,7 +333,11 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
     }
   }
 
-  await clearSlackNotification(questId, logger, 'after failure notice');
+  // slackNotification is deliberately left in place: the handler rethrows so the event is
+  // retried, and a successful retry must still find it to replace this notice with the
+  // answer. A repeat failure only re-edits the same message by ts, which is idempotent.
+  // Once every retry is exhausted the field stays set on that quest for good, so any new
+  // reader of slackNotification must check the quest's status before acting on it.
 }
 
 /**
@@ -419,14 +422,12 @@ export const handler = withEventContext(async (event, logger) => {
   // Slack completions always get Slack tools - no enableSlackTools flag needed
   const baseTools: Record<string, ToolDefinition> = { ...slackToolDefinitions };
 
-  if (requestBody.tools?.includes('confirm_pending_action')) {
+  if (requestBody.tools?.includes('cancel_pending_action')) {
     const pendingTools = createPendingActionToolDefs({
       sessionId: params.sessionId,
-      executePendingAction,
       cancelPendingAction: cancelPendingActionOnQuest,
       findQuestWithPendingAction: (sessionId: string) =>
         Quest.findOne({ sessionId, pendingAction: { $exists: true } }).sort({ createdAt: -1 }),
-      findUserById: (userId: string) => User.findById(userId),
     });
     Object.assign(baseTools, pendingTools);
   }
@@ -496,7 +497,7 @@ export const handler = withEventContext(async (event, logger) => {
     displayText = formattedPreview;
     formatted = formatSimpleAgentResponse(formattedPreview);
 
-    const confirmButtons = buildConfirmationButtons(params.questId);
+    const confirmButtons = buildPendingActionButtons(quest);
     formatted.blocks = [...formatted.blocks, ...confirmButtons];
 
     await Quest.findByIdAndUpdate(params.questId, {

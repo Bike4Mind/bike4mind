@@ -20,17 +20,19 @@ import {
   DocumentDateSource,
   FabFileSourceType,
   KnowledgeType,
+  countTagPathsByTagSet,
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
   UNCATEGORIZED_TAG_SUFFIX,
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
+  type FabFileTypeFilter,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
 import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
-import { addLowercaseField } from '../../utils/documentdb-compat';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
+import { addLowercaseField, USE_DOCUMENTDB } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import {
   buildFabFileSearchQuery,
@@ -47,12 +49,15 @@ import {
   LAKE_REPORTING_EXCLUDED_STATUS,
 } from '../../queries/dataLakeLifecycleScope';
 
+// Bare regex for aggregation expressions ($regexMatch); NOT_META_TAG below is the query-operator form.
+const META_TAG_REGEX = new RegExp(`^${DATALAKE_TAG_PREFIX}`);
+
 /**
  * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
  * to the namespace cannot leave a counter behind. Both tag counters exclude it: a meta-tag is
  * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
  */
-const NOT_META_TAG = { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`) };
+const NOT_META_TAG = { $not: META_TAG_REGEX };
 
 /**
  * The `$project` stage behind every MEMBERSHIP-dimension read, shared by the lake-wide scan
@@ -851,7 +856,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+      type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[];
@@ -866,6 +871,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       restrictToDataLake?: boolean;
+      admitFileIds?: string[];
       /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
       lakeMemberships?: DataLakeMembershipScope[];
       skipOwnership?: boolean;
@@ -1009,7 +1015,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
-   * As `findMetadataByIds`, for the files a session currently holds. Excludes
+   * As `findMetadataByIds`, for the files a session currently holds (including its
+   * tool-generated files, linked by provenance - see findToolGeneratedBySessionId). Excludes
    * soft-deleted files - see the note above on why the two differ.
    *
    * Bounded at METADATA_PAGE_CAP rows; a session with more uploads than that is
@@ -1021,7 +1028,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     cap = METADATA_PAGE_CAP
   ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }> {
     const result = await this.fabFileModel
-      .find({ sessionId, deletedAt: null }, METADATA_ONLY_PROJECTION)
+      .find(
+        {
+          $or: [{ sessionId }, { sourceType: FabFileSourceType.TOOL_GENERATED, 'sourceMetadata.sessionId': sessionId }],
+          deletedAt: null,
+        },
+        METADATA_ONLY_PROJECTION
+      )
       .sort({ createdAt: 1, _id: 1 })
       .limit(cap + 1);
     const hasMore = result.length > cap;
@@ -1092,6 +1105,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => String(d._id));
   }
 
+  /**
+   * Existence including soft-deleted rows - see IFabFileRepository.findExistingIdsIncludingDeletedByIds
+   * for which of the two probes a caller wants. `includeDeleted` is what makes the difference: the
+   * plugin's pre('find') hook otherwise scopes this to `deletedAt: null`.
+   */
+  async findExistingIdsIncludingDeletedByIds(ids: string[]): Promise<string[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findExistingIdsIncludingDeletedByIds') } })
+      .select('_id')
+      .setOptions({ includeDeleted: true })
+      .lean<{ _id: unknown }[]>();
+    return docs.map(d => String(d._id));
+  }
+
   /** The citability projection only - see IFabFileRepository.findCitableFieldsByIds. */
   async findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]> {
     const docs = await this.fabFileModel
@@ -1152,6 +1179,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ batchId, deletedAt: null });
+    return result.map(d => d.toJSON());
+  }
+
+  async findToolGeneratedBySessionId(sessionId: string): Promise<IFabFileDocument[]> {
+    const result = await this.fabFileModel.find({
+      sourceType: FabFileSourceType.TOOL_GENERATED,
+      'sourceMetadata.sessionId': sessionId,
+      deletedAt: null,
+    });
     return result.map(d => d.toJSON());
   }
 
@@ -1239,8 +1275,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
-   * Counts tags matching specific prefixes across data-lake-accessible files.
-   * Used by the Data Lake Explorer to build the tag tree without fetching all articles.
+   * Counts tags matching specific prefixes across data-lake-accessible files, one row per tag-tree
+   * path. Used by the Data Lake Explorer to build the tag tree without fetching all articles.
+   *
+   * `count` is files tagged with exactly `tag`; `fileCount` is distinct files tagged with `tag` or
+   * anything under it. Rows include every ancestor path of a matched tag (`acme` and `acme:legal`
+   * for `acme:legal:a`), with `count: 0` when no file carries that path itself. buildTagTree reads
+   * `fileCount` for branch rows. The rows come from countTagPathsByTagSet (`@bike4mind/common`),
+   * which the client's Manager trees share.
    */
   async countDataLakeTagsByPrefix(
     userId: string,
@@ -1251,8 +1293,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTagPrefixes?: string[];
       /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
       lakeMemberships?: DataLakeMembershipScope[];
+      /** Count only the given lakes' members - see buildOwnershipConditions.restrictToDataLake. */
+      restrictToDataLake?: boolean;
     }
-  ): Promise<{ tag: string; count: number }[]> {
+  ): Promise<{ tag: string; count: number; fileCount: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
     if (usablePrefixes.length === 0) return [];
 
@@ -1268,7 +1312,43 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const prefixPattern = usablePrefixes.map(p => escapeRegex(p)).join('|');
     const prefixRegex = new RegExp(`^(${prefixPattern})`);
 
-    const result = await this.fabFileModel.aggregate([
+    // Each file's matched tag names as a deduped set. The default path filters in place; DocumentDB
+    // compatibility mode unwinds instead, with the $unwind/$match pair the old per-tag counter ran there.
+    const ownTagSet: PipelineStage[] = USE_DOCUMENTDB()
+      ? [
+          { $unwind: '$tags' },
+          { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': NOT_META_TAG }] } },
+          { $group: { _id: '$_id', own: { $addToSet: '$tags.name' } } },
+        ]
+      : [
+          {
+            $project: {
+              own: {
+                $setUnion: [
+                  {
+                    $filter: {
+                      input: '$tags.name',
+                      cond: {
+                        // $regexMatch throws on a non-string input (the old $match skipped it); tags
+                        // are [Object] in the schema, so test the type first. $and short-circuits.
+                        $and: [
+                          { $eq: [{ $type: '$$this' }, 'string'] },
+                          { $regexMatch: { input: '$$this', regex: prefixRegex } },
+                          { $not: [{ $regexMatch: { input: '$$this', regex: META_TAG_REGEX } }] },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        ];
+
+    // The aggregate stops at one row per distinct tag set, weighted by how many files share it, and
+    // the path expansion runs in JS through the same countTagPathsByTagSet the client trees use, so
+    // the two cannot disagree. If an unordered set splits one tag set into two groups, counts still add.
+    const tagSets = await this.fabFileModel.aggregate<{ _id: unknown[]; files: number }>([
       {
         // Pre-unwind filter: use $elemMatch with the prefix regex so MongoDB can use
         // the tags.name index and skip non-data-lake files entirely before the $unwind
@@ -1285,12 +1365,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           tags: { $elemMatch: { name: { $regex: prefixRegex } } },
         },
       },
-      { $unwind: '$tags' },
-      { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': NOT_META_TAG }] } },
-      { $group: { _id: '$tags.name', count: { $sum: 1 } } },
-      { $project: { tag: '$_id', count: 1, _id: 0 } },
+      ...ownTagSet,
+      { $group: { _id: '$own', files: { $sum: 1 } } },
     ]);
-    return result;
+    // The compat path's $regex also matches a string INSIDE an array-valued name, which the default
+    // path's $type check rejects, so drop non-strings here to keep the two paths' rows identical.
+    return countTagPathsByTagSet(
+      tagSets.map(set => ({ tags: set._id.filter((tag): tag is string => typeof tag === 'string'), files: set.files }))
+    );
   }
 
   /**
@@ -2717,7 +2799,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     ]);
   }
 
-  async resetChunkStateByIds(ids: string[]): Promise<string[]> {
+  async resetChunkStateByIds(ids: string[], options: { concurrency?: number } = {}): Promise<string[]> {
     if (ids.length === 0) return [];
     // The ONE reset shape for re-chunking, shared by the bulk "Rebuild passages" wave and the
     // per-file reprocess route, so the two cannot drift on which fields they clear.
@@ -2743,10 +2825,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // queues 198 of them, and on self-host - one long-lived process sharing that pool with every
     // other request - it stalls unrelated queries for the length of the wave. Purely a scheduling
     // bound: the per-document precondition and the exact returned-id set are unchanged.
+    const concurrency = Math.max(1, options.concurrency ?? RESET_CONCURRENCY);
     const results: (string | null)[] = [];
-    for (let i = 0; i < ids.length; i += RESET_CONCURRENCY) {
+    for (let i = 0; i < ids.length; i += concurrency) {
       const batch = await Promise.all(
-        ids.slice(i, i + RESET_CONCURRENCY).map(async id => {
+        ids.slice(i, i + concurrency).map(async id => {
           const doc = await this.fabFileModel.findOneAndUpdate(
             { _id: id, isChunking: { $ne: true } },
             {
@@ -2975,34 +3058,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     });
   }
 
-  /**
-   * The same distinct count, narrowed to the files categorized under NONE of the caller's lake
-   * prefixes - the bucket for a MERGED tree, where a file categorized under any one lake is
-   * already reachable through that lake's branch.
-   *
-   * Deliberately not a sum of the per-lake `uncategorized` figures: those judge each lake
-   * separately, so a file uncategorized in two lakes would count twice, and one uncategorized in
-   * A but categorized in B would count despite already being reachable under B's branch.
-   *
-   * Each prefix is its own `$and` conjunct - every fragment's top-level key is `tags`, so merging
-   * them into one object would keep only the last and the count would silently widen. Prefixes
-   * are deduped and unusable ones dropped, matching the browse query this sizes.
-   */
-  async countDistinctUncategorizedDataLakeFilesByMembership(
-    scopes: DataLakeMembershipScope[],
-    tagPrefixes: string[]
-  ): Promise<number> {
-    if (scopes.length === 0) return 0;
-    const prefixes = usableTagPrefixes(tagPrefixes);
-    return this.fabFileModel.countDocuments({
-      $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
-      ...(prefixes.length > 0 ? { $and: prefixes.map(buildLacksContentPrefixTagFilter) } : {}),
-      deletedAt: null,
-      archivedAt: null,
-      status: { $ne: 'pending' },
-    });
-  }
-
   // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared
   // stamp across every row it flips, records that value on the lake, and restore passes it back as
   // `stampedAt` to reverse exactly that batch. Equality, not a range: a lower bound would also match
@@ -3163,6 +3218,35 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
     await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
     return fabFileIds;
+  }
+
+  async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
+    if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
+      throw new Error('Cleanup chunk batch size must be between 1 and 1000');
+    }
+    for (;;) {
+      const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
+        .limit(chunkBatchSize + 1)
+        .lean();
+      const ids = chunks.slice(0, chunkBatchSize).map(chunk => chunk._id);
+      const removeBatch = () => FabFileChunk.deleteMany({ fabFileId, _id: { $in: ids } });
+      if (chunks.length > chunkBatchSize) {
+        // Keep the row as a retry locator while earlier chunk batches make partial progress.
+        await removeBatch();
+        continue;
+      }
+      const completed = await withTransaction(async () => {
+        // Include chunks committed between the candidate read and transaction start.
+        const finalChunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
+          .limit(chunkBatchSize + 1)
+          .lean();
+        if (finalChunks.length > chunkBatchSize) return false;
+        await this.hardDeleteOneById(fabFileId);
+        await FabFileChunk.deleteMany({ fabFileId, _id: { $in: finalChunks.map(chunk => chunk._id) } });
+        return true;
+      });
+      if (completed) return;
+    }
   }
 
   async hardDeleteOneById(fabFileId: string): Promise<boolean> {
@@ -3460,6 +3544,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const doc = await this.fabFileModel.findById(fabFileId).select('+supersededInLakes').lean();
     return doc?.supersededInLakes?.find(r => r.dataLakeId === dataLakeId)?.supersededByFabFileId ?? null;
   }
+
+  async listLakeSupersededIds(fabFileIds: string[], dataLakeId: string): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    const docs = await this.fabFileModel
+      .find({
+        _id: { $in: usableObjectIds(fabFileIds, 'FabFileModel.listLakeSupersededIds') },
+        'supersededInLakes.dataLakeId': dataLakeId,
+      })
+      .select('_id')
+      .lean();
+    return docs.map(doc => String(doc._id));
+  }
 }
 
 // Non-destructive AI-edit history for binary Office documents. `_id: false` keeps entries
@@ -3572,6 +3668,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // "never failed" sorts ahead of any attempted row without a backfill.
     moderationAttempts: { type: Number, required: false },
     moderationLastAttemptAt: { type: Date, required: false },
+    // See IFabFile.storageChargedAt and server/s3/storageCharge.ts.
+    storageChargedAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -3750,6 +3848,12 @@ FabFileSchema.index(
 
 // Batch file queries
 FabFileSchema.index({ batchId: 1 });
+
+// findToolGeneratedBySessionId. Partial so only tool-generated rows carry an entry.
+FabFileSchema.index(
+  { 'sourceMetadata.sessionId': 1, deletedAt: 1 },
+  { partialFilterExpression: { sourceType: FabFileSourceType.TOOL_GENERATED } }
+);
 
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });

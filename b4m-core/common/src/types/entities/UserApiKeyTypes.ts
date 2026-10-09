@@ -10,6 +10,14 @@ export enum ApiKeyScope {
   AI_CHAT = 'ai:chat',
   READ_PROJECTS = 'projects:read',
   WRITE_PROJECTS = 'projects:write',
+  /** List and read the key owner's agents (and agents shared with them). */
+  READ_AGENTS = 'agents:read',
+  /**
+   * Create, update, delete and fund agents, manage their embed keys, and run the
+   * agent-authoring assistants (description/avatar/system-prompt/field generation),
+   * which spend the owner's credits on the agent's behalf.
+   */
+  WRITE_AGENTS = 'agents:write',
   /** Authorizes only the cc-bridge WS actions (cc_agent_register /
    *  cc_agent_event / cc_agent_disconnect). Keys with this scope CANNOT
    *  call chat/completions - a leaked bridge key has the narrow blast
@@ -210,7 +218,7 @@ export const API_KEY_RATE_LIMIT_DEFAULTS: Readonly<IUserApiKeyRateLimit> = Objec
 
 /**
  * White-label config for an embed key (epic #41), rendered by the widget serve
- * route. Writes are validated by EmbedBrandingSchema (schemas/embedBranding.ts);
+ * route. Writes are validated by EmbedBrandingSchema (schemas/embedKey.ts);
  * `hideBranding` is honored only when the key owner's plan carries the
  * whitelabel entitlement - the serve route re-checks on every request.
  */
@@ -226,6 +234,13 @@ export interface IUserApiKey {
   userId: string;
   name: string; // Human-friendly name
   keyHash: string; // Hashed secret (never store plain text)
+  /**
+   * Hex SHA-256 of the raw key: the fast validation path. Keys are 128-bit random
+   * tokens, so an unkeyed digest is not brute-forceable and needs no server secret.
+   * Absent on keys minted before it existed; validate falls back to bcrypt `keyHash`
+   * and writes it back on first successful use. Never serialized (see toJSON).
+   */
+  keyDigest?: string;
   keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
   scopes: ApiKeyScope[]; // Permissions array
   status: ApiKeyStatus;
@@ -278,6 +293,12 @@ export interface IUserApiKey {
   /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
   allowedOrigins?: string[];
   /**
+   * OAuth client ids allowed to mint identified (user-pays) sessions on this embed key.
+   * Absent or empty = anonymous only. The opt-in binds a federated client to this key's
+   * tenant; without it any federated client could pair its users with any public key.
+   */
+  identifiedClientIds?: string[];
+  /**
    * Lake ids this key is bound to for the manage-but-not-member session admission (see
    * `preauthorizedLakeIds` on the session, and its containment check at
    * pages/api/v1/sessions/index.ts). Admin-minted only; a key's presence in this list is not itself
@@ -311,6 +332,15 @@ export type ApiKeyBillingOwnerType = CreditHolderType.User | CreditHolderType.Or
 
 export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
 
+/**
+ * Which per-user active-key cap a key counts against. Federated-exchange keys
+ * (`createdFrom === 'oauth-exchange'`) are short-lived, at most one per (user, client),
+ * and minted by a relying party rather than the user, so they get their own pool
+ * instead of eating the user's dashboard/admin key slots. Caps live in
+ * b4m-core/services/src/userApiKeyService/create.ts.
+ */
+export type ApiKeyCapPool = 'standard' | 'oauth-exchange';
+
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
@@ -325,6 +355,17 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Replaces both request ceilings; the enforcer picks them up on the next request. */
   setRateLimit: (id: string, rateLimit: IUserApiKeyRateLimit) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
+  /**
+   * Stores the fast-path digest for a key validated via the legacy bcrypt hash. A no-op unless
+   * `expectedKeyHash` is still the stored hash and no digest is set: a backfill that lands after a
+   * rotation must not write the old key's digest over the new one.
+   */
+  setKeyDigest: (id: string, keyDigest: string, expectedKeyHash: string) => Promise<void>;
+  /**
+   * Upgrades a legacy short prefix to the current length, under the same `expectedKeyHash` guard as
+   * setKeyDigest, so a heal racing a rotation cannot repoint the doc at the rotated-away key.
+   */
+  healKeyPrefix: (id: string, keyPrefix: string, expectedKeyHash: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**
@@ -333,8 +374,24 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
-  /** Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot. */
-  countActiveByUserId: (userId: string) => Promise<number>;
+  /**
+   * Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot.
+   * `pool` selects which per-user cap the count feeds (see ApiKeyCapPool); defaults to 'standard'.
+   */
+  countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
+  /**
+   * Inserts the document, then recounts active keys for the same (userId, pool).
+   * Returns the document when the count is within `cap`; otherwise hard-deletes its
+   * own insert and returns 'at_cap'. Every caller that counts over the cap yields,
+   * because `createdAt` is stamped client-side and so cannot rank concurrent inserts
+   * that commit out of order. The cap is therefore never exceeded, at the cost that
+   * simultaneous creates at `cap - 1` may all be rejected and have to be retried.
+   */
+  createIfUnderCap: (
+    doc: Parameters<IUserApiKeyRepository['create']>[0],
+    cap: number,
+    pool: ApiKeyCapPool
+  ) => Promise<IUserApiKeyDocument | 'at_cap'>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
   countActiveByProductId: (productId: string) => Promise<number>;

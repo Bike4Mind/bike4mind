@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { DataLakeConfig } from '@bike4mind/common';
 
 /**
  * The multi-lake browse resolves its own scope from the lakes the caller can reach and hands it to
@@ -67,6 +68,12 @@ const DYNAMIC_LAKE_DOC = {
   fileTagPrefix: 'handbook:',
   createdByUserId: 'creator-9',
 };
+
+const COLLIDING_LAKE = {
+  id: 'dyn-lake-2',
+  datalakeTag: 'datalake:org2:handbook',
+  fileTagPrefix: 'handbook:',
+} as DataLakeConfig;
 
 // This is a real static-registry id (STATIC_LAKE_IDS), so its prefix is the OPEN arm - a bare,
 // un-ANDed bypass, and its scope must never reach `lakeMemberships` in a multi-lake query.
@@ -145,6 +152,37 @@ describe('queryDataLakeArticles scope plumbing', () => {
     expect(serverOptions.dataLakeTagPrefixes).toEqual([]);
   });
 
+  it('restricts a selected tag to its lake even when another lake has the same full tag', async () => {
+    findByDatalakeTags.mockResolvedValue([
+      DYNAMIC_LAKE_DOC,
+      { datalakeTag: COLLIDING_LAKE.datalakeTag, fileTagPrefix: 'handbook:', createdByUserId: 'creator-10' },
+    ]);
+
+    await queryDataLakeArticles(req, [DYNAMIC_LAKE, COLLIDING_LAKE], {
+      lakeId: DYNAMIC_LAKE.id,
+      tags: 'handbook:policy',
+    });
+
+    const { params, serverOptions } = callArgs();
+    expect(params.filters.tags).toEqual(['handbook:policy']);
+    expect(serverOptions).toMatchObject({
+      dataLakeTags: [DYNAMIC_LAKE.datalakeTag],
+      lakeMemberships: [expect.objectContaining({ creatorUserId: 'creator-9' })],
+      restrictToDataLake: true,
+    });
+    expect(findByDatalakeTags).toHaveBeenCalledWith([DYNAMIC_LAKE.datalakeTag]);
+  });
+
+  it('returns no articles for an unknown or malformed selected lake id', async () => {
+    expect(await queryDataLakeArticles(req, [DYNAMIC_LAKE], { lakeId: 'other-lake' })).toEqual({
+      data: [], total: 0, hasMore: false,
+    });
+    expect(await queryDataLakeArticles(req, [DYNAMIC_LAKE], { lakeId: [''] })).toEqual({
+      data: [], total: 0, hasMore: false,
+    });
+    expect(h.search).not.toHaveBeenCalled();
+  });
+
   it('cannot have its scope influenced by the query string', async () => {
     await queryDataLakeArticles(req, [DYNAMIC_LAKE], {
       dataLakeTagPrefixes: ['datalake:'],
@@ -191,56 +229,6 @@ describe('queryDataLakeArticles scope plumbing', () => {
 
 // grantingLakes case a caller with no recoverable meta-tag still resolves precisely, not via a
 // full-scope fallback (STATIC_LAKE is declared above, shared with the scope-plumbing block).
-describe('queryDataLakeArticles merged Uncategorized bucket', () => {
-  beforeEach(() => {
-    h.search.mockReset();
-    h.search.mockResolvedValue({ data: [], total: 0, hasMore: false });
-    findByDatalakeTags.mockReset();
-    findByDatalakeTags.mockResolvedValue([DYNAMIC_LAKE_DOC]);
-  });
-
-  it('narrows to the members categorized under NO accessible prefix, and restricts to lake content', async () => {
-    // The merged tree's bucket (#2031). restrictToDataLake is load-bearing, not incidental: the
-    // narrowing is a top-level AND, so without it the broad owner/shared arms stay in and this
-    // returns every personal file the caller owns that happens to carry none of these prefixes.
-    await queryDataLakeArticles(req, [DYNAMIC_LAKE, STATIC_LAKE], { uncategorized: 'true' } as any);
-
-    const { params, serverOptions } = callArgs();
-    expect(serverOptions.restrictToDataLake).toBe(true);
-    expect(serverOptions.lacksContentPrefixTags).toEqual(expect.arrayContaining(['handbook:', 'opti:']));
-    // Both provenances are narrowed against, not just the open registry half: a dynamic lake's
-    // prefix is exactly where a merged tree DOES have a branch, so omitting it would put already
-    // reachable files back in the bucket.
-    expect(serverOptions.lacksContentPrefixTags).toHaveLength(2);
-    // Scope stays out of the zod-parsed params, like every other access value here.
-    expect(params.options).not.toHaveProperty('lacksContentPrefixTags');
-    expect(params.options).not.toHaveProperty('restrictToDataLake');
-  });
-
-  it('leaves the browse unnarrowed and unrestricted without the flag', async () => {
-    // The default browse is a MIXED corpus (owned + shared + lake), which restrictToDataLake would
-    // silently cut down - so the flag must be the only thing that turns either of these on.
-    await queryDataLakeArticles(req, [DYNAMIC_LAKE], {} as any);
-
-    const { serverOptions } = callArgs();
-    expect(serverOptions).not.toHaveProperty('lacksContentPrefixTags');
-    expect(serverOptions).not.toHaveProperty('restrictToDataLake');
-  });
-
-  it('ignores any value other than the literal true', async () => {
-    await queryDataLakeArticles(req, [DYNAMIC_LAKE], { uncategorized: 'false' } as any);
-
-    expect(callArgs().serverOptions).not.toHaveProperty('lacksContentPrefixTags');
-  });
-
-  it('narrows on the FIRST value when the flag is repeated in the query string', async () => {
-    // Express hands back an array for a repeated key; the rest of this handler narrows the same way.
-    await queryDataLakeArticles(req, [DYNAMIC_LAKE], { uncategorized: ['true', 'false'] } as any);
-
-    expect(callArgs().serverOptions.lacksContentPrefixTags).toEqual(['handbook:']);
-  });
-});
-
 describe('queryDataLakeArticles deep-link (?id=) branch', () => {
   beforeEach(() => {
     h.search.mockReset();

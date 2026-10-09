@@ -77,7 +77,7 @@ describe('FabFileChunkRepository.findVectorsByFabFileIds scoping', () => {
 });
 
 // The other half of the same reading, and the one the resume's embedding-space guard rests on
-// (resolveResumeEmbeddingModel in apps/client/server/queueHandlers/fabFileChunk.ts): which spaces
+// (resolveResumeEmbeddingModel in apps/workers/src/queueHandlers/fabFileChunk.ts): which spaces
 // the file's VECTORS occupy. One means finish there, two means refuse - so a row that votes
 // without holding a vector can turn a healthy file into a permanent refusal.
 describe('FabFileChunkRepository.distinctEmbeddingModelsByFabFileId', () => {

@@ -35,7 +35,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { isDirectInvocation } from './isDirectInvocation.js';
+import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 import type { HelpIndex, HelpIndexEntry } from './types.js';
 import { ADMIN_HELP_CONTENT_DIR, PUBLIC_HELP_CONTENT_DIR, isPublicAccessLevel } from './utils.js';
 import {

@@ -11,7 +11,9 @@
  *
  * Also the backstop for generation completion callbacks: every run re-dispatches
  * settled quests whose callback is still `pending` (a settle site that died before
- * its claim, or an enqueue that failed), whether or not any quest was stuck.
+ * its claim, or an enqueue that failed), and re-enqueues ones stuck at `dispatched`
+ * past the delivery window (a claim whose message never reached the queue), whether
+ * or not any quest was stuck.
  *
  * Schedule: every 5 minutes
  * Enabled: production + dev
@@ -19,17 +21,26 @@
  */
 
 import { connectDB, questRepository } from '@bike4mind/database';
+import { QUESTS_NAMESPACE, QUEST_METRICS, type QuestMetricName } from '@bike4mind/infra';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';
-import { resolveQuestTimeoutRecovery, QUEST_TIMEOUT_THRESHOLD_MS } from '@server/chatCompletion/questTimeoutRecovery';
-import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
+import {
+  resolveQuestTimeoutRecovery,
+  QUEST_TIMEOUT_THRESHOLD_MS,
+  STUCK_QUEST_RECOVERED_LOG,
+} from '@server/chatCompletion/questTimeoutRecovery';
+import {
+  dispatchQuestCallback,
+  GENERATION_CALLBACK_MAX_REDISPATCHES,
+  GENERATION_CALLBACK_REDISPATCH_HORIZON_MS,
+  GENERATION_CALLBACK_STALE_DISPATCH_MS,
+  redispatchStaleQuestCallback,
+} from '@server/generationCallback/dispatchQuestCallback';
 
 const logger = new Logger({ metadata: { service: 'questTimeoutSweep' } });
-
-const CLOUDWATCH_NAMESPACE = 'Lumina5/Quests';
 
 /**
  * Oldest quest a steady-state pass will touch. Without a floor the first runs
@@ -61,7 +72,7 @@ export async function handler() {
   // Ahead of the connect and the query, so a sweep that cannot reach the database
   // still reports as a run. Emitted after them, a totally broken sweep looks
   // identical to one that was never scheduled.
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'TimeoutSweepRuns', 1, { Stage: stage }, StandardUnit.Count);
+  await emitMetric(QUESTS_NAMESPACE, QUEST_METRICS.TimeoutSweepRuns, 1, { Stage: stage }, StandardUnit.Count);
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
   return runQuestTimeoutSweep();
@@ -74,8 +85,8 @@ export async function handler() {
  */
 export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
   const stage = Resource.App.stage;
-  const metric = async (name: string, value: number) => {
-    if (emitMetrics) await emitMetric(CLOUDWATCH_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
+  const metric = async (name: QuestMetricName, value: number) => {
+    if (emitMetrics) await emitMetric(QUESTS_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
   };
 
   const nowMs = Date.now();
@@ -88,7 +99,7 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
   // Candidate depth is its own metric because `recovered` cannot distinguish a
   // run that drained the backlog from one that hit the cap with more waiting -
   // the difference that matters during an incident stranding thousands of quests.
-  await metric('TimeoutSweepCandidates', staleQuests.length);
+  await metric(QUEST_METRICS.TimeoutSweepCandidates, staleQuests.length);
 
   if (staleQuests.length >= SWEEP_LIMIT) {
     logger.warn('[QuestTimeoutSweep] Hit the per-run candidate cap; more quests may be waiting', {
@@ -111,10 +122,10 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
       const applied = await questRepository.settleIfUnfinished(quest.id, recovery);
       if (applied) {
         recovered++;
-        // Error level, not warn: a stuck quest is a user-visible failure LiveOps must
-        // see in the Slack error channel, which is fed by the ERROR-level subscription
-        // on this function's log group (infra/logMonitor.ts).
-        logger.error('[QuestTimeoutSweep] Recovered stuck quest', { questId: quest.id });
+        // Error level, not warn: a stuck quest is a user-visible failure LiveOps must see in the
+        // Slack error channel. The message is the shared recovery constant so one filter covers
+        // every settle site (infra/logMonitor.ts); `via` names this one.
+        logger.error(STUCK_QUEST_RECOVERED_LOG, { questId: quest.id, via: 'sweep' });
         await dispatchQuestCallback(quest.id, logger);
       }
     } catch (err) {
@@ -124,14 +135,19 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
 
   // Not gated on having stuck quests: a missed callback is independent of timeout recovery.
   const callbacksRedispatched = await redispatchMissedCallbacks(nowMs);
+  const staleCallbacksReenqueued = await redispatchStaleCallbacks(nowMs);
 
   logger.info('[QuestTimeoutSweep] Sweep complete', {
     candidates: staleQuests.length,
     recovered,
     callbacksRedispatched,
+    staleCallbacksReenqueued,
   });
-  await metric('TimeoutSweepRecovered', recovered);
-  await metric('TimeoutSweepCallbacksRedispatched', callbacksRedispatched);
+  await metric(QUEST_METRICS.TimeoutSweepRecovered, recovered);
+  await metric(QUEST_METRICS.TimeoutSweepCallbacksRedispatched, callbacksRedispatched);
+  // Its own metric: a message lost after its claim is a different failure from a claim never made,
+  // and its rate is the one worth alerting on.
+  await metric(QUEST_METRICS.TimeoutSweepStaleCallbacksReenqueued, staleCallbacksReenqueued);
 
   return { status: 'OK', recovered };
 }
@@ -151,6 +167,33 @@ async function redispatchMissedCallbacks(nowMs: number): Promise<number> {
   } catch (err) {
     // The timeout recovery above already ran; a backstop read failure must not fail the sweep.
     logger.error('[QuestTimeoutSweep] Generation callback backstop failed', { err });
+    return 0;
+  }
+}
+
+/**
+ * Backstop for generation callbacks claimed `dispatched` whose queue message was lost. Returns the
+ * re-sends that actually went out, not the candidates read.
+ */
+async function redispatchStaleCallbacks(nowMs: number): Promise<number> {
+  try {
+    const criteria = {
+      dispatchedBefore: new Date(nowMs - GENERATION_CALLBACK_STALE_DISPATCH_MS),
+      dispatchedAfter: new Date(nowMs - GENERATION_CALLBACK_REDISPATCH_HORIZON_MS),
+      maxRedispatches: GENERATION_CALLBACK_MAX_REDISPATCHES,
+    };
+    const questIds = await questRepository.findStaleDispatchedCallbacks({
+      ...criteria,
+      limit: CALLBACK_BACKSTOP_LIMIT,
+    });
+    let reenqueued = 0;
+    for (const questId of questIds) {
+      logger.warn('[QuestTimeoutSweep] Re-enqueueing generation callback stuck at dispatched', { questId });
+      if (await redispatchStaleQuestCallback(questId, criteria, logger)) reenqueued++;
+    }
+    return reenqueued;
+  } catch (err) {
+    logger.error('[QuestTimeoutSweep] Stale generation callback backstop failed', { err });
     return 0;
   }
 }

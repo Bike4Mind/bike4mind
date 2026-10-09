@@ -7,6 +7,7 @@ import PromptReplies from '@client/app/components/Session/PromptReplies';
 import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
 import ReasoningDisclosure from '@client/app/components/Session/AgentExecution/ReasoningDisclosure';
 import AutoRouteBadge from '@client/app/components/Session/AgentExecution/AutoRouteBadge';
+import FallbackModelNote from '@client/app/components/Session/FallbackModelNote';
 import UserPrompt from '@client/app/components/Session/UserPrompt';
 import ResearchModeResponseDisplay from '@client/app/components/Session/ResearchModeResponseDisplay';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
@@ -79,7 +80,7 @@ import { useGetQuest, useUpdateQuest } from '@client/app/hooks/data/quests';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { extractReplies } from '@client/app/utils/replyUtils';
+import { extractReplies } from '@client/shared/replyUtils';
 import { detectChatContentType } from '@client/app/utils/contentTypes';
 import { saveToFileAndWorkbench } from '@client/app/utils/fabFileUtils';
 import ToolsUsed from '@client/app/components/Session/ToolsUsed';
@@ -764,7 +765,7 @@ const MessageContent: React.FC<ContentProps> = memo(
         {showSnipModal && (
           <ConfirmActionModal
             className="session-middle-snip-modal"
-            title="Quickstart Notebook from thisMessage?"
+            title="Quickstart Notebook from this Message?"
             description="Are you sure you want to quickstart a notebook from this message?"
             onGoBackward={() => setShowSnipModal(false)}
             onGoForward={() => {
@@ -795,6 +796,8 @@ const MessageContent: React.FC<ContentProps> = memo(
         {(messageData.routingSource === 'classifier' || messageData.routingSource === 'complexity') && (
           <AutoRouteBadge source={messageData.routingSource} />
         )}
+        {/* An error turn has no answer to attribute; recovery paths can leave the record behind. */}
+        {messageData.type !== 'error' && <FallbackModelNote fallbackInfo={messageData.fallbackInfo ?? undefined} />}
         {/* Conditional rendering: Research Mode vs Standard Response */}
         {messageData.researchModeResults && messageData.researchModeResults.length > 0 ? (
           <ResearchModeResponseDisplay

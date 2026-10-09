@@ -17,7 +17,7 @@ import {
   REFUSAL_FALLBACK_MODELS,
   type ModelInfo,
 } from '@bike4mind/common';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -85,6 +85,14 @@ const TEMPERATURE_ONLY_MODELS = [
 ];
 
 // Timeout constants for detecting streaming hangs (known anthropic-sdk streaming-hang bug)
+/**
+ * Key-table value meaning "authenticate through Anthropic workload identity federation": the
+ * client is built with no key, so the SDK resolves ANTHROPIC_FEDERATION_RULE_ID,
+ * ANTHROPIC_ORGANIZATION_ID and ANTHROPIC_IDENTITY_TOKEN_FILE from the environment. An
+ * ANTHROPIC_API_KEY left in the environment still wins, so CI must not set both.
+ */
+export const ANTHROPIC_FEDERATED_KEY = 'federated';
+
 const INITIAL_TIMEOUT_MS = 30000; // 30s to first event
 const DEFAULT_IDLE_TIMEOUT_MS = 90000; // 90s between events for standard models
 const THINKING_IDLE_TIMEOUT_MS = 180000; // 180s for thinking models (can pause during extended thinking)
@@ -182,7 +190,11 @@ export class AnthropicBackend implements ICompletionBackend {
       }
       throw new TypeError('terminated');
     };
-    this._api = new Anthropic({ apiKey, maxRetries: 5, fetch: retryFetch });
+    this._api = new Anthropic({
+      apiKey: apiKey === ANTHROPIC_FEDERATED_KEY ? undefined : apiKey,
+      maxRetries: 5,
+      fetch: retryFetch,
+    });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
   }
@@ -1171,6 +1183,8 @@ export class AnthropicBackend implements ICompletionBackend {
             cache_creation_input_tokens?: number;
           }
         | undefined;
+      // This round's answer text, for shouldEndTurnAfterTools.
+      let streamedRoundText = '';
       if (options.stream) {
         // Promise wrapper around the stream API
         await new Promise<void>((resolve, reject) => {
@@ -1408,6 +1422,7 @@ export class AnthropicBackend implements ICompletionBackend {
                           name: toolBlock.name,
                           input: {},
                         };
+                        await cb([], { toolsUsed, toolStarted: { name: toolBlock.name, id: toolBlock.id } });
                       }
                     }
                   } else if (event.type === 'content_block_delta') {
@@ -1426,6 +1441,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
+                      streamedRoundText += event.delta.text;
                       checkDegenerate(event.delta.text);
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
@@ -1574,7 +1590,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   isInThinkingBlock = false;
                   const closing: string[] = [];
                   closing[thinkingBlockIndex] = reasoningEscaper.flush() + '</think>';
-                  await cb(closing, { toolsUsed });
+                  await cb(closing, { toolsUsed, channel: 'reasoning' });
                 }
                 if (options.abortSignal?.aborted) {
                   this.logger.info('[AnthropicBackend] Stream ended before message_stop after abort', { model });
@@ -2045,6 +2061,30 @@ export class AnthropicBackend implements ICompletionBackend {
               }
             }
 
+            if (shouldEndTurnAfterTools(toolCallNames, options.tools, streamedRoundText)) {
+              this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+                model,
+                toolsExecuted: toolCallNames,
+              });
+              // Same terminal shape as the no-tool end of turn, carrying the whole chain's usage.
+              await (artifactGuard?.callback ?? cb)([], {
+                toolsUsed,
+                inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
+                outputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
+                cacheReadInputTokens: totalCacheTokens(
+                  accumCacheReadTokens,
+                  streamingTurnUsage?.cache_read_input_tokens
+                ),
+                cacheCreationInputTokens: totalCacheTokens(
+                  accumCacheWriteTokens,
+                  streamingTurnUsage?.cache_creation_input_tokens
+                ),
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // Add newline separator before recursive call to ensure proper markdown rendering
             await cb(['\n\n'], { toolsUsed });
 
@@ -2451,6 +2491,27 @@ export class AnthropicBackend implements ICompletionBackend {
                   observation
                 );
               }
+            }
+
+            if (shouldEndTurnAfterTools(toolCallNames, options.tools, streamedText.join(''))) {
+              this.logger.info('[Tool Execution] Ending turn: answer already sent, only end-of-turn tools ran', {
+                model,
+                toolsExecuted: toolCallNames,
+              });
+              // The cb above emitted 0 tokens for this tool turn, so this is the terminal total.
+              await (artifactGuard?.callback ?? cb)([], {
+                toolsUsed,
+                inputTokens: accumInputTokens + (usage?.input_tokens || 0),
+                outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
+                cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
+                cacheCreationInputTokens: totalCacheTokens(
+                  accumCacheWriteTokens,
+                  usageWithCacheNS?.cache_creation_input_tokens
+                ),
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
             }
 
             // Log before recursive call

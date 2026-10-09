@@ -8,6 +8,21 @@ import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind
 
 export { TOKEN_EXPIRATION_MS };
 
+/**
+ * Atomically takes the pending action off the quest so exactly one confirm can execute it: two
+ * concurrent clicks (or a click racing a retry) both read the action, but only one claim matches.
+ * Matching on `ts` binds the claim to the action the caller read, not a newer one that replaced it.
+ * Callers claim after their pre-execution checks and immediately before executing; the action is
+ * consumed even if execution then fails.
+ */
+export async function claimPendingAction(questId: string, pendingActionTs: number): Promise<boolean> {
+  const claimed = await Quest.findOneAndUpdate(
+    { _id: questId, 'pendingAction.ts': pendingActionTs },
+    { $unset: { pendingAction: 1 } }
+  );
+  return claimed !== null;
+}
+
 export interface PendingActionResult {
   success: boolean;
   message: string;
@@ -15,13 +30,16 @@ export interface PendingActionResult {
 
 /**
  * Execute a pending action stored on a Quest.
- * Extracted from handleConfirmAction in interactive.ts so both button clicks
- * and LLM tool calls can share the same execution logic.
+ * Called only from the Slack Confirm button handler (interactive.ts); model output must never
+ * reach this, since executing is what the human click authorizes.
+ * `expectedTs` is the `ts` of the action the button displayed; undefined only for a button rendered
+ * before it carried one. Keep in sync with the web executor (pages/api/mcp/confirm.ts).
  */
 export async function executePendingAction(
   questId: string,
   dbUser: IUserDocument,
-  logger: Logger
+  logger: Logger,
+  expectedTs?: number
 ): Promise<PendingActionResult> {
   const questWithPending = await Quest.findById(questId);
 
@@ -31,13 +49,18 @@ export async function executePendingAction(
 
   const pendingAction = questWithPending.pendingAction;
 
+  if (expectedTs !== undefined && expectedTs !== pendingAction.ts) {
+    logger.warn('[PendingActionExecutor] Pending action replaced since it was displayed', { questId });
+    return { success: false, message: 'This action was replaced by a newer one. Please review it again.' };
+  }
+
   if (pendingAction.ts && Date.now() - pendingAction.ts > TOKEN_EXPIRATION_MS) {
     logger.warn('[PendingActionExecutor] Pending action expired', {
       questId,
       tokenAgeMs: Date.now() - pendingAction.ts,
       maxAgeMs: TOKEN_EXPIRATION_MS,
     });
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
+    await claimPendingAction(questId, pendingAction.ts);
     return { success: false, message: 'This action has expired. Please start the request again.' };
   }
 
@@ -147,7 +170,6 @@ export async function executePendingAction(
         logger.error('[PendingActionExecutor] Failed to download file', {
           error: fileError instanceof Error ? fileError.message : String(fileError),
         });
-        await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
         return {
           success: false,
           message: `Failed to download file: ${fileError instanceof Error ? fileError.message : 'Unknown error'}`,
@@ -160,6 +182,12 @@ export async function executePendingAction(
       mcpName,
       selectedRepoCount: selectedRepositories?.length ?? 0,
     });
+
+    // Claimed only once every pre-execution check has passed, so a fixable failure above leaves the
+    // action in place for another click.
+    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+      return { success: false, message: 'No pending action found \u2014 it may have already been processed.' };
+    }
 
     const result = await invokeMcpHandler<unknown>({
       envVariables,
@@ -208,9 +236,6 @@ export async function executePendingAction(
       resultKeys: Object.keys(resultData || {}),
     });
 
-    // Clear pendingAction regardless of success/failure
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
-
     if (isSuccess) {
       const successMessage = buildSuccessMessage(pendingAction, resultData, url as string | undefined);
       return { success: true, message: successMessage };
@@ -224,8 +249,6 @@ export async function executePendingAction(
     logger.error('[PendingActionExecutor] Execution failed', {
       error: error instanceof Error ? error.message : String(error),
     });
-    // Clear pendingAction on unexpected errors too
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } }).catch(() => {});
     return {
       success: false,
       message: `Failed to execute: ${error instanceof Error ? error.message : String(error)}`,
@@ -235,8 +258,22 @@ export async function executePendingAction(
 
 /**
  * Cancel a pending action on a Quest by clearing the pendingAction field.
+ * With `expectedTs` (a Slack Cancel button) only that action is cleared, so a stale button cannot
+ * clear a newer one; without it (the model's cancel tool, a legacy button) whatever is pending goes.
  */
-export async function cancelPendingActionOnQuest(questId: string, logger: Logger): Promise<PendingActionResult> {
+export async function cancelPendingActionOnQuest(
+  questId: string,
+  logger: Logger,
+  expectedTs?: number
+): Promise<PendingActionResult> {
+  if (expectedTs !== undefined) {
+    if (!(await claimPendingAction(questId, expectedTs))) {
+      return { success: false, message: 'This action was already processed or replaced by a newer one.' };
+    }
+    logger.info('[PendingActionExecutor] Cleared pendingAction on cancel', { questId, cleared: true });
+    return { success: true, message: 'Cancelled. Let me know if you need anything else.' };
+  }
+
   try {
     const result = await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
     logger.info('[PendingActionExecutor] Cleared pendingAction on cancel', {

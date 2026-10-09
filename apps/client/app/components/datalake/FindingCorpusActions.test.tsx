@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  serverRefusalMessage: (error: { serverMessage?: string }) => error.serverMessage,
   useApplyCorpusAction: () => ({ mutate: h.mutate, isPending: h.applyPending.value }),
   useLakeFileTags: (...args: unknown[]) => h.lakeTags(...args),
 }));
@@ -124,6 +125,105 @@ describe('FindingCorpusActions', () => {
     });
   });
 
+  it('moves the other side when the same document is chosen as kept and retired', () => {
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-supersede-btn'));
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-keep-file-b')).getByRole('radio'));
+    expect(within(screen.getByTestId('finding-corpus-supersede-retire-file-a')).getByRole('radio')).toBeChecked();
+    expect(screen.getByTestId('finding-corpus-confirm-btn')).toBeEnabled();
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-retire-file-b')).getByRole('radio'));
+    expect(within(screen.getByTestId('finding-corpus-supersede-keep-file-a')).getByRole('radio')).toBeChecked();
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+
+    expect(h.mutate.mock.calls[0][0].body).toMatchObject({ keepFabFileId: 'file-a', retireFabFileId: 'file-b' });
+  });
+
+  it('keeps both sides intact on a one-source finding instead of clearing Kept', () => {
+    renderActions(finding({ sources: [finding().sources[0]] }));
+
+    fireEvent.click(screen.getByTestId('finding-corpus-supersede-btn'));
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-retire-file-a')).getByRole('radio'));
+
+    expect(within(screen.getByTestId('finding-corpus-supersede-keep-file-a')).getByRole('radio')).toBeChecked();
+    expect(within(screen.getByTestId('finding-corpus-supersede-retire-file-a')).getByRole('radio')).not.toBeChecked();
+    expect(screen.getByTestId('finding-corpus-confirm-btn')).toBeDisabled();
+  });
+
+  it('hands the displaced file to the other side on a finding that cites three documents', () => {
+    const [a, b] = finding().sources;
+    renderActions(
+      finding({ sources: [a, b, { fabFileId: 'file-c', fileName: 'forecast.md', excerpt: 'ARR is $5M.' }] })
+    );
+
+    fireEvent.click(screen.getByTestId('finding-corpus-supersede-btn'));
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-keep-file-c')).getByRole('radio'));
+    expect(within(screen.getByTestId('finding-corpus-supersede-retire-file-b')).getByRole('radio')).toBeChecked();
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-keep-file-b')).getByRole('radio'));
+    expect(within(screen.getByTestId('finding-corpus-supersede-retire-file-c')).getByRole('radio')).toBeChecked();
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-retire-file-b')).getByRole('radio'));
+    expect(within(screen.getByTestId('finding-corpus-supersede-keep-file-c')).getByRole('radio')).toBeChecked();
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+
+    expect(h.mutate.mock.calls[0][0].body).toMatchObject({ keepFabFileId: 'file-c', retireFabFileId: 'file-b' });
+  });
+
+  it('falls back to the error message, then a generic one, when the server gives no refusal text', () => {
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('network down')));
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('')));
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-supersede-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-supersede-error')).toHaveTextContent('network down');
+
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-supersede-error')).toHaveTextContent('Could not supersede');
+  });
+
+  it('shows a server refusal inline in the supersede dialog and clears it on a new choice', () => {
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError({ serverMessage: 'would create a cycle' }));
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-supersede-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-supersede-error')).toHaveTextContent('would create a cycle');
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-keep-file-b')).getByRole('radio'));
+    expect(screen.queryByTestId('finding-corpus-supersede-error')).not.toBeInTheDocument();
+  });
+
+  it('shows a server refusal inline in the merge dialog and clears it on a new choice', () => {
+    h.mutate.mockImplementationOnce((_vars, options) =>
+      options.onError({ serverMessage: 'would retire every document' })
+    );
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-merge-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-merge-error')).toHaveTextContent('would retire every document');
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-merge-keep-file-b')).getByRole('radio'));
+    expect(screen.queryByTestId('finding-corpus-merge-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-merge-dialog')).toBeInTheDocument();
+  });
+
+  it('falls back to the error message, then a generic one, when a merge gets no refusal text', () => {
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('network down')));
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('')));
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-merge-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-merge-error')).toHaveTextContent('network down');
+
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-merge-error')).toHaveTextContent('Could not merge');
+  });
+
   it('blocks a retag until the current tags have loaded, then posts the complete edited set', () => {
     const { rerender } = renderActions();
 
@@ -181,5 +281,34 @@ describe('FindingCorpusActions', () => {
     fireEvent.click(screen.getByTestId('finding-corpus-retag-add-btn'));
 
     expect(screen.getByTestId('finding-corpus-retag-invalid')).toHaveTextContent(/tag limit/i);
+  });
+
+  it('shows a server refusal inline in the retag dialog and clears it on a new choice', () => {
+    h.lakeTags.mockReturnValue({ data: { prefix: 'lk:', current: [] }, isLoading: false, isError: false });
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError({ serverMessage: 'tag set is too large' }));
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-retag-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-retag-refusal')).toHaveTextContent('tag set is too large');
+    expect(screen.queryByTestId('finding-corpus-retag-error')).not.toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-retag-file-file-b')).getByRole('radio'));
+    expect(screen.queryByTestId('finding-corpus-retag-refusal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-retag-dialog')).toBeInTheDocument();
+  });
+
+  it('falls back to the error message, then a generic one, when a retag gets no refusal text', () => {
+    h.lakeTags.mockReturnValue({ data: { prefix: 'lk:', current: [] }, isLoading: false, isError: false });
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('network down')));
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('')));
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-retag-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-retag-refusal')).toHaveTextContent('network down');
+
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-retag-refusal')).toHaveTextContent('Could not retag');
   });
 });

@@ -251,11 +251,21 @@ describe('DataLakeProposalRepository', () => {
   it('lists a lake queue newest first, and narrows by status', async () => {
     // Explicit, distinct createdAt values: two back-to-back inserts can land in the same millisecond,
     // which leaves `sort({ createdAt: -1 })` free to order them either way and the assertion below
-    // flaky rather than wrong.
+    // flaky rather than wrong. createdAt is immutable, so without `overwriteImmutable` mongoose strips
+    // the $set silently and the ordering is left to that same-millisecond tie.
     const older = await create({ canonicalSourceKey: 'https://example.com/a' });
     const newer = await create({ canonicalSourceKey: 'https://example.com/b' });
-    await DataLakeProposalModel.updateOne({ _id: older.id }, { $set: { createdAt: new Date('2026-08-01') } });
-    await DataLakeProposalModel.updateOne({ _id: newer.id }, { $set: { createdAt: new Date('2026-08-02') } });
+    await DataLakeProposalModel.updateOne(
+      { _id: older.id },
+      { $set: { createdAt: new Date('2026-08-01') } },
+      { overwriteImmutable: true }
+    );
+    await DataLakeProposalModel.updateOne(
+      { _id: newer.id },
+      { $set: { createdAt: new Date('2026-08-02') } },
+      { overwriteImmutable: true }
+    );
+    expect((await DataLakeProposalModel.findById(older.id))?.createdAt).toEqual(new Date('2026-08-01'));
     await repo.claimForReview(older.id, review({ status: 'declined' }));
 
     const all = await repo.listByLake('lake-1');

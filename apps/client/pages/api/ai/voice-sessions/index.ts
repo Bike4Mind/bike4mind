@@ -8,7 +8,7 @@ import {
   userRepository,
   questRepository,
 } from '@bike4mind/database';
-import { AiEvents, ApiKeyType, ISessionDocument, redactSessionForClient } from '@bike4mind/common';
+import { AiEvents, ApiKeyType, BadGatewayError, ISessionDocument, redactSessionForClient } from '@bike4mind/common';
 import { apiKeyService, sessionService } from '@bike4mind/services';
 import {
   buildVoiceInstructions,
@@ -21,6 +21,7 @@ import {
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
@@ -31,6 +32,17 @@ const CreateSessionBodySchema = z.object({
   // reuse the existing credit hold instead of reserving (and charging) a second time.
   isReconnect: z.boolean().optional(),
 });
+
+// Marked expected so errorHandler logs it at warn: an error-level log reaches the LiveOps alert filter,
+// and a missing or rejected OpenAI key is a handled third-party condition, not a server fault.
+function voiceUnavailableError(extra?: Record<string, unknown>) {
+  const error = new BadGatewayError(VOICE_SESSION_UNAVAILABLE_MESSAGE, {
+    code: VOICE_SESSION_ERROR.unavailable,
+    ...extra,
+  });
+  error.expected = true;
+  return error;
+}
 
 const handler = baseApi().post(async (req, res) => {
   const { sessionId, isReconnect } = CreateSessionBodySchema.parse(req.body);
@@ -96,6 +108,10 @@ const handler = baseApi().post(async (req, res) => {
     { type: ApiKeyType.openai, nullIfMissing: true },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
+  if (!openaiApiKey) {
+    req.logger.warn('[Voice Session] No OpenAI API key configured');
+    throw voiceUnavailableError();
+  }
 
   let session: ISessionDocument | null = null;
 
@@ -358,12 +374,10 @@ When you get the tool result back, summarize it conversationally for voice.`;
     if (axios.isAxiosError(error)) {
       const responseData = error.response?.data;
       const status = error.response?.status;
-      console.error('[Voice Session] OpenAI Realtime API error:', status, JSON.stringify(responseData));
-      return res.status(status || 500).json({
-        error: 'OpenAI Realtime API error',
-        status,
-        details: responseData,
-      });
+      req.logger.warn('[Voice Session] OpenAI Realtime API error', { upstreamStatus: status, body: responseData });
+      // Never relay OpenAI's status: a 401 from this route makes ApiContext tear down the login
+      // session. A 502 never enters that path, so the user stays signed in.
+      throw voiceUnavailableError({ upstreamStatus: status });
     }
     throw error;
   }

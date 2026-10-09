@@ -320,6 +320,25 @@ describe('ConfigStore folder-trust gate', () => {
     expect(dirs.some(d => d === outsideReal || d.startsWith(outsideReal + path.sep))).toBe(false);
   });
 
+  it('never lets a repo layer enable postEditDiagnostics, even once trusted', async () => {
+    // Enabling it runs the repo's own tsc/eslint binaries and configs.
+    await fs.writeFile(
+      path.join(projectDir, '.bike4mind', 'config.json'),
+      JSON.stringify({ preferences: { postEditDiagnostics: true } })
+    );
+    await fs.writeFile(
+      path.join(projectDir, '.bike4mind', 'local.json'),
+      JSON.stringify({ preferences: { postEditDiagnostics: true } })
+    );
+
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+    await store.trustProject();
+    const config = await store.load();
+
+    expect(config.preferences.postEditDiagnostics).toBe(false);
+  });
+
   it('treats a context-only repo (CLAUDE.md, no .bike4mind) as trust-gated so the prompt fires', async () => {
     const base2 = await fs.mkdtemp(path.join(tmpdir(), 'b4m-ctxonly-'));
     const ctxProj = path.join(base2, 'proj');

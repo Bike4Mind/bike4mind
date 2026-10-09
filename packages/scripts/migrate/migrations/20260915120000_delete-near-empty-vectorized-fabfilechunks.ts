@@ -51,7 +51,7 @@ import {
  * count - the two can differ if something else touched the file's chunks in between). That
  * decrement is applied with an optimistic-concurrency guard (the update's filter re-checks
  * `vectorizedChunkCount` still equals what was just read): if the LIVE vectorize handler
- * (apps/client/server/queueHandlers/fabFileVectorize.ts) touches the same file in that same
+ * (apps/workers/src/queueHandlers/fabFileVectorize.ts) touches the same file in that same
  * instant, the guard fails and this migration skips the write rather than clobbering it - safe to
  * skip, because that handler recomputes `vectorizedChunkCount`/`embeddedChunkCount`/
  * `embeddedCharCount` from source on its own next write, which by then already reflects this

@@ -2,9 +2,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
-import { dataLakeResearchConfigRepository } from '@bike4mind/database';
+import { withTransaction, dataLakeResearchConfigRepository, dataLakeRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { ResearchLeversInput, ResearchScheduleInput } from '@server/dataLakes/researchConfigInput';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
@@ -25,20 +26,36 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .put(async (req: Request, res) => {
     const { id, configId } = req.query as { id: string; configId: string };
-    const { lake, actor, grants } = await assertLakeResearchManage(req, id);
-    const input = UpdateInput.parse(req.body);
+    // Resolved outside the transaction: it issues concurrent reads, which an ambient session rejects.
+    const ctx = await toAccessContext(req);
 
-    const updated = await dataLakeResearchService.updateResearchConfig(configId, lake, actor, grants, input, {
-      db,
-      logger: req.logger,
+    // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
+    // on the lake doc and the retry re-reads live grants.
+    const updated = await withTransaction(async () => {
+      const { lake, actor, grants } = await assertLakeResearchManage(req, id, ctx);
+      const input = UpdateInput.parse(req.body);
+
+      const result = await dataLakeResearchService.updateResearchConfig(configId, lake, actor, grants, input, {
+        db,
+        logger: req.logger,
+      });
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(lake.id);
+      return result;
     });
     return res.json({ data: updated });
   })
   .delete(async (req: Request, res) => {
     const { id, configId } = req.query as { id: string; configId: string };
-    const { lake, actor, grants } = await assertLakeResearchManage(req, id);
+    // Resolved outside the transaction: it issues concurrent reads, which an ambient session rejects.
+    const ctx = await toAccessContext(req);
 
-    await dataLakeResearchService.deleteResearchConfig(configId, lake, actor, grants, { db, logger: req.logger });
+    await withTransaction(async () => {
+      const { lake, actor, grants } = await assertLakeResearchManage(req, id, ctx);
+
+      await dataLakeResearchService.deleteResearchConfig(configId, lake, actor, grants, { db, logger: req.logger });
+      await dataLakeRepository.touchIfStable(lake.id);
+    });
     return res.status(204).end();
   });
 

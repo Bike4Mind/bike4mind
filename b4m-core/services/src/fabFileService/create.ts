@@ -21,15 +21,17 @@ import {
   resolveSupportedMimeType,
   secureParameters,
 } from '@bike4mind/utils';
+import { GENERATED_AUDIO_OFFLOAD_PREFIX } from '@bike4mind/common';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 
-// The fab-file bucket reaps everything under this prefix after 1 day (infra/buckets.ts,
-// expire-notebook-exports), so no durable FabFile may be stored there. Pinned to the rule by
+// The fab-file bucket reaps everything under these prefixes after 1 day (infra/buckets.ts,
+// expire-notebook-exports and expire-generated-audio-offload), so no durable FabFile may be stored there. Pinned to the rule by
 // infra/__tests__/fabFileBucketLifecycle.test.ts.
 export const RESERVED_FAB_FILE_KEY_PREFIX = 'exports/';
+export const RESERVED_FAB_FILE_KEY_PREFIXES = [RESERVED_FAB_FILE_KEY_PREFIX, GENERATED_AUDIO_OFFLOAD_PREFIX];
 
 export const createFabFileSchema = z.object({
   fileName: z.string(),
@@ -49,8 +51,8 @@ export const createFabFileSchema = z.object({
   prefix: z
     .string()
     // Mirrors the key built below (`${prefix}/<uuid>.<ext>`).
-    .refine(prefix => !`${prefix}/`.startsWith(RESERVED_FAB_FILE_KEY_PREFIX), {
-      message: `prefix must not start with the reserved "${RESERVED_FAB_FILE_KEY_PREFIX}" namespace`,
+    .refine(prefix => !RESERVED_FAB_FILE_KEY_PREFIXES.some(p => `${prefix}/`.startsWith(p)), {
+      message: `prefix must not start with a reserved namespace (${RESERVED_FAB_FILE_KEY_PREFIXES.map(p => `"${p}"`).join(', ')})`,
     })
     .optional(),
   system: z.boolean().optional(),
@@ -65,6 +67,7 @@ export const createFabFileSchema = z.object({
 type CreateFabFileParameters = z.infer<typeof createFabFileSchema>;
 
 export interface CreateFabFileAdapters {
+  objectKey?: string;
   db: {
     fabFiles: {
       create: (data: Omit<IFabFileDocument, 'id'>) => Promise<IFabFileDocument>;
@@ -161,10 +164,10 @@ const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
  * Explorer's tag tree until some later edit happens to trigger it. `previousTags` is deliberately
  * omitted - a create has no prior state to retract a stamp against.
  */
-export const createFabFile = async (
+export const prepareFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence }: CreateFabFileAdapters
+  { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence, objectKey }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
@@ -201,6 +204,8 @@ export const createFabFile = async (
 
   let filePath = params.prefix ? `${params.prefix}/` : '';
   filePath += `${uuidv4()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
+
+  if (objectKey) filePath = objectKey;
 
   const maxFileSize = getSettingsValue('MaxFileSize', await getSettingsMap(db), MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
@@ -247,7 +252,11 @@ export const createFabFile = async (
     buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put');
   }
 
-  const result = await db.fabFiles.create(buildData);
-
-  return result;
+  return buildData;
 };
+
+export const createFabFile = async (
+  userId: string,
+  parameters: CreateFabFileParameters,
+  adapters: CreateFabFileAdapters
+) => adapters.db.fabFiles.create(await prepareFabFile(userId, parameters, adapters));

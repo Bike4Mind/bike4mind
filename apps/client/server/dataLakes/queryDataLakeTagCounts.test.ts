@@ -15,7 +15,6 @@ const h = vi.hoisted(() => ({
   countDataLakeFilesByMembership: vi.fn(),
   countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
-  countDistinctUncategorizedDataLakeFilesByMembership: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -48,7 +47,6 @@ vi.mock('@bike4mind/database', async () => {
       countDataLakeFilesByMembership: h.countDataLakeFilesByMembership,
       countDataLakeFilesByMembershipArm: h.countDataLakeFilesByMembershipArm,
       countDistinctDataLakeFilesByMembership: h.countDistinctDataLakeFilesByMembership,
-      countDistinctUncategorizedDataLakeFilesByMembership: h.countDistinctUncategorizedDataLakeFilesByMembership,
     },
   };
 });
@@ -56,7 +54,7 @@ vi.mock('@bike4mind/database', async () => {
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 
 import { DATA_LAKES } from '@bike4mind/common';
-import { queryDataLakeTagCounts } from './index';
+import { queryDataLakeTagCounts, queryScopedDataLakeTagCounts } from './index';
 
 const req = { user: { id: 'viewer-9', groups: ['group-a'], tags: ['Opti'] } } as any;
 
@@ -72,7 +70,6 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     h.countDataLakeFilesByMembership.mockReset().mockResolvedValue({});
     h.countDataLakeFilesByMembershipArm.mockReset().mockResolvedValue({});
     h.countDistinctDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
-    h.countDistinctUncategorizedDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
   });
 
   it('reads the lake documents in ONE call whatever the lake count', async () => {
@@ -140,7 +137,6 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
       lakeArmCounts: {},
       uncategorizedFileCounts: {},
       totalLakeFileCount: 0,
-      totalUncategorizedFileCount: 0,
     });
     expect(h.findByDatalakeTags).not.toHaveBeenCalled();
   });
@@ -194,30 +190,6 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     expect(result.uniqueArticleCounts.total).toBe(0);
   });
 
-  it('sizes the merged bucket from a distinct count, not a sum of the per-lake figures', async () => {
-    // Summing would be wrong on both edges: it double-counts a file loose in two lakes, and counts
-    // one that another lake already files under a branch the merged tree renders.
-    h.countDataLakeFilesByMembership.mockResolvedValue({
-      'datalake:lake-0': { total: 3, uncategorized: 2 },
-      'datalake:lake-1': { total: 3, uncategorized: 2 },
-    });
-    h.countDistinctUncategorizedDataLakeFilesByMembership.mockResolvedValue(1);
-
-    const result = await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
-
-    expect(result.totalUncategorizedFileCount).toBe(1);
-  });
-
-  it('narrows the merged bucket against every accessible prefix, not just the open ones', async () => {
-    // A dynamic lake's prefix is exactly where the merged tree DOES have a branch, so leaving it
-    // out would put already reachable files back in the bucket.
-    await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
-
-    const [scopeArg, prefixArg] = h.countDistinctUncategorizedDataLakeFilesByMembership.mock.calls[0];
-    expect(scopeArg).toEqual(scopes());
-    expect(prefixArg).toEqual(expect.arrayContaining(['lake0:', 'lake1:']));
-  });
-
   it('passes the SAME scopes to the distinct total as to the per-lake counts', async () => {
     // The two numbers sit above and below each other in the picker; resolving them from different
     // scope sets is exactly how they would start describing different populations again.
@@ -243,5 +215,74 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     expect(h.countDataLakeTagsByPrefix.mock.calls[0][2].lakeMemberships).toEqual(owned);
     expect(h.countDataLakeUniqueFilesByPrefix.mock.calls[0][2].lakeMemberships).toEqual(owned);
     expect(scopes().some((s: { kind: string }) => s.kind === 'registry')).toBe(true);
+  });
+});
+
+describe('queryScopedDataLakeTagCounts', () => {
+  beforeEach(() => {
+    h.findByDatalakeTags.mockReset().mockResolvedValue([
+      { datalakeTag: 'datalake:lake-0', fileTagPrefix: 'docs:', createdByUserId: 'creator-0' },
+      { datalakeTag: 'datalake:lake-1', fileTagPrefix: 'docs:', createdByUserId: 'creator-1' },
+    ]);
+    h.countDataLakeTagsByPrefix.mockReset().mockResolvedValue([{ tag: 'docs:alpha', count: 1 }]);
+    h.countDataLakeUniqueFilesByPrefix.mockReset();
+    h.countDataLakeFilesByMembership.mockReset();
+    h.countDataLakeFilesByMembershipArm.mockReset();
+    h.countDistinctDataLakeFilesByMembership.mockReset();
+  });
+
+  // Two creators' lakes may share a prefix (unique per creator only). With lake-0 selected, the
+  // counter must see only lake-0's arms and drop the base-access arms, or lake-1's same-prefix tags
+  // and the viewer's own prefixed files land in lake-0's tree.
+  const sharedPrefixLake = (i: number) => ({ ...lake(i), fileTagPrefix: 'docs:' });
+
+  it("hands the counter only the selected lake's arms, restricted to its membership", async () => {
+    const result = await queryScopedDataLakeTagCounts(req, [sharedPrefixLake(0)]);
+
+    expect(result).toEqual({ tagCounts: [{ tag: 'docs:alpha', count: 1 }] });
+    expect(h.findByDatalakeTags).toHaveBeenCalledWith(['datalake:lake-0']);
+    expect(h.countDataLakeTagsByPrefix).toHaveBeenCalledTimes(1);
+    const [userId, prefixes, options] = h.countDataLakeTagsByPrefix.mock.calls[0];
+    expect(userId).toBe('viewer-9');
+    expect(prefixes).toEqual(['docs:']);
+    expect(options).toEqual({
+      userGroups: ['group-a'],
+      dataLakeTags: ['datalake:lake-0'],
+      dataLakeTagPrefixes: [],
+      lakeMemberships: [
+        { kind: 'owned', datalakeTag: 'datalake:lake-0', fileTagPrefix: 'docs:', creatorUserId: 'creator-0' },
+      ],
+      restrictToDataLake: true,
+    });
+  });
+
+  it('runs none of the per-lake membership aggregates', async () => {
+    await queryScopedDataLakeTagCounts(req, [sharedPrefixLake(0)]);
+
+    expect(h.countDataLakeUniqueFilesByPrefix).not.toHaveBeenCalled();
+    expect(h.countDataLakeFilesByMembership).not.toHaveBeenCalled();
+    expect(h.countDataLakeFilesByMembershipArm).not.toHaveBeenCalled();
+    expect(h.countDistinctDataLakeFilesByMembership).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty tree for an empty selection, never widening to every lake', async () => {
+    const result = await queryScopedDataLakeTagCounts(req, []);
+
+    expect(result).toEqual({ tagCounts: [] });
+    expect(h.findByDatalakeTags).not.toHaveBeenCalled();
+    expect(h.countDataLakeTagsByPrefix).not.toHaveBeenCalled();
+  });
+
+  it('keeps a selected registry lake on its open prefix arm, out of the shared membership $or', async () => {
+    const registryLake = DATA_LAKES[0];
+    h.findByDatalakeTags.mockResolvedValue([]);
+
+    await queryScopedDataLakeTagCounts(req, [registryLake as never]);
+
+    const options = h.countDataLakeTagsByPrefix.mock.calls[0][2];
+    expect(options.dataLakeTags).toEqual([registryLake.datalakeTag]);
+    expect(options.dataLakeTagPrefixes).toEqual([registryLake.fileTagPrefix]);
+    expect(options.lakeMemberships).toEqual([]);
+    expect(options.restrictToDataLake).toBe(true);
   });
 });

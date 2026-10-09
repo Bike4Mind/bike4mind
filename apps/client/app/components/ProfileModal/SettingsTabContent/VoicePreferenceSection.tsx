@@ -9,7 +9,8 @@ import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyle
 import GraphicEqIcon from '@mui/icons-material/GraphicEq';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
-import { AVAILABLE_TTS_VOICES } from '@bike4mind/common';
+import { AVAILABLE_TTS_VOICES, type TtsBase64Response } from '@bike4mind/common';
+import { toPlayableAudio } from '@client/app/utils/generatedAudio';
 
 const DEFAULT_SAMPLE_TEXT = "Hello! This is how my voice sounds. I'm ready to help you with anything you need.";
 
@@ -77,33 +78,45 @@ const VoicePreferenceSection = () => {
         audioUrlRef.current = null;
       }
 
-      // Call the TTS API; it approximates the real-time voice for testing
-      const response = await api.post(
-        '/api/ai/text-to-speech',
+      // Call the TTS API; it approximates the real-time voice for testing.
+      // preview keeps the throwaway audition out of the user's Files.
+      const response = await api.post<TtsBase64Response>(
+        '/api/ai/tts',
         {
           text: sampleText,
+          provider: 'openai',
           voice: voiceToTest,
+          preview: true,
+          encoding: 'base64',
         },
         {
-          responseType: 'blob',
           timeout: 30000,
           validateStatus: status => status === 200,
           skipAuthRefresh: true, // Prevent infinite retry loop on 401 (missing OpenAI key)
         }
       );
 
-      // response.data is already a Blob when responseType is 'blob'
-      const audioBlob = response.data;
+      // /api/ai/tts stands in another provider when OpenAI is unavailable, but a
+      // different vendor's voice is no audition of the selected OpenAI one.
+      if (response.data.fallbackFrom) {
+        setIsTesting(false);
+        toast.error('OpenAI is unavailable, so this voice cannot be previewed. Please contact your administrator.');
+        return;
+      }
 
-      const audioUrl = URL.createObjectURL(audioBlob);
-      audioUrlRef.current = audioUrl;
+      const { url: audioUrl, isObjectUrl } = toPlayableAudio(response.data);
+      const releaseAudioUrl = () => {
+        if (!isObjectUrl) return;
+        URL.revokeObjectURL(audioUrl);
+        audioUrlRef.current = null;
+      };
+      if (isObjectUrl) audioUrlRef.current = audioUrl;
       const audio = new Audio(audioUrl);
       audioRef.current = audio;
 
       audio.onended = () => {
         setIsTesting(false);
-        URL.revokeObjectURL(audioUrl);
-        audioUrlRef.current = null;
+        releaseAudioUrl();
       };
 
       audio.onerror = event => {
@@ -114,8 +127,7 @@ const VoicePreferenceSection = () => {
           networkState: audio.networkState,
         });
         setIsTesting(false);
-        URL.revokeObjectURL(audioUrl);
-        audioUrlRef.current = null;
+        releaseAudioUrl();
 
         const errorCode = audio.error?.code;
         if (errorCode === 1) {
@@ -136,8 +148,7 @@ const VoicePreferenceSection = () => {
       } catch (playError) {
         console.error('Audio play() failed:', playError);
         setIsTesting(false);
-        URL.revokeObjectURL(audioUrl);
-        audioUrlRef.current = null;
+        releaseAudioUrl();
 
         // Handle autoplay restrictions (audio.play() rejects with a DOMException)
         const errorName = playError instanceof DOMException ? playError.name : '';
@@ -171,22 +182,16 @@ const VoicePreferenceSection = () => {
         // HTTP error response
         const status = error.response.status;
 
-        // The error response is a blob, need to parse it
         const data: unknown = error.response.data;
-        let errorMessage = 'Unknown error';
-        try {
-          if (data instanceof Blob) {
-            const text = await data.text();
-            const errorData = JSON.parse(text) as { error?: string };
-            errorMessage = errorData.error || errorMessage;
-          } else if (data && typeof data === 'object' && (data as { error?: string }).error) {
-            errorMessage = (data as { error: string }).error;
-          }
-        } catch (parseError) {
-          console.error('Failed to parse error response:', parseError);
-        }
+        const errorBody = (data && typeof data === 'object' ? data : {}) as { error?: string; errorCode?: string };
+        const errorMessage = errorBody.error || 'Unknown error';
 
-        if (status === 401) {
+        if (errorBody.errorCode === 'insufficient_credits') {
+          toast.error('You do not have enough credits to test this voice.');
+        } else if (errorBody.errorCode === 'provider_rejected') {
+          toast.error('The OpenAI API key was rejected. Please contact your administrator.');
+        } else if (status === 401) {
+          // provider_not_configured, or any other auth failure
           toast.error('OpenAI API key not configured. Please contact your administrator.');
         } else if (status === 429) {
           toast.error('Rate limit exceeded. Please try again later.');

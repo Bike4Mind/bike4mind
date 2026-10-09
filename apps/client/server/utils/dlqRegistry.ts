@@ -61,9 +61,9 @@ const DLQ_REGISTRY = [
     sourceQueue: 'researchEngineQueue',
   },
   {
-    label: 'whats-new-generation',
-    displayName: "What's New Generation",
-    application: 'WhatsNewGeneration',
+    label: 'release-notes',
+    displayName: 'Release Notes',
+    application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
   },
   {
@@ -109,10 +109,10 @@ const DLQ_REGISTRY = [
     sourceQueue: 'questExportQueue',
   },
   {
-    label: 'video-generation',
-    displayName: 'Video Generation',
-    application: 'VideoGeneration',
-    sourceQueue: 'videoGenerationQueue',
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
   },
   {
     label: 'liveops-triage',
@@ -197,6 +197,12 @@ const DLQ_REGISTRY = [
     displayName: 'Bob Panel Run',
     application: 'BobIntegration',
     sourceQueue: 'bobRunQueue',
+  },
+  {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
   },
   {
     label: 'data-lake-cleanup',

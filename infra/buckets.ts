@@ -99,6 +99,21 @@ const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFil
         daysAfterInitiation: 1,
       },
     },
+    {
+      // Oversized generated audio handed back as a 1h signed URL (generatedAudioDelivery.ts);
+      // nothing else deletes it. Prefix must stay in sync with GENERATED_AUDIO_OFFLOAD_PREFIX there.
+      id: 'expire-generated-audio-offload',
+      status: 'Enabled',
+      filter: {
+        prefix: 'generated-audio-offload/',
+      },
+      expiration: {
+        days: 1,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+    },
   ],
 });
 

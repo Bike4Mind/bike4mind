@@ -4,7 +4,7 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
 import { authorizeLakeDriveAccess } from '@server/integrations/google/drive/authorizeLakeDriveAccess';
-import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
+import { withConnectionId, withLakeConnectorClaim } from '@server/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
   createDriveClient,
@@ -168,28 +168,29 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       }
       connectionId = byFolder.id;
     } else {
-      // Only a NEW claim can add a second connector, so the guard lives here and not up with the cheap
-      // gates: a same-folder Re-sync on a lake that already carries a GitHub row must still reach the
-      // reuse branch. Not gated on EnableDataLakeGitHub: with that flag off the client cannot see a
+      // Only a NEW claim can add a second connector, so the lake claim is taken here and not up with the
+      // cheap gates: a same-folder Re-sync on a lake that already carries a GitHub row must still reach
+      // the reuse branch. Not gated on EnableDataLakeGitHub: with that flag off the client cannot see a
       // bound repository, so this is the only thing stopping a second connector.
-      // Drive is exempt here: a second Drive folder on this lake falls to the E11000 catch below, whose
-      // message is more specific than the guard's.
-      await assertLakeConnectorFree(lake.id, { except: 'googleDrive' });
       try {
-        const created = await orgGoogleDriveConnectionRepository.create({
-          ...(owner.kind === 'organization' && {
-            organizationId: owner.organizationId,
-            oauthRefreshToken: userCredential,
-          }),
-          authMode: 'oauth',
-          driveFolderId,
-          folderName,
-          targetDataLakeId: dataLakeId,
-          connectedBy: req.user.id,
-          enabled: true,
-          status: 'connected',
-          connectedAt: new Date(),
-        });
+        const created = await withLakeConnectorClaim(lake.id, 'googleDrive', claimedId =>
+          orgGoogleDriveConnectionRepository.create(
+            withConnectionId(claimedId, {
+              ...(owner.kind === 'organization' && {
+                organizationId: owner.organizationId,
+                oauthRefreshToken: userCredential,
+              }),
+              authMode: 'oauth',
+              driveFolderId,
+              folderName,
+              targetDataLakeId: dataLakeId,
+              connectedBy: req.user.id,
+              enabled: true,
+              status: 'connected',
+              connectedAt: new Date(),
+            })
+          )
+        );
         connectionId = created.id;
         claimedByThisRequest = true;
       } catch (e) {
@@ -236,6 +237,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       });
       throw new InternalServerError('Could not queue the Google Drive ingest. Please try again.');
     }
+
+    // Only past the enqueue: a failed one releases a new claim, leaving the lake unbound and its
+    // intent still wanted. Best-effort, since the bind stands without it (see the GitHub connect).
+    await dataLakeRepository.clearPendingConnector(dataLakeId).catch((e: unknown) =>
+      req.logger.warn('Google Drive connect: could not clear the pending connector', {
+        connectionId,
+        error: e instanceof Error ? e.message : String(e),
+      })
+    );
 
     return res.status(202).json({ connectionId, status: 'queued' });
   });

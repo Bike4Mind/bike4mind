@@ -3,6 +3,7 @@ import {
   GetFoundationModelAvailabilityCommand,
   ListFoundationModelsCommand,
 } from '@aws-sdk/client-bedrock';
+import { bedrockClientConfig } from '@bike4mind/common';
 import type { modelDiscoveryService } from '@bike4mind/services';
 
 type BedrockControlPlane = modelDiscoveryService.BedrockControlPlane;
@@ -22,7 +23,7 @@ type BedrockFoundationModelSummary = modelDiscoveryService.BedrockFoundationMode
  * reason server/utils/cloudwatch.ts builds its client per call).
  */
 export function createBedrockControlPlane(region = process.env.AWS_REGION || 'us-east-1'): BedrockControlPlane {
-  const client = new BedrockClient({ region });
+  const client = new BedrockClient({ region, ...bedrockClientConfig() });
 
   return {
     async listFoundationModels(signal: AbortSignal): Promise<BedrockFoundationModelSummary[]> {

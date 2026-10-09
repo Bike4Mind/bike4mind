@@ -2,8 +2,18 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeAccessGrantRepository, dataLakeFindingRepository } from '@bike4mind/database';
-import { INCONSISTENCY_KINDS, LAKE_FINDING_DETECTORS, LAKE_FINDING_STATUSES } from '@bike4mind/common';
+import {
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeFindingRepository,
+  fabFileRepository,
+} from '@bike4mind/database';
+import {
+  INCONSISTENCY_KINDS,
+  LAKE_FINDING_DETECTORS,
+  LAKE_FINDING_STATUSES,
+  type ILakeFindingListItem,
+} from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -65,7 +75,24 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       offset: offset ?? 0,
     });
 
-    return res.json({ data: findings.slice(0, pageLimit), hasMore: findings.length > pageLimit });
+    const page = findings.slice(0, pageLimit);
+
+    // Only OPEN rows: `unsupersede` requires an open finding, so a ruling on a closed one is not
+    // actionable and is not worth the lookup. One batched read for the whole page, not one per row.
+    const citedByOpenRows = [
+      ...new Set(page.filter(finding => finding.status === 'open').flatMap(f => f.sources.map(s => s.fabFileId))),
+    ];
+    const superseded = new Set(await fabFileRepository.listLakeSupersededIds(citedByOpenRows, lake.id));
+
+    const data: ILakeFindingListItem[] = page.map(finding => ({
+      ...finding,
+      supersededFabFileIds:
+        finding.status === 'open'
+          ? finding.sources.map(s => s.fabFileId).filter(fabFileId => superseded.has(fabFileId))
+          : [],
+    }));
+
+    return res.json({ data, hasMore: findings.length > pageLimit });
   });
 
 export const config = { api: { externalResolver: true } };

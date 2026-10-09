@@ -36,6 +36,7 @@ import {
   clampImageQualityForModel,
   isGPTImageModel,
   isGPTImage25Model,
+  supportsTransparentBackground,
   isKontextModel as isKontextImageModel,
   EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
@@ -59,7 +60,7 @@ import {
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
-import { defaultImageSize, getAvailableImageSizes } from './imageSizeOptions';
+import { defaultImageSize, getAvailableImageSizes, showsImageSizeRow } from './imageSizeOptions';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
@@ -301,8 +302,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       },
       testId: 'image-setting-temperature-input',
     },
-    // Image Size (hidden for Kontext)
-    ...(!isKontextModel
+    // Image Size (hidden when the model's sizing takes no size)
+    ...(showsImageSizeRow(contextImageModel)
       ? [
           {
             label: 'Image Size',
@@ -534,6 +535,14 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                   )}
                   {selectedModelInfo.max_tokens && (
                     <MetadataChip label={`${selectedModelInfo.max_tokens} max`} mode={mode} variant="default" />
+                  )}
+                  {supportsTransparentBackground(selectedModel) && (
+                    <MetadataChip
+                      label="Transparent background"
+                      mode={mode}
+                      variant="purple"
+                      tooltip="Can render PNG/WebP images with a real transparent background - ask for a cutout, icon, sticker or logo with no backdrop."
+                    />
                   )}
                   {selectedModelInfo.contextWindow && (
                     <MetadataChip

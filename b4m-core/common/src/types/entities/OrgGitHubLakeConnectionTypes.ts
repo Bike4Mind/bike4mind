@@ -11,8 +11,36 @@ import { IMongoDocument } from './common';
  * A GitHub App has ONE installation per GitHub account, so several connections can share an
  * installationId (two lakes fed by two repos of the same org). The binding is therefore
  * (installationId, repositoryId); the installation itself is only removed with its last binding.
+ *
+ * 'access_lost' is the subset of 'error' the App cannot retry its way out of: GitHub answered 404/422
+ * because the installation was deleted or the repository left its selection. It stays claimable, so a
+ * Re-sync still recovers it once access is restored on GitHub.
  */
-export type GitHubLakeConnectionStatus = 'connected' | 'syncing' | 'error';
+export type GitHubLakeConnectionStatus = 'connected' | 'syncing' | 'error' | 'access_lost';
+
+/** What a sync may park a connection in when it releases its claim: never 'syncing'. */
+export type GitHubLakeReleaseStatus = Exclude<GitHubLakeConnectionStatus, 'syncing'>;
+
+/** A status a release must carry forward rather than heal, when it resolved nothing itself. */
+export function isGitHubLakeFailureStatus(
+  status: GitHubLakeConnectionStatus | undefined
+): status is 'error' | 'access_lost' {
+  return status === 'error' || status === 'access_lost';
+}
+
+/**
+ * The App lost its read on the repository (uninstalled, or the repository left the installation's
+ * selection). The UI answers this with the Access lost state - Fix on GitHub plus Disconnect -
+ * instead of the plain error chip, because a Re-sync alone cannot resolve it.
+ */
+export function isGitHubLakeAccessLost(connection: {
+  status: GitHubLakeConnectionStatus;
+  enabled: boolean;
+  disconnecting: boolean;
+}): boolean {
+  // A paused or disconnecting connection is not asking the user to repair anything on GitHub.
+  return connection.status === 'access_lost' && connection.enabled && !connection.disconnecting;
+}
 
 export interface IOrgGitHubLakeConnection {
   organizationId: string;
@@ -21,6 +49,11 @@ export interface IOrgGitHubLakeConnection {
   installationId: number;
   /** Login of the GitHub user/org account the App is installed on. */
   accountLogin: string;
+  /**
+   * The account's immutable numeric GitHub id, the `target_id` of a targeted install link. Absent on
+   * rows written before it was recorded, which then fall back to the untargeted install page.
+   */
+  accountId?: number;
   /** GitHub's immutable numeric repository id - survives renames and transfers, unlike the name. */
   repositoryId: number;
   /** `owner/name` at connect time; display only, may go stale after a rename. */
@@ -30,7 +63,7 @@ export interface IOrgGitHubLakeConnection {
   connectedAt: Date;
   /** Model default true; archiving or deleting the lake turns it off, unarchive/restore back on. */
   enabled?: boolean;
-  /** Model default 'connected'. 'error' means the App lost the repository and the user must reconnect. */
+  /** Model default 'connected'. See GitHubLakeConnectionStatus for what 'error' and 'access_lost' mean. */
   status?: GitHubLakeConnectionStatus;
   lastError?: string | null;
   /** Re-read from GitHub on every sync; the branch can be renamed there. */
@@ -38,6 +71,9 @@ export interface IOrgGitHubLakeConnection {
   /** The commit the last clean sync fully applied. A non-manual sync at the same HEAD is a no-op. */
   lastSyncedCommitSha?: string;
   lastSyncedAt?: Date;
+  /** The latest tree read's split under GITHUB_LAKE_FILE_RULES, re-counted by every sync slice. */
+  treeCandidateCount?: number;
+  treeSkippedCount?: number;
   // Claim fields, same contract as IOrgGoogleDriveConnection's.
   syncClaimedAt?: Date;
   activeIngestBatchId?: string;
@@ -48,6 +84,12 @@ export interface IOrgGitHubLakeConnection {
    * While set the connection stays disabled; the row is hard-deleted once the purge finishes.
    */
   disconnectRequestedAt?: Date;
+  /** When the scheduled reconcile last compared this repo's HEAD; drives its oldest-checked-first order. */
+  reconcileCheckedAt?: Date;
+  /** HEAD the reconcile last enqueued a sync for (null: access was lost before HEAD could be read). */
+  reconcileEnqueuedSha?: string | null;
+  /** When that enqueue happened; the reconcile's retry cooldown runs from here. */
+  reconcileEnqueuedAt?: Date;
 }
 
 /**
@@ -60,6 +102,13 @@ export const GITHUB_DISCONNECT_STALL_MS = 15 * 60 * 1000;
 export function isGitHubDisconnectStalled(disconnectRequestedAt: Date, now: Date = new Date()): boolean {
   return now.getTime() - new Date(disconnectRequestedAt).getTime() >= GITHUB_DISCONNECT_STALL_MS;
 }
+
+/**
+ * How a sync's tree read split under GITHUB_LAKE_FILE_RULES: files the rules admit (the sync's
+ * target, before any post-fetch content check) and files they filter out. Directories are not files
+ * and count as neither.
+ */
+export type GitHubLakeTreeCounts = { candidateCount: number; skippedCount: number };
 
 export interface IOrgGitHubLakeConnectionDocument extends IOrgGitHubLakeConnection, IMongoDocument {}
 
@@ -76,6 +125,10 @@ export interface IOrgGitHubLakeConnectionResponse {
   lastError: string | null;
   defaultBranch: string | null;
   lastSyncedAt: Date | null;
+  lastSyncedCommitSha: string | null;
+  /** From the latest tree read (GitHubLakeTreeCounts); null until a sync has read the tree. */
+  candidateCount: number | null;
+  skippedCount: number | null;
   /**
    * 'syncing' whose claim went stale (a crashed run). Nothing resets such a row on its own, but the
    * sync route admits it, so the client offers Re-sync instead of waiting on it.
@@ -87,6 +140,13 @@ export interface IOrgGitHubLakeConnectionResponse {
   disconnecting: boolean;
   /** The pending purge has made no progress for GITHUB_DISCONNECT_STALL_MS, so a retry may re-queue it. */
   disconnectStalled: boolean;
+  /**
+   * Where "Fix on GitHub" sends a user whose App lost access: GitHub's install page targeted at this
+   * installation's account, which opens its repository access for an owner and lets any other member
+   * request the change. Deliberately NOT the installation's settings page, which GitHub 404s for a
+   * non-owner. Null when the data-lake App is unconfigured on this deployment.
+   */
+  fixAccessUrl: string | null;
 }
 
 /** Why an installation cannot feed a lake (lakeAppPolicy.ts findInstallationPolicyViolation). */
@@ -161,7 +221,7 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
     id: string,
     expectedToken: string,
     lastError: string | null,
-    status?: 'connected' | 'error'
+    status?: GitHubLakeReleaseStatus
   ): Promise<IOrgGitHubLakeConnectionDocument | null>;
   /** The clean-finish release: records the applied commit and clears lastError. */
   recordSynced(
@@ -191,6 +251,11 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
    * `stamp` so a concurrent DELETE that re-stamped since is left alone. Returns whether it matched.
    */
   cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean>;
+  /**
+   * Stores a sync's tree counts, compare-and-set on the live claim token like renewSyncClaim, so a run
+   * that lost its claim cannot overwrite the counts of the one that took it. Returns whether it matched.
+   */
+  recordTreeCounts(id: string, expectedToken: string, counts: GitHubLakeTreeCounts): Promise<boolean>;
   /** Refreshes a pending disconnect's stamp (each purge slice); false when none is pending. */
   touchDisconnect(id: string): Promise<boolean>;
   /**
@@ -200,4 +265,13 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
   setEnabledForLake(targetDataLakeId: string, enabled: boolean): Promise<boolean>;
   /** Best-effort visibility for a failure outside any sync claim (e.g. the connect-time enqueue). */
   recordLastError(id: string, lastError: string): Promise<boolean>;
+  /**
+   * The scheduled reconcile's batch: enabled, not disconnecting, status connected (or legacy unset) or a
+   * stale 'syncing' claim, least recently checked first. 'error' is excluded - the App cannot read it.
+   */
+  findDueForReconcile(limit: number): Promise<IOrgGitHubLakeConnectionDocument[]>;
+  /** Stamps reconcileCheckedAt without touching updatedAt. */
+  markReconcileChecked(ids: readonly string[], at: Date): Promise<void>;
+  /** Records the reconcile's enqueue target for its retry cooldown, without touching updatedAt. */
+  markReconcileEnqueued(id: string, sha: string | null, at: Date): Promise<void>;
 }

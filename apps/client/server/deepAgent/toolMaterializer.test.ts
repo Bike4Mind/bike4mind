@@ -26,10 +26,16 @@ vi.mock('@bike4mind/services/llm', async importOriginal => {
 });
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn().mockResolvedValue({ _id: 'owner-1', id: 'owner-1' }) },
-  adminSettingsRepository: {},
+  // Lakes disabled, so the save tool answers right after its adapter gate without writing.
+  adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
   apiKeyRepository: {},
-  dataLakeRepository: {},
-  dataLakeAccessGrantRepository: { listActiveByLakes: vi.fn().mockResolvedValue([]) },
+  dataLakeRepository: {
+    findBySlug: vi.fn(),
+    findBySlugAmongIds: vi.fn(),
+    setStats: vi.fn(),
+    activateIfDraft: vi.fn(),
+  },
+  dataLakeAccessGrantRepository: { listActiveByLakes: vi.fn().mockResolvedValue([]), listByLake: vi.fn() },
   fallbackLakeSettingsRepository: {},
   // ToolContext.db.organizations is required since #1674 (org membership set).
   organizationRepository: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
@@ -37,7 +43,12 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   imageModerationIncidentRepository: {},
   projectRepository: {},
+  questRepository: { findSessionIdsByImage: vi.fn() },
+  sessionRepository: { findAllByIds: vi.fn() },
   lakeAccessEventRepository: {},
+  lakeMembershipRemovalRepository: {},
+  lakeConfigChangeEventRepository: {},
+  lakeMembershipChangeEventRepository: {},
   scopedSettingsRepository: {},
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -51,6 +62,7 @@ vi.mock('@server/utils/storage', () => ({
 }));
 
 const { createDeepAgentToolMaterializer } = await import('./toolMaterializer');
+const { questRepository, sessionRepository } = await import('@bike4mind/database');
 
 // A minimal backend stand-in; never invoked by the paths under test.
 const fakeLlm = { complete: vi.fn() } as unknown as ICompletionBackend;
@@ -102,5 +114,32 @@ describe('createDeepAgentToolMaterializer', () => {
       config?: { web_search?: { imageUrlSigningSecret?: string } };
     };
     expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe('test-secret');
+  });
+
+  it('wires the owner lookup edit_image needs for generated-image keys', async () => {
+    // Without it the resolver fails closed, so owners are refused with only a logged warning.
+    await materialize()(['edit_image'], 'owner-1');
+    const toolDeps = buildSharedToolsSpy.mock.calls[0]?.[0] as {
+      db: { quests?: unknown; sessions?: { findAllByIds: (ids: string[]) => unknown } };
+    };
+    expect(toolDeps.db.quests).toBe(questRepository);
+    // Narrow by design: only the lookup, never incrementImageCount.
+    expect(Object.keys(toolDeps.db.sessions ?? {})).toEqual(['findAllByIds']);
+    toolDeps.db.sessions?.findAllByIds(['s1']);
+    expect(sessionRepository.findAllByIds).toHaveBeenCalledWith(['s1']);
+  });
+
+  it('hands the lake write tools their audit adapters and no organization', async () => {
+    const tools = await materialize()(['save_content_to_data_lake'], 'owner-1');
+    const toolDeps = buildSharedToolsSpy.mock.calls[0]?.[0] as { db: Record<string, unknown>; organizationId?: string };
+    expect(toolDeps.db.lakeMembershipRemovals).toBeDefined();
+    expect(toolDeps.db.lakeConfigChangeEvents).toBeDefined();
+    expect(toolDeps.db.lakeMembershipChangeEvents).toBeDefined();
+    expect(toolDeps.organizationId).toBeUndefined();
+
+    const save = tools.find(t => t.toolSchema.name === 'save_content_to_data_lake');
+    const reply = await save?.toolFn({ content: 'hello', fileName: 'note.md', dataLakeId: 'lake-1' });
+    expect(reply).not.toMatch(/not available on this surface/);
+    expect(reply).toMatch(/Data lakes are not enabled/);
   });
 });

@@ -24,7 +24,7 @@ vi.mock('@server/dataLakes/runTaxonomyInference', () => ({
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://example' } } }));
 
-import { analyzeBatchTaxonomy } from './analyzeBatchTaxonomy';
+import { analyzeBatchTaxonomy, claimBatchForAnalysis } from './analyzeBatchTaxonomy';
 
 const logger = { error: vi.fn(), warn: vi.fn() };
 
@@ -66,6 +66,39 @@ describe('analyzeBatchTaxonomy', () => {
       'analyzing',
       expect.objectContaining({ taxonomyStartedAt: expect.any(Date) })
     );
+  });
+
+  it('skips the claim when the caller already holds it and finalizes straight to ready', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'ready' }); // finalize
+
+    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { claimHeldByCaller: true });
+
+    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalledWith(
+      'b1',
+      expect.anything(),
+      'analyzing',
+      expect.anything()
+    );
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledTimes(1);
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(
+      1,
+      'b1',
+      ['analyzing'],
+      'ready',
+      expect.objectContaining({ taxonomySuggestions: expect.anything() })
+    );
+    expect(result.outcome).toBe('ready');
+  });
+
+  it('claimBatchForAnalysis passes the from-set and a fresh taxonomyStartedAt', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' });
+
+    const claimed = await claimBatchForAnalysis('b1', ['ready', 'failed']);
+
+    expect(claimed).toEqual({ id: 'b1' });
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['ready', 'failed'], 'analyzing', {
+      taxonomyStartedAt: expect.any(Date),
+    });
   });
 
   it('fails closed with a real message and notifies when no files exist', async () => {

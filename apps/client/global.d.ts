@@ -1,5 +1,11 @@
 import { Ability } from '@server/auth/ability';
-import { ApiKeyBillingOwnerType, ApiKeyScope, IUserApiKeyRateLimit, IUserDocument } from '@bike4mind/common';
+import {
+  ApiKeyBillingOwnerType,
+  ApiKeyCompletionSource,
+  ApiKeyScope,
+  IUserApiKeyRateLimit,
+  IUserDocument,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 
@@ -34,6 +40,8 @@ declare global {
       endpoint: string;
       method: string;
       startTime: number;
+      source: ApiKeyCompletionSource;
+      ownerType: ApiKeyBillingOwnerType;
     }
 
     interface Request {

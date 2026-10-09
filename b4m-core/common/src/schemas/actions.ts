@@ -5,12 +5,14 @@ import {
   hearthEventKindSchema,
   hearthMachineBodySchema,
   hearthEventRefsSchema,
+  hearthEventOriginSchema,
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
+import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
 
 // Schemas for actions sent over the WebSocket connection.
@@ -345,6 +347,21 @@ export const PiHistoryErrorAction = z.object({
 });
 export type IPiHistoryErrorAction = z.infer<typeof PiHistoryErrorAction>;
 
+export const GenerationJobUpdatedAction = z.object({
+  action: z.literal('generation_job_updated'),
+  job: z.object({
+    id: z.string(),
+    kind: z.enum(GENERATION_JOB_KINDS),
+    state: z.enum(GENERATION_JOB_STATES),
+    progress: z.number().min(0).max(1).optional(),
+    error: z.object({ code: z.string(), message: z.string() }).optional(),
+    output: z
+      .object({ fileId: z.string().optional(), contentType: z.string(), durationSeconds: z.number() })
+      .optional(),
+  }),
+});
+export type IGenerationJobUpdatedAction = z.infer<typeof GenerationJobUpdatedAction>;
+
 export const StreamedChatCompletionAction = z.object({
   action: z.literal('streamed_chat_completion'),
   clientId: z.string().optional(),
@@ -357,6 +374,7 @@ export const StreamedChatCompletionAction = z.object({
       replies: z.array(z.string()).optional(),
       images: z.array(z.string()).optional(),
       videos: z.array(z.string()).optional(),
+      videoJobIds: z.array(z.string()).optional(),
       // Derived from CHAT_HISTORY_ITEM_TYPES so the WebSocket payload cannot publish a
       // narrower quest-type vocabulary than the REST surfaces (schemas/chat.ts) do.
       type: z.enum(CHAT_HISTORY_ITEM_TYPES),
@@ -422,8 +440,9 @@ export const StreamedChatCompletionAction = z.object({
           endTime: z.number().optional(),
         })
         .optional(),
-      // Add fallback info to support backend fallback mechanism
-      fallbackInfo: FallbackInfoSchema.optional(),
+      // Add fallback info to support backend fallback mechanism. Nullish: a whole-quest payload
+      // carries the null that clears a stale value (see IChatHistoryItem.fallbackInfo).
+      fallbackInfo: FallbackInfoSchema.nullish(),
       // MCP confirmation action awaiting user approval (confirm/cancel buttons)
       pendingAction: z
         .object({
@@ -577,6 +596,7 @@ export const CliCompletionChunkAction = z.object({
   chunk: z.object({
     type: z.enum(['content', 'tool_use']),
     text: z.string(),
+    toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
     tools: z.array(z.unknown()).optional(),
     usage: z
       .object({
@@ -894,6 +914,8 @@ export const HearthEventAction = z.object({
     }),
     machine: hearthMachineBodySchema.optional(),
     refs: hearthEventRefsSchema.prefault({}),
+    // Server-set provenance; surfaces badge api-key/gateway writes.
+    origin: hearthEventOriginSchema.optional(),
     createdAt: z.string(),
   }),
 });
@@ -1492,6 +1514,10 @@ export const ReconnectResultAction = z.object({
   action: z.literal('reconnect_result'),
   found: z.boolean(),
   executionId: z.string().optional(),
+  // The session the found run belongs to, so the client stamps it from the
+  // response rather than correlating responses with requests. Absent on
+  // `found: false`, and on frames from servers that predate the echo.
+  sessionId: z.string().optional(),
   // Same enum reasoning as `ChildExecutionSnapshotSchema.status` - a free
   // string forced the client to re-narrow on every read. `.optional()` because
   // a `found: false` frame omits it.
@@ -1552,6 +1578,7 @@ export const OptiHashiRunUpdatedAction = z.object({
 export type IOptiHashiRunUpdatedAction = z.infer<typeof OptiHashiRunUpdatedAction>;
 
 export const MessageDataToClient = z.discriminatedUnion('action', [
+  GenerationJobUpdatedAction,
   DataSubscriptionUpdateAction,
   DataSubscribeErrorAction,
   InboxRefetchAction,

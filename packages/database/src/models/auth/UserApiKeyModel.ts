@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
+  ApiKeyCapPool,
   ApiKeyStatus,
   ApiKeyScope,
   CreditHolderType,
@@ -89,6 +90,19 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     );
   }
 
+  // Both lazy heals below run after a slow bcrypt compare, so they are conditioned on the keyHash
+  // that compare read: if a rotation committed in between, the filter misses and nothing is written.
+  async setKeyDigest(id: string, keyDigest: string, expectedKeyHash: string) {
+    await this.model.updateOne(
+      { _id: id, keyHash: expectedKeyHash, keyDigest: { $in: [null, ''] } },
+      { $set: { keyDigest } }
+    );
+  }
+
+  async healKeyPrefix(id: string, keyPrefix: string, expectedKeyHash: string) {
+    await this.model.updateOne({ _id: id, keyHash: expectedKeyHash }, { $set: { keyPrefix } });
+  }
+
   findActiveByKeyPrefix(keyPrefix: string) {
     return this.model
       .findOne({
@@ -136,14 +150,49 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
-  async countActiveByUserId(userId: string): Promise<number> {
-    // Mirror findActiveByKeyPrefix: an expired key cannot authenticate, so it must
-    // not consume a per-user slot. `expiresAt: null` also matches rows with no expiry.
-    return this.model.countDocuments({
+  // Mirror findActiveByKeyPrefix: an expired key cannot authenticate, so it must
+  // not consume a per-user slot. `expiresAt: null` also matches rows with no expiry.
+  // `$ne` (not `$nin` on a list) so a legacy row with no metadata stays in the standard pool.
+  private activeKeyFilter(userId: string, pool: ApiKeyCapPool) {
+    return {
       userId,
       status: ApiKeyStatus.ACTIVE,
       $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
-    });
+      'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
+    };
+  }
+
+  async countActiveByUserId(userId: string, pool: ApiKeyCapPool = 'standard'): Promise<number> {
+    return this.model.countDocuments(this.activeKeyFilter(userId, pool));
+  }
+
+  async createIfUnderCap(
+    doc: Parameters<IUserApiKeyRepository['create']>[0],
+    cap: number,
+    pool: ApiKeyCapPool
+  ): Promise<IUserApiKeyDocument | 'at_cap'> {
+    const userId = (doc as { userId: string }).userId;
+    const created = await this.model.create(doc);
+    try {
+      const filter = this.activeKeyFilter(userId, pool);
+      const count = await this.model.countDocuments(filter);
+      // Over cap: this caller yields. Ranking survivors by createdAt is unsafe because
+      // inserts on separate pooled connections commit out of order: a later-stamped key can
+      // count `cap` and succeed before an earlier-stamped one commits, so the earlier one
+      // would rank itself in and land at cap+1. Yielding never exceeds the cap; the cost is
+      // that truly simultaneous creates at cap - 1 can all be rejected (caller may retry).
+      if (count > cap) {
+        // Hard-delete via the raw driver: the soft-delete plugin's deleteOne would
+        // only set deletedAt, leaving the row visible with status ACTIVE.
+        await this.model.collection.deleteOne({ _id: created._id });
+        return 'at_cap';
+      }
+      return created;
+    } catch (err) {
+      // Best-effort cleanup: remove the dangling insert before propagating.
+      await this.model.collection.deleteOne({ _id: created._id });
+      throw err;
+    }
   }
 
   findByProductId(productId: string) {
@@ -222,6 +271,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     userId: { type: String, required: true },
     name: { type: String, required: true },
     keyHash: { type: String, required: true },
+    keyDigest: { type: String },
     keyPrefix: { type: String, required: true, unique: true },
     scopes: [{ type: String, enum: Object.values(ApiKeyScope), required: true }],
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
@@ -273,6 +323,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // `[]`/`{}` (which would otherwise echo in the API response for every key).
     agentId: { type: String },
     allowedOrigins: { type: [String], default: undefined },
+    identifiedClientIds: { type: [String], default: undefined },
     // Lake ids this key is bound to for the manage-but-not-member session admission (see
     // pages/api/v1/sessions/index.ts's preauthorizedLakeIds containment check). Admin-minted only.
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
@@ -323,8 +374,9 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     toJSON: {
       virtuals: true,
       transform: function (doc, ret: any) {
-        // Never expose the keyHash in JSON responses
+        // Never expose the keyHash or keyDigest in JSON responses
         delete ret.keyHash;
+        delete ret.keyDigest;
         delete ret.callbackSigningSecret;
         return ret;
       },

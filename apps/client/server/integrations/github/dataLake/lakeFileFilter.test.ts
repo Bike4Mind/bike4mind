@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { GITHUB_LAKE_FILE_RULES, checkLakeFileContent, classifyTreeEntry, lakeFileMimeType } from './lakeFileFilter';
+import { GITHUB_LAKE_FILE_RULES } from '@bike4mind/common';
+import { checkLakeFileContent, classifyTreeEntry, lakeFileMimeType } from './lakeFileFilter';
 
 const MB = 1024 * 1024;
 const blob = (path: string, size = 10, mode = '100644') => ({ path, mode, type: 'blob', sha: `sha-${path}`, size });

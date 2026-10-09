@@ -1,23 +1,72 @@
 import { describe, it, expect } from 'vitest';
-import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '@bike4mind/common';
-import { defaultImageSize, getAvailableImageSizes, getImageSizePresets } from './imageSizeOptions';
+import { GEMINI_IMAGE_MODELS, IMAGE_MODELS, IMAGE_SIZE_CONSTRAINTS, ImageModels } from '@bike4mind/common';
+import { defaultImageSize, getAvailableImageSizes, getImageSizePresets, showsImageSizeRow } from './imageSizeOptions';
 
-describe('getImageSizePresets', () => {
-  it('lists each tier its own presets', () => {
-    expect(getImageSizePresets(ImageModels.GPT_IMAGE_2)).toEqual(IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes);
-    expect(getImageSizePresets(ImageModels.GPT_IMAGE_1)).toEqual(IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes);
-    expect(getImageSizePresets(ImageModels.GPT_IMAGE_1_5)).toEqual(IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes);
-    expect(getImageSizePresets(ImageModels.FLUX_PRO_1_1)).toEqual(IMAGE_SIZE_CONSTRAINTS.BFL.sizes);
+const { GPT_IMAGE_1, GPT_IMAGE_2, BFL, DALL_E_2 } = IMAGE_SIZE_CONSTRAINTS;
+
+// The models whose picked size reaches the render, and the presets and default each showed before
+// the picker moved onto getImageModelCapabilities. dall-e-2 is the one row that changed: it used
+// to get the BFL list.
+const SIZED: readonly [string, readonly string[], string][] = [
+  [ImageModels.GPT_IMAGE_1, GPT_IMAGE_1.sizes, GPT_IMAGE_1.defaultSize],
+  [ImageModels.GPT_IMAGE_1_5, GPT_IMAGE_1.sizes, GPT_IMAGE_1.defaultSize],
+  [ImageModels.GPT_IMAGE_1_MINI, GPT_IMAGE_1.sizes, GPT_IMAGE_1.defaultSize],
+  [ImageModels.GPT_IMAGE_2, GPT_IMAGE_2.sizes, GPT_IMAGE_2.defaultSize],
+  [ImageModels.GPT_IMAGE_2_5_SUNBURST, GPT_IMAGE_2.sizes, GPT_IMAGE_2.defaultSize],
+  [ImageModels.GPT_IMAGE_2_5_FLARE, GPT_IMAGE_2.sizes, GPT_IMAGE_2.defaultSize],
+  [ImageModels.FLUX_PRO, BFL.sizes, BFL.defaultSize],
+  [ImageModels.FLUX_PRO_1_1, BFL.sizes, BFL.defaultSize],
+  [ImageModels.DALL_E_2, DALL_E_2.sizes, DALL_E_2.defaultSize],
+];
+
+// The models whose sizing takes no size: aspectRatio (Ultra, Gemini), inputImage (Fill, Kontext),
+// fixed (Grok).
+const UNSIZED: readonly string[] = [
+  ImageModels.FLUX_PRO_ULTRA,
+  ImageModels.FLUX_PRO_FILL,
+  ImageModels.FLUX_KONTEXT_PRO,
+  ImageModels.FLUX_KONTEXT_MAX,
+  ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
+  ...GEMINI_IMAGE_MODELS,
+];
+
+describe('showsImageSizeRow', () => {
+  it('has every catalog image model sorted into exactly one of the two lists', () => {
+    // A new image model fails here until someone decides whether its row shows.
+    expect([...SIZED.map(([model]) => model), ...UNSIZED].sort()).toEqual([...IMAGE_MODELS].sort());
   });
 
-  it('offers no preset for Kontext, which is sized by its input image', () => {
-    expect(getImageSizePresets(ImageModels.FLUX_KONTEXT_PRO)).toEqual([]);
-    expect(getImageSizePresets(ImageModels.FLUX_KONTEXT_MAX)).toEqual([]);
+  it.each(SIZED.map(([model]) => model))('shows the row for %s', model => {
+    expect(showsImageSizeRow(model)).toBe(true);
+  });
+
+  it.each(UNSIZED)('hides the row for %s, which takes no size', model => {
+    expect(showsImageSizeRow(model)).toBe(false);
+  });
+
+  it('keeps the row for an unrecognized model', () => {
+    expect(showsImageSizeRow('some-unreleased-model')).toBe(true);
+    expect(showsImageSizeRow(undefined)).toBe(true);
+  });
+});
+
+describe('getImageSizePresets', () => {
+  it.each(SIZED)('lists %s its own presets', (model, presets) => {
+    expect(getImageSizePresets(model)).toEqual(presets);
+  });
+
+  it.each(UNSIZED)('offers no preset for %s', model => {
+    expect(getImageSizePresets(model)).toEqual([]);
+  });
+
+  it('reads a dated gpt-image snapshot as its family', () => {
+    expect(getImageSizePresets('gpt-image-2-2026-01-15')).toEqual(GPT_IMAGE_2.sizes);
+    expect(getImageSizePresets('gpt-image-1-2025-04-23')).toEqual(GPT_IMAGE_1.sizes);
   });
 
   it('falls back to the BFL presets for an unrecognized model', () => {
-    expect(getImageSizePresets('some-unreleased-model')).toEqual(IMAGE_SIZE_CONSTRAINTS.BFL.sizes);
-    expect(getImageSizePresets(undefined)).toEqual(IMAGE_SIZE_CONSTRAINTS.BFL.sizes);
+    expect(getImageSizePresets('some-unreleased-model')).toEqual(BFL.sizes);
+    expect(getImageSizePresets(undefined)).toEqual(BFL.sizes);
   });
 });
 
@@ -48,6 +97,12 @@ describe('getAvailableImageSizes', () => {
   it('leaves non-OpenAI models on their presets alone', () => {
     // isSupportedImageSize measures OpenAI tiers only, so a BFL size must never be put through it.
     expect(getAvailableImageSizes(ImageModels.FLUX_PRO_1_1, '2048x2048')).toEqual(IMAGE_SIZE_CONSTRAINTS.BFL.sizes);
+    // A dall-e size, which isSupportedImageSize does accept for a model outside the OpenAI tiers.
+    expect(getAvailableImageSizes(ImageModels.FLUX_PRO_1_1, '256x256')).toEqual(IMAGE_SIZE_CONSTRAINTS.BFL.sizes);
+  });
+
+  it('never adds a size to dall-e-2, whose presets are the whole list', () => {
+    expect(getAvailableImageSizes(ImageModels.DALL_E_2, '1280x960')).toEqual(IMAGE_SIZE_CONSTRAINTS.DALL_E_2.sizes);
   });
 
   it('returns the presets unchanged when no size is set', () => {
@@ -58,10 +113,12 @@ describe('getAvailableImageSizes', () => {
 });
 
 describe('defaultImageSize', () => {
-  it('defaults each tier to its own size', () => {
-    expect(defaultImageSize(ImageModels.GPT_IMAGE_2)).toBe(IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.defaultSize);
-    expect(defaultImageSize(ImageModels.GPT_IMAGE_1_MINI)).toBe(IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.defaultSize);
-    expect(defaultImageSize(ImageModels.FLUX_PRO_1_1)).toBe(IMAGE_SIZE_CONSTRAINTS.BFL.defaultSize);
+  it.each(SIZED)('defaults %s to its own size', (model, _presets, defaultSize) => {
+    expect(defaultImageSize(model)).toBe(defaultSize);
+  });
+
+  it('falls back to the GPT-Image-1 default for an unrecognized model', () => {
+    expect(defaultImageSize('some-unreleased-model')).toBe(IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.defaultSize);
   });
 });
 
@@ -69,23 +126,14 @@ describe('the Select value is always one of its options', () => {
   // The defect this module exists to prevent: Joy draws a Select blank when its value matches no
   // <Option>, so both modals depend on `value` and `options` never disagreeing. Asserting the
   // invariant directly is what a per-field state check missed.
-  const models = [
-    ImageModels.GPT_IMAGE_1,
-    ImageModels.GPT_IMAGE_1_5,
-    ImageModels.GPT_IMAGE_1_MINI,
-    ImageModels.GPT_IMAGE_2,
-    ImageModels.FLUX_PRO_1_1,
-    ImageModels.FLUX_PRO_ULTRA,
-    'some-unreleased-model',
-  ];
-  const sizes = [undefined, 'auto', '1024x1024', '1280x960', '2048x2048', '1440x810', '1536x1024'];
+  // UNSIZED models are left out: both modals hide the row, so nothing is drawn for them.
+  const models = [...SIZED.map(([model]) => model), 'some-unreleased-model'];
+  const sizes = [undefined, 'auto', '1024x1024', '1280x960', '2048x2048', '1440x810', '1536x1024', '256x256'];
 
   it.each(models)('holds for %s', model => {
     for (const size of sizes) {
       const value = size || defaultImageSize(model);
       const options = getAvailableImageSizes(model, size);
-      // Kontext is the one model with no presets, and both modals hide the row for it.
-      if (options.length === 0) continue;
       if (options.includes(value)) continue;
       // A size the model rejects is discarded elsewhere (handleModelChange coerces it); what must
       // never happen is the model's own default going unrendered.

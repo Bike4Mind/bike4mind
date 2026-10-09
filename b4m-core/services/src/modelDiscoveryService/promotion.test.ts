@@ -1,7 +1,14 @@
 import { ModelBackend } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { testCredentials, testRecord } from './__fixtures__/fakes';
-import { AWAITING_APPROVAL_REASON, AWAITING_PRICE_REASON, NOT_INVOCABLE_REASON, evaluatePromotion } from './promotion';
+import {
+  AWAITING_APPROVAL_REASON,
+  AWAITING_PRICE_REASON,
+  NOT_INVOCABLE_REASON,
+  PRICED_IN_BUILD_REASON,
+  UNCORROBORATED_PRICE_REASON,
+  evaluatePromotion,
+} from './promotion';
 import type { PromotionInput } from './promotion';
 
 const evaluate = (overrides: Partial<PromotionInput> = {}) =>
@@ -67,6 +74,35 @@ describe('evaluatePromotion', () => {
     expect(decision.autoDisabledReason).toBe(AWAITING_PRICE_REASON);
   });
 
+  it('words the denial differently when an aggregator quoted a price nobody corroborated', () => {
+    const decision = evaluate({ hasTrustedPrice: false, awaitingPrice: 'aggregator-quote' });
+
+    expect(decision.blockedBy).toEqual(['no-trusted-price']);
+    expect(decision.autoDisabledReason).toBe(UNCORROBORATED_PRICE_REASON);
+  });
+
+  it('words the denial as priced in this build when only a non-per-token literal stands behind it', () => {
+    const decision = evaluate({ hasTrustedPrice: false, awaitingPrice: 'build-literal' });
+
+    expect(decision.blockedBy).toEqual(['no-trusted-price']);
+    expect(decision.autoDisabledReason).toBe(PRICED_IN_BUILD_REASON);
+  });
+
+  it('does not let the priced-in-build flag change a verdict', () => {
+    expect(evaluate({ hasTrustedPrice: true, awaitingPrice: 'build-literal' })).toEqual({
+      promote: true,
+      blockedBy: [],
+    });
+    expect(evaluate({ hasTrustedPrice: false, awaitingPrice: 'build-literal' }).promote).toBe(false);
+  });
+
+  it('does not let the uncorroborated flag change a verdict', () => {
+    expect(evaluate({ hasTrustedPrice: true, awaitingPrice: 'aggregator-quote' })).toEqual({
+      promote: true,
+      blockedBy: [],
+    });
+  });
+
   it('promotes an unpriced model that cannot cost anything', () => {
     expect(evaluate({ hasTrustedPrice: false, record: testRecord({ freeToRun: true }) }).promote).toBe(true);
   });
@@ -100,7 +136,15 @@ describe('evaluatePromotion', () => {
     const record = testRecord({ backend: ModelBackend.Bedrock, adapterFamily: 'anthropic-messages' });
 
     expect(evaluate({ record }).blockedBy).not.toContain('no-credential-for-backend');
-    expect(evaluate({ record, credentials: testCredentials({ awsIam: false }) }).blockedBy).toContain(
+    expect(evaluate({ record, credentials: testCredentials({ bedrock: false }) }).blockedBy).toContain(
+      'no-credential-for-backend'
+    );
+  });
+
+  it('gates the AWS backend on the hosted IAM role, not on Bedrock credentials', () => {
+    const record = testRecord({ backend: ModelBackend.AWS });
+
+    expect(evaluate({ record, credentials: testCredentials({ bedrock: true, awsIam: false }) }).blockedBy).toContain(
       'no-credential-for-backend'
     );
   });

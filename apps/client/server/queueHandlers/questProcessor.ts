@@ -32,11 +32,9 @@ import {
   lakeAccessEventRepository,
   Quest,
   scopedSettingsRepository,
-  lakeMembershipRemovalRepository,
   usageEventRepository,
 } from '@bike4mind/database';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
@@ -58,7 +56,9 @@ import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
-import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -140,11 +140,7 @@ export const getStaticOptions = () => {
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
-      // Read by save_content_to_data_lake (-> addFileToDataLake). Without them that tool answers
-      // "not available on this surface" rather than failing mid-write.
-      lakeMembershipRemovals: lakeMembershipRemovalRepository,
-      lakeConfigChangeEvents: lakeConfigAuditDb.lakeConfigChangeEvents,
-      lakeMembershipChangeEvents: lakeMembershipAuditDb.lakeMembershipChangeEvents,
+      ...lakeWriteToolDb,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
@@ -215,6 +211,15 @@ const autoNameSessionAdapter = async (sessionId: string, logger: Logger): Promis
     throw error;
   }
 };
+
+/**
+ * API-key turns must not start billed video jobs: that would bypass the video-generations contract's
+ * scope check and rate limit, so only session-authenticated turns are offered the tool.
+ */
+export const getVideoToolConfigResolver = (apiKeyId: string | undefined, userId: string) =>
+  apiKeyId
+    ? undefined
+    : () => buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() });
 
 /**
  * Quest Processor - shared processing core.
@@ -310,15 +315,13 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   if (requestBody.enableSlackTools) {
     externalTools = { ...slackToolDefinitions };
 
-    // Add confirm/cancel tools only when the tools array includes them
-    if (requestBody.tools?.includes('confirm_pending_action')) {
+    // Add the cancel tool only when the tools array includes it
+    if (requestBody.tools?.includes('cancel_pending_action')) {
       const pendingTools = createPendingActionToolDefs({
         sessionId: params.sessionId,
-        executePendingAction,
         cancelPendingAction: cancelPendingActionOnQuest,
         findQuestWithPendingAction: (sessionId: string) =>
           Quest.findOne({ sessionId, pendingAction: { $exists: true } }).sort({ createdAt: -1 }),
-        findUserById: (userId: string) => User.findById(userId),
       });
       Object.assign(externalTools, pendingTools);
     }
@@ -338,6 +341,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     body: requestBody,
     logger,
     externalTools,
+    videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
   });
 
   return;

@@ -42,7 +42,29 @@ describe('sharingService - revoke', () => {
 
     await revoke(ownerId, { id: documentId, type: 'files', userId: sharedUserId }, mockAdapters as any);
 
-    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }), {
+      includeDeleted: true,
+    });
+  });
+
+  it('writes only the grant fields with the read-time __v, so a tombstone is reached but never revived', async () => {
+    const document = {
+      id: documentId,
+      userId: ownerId,
+      fileName: 'f.txt',
+      deletedAt: null,
+      __v: 3,
+      users: [{ userId: sharedUserId, permissions: ['read'] }],
+    };
+    mockAdapters.db.users.findById.mockResolvedValue({ id: sharedUserId });
+    mockAdapters.db.fabFiles.shareable.findAccessibleById.mockResolvedValue(document);
+
+    await revoke(ownerId, { id: documentId, type: 'files', userId: sharedUserId }, mockAdapters as any);
+
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
+      { id: documentId, users: [], __v: 3 },
+      { includeDeleted: true }
+    );
   });
 
   it('should allow a user to revoke their own sharing (self-removal)', async () => {
@@ -56,7 +78,9 @@ describe('sharingService - revoke', () => {
 
     await revoke(sharedUserId, { id: documentId, type: 'files', userId: sharedUserId }, mockAdapters as any);
 
-    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }), {
+      includeDeleted: true,
+    });
   });
 
   it('should reject when caller is neither owner nor the user being revoked', async () => {
@@ -125,7 +149,8 @@ describe('sharingService - revoke (project-scoped grants)', () => {
     await revoke(leavingId, { id: fileId, type: 'files', userId: leavingId, projectId }, mockAdapters);
 
     expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ users: [{ userId: coMemberId, permissions: ['read'], projectId }] })
+      expect.objectContaining({ users: [{ userId: coMemberId, permissions: ['read'], projectId }] }),
+      { includeDeleted: true }
     );
   });
 
@@ -144,7 +169,8 @@ describe('sharingService - revoke (project-scoped grants)', () => {
     await revoke(ownerId, { id: fileId, type: 'files', userId: leavingId, projectId }, mockAdapters);
 
     expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ users: [{ userId: leavingId, permissions: ['read', 'update'] }] })
+      expect.objectContaining({ users: [{ userId: leavingId, permissions: ['read', 'update'] }] }),
+      { includeDeleted: true }
     );
   });
 
@@ -163,7 +189,8 @@ describe('sharingService - revoke (project-scoped grants)', () => {
     await revoke(ownerId, { id: fileId, type: 'files', userId: leavingId, projectId }, mockAdapters);
 
     expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ users: [{ userId: leavingId, permissions: ['read'], projectId: 'project-other' }] })
+      expect.objectContaining({ users: [{ userId: leavingId, permissions: ['read'], projectId: 'project-other' }] }),
+      { includeDeleted: true }
     );
   });
 });
@@ -225,14 +252,17 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
 
     await revoke(ownerId, { id: sessionId, type: 'sessions', userId: sharedUserId }, mockAdapters);
 
-    expect(mockAdapters.db.sessions.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    expect(mockAdapters.db.sessions.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }), {
+      includeDeleted: true,
+    });
     // The grant this session materialized is stripped.
     expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: plainFileId, users: [] })
+      expect.objectContaining({ id: plainFileId, users: [] }),
+      { includeDeleted: true }
     );
     // A grant tied to a different project is left untouched, and the file is never even written.
-    expect(mockAdapters.db.fabFiles.updateGuarded).not.toHaveBeenCalledWith(
-      expect.objectContaining({ id: projectFileId })
+    expect(mockAdapters.db.fabFiles.updateGuarded.mock.calls.filter(([doc]) => doc.id === projectFileId)).toHaveLength(
+      0
     );
   });
 
@@ -263,7 +293,8 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
     await revoke(ownerId, { id: sessionId, type: 'sessions', userId: carolId }, mockAdapters);
 
     expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: plainFileId, users: [alicesDirectShare] })
+      expect.objectContaining({ id: plainFileId, users: [alicesDirectShare] }),
+      { includeDeleted: true }
     );
   });
 
@@ -296,7 +327,8 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
     await revoke(ownerId, { id: sessionId, type: 'sessions', userId: sharedUserId }, mockAdapters);
 
     expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: foreignFileId, users: [{ userId: ownerId, permissions: ['read', 'share'] }] })
+      expect.objectContaining({ id: foreignFileId, users: [{ userId: ownerId, permissions: ['read', 'share'] }] }),
+      { includeDeleted: true }
     );
   });
 
@@ -406,7 +438,8 @@ describe('sharingService - revoke (cross-project grants)', () => {
     expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({
         users: [{ userId: sharedUserId, permissions: [Permission.read], projectId: projectBId }],
-      })
+      }),
+      { includeDeleted: true }
     );
   });
 
@@ -420,7 +453,8 @@ describe('sharingService - revoke (cross-project grants)', () => {
     expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({
         users: [{ userId: sharedUserId, permissions: [Permission.read], projectId: projectAId }],
-      })
+      }),
+      { includeDeleted: true }
     );
   });
 
@@ -431,7 +465,9 @@ describe('sharingService - revoke (cross-project grants)', () => {
 
     await revoke(ownerId, { id: fileId, type: 'files', userId: sharedUserId }, mockAdapters);
 
-    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }), {
+      includeDeleted: true,
+    });
   });
 
   it('reports a scoped revoke that matches no grant instead of silently removing nothing', async () => {
@@ -511,7 +547,8 @@ describe('sharingService - revoke on a project', () => {
     expect(adapters.db.projects.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({
         users: [{ userId: coMemberId, permissions: [Permission.read], projectId }],
-      })
+      }),
+      { includeDeleted: true }
     );
   });
 
@@ -524,7 +561,8 @@ describe('sharingService - revoke on a project', () => {
     await revoke(ownerId, { id: projectId, type: 'projects', userId: memberId, projectId }, adapters);
 
     expect(adapters.db.projects.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ users: [{ userId: coMemberId, permissions: [Permission.read] }] })
+      expect.objectContaining({ users: [{ userId: coMemberId, permissions: [Permission.read] }] }),
+      { includeDeleted: true }
     );
   });
 
@@ -545,7 +583,8 @@ describe('sharingService - revoke on a project', () => {
     await revoke(ownerId, { id: projectId, type: 'projects', userId: memberId }, adapters);
 
     expect(adapters.db.projects.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ fileIds: [], users: [{ userId: coMemberId, permissions: [Permission.read] }] })
+      expect.objectContaining({ fileIds: [], users: [{ userId: coMemberId, permissions: [Permission.read] }] }),
+      { includeDeleted: true }
     );
   });
 

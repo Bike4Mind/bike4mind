@@ -1,5 +1,6 @@
 import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
+import { GeneratedVideoJobs } from '@client/app/components/Session/GeneratedVideoJobs';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
 import React, {
@@ -44,12 +45,18 @@ import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
-import { IAgent, GENERATED_AUDIO_EXTENSION_RE, GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
+import {
+  IAgent,
+  GENERATED_AUDIO_EXTENSION_RE,
+  GENERATED_IMAGE_EXTENSION_RE,
+  MCP_ACTION_REPLACED_ERROR_CODE,
+} from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
+import { z } from 'zod';
 import { useConfig } from '@client/app/hooks/data/settings';
 import {
   hasCompleteOpeningTag,
@@ -60,7 +67,7 @@ import {
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { extractReplies, extractThinking } from '@client/app/utils/replyUtils';
+import { extractReplies, extractThinking } from '@client/shared/replyUtils';
 import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
@@ -593,6 +600,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
+        videoJobIds={messageData.videoJobIds}
         audio={audio}
         search={search}
         isExpandable={isExpandable}
@@ -725,14 +733,40 @@ interface PendingActionButtonsProps {
   sessionId?: string;
 }
 
-const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
-  const storageKey = messageId ? `mcp-confirm-${messageId}` : null;
+const pendingActionErrorSchema = z.object({
+  error: z.string().optional(),
+  errorCode: z.string().optional(),
+});
+
+function getPendingActionError(error: unknown, fallbackMessage: string): { message: string; isReplaced: boolean } {
+  if (isAxiosError(error)) {
+    const parsedResponse = pendingActionErrorSchema.safeParse(error.response?.data);
+    const responseData = parsedResponse.success ? parsedResponse.data : undefined;
+    return {
+      message: responseData?.error || error.message,
+      isReplaced: error.response?.status === 409 && responseData?.errorCode === MCP_ACTION_REPLACED_ERROR_CODE,
+    };
+  }
+
+  return {
+    message: error instanceof Error ? error.message : fallbackMessage,
+    isReplaced: false,
+  };
+}
+
+export const PendingActionButtons: FC<PendingActionButtonsProps> = props => (
+  <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
+);
+
+const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
+  const storageKey = messageId ? `mcp-confirm-${messageId}-${pendingAction.ts}` : null;
   const storedData = storageKey && typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) : null;
   const parsedData = storedData ? JSON.parse(storedData) : null;
 
   const [isLoading, setIsLoading] = useState(false);
   const [isConfirmed, setIsConfirmed] = useState(() => parsedData?.status === 'confirmed');
   const [isCancelled, setIsCancelled] = useState(() => parsedData?.status === 'cancelled');
+  const [isReplaced, setIsReplaced] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string; url?: string } | null>(
     () => parsedData?.result || null
   );
@@ -752,6 +786,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         questId: messageId,
         sessionId,
         confirmed: true,
+        pendingActionTs: pendingAction.ts,
       });
       setIsConfirmed(true);
       setResult(response.data);
@@ -760,11 +795,10 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         sessionStorage.setItem(storageKey, JSON.stringify(dataToStore));
       }
     } catch (error: unknown) {
-      const message = isAxiosError(error)
-        ? error.response?.data?.error || error.message
-        : error instanceof Error
-          ? error.message
-          : 'Failed to execute action';
+      const { message, isReplaced } = getPendingActionError(error, 'Failed to execute action');
+      if (isReplaced) {
+        setIsReplaced(true);
+      }
       setResult({
         success: false,
         message,
@@ -782,6 +816,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         questId: messageId,
         sessionId,
         confirmed: false,
+        pendingActionTs: pendingAction.ts,
       });
       setIsCancelled(true);
       const cancelResult = { success: true, message: 'Action cancelled' };
@@ -791,11 +826,10 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         sessionStorage.setItem(storageKey, JSON.stringify(dataToStore));
       }
     } catch (error: unknown) {
-      const message = isAxiosError(error)
-        ? error.response?.data?.error || error.message
-        : error instanceof Error
-          ? error.message
-          : 'Failed to cancel action';
+      const { message, isReplaced } = getPendingActionError(error, 'Failed to cancel action');
+      if (isReplaced) {
+        setIsReplaced(true);
+      }
       setResult({
         success: false,
         message,
@@ -805,10 +839,14 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
     }
   };
 
-  if (isConfirmed || isCancelled) {
+  if (isConfirmed || isCancelled || isReplaced) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'background.level1' }}>
-        <Typography level="body-sm" sx={{ color: result?.success ? 'success.plainColor' : 'danger.plainColor' }}>
+        <Typography
+          level="body-sm"
+          sx={{ color: result?.success ? 'success.plainColor' : 'danger.plainColor' }}
+          data-testid="mcp-confirm-result"
+        >
           {result?.message || (isConfirmed ? 'Action completed' : 'Action cancelled')}
         </Typography>
         {result?.url && (
@@ -872,6 +910,11 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
           Cancel
         </Button>
       </Stack>
+      {result && !result.success && (
+        <Typography level="body-sm" sx={{ mt: 1, color: 'danger.plainColor' }} data-testid="mcp-confirm-error">
+          {result.message}
+        </Typography>
+      )}
     </Box>
   );
 };
@@ -1142,6 +1185,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   images = [],
   generatedFiles = [],
   videos = [],
+  videoJobIds = [],
   audio = [],
   search,
   isExpandable = false,
@@ -1576,6 +1620,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                 images.length > 0 ||
                 generatedFiles.length > 0 ||
                 videos.length > 0 ||
+                videoJobIds.length > 0 ||
                 audio.length > 0 ||
                 navSuggestions) && (
                 <Box
@@ -1691,6 +1736,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                             ))}
                           </Box>
                         )}
+
+                        <GeneratedVideoJobs jobIds={videoJobIds} />
 
                         {videos?.length > 0 && (
                           <Box

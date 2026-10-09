@@ -3,6 +3,7 @@ import type { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
   claimCallbackDispatch: vi.fn(),
+  reclaimStaleCallbackDispatch: vi.fn(),
   releaseCallbackDispatch: vi.fn(),
   sendMessage: vi.fn(),
   // undefined simulates the sst Resource proxy throwing on an unlinked key (see the `sst` mock below).
@@ -14,6 +15,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   questRepository: {
     claimCallbackDispatch: h.claimCallbackDispatch,
+    reclaimStaleCallbackDispatch: h.reclaimStaleCallbackDispatch,
     releaseCallbackDispatch: h.releaseCallbackDispatch,
   },
 }));
@@ -46,7 +48,16 @@ vi.mock('sst', () => ({
   ),
 }));
 
-import { dispatchQuestCallback } from './dispatchQuestCallback';
+import {
+  dispatchQuestCallback,
+  GENERATION_CALLBACK_REDISPATCH_HORIZON_MS,
+  GENERATION_CALLBACK_STALE_DISPATCH_MS,
+  redispatchStaleQuestCallback,
+} from './dispatchQuestCallback';
+import {
+  GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+  GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
+} from '@server/queueHandlers/sqsDelivery';
 
 function makeLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
@@ -133,5 +144,63 @@ describe('dispatchQuestCallback', () => {
     const logger = makeLogger();
 
     await expect(dispatchQuestCallback('quest-1', logger)).resolves.toBeUndefined();
+  });
+});
+
+describe('redispatchStaleQuestCallback', () => {
+  const criteria = {
+    dispatchedBefore: new Date('2026-01-01T00:00:00Z'),
+    dispatchedAfter: new Date('2025-12-29T00:00:00Z'),
+    maxRedispatches: 3,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.queueUrl = 'https://sqs.us-east-2.amazonaws.com/123456789012/generationCallbackQueue';
+    h.unprovisioned = false;
+  });
+
+  it('re-sends under the reclaimed event id, so the receiver can dedupe it', async () => {
+    h.reclaimStaleCallbackDispatch.mockResolvedValue('quest_quest-1_event');
+    h.sendMessage.mockResolvedValue('message-id-1');
+
+    await expect(redispatchStaleQuestCallback('quest-1', criteria, makeLogger())).resolves.toBe(true);
+
+    expect(h.reclaimStaleCallbackDispatch).toHaveBeenCalledWith('quest-1', criteria);
+    expect(h.claimCallbackDispatch).not.toHaveBeenCalled();
+    expect(h.sendMessage).toHaveBeenCalledWith(
+      'https://sqs.us-east-2.amazonaws.com/123456789012/generationCallbackQueue',
+      { questId: 'quest-1', eventId: 'quest_quest-1_event' }
+    );
+  });
+
+  it('does not send when the reclaim matched nothing (inside the window, or another sweep won)', async () => {
+    h.reclaimStaleCallbackDispatch.mockResolvedValue(null);
+
+    await expect(redispatchStaleQuestCallback('quest-1', criteria, makeLogger())).resolves.toBe(false);
+
+    expect(h.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('releases the reclaim to pending and resolves when the send fails', async () => {
+    h.reclaimStaleCallbackDispatch.mockResolvedValue('quest_quest-1_event');
+    h.sendMessage.mockRejectedValue(new Error('SQS is down'));
+    h.releaseCallbackDispatch.mockResolvedValue(undefined);
+
+    await expect(redispatchStaleQuestCallback('quest-1', criteria, makeLogger())).resolves.toBe(false);
+
+    expect(h.releaseCallbackDispatch).toHaveBeenCalledWith('quest-1', 'quest_quest-1_event');
+  });
+});
+
+describe('GENERATION_CALLBACK_STALE_DISPATCH_MS', () => {
+  // The queue constants are pinned to infra/queues.ts in sqsDelivery.test.ts.
+  it('outlasts every receive the queue can still make', () => {
+    const longestDeliveryMs = GENERATION_CALLBACK_MAX_RECEIVE_COUNT * GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC * 1000;
+    expect(GENERATION_CALLBACK_STALE_DISPATCH_MS).toBeGreaterThan(longestDeliveryMs);
+  });
+
+  it('leaves room for reclaims before the re-send horizon', () => {
+    expect(GENERATION_CALLBACK_REDISPATCH_HORIZON_MS).toBeGreaterThan(GENERATION_CALLBACK_STALE_DISPATCH_MS);
   });
 });

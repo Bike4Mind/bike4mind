@@ -37,11 +37,13 @@ export const generateTools = (
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    attachedFileIds,
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
     sessionReaderConsentDatalakeTags,
     sessionLakeScopeExplicit,
+    sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
     apiKeyId,
@@ -52,11 +54,14 @@ export const generateTools = (
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+    attachedFileIds?: ToolContext['attachedFileIds'];
     fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
     suppressLakeArms?: ToolContext['suppressLakeArms'];
     sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
     sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
     sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
+    /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+    sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
     sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
     organizationId?: ToolContext['organizationId'];
     apiKeyId?: ToolContext['apiKeyId'];
@@ -104,11 +109,13 @@ export const generateTools = (
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    attachedFileIds,
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
     sessionReaderConsentDatalakeTags,
     sessionLakeScopeExplicit,
+    sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
     apiKeyId,
@@ -128,16 +135,40 @@ export const generateTools = (
 };
 
 /**
+ * MCP tool args only the confirm-button handlers may set. Those handlers call the MCP host
+ * directly, never through these generators, so a model-originated call carrying one is forged.
+ * `_executeFromButton` mirrors the button-only keys of `confirmationParams` in
+ * b4m-core/mcp/src/shared/schemas.ts (pinned by github/__tests__/helpers/schemas.test.ts there);
+ * `_confirmToken` is the preview token tools return.
+ */
+const SERVER_ONLY_MCP_ARG_KEYS: readonly string[] = ['_executeFromButton', '_confirmToken'];
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function stripServerOnlyArgs(args: unknown): unknown {
+  if (!isPlainObject(args)) return args;
+  return Object.fromEntries(Object.entries(args).filter(([key]) => !SERVER_ONLY_MCP_ARG_KEYS.includes(key)));
+}
+
+/**
  * Normalize MCP tool parameters for OpenAI compatibility.
  * OpenAI requires 'properties' on object schemas - MCP tools like current_user
  * return { type: 'object' } without it, causing 400 errors.
  */
 function normalizeToolParameters(rest: Record<string, unknown>): ICompletionOptionTools['toolSchema']['parameters'] {
   const rawParameters = rest?.input_schema ?? rest?.inputSchema ?? rest?.parameters;
-  if (rawParameters && typeof rawParameters === 'object') {
+  if (isPlainObject(rawParameters)) {
+    const properties = isPlainObject(rawParameters.properties)
+      ? stripServerOnlyArgs(rawParameters.properties)
+      : (rawParameters.properties ?? {});
+    const required = Array.isArray(rawParameters.required)
+      ? rawParameters.required.filter(key => typeof key !== 'string' || !SERVER_ONLY_MCP_ARG_KEYS.includes(key))
+      : rawParameters.required;
     return {
       ...rawParameters,
-      properties: (rawParameters as Record<string, unknown>).properties ?? {},
+      properties,
+      ...(required !== undefined ? { required } : {}),
     } as ICompletionOptionTools['toolSchema']['parameters'];
   }
   return {
@@ -223,7 +254,7 @@ export const generateMcpTools = async (
         // Use original tool name when calling the MCP server
         Logger.debug(`Calling ${originalToolName} tool via ${mcpData.serverName}`, args);
         try {
-          const toolResult = await mcpData.callTool(originalToolName, args);
+          const toolResult = await mcpData.callTool(originalToolName, stripServerOnlyArgs(args));
           const contentBlocks = (toolResult as any)?.content;
           if (Array.isArray(contentBlocks) && contentBlocks.length > 0) {
             const normalized = contentBlocks
@@ -305,7 +336,7 @@ export const generateMcpToolsFromCache = (
       toolFn: async (args: unknown) => {
         Logger.debug(`Calling ${originalToolName} tool via ${serverName}`, args);
         try {
-          const toolResult = await callTool(originalToolName, args);
+          const toolResult = await callTool(originalToolName, stripServerOnlyArgs(args));
           const contentBlocks = (toolResult as Record<string, unknown>)?.content;
           if (Array.isArray(contentBlocks) && contentBlocks.length > 0) {
             const normalized = contentBlocks

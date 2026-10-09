@@ -1,6 +1,7 @@
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
+import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import MFAModal from './common/MFAModal';
 import { useTheme } from '@mui/joy/styles';
@@ -85,7 +86,9 @@ const Register: React.FC = () => {
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [mfaMode, setMfaMode] = useState<'verify' | 'setup'>('verify');
   const [mfaSetupData, setMfaSetupData] = useState<MFASetupResponse | null>(null);
+  const [mfaPasskeyAvailable, setMfaPasskeyAvailable] = useState(false);
   const verifyMFA = useVerifyMFA();
+  const verifyPasskeyMFA = useVerifyPasskeyMFA();
   const setupMFA = useSetupMFA();
   const verifyMFASetup = useVerifyMFASetup();
 
@@ -239,6 +242,28 @@ const Register: React.FC = () => {
     }
   };
 
+  const finishMfaLogin = (result: { accessToken: string; user: Parameters<typeof setCurrentUser>[0] }) => {
+    resetRefreshCoordinator();
+    // Drop the cached cold-load result: this browser just acquired a session, so the next
+    // protected navigation must not reuse the "no session" answer from before login.
+    resetSessionBootstrap();
+    useAccessToken.getState().setVerifiedSession(result.accessToken);
+    setShowMFAModal(false);
+    setMfaPasskeyAvailable(false);
+    // Setting currentUser triggers the redirect effect above.
+    setCurrentUser(result.user);
+  };
+
+  const handlePasskeyVerification = async () => {
+    if (!mfaUserId) return;
+    setMfaError(null);
+    try {
+      finishMfaLogin(await verifyPasskeyMFA.mutateAsync({}));
+    } catch (error: unknown) {
+      setMfaError(describePasskeyMfaError(error));
+    }
+  };
+
   const handleMFAVerification = async (token: string) => {
     if (!mfaUserId) return;
     setMfaError(null);
@@ -249,14 +274,7 @@ const Register: React.FC = () => {
       } else {
         result = await verifyMFA.mutateAsync({ token });
       }
-      resetRefreshCoordinator();
-      // Drop the cached cold-load result: this browser just acquired a session, so the next
-      // protected navigation must not reuse the "no session" answer from before login.
-      resetSessionBootstrap();
-      useAccessToken.getState().setVerifiedSession(result.accessToken);
-      setShowMFAModal(false);
-      // Setting currentUser triggers the redirect effect above.
-      setCurrentUser(result.user);
+      finishMfaLogin(result);
     } catch (error: unknown) {
       const errorData = (error as Record<string, Record<string, Record<string, unknown>>>)?.response?.data;
       if (errorData?.forceLogout) {
@@ -278,6 +296,7 @@ const Register: React.FC = () => {
   const handleMFACancel = () => {
     useAccessToken.getState().resetTokens();
     setShowMFAModal(false);
+    setMfaPasskeyAvailable(false);
     setMfaUserId(null);
     setMfaError(null);
     setMfaMode('verify');
@@ -337,6 +356,7 @@ const Register: React.FC = () => {
         }
         setMfaUserId(response.userId);
         setMfaMode('verify');
+        setMfaPasskeyAvailable(!!response.passkeyAvailable);
         setShowMFAModal(true);
         return;
       }
@@ -912,12 +932,16 @@ const Register: React.FC = () => {
         description={
           mfaMode === 'setup'
             ? 'Your administrator requires MFA. Scan the QR code with your authenticator app to set up MFA.'
-            : 'Enter your 6-digit code or backup code to continue.'
+            : mfaPasskeyAvailable && passkeysSupported()
+              ? 'Use your passkey, or enter your 6-digit code or backup code to continue.'
+              : 'Enter your 6-digit code or backup code to continue.'
         }
         qrCodeUrl={mfaSetupData?.qrCodeUrl}
         manualEntryKey={mfaSetupData?.manualEntryKey}
         backupCodes={mfaSetupData?.backupCodes}
         showVerify={true}
+        onPasskeyVerify={mfaPasskeyAvailable ? handlePasskeyVerification : undefined}
+        passkeyLoading={verifyPasskeyMFA.isPending}
       />
     </>
   );

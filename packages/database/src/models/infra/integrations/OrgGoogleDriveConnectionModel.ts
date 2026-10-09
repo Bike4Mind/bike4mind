@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { releaseLakeClaimBestEffort } from './LakeConnectorClaimModel';
 import { randomUUID } from 'crypto';
 
 const MAX_LAST_ERROR_LEN = 500;
@@ -594,7 +595,9 @@ class OrgGoogleDriveConnectionRepository
    */
   async release(id: string, owner: DriveConnectionOwner): Promise<boolean> {
     const res = await this.model.deleteMany({ _id: id, ...ownerFilter(owner) }, { hardDelete: true });
-    return (res?.deletedCount ?? 0) > 0;
+    const deleted = (res?.deletedCount ?? 0) > 0;
+    if (deleted) await releaseLakeClaimBestEffort(id);
+    return deleted;
   }
 }
 

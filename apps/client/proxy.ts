@@ -6,6 +6,8 @@ import type { NextRequest } from 'next/server';
 const PATH_TRAVERSAL_PATTERN = /(\.\.[/\\])|([/\\]\.\.)|(\.\.%2[fF])|(%2[fF]\.\.)/;
 const NULL_BYTE_PATTERN = /%00|\0/;
 const BACKSLASH_PATTERN = /\\/;
+// Must match the filenames scripts/copy-pdf-worker.mjs writes: versioned and legacy unversioned.
+const PDF_WORKER_PATH = /^\/pdf\.worker(-\d+\.\d+\.\d+)?\.min\.mjs$/;
 
 // Stamped by the router's viewer-request function on every request it forwards; must stay in
 // sync with ORIGIN_VERIFY_HEADER in infra/router.ts. ORIGIN_VERIFY_SECRET is set only on
@@ -108,11 +110,17 @@ export function proxy(request: NextRequest) {
   // hardening pass deliberately removed 'unsafe-eval' from the built CSP; this re-adds
   // it ONLY when NODE_ENV === 'development' (not 'production', not 'test').
   const devUnsafeEval = process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : '';
+  // A dedicated worker is governed by its own response's CSP, and where this proxy serves the pdf.js
+  // worker (dev, self-host) that is this policy. 'wasm-unsafe-eval' lets it compile its wasm image
+  // decoders (PdfViewer's wasmUrl) instead of falling back to slow JS ones; it permits no JS eval
+  // and is scoped to the worker so the app shell's script-src stays unchanged. Hosted stages serve
+  // the worker from S3 with no CSP; a CSP added there would also need 'wasm-unsafe-eval'.
+  const wasmUnsafeEval = PDF_WORKER_PATH.test(pathname) ? " 'wasm-unsafe-eval'" : '';
   // Reddit ads pixel (consent-deferred, see app/utils/redditPixel.ts): script from
   // www.redditstatic.com, pixel config fetch from pixel-config.reddit.com, and the
   // conversion beacon (rp.gif) to alb.reddit.com — the latter goes in both img-src
   // and connect-src since the pixel may use either transport.
-  const scriptSrcPolicy = `'self' 'unsafe-inline'${devUnsafeEval} blob: https://unpkg.com https://cdn.tailwindcss.com https://assets.mailerlite.com https://accounts.google.com https://js.stripe.com https://apis.google.com https://cdn.jsdelivr.net https://www.googletagmanager.com https://www.redditstatic.com https://connect.facebook.net`;
+  const scriptSrcPolicy = `'self' 'unsafe-inline'${wasmUnsafeEval}${devUnsafeEval} blob: https://unpkg.com https://cdn.tailwindcss.com https://assets.mailerlite.com https://accounts.google.com https://js.stripe.com https://apis.google.com https://cdn.jsdelivr.net https://www.googletagmanager.com https://www.redditstatic.com https://connect.facebook.net`;
   // assets.mailerlite.com hosts universal.css for the in-app subscriber widget; explicit host avoids re-opening blanket https:.
   const styleSrcPolicy = `'self' 'unsafe-inline' https://assets.mailerlite.com`;
 
@@ -167,7 +175,7 @@ export function proxy(request: NextRequest) {
     connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://assets.mailerlite.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${mapTileHost};
     frame-src 'self' blob: https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
-    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net https://*.googleapis.com;
+    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com;
     base-uri 'self';
     frame-ancestors 'self';
     form-action 'self';

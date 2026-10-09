@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { EXAMPLE_USER_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { MeResponseSchema } from '../../schemas/me';
 import { ApiErrorSchema } from '../../schemas/chat';
@@ -28,7 +29,7 @@ export const getMeContract = defineEndpoint({
     "owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws " +
     'on a pool this number does not describe. Gate on `tier != "free"` for "is this caller paying" and ' +
     'on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ' +
-    'ladder and do not track a plan\'s marketing name. Responses are never cacheable. Authenticate with ' +
+    "ladder and do not track a plan's marketing name. Responses are never cacheable. Authenticate with " +
     'an API key (`b4m_live_`) carrying `me:read`, or a JWT.',
   tags: ['Account'],
   auth: 'apiKeyOrJwt',
@@ -39,7 +40,7 @@ export const getMeContract = defineEndpoint({
       description: 'The caller, their tier, their personal credit balance, and their entitlement keys.',
       schema: MeResponseSchema,
       example: {
-        id: '507f1f77bcf86cd799439011',
+        id: EXAMPLE_USER_ID,
         name: 'Ada Lovelace',
         tier: 'basic',
         subscription: {

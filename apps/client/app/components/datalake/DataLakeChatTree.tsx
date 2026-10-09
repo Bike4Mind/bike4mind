@@ -23,7 +23,7 @@ import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import FileIndexingAlert from './FileIndexingAlert';
-import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
+import DataLakeTreeView, { type DataLakeTreeChrome, type DataLakeUncategorized } from './DataLakeTreeView';
 import TreeRowLabel from './TreeRowLabel';
 import LakeDraftChip from './LakeDraftChip';
 import { RowActionsMenu, RowMenuItem } from './rowActionsMenu';
@@ -54,13 +54,12 @@ interface DataLakeChatTreeProps {
   /** Threaded to DataLakeTreeView's cross-tree article search. */
   source?: DataLakeBrowseSource;
   /**
-   * The scoped lake's Uncategorized bucket: its members carrying no tag under the lake's own
-   * prefix, which the tag tree has no branch for. `count` comes from the same tag-counts payload
-   * as the picker's number, so the two account for the same files; `files` is fetched only once
-   * the bucket is opened and is empty until then. Omitted in the all-lakes scope, where there is
-   * no single prefix to be outside of.
+   * A lake's Uncategorized bucket: its members carrying no tag under the lake's own prefix, which
+   * the tag tree has no branch for. `depth` pins it inside that lake's folder when several lakes share the tree.
+   * `count` comes from the same tag-counts payload as the picker's number; `files` is fetched only
+   * once the bucket is opened and is empty until then.
    */
-  uncategorized?: { files: IFabFileDocument[]; count: number };
+  uncategorized?: Omit<DataLakeUncategorized, 'renderRow'>;
   selectedFileIds: ReadonlySet<string>;
   /**
    * Tag paths (`acme:legal`, no trailing colon) of the draft lakes in view. A folder whose FULL path
@@ -100,10 +99,9 @@ interface DataLakeChatTreeProps {
   /** Resolves a node's full path to the lake whose tag prefix it is, so the row shows the lake's
    *  own name. Must return undefined for a prefix more than one lake holds. */
   lakeForPath?: (path: string[]) => { name: string; datalakeTag: string } | undefined;
-  /** Distinct members per `datalakeTag`; a lake-root row shows this instead of the tag-occurrence
-   *  sum in `node.fileCount`, which counts a file once per prefix tag it carries. It can differ
-   *  from the children's chips: those still count tag occurrences, and meta-tag-only members
-   *  sit under Uncategorized. */
+  /** Distinct members per `datalakeTag`; a lake-root row shows this instead of `node.fileCount`,
+   *  which sees only taxonomy-tagged files and, in a single-lake scope (where the rows above each
+   *  lake are scoped away), sums its children. Meta-tag-only members sit under Uncategorized. */
   lakeFileCounts?: Record<string, number>;
 }
 

@@ -6,9 +6,11 @@ import PriceChangeIcon from '@mui/icons-material/PriceChange';
 import BusinessIcon from '@mui/icons-material/Business';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import HistoryIcon from '@mui/icons-material/History';
+import ApiIcon from '@mui/icons-material/Api';
 import { MarginDashboard } from './components/MarginDashboard';
 import { ModelPricingCatalog } from './components/ModelPricingCatalog';
 import { UsageDashboard } from './components/UsageDashboard';
+import { PlatformUsageDashboard } from './components/PlatformUsageDashboard';
 import { CreditHolderType } from '@bike4mind/common';
 import { TransactionLedger } from './components/TransactionLedger';
 import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
@@ -51,6 +53,12 @@ export const CreditAnalyticsTab: React.FC = () => {
               <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Org Usage</Box>
             </Box>
           </Tab>
+          <Tab value="api-usage" data-testid="credit-analysis-api-usage-tab">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <ApiIcon sx={{ fontSize: '18px' }} />
+              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>API Usage</Box>
+            </Box>
+          </Tab>
           <Tab value="ledger" data-testid="credit-analysis-ledger-tab">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <ReceiptLongIcon sx={{ fontSize: '18px' }} />
@@ -80,6 +88,10 @@ export const CreditAnalyticsTab: React.FC = () => {
 
         <TabPanel value="org-usage" sx={{ p: 0 }}>
           <UsageDashboard ownerType={CreditHolderType.Organization} />
+        </TabPanel>
+
+        <TabPanel value="api-usage" sx={{ p: 0 }}>
+          <PlatformUsageDashboard />
         </TabPanel>
 
         <TabPanel value="ledger" sx={{ p: 0 }}>

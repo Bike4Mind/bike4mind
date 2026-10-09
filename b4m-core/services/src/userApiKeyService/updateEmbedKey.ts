@@ -21,6 +21,8 @@ const updateEmbedKeySchema = z.object({
   agentId: z.string().min(1).optional(),
   allowedOrigins: EmbedOriginsSchema.optional(),
   branding: EmbedBrandingSchema.optional(),
+  // `[]` explicitly turns identified mode off for the key.
+  identifiedClientIds: z.array(z.string().min(1).max(200)).max(10).optional(),
 });
 
 export type UpdateEmbedKeyParameters = z.infer<typeof updateEmbedKeySchema>;
@@ -44,6 +46,7 @@ export interface UpdateEmbedKeyResult {
   name: string;
   agentId?: string;
   allowedOrigins?: string[];
+  identifiedClientIds?: string[];
   branding?: {
     primaryColor?: string;
     logoUrl?: string;
@@ -100,6 +103,7 @@ export const updateEmbedKey = async (
   }
   if (params.allowedOrigins !== undefined) patch.allowedOrigins = params.allowedOrigins;
   if (params.branding !== undefined) patch.branding = params.branding;
+  if (params.identifiedClientIds !== undefined) patch.identifiedClientIds = [...new Set(params.identifiedClientIds)];
 
   Object.assign(apiKey, patch);
   await db.userApiKeys.update(patch);
@@ -109,6 +113,7 @@ export const updateEmbedKey = async (
     name: apiKey.name,
     agentId: apiKey.agentId,
     allowedOrigins: apiKey.allowedOrigins,
+    identifiedClientIds: apiKey.identifiedClientIds,
     branding: apiKey.branding,
   };
 };

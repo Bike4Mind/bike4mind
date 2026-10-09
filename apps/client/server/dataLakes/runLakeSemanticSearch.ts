@@ -26,12 +26,15 @@ import {
 } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
+  CreditHolderType,
   getEmbeddingModelCost,
   hasKeylessCloudEmbedder,
   ModelBackend,
   isSupportedEmbeddingModel,
   insufficientCreditsError,
   usdToCredits,
+  type IOrganizationDocument,
+  type IUserDocument,
   type LakeAccessSurface,
   type SettingScope,
   type SupportedEmbeddingModel,
@@ -41,6 +44,10 @@ import type { Logger } from '@bike4mind/observability';
 import type { RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { getRequestMembershipOrgIds } from '@server/dataLakes/requestMembership';
+import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { BadRequestError } from '@server/utils/errors';
+import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
 /**
  * The semantic-search core shared by POST /api/data-lakes/semantic-search (the product UI and the
@@ -83,7 +90,7 @@ export function resetSharedTokenizerForTests(): void {
  * Budgets are read-only, so this is a tighter standard than the rung strictly needs. It is the
  * cheap one here, and it keeps the search from being the precedent that a looser derivation is fine.
  *
- * Deliberately diverges from the billing block further down (`billingOrg`, via
+ * Deliberately diverges from resolveBillingOrg below (a JWT caller's org, via
  * `organizationRepository.shareable.findAccessibleById`), which also grants on a `groups[]`
  * share. A caller with only group-share access is therefore not a member here but is billed
  * against and capped by that org there, in the same request - both checks are individually
@@ -96,6 +103,40 @@ async function resolveBudgetScope(req: Request): Promise<SettingScope> {
   const memberOrgIds = await getRequestMembershipOrgIds(req);
   const verifiedOrgId = selectedOrgId && memberOrgIds.includes(selectedOrgId) ? selectedOrgId : undefined;
   return scopedSettingsService.scopeForCaller({ userId, organizationId: verifiedOrgId });
+}
+
+/**
+ * The organization a search bills, or null when the user pays.
+ *
+ * An API key carries its billing owner, so an API-key caller follows the key: the same rule
+ * apiKeyAuth stamps on ApiKeyUsageLog (resolveApiKeyOwnerType) and reserveRequestCredits bills the
+ * other paid API routes by. A user-billed key bills the user even when they hold an org seat. An
+ * org-billed key whose organization no longer exists throws, rather than quietly billing the user.
+ *
+ * A browser/JWT caller bills their org seat, ACL-checked rather than the plain accessor: a stale
+ * organizationId pointer (the roster no longer carries this user, #2607) must fall back to personal
+ * billing rather than billing/capping against an org they've left. Same shareable ACL
+ * resolveActiveOrg uses (#2769), deliberately WITHOUT its isAdmin arm - platform admin rights are
+ * not a billing relationship, so an admin's own stale pointer bills personally too.
+ *
+ * Deliberately diverges from resolveBudgetScope above (#2709), which does not grant on a groups[]
+ * share: a caller with only group-share access is billed/capped here but resolves at their personal
+ * owner rung there (no org rung at all), so their own override governs instead of the org's - see
+ * #2857 for why that disagreement is accepted as-is rather than reconciled.
+ */
+async function resolveBillingOrg(
+  req: Request,
+  billingUser: IUserDocument | null
+): Promise<IOrganizationDocument | null> {
+  if (req.apiKeyInfo) {
+    if (resolveApiKeyOwnerType(req.apiKeyInfo) !== CreditHolderType.Organization) return null;
+    const keyOrg = await organizationRepository.findById(req.apiKeyInfo.organizationId!);
+    if (!keyOrg) throw new BadRequestError('Billing organization not found');
+    return keyOrg;
+  }
+  return billingUser?.organizationId
+    ? await organizationRepository.shareable.findAccessibleById(req.user, billingUser.organizationId)
+    : null;
 }
 
 export type LakeSemanticSearchInput = {
@@ -185,34 +226,32 @@ export async function runLakeSemanticSearch(
   // (see the `shouldBill &&` guard on the settlement below), so falling back to `false`
   // would hand out an unbilled search. A throw is the safer failure for that shape.
   const shouldBill = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, req.logger);
+  const source = resolveRequestUsageSource(req);
 
   // Resolved once and reused by the settlement below, so the pre-flight and the charge
   // can never disagree about which holder pays. Best-effort: a billing-store failure leaves
   // both the check and the charge undone, which is the pre-existing behaviour - it must not
   // turn a working search into a 500.
-  let billingUser: Awaited<ReturnType<typeof userRepository.findById>> | null = null;
-  let billingOrg: Awaited<ReturnType<typeof organizationRepository.shareable.findAccessibleById>> | null = null;
+  let billingUser: IUserDocument | null = null;
+  let billingOrg: IOrganizationDocument | null = null;
   try {
     // Both assigned only after both reads succeed: a half-resolved pair (user set, org
     // null) would skip the member cap and bill the member personally for org usage.
     const resolvedUser = await userRepository.findById(req.user.id);
-    // ACL-checked, not the plain accessor: a stale organizationId pointer (the roster no
-    // longer carries this user, #2607) must fall back to personal billing rather than
-    // billing/capping against an org they've left. Same shareable ACL resolveActiveOrg
-    // uses (#2769), deliberately WITHOUT its isAdmin arm - platform admin rights are not
-    // a billing relationship, so an admin's own stale pointer bills personally too.
-    // Deliberately diverges from resolveBudgetScope above (#2709), which does not grant on a
-    // groups[] share: a caller with only group-share access is billed/capped here but resolves
-    // at their personal owner rung there (no org rung at all), so their own override governs
-    // instead of the org's - see #2857 for why that disagreement is accepted as-is rather than
-    // reconciled.
-    const resolvedOrg = resolvedUser?.organizationId
-      ? await organizationRepository.shareable.findAccessibleById(req.user, resolvedUser.organizationId)
-      : null;
+    const resolvedOrg = await resolveBillingOrg(req, resolvedUser);
     billingUser = resolvedUser;
     billingOrg = resolvedOrg;
   } catch (billingErr) {
+    // A refusal is the key's billing target, not a store failure - only the latter degrades.
+    if (billingErr instanceof BadRequestError && shouldBill) throw billingErr;
     req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
+  }
+
+  // Gated on billing alone, not on the query having a price: unlike reserveRequestCredits, which
+  // skips the check for a free request, a departed holder is refused here even on a zero-cost
+  // embedder. Deliberate - the key no longer speaks for that org, whatever the search costs.
+  if (shouldBill && billingUser) {
+    assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) });
   }
 
   // --- Get the embedding-provider API keys, for every provider we have one, not just the
@@ -454,7 +493,7 @@ export async function runLakeSemanticSearch(
               model,
               inputTokens: tokens,
               costUsd: getEmbeddingModelCost(model, tokens),
-              source: 'api',
+              source,
             },
             {
               db: {

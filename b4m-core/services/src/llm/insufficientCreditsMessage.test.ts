@@ -30,16 +30,22 @@ describe('buildInsufficientCreditsMessage', () => {
 });
 
 describe('buildMemberCreditCapMessage', () => {
-  it('reports the member cap and usage and points the member at their admin', () => {
-    const msg = buildMemberCreditCapMessage({ used: 9, cap: 10, organizationName: 'Acme' });
-    expect(msg).toContain('per-member credit limit');
+  it('reports the monthly cap, usage and reset date, and points the member at their admin', () => {
+    const msg = buildMemberCreditCapMessage({
+      used: 9,
+      cap: 10,
+      resetsAt: new Date('2026-11-01T00:00:00Z'),
+      organizationName: 'Acme',
+    });
+    expect(msg).toContain('monthly per-member credit limit');
     expect(msg).toContain('for "Acme"');
-    expect(msg).toContain('(9 of 10 credits used)');
+    expect(msg).toContain('(9 of 10 credits used this month)');
+    expect(msg).toContain('It resets on November 1.');
     expect(msg).toContain('Contact your organization administrator to raise your limit.');
   });
 
   it('falls back to a generic org label when the name is unknown', () => {
-    const msg = buildMemberCreditCapMessage({ used: 5, cap: 5 });
+    const msg = buildMemberCreditCapMessage({ used: 5, cap: 5, resetsAt: new Date('2026-11-01T00:00:00Z') });
     expect(msg).toContain('for your organization');
     expect(msg).not.toContain('""');
   });

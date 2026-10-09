@@ -195,7 +195,7 @@ export default function GitHubRepositoryPickerModal() {
                 data-testid="github-repo-picker-reconnect-btn"
                 startDecorator={<GitHubIcon />}
                 loading={reconnecting}
-                onClick={reconnect}
+                onClick={() => reconnect()}
                 sx={{ alignSelf: 'flex-start' }}
               >
                 Reconnect GitHub

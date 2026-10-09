@@ -74,7 +74,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // Grant-aware and org-aware, exactly like the reversible DELETE on this same path: the whole
     // ctx and the grant repo, so the service decides the rule instead of the call site encoding
     // half of it by omission.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     dataLakeService.assertLakeWritable(lake);

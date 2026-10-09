@@ -13,10 +13,14 @@ import {
   DataLakeSearchRequestSchema,
   DataLakeSearchResponseSchema,
   ListDataLakesResponseSchema,
-  ProviderNotConfiguredErrorSchema,
 } from '../../schemas/dataLakePublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  ProviderNotConfiguredErrorSchema,
+  ScopeForbiddenErrorSchema,
+} from '../../schemas/chat';
 
 /**
  * The integrator-facing subset of the data-lake API. Each route is a `/api/v1` twin of an SPA route
@@ -223,6 +227,11 @@ export const searchDataLakeContract = defineEndpoint({
     200: {
       description: 'The ranked passages and what, if anything, was withheld.',
       schema: DataLakeSearchResponseSchema,
+    },
+    400: {
+      description:
+        'The API key bills an organization that no longer exists, or one its owner is no longer a member of.',
+      schema: ApiErrorSchema,
     },
     403: {
       description: `The API key lacks \`datalake:query\`, ${FEATURE_DISABLED_NOTE}.`,

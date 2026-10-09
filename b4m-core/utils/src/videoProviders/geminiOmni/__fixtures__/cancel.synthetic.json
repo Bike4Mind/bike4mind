@@ -1,0 +1,85 @@
+{
+  "scenario": "cancel.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built: W11 is unverified (the cancel path exists; its success body is unknown). Assumes the cancel returns 200 with the interaction in status cancelled, and a later GET reports cancelled. Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "gemini-omni-1.1-flash",
+          "input": "A paper boat drifting down a rainy street gutter.",
+          "background": true,
+          "response_format": {
+            "type": "video",
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration": "3s"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-cancel",
+          "status": "in_progress",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:00Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "cancel",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions/v1_synthetic-cancel/cancel"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-cancel",
+          "status": "cancelled",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:01Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_synthetic-cancel"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-cancel",
+          "status": "cancelled",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:01Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    }
+  ]
+}

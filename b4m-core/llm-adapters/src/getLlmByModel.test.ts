@@ -259,6 +259,11 @@ describe('getLlmByModel', () => {
         ChatModels.CLAUDE_5_SONNET_BEDROCK,
         ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
         ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
+        ChatModels.CLAUDE_FABLE_5_BEDROCK,
+        ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+        ChatModels.CLAUDE_5_OPUS_BEDROCK,
+        ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+        ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
         ChatModels.CLAUDE_3_5_HAIKU_BEDROCK,
       ]) {
         const result = getLlmByModel({}, { modelInfo: makeModelInfo({ backend: 'bedrock', id }), logger }) as any;

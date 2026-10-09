@@ -5,3 +5,4 @@ export * from './memberCreditCap';
 export * from './stampCreditLot';
 export * from './creditLotAssignment';
 export * from './clawbackCreditLots';
+export * from './creditHold';

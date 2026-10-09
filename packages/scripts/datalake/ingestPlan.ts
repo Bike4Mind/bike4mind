@@ -116,13 +116,23 @@ interface StaticLakeInput {
  * Resolve the ingest target. DB lakes win (they carry write authorization and
  * stats); static registry lakes (e.g. premium overlay entries) have no Mongo
  * doc, so the caller must gate them on platform-admin instead of the creator
- * check, and their stats cannot be persisted.
+ * check, and their stats cannot be persisted. `unresolvableShadow` is a same-scope lake with the
+ * slug that `findBySlug` skipped (deleted/purging): refuse rather than silently target another lake.
  */
 export const resolveLakeTarget = (
   slug: string,
   dbLake: DbLakeInput | null,
-  staticConfigs: StaticLakeInput[]
+  staticConfigs: StaticLakeInput[],
+  unresolvableShadow?: { status: string; organizationId?: string } | null
 ): LakeTarget | null => {
+  if (unresolvableShadow) {
+    const org = unresolvableShadow.organizationId;
+    throw new Error(
+      `Data lake "${slug}" in ${org ? `org ${org}` : 'the org-less scope'} is ${unresolvableShadow.status}; ` +
+        'refusing to fall back to another lake with that slug. Restore it first' +
+        (org ? ', or drop --organizationId to target the org-less or registry lake.' : '.')
+    );
+  }
   if (dbLake) {
     return {
       source: 'db',

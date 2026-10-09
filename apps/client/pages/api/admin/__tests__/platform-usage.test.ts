@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
@@ -20,11 +20,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockPlatformUsageSummary = vi.fn();
-const mockPlatformEndpointUsage = vi.fn();
 const mockUserApiKeyFind = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   usageEventRepository: { platformUsageSummary: (...a: unknown[]) => mockPlatformUsageSummary(...a) },
-  apiKeyUsageLogRepository: { platformEndpointUsage: (...a: unknown[]) => mockPlatformEndpointUsage(...a) },
   userApiKeyRepository: { find: (...a: unknown[]) => mockUserApiKeyFind(...a) },
 }));
 
@@ -61,7 +59,6 @@ describe('GET /api/admin/platform-usage', () => {
       byModel: [],
       totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
     });
-    mockPlatformEndpointUsage.mockResolvedValue(null);
     mockUserApiKeyFind.mockResolvedValue([]);
     mockOrgFind.mockResolvedValue([]);
     mockResolveUserNames.mockResolvedValue(new Map());
@@ -92,5 +89,54 @@ describe('GET /api/admin/platform-usage', () => {
     await run();
     expect(mockPlatformUsageSummary).toHaveBeenCalledWith({ days: 7, source: undefined, ownerType: undefined });
     expect(res._getJSONData().days).toBe(7);
+  });
+
+  describe('consumer owner attribution', () => {
+    const orgKeyId = 'a'.repeat(24);
+    const userKeyId = 'b'.repeat(24);
+
+    it('attributes an org-billed key to its organization and a user-billed key to its user, even when the latter carries an organizationId', async () => {
+      mockPlatformUsageSummary.mockResolvedValue({
+        overTime: [],
+        byFeature: [],
+        byConsumer: [{ apiKeyId: orgKeyId }, { apiKeyId: userKeyId }],
+        byModel: [],
+        totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
+      });
+      mockUserApiKeyFind.mockResolvedValue([
+        {
+          id: orgKeyId,
+          name: 'org key',
+          keyPrefix: 'org_',
+          userId: 'user-1',
+          organizationId: 'org-1',
+          billingOwnerType: CreditHolderType.Organization,
+        },
+        {
+          id: userKeyId,
+          name: 'user key',
+          keyPrefix: 'usr_',
+          userId: 'user-2',
+          organizationId: 'org-2',
+          billingOwnerType: CreditHolderType.User,
+        },
+      ]);
+      const { res, run } = call({});
+      await run();
+      const byApiKeyId = new Map<string, { ownerType: string; ownerId: string }>(
+        res
+          ._getJSONData()
+          .byConsumer.map((c: { apiKeyId: string; ownerType: string; ownerId: string }) => [c.apiKeyId, c])
+      );
+      expect(byApiKeyId.get(orgKeyId)).toMatchObject({ ownerType: CreditHolderType.Organization, ownerId: 'org-1' });
+      expect(byApiKeyId.get(userKeyId)).toMatchObject({ ownerType: CreditHolderType.User, ownerId: 'user-2' });
+    });
+  });
+
+  it('no longer serves endpoint traffic (moved to platform-usage/endpoints)', async () => {
+    const { res, run } = call({});
+    await run();
+    expect(res._getJSONData()).not.toHaveProperty('endpoints');
+    expect(res._getJSONData()).not.toHaveProperty('endpointWindowDays');
   });
 });

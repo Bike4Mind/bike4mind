@@ -22,6 +22,9 @@ interface CreateTestUserBody {
   isAdmin?: boolean;
   emailVerified?: boolean;
   tags?: string[];
+  // PREDEFINED_USER_TAGS are prepended to `tags` by default. Pass exactly false to get only the
+  // passed `tags` (or none), e.g. to mint a user without the Developer tag.
+  includePredefinedTags?: boolean;
   // Whether to pre-record AUP/ToS acceptance so the user clears the consent gate and skips the
   // /accept-policies interstitial. Defaults to true - test users start fully onboarded like
   // `emailVerified`. Pass false to mint an un-consented user for testing the gate itself.
@@ -50,8 +53,18 @@ const handler = baseApi({ auth: false }).post(
       return res.status(401).json({ error: 'Invalid cleanup secret' });
     }
 
-    const { username, email, name, password, isAdmin, emailVerified, tags, acceptedPolicies, initialCredits } =
-      req.body;
+    const {
+      username,
+      email,
+      name,
+      password,
+      isAdmin,
+      emailVerified,
+      tags,
+      includePredefinedTags,
+      acceptedPolicies,
+      initialCredits,
+    } = req.body;
 
     // Guard 3: Only allow creating users the cleanup sweep can find - by the E2E email
     // pattern, or, for an emailless account, by the E2E username suffix.
@@ -80,7 +93,7 @@ const handler = baseApi({ auth: false }).post(
         isAdmin: isAdmin ?? false,
         // No address means nothing to have verified.
         emailVerified: email ? (emailVerified ?? true) : false,
-        tags: [...PREDEFINED_USER_TAGS, ...(tags ?? [])],
+        tags: [...(includePredefinedTags === false ? [] : PREDEFINED_USER_TAGS), ...(tags ?? [])],
         initialCredits: initialCredits ?? DEFAULT_E2E_INITIAL_CREDITS,
       },
       { db: { users: userRepository } }

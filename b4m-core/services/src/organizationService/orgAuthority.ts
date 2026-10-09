@@ -50,6 +50,9 @@ export type OrgMembershipRoster = AdministrableOrg & { users?: { userId: string 
  * No platform-admin arm: this reports a factual relationship to the roster, not authority. A
  * caller that wants "admin may act anyway" must say so itself, so the two ideas cannot be
  * conflated at a billing gate, where an admin's involvement should not change whose pool is spent.
+ *
+ * The repository's `setMemberMaxCredits` encodes the same three tiers as a Mongo `$or` and must
+ * stay in sync with this.
  */
 export function isCurrentOrgMember(organization: OrgMembershipRoster, userId: string): boolean {
   if (organization.userId === userId) return true;

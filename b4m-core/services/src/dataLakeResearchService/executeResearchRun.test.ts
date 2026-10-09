@@ -41,7 +41,7 @@ const makePorts = ({ candidates = [hit(1)], ...overrides }: PortOverrides = {}) 
     }),
     fetchSource: vi.fn(async (url: string) => {
       calls.fetched.push(url);
-      return { title: 'Fetched title', text: 'body text' };
+      return { title: 'Fetched title', finalUrl: url, text: 'body text' };
     }),
     propose: vi.fn(async (candidate: ProposalCandidate) => {
       calls.proposals.push(candidate);
@@ -89,9 +89,57 @@ describe('executeResearchRun', () => {
 
   it('falls back to the search hit title when the fetch yields none', async () => {
     const { ports, calls } = makePorts();
-    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({ title: '', text: 'body' });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: '',
+      finalUrl: 'https://example.com/1',
+      text: 'body',
+    });
     await executeResearchRun(levers(), 'run-1', ports);
     expect(calls.proposals[0].title).toBe('Result 1');
+  });
+
+  it('keeps the search hit title when the fetched title is only the url last path segment', async () => {
+    const { ports, calls } = makePorts({
+      candidates: [
+        { title: 'Job shop scheduling with deep RL', url: 'https://arxiv.org/pdf/1909.08247', snippet: 's' },
+      ],
+    });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: '1909.08247',
+      finalUrl: 'https://arxiv.org/pdf/1909.08247',
+      text: 'body',
+    });
+    await executeResearchRun(levers(), 'run-1', ports);
+    expect(calls.proposals[0].title).toBe('Job shop scheduling with deep RL');
+  });
+
+  it('keeps the fetched title when it is a placeholder but the hit title is blank', async () => {
+    const { ports, calls } = makePorts({
+      candidates: [{ title: '   ', url: 'https://arxiv.org/pdf/1909.08247', snippet: 's' }],
+    });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: '1909.08247',
+      finalUrl: 'https://arxiv.org/pdf/1909.08247',
+      text: 'body',
+    });
+    await executeResearchRun(levers(), 'run-1', ports);
+    expect(calls.proposals[0].title).toBe('1909.08247');
+  });
+
+  it('checks the placeholder against the redirected final url, not the search hit url', async () => {
+    const { ports, calls } = makePorts({
+      candidates: [
+        { title: 'Real paper title', url: 'https://ieeexplore.ieee.org/iel4/9/6845/00277252.pdf', snippet: 's' },
+      ],
+    });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: ';jsessionid=ABC123',
+      finalUrl: 'https://ieeexplore.ieee.org/document/277252/;jsessionid=ABC123',
+      text: 'body',
+    });
+    await executeResearchRun(levers(), 'run-1', ports);
+    expect(calls.proposals[0].title).toBe('Real paper title');
+    expect(calls.proposals[0].sourceUrl).toBe('https://ieeexplore.ieee.org/iel4/9/6845/00277252.pdf');
   });
 
   // Rule 1: the free filter runs first, so a narrow allow list costs nothing to enforce.
@@ -248,7 +296,7 @@ describe('executeResearchRun', () => {
     const { ports, calls } = makePorts({ candidates: [hit(1), hit(2)] });
     (ports.fetchSource as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ title: 't', text: 'x' });
+      .mockResolvedValueOnce({ title: 't', finalUrl: 'https://example.com/2', text: 'x' });
 
     const result = await executeResearchRun(levers(), 'run-1', ports);
 

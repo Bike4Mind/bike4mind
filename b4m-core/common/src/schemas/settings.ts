@@ -42,6 +42,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
+import { ReleaseNotesConfigSchema } from './releaseNotes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
@@ -302,6 +303,7 @@ export const SettingKeySchema = z.enum([
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
   'EnableDataLakeGitHub',
+  'EnableDataLakeGitHubReconcile',
   'EnforceLakeAdmission',
   'EnforceLakeOriginOnIngest',
   'EnableBriefcase',
@@ -475,6 +477,7 @@ export const SettingKeySchema = z.enum([
   'whatsNewAutomationEnabled',
   'whatsNewConfig',
   'whatsNewSyncConfig',
+  'releaseNotesConfig',
 
   // AGENT PROACTIVE MESSAGING SETTINGS
   'enableAgentProactiveMessages',
@@ -539,6 +542,9 @@ export const SettingKeySchema = z.enum([
 
   // AGENT ORCHESTRATION DEFAULTS
   'orchestrationDefaults',
+
+  // VIDEO GENERATION
+  'videoGeneration',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -846,6 +852,23 @@ interface BaseSetting {
    * adding this field changes no existing consumer.
    */
   scope?: SettingScopeConfig;
+  /**
+   * A blank save DELETES the platform row instead of storing the declared default, so the setting
+   * reads as unset again (see `isBlankSettingValue` and apps/client/pages/api/settings/update.ts).
+   * Only for a setting whose consumer treats unset differently from its default's own number.
+   */
+  clearDeletesRow?: boolean;
+  /** What a `clearDeletesRow` setting resolves to while unset, shown by the admin UI in place of a value. */
+  unsetLabel?: string;
+}
+
+/**
+ * "No stored choice", for a setting of ANY type (the scoped resolver applies this to every key, not
+ * just numbers): a missing, null or whitespace-only stored value. A number setting's schema rewrites
+ * one into the declared default, which is exactly why a stored default must not read as a choice of it.
+ */
+export function isBlankSettingValue(raw: unknown): boolean {
+  return raw == null || (typeof raw === 'string' && raw.trim() === '');
 }
 
 function makeStringSetting(
@@ -982,7 +1005,7 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
     // substitutes only on the raw value it receives, so chaining it outside would feed the
     // rewritten undefined into z.coerce.number() and fail with a NaN instead of defaulting.
     schema: z.preprocess(
-      val => (val === null || (typeof val === 'string' && val.trim() === '') ? undefined : val),
+      val => (isBlankSettingValue(val) ? undefined : val),
       numberSchema.prefault(config.defaultValue ?? 0)
     ),
   };
@@ -1079,6 +1102,13 @@ export const RapidReplySettingsSchema = z.object({
 });
 
 export type RapidReplySettings = z.infer<typeof RapidReplySettingsSchema>;
+
+export const VideoGenerationSettingsSchema = z.object({
+  // Per-model override of VIDEO_MODEL_CATALOG[id].defaultEnabled; see isVideoModelEnabled in ../video/enablement.
+  enabledModels: z.record(z.string(), z.boolean()).prefault({}),
+});
+
+export type VideoGenerationSettings = z.infer<typeof VideoGenerationSettingsSchema>;
 
 /**
  * Canonical repository and branch the What's New generator reads from.
@@ -2015,8 +2045,9 @@ export const settingsMap = {
     // which 401s where no key is configured. A reliable, tool-calling default also fixes the
     // tool-driven surfaces (OptiHashi et al.) that silently break on GPT-5 (internal tracking).
     // Opus/Fable remain an explicit opt-in.
-    // Self-host inverts the reasoning: there is no AWS IAM there (Bedrock can never work),
-    // while ANTHROPIC_API_KEY from .env.selfhost powers the Anthropic-hosted twin.
+    // Self-host inverts the reasoning: there is no AWS IAM there (Bedrock works only with the
+    // opt-in BEDROCK_AWS_* pair), while ANTHROPIC_API_KEY from .env.selfhost powers the
+    // Anthropic-hosted twin.
     // This is the authoritative default returned by getSettingsValue() when no AdminSettings override exists.
     defaultValue:
       process.env.B4M_SELF_HOST === 'true' ? ChatModels.CLAUDE_5_SONNET : ChatModels.CLAUDE_5_SONNET_BEDROCK,
@@ -2259,6 +2290,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 96,
     dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeGitHubReconcile: makeBooleanSetting({
+    key: 'EnableDataLakeGitHubReconcile',
+    name: 'Data Lakes: GitHub scheduled reconcile',
+    defaultValue: false,
+    description:
+      "Server-side gate for the scheduled check that compares each connected GitHub repository's default-branch HEAD with the last synced commit and queues a sync when they differ, so a missed or dropped push webhook still reaches the lake. Off by default - pushes still sync through the webhook and the Re-sync button; turn this on to also reconcile on a schedule.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 96,
+    dependsOn: 'EnableDataLakeGitHub',
   }),
   EnforceLakeAdmission: makeBooleanSetting({
     key: 'EnforceLakeAdmission',
@@ -3803,22 +3845,26 @@ export const settingsMap = {
     description:
       'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
       'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
-      `gate - the relative floor above does the ranking. LEAVE IT AT ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} UNLESS YOU HAVE MEASURED ` +
-      'YOUR OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so ' +
-      `while this reads ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} the server ignores it and applies the floor measured for whichever model ` +
-      `your documents are actually embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
+      'gate - the relative floor above does the ranking. LEAVE IT UNSET UNLESS YOU HAVE MEASURED YOUR ' +
+      'OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so while ' +
+      'unset the server applies the floor measured for whichever model your documents are actually ' +
+      `embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
       'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
-      'applies). Set any other value and the server uses exactly that, in every space, which is ' +
-      'yours to get right: 75 against text-embedding-3-small sits above that band entirely and ' +
-      'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
-      'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
-      'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
-      'embedding model.',
+      `applies). While unset the field is blank; ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} is the ada-002 value. Any value you save, ` +
+      `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} included, is used exactly, in every space, which is yours to get right: 75 ` +
+      'against text-embedding-3-small sits above that band entirely and returns nothing on every ' +
+      'query. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
+      'inside your band decides a lot - on one measured corpus 74 / 75 / 76 swung recall 91% / 65% / ' +
+      '40% - and the same 75 that is a cliff on one lake rejects nothing at all on another. ' +
+      'Re-measure after changing the embedding model.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,
     // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+    // Unset resolves per embedding space; a stored value, 75 included, is honored in every space.
+    clearDeletesRow: true,
+    unsetLabel: 'per embedding space',
   }),
   forcedRetrievalSpreadFloorPct: makeNumberSetting({
     key: 'forcedRetrievalSpreadFloorPct',
@@ -4340,6 +4386,16 @@ export const settingsMap = {
     order: 102,
     schema: WhatsNewSyncConfigSchema,
   }),
+  releaseNotesConfig: makeObjectSetting({
+    key: 'releaseNotesConfig',
+    name: 'Release Notes Configuration',
+    defaultValue: ReleaseNotesConfigSchema.parse({}),
+    description:
+      'Customer-facing release notes generated from each production release. Disabled by default. Sets the model, the embargo before a note becomes visible, a denylist of terms that must never appear, and the Slack channel that gets the pre-publish preview.',
+    category: 'Admin',
+    order: 103,
+    schema: ReleaseNotesConfigSchema,
+  }),
   enableAgentProactiveMessages: makeBooleanSetting({
     key: 'enableAgentProactiveMessages',
     name: 'Enable Agent Proactive Messages',
@@ -4767,6 +4823,17 @@ export const settingsMap = {
     order: 140,
     schema: OrchestrationDefaultsSchema,
   }),
+  videoGeneration: makeObjectSetting({
+    key: 'videoGeneration',
+    userReadable: true,
+    name: 'Video Generation',
+    defaultValue: VideoGenerationSettingsSchema.parse({}),
+    description:
+      'Enable or disable individual video generation models. Models without an override use their built-in default.',
+    category: 'AI',
+    order: 145,
+    schema: VideoGenerationSettingsSchema,
+  }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',
     name: 'Enable Model Discovery',
@@ -4938,7 +5005,7 @@ export const SEARCH_BUDGET_SETTING_KEYS = [
  * Every setting the forced-retrieval merge resolves, in one list - the sibling of
  * {@link SEARCH_BUDGET_SETTING_KEYS} for the other read that resolves settings for one retrieval
  * turn. `readForcedRetrievalSettings` (ChatCompletionFeatures.ts, b4m-core/services) resolves these
- * through `resolveScopedSettingValues`, and the guard in settings.test.ts loops this list to assert
+ * through `resolveScopedSettingEntries`, and the guard in settings.test.ts loops this list to assert
  * none of them declares a Lake rung: one turn scans an uncapped SET of lakes into a single pool, so
  * no single lake can key a narrower rung (#2572).
  *

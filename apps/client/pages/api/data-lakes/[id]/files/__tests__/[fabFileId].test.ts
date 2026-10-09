@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   removeFileFromDataLake: vi.fn(),
   addFileToDataLake: vi.fn(),
@@ -26,14 +29,22 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     removeFileFromDataLake: h.removeFileFromDataLake,
     addFileToDataLake: h.addFileToDataLake,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -66,6 +77,7 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.removeFileFromDataLake.mockResolvedValue({ success: true, fileCount: 2, totalSizeBytes: 30 });
@@ -73,9 +85,9 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
   });
 
   it('removes the file against the RESOLVED lake and returns the service result verbatim', async () => {
-    // The route accepts an id OR a slug and assertLakeAccess resolves it, so the service must
-    // get lake.id - handing it the raw query value would address the wrong lake for a slug.
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
+    // The service must get the gate's resolved lake.id, never the raw query value (which differs
+    // here on purpose, so forwarding the query instead would fail this test).
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
     const { res, json } = makeRes();
 
     await call(req('DELETE', { id: 'my-lake', fabFileId: 'f1' }), res);
@@ -98,7 +110,7 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
    * passed throughout, because its own fixture supplied the repos the route did not.
    */
   it('wires the config-audit repositories, so a removal that activates the lake is actually recorded', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
     const { res } = makeRes();
 
     await call(req('DELETE', { id: 'my-lake', fabFileId: 'f1' }), res);
@@ -117,7 +129,7 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
   });
 
   it('does not remove anything when the access gate denies the lake', async () => {
-    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessById.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
 
     await expect(call(req('DELETE', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/not found/i);
@@ -127,7 +139,7 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
   it('does not remove anything from a built-in read-only lake', async () => {
     // assertLakeWritable is what keeps a registry lake's prefixed tags out of reach of the
     // removal write, so the file-tag clear can never touch curated shared content.
-    h.assertLakeAccess.mockResolvedValue({ id: 'opti-knowledge', slug: 'opti' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'opti-knowledge', slug: 'opti' });
     h.assertLakeWritable.mockImplementation(() => {
       throw new Error('This data lake is built into the platform and is read-only');
     });
@@ -138,7 +150,7 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
   });
 
   it('forwards an admin actor through to the service (untested before, so a route that hardcoded isAdmin: false would have gone unnoticed)', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1' });
     h.toAccessContext.mockResolvedValue({ userId: 'root', isAdmin: true });
     const { res } = makeRes();
 
@@ -153,7 +165,7 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
   });
 
   it('takes the actor from the access context, never from the request body', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1' });
     const { res } = makeRes();
 
     await call(req('DELETE', { id: 'lake1', fabFileId: 'f1' }, { userId: 'attacker', isAdmin: true }), res);
@@ -165,18 +177,49 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
       expect.anything()
     );
   });
+
+  it('DELETE: runs the gate and the write inside one transaction, then touches the resolved lake last', async () => {
+    h.assertLakeAccessById.mockImplementation(async () => {
+      h.tx.push('gate');
+      return { id: 'lake-oid-1', slug: 'my-lake' };
+    });
+    h.removeFileFromDataLake.mockImplementation(async () => {
+      h.tx.push('write');
+      return { success: true };
+    });
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    const { res } = makeRes();
+
+    await call(req('DELETE', { id: 'my-lake', fabFileId: 'f1' }), res);
+
+    expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+  });
+
+  it('DELETE: neither writes nor touches when the gate throws', async () => {
+    h.assertLakeAccessById.mockRejectedValue(new Error('Data lake not found'));
+    const { res } = makeRes();
+
+    await expect(call(req('DELETE', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/not found/i);
+    expect(h.removeFileFromDataLake).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/data-lakes/[id]/files/[fabFileId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.addFileToDataLake.mockResolvedValue({ success: true, fileCount: 3, totalSizeBytes: 40 });
   });
 
   it('adds the file against the RESOLVED lake and returns the service result verbatim', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
     const { res, json } = makeRes();
 
     await call(req('POST', { id: 'my-lake', fabFileId: 'f1' }), res);
@@ -191,7 +234,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]', () => {
   });
 
   it('wires the removal-record repository and the admission-contract settings repositories', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
     const { res } = makeRes();
 
     await call(req('POST', { id: 'my-lake', fabFileId: 'f1' }), res);
@@ -203,7 +246,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]', () => {
   });
 
   it('does not add anything when the access gate denies the lake', async () => {
-    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessById.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
 
     await expect(call(req('POST', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/not found/i);
@@ -211,7 +254,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]', () => {
   });
 
   it('does not add anything to a built-in read-only lake', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'opti-knowledge', slug: 'opti' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'opti-knowledge', slug: 'opti' });
     h.assertLakeWritable.mockImplementation(() => {
       throw new Error('This data lake is built into the platform and is read-only');
     });
@@ -222,7 +265,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]', () => {
   });
 
   it('takes the actor from the access context, never from the request body', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1' });
     const { res } = makeRes();
 
     await call(req('POST', { id: 'lake1', fabFileId: 'f1' }, { userId: 'attacker', isAdmin: true }), res);
@@ -238,7 +281,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]', () => {
   // The whole point of #2248's Key Decision 2: the restore tags come from the server's own
   // removal record, never from anything the client sends. A `restoreTags` field must be inert.
   it('ignores a restoreTags field in the body entirely', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1' });
     const { res } = makeRes();
 
     await call(req('POST', { id: 'lake1', fabFileId: 'f1' }, { restoreTags: ['forged:tag'] }), res);
@@ -249,5 +292,35 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]', () => {
       'f1',
       expect.anything()
     );
+  });
+
+  it('POST: runs the gate and the write inside one transaction, then touches the resolved lake last', async () => {
+    h.assertLakeAccessById.mockImplementation(async () => {
+      h.tx.push('gate');
+      return { id: 'lake-oid-1', slug: 'my-lake' };
+    });
+    h.addFileToDataLake.mockImplementation(async () => {
+      h.tx.push('write');
+      return { success: true };
+    });
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    const { res } = makeRes();
+
+    await call(req('POST', { id: 'my-lake', fabFileId: 'f1' }), res);
+
+    expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+  });
+
+  it('POST: neither writes nor touches when the gate throws', async () => {
+    h.assertLakeAccessById.mockRejectedValue(new Error('Data lake not found'));
+    const { res } = makeRes();
+
+    await expect(call(req('POST', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/not found/i);
+    expect(h.addFileToDataLake).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

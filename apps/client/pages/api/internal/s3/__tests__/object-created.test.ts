@@ -9,15 +9,24 @@ const {
   recomputeUploadedMock,
   historyDispatchMock,
   notebookDispatchMock,
-} = vi.hoisted(() => ({
-  findOneMock: vi.fn(),
-  saveMock: vi.fn(),
-  getSettingsValueMock: vi.fn(),
-  sendToQueueMock: vi.fn(),
-  recomputeUploadedMock: vi.fn(),
-  historyDispatchMock: vi.fn().mockResolvedValue(undefined),
-  notebookDispatchMock: vi.fn().mockResolvedValue(undefined),
-}));
+  moderateFilesMock,
+  moderationDeps,
+  buildDepsMock,
+} = vi.hoisted(() => {
+  const deps = { claim: vi.fn(), persist: vi.fn(), release: vi.fn() };
+  return {
+    moderateFilesMock: vi.fn().mockResolvedValue({ scanned: 1 }),
+    moderationDeps: deps,
+    buildDepsMock: vi.fn(() => deps),
+    findOneMock: vi.fn(),
+    saveMock: vi.fn(),
+    getSettingsValueMock: vi.fn(),
+    sendToQueueMock: vi.fn(),
+    recomputeUploadedMock: vi.fn(),
+    historyDispatchMock: vi.fn().mockResolvedValue(undefined),
+    notebookDispatchMock: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
 vi.mock('@bike4mind/database', () => ({
@@ -41,6 +50,8 @@ vi.mock('sst', () => ({
 }));
 vi.mock('@server/s3/historyUploadComplete', () => ({ dispatch: historyDispatchMock }));
 vi.mock('@server/s3/notebookImportComplete', () => ({ dispatch: notebookDispatchMock }));
+vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: moderateFilesMock }));
+vi.mock('@server/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: buildDepsMock }));
 
 const handler = (await import('../object-created')).default as (req: Request, res: Response) => Promise<unknown>;
 
@@ -167,6 +178,86 @@ describe('POST /api/internal/s3/object-created', () => {
 
     expect(saveMock).toHaveBeenCalledTimes(1);
     expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  // Without this scan nothing moved a self-host file off 'pending' until the rescue sweep's
+  // 30-minute floor, so every upload and generated video was unservable for half an hour.
+  it('runs the upload-time moderation scan for the landed file, owned by its uploader', async () => {
+    const req = makeReq('secret-token', 'uploads/clip.mp4');
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(moderateFilesMock).toHaveBeenCalledTimes(1);
+    expect(moderateFilesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePaths: ['uploads/clip.mp4'],
+        userId: 'u1',
+        enabled: true,
+        terminalOnMissingObject: false,
+        claim: moderationDeps.claim,
+      })
+    );
+    // The wiring must be the real thing, not a stray stub: the request logger carries the failure
+    // context, and dropping `release` would strand a failed scan on 'scanning' instead of 'pending'.
+    expect(buildDepsMock).toHaveBeenCalledWith(req.logger);
+    expect(moderateFilesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ persist: moderationDeps.persist, release: moderationDeps.release })
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  // The scan is deliberately not awaited: holding MinIO's webhook on a full object download would
+  // time it out and provoke a redelivery. A never-settling mock makes an `await` on that chain hang
+  // this test, so it fails loudly instead of silently regressing to a blocking webhook.
+  // A short per-test timeout so an `await` regression fails on the contract, not as a generic hang
+  // against the 30s suite default.
+  it('answers 200 before the upload-time scan settles', async () => {
+    moderateFilesMock.mockImplementationOnce(() => new Promise(() => {}));
+    const res = makeRes();
+
+    await handler(makeReq('secret-token', 'uploads/clip.mp4'), res);
+
+    expect(moderateFilesMock).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(200);
+  }, 2000);
+
+  it('passes the ImageModerationEnabled setting through to the scan', async () => {
+    getSettingsValueMock.mockImplementation(async (name: string) => name !== 'ImageModerationEnabled');
+    await handler(makeReq('secret-token', 'uploads/clip.mp4'), makeRes());
+
+    expect(moderateFilesMock).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+  });
+
+  it('defaults the scan to enabled when the setting has never been written', async () => {
+    getSettingsValueMock.mockImplementation(async (name: string) =>
+      name === 'ImageModerationEnabled' ? undefined : true
+    );
+    await handler(makeReq('secret-token', 'uploads/clip.mp4'), makeRes());
+
+    expect(moderateFilesMock).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+  });
+
+  // The file is already marked complete and chunking enqueued by now, so a 500 would make MinIO
+  // redeliver and enqueue the chunk job twice. The file stays 'pending' for the sweep instead.
+  it('still answers 200 and logs when building the scan wiring throws', async () => {
+    buildDepsMock.mockImplementationOnce(() => {
+      throw new Error('storage client misconfigured');
+    });
+    const req = makeReq('secret-token', 'uploads/photo.png');
+    const res = makeRes();
+    await handler(req, res);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(moderateFilesMock).not.toHaveBeenCalled();
+    expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('storage client misconfigured'));
+  });
+
+  it('does not scan when the file has no metadata row', async () => {
+    findOneMock.mockResolvedValue(null);
+    await handler(makeReq('secret-token', 'uploads/orphan.mp4'), makeRes());
+
+    expect(moderateFilesMock).not.toHaveBeenCalled();
   });
 });
 

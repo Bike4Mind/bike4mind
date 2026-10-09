@@ -1,5 +1,12 @@
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
-import { settingsMap, SETTING_TABS, API_SERVICE_GROUPS, Category, CATEGORY_ICONS } from '@bike4mind/common';
+import {
+  isBlankSettingValue,
+  settingsMap,
+  SETTING_TABS,
+  API_SERVICE_GROUPS,
+  Category,
+  CATEGORY_ICONS,
+} from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import {
   Checkbox,
@@ -26,6 +33,7 @@ import {
 import React, { useCallback, useMemo, useState } from 'react';
 import AdminSettingInputField from './AdminSettingInputField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
+import { AdminVideoModelsSetting } from './AdminVideoModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 
 import AdminLogoUpload from './AdminLogoUpload';
@@ -325,12 +333,16 @@ const AdminSettingsTab: React.FC = () => {
       if (
         [
           'logoSettings',
+          // Per-model video toggles are rendered by <AdminVideoModelsSetting />
+          'videoGeneration',
           'RapidReplySettings',
           'SystemFiles',
           // What's New settings are managed in the What's New Modals tab
           'whatsNewAutomationEnabled',
           'whatsNewConfig',
           'whatsNewSyncConfig',
+          // Release notes config is edited in the Release notes tab
+          'releaseNotesConfig',
           // SRE Agent config has its own dedicated admin tab
           'sreAgentConfig',
           // Context Telemetry settings are managed in the Context Inspector tab
@@ -528,7 +540,13 @@ const AdminSettingsTab: React.FC = () => {
                   key={`${setting.key}-${groupId || 'ungrouped'}-${setting.name}-${index}`}
                   index={index}
                   setting={setting}
-                  defaultValue={settingValueByName.get(setting.key) ?? setting.defaultValue}
+                  // clearDeletesRow: no stored row (or a blank one, which the resolver also reads as unset)
+                  // means unset, NOT the declared default - pass null so the field renders its unset label.
+                  defaultValue={
+                    setting.clearDeletesRow && isBlankSettingValue(settingValueByName.get(setting.key))
+                      ? null
+                      : (settingValueByName.get(setting.key) ?? setting.defaultValue)
+                  }
                   subSettings={subSettings}
                 />
               );
@@ -560,6 +578,8 @@ const AdminSettingsTab: React.FC = () => {
 
         {/* Operations Model component for the AI category */}
         {category === 'AI' && <AdminOperationsModelSetting />}
+
+        {category === 'AI' && <AdminVideoModelsSetting />}
 
         {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
             seven of the nine scope-capable settings are AI, and the panel lists all nine wherever

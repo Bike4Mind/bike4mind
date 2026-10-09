@@ -26,6 +26,13 @@ export interface NodeArtifact {
  * permanently; re-deriving on read makes it self-healing, and `linkArtifacts`
  * uses `$addToSet` so repeats are free.
  *
+ * Only artifacts owned by the graph's user are joined. Graphs are owner-only
+ * and their runs execute as that owner, so the run's own artifacts always
+ * match. Rows other users stamped with the same quest id through the
+ * caller-supplied `sourceQuestId` on the create endpoint (including session
+ * sharees, whom that endpoint allows) are not the run's output and stay off
+ * the node.
+ *
  * One batched query for the whole graph, projected to id/type/title - a
  * per-node lookup would be an N+1 on a polled endpoint, and the full document
  * carries the artifact body.
@@ -36,6 +43,7 @@ export interface NodeArtifact {
 export async function linkNodeArtifacts(
   nodes: IQuestNodeDocument[],
   runs: Map<string, NodeRunSummary>,
+  ownerId: string,
   logger: Logger
 ): Promise<Map<string, NodeArtifact[]>> {
   const byNode = new Map<string, NodeArtifact[]>();
@@ -49,7 +57,7 @@ export async function linkNodeArtifacts(
   if (!questIdByNode.size) return byNode;
 
   try {
-    const rows = await artifactRepository.findByQuestIds([...new Set(questIdByNode.values())]);
+    const rows = await artifactRepository.findByQuestIds([...new Set(questIdByNode.values())], ownerId);
     if (!rows.length) return byNode;
 
     const byQuest = new Map<string, NodeArtifact[]>();

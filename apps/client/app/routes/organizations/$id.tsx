@@ -1,4 +1,4 @@
-import { IOrganizationDocument, Permission, WithId } from '@bike4mind/common';
+import { IOrganizationDocument, Permission, WithId, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
@@ -97,19 +97,12 @@ const OrganizationPage: FC = () => {
   // permission set.
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
 
-  // Who may manage group instances + membership. Mirrors assertCanManageOrgGroups
-  // (organizationService/groupMembership.ts) exactly: billing owner, an appointed org admin who is
-  // ALSO still a current member, or a platform admin. Personal orgs never have groups.
-  // The membership conjunct is not redundant - it is what stops a stale adminUserIds entry (a purge
-  // that missed) from being shown a management surface whose every write would 403.
+  // Who may manage group instances + membership: the same isOrgOwnerOrCurrentAdmin rule
+  // assertCanManageOrgGroups enforces, so a stale adminUserIds entry is never shown a surface whose
+  // every write would 403. Personal orgs never have groups.
   const canManageGroups = useMemo(() => {
     if (!currentUser || !organization || organization.personal) return false;
-    if (currentUser.isAdmin) return true;
-    if (currentUser.id === organization.userId) return true;
-    return (
-      (organization.adminUserIds ?? []).includes(currentUser.id) &&
-      (organization.users ?? []).some(member => member.userId === currentUser.id)
-    );
+    return isOrgOwnerOrCurrentAdmin(currentUser, organization);
   }, [currentUser, organization]);
 
   // Billing is owner-only, narrower than canManageOrg - see canViewOrgBilling for why, and for

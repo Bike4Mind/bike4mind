@@ -14,6 +14,7 @@ import {
   type CacheUsageStats,
   type ResponseFormat,
   type StreamChannel,
+  type ToolStarted,
 } from '@bike4mind/common';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
@@ -32,6 +33,14 @@ interface IChoiceBase {
   chunkText?: string | null;
   /** Set when chunkText is reasoning rather than reply prose; see StreamChannel. */
   channel?: StreamChannel;
+  /**
+   * Whether chunkText is a tool-call argument fragment. Adapters whose prose shares a choice index
+   * with a tool call must set this; left undefined, a chunk at an index whose tool name is already
+   * known is treated as an argument fragment.
+   * While a tool is streaming, only `false` choices are forwarded to the client as text. An
+   * argument fragment (`true`) must arrive after the choice that carries its `tool` header.
+   */
+  toolArguments?: boolean;
   index: number;
   status: ChoiceStatus;
   statusEndReason?: ChoiceEndReason;
@@ -111,6 +120,13 @@ export interface ICompletionOptionTools {
    * MCP server. Built-in emitters are pinned in common TOOL_ARTIFACT_EMITTERS, which wins.
    */
   artifactType?: string;
+  /**
+   * Fire-and-forget tool whose result the model never needs to read: when a round already
+   * streamed answer text and every tool it called carries this flag, the adapter ends the
+   * turn instead of making the follow-up model call (which would only restate the answer).
+   * Decided by shouldEndTurnAfterTools (executeToolsBatch.ts). Never honored from MCP servers.
+   */
+  endsTurnAfterText?: boolean;
 }
 
 export interface ICompletionOptions {
@@ -162,7 +178,8 @@ export interface ICompletionOptions {
    */
   complexity?: 'simple' | 'contextual' | 'complex';
   /**
-   * Explicit reasoning effort level for OpenAI reasoning models (O1, O3, GPT-5 series)
+   * Explicit reasoning effort level. Read by the OpenAI (reasoning models: O1, O3, GPT-5 series),
+   * Kimi (K3 only) and DeepSeek backends; ignored by the others (Anthropic, Gemini, Bedrock, xAI, Ollama).
    * When set, overrides the auto-classification from complexity
    * @see https://platform.openai.com/docs/guides/reasoning
    */
@@ -308,6 +325,8 @@ export type CompletionInfo = {
    * instead of scanning content for markers that are themselves model text.
    */
   channel?: StreamChannel;
+  /** A tool call the provider has just opened; see CompletionInfo.toolStarted in @bike4mind/common. */
+  toolStarted?: ToolStarted;
   inputTokens?: number;
   outputTokens?: number;
   creditsUsed?: number;

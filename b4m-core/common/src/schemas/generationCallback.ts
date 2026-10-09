@@ -43,7 +43,13 @@ export type IQuestCallback = {
    */
   eventId: string;
   state: QuestCallbackState;
+  /** When the current claim was made; a stale-dispatch reclaim moves it forward. */
   dispatchedAt?: Date;
+  /**
+   * How many times the sweep backstop re-enqueued a callback stuck at `dispatched`; bounds those
+   * reclaims so a message the handler can never process is not re-enqueued forever.
+   */
+  redispatchCount?: number;
   completedAt?: Date;
   lastStatusCode?: number;
   lastError?: string;
@@ -52,7 +58,7 @@ export type IQuestCallback = {
 /**
  * The `callbackUrl` paragraph of every queued-generation contract description (image generation,
  * image edit, video generation), shared so the three cannot drift. Must stay true of
- * apps/client/server/queueHandlers/generationCallback.ts and server/webhooks/signedWebhook.ts.
+ * apps/workers/src/queueHandlers/generationCallback.ts and server/webhooks/signedWebhook.ts.
  */
 export const GENERATION_CALLBACK_DESCRIPTION =
   'Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, ' +

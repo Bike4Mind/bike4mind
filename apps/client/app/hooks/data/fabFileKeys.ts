@@ -14,12 +14,13 @@
  */
 // Type-only, and pointed at the defining module rather than the fabFiles barrel: this module
 // stays runtime-free, with no cycle back through the barrel whose modules value-import us.
+import type { FabFileTypeFilter } from '@bike4mind/common';
 import type { ISearchFabFilesParams } from '@client/app/hooks/data/fabFileSearch';
 
 /** Filters accepted by the paged own-files list (GET /api/files). */
 export interface FabFileListFilters {
   tags?: string;
-  type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+  type?: FabFileTypeFilter;
   shared?: boolean;
   projectId?: string;
 }

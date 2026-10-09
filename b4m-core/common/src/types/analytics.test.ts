@@ -1,5 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { resolveApiCompletionSource } from './analytics';
+import {
+  COMPLETION_SOURCES,
+  isApiKeyCompletionSource,
+  resolveApiCompletionSource,
+  resolveRequestClient,
+} from './analytics';
+
+describe('resolveRequestClient', () => {
+  it('prefers User-Agent over x-b4m-client', () => {
+    expect(resolveRequestClient({ 'user-agent': 'b4m-desktop/0.1.0', 'x-b4m-client': 'other/1' })).toBe(
+      'b4m-desktop/0.1.0'
+    );
+  });
+
+  it('falls back to x-b4m-client, and is undefined when neither is set', () => {
+    expect(resolveRequestClient({ 'x-b4m-client': 'b4m-desktop/0.1.0' })).toBe('b4m-desktop/0.1.0');
+    expect(resolveRequestClient({})).toBeUndefined();
+  });
+
+  it('looks up header names case-insensitively', () => {
+    expect(resolveRequestClient({ 'User-Agent': 'b4m-desktop/0.1.0' })).toBe('b4m-desktop/0.1.0');
+    expect(resolveRequestClient({ 'X-B4M-Client': 'b4m-desktop/0.1.0' })).toBe('b4m-desktop/0.1.0');
+  });
+});
 
 describe('resolveApiCompletionSource', () => {
   it('returns "cli" for the b4m-cli User-Agent', () => {
@@ -36,5 +59,11 @@ describe('resolveApiCompletionSource', () => {
 
   it('rejects substrings that contain but do not start with the CLI prefix', () => {
     expect(resolveApiCompletionSource({ 'user-agent': 'wrapper b4m-cli/0.9.3' })).toBe('api');
+  });
+});
+
+describe('isApiKeyCompletionSource', () => {
+  it('is true only for api and cli', () => {
+    expect(COMPLETION_SOURCES.filter(isApiKeyCompletionSource).sort()).toEqual(['api', 'cli']);
   });
 });

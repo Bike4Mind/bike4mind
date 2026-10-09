@@ -40,6 +40,7 @@ import {
   AccordionGroup,
   AccordionSummary,
   AccordionDetails,
+  Link,
 } from '@mui/joy';
 import CheckIcon from '@mui/icons-material/Check';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -53,12 +54,15 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
-import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
+import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
 import { toast } from 'sonner';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -85,8 +89,8 @@ const StyledTab = styled(Tab)(({ theme }) => ({
   },
 }));
 
-// Scope presentation model for the New-Key modal, derived from
-// GENERIC_MODAL_API_KEY_SCOPES by parsing the resource:action convention, so new
+// Scope presentation model for the New-Key modal, derived from the viewer's
+// generic scopes (useGenericApiKeyScopes) by parsing the resource:action convention, so new
 // generic-flow scopes surface here automatically (embed:chat is excluded - see below).
 
 const RESOURCE_LABELS: Record<string, string> = {
@@ -124,14 +128,19 @@ interface ScopeGroup {
   }[];
 }
 
-// The New-Key modal offers only generic-flow scopes; embed:chat is minted via
-// the dedicated embed flow (epic #41 Phase E), so it is excluded from selection
-// here (and from the Scopes docs tab below - see scopeDescriptions).
-const MODAL_SCOPE_VALUES = GENERIC_MODAL_API_KEY_SCOPES.map(s => s.value);
+type PresetId = 'read' | 'readwrite' | 'full';
 
-const SCOPE_GROUPS: ScopeGroup[] = (() => {
+interface ScopeModel {
+  scopeValues: ApiKeyScope[];
+  groups: ScopeGroup[];
+  presetScopes: Record<PresetId, ApiKeyScope[]>;
+}
+
+// Built from the viewer's generic-flow scopes, not a module constant, so the "full"
+// preset can never grant a premium scope the viewer is not entitled to see.
+const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
   const groups = new Map<string, ScopeGroup>();
-  for (const scope of GENERIC_MODAL_API_KEY_SCOPES) {
+  for (const scope of scopes) {
     const [resource, action = ''] = scope.value.split(':');
     if (!groups.has(resource)) {
       groups.set(resource, {
@@ -147,18 +156,15 @@ const SCOPE_GROUPS: ScopeGroup[] = (() => {
       isMutating: action !== 'read',
     });
   }
-  return [...groups.values()];
-})();
 
-const READ_SCOPES = GENERIC_MODAL_API_KEY_SCOPES.filter(s => s.value.endsWith(':read')).map(s => s.value);
-const WRITE_SCOPES = GENERIC_MODAL_API_KEY_SCOPES.filter(s => s.value.endsWith(':write')).map(s => s.value);
-
-type PresetId = 'read' | 'readwrite' | 'full';
-
-const PRESET_SCOPES: Record<PresetId, ApiKeyScope[]> = {
-  read: READ_SCOPES,
-  readwrite: [...READ_SCOPES, ...WRITE_SCOPES],
-  full: [...MODAL_SCOPE_VALUES],
+  const scopeValues = scopes.map(s => s.value);
+  const readScopes = scopeValues.filter(value => value.endsWith(':read'));
+  const writeScopes = scopeValues.filter(value => value.endsWith(':write'));
+  return {
+    scopeValues,
+    groups: [...groups.values()],
+    presetScopes: { read: readScopes, readwrite: [...readScopes, ...writeScopes], full: [...scopeValues] },
+  };
 };
 
 const PRESETS: { id: PresetId; label: string; description: string }[] = [
@@ -176,15 +182,34 @@ interface NewKeyModalProps {
 }
 
 function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
+  const genericScopes = useGenericApiKeyScopes();
+  const scopeModel = useMemo(() => buildScopeModel(genericScopes), [genericScopes]);
   const [formData, setFormData] = useState<CreateUserApiKeyRequest>({
     name: '',
-    scopes: [...READ_SCOPES],
+    scopes: [...scopeModel.presetScopes.read],
     rateLimit: {
       requestsPerMinute: 60,
       requestsPerDay: 1000,
     },
   });
   const [expirationDays, setExpirationDays] = useState<string>('never');
+
+  // Opti access can resolve after mount (entitlement fetch) or be revoked mid-session, so
+  // re-seed the selection whenever the offered scopes change: a preset selection follows
+  // its preset into the new model, and a custom one keeps the user's picks minus any scope
+  // no longer offered, so a hidden scope can't be submitted.
+  const [seededModel, setSeededModel] = useState(scopeModel);
+  if (seededModel !== scopeModel) {
+    const previousModel = seededModel;
+    setSeededModel(scopeModel);
+    setFormData(fd => {
+      const presetId = PRESETS.find(p => sameScopeSet(fd.scopes, previousModel.presetScopes[p.id]))?.id;
+      const scopes = presetId
+        ? [...scopeModel.presetScopes[presetId]]
+        : fd.scopes.filter(scope => scopeModel.scopeValues.includes(scope));
+      return { ...fd, scopes };
+    });
+  }
 
   const { data: billingOrgs } = useBillingOrganizations();
   const canBillOrg = (billingOrgs?.length ?? 0) > 0;
@@ -200,7 +225,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   const resetForm = () => {
     setFormData({
       name: '',
-      scopes: [...READ_SCOPES],
+      scopes: [...scopeModel.presetScopes.read],
       rateLimit: {
         requestsPerMinute: 60,
         requestsPerDay: 1000,
@@ -217,10 +242,10 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
     createMutation.mutate(submitData);
   };
 
-  const activePreset = PRESETS.find(p => sameScopeSet(formData.scopes, PRESET_SCOPES[p.id]))?.id;
+  const activePreset = PRESETS.find(p => sameScopeSet(formData.scopes, scopeModel.presetScopes[p.id]))?.id;
   const isCustom = !activePreset;
 
-  const applyPreset = (id: PresetId) => setFormData(fd => ({ ...fd, scopes: [...PRESET_SCOPES[id]] }));
+  const applyPreset = (id: PresetId) => setFormData(fd => ({ ...fd, scopes: [...scopeModel.presetScopes[id]] }));
 
   const toggleScope = (value: ApiKeyScope) =>
     setFormData(fd => ({
@@ -316,11 +341,11 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography level="title-sm">Permissions</Typography>
               <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                {formData.scopes.length} of {MODAL_SCOPE_VALUES.length} enabled
+                {formData.scopes.length} of {scopeModel.scopeValues.length} enabled
               </Typography>
             </Box>
             <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'hidden' }}>
-              {SCOPE_GROUPS.map((group, i) => (
+              {scopeModel.groups.map((group, i) => (
                 <Box
                   key={group.resource}
                   sx={{
@@ -506,11 +531,13 @@ function KeyCreatedModal({ open, onClose, apiKey, callbackSigningSecret }: KeyCr
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
 
-  const exampleCode = `curl -X POST \\
-  -H "X-API-Key: ${apiKey}" \\
+  // The key stays in its one-time copy field only; the snippet reads it from the shell.
+  const exampleCode = `export B4M_API_KEY="<paste your API key>"
+curl -X POST \\
+  -H "Authorization: Bearer $B4M_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"message": "Hello! Can you help me with my project?"}' \\
-  https://your-deployment.example.com/api/chat`;
+  ${window.location.origin}/api/chat`;
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-created-modal">
@@ -573,6 +600,7 @@ function KeyCreatedModal({ open, onClose, apiKey, callbackSigningSecret }: KeyCr
                 fontFamily: 'monospace',
               }}
               className="project-api-keys-documentation-code"
+              data-testid="api-key-created-snippet"
             >
               {exampleCode}
             </Box>
@@ -648,20 +676,21 @@ interface ApiDocumentationProps {
 function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDocumentationProps) {
   const { handleCopyToClipboard } = useCopyToClipboard();
   const [activeTab, setActiveTab] = useState(0);
+  const origin = window.location.origin;
 
   const codeExamples = {
     curl: {
       listSessions: `curl -X GET \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
-  https://your-deployment.example.com/api/sessions`,
+  ${origin}/api/sessions`,
       createSession: `curl -X POST \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{"name": "My API Session"}' \\
-  https://your-deployment.example.com/api/v1/sessions`,
+  ${origin}/api/v1/sessions`,
       aiChatSimple: `curl -X POST \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{
     "message": "Hello! Can you help me with my project?",
@@ -669,21 +698,21 @@ function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDo
     "temperature": 0.7,
     "max_tokens": 500
   }' \\
-  https://your-deployment.example.com/api/chat`,
+  ${origin}/api/chat`,
       aiChatSync: `curl -X POST \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{
     "message": "What is the capital of France?",
     "model": "gpt-4o-mini",
     "wait": true
   }' \\
-  https://your-deployment.example.com/api/chat`,
+  ${origin}/api/chat`,
       questStatus: `curl -X GET \\
-  -H "X-API-Key: ${sampleApiKey}" \\
-  https://your-deployment.example.com/api/v1/quests/quest_123`,
+  -H "Authorization: Bearer ${sampleApiKey}" \\
+  ${origin}/api/v1/quests/quest_123`,
       aiChat: `curl -X POST \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{
     "sessionId": "your_session_id_here",
@@ -704,21 +733,21 @@ function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDo
       }
     }
   }' \\
-  https://your-deployment.example.com/api/ai/llm`,
+  ${origin}/api/ai/llm`,
     },
     javascript: {
-      listSessions: `const response = await fetch('/api/sessions', {
+      listSessions: `const response = await fetch('${origin}/api/sessions', {
   method: 'GET',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   }
 });
 const sessions = await response.json();`,
-      createSession: `const response = await fetch('/api/v1/sessions', {
+      createSession: `const response = await fetch('${origin}/api/v1/sessions', {
   method: 'POST',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -726,10 +755,10 @@ const sessions = await response.json();`,
   })
 });
 const newSession = await response.json();`,
-      aiChatSimple: `const response = await fetch('/api/chat', {
+      aiChatSimple: `const response = await fetch('${origin}/api/chat', {
   method: 'POST',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -739,11 +768,13 @@ const newSession = await response.json();`,
     max_tokens: 1000
   })
 });
-const result = await response.json();`,
-      aiChatSync: `const response = await fetch('/api/chat', {
+const result = await response.json();
+// A fresh notebook was created; pass this back as sessionId to continue it.
+const sessionId = result.sessionId;`,
+      aiChatSync: `const response = await fetch('${origin}/api/chat', {
   method: 'POST',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -752,18 +783,20 @@ const result = await response.json();`,
     wait: true
   })
 });
-const result = await response.json();`,
-      questStatus: `const response = await fetch('/api/v1/quests/quest_123', {
+const result = await response.json();
+// A fresh notebook was created; pass this back as sessionId to continue it.
+const sessionId = result.sessionId;`,
+      questStatus: `const response = await fetch('${origin}/api/v1/quests/quest_123', {
   method: 'GET',
   headers: {
-    'X-API-Key': '${sampleApiKey}'
+    Authorization: 'Bearer ${sampleApiKey}'
   }
 });
 const quest = await response.json();`,
-      aiChat: `const response = await fetch('/api/ai/llm', {
+      aiChat: `const response = await fetch('${origin}/api/ai/llm', {
   method: 'POST',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -782,27 +815,27 @@ const aiResponse = await response.json();`,
       listSessions: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
-response = requests.get('/api/sessions', headers=headers)
+response = requests.get('${origin}/api/sessions', headers=headers)
 sessions = response.json()`,
       createSession: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
 data = {'name': 'My API Session'}
-response = requests.post('/api/v1/sessions', 
+response = requests.post('${origin}/api/v1/sessions', 
                         headers=headers, json=data)
 new_session = response.json()`,
       aiChatSimple: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -813,12 +846,14 @@ data = {
     'max_tokens': 1000
 }
 
-response = requests.post('/api/chat', headers=headers, json=data)
-result = response.json()`,
+response = requests.post('${origin}/api/chat', headers=headers, json=data)
+result = response.json()
+# A fresh notebook was created; pass this back as sessionId to continue it.
+session_id = result['sessionId']`,
       aiChatSync: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -828,20 +863,22 @@ data = {
     'wait': True
 }
 
-response = requests.post('/api/chat', headers=headers, json=data)
-result = response.json()`,
+response = requests.post('${origin}/api/chat', headers=headers, json=data)
+result = response.json()
+# A fresh notebook was created; pass this back as sessionId to continue it.
+session_id = result['sessionId']`,
       questStatus: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}'
+    'Authorization': 'Bearer ${sampleApiKey}'
 }
 
-response = requests.get('/api/v1/quests/quest_123', headers=headers)
+response = requests.get('${origin}/api/v1/quests/quest_123', headers=headers)
 quest = response.json()`,
       aiChat: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -855,15 +892,15 @@ data = {
     }
 }
 
-response = requests.post('/api/ai/llm', headers=headers, json=data)
+response = requests.post('${origin}/api/ai/llm', headers=headers, json=data)
 ai_response = response.json()`,
     },
   };
 
   // Docs tab shows only generic-flow scopes; dedicated-flow scopes (embed:chat) are
   // hidden until their mint flow ships (epic #41 Phase E) so we don't advertise a
-  // scope/endpoint a user cannot use yet.
-  const scopeDescriptions = GENERIC_MODAL_API_KEY_SCOPES;
+  // scope/endpoint a user cannot use yet. Premium scopes need Opti access.
+  const scopeDescriptions = useGenericApiKeyScopes();
 
   const copyCode = (code: string) => {
     handleCopyToClipboard(code);
@@ -871,6 +908,19 @@ ai_response = response.json()`,
 
   return (
     <Box className="project-api-keys-documentation-container">
+      <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
+        These guides cover the essentials. For every endpoint with full request and response schemas, see the{' '}
+        <Link
+          href={ExternalLinks.apiDocs}
+          target="_blank"
+          rel="noopener noreferrer"
+          endDecorator={<OpenInNewIcon sx={{ fontSize: '14px' }} />}
+          data-testid="api-keys-docs-reference-link"
+        >
+          API reference
+        </Link>
+        .
+      </Typography>
       <Tabs
         value={activeTab}
         onChange={(_, value) => setActiveTab(value as number)}
@@ -898,10 +948,14 @@ ai_response = response.json()`,
               <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
                 <InfoOutlinedIcon sx={{ fontSize: '20px', color: 'text.primary', mt: 0.5, opacity: 0.5 }} />
                 <Typography level="body-sm" sx={{ color: 'text.primary' }}>
-                  Use your API key to authenticate requests by adding it to the <code>X-API-Key</code> header. The{' '}
-                  <code>/api/chat</code> endpoint supports both asynchronous (returns quest ID for tracking) and
-                  synchronous modes (add <code>&quot;wait&quot;: true</code> to get the response immediately). Sessions
-                  automatically use your most recent notebook if no <code>sessionId</code> is provided.
+                  Use your API key to authenticate requests by sending it as{' '}
+                  <code>Authorization: Bearer &lt;key&gt;</code>. The <code>/api/chat</code> endpoint supports both
+                  asynchronous (returns quest ID for tracking) and synchronous modes (add{' '}
+                  <code>&quot;wait&quot;: true</code> to get the response immediately). Pass <code>sessionId</code> to
+                  continue an existing notebook. An API key that omits it starts a new notebook (named{' '}
+                  <code>API chat - ...</code>) and returns its id as <code>sessionId</code> - pass that back to continue
+                  the conversation. Add <code>&quot;newConversation&quot;: true</code> to force a new notebook.
+                  (First-party browser requests still fall back to your most recent notebook.)
                 </Typography>
               </Box>
             </Alert>
@@ -1900,7 +1954,7 @@ export default function UserApiKeysTab() {
             <Typography level="title-md" sx={{ color: 'text.primary' }}>
               Manage Your API Keys
             </Typography>
-            <Box display="flex" gap={1} flexShrink={0} alignItems="center">
+            <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
               {revokedCount > 0 && (
                 <Checkbox
                   size="sm"
@@ -1911,6 +1965,18 @@ export default function UserApiKeysTab() {
                   sx={{ mr: 1, whiteSpace: 'nowrap' }}
                 />
               )}
+              <Button
+                component="a"
+                href={ExternalLinks.apiDocs}
+                target="_blank"
+                rel="noopener noreferrer"
+                variant="outlined"
+                color="neutral"
+                endDecorator={<OpenInNewIcon sx={{ fontSize: '16px' }} />}
+                data-testid="api-keys-open-docs-btn"
+              >
+                API Docs
+              </Button>
               <Tooltip title="Refresh">
                 <IconButton onClick={() => refetch()} variant="outlined">
                   <RefreshIcon />

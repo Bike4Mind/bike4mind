@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "6.4.0",
+  "version": "7.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -100,6 +100,16 @@
         "default": "./dist/globMatches.cjs"
       }
     },
+    "./calibratedTokenizer": {
+      "import": {
+        "types": "./dist/calibratedTokenizer.d.mts",
+        "default": "./dist/calibratedTokenizer.mjs"
+      },
+      "require": {
+        "types": "./dist/calibratedTokenizer.d.cts",
+        "default": "./dist/calibratedTokenizer.cjs"
+      }
+    },
     "./contentDisposition": {
       "import": {
         "types": "./dist/contentDisposition.d.mts",
@@ -140,6 +150,16 @@
         "default": "./dist/registrableDomain.cjs"
       }
     },
+    "./videoProviders": {
+      "import": {
+        "types": "./dist/videoProviders/index.d.mts",
+        "default": "./dist/videoProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/videoProviders/index.d.cts",
+        "default": "./dist/videoProviders/index.cjs"
+      }
+    },
     "./security": {
       "import": {
         "types": "./dist/security/index.d.mts",
@@ -178,6 +198,7 @@
     "@bike4mind/observability": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
+    "@types/aws-lambda": "^8.10.162",
     "axios": "1.20.0",
     "cheerio": "1.2.0",
     "csv-parse": "^7.0.2",
@@ -198,10 +219,10 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.162",
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
     "esbuild": "0.28.1",
+    "msw": "^2.15.0",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3"
   }

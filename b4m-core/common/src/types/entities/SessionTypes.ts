@@ -194,6 +194,9 @@ export interface IChatHistoryItem {
   /** Path to the video in the storage bucket */
   videos?: string[];
 
+  /** Ids of the video generation jobs this quest started */
+  videoJobIds?: string[];
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
@@ -249,6 +252,14 @@ export interface IChatHistoryItem {
    * (previous answer, what the user said was wrong, corrected answer).
    */
   correctsQuestId?: string;
+
+  /**
+   * Ms from the client sending the prompt to rendering the first token, posted back by the client
+   * mid-stream (quests/[id]/client-timing). Top-level rather than under `promptMeta.performance`
+   * because the completion pipeline saves `promptMeta` whole from an in-memory copy that never has
+   * it, so the stream's final save would erase it. Older quests carry it at the promptMeta path.
+   */
+  clientFirstTokenTime?: number;
 
   /**
    * Provenance of the routing decision that produced this quest (M4).
@@ -311,7 +322,8 @@ export interface IChatHistoryItem {
   };
 
   /**
-   * Fallback model information when a fallback occurred during generation
+   * Fallback model information when a fallback occurred during generation. `null` clears a value
+   * persisted by an earlier attempt: repository updates are a `$set`, which drops `undefined`.
    */
   fallbackInfo?: {
     sessionId: string;
@@ -322,8 +334,9 @@ export interface IChatHistoryItem {
     /** Provider path of each side; see FallbackInfoSchema for why these are optional. */
     primaryModelBackend?: string;
     fallbackModelBackend?: string;
+    reason?: string;
     timestamp: number;
-  };
+  } | null;
 
   /**
    * Prompt enhancement information for image generation
@@ -600,6 +613,19 @@ export interface SessionListFilters {
   hasImages?: boolean;
 }
 
+/** Keyset page of a user's own sessions, newest first by id (GET /api/v1/sessions). */
+export type ListSessionsByUserQuery = {
+  userId: string;
+  /** Same semantics as searchByUserId: case-insensitive match on name, summary or tag name. */
+  search?: string;
+  /** Same semantics as searchByUserId: unset lists only sessions with no surface. */
+  surface?: string;
+  filters?: SessionListFilters;
+  /** Exclusive: only sessions whose id sorts before this one (the previous page's last id). */
+  beforeId?: string;
+  limit: number;
+};
+
 export interface ISession {
   id: string;
   name: string;
@@ -683,6 +709,12 @@ export interface ISession {
    * attaching a lake file does not silently re-scope a session the user scoped by hand.
    */
   lakeScopeExplicit?: boolean;
+  /**
+   * Whether a lake-scoped chat also grounds on the user's own library (owned, shared and group
+   * files) alongside the lake. Unset falls back to "only when no lake is named", which is the
+   * pre-existing behavior; resolve it through effectiveIncludeLibraryFiles, never read it raw.
+   */
+  includeLibraryFiles?: boolean;
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
    * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its
@@ -896,6 +928,16 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     data: Partial<ISessionDocument> & { id: string },
     opts?: { includeGlobalWrite?: boolean }
   ) => Promise<ISessionDocument | null>;
+  /**
+   * updateWithUpdateAccess that adds `knowledgeIds` ($addToSet) rather than replacing the stored list,
+   * so a concurrent detach is not undone by a caller's stale read.
+   */
+  addKnowledgeIdsWithUpdateAccess: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<Omit<ISessionDocument, 'knowledgeIds'>> & { id: string },
+    knowledgeIds: string[],
+    opts?: { includeGlobalWrite?: boolean }
+  ) => Promise<ISessionDocument | null>;
   upsertByOpenaiConversationId: <Txn>(
     openaiConversationId: string,
     update: Partial<ISession>,
@@ -973,6 +1015,13 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     surface?: string,
     filters?: SessionListFilters
   ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+
+  /**
+   * Cursor-paginated twin of searchByUserId: ordered by `_id` descending and bounded by `limit`,
+   * so a page boundary stays put while sessions are added or edited (lastUpdated moves, _id does
+   * not). Callers pass `limit + 1` to learn whether another page exists without a count query.
+   */
+  listByUserId: (query: ListSessionsByUserQuery) => Promise<ISessionDocument[]>;
 
   /** Atomically adds `count` generated images to the session's imageCount (one $inc). */
   incrementImageCount: (sessionId: string, count: number) => Promise<void>;

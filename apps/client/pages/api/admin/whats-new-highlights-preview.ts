@@ -3,8 +3,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { ForbiddenError } from '@server/utils/errors';
-import { buildHighlightsPrompt } from '@server/queueHandlers/whatsNewHighlights.prompt';
-import type { ModalForHighlights } from '@server/queueHandlers/whatsNewHighlights.types';
+import { buildHighlightsPrompt } from '@server/whatsNew/whatsNewHighlights.prompt';
+import type { ModalForHighlights } from '@server/whatsNew/whatsNewHighlights.types';
 import { z } from 'zod';
 
 const PREVIEW_RATE_LIMIT = 20;

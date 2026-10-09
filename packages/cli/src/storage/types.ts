@@ -222,6 +222,12 @@ export interface CliConfig {
     enableParallelToolExecution?: boolean; // Enable parallel execution of read-only tools (default: false)
     enableDynamicAgentCreation?: boolean; // Enable dynamic agent creation (default: false, experimental)
     enableCoordinatorMode?: boolean; // Enable coordinator mode for complex task decomposition (default: false)
+    /**
+     * Type-check/lint files the agent edits in the background and feed the
+     * errors back into the agent's next turn (see diagnostics/PostEditDiagnostics.ts).
+     * Global config only. Default false.
+     */
+    postEditDiagnostics?: boolean;
     /** System-prompt variant. 'minimal' is a pi-style short prompt; 'current' is the historical default. */
     promptVariant?: 'current' | 'minimal';
     /** Show the agent's thought steps in the chat trace. Default true. */

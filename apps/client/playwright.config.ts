@@ -177,6 +177,12 @@ export default defineConfig({
       testMatch: [setupMatch],
       dependencies: skipWarmup ? ['setup-core'] : ['warmup'],
     })),
+    // Missing-static-asset smoke: browserless and unauthenticated - it only makes HTTP requests
+    // against the base URL, so it takes no setup/auth dependency. The globalSetup still runs.
+    {
+      name: 'static-asset',
+      testMatch: [/(?:^|\/)static-asset-404\.spec\.ts$/],
+    },
     // Unauthenticated specs need core + projects user (for login credentials)
     {
       name: 'unauthenticated',

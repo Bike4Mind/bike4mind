@@ -1,3 +1,4 @@
+import type { CurationResult } from '@bike4mind/common';
 import mongoose, { Model, Schema, model } from 'mongoose';
 
 const ModelName = 'NotebookCurationJob';
@@ -26,6 +27,8 @@ export interface INotebookCurationJobDoc {
   sessionId: string;
   userId?: string;
   status: NotebookCurationJobStatus;
+  result?: CurationResult;
+  filePath?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -38,6 +41,8 @@ const NotebookCurationJobSchema = new Schema<INotebookCurationJobDoc>(
     sessionId: { type: String, required: true },
     userId: { type: String },
     status: { type: String, enum: ['completed'], required: true },
+    result: { type: Schema.Types.Mixed },
+    filePath: { type: String },
   },
   { timestamps: true }
 );

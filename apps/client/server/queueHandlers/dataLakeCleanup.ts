@@ -59,6 +59,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     logger.updateMetadata({ handler: 'dataLakeCleanup', dataLakeId, userId: actor.userId });
 
     await dataLakeService.cleanupDeletedDataLake(actor, dataLakeId, {
+      purgeClaimId,
+      beginPurge: () => dataLakeRepository.beginPurgeExecution(dataLakeId, purgeClaimId),
+      deleteFileAndChunks: id => fabFileRepository.hardDeleteWithChunks(id),
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -133,29 +136,26 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger,
     });
   } catch (err) {
-    // A failed GUARD (BadRequestError: not a manager, or the lake is not in a sweepable status) is
-    // the one permanent failure that abandons an ACCEPTED purge, so it does not get to be a quiet
-    // WARN. Log it at ERROR and release 'purging' -> 'deleted', which puts the lake back in the
-    // deleted-lakes list where its owner can see it and retry, rather than leaving it in a status
-    // no list shows (#1744).
-    //
-    // Releasing is safe ONLY because cleanupDeletedDataLake throws BadRequestError exclusively from
-    // its two entry guards, before anything is destroyed. Keep it that way: a BadRequestError raised
-    // deeper in the sweep would make this advertise a half-purged lake as restorable. Every other
-    // failure (DB/network) rethrows below and is recovered by DLQ replay, which must NOT release -
-    // that lake may be partly swept.
-    //
-    // Keyed by the message's claim id: SQS is at-least-once, so a redelivered message can be refused
-    // after a NEWER purge claimed the lake, and an anonymous release would reopen that purge's lake
-    // for restore while its sweep is queued. Only a legacy message with no id falls back to releasing
-    // a claim that has no id either.
+    // Release only an unstarted matching generation. Started cleanup must remain replayable and hidden.
     if (err instanceof BadRequestError) {
-      logger.error('[dataLakes] cleanup sweep refused by its own guard; releasing the accepted purge', {
+      if (parsedLakeId) {
+        const released = await dataLakeRepository.releasePurgingToDeleted(parsedLakeId, parsedClaimId);
+        if (released) {
+          logger.error('[dataLakes] cleanup guard refused; releasing the accepted purge', {
+            dataLakeId: parsedLakeId,
+            purgeClaimId: parsedClaimId,
+            reason: err.message,
+          });
+          return;
+        }
+        const lake = await dataLakeRepository.findById(parsedLakeId);
+        if (lake?.purgeStartedAt && lake.purgeClaimId === parsedClaimId) throw err;
+      }
+      logger.warn('[dataLakes] skipping refused cleanup generation without releasing another claim', {
         dataLakeId: parsedLakeId,
         purgeClaimId: parsedClaimId,
         reason: err.message,
       });
-      if (parsedLakeId) await dataLakeRepository.releasePurgingToDeleted(parsedLakeId, parsedClaimId);
       return;
     }
     // Malformed payload (SyntaxError/ZodError): permanently invalid and unattributable - there is no

@@ -322,7 +322,12 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
               });
             }
             if (call.function?.arguments) {
-              choices.push({ status: ChoiceStatus.STREAM, index: idx, chunkText: call.function.arguments });
+              choices.push({
+                status: ChoiceStatus.STREAM,
+                index: idx,
+                chunkText: call.function.arguments,
+                toolArguments: true,
+              });
             }
           } else {
             // Non-streaming: the message carries complete tool calls and the base
@@ -372,7 +377,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           const chunkText = this.isInThinkingBlock ? escapedReasoning : `<think>${escapedReasoning}`;
           this.isInThinkingBlock = true;
           this.roundReasoning += reasoning;
-          choices.push({ status: ChoiceStatus.STREAM, index, chunkText, ...usageForIndex });
+          choices.push({ status: ChoiceStatus.STREAM, index, chunkText, toolArguments: false, ...usageForIndex });
           continue;
         }
 
@@ -388,12 +393,11 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           this.roundReasoning += think;
           // A marker that never parsed into a call still means a tool was attempted.
           if (nativeCalls.length > 0 || this.nativeToolStream.sawMarker) this.roundCalledTool = true;
-          // Pushed ahead of the calls: they share index 0, and once base.ts has seen a tool
-          // name at an index it appends every later non-TOOL_USE chunkText there to its args.
           choices.push({
             status: ChoiceStatus.END,
             statusEndReason: endReason,
             index,
+            toolArguments: false,
             chunkText: think ? `<think>${think}</think>` : '',
             ...usageForIndex,
           });
@@ -407,7 +411,12 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
               tool: { id: call.id, name: call.name },
             });
             if (call.arguments) {
-              choices.push({ status: ChoiceStatus.STREAM, index: call.index, chunkText: call.arguments });
+              choices.push({
+                status: ChoiceStatus.STREAM,
+                index: call.index,
+                chunkText: call.arguments,
+                toolArguments: true,
+              });
             }
           }
           continue;
@@ -421,6 +430,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
             status: ChoiceStatus.END,
             statusEndReason: endReason,
             index,
+            toolArguments: false,
             chunkText: `${this.reasoningEscaper.flush()}</think>${content}`,
             ...usageForIndex,
           });
@@ -430,6 +440,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           status: ChoiceStatus.END,
           statusEndReason: endReason,
           index,
+          toolArguments: false,
           chunkText: content,
           ...usageForIndex,
         });

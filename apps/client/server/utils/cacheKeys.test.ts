@@ -12,7 +12,7 @@ import { CacheKeys } from './cacheKeys';
 describe('CacheKeys', () => {
   describe('versioned 12h keys', () => {
     it('pins the key for every versioned builder', () => {
-      expect(CacheKeys.modelMetrics({})).toBe('model-metrics:v1:4f53cda18c2baa0c');
+      expect(CacheKeys.modelMetrics({})).toBe('model-metrics:v2:4f53cda18c2baa0c');
       expect(
         CacheKeys.modelMetrics({
           dateFrom: '2026-01-01',
@@ -21,7 +21,7 @@ describe('CacheKeys', () => {
           modelFilter: 'gpt',
           statusFilter: 'completed',
         })
-      ).toBe('model-metrics:v1:51d5aaf35280f540');
+      ).toBe('model-metrics:v2:51d5aaf35280f540');
 
       expect(CacheKeys.spend({})).toBe('admin-spend:v2:4f53cda18c2baa0c');
       expect(

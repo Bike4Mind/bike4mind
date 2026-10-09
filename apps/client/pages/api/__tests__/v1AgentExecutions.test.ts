@@ -11,7 +11,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { AgentExecutionAckSchema, AgentExecutionStatusResponseSchema } from '@bike4mind/common';
+import { AgentExecutionAckSchema, AgentExecutionStatusResponseSchema, ApiKeyScope } from '@bike4mind/common';
 
 const { mockStart, mockLoadTrace } = vi.hoisted(() => ({
   mockStart: vi.fn(),
@@ -191,6 +191,29 @@ describe('POST /api/v1/agent-executions', () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(await statusOf((startHandler as any)(req, res))).toBe(status);
+  });
+
+  // Scope denials are derived inside startAgentExecution (covered there); the door's job is to
+  // forward the credential, and only from the request's apiKeyInfo.
+  it('forwards the authenticating key as apiKeyInfo, never an id from the body', async () => {
+    const keyInfo = { keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT] };
+    const keyed = post({
+      session_id: 's1',
+      message: 'go',
+      apiKeyId: 'spoofed',
+      apiKeyInfo: { keyId: 'spoofed', scopes: Object.values(ApiKeyScope) },
+    });
+    Object.assign(keyed.req, { apiKeyInfo: keyInfo });
+    const session = post({ session_id: 's1', message: 'go' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(keyed.req, keyed.res);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(session.req, session.res);
+
+    expect(mockStart.mock.calls[0][0].apiKeyInfo).toBe(keyInfo);
+    expect(mockStart.mock.calls[0][0]).not.toHaveProperty('apiKeyId');
+    expect(mockStart.mock.calls[1][0].apiKeyInfo).toBeUndefined();
   });
 
   it('rejects a body with no message before dispatching anything', async () => {

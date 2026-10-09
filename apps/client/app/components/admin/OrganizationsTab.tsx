@@ -195,6 +195,9 @@ const OrganizationsTab: React.FC = () => {
   const grantedOrgIds = useMemo(() => new Set((grants ?? []).map(g => g.ownerId)), [grants]);
 
   const organizations = data?.data ?? [];
+  // The modal opens from a row snapshot; read the refreshed row once a write inside it (e.g. a
+  // member credit limit) invalidates the list, or the modal keeps showing the old values.
+  const liveMembersOrg = membersOrg ? (organizations.find(org => org.id === membersOrg.id) ?? membersOrg) : null;
 
   useEffect(() => {
     setTotalOrganizations(curr => data?.totalOrganizations ?? curr);
@@ -733,7 +736,7 @@ const OrganizationsTab: React.FC = () => {
               {membersOrg.name} - Members
             </Typography>
             <OrganizationMembers
-              organization={membersOrg}
+              organization={liveMembersOrg ?? membersOrg}
               userPermissions={
                 currentUser?.isAdmin ? [Permission.read, Permission.update, Permission.share] : [Permission.read]
               }

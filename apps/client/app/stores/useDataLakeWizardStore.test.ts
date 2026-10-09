@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { useDataLakeWizardStore } from './useDataLakeWizardStore';
+import { toWizardTargetLake, useDataLakeWizardStore } from './useDataLakeWizardStore';
 import type { WizardFile } from '../utils/folderTreeParser';
 import { MAX_TAG_PREFIX_LENGTH, tagPrefixIssue } from '@bike4mind/common';
 
@@ -31,11 +31,79 @@ const seedStaleSession = () =>
     },
   });
 
+/**
+ * The create wizard asks for a source before anything else (#3817), and the answer decides the new
+ * lake's origin - so switching it must not carry the abandoned source's content into the lake the
+ * next one creates.
+ */
+describe('useDataLakeWizardStore - the chosen create source', () => {
+  afterEach(() => useDataLakeWizardStore.getState().resetWizard());
+
+  it('starts unanswered, so the cards are what a fresh create shows', () => {
+    useDataLakeWizardStore.getState().openWizard();
+
+    expect(useDataLakeWizardStore.getState().createSource).toBeNull();
+  });
+
+  it('never asks in append mode - the target lake already declares its origin', () => {
+    useDataLakeWizardStore.getState().openWizardForLake({
+      id: 'lake1',
+      slug: 'niche',
+      name: 'Niche',
+      fileTagPrefix: 'niche:',
+      organizationId: 'org-1',
+      canManage: true,
+      isCreator: true,
+    });
+
+    expect(useDataLakeWizardStore.getState().createSource).toBe('upload');
+  });
+
+  it('drops all upload state the abandoned source gathered', () => {
+    useDataLakeWizardStore.getState().setCreateSource('upload');
+    useDataLakeWizardStore.setState({
+      allFiles: [staleFile()],
+      pendingDriveFolder: { driveFolderId: 'FOLDER1' },
+      recoverableLake: { id: 'lake-1', tagPrefix: 'old:', slug: 'old' },
+      hashingProgress: { total: 2, completed: 1, status: 'hashing' },
+      duplicateCheckResults: { duplicateCount: 1, checkedAt: 1 },
+    });
+
+    useDataLakeWizardStore.getState().setCreateSource('googleDrive');
+
+    const s = useDataLakeWizardStore.getState();
+    expect(s.createSource).toBe('googleDrive');
+    expect(s.allFiles).toEqual([]);
+    expect(s.pendingDriveFolder).toBeNull();
+    expect(s.recoverableLake).toBeNull();
+    expect(s.hashingProgress).toEqual({ total: 0, completed: 0, status: 'idle' });
+    expect(s.duplicateCheckResults).toBeNull();
+  });
+
+  it('keeps what the current source gathered when it is re-selected', () => {
+    useDataLakeWizardStore.getState().setCreateSource('upload');
+    useDataLakeWizardStore.setState({ allFiles: [staleFile()] });
+
+    useDataLakeWizardStore.getState().setCreateSource('upload');
+
+    expect(useDataLakeWizardStore.getState().allFiles).toHaveLength(1);
+  });
+
+  it('clears the answer when the user goes back to the cards', () => {
+    useDataLakeWizardStore.getState().setCreateSource('googleDrive');
+
+    useDataLakeWizardStore.getState().setCreateSource(null);
+
+    expect(useDataLakeWizardStore.getState().createSource).toBeNull();
+  });
+});
+
 describe('useDataLakeWizardStore - open starts a clean session', () => {
   afterEach(() => useDataLakeWizardStore.getState().resetWizard());
 
   it('openWizard clears a prior session (no config/prefix/files leak)', () => {
     seedStaleSession();
+    useDataLakeWizardStore.getState().setCreateSource('googleDrive');
 
     useDataLakeWizardStore.getState().openWizard();
 
@@ -43,6 +111,8 @@ describe('useDataLakeWizardStore - open starts a clean session', () => {
     expect(s.isOpen).toBe(true);
     expect(s.step).toBe('source');
     expect(s.targetLake).toBeNull();
+    // A prior session's source must not pre-answer the new session's first question.
+    expect(s.createSource).toBeNull();
     expect(s.allFiles).toEqual([]);
     expect(s.config.name).toBe('');
     expect(s.config.tagPrefix).toBe('');
@@ -235,5 +305,58 @@ describe('useDataLakeWizardStore - GitHub repository picker', () => {
     useDataLakeWizardStore.getState().openGitHubRepoPicker('lake1');
     useDataLakeWizardStore.getState().closeManager();
     expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBeNull();
+  });
+});
+
+describe('toWizardTargetLake', () => {
+  const lake = { id: 'lake1', slug: 'docs', name: 'Docs', fileTagPrefix: 'docs', isCreator: false };
+
+  it('carries the origin, so the GitHub connect control can ask to switch a curated lake', () => {
+    expect(toWizardTargetLake({ ...lake, origin: 'curated' }).origin).toBe('curated');
+    expect(toWizardTargetLake({ ...lake, origin: 'connector-fed' }).origin).toBe('connector-fed');
+  });
+
+  it('leaves an absent origin absent, which the control reads as curated', () => {
+    expect(toWizardTargetLake(lake).origin).toBeUndefined();
+  });
+});
+
+describe('useDataLakeWizardStore - adoptAutoTagPrefix', () => {
+  afterEach(() => useDataLakeWizardStore.getState().resetWizard());
+
+  const store = () => useDataLakeWizardStore.getState();
+
+  it('adopts over an auto-derived prefix and keeps it re-derivable on rename', () => {
+    store().setConfig({ name: 'Acme' });
+    store().deriveTagPrefixFromName();
+
+    store().adoptAutoTagPrefix('acme-1:');
+    expect(store().config.tagPrefix).toBe('acme-1:');
+
+    store().setConfig({ name: 'Globex' });
+    store().deriveTagPrefixFromName();
+    expect(store().config.tagPrefix).toBe('globex:');
+  });
+
+  // Leaving Configure and coming back must not drop the free `-N` back to the held base: a retry
+  // would then miss the lake its failed attempt archived under that `-N`.
+  it('keeps an adopted prefix when the name is unchanged', () => {
+    store().setConfig({ name: 'Acme' });
+    store().deriveTagPrefixFromName();
+    store().adoptAutoTagPrefix('acme-1:');
+
+    store().deriveTagPrefixFromName();
+
+    expect(store().config.tagPrefix).toBe('acme-1:');
+  });
+
+  it('never overwrites a prefix the user typed', () => {
+    store().setConfig({ name: 'Acme' });
+    store().deriveTagPrefixFromName();
+    store().setTagPrefix('legal:');
+
+    store().adoptAutoTagPrefix('acme-1:');
+
+    expect(store().config.tagPrefix).toBe('legal:');
   });
 });

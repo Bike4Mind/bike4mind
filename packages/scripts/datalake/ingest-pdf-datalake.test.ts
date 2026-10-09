@@ -6,6 +6,7 @@ const mockFind = vi.fn();
 const mockResetChunkState = vi.fn();
 const mockSend = vi.fn();
 const mockLakeFindById = vi.fn();
+const mockLakeFind = vi.fn();
 const mockResolveScopedSetting = vi.fn();
 const mockGetSettingsValue = vi.fn();
 
@@ -20,7 +21,10 @@ vi.mock('@bike4mind/database', () => ({
   // throws on ACCESS of an undeclared export - so omitting it is a trap for whoever extends this
   // file to cover that path, not a saving.
   scopedSettingsRepository: {},
-  dataLakeRepository: { findById: (...args: unknown[]) => mockLakeFindById(...args) },
+  dataLakeRepository: {
+    findById: (...args: unknown[]) => mockLakeFindById(...args),
+    find: (...args: unknown[]) => mockLakeFind(...args),
+  },
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {
     resetChunkStateByIds: (...args: unknown[]) => mockResetChunkState(...args),
@@ -53,6 +57,7 @@ vi.mock('@bike4mind/common', async () => {
     CONVERGENCE_ORIGIN: actual.CONVERGENCE_ORIGIN,
     shouldHaltConvergence: actual.shouldHaltConvergence,
     isChunkStalled: actual.isChunkStalled,
+    DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES: actual.DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
     DATA_LAKES: [],
     KnowledgeType: { FILE: 'file' },
   };
@@ -70,7 +75,7 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 }));
 
 import { CONVERGENCE_ORIGIN } from '@bike4mind/common';
-import { requeueStragglers, type Options } from './ingest-pdf-datalake';
+import { findUnresolvableShadow, requeueStragglers, type Options } from './ingest-pdf-datalake';
 import type { LakeTarget } from './ingestPlan';
 
 const lake: LakeTarget = {
@@ -260,5 +265,45 @@ describe('requeueStragglers', () => {
 
     expect(mockResetChunkState).not.toHaveBeenCalled();
     expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('findUnresolvableShadow', () => {
+  it('looks up the org-less scope on a miss without --organizationId', async () => {
+    mockLakeFind.mockResolvedValue([{ status: 'purging' }]);
+    await expect(findUnresolvableShadow('my-lake', undefined, null)).resolves.toEqual({
+      status: 'purging',
+      organizationId: undefined,
+    });
+    expect(mockLakeFind).toHaveBeenCalledWith({ organizationId: { $in: [null, ''] }, slug: 'my-lake' });
+  });
+
+  it('looks up the org scope on a miss with --organizationId', async () => {
+    mockLakeFind.mockResolvedValue([{ status: 'deleted' }]);
+    await expect(findUnresolvableShadow('my-lake', 'org-1', null)).resolves.toEqual({
+      status: 'deleted',
+      organizationId: 'org-1',
+    });
+    expect(mockLakeFind).toHaveBeenCalledWith({ organizationId: 'org-1', slug: 'my-lake' });
+  });
+
+  it('checks the org scope when findBySlug fell through to an org-less lake', async () => {
+    mockLakeFind.mockResolvedValue([{ status: 'deleted' }]);
+    await expect(findUnresolvableShadow('my-lake', 'org-1', { organizationId: null })).resolves.toMatchObject({
+      status: 'deleted',
+    });
+    expect(mockLakeFind).toHaveBeenCalledWith({ organizationId: 'org-1', slug: 'my-lake' });
+  });
+
+  it('skips the lookup when findBySlug hit the scope own lake, even with an ObjectId-typed org', async () => {
+    const objectIdLike = { toString: () => 'org-1' };
+    await expect(findUnresolvableShadow('my-lake', 'org-1', { organizationId: objectIdLike })).resolves.toBeNull();
+    await expect(findUnresolvableShadow('my-lake', undefined, { organizationId: undefined })).resolves.toBeNull();
+    expect(mockLakeFind).not.toHaveBeenCalled();
+  });
+
+  it('ignores same-scope lakes that are still slug-resolvable', async () => {
+    mockLakeFind.mockResolvedValue([{ status: 'deleting' }, { status: 'active' }]);
+    await expect(findUnresolvableShadow('my-lake', 'org-1', null)).resolves.toBeNull();
   });
 });

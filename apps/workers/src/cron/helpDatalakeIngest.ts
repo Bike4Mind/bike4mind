@@ -57,9 +57,12 @@ export async function handler() {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
 
   // Owner comes from the lake, never from this handler - see the no-bootstrap note above.
+  // By slug, unlike the script's tag lookup: an unattended run must not revive a lake an admin deleted.
   const lake = await dataLakeRepository.findBySlug(HELP_DATALAKE_SLUG);
   if (!lake) {
-    logger.warn('[helpDatalakeIngest] no system-help lake; run help:ingest-datalake once to bootstrap it');
+    logger.warn(
+      '[helpDatalakeIngest] no live system-help lake (missing, deleted or purging); run help:ingest-datalake to bootstrap or reactivate it'
+    );
     return { statusCode: 200, body: JSON.stringify({ skipped: 'lake-missing' }) };
   }
 

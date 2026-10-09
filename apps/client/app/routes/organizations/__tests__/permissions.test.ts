@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Permission } from '@bike4mind/common';
+import { Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import { canViewOrgBilling, canViewOrgUsage, OrganizationTabs, resolveAccessibleTab } from '../orgTabAccess';
 
 /**
@@ -202,9 +202,8 @@ describe('Organization Permissions', () => {
   });
 
   describe('canManageGroups Helper', () => {
-    // Mirrors the canManageGroups memo in $id.tsx, which must match
-    // assertCanManageOrgGroups (organizationService/groupMembership.ts) so the Groups tab never
-    // shows to someone whose every write would 403. Kept in sync with that predicate.
+    // $id.tsx gates the Groups tab on `!personal && isOrgOwnerOrCurrentAdmin`; this runs the real
+    // predicate so the tab and assertCanManageOrgGroups cannot drift apart.
     const canManageGroups = (
       currentUser: { id: string; isAdmin?: boolean } | null,
       organization: {
@@ -215,12 +214,7 @@ describe('Organization Permissions', () => {
       } | null
     ): boolean => {
       if (!currentUser || !organization || organization.personal) return false;
-      if (currentUser.isAdmin) return true;
-      if (currentUser.id === organization.userId) return true;
-      return (
-        (organization.adminUserIds ?? []).includes(currentUser.id) &&
-        (organization.users ?? []).some(member => member.userId === currentUser.id)
-      );
+      return isOrgOwnerOrCurrentAdmin(currentUser, organization);
     };
 
     const org = {

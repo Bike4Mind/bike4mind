@@ -11,7 +11,7 @@ import './schemas';
 import { registeredContracts } from './operations';
 
 // Neutral placeholder default so the committed openapi.json never hardcodes a
-// real deployment domain in this public repo (matches apiReferenceContent.ts).
+// real deployment domain in this public repo.
 // Real deployments set B4M_OPENAPI_PROD_URL at build time.
 const PLACEHOLDER_PROD_URL = 'https://your-deployment.example.com';
 
@@ -23,8 +23,7 @@ function prodUrl(): string {
 /**
  * Server URLs are env-overridable with neutral placeholder defaults so the
  * committed openapi.json never hardcodes a real deployment domain in this public
- * repo (matches the placeholder convention in apiReferenceContent.ts). Real
- * deployments set these at build time.
+ * repo. Real deployments set these at build time.
  */
 function servers() {
   return [
@@ -54,7 +53,7 @@ function infoDescription(): string {
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Sessions**, **Files**, **Data Lakes** and **Account**.',
+      '**Images**, **Audio**, **Sessions**, **Files**, **Projects**, **Data Lakes** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -171,7 +170,14 @@ export function toPythonLiteral(value: unknown, indent = 1): string {
  */
 const CURL_HEREDOC_DELIMITER = 'B4M_REQUEST_BODY';
 
-function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string, method: string) {
+function codeSamples(
+  path: string,
+  body: unknown,
+  streaming: boolean,
+  authToken: string,
+  method: string,
+  hasBody: boolean
+) {
   // A raw OpenAPI path template (`/api/sessions/{id}`) is not a runnable URL - swap each
   // `{param}` for a `<param>` placeholder, matching this file's existing `<key>`/`<fabFileId>`
   // convention for "substitute your own value here", so a copy-pasted sample doesn't 404.
@@ -183,10 +189,6 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
   // `requests` exposes one function per verb (requests.get/post/put/patch/delete/...),
   // matching the lowercase HTTP method name exactly.
   const pyMethod = method.toLowerCase();
-  // A GET/HEAD request cannot carry a body: browser and Node `fetch` both throw
-  // `TypeError: Request with GET/HEAD method cannot have body`, so a sample that
-  // sent one would be copy-paste-broken rather than merely redundant.
-  const hasBody = !['get', 'head'].includes(pyMethod);
   return [
     {
       lang: 'curl',
@@ -346,16 +348,27 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
   doc.tags = [
     { name: 'AI', description: 'Chat, completions, embeddings, and server-side tool execution.' },
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
+    { name: 'Release notes', description: 'Customer-facing notes on what changed in each release. Public.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
     { name: 'Videos', description: 'Video generation, queued and polled as quests.' },
+    {
+      name: 'Voice',
+      description: 'Real-time voice conversations: list voices, open a call, and reconcile its credits when it ends.',
+    },
+    { name: 'Models', description: 'The models the caller can use, and the parameters each one accepts.' },
     { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
     {
       name: 'Data Lakes',
       description:
         'Curated document collections: list and inspect the lakes you can reach, manage which files belong ' +
         "to one, check each file's ingestion status, and run semantic search over a single lake.",
+    },
+    {
+      name: 'Projects',
+      description:
+        'Workspaces that group sessions and files: list and read the projects you can reach, and create new ones.',
     },
   ];
 
@@ -374,7 +387,18 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       const scopes = meta.scopes[opId];
       if (scopes) op['x-required-scopes'] = scopes;
       const sample = meta.codeSamples[opId];
-      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken, method);
+      // Send a body only when the operation declares one. That keeps GET/HEAD samples runnable
+      // (`fetch` throws on a GET/HEAD body) and stops a body-less DELETE or POST from sending `{}`.
+      if (sample) {
+        op['x-codeSamples'] = codeSamples(
+          pathKey,
+          sample.body,
+          sample.streaming,
+          sample.authToken,
+          method,
+          op.requestBody !== undefined
+        );
+      }
 
       const emitsRateLimitHeaders = meta.rateLimitHeaderOps.has(opId);
       const declaredStatuses = meta.declaredStatuses.get(opId);

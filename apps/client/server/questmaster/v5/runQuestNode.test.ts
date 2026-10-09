@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiKeyScope, DATA_LAKE_WRITE_TOOL_NAMES } from '@bike4mind/common';
 import type { IQuestGraphDocument, IQuestNodeDocument } from '@bike4mind/common';
 
 import { buildNodeQuery } from './runQuestNode';
@@ -131,6 +132,36 @@ describe('runQuestNode memory gating', () => {
 
     expect(create.mock.calls[0][0].enableMementos).toBe(false);
   });
+
+  it('derives and persists the scope denials from the key, and omits the field when there are none', async () => {
+    await runQuestNode({
+      node: node(),
+      graph: graph(),
+      userId: 'u1',
+      model: 'gpt-x',
+      logger,
+      apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_READ] },
+    });
+    expect(create.mock.calls[0][0].scopeDeniedTools).toEqual([...DATA_LAKE_WRITE_TOOL_NAMES]);
+
+    await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger });
+    expect(create.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
+  });
+
+  it('persists the authenticating key, and omits it for a session caller', async () => {
+    await runQuestNode({
+      node: node(),
+      graph: graph(),
+      userId: 'u1',
+      model: 'gpt-x',
+      logger,
+      apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] },
+    });
+    expect(create.mock.calls[0][0].apiKeyId).toBe('key-1');
+
+    await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger });
+    expect(create.mock.calls[1][0]).not.toHaveProperty('apiKeyId');
+  });
 });
 
 describe('runQuestNode stale sweep', () => {
@@ -163,6 +194,7 @@ describe('runQuestNode stale sweep', () => {
       status: 'done',
       type: 'error',
       reply: ABANDONED_REPLY,
+      fallbackInfo: null,
     });
   });
 

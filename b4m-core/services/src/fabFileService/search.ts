@@ -1,15 +1,22 @@
-import { IFabFileRepository, IProjectRepository, type DataLakeMembershipScope } from '@bike4mind/common';
+import {
+  FAB_FILE_TYPE_FILTERS,
+  IFabFileRepository,
+  IProjectRepository,
+  type DataLakeMembershipScope,
+} from '@bike4mind/common';
 import { z } from 'zod';
 import { generateSignedUrl, GetFabFileAdapter } from './get';
 
+// `GET /api/files` has no contract, so this schema's request quirks (all-or-nothing nested
+// objects, coerced booleans, the 20-value `[]` limit) are mirrored in the "List Files" section of
+// apps/client/app/components/admin/content/apiReferenceContent.ts - keep both in sync and drop
+// that section once a files contract lands.
 const searchFabFilesSchema = z.object({
   search: z.string().optional(),
   filters: z
     .object({
       tags: z.array(z.string()).optional(),
-      type: z
-        .enum(['text', 'pdf', 'url', 'image', 'excel', 'word', 'json', 'csv', 'markdown', 'code', 'audio'])
-        .optional(),
+      type: z.enum(FAB_FILE_TYPE_FILTERS).optional(),
       shared: z.coerce.boolean().optional(), // Indicates if the user is searching for shared files
       curated: z.coerce.boolean().optional(), // Indicates if the user is searching for curated notebook files
       projectId: z.string().optional(),

@@ -11,11 +11,11 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryFunction } from './cron';
+import { modelDiscoveryCronEnabled, modelDiscoveryFunction, modelDiscoveryStalenessFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
-import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
+import { isMonitoredStage as _isMonitoredStage, QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -799,6 +799,59 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: Model Discovery no successful run (dead-man's switch)
+   *
+   * An independent check reads the last completed hosted 'ok' run every 15
+   * minutes. Partial runs do not refresh it. An independent schedule is needed
+   * because CloudWatch can reuse older healthy data beyond a missing 24h
+   * window when the watched discovery cron stops.
+   *
+   * Metric emitted by: apps/workers/src/cron/modelDiscoveryStaleness.ts
+   * Namespace: Lumina5/ModelDiscovery / NoSuccessfulRun
+   */
+  if (modelDiscoveryCronEnabled) {
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryNoSuccessfulRun', {
+      name: `${$app.name}-${$app.stage}-model-discovery-no-successful-run`,
+      alarmDescription: 'No completed successful hosted model discovery run in 24h',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'NoSuccessfulRun',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 1800, // Two independent checks per period; any stale check breaches.
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'breaching',
+      dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryStalenessCheckErrors', {
+      name: `${$app.name}-${$app.stage}-model-discovery-staleness-check-errors`,
+      alarmDescription: 'Model discovery staleness check failed; watchdog data may be unavailable',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: {
+        FunctionName: modelDiscoveryStalenessFunction.name,
+      },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
    * Alarm: Model Discovery Lambda Errors
    *
    * Monitors the Lambda itself. The application-level RunFailures metric can
@@ -1395,23 +1448,23 @@ if (isMonitoredStage) {
    * users before anyone noticed), so this alarms on the raw failure count rather than waiting for
    * a single error class to dominate.
    *
-   * Metric emitted by: apps/client/server/chatCompletion/internal/route.ts, in the
-   * processQuest(...).catch handler. Reads the Stage-only rollup datum (see the comment at that
-   * call site) - alarms match one exact dimension set, so the per-ErrorClass breakdown is a
-   * dashboard concern, not this alarm's.
+   * Metric emitted by: apps/client/server/chatCompletion/processingFailedMetric.ts, from the
+   * failure path of internal /process. The CLI SSE/WS and embed chat surfaces emit the same metric
+   * under their own Surface value but are deliberately not alarmed until a base rate exists: their
+   * failure definition differs and embed takes public traffic. Alarms match one exact dimension set.
    */
   new aws.cloudwatch.MetricAlarm('questProcessingFailures', {
     name: `${$app.name}-${$app.stage}-quest-processing-failures`,
-    alarmDescription: 'Quest processing is failing on the internal ChatCompletion /process path',
+    alarmDescription: 'Quest processing (/process) is failing on the ChatCompletion service',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
-    metricName: 'ProcessingFailed',
-    namespace: 'Lumina5/Quests',
+    metricName: QUEST_METRICS.ProcessingFailed,
+    namespace: QUESTS_NAMESPACE,
     period: 300, // 5 minutes
     statistic: 'Sum',
     threshold: 5,
     treatMissingData: 'notBreaching',
-    dimensions: { Stage: $app.stage },
+    dimensions: { Stage: $app.stage, Surface: '/process' },
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Quests',

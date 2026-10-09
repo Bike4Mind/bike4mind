@@ -1,25 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mocks, InsufficientTtsCreditsError, TtsProviderNotConfiguredError, UnprocessableEntityError } = vi.hoisted(
-  () => {
-    class InsufficientTtsCreditsError extends Error {}
+const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError, UnprocessableEntityError } =
+  vi.hoisted(() => {
+    class InsufficientCreditsPreflightError extends Error {}
     class TtsProviderNotConfiguredError extends Error {}
     class UnprocessableEntityError extends Error {}
     return {
-      InsufficientTtsCreditsError,
+      InsufficientCreditsPreflightError,
       TtsProviderNotConfiguredError,
       UnprocessableEntityError,
       mocks: {
         synthesizeTts: vi.fn(),
-        assertTtsCreditsAvailable: vi.fn(),
+        estimateTtsCreditCost: vi.fn(),
+        assertPreflightCredits: vi.fn(),
         deductTtsCredits: vi.fn(),
-        exceedsTtsResponseLimit: vi.fn(),
         persistGeneratedAudio: vi.fn(),
+        upload: vi.fn(),
+        getSignedUrl: vi.fn(),
       },
     };
-  }
-);
+  });
 
 // Contract-adapter mock: unwrap the post handler and stand in for the prelude by
 // exposing the body as `req.validated`. Passthrough, not a real parse - schema
@@ -35,11 +36,16 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   }),
 }));
 
-vi.mock('@bike4mind/common', () => ({
+// Real common (shouldPersistGeneratedAudio, extensionFromMimeType) with the TTS tables pinned.
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   UnprocessableEntityError,
+  DEFAULT_TTS_PROVIDER: 'openai',
   synthesizeSpeechContract: { method: 'post', path: '/api/ai/tts', auth: 'apiKeyOrJwt', responses: {} },
   TTS_MAX_INPUT_CHARS: { openai: 4096, elevenlabs: 10000 },
   VOICE_VENDOR_SUPPORTED_FORMATS: { openai: ['mp3', 'wav'], elevenlabs: ['mp3', 'pcm', 'opus'] },
+  TTS_DEFAULT_MODEL: { openai: 'tts-1', elevenlabs: 'eleven_multilingual_v2' },
+  estimateTtsCreditCost: (...a: unknown[]) => mocks.estimateTtsCreditCost(...a),
 }));
 
 vi.mock('@server/utils/resolveTtsProvider', () => ({
@@ -56,13 +62,11 @@ vi.mock('@server/utils/synthesizeTts', () => ({
   },
 }));
 vi.mock('@server/utils/deductTtsCredits', () => ({
-  assertTtsCreditsAvailable: (...a: unknown[]) => mocks.assertTtsCreditsAvailable(...a),
   deductTtsCredits: (...a: unknown[]) => mocks.deductTtsCredits(...a),
-  InsufficientTtsCreditsError,
 }));
-vi.mock('@server/utils/ttsResponseLimit', () => ({
-  exceedsTtsResponseLimit: (...a: unknown[]) => mocks.exceedsTtsResponseLimit(...a),
-  TTS_RESPONSE_TOO_LARGE_MESSAGE: 'too large',
+vi.mock('@server/utils/creditPreflight', () => ({
+  assertPreflightCredits: (...a: unknown[]) => mocks.assertPreflightCredits(...a),
+  InsufficientCreditsPreflightError,
 }));
 // Mock the persistence helper so this route test doesn't pull in the real
 // FabFile/services/database stack (which references @bike4mind/common exports
@@ -71,6 +75,15 @@ vi.mock('@server/utils/persistGeneratedAudio', () => ({
   persistGeneratedAudio: (...a: unknown[]) => mocks.persistGeneratedAudio(...a),
 }));
 
+// Only the oversized-audio offload touches storage; the delivery module itself is real.
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({
+    upload: (...a: unknown[]) => mocks.upload(...a),
+    getSignedUrl: (...a: unknown[]) => mocks.getSignedUrl(...a),
+  }),
+}));
+
+import { GENERATED_AUDIO_TOO_LARGE_MESSAGE } from '@server/utils/generatedAudioDelivery';
 import handler from '../tts';
 
 const run = (
@@ -79,9 +92,11 @@ const run = (
 ) => {
   const { req, res } = createMocks({ method: 'POST', body });
   (req as Record<string, unknown>).user = user;
-  (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  (req as Record<string, unknown>).logger = logger;
   return {
     res,
+    logger,
     promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res),
   };
 };
@@ -99,9 +114,11 @@ const okSynthesis = (vendor = 'openai', fallbackFrom?: string) =>
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
-  mocks.assertTtsCreditsAvailable.mockResolvedValue(undefined);
+  mocks.assertPreflightCredits.mockResolvedValue(undefined);
+  mocks.estimateTtsCreditCost.mockImplementation((_v: string, _m: string, chars: number) => chars * 10);
   mocks.deductTtsCredits.mockResolvedValue(undefined);
-  mocks.exceedsTtsResponseLimit.mockReturnValue(false);
+  mocks.upload.mockResolvedValue(undefined);
+  mocks.getSignedUrl.mockResolvedValue('https://s3/offload');
   mocks.persistGeneratedAudio.mockResolvedValue({
     saved: true,
     fabFileId: 'fab-1',
@@ -131,7 +148,7 @@ describe('POST /api/ai/tts', () => {
   // ordinary validation failure, so a caller that matched on the status alone
   // would treat "out of credits" as "bad request".
   it('returns a classified 422 and never calls the provider when credits are exhausted', async () => {
-    mocks.assertTtsCreditsAvailable.mockRejectedValue(new InsufficientTtsCreditsError('broke'));
+    mocks.assertPreflightCredits.mockRejectedValue(new InsufficientCreditsPreflightError('broke'));
     const { res, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(422);
@@ -143,13 +160,94 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
 
-  it('bills for the synthesis before the size guard, then returns 413 when the audio is too large', async () => {
-    mocks.exceedsTtsResponseLimit.mockReturnValue(true);
+  it('rethrows a preflight failure that is not a credit refusal, before any provider cost', async () => {
+    const boom = new Error('settings down');
+    mocks.assertPreflightCredits.mockRejectedValue(boom);
+    const { promise } = run({ text: 'hi' });
+    await expect(promise).rejects.toBe(boom);
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
+  it('prices the pre-flight from the requested text so the gate is cost-aware', async () => {
+    const { promise } = run({ text: 'hello' });
+    await promise;
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1', 5);
+    expect(mocks.assertPreflightCredits).toHaveBeenCalledWith({
+      userId: 'u1',
+      estimatedCredits: 50,
+      featureLabel: 'text-to-speech',
+    });
+  });
+
+  it('prices an ElevenLabs request at the elevenlabs default model', async () => {
+    const { promise } = run({ text: 'hello', provider: 'elevenlabs' });
+    await promise;
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('elevenlabs', 'eleven_multilingual_v2', 5);
+  });
+
+  it('forwards an explicit model to the estimate', async () => {
+    const { promise } = run({ text: 'hello', model: 'tts-1-hd' });
+    await promise;
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1-hd', 5);
+  });
+
+  describe('audio over the response limit', () => {
+    const oversizedAudio = Buffer.alloc(4 * 1024 * 1024 + 1);
+
+    beforeEach(() => {
+      mocks.synthesizeTts.mockResolvedValue({
+        vendor: 'openai',
+        result: { ...synthesisResult(), audio: oversizedAudio },
+      });
+    });
+
+    it('serves the saved copy by URL for base64, without offloading, and still bills once', async () => {
+      const { res, promise } = run({ text: 'hi', encoding: 'base64' });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({
+        delivery: 'url',
+        url: 'https://s3/get',
+        bytes: oversizedAudio.length,
+        saved: true,
+        fabFileId: 'fab-1',
+      });
+      expect(mocks.upload).not.toHaveBeenCalled();
+      // Provider cost is already incurred, so we must still charge on an oversized result.
+      expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
+    });
+
+    it('offloads an unsaved binary response and redirects with a 303', async () => {
+      const { res, promise } = run({ text: 'hi', preview: true });
+      await promise;
+      expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
+      expect(mocks.upload).toHaveBeenCalledWith(
+        oversizedAudio,
+        expect.stringMatching(/^generated-audio-offload\/.+\.mp3$/),
+        { ContentType: 'audio/mpeg' }
+      );
+      expect(res._getStatusCode()).toBe(303);
+      expect(res._getRedirectUrl()).toBe('https://s3/offload');
+    });
+
+    it('returns a 413 with the provider and logs when the offload fails', async () => {
+      mocks.upload.mockRejectedValue(new Error('s3 down'));
+      const { res, logger, promise } = run({ text: 'hi', preview: true, encoding: 'base64' });
+      await promise;
+      expect(res._getStatusCode()).toBe(413);
+      expect(res._getJSONData()).toEqual({ error: GENERATED_AUDIO_TOO_LARGE_MESSAGE, provider: 'openai' });
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('sets the save headers on a binary response when the audio was saved', async () => {
     const { res, promise } = run({ text: 'hi' });
     await promise;
-    expect(res._getStatusCode()).toBe(413);
-    // Provider cost is already incurred, so we must still charge on an oversized result.
-    expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
+    expect(res.getHeader('X-B4M-Audio-File-Name')).toBe('speech-1.mp3');
+    expect(res.getHeader('X-B4M-Audio-File-Url')).toBe('https://s3/get');
   });
 
   it('passes an upstream 429 through with a generic body, without leaking provider text', async () => {
@@ -223,6 +321,7 @@ describe('POST /api/ai/tts', () => {
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({
+      delivery: 'inline',
       audio: Buffer.from([1, 2, 3]).toString('base64'),
       format: 'mp3',
       contentType: 'audio/mpeg',
@@ -241,7 +340,7 @@ describe('POST /api/ai/tts', () => {
   it('does not bill a caller without a resolved user id', async () => {
     const { promise } = run({ text: 'hi' }, {});
     await promise.catch(() => undefined);
-    expect(mocks.assertTtsCreditsAvailable).not.toHaveBeenCalled();
+    expect(mocks.assertPreflightCredits).not.toHaveBeenCalled();
     expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
   });
 

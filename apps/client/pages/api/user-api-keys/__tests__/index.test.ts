@@ -409,6 +409,21 @@ describe('POST /api/user-api-keys - scope allowlist guard', () => {
     expect(createUserApiKey).toHaveBeenCalled();
   });
 
+  // The service picks the per-user cap pool from metadata.createdFrom, so a body that could
+  // set it would let a dashboard mint dodge the 10-key cap (see ApiKeyCapPool).
+  it('ignores a body-supplied metadata, so a dashboard mint cannot claim the oauth-exchange cap pool', async () => {
+    const { req, res } = post({
+      name: 'plain',
+      scopes: ['notebooks:read'],
+      metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'spoofed-client' },
+    });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    const [, forwarded] = createUserApiKey.mock.calls[0];
+    expect(forwarded.metadata.createdFrom).toBe('dashboard');
+    expect(forwarded.metadata).not.toHaveProperty('oauthClientId');
+  });
+
   it('allows embed:chat through the user endpoint', async () => {
     const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'a1' });
     await mockRefs.postHandler!(req, res);

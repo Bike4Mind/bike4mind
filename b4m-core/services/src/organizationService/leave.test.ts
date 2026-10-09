@@ -75,6 +75,7 @@ describe('organizationService - leave', () => {
         // Same for org lakes: no lakes by default, so the lake-access lapse is a no-op.
         dataLakes: {
           findByOrganizationId: vi.fn().mockResolvedValue([]),
+          touchIfStable: vi.fn().mockResolvedValue(true),
           update: vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id })),
         },
         dataLakeAccessGrants: {

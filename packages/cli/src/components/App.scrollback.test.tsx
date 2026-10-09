@@ -191,6 +191,59 @@ describe('App does not clobber scrollback while thinking', () => {
     expect(duringRun).not.toContain(ERASE_SCROLLBACK);
   });
 
+  describe('with a permission prompt open', () => {
+    // Tall enough for the prompt and some trace to share it, so the trace has
+    // a non-zero budget that has to be shrunk rather than simply dropped.
+    const TALL_ROWS = 60;
+
+    const diffPreview = (lines: number) => Array.from({ length: lines }, (_, i) => `+ added line ${i}`).join('\n');
+
+    async function openPermissionPrompt(preview: string) {
+      const before = stdout.writes.length;
+      useCliStore.setState({
+        permissionPrompt: {
+          id: 'prompt-1',
+          toolName: 'edit_local_file',
+          args: {},
+          preview,
+          canBeTrusted: true,
+          resolve: noop,
+        },
+      });
+      await nextFrame(before);
+    }
+
+    afterEach(() => {
+      useCliStore.setState({ permissionPrompt: null });
+    });
+
+    it('never erases scrollback when a prompt opens over a full trace', async () => {
+      stdout.rows = TALL_ROWS;
+
+      const instance = renderApp();
+      await runTurn(GROWING_TURN);
+      await openPermissionPrompt(diffPreview(12));
+      // Steps can still land while the prompt waits, e.g. from a parallel tool.
+      await runTurn([81, 82]);
+      const duringRun = stdout.all;
+      instance.unmount();
+
+      expect(duringRun).not.toContain(ERASE_SCROLLBACK);
+    });
+
+    it('never erases scrollback when the trace grows under an open prompt', async () => {
+      stdout.rows = TALL_ROWS;
+
+      const instance = renderApp();
+      await openPermissionPrompt(diffPreview(12));
+      await runTurn(GROWING_TURN);
+      const duringRun = stdout.all;
+      instance.unmount();
+
+      expect(duringRun).not.toContain(ERASE_SCROLLBACK);
+    });
+  });
+
   it('control: an overflowing live frame does erase scrollback', async () => {
     const Overflowing = ({ rows }: { rows: number }) => (
       <Box flexDirection="column">

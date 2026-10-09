@@ -73,6 +73,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       organizationId: body.organization_id,
       agentId: body.agent_id,
       enabledTools: body.tools,
+      apiKeyInfo: req.apiKeyInfo,
       maxIterations: body.max_iterations,
       messageFileIds: body.file_ids,
       sessionFabFileIds: body.session_file_ids,

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createHash } from 'crypto';
+import bcrypt from 'bcryptjs';
 import { createUserApiKey } from '../create';
 import { validateUserApiKey, validateUserApiKeyById } from '../validate';
 import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
@@ -26,9 +28,25 @@ function makeSyncedRepo() {
       .fn()
       .mockImplementation((prefix: string) => Promise.resolve(stored?.keyPrefix === prefix ? stored : null)),
     updateLastUsed: vi.fn().mockResolvedValue(undefined),
+    // Both heals mirror the Mongo filter in UserApiKeyModel: they only land while the hash the
+    // caller validated against is still the stored one.
+    setKeyDigest: vi.fn().mockImplementation((_id: string, keyDigest: string, expectedKeyHash: string) => {
+      if (stored && stored.keyHash === expectedKeyHash && !stored.keyDigest) stored.keyDigest = keyDigest;
+      return Promise.resolve();
+    }),
+    healKeyPrefix: vi.fn().mockImplementation((_id: string, keyPrefix: string, expectedKeyHash: string) => {
+      if (stored && stored.keyHash === expectedKeyHash) stored.keyPrefix = keyPrefix;
+      return Promise.resolve();
+    }),
   };
 
-  return { repo, getStored: () => stored };
+  return {
+    repo,
+    getStored: () => stored,
+    setStored: (doc: IUserApiKeyDocument) => {
+      stored = doc;
+    },
+  };
 }
 
 const mintParams = {
@@ -46,7 +64,7 @@ const mintParams = {
  * 12-char lookup or every pre-existing key 401s.
  */
 async function mintLegacyKey() {
-  const { repo, getStored } = makeSyncedRepo();
+  const { repo, getStored, setStored } = makeSyncedRepo();
 
   const adapters = {
     db: {
@@ -62,7 +80,7 @@ async function mintLegacyKey() {
 
   getStored()!.keyPrefix = key.substring(0, 12); // legacy prefix length
 
-  return { key, repo, getStored, adapters };
+  return { key, repo, getStored, setStored, adapters };
 }
 
 describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
@@ -80,7 +98,7 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
 
     await validateUserApiKey(key, adapters);
 
-    expect(repo.update).toHaveBeenCalledWith({ id: 'key-1', keyPrefix: key.substring(0, KEY_PREFIX_LENGTH) });
+    expect(repo.healKeyPrefix).toHaveBeenCalledWith('key-1', key.substring(0, KEY_PREFIX_LENGTH), getStored()!.keyHash);
     expect(getStored()!.keyPrefix).toBe(key.substring(0, KEY_PREFIX_LENGTH));
   });
 
@@ -92,7 +110,7 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
 
     expect(result.isValid).toBe(false);
     expect(result.reason).toBe('expired');
-    expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.healKeyPrefix).not.toHaveBeenCalled();
   });
 
   it('rejects a wrong key that collides on the legacy prefix', async () => {
@@ -105,7 +123,39 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
     expect(result.isValid).toBe(false);
     expect(result.reason).toBe('invalid_hash');
     // Must NOT self-heal the prefix from a failed validation
-    expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.healKeyPrefix).not.toHaveBeenCalled();
+  });
+
+  // A rotation that commits during the bcrypt compare: the request validated K1 against the hash
+  // it loaded, but by the time its heals fire the doc holds K2. Unguarded, the late writes left
+  // keyPrefix = K1's and keyDigest = D(K1) beside H(K2), so the rotated-away key authenticated on
+  // the digest path indefinitely and K2 never did.
+  it('does not let a heal racing a rotation revive the rotated-away key', async () => {
+    const { key, repo, getStored, setStored, adapters } = await mintLegacyKey();
+    delete getStored()!.keyDigest;
+    const loaded = getStored()!;
+    const rotated = {
+      ...loaded,
+      keyHash: '$2b$12$rotatedrotatedrotatedr',
+      keyDigest: 'b'.repeat(64),
+      keyPrefix: 'b4m_live_rotated',
+    } as IUserApiKeyDocument;
+    const realCompare = bcrypt.compare;
+    const compare = vi.spyOn(bcrypt, 'compare').mockImplementation(async (...args: Parameters<typeof realCompare>) => {
+      const ok = await realCompare(...args);
+      setStored(rotated);
+      return ok;
+    });
+
+    const result = await validateUserApiKey(key, adapters);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(result.isValid).toBe(true); // K1 was valid when the request read it
+    expect(repo.healKeyPrefix).toHaveBeenCalledWith('key-1', key.substring(0, KEY_PREFIX_LENGTH), loaded.keyHash);
+    expect(repo.setKeyDigest).toHaveBeenCalledWith('key-1', expect.any(String), loaded.keyHash);
+    expect(getStored()).toMatchObject({ keyDigest: 'b'.repeat(64), keyPrefix: 'b4m_live_rotated' });
+    expect(await validateUserApiKey(key, adapters)).toMatchObject({ isValid: false });
+    compare.mockRestore();
   });
 
   it('still rejects unknown keys when both prefix lookups miss', async () => {
@@ -135,7 +185,7 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
     const result = await validateUserApiKey(key, adapters);
 
     expect(result.isValid).toBe(true);
-    expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.healKeyPrefix).not.toHaveBeenCalled();
     expect(getStored()!.keyPrefix).toHaveLength(KEY_PREFIX_LENGTH);
   });
 });
@@ -289,5 +339,118 @@ describe('validateUserApiKeyById + shared finalize gates', () => {
     expect(result.isValid).toBe(false);
     expect(result.reason).toBe('disabled');
     expect(repo.updateLastUsed).not.toHaveBeenCalled();
+  });
+});
+
+describe('validateUserApiKey - SHA-256 digest fast path', () => {
+  const sha256 = (k: string) => createHash('sha256').update(k).digest('hex');
+
+  async function mint() {
+    const { repo, getStored } = makeSyncedRepo();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapters = { db: { userApiKeys: repo as any } };
+    const { key } = await createUserApiKey('sys-1', mintParams, { ...adapters, systemUserId: 'sys-1' });
+    return { key, repo, getStored, adapters };
+  }
+
+  it('validates a key with a stored digest without calling bcrypt', async () => {
+    const { key, repo, getStored, adapters } = await mint();
+    expect(getStored()!.keyDigest).toBe(sha256(key));
+    const compare = vi.spyOn(bcrypt, 'compare');
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(true);
+    expect(result.keyId).toBe('key-1');
+    expect(compare).not.toHaveBeenCalled();
+    expect(repo.setKeyDigest).not.toHaveBeenCalled();
+    compare.mockRestore();
+  });
+
+  it('rejects a wrong key sharing the prefix without falling back to bcrypt', async () => {
+    const { key, repo, adapters } = await mint();
+    const compare = vi.spyOn(bcrypt, 'compare');
+
+    const impostor = key.substring(0, KEY_PREFIX_LENGTH) + 'f'.repeat(key.length - KEY_PREFIX_LENGTH);
+    const result = await validateUserApiKey(impostor, adapters);
+
+    expect(result).toEqual({ isValid: false, reason: 'invalid_hash' });
+    expect(compare).not.toHaveBeenCalled();
+    expect(repo.setKeyDigest).not.toHaveBeenCalled();
+    expect(repo.updateLastUsed).not.toHaveBeenCalled();
+    compare.mockRestore();
+  });
+
+  it('treats a malformed stored digest as a miss instead of throwing', async () => {
+    const { key, getStored, adapters } = await mint();
+    getStored()!.keyDigest = 'abc123';
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result).toEqual({ isValid: false, reason: 'invalid_hash' });
+  });
+
+  it('validates a pre-digest key via bcrypt and backfills its digest', async () => {
+    const { key, repo, getStored, adapters } = await mint();
+    delete getStored()!.keyDigest; // minted before the digest existed
+    const compare = vi.spyOn(bcrypt, 'compare');
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(true);
+    expect(compare).toHaveBeenCalledTimes(1);
+    expect(repo.setKeyDigest).toHaveBeenCalledWith('key-1', sha256(key), getStored()!.keyHash);
+    expect(getStored()!.keyDigest).toBe(sha256(key));
+
+    // Migrated: the next request takes the fast path.
+    compare.mockClear();
+    expect((await validateUserApiKey(key, adapters)).isValid).toBe(true);
+    expect(compare).not.toHaveBeenCalled();
+    expect(repo.setKeyDigest).toHaveBeenCalledTimes(1);
+    compare.mockRestore();
+  });
+
+  it('does not backfill a digest from a failed bcrypt check', async () => {
+    const { key, repo, getStored, adapters } = await mint();
+    delete getStored()!.keyDigest;
+
+    const impostor = key.substring(0, KEY_PREFIX_LENGTH) + 'f'.repeat(key.length - KEY_PREFIX_LENGTH);
+    const result = await validateUserApiKey(impostor, adapters);
+
+    expect(result).toEqual({ isValid: false, reason: 'invalid_hash' });
+    expect(repo.setKeyDigest).not.toHaveBeenCalled();
+    expect(getStored()!.keyDigest).toBeUndefined();
+  });
+
+  it('does not backfill the digest of an expired pre-digest key', async () => {
+    const { key, repo, getStored, adapters } = await mint();
+    delete getStored()!.keyDigest;
+    getStored()!.expiresAt = new Date(Date.now() - 1000);
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.reason).toBe('expired');
+    expect(repo.setKeyDigest).not.toHaveBeenCalled();
+  });
+
+  it('a failed digest backfill does not fail the request', async () => {
+    const { key, repo, getStored, adapters } = await mint();
+    delete getStored()!.keyDigest;
+    repo.setKeyDigest.mockRejectedValueOnce(new Error('db down'));
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(true);
+  });
+
+  it('never returns the digest or hash in the validation result', async () => {
+    const { key, adapters } = await mint();
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(sha256(key));
+    expect(result).not.toHaveProperty('keyDigest');
+    expect(result).not.toHaveProperty('keyHash');
   });
 });

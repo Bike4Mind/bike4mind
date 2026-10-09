@@ -59,6 +59,8 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_SETTING_KEYS,
+  settingsMap,
+  isBlankSettingValue,
   backgroundScoreOf,
   citationTagDescription,
   compareForcedRetrievalRank,
@@ -80,12 +82,14 @@ import {
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   narrowLakeAccessToSession,
+  sessionExcludesLibraryFiles,
+  hasLakeArms as accessHasLakeArms,
   sessionGroundsOnNoLake,
   sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
 import { nonNegativeIntOr, positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
-import { resolveScopedSettingValues, scopeForCaller } from '../settings/resolveScopedSetting';
+import { resolveScopedSettingEntries, scopeForCaller } from '../settings/resolveScopedSetting';
 import {
   classifyLoadedChunk,
   partitionFilesByEmbeddingModel,
@@ -136,6 +140,7 @@ import {
   EmbeddingFactory,
   fetchAndProcessPreviousMessages,
   getProviderFromModel,
+  getSettingsByNames,
   IQueueService,
   ITokenizer,
   normalizeId,
@@ -149,11 +154,8 @@ import { MongoAbility } from '@casl/ability';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { GetEffectiveApiKeyAdapters } from '@bike4mind/auth/apiKeyService';
-import {
-  ChatCompletionProcess,
-  DEFAULT_VERBATIM_WINDOW_FRACTION,
-  SYSTEM_PROMPT_RESERVE_TOKENS,
-} from './ChatCompletionProcess';
+import type { ChatCompletionProcess } from './ChatCompletionProcess';
+import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { QuestStartBodySchema } from './questStartBody';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
@@ -163,8 +165,10 @@ import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalS
 import { isObjectIdShaped } from './tools/base/objectId';
 
 interface DatabaseAdapters {
+  // `pullKnowledgeIds` backs the stale-attachment detach in scrubMissingKnowledgeIds - a $pull, so
+  // it cannot clobber a file attached concurrently the way rewriting the array through `update` would.
   // incrementImageCount is optional: only the image tools use it, via ToolContext (recordGeneratedImages).
-  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent'> &
+  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent' | 'pullKnowledgeIds'> &
     Partial<Pick<ISessionRepository, 'incrementImageCount'>>;
   users: Pick<
     IUserRepository,
@@ -1819,23 +1823,41 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
 }
 
 /**
+ * `forcedRetrievalMinSimilarityPct`'s twin of {@link forcedRetrievalFloorPct}, except an unusable value
+ * lands on unset (per embedding space) rather than the coded 75, which is an ada-002 number.
+ */
+function forcedRetrievalConfiguredAbsolutePct(raw: unknown, logger: Logger): number | undefined {
+  // Blank/null is "nobody chose a value", NOT 0 - `Number(null)` is 0, which a lower bound of 0
+  // would accept and then disable the floor instead of resolving it per embedding space.
+  if (isBlankSettingValue(raw)) return undefined;
+  const pct = Number(raw);
+  // min 1, matching the setting's schema: 0 is a cleared field, not a floor.
+  if (Number.isFinite(pct) && pct >= 1 && pct <= 100) return pct;
+  logger.warn(
+    `\u{1F512} Forced retrieval: forcedRetrievalMinSimilarityPct ${JSON.stringify(raw)} is unusable; resolving per embedding space`
+  );
+  return undefined;
+}
+
+/** `${space}:${pct}` pairs already warned about, so a misconfigured floor warns once per process. */
+const warnedOverFloor = new Set<string>();
+
+/** Test-only: forget which floors were warned about, so a warn-once test does not depend on test order. */
+export function resetForcedRetrievalFloorWarnings(): void {
+  warnedOverFloor.clear();
+}
+
+/**
  * The absolute floor to grade THIS turn's candidates against, given what the operator configured and
  * which embedding space the scores were actually produced in.
  *
- * A configured value is honored as-is: it is a raw cosine, the operator picked it for the corpus in
- * front of them, and `forcedRetrievalMinSimilarityPct`'s whole point is that it be tunable. What
- * cannot be honored is a value nobody chose. The setting's DECLARED default is 75, fitted to
- * ada-002, and both settings read paths manufacture that 75 for a key no one has ever written - so
- * an untouched deployment that flips `defaultEmbeddingModel` would carry an ada-002 number into a
- * space whose entire band sits below it and reject every chunk on every turn.
- *
- * Neither read path can distinguish "never set" from "set to exactly the default" without a second
- * scoped query per turn, which this path deliberately does not spend (see `readForcedRetrievalSettings`
- * on why all three keys share one read). So the declared default doubles as the "nobody chose this"
- * signal: a configured value EQUAL to it resolves per embedding space instead. The one case that
- * misreads is an operator who deliberately types the default's own number for a space whose measured
- * floor differs - they get the measured floor rather than their typed one, which is more results
- * than they asked for rather than fewer, and it is logged. The opposite mistake is a silent blackout.
+ * A configured value is honored as-is, the declared default's own number included: it is a raw
+ * cosine, the operator picked it for the corpus in front of them, and `forcedRetrievalMinSimilarityPct`'s
+ * whole point is that it be tunable. What cannot be honored is a value nobody chose (`undefined`). The
+ * setting's DECLARED default is 75, fitted to ada-002 - an untouched deployment that flips
+ * `defaultEmbeddingModel` and inherited it would carry an ada-002 number into a space whose entire
+ * band sits below it and reject every chunk on every turn. So an unset value resolves per embedding
+ * space instead; `readForcedRetrievalSettings` is what tells unset apart from a stored 75.
  *
  * An unmeasured space yields 0, leaving the scale-free relative floor as the only gate. That is a
  * real loss of precision, and it beats every alternative: there is no floor that transfers across
@@ -1859,15 +1881,27 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
  * The log below therefore names the space the floor was chosen FOR, which is always right, and says
  * nothing about whether every scored chunk really lives there.
  */
-function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: string, logger: Logger): number {
-  if (configuredPct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) return configuredPct / 100;
-
+function resolveForcedRetrievalAbsoluteFloor(configuredPct: number | undefined, space: string, logger: Logger): number {
   const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
+  if (configuredPct !== undefined) {
+    // Honored, but above the measured floor it can reject the space's whole band (75 on
+    // text-embedding-3-small returns nothing on every query), so say so - once, not every turn.
+    const warnKey = `${space}:${configuredPct}`;
+    if (spacePct !== undefined && configuredPct > spacePct && !warnedOverFloor.has(warnKey)) {
+      warnedOverFloor.add(warnKey);
+      logger.warn(
+        `\u{1F512} Forced retrieval: configured absolute floor ${configuredPct}% is above the ${spacePct}% ` +
+          `measured for embedding space "${space}" and may reject every chunk; clear it to use the measured floor`
+      );
+    }
+    return configuredPct / 100;
+  }
+
   if (spacePct !== undefined) {
-    if (spacePct !== configuredPct) {
+    if (spacePct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) {
       logger.log(
         `\u{1F512} Forced retrieval: absolute floor ${spacePct}% resolved for embedding space "${space}" ` +
-          `(the ${configuredPct}% default is an ada-002 value and does not transfer)`
+          `(no floor configured; the ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% ada-002 default does not transfer)`
       );
     }
     return spacePct / 100;
@@ -1879,7 +1913,7 @@ function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: strin
   // ignore the channel. Measuring a floor is the fix, and it happens offline.
   logger.warn(
     `\u{1F512} Forced retrieval: no measured absolute floor for embedding space "${space}"; gating on ` +
-      `the relative floor alone. Applying the ${configuredPct}% default here would have been an ` +
+      `the relative floor alone. Applying the declared ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% default here would have been an ` +
       `ada-002 number in a space nobody has measured - above its band that rejects every chunk on ` +
       `every turn. Measure one into FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE.`
   );
@@ -1920,7 +1954,8 @@ interface ForcedRetrievalFloors {
 interface ForcedRetrievalConfig {
   charBudget: number;
   relativeFloor: number;
-  configuredAbsolutePct: number;
+  /** `undefined` = nobody chose a value; it resolves per embedding space. */
+  configuredAbsolutePct: number | undefined;
   /** Ready to use for the same reason the relative floor is: a fraction of the turn's own span. */
   spreadFloor: number;
 }
@@ -1995,6 +2030,27 @@ function compareForcedRetrievalCandidates(a: ForcedRetrievalCandidate, b: Forced
 }
 
 /**
+ * Lake rows first, then the union's remaining (library) rows, deduped by id and capped at
+ * `listingLimit`. `hasMore` also flips when the merged rows overflow the cap even though neither
+ * listing reported more, so the caller still marks the candidate set as truncated.
+ */
+export function mergeLakeFirstListing<T extends { id: string }>(
+  lakeListing: { data: T[]; hasMore?: boolean },
+  scopeListing: { data: T[]; hasMore?: boolean },
+  listingLimit: number
+): { data: T[]; hasMore: boolean } {
+  const lakeFileIds = new Set(lakeListing.data.map(f => f.id));
+  const libraryRows = scopeListing.data.filter(f => !lakeFileIds.has(f.id));
+  return {
+    data: [...lakeListing.data, ...libraryRows].slice(0, listingLimit),
+    hasMore:
+      lakeListing.hasMore === true ||
+      scopeListing.hasMore === true ||
+      lakeListing.data.length + libraryRows.length > listingLimit,
+  };
+}
+
+/**
  * KnowledgeRetrievalFeature - forced server-side retrieval ("citation enforcer").
  *
  * Generic capability: when a session sets `forceKnowledgeRetrieval`, every user
@@ -2040,6 +2096,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
    */
   private readerConsentTags: string[];
+  /** `session.includeLibraryFiles` - resolve through sessionExcludesLibraryFiles, never raw. */
+  private includeLibraryFiles: boolean | undefined;
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -2048,7 +2106,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     retrievalFilter?: RetrievalExclusionOptions,
     preauthorizedLakeIds?: string[],
     lakeScopeExplicit?: boolean,
-    readerConsentDatalakeTags?: string[]
+    readerConsentDatalakeTags?: string[],
+    includeLibraryFiles?: boolean
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -2058,6 +2117,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
     this.lakeScopeExplicit = lakeScopeExplicit;
     this.readerConsentTags = Array.isArray(readerConsentDatalakeTags) ? readerConsentDatalakeTags : [];
+    this.includeLibraryFiles = includeLibraryFiles;
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2590,12 +2650,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // Stays a PERCENT here, unresolved: turning it into a cosine needs the embedding space,
         // which is not known until the candidate files have voted on one, mid-scan. See
         // `resolveForcedRetrievalAbsoluteFloor`.
-        configuredAbsolutePct: forcedRetrievalFloorPct(
-          absolute,
-          FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
-          'forcedRetrievalMinSimilarityPct',
-          this.logger
-        ),
+        // `undefined` = no rung stored a parseable value. Both read paths schema-parse (1..100), so
+        // the range guard is a backstop only.
+        configuredAbsolutePct: forcedRetrievalConfiguredAbsolutePct(absolute, this.logger),
       };
     } catch (err) {
       // Names every key, because one read failure degrades all three at once and an operator
@@ -2606,16 +2663,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           `forcedRetrievalSpreadFloorPct; falling back to ` +
           `${FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT} chars, ` +
           `${FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT}% relative / ` +
-          `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% absolute / ` +
+          `per-space absolute / ` +
           `${FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT}% spread`,
         err
       );
       return {
         charBudget: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
         relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
-        // The coded default, which then resolves per embedding space like any unchosen value - so a
-        // settings outage cannot reintroduce the ada-002 floor in a space it does not belong to.
-        configuredAbsolutePct: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+        // Unset, so it resolves per embedding space - a settings outage cannot reintroduce the
+        // ada-002 floor in a space it does not belong to.
+        configuredAbsolutePct: undefined,
         spreadFloor: FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT / 100,
       };
     }
@@ -2641,7 +2698,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * already have, and the trade for it is one fewer uncached `findOne` per Data-Lake-mode turn.
    *
    * The scoped branch is wrapped defensively, NOT because production takes the fallback:
-   * `resolveScopedSettingValues` documents that it never throws and wraps both of its own reads, so
+   * `resolveScopedSettingEntries` documents that it never throws and wraps both of its own reads, so
    * the only thing the catch can realistically see is an argument-evaluation error - now including
    * the membership read below, which has its own real failure mode. The corollary is worth knowing
    * rather than assuming away - when the resolver's OWN platform read fails it resolves the coded
@@ -2669,17 +2726,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           ? await membershipOrgIdsForTurn(this.chatCompletion, user.id, db.organizations)
           : [];
         const verifiedOrgId = pointerOrgId && membershipOrgIds.includes(pointerOrgId) ? pointerOrgId : undefined;
-        const values = await resolveScopedSettingValues(
+        const entries = await resolveScopedSettingEntries(
           FORCED_RETRIEVAL_SETTING_KEYS,
           scopeForCaller({ userId: user.id, organizationId: verifiedOrgId }),
           { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
           { logger: this.logger }
         );
+        const absolute = entries.forcedRetrievalMinSimilarityPct;
         return {
-          charBudget: values.forcedRetrievalCharBudget,
-          relative: values.forcedRetrievalRelativeFloorPct,
-          absolute: values.forcedRetrievalMinSimilarityPct,
-          spread: values.forcedRetrievalSpreadFloorPct,
+          charBudget: entries.forcedRetrievalCharBudget.value,
+          relative: entries.forcedRetrievalRelativeFloorPct.value,
+          absolute: absolute.stored ? absolute.value : undefined,
+          spread: entries.forcedRetrievalSpreadFloorPct.value,
         };
       } catch (err) {
         // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
@@ -2691,13 +2749,20 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
       }
     }
-    const [charBudget, relative, absolute, spread] = await Promise.all([
+    const [charBudget, relative, absoluteRaw, spread] = await Promise.all([
       db.adminSettings.getSettingsValue('forcedRetrievalCharBudget'),
       db.adminSettings.getSettingsValue('forcedRetrievalRelativeFloorPct'),
-      db.adminSettings.getSettingsValue('forcedRetrievalMinSimilarityPct'),
+      // Not getSettingsValue: it manufactures the declared 75 for a missing row, which would read as
+      // an explicit 75. The cached raw read yields null for a missing row instead.
+      getSettingsByNames(['forcedRetrievalMinSimilarityPct'], db, { logger: this.logger }),
       db.adminSettings.getSettingsValue('forcedRetrievalSpreadFloorPct'),
     ]);
-    return { charBudget, relative, absolute, spread };
+    // A missing or blank row is unset: the schema would preprocess either into the same manufactured 75.
+    const raw = absoluteRaw.forcedRetrievalMinSimilarityPct;
+    const parsed = isBlankSettingValue(raw)
+      ? undefined
+      : settingsMap.forcedRetrievalMinSimilarityPct.schema.safeParse(raw);
+    return { charBudget, relative, absolute: parsed?.success ? parsed.data : undefined, spread };
   }
 
   private noContextMessages(finding: ForcedRetrievalNoContextFinding): IMessage[] {
@@ -2751,11 +2816,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
     // The session deliberately grounds on NO lake, so there is nothing to force retrieval against.
     // Skipping is the whole handling: narrowing to nothing and running anyway would either search
-    // the caller's entire personal library (`restrictToDataLake` is gated on `lakeScoped`, which is
-    // false here) or, with it on, abstain through the `no_lakes` exit and stamp an outcome that
-    // reads as a broken lake rather than a chosen scope. The model can still call
-    // search_knowledge_base for the caller's own files; its lake arms are empty for the same
-    // reason (resolveSessionLakeAccess).
+    // the caller's entire personal library (`restrictToDataLake` follows sessionExcludesLibraryFiles,
+    // which is false here unless the library was turned off) or abstain through the `no_lakes` exit
+    // and stamp an outcome that reads as a broken lake rather than a chosen scope. The model can
+    // still call search_knowledge_base, whose lake arms are empty for the same reason
+    // (resolveSessionLakeAccess); it reads the caller's own files only while the library is on.
     //
     // Checked BEFORE personalCorpusOnly below: that check's remedy ("ask again without the
     // attachment") assumes the session would otherwise ground on a lake, which is never true once
@@ -2830,11 +2895,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // query to one lake); narrowing without restrictToDataLake still leaks the personal library
       // through the own/shared/group base arms.
       //
-      // Both halves are gated on `lakeScoped`, NOT applied unconditionally. The narrowing no-ops
+      // Both halves are gated, NOT applied unconditionally. The narrowing no-ops
       // for a session whose tags name no lake (see sessionNamesALake), and pairing that no-op with
       // restrictToDataLake would drop the base arms for a session that never asked to be
       // lake-scoped - silently confining its grounding to lake content and losing the caller's own
-      // files. `restrictToDataLake` must mean "the session named a lake", not "this code ran".
+      // files. `restrictToDataLake` must mean "the session excludes the library", not "this code
+      // ran": `lakeScoped` while `includeLibraryFiles` is unset, the explicit flag once set. Explicit
+      // false therefore also confines an all-lakes session (no lake named) to lake content. The
+      // knowledge tools derive it through the same sessionExcludesLibraryFiles call, so they agree.
       //
       // `lakeScoped` is computed from the PRE-narrowing set. That is equivalent to asking the
       // narrowed one today - `retainedLakes` is a superset of the prefix-matched lakes, so the
@@ -2848,6 +2916,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const lakeMemberships = lakeMembershipsFrom(lakes);
       warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
       attemptedDataLakeTags = dataLakeTags;
+      const excludeLibrary = sessionExcludesLibraryFiles(this.includeLibraryFiles, resolvedAccess, this.retrievalTags);
+      const hasLakeArms = accessHasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
 
       // The session named a lake and narrowing retained none of it: a revoked grant, an archived
       // lake, or a lapsed entitlement on a session that still names that lake. Nothing was in scope
@@ -2855,9 +2925,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // buildOwnershipConditions' restrictToDataLake fail-fast throws into the outer catch and
       // stamps `failed` at error level on EVERY turn of that session, indefinitely, reporting a
       // benign access state as a retrieval failure to logs and to the retrieval-rate metric.
-      // Only reachable while `lakeScoped` - with it false the base arms survive, so `conditions`
-      // is never empty and the fail-fast cannot fire.
-      if (lakeScoped && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+      // Also the exit for a library-excluding session with no lake at all to reach. Only reachable
+      // while `excludeLibrary` - otherwise the base arms survive, so `conditions` is never empty
+      // and the fail-fast cannot fire.
+      if (excludeLibrary && !hasLakeArms) {
         recordRetrieval('no_lakes', []);
         this.logger.log('🔒 Forced retrieval: session names no lake this caller can reach');
         return this.noContextMessages('unavailable');
@@ -2894,32 +2965,43 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const listingLimit = relevanceSelectionAvailable
         ? FORCED_RETRIEVAL_MAX_LISTED_FILES
         : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
-      const fileResults = await db.fabfiles.search(
-        user.id,
-        '',
-        { tags: nonLakeRetrievalTags, shared: false },
-        { page: 1, limit: listingLimit },
-        { by: 'fileName', direction: 'asc' },
-        {
-          textSearch: true,
-          includeShared: true,
-          userGroups: user.groups || [],
-          dataLakeTags,
-          dataLakeTagPrefixes, // static-registry (open) prefixes
-          lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
-          // Scope to the resolved lake(s) only, never the caller's whole library - but only when
-          // the session actually named a lake; see the `lakeScoped` note above.
-          restrictToDataLake: lakeScoped,
-          excludeContent: true, // metadata only; chunk text + vectors fetched below
-          // supersededInLakes is select:false by default; forced retrieval feeds the same
-          // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
-          // FabFileModel.executeSearch.
-          includeSupersessionRulings: true,
-          // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
-          // so this arm agrees with the surface's document-listing predicate. No-op when unset.
-          ...this.retrievalFilter,
-        }
-      );
+      const listFiles = (restrictToDataLake: boolean) =>
+        db.fabfiles.search(
+          user.id,
+          '',
+          { tags: nonLakeRetrievalTags, shared: false },
+          { page: 1, limit: listingLimit },
+          { by: 'fileName', direction: 'asc' },
+          {
+            textSearch: true,
+            includeShared: true,
+            userGroups: user.groups || [],
+            dataLakeTags,
+            dataLakeTagPrefixes, // static-registry (open) prefixes
+            lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
+            restrictToDataLake,
+            excludeContent: true, // metadata only; chunk text + vectors fetched below
+            // supersededInLakes is select:false by default; forced retrieval feeds the same
+            // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
+            // FabFileModel.executeSearch.
+            includeSupersessionRulings: true,
+            // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
+            // so this arm agrees with the surface's document-listing predicate. No-op when unset.
+            ...this.retrievalFilter,
+          }
+        );
+      // An explicit "+ My files" turns the listing into a union where a large personal library,
+      // sorted by name, could crowd the lake out of the listing and the by-name candidate cut. The
+      // lake-only listing goes first so lake files keep their slots; library files fill the rest.
+      const prioritizeLakeFiles = this.includeLibraryFiles === true && hasLakeArms;
+      // Scope to the resolved lake(s) only, never the caller's whole library - but only when the
+      // session excludes the library; see the gating note above.
+      const [lakeListing, scopeListing] = await Promise.all([
+        prioritizeLakeFiles ? listFiles(true) : null,
+        listFiles(excludeLibrary),
+      ]);
+      const lakeFileIds = new Set((lakeListing?.data ?? []).map(f => f.id));
+      const fileResults = lakeListing ? mergeLakeFirstListing(lakeListing, scopeListing, listingLimit) : scopeListing;
 
       // Authoritative post-filter: the DB clause above is a best-effort pre-filter; re-apply the
       // exclusion in memory so correctness never depends on the DB regex engine or fileNameLower.
@@ -2935,8 +3017,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
       const fileById = new Map(files.map(f => [f.id, f]));
       // Fixed scan order so batching, the model pick, and any truncation are all reproducible;
-      // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves.
+      // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves. Prioritized
+      // lake files sort first so a by-name candidate cut keeps them (see prioritizeLakeFiles).
       const scanOrder = [...files].sort((a, b) => {
+        const al = lakeFileIds.has(a.id);
+        if (al !== lakeFileIds.has(b.id)) return al ? -1 : 1;
         const an = a.fileName ?? '';
         const bn = b.fileName ?? '';
         if (an !== bn) return an < bn ? -1 : 1;

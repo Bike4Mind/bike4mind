@@ -35,7 +35,7 @@ import {
   Terminal as OutputIcon,
 } from '@mui/icons-material';
 import { ArtifactVersionDropdown } from '@client/app/components/artifacts';
-import { toast } from 'react-hot-toast';
+import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   checkArtifactExists,
