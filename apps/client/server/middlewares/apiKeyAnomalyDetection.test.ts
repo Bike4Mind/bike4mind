@@ -2,9 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
 
 vi.mock('./apiKeyAuth', () => ({ isApiKeyAuth: () => true }));
-vi.mock('@server/managers/apiKeyAlertService', () => ({ ApiKeyAlertService: vi.fn() }));
+vi.mock('@server/managers/apiKeyAlertService', () => ({
+  ApiKeyAlertService: { detectAnomalies: vi.fn().mockResolvedValue(undefined) },
+}));
 
 import { apiKeyAnomalyDetection } from './apiKeyAnomalyDetection';
+import { ApiKeyAlertService } from '@server/managers/apiKeyAlertService';
 
 const run = async (scopes: ApiKeyScope[]) => {
   const res = { once: vi.fn() };
@@ -23,5 +26,19 @@ describe('apiKeyAnomalyDetection', () => {
   it('still schedules detection for ordinary keys', async () => {
     const { res } = await run([ApiKeyScope.AI_CHAT]);
     expect(res.once).toHaveBeenCalledWith('finish', expect.any(Function));
+  });
+  it('passes the raw path, not the templated endpoint, to the sensitive-endpoint check', async () => {
+    const res = { once: vi.fn() };
+    const req = {
+      apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] },
+      _apiKeyUsageInfo: { userId: 'u1', ipAddress: '1.2.3.4', endpoint: '/api/[key]/gears/admin' },
+      originalUrl: '/api/admin/gears/admin?z=1',
+    };
+    await apiKeyAnomalyDetection()(req as never, res as never, vi.fn());
+    res.once.mock.calls[0][1]();
+    expect(ApiKeyAlertService.detectAnomalies).toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint: '/api/[key]/gears/admin', pathname: '/api/admin/gears/admin' }),
+      undefined
+    );
   });
 });
