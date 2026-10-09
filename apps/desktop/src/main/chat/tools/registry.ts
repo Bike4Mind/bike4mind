@@ -14,6 +14,7 @@ import {
   generateVideoSchema,
   generateVideoTool,
 } from './mediaTools';
+import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { requestDirectory } from './requestDirectoryTool';
 import { bashExecute } from './shellTools';
@@ -130,6 +131,7 @@ const BY_NAME = new Map(
     ...SKILL_TOOLS,
     askUser,
     requestDirectory,
+    ...MCP_TOOLS,
   ].map(tool => [tool.schema.name, tool])
 );
 
@@ -186,6 +188,12 @@ export function toolsForRequest(options: {
    * a name collision with a built-in must be impossible, not resolved here.
    */
   mcp?: readonly ToolSchema[];
+  /**
+   * The app has an MCP manager. Offers mcp_list_servers, and with a user present the tools that
+   * add and change servers, whose cards only that user can answer. Static schemas, declared
+   * whether or not anything is configured, so the tool list does not churn as servers come and go.
+   */
+  mcpServers?: boolean;
 }): { toolSchema: ToolSchema }[] {
   const available = [
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
@@ -197,6 +205,7 @@ export function toolsForRequest(options: {
     ...(options.skills ? SKILL_TOOLS : []),
     // Offered with no folder granted too: asking for one is exactly what that conversation needs.
     ...(options.ask ? [askUser, requestDirectory] : []),
+    ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),
   ];
   return [
     ...available.map(tool => ({ toolSchema: tool.schema })),

@@ -110,6 +110,11 @@ function ServerRow({
           <Typography level="body-xs" textColor="text.tertiary" noWrap>
             {server.transport === 'stdio' ? `${server.command ?? ''} ${joinArgs(server.args)}`.trim() : server.url}
           </Typography>
+          {server.addedBy && (
+            <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="mcp-server-added-by">
+              Added by assistant in {server.addedBy.sessionTitle}
+            </Typography>
+          )}
         </Stack>
 
         {server.status === 'connecting' && <CircularProgress size="sm" data-testid="mcp-server-connecting" />}

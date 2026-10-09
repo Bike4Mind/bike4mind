@@ -137,4 +137,19 @@ describe('McpServerStore', () => {
     });
     expect(Object.keys(added.env)).toEqual(['OK']);
   });
+
+  it('stores who added a server as plain metadata, and keeps it through an edit and a reload', async () => {
+    const file = memoryFile();
+    const store = new McpServerStore(cipher(), file, logger);
+    const addedBy = { sessionId: 's-1', sessionTitle: 'Chair blueprint', addedAt: '2026-10-09T00:00:00.000Z' };
+    const record = await store.add(
+      { name: 'cad', transport: 'stdio', command: 'node', env: { KEY: 'v4lue' } },
+      addedBy
+    );
+    await store.update(record.id, { name: 'cad', transport: 'stdio', command: 'node', args: ['--flag'] });
+
+    expect(file.contents).toContain('Chair blueprint');
+    const reloaded = new McpServerStore(cipher(), file, logger);
+    expect((await reloaded.get(record.id))?.addedBy).toEqual(addedBy);
+  });
 });

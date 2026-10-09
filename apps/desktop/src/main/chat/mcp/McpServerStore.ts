@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { McpServerInput, McpTransport } from '@shared/mcp';
+import type { McpServerInput, McpServerProvenance, McpTransport } from '@shared/mcp';
 
 /**
  * The slice of Electron's `safeStorage` this module needs, narrowed to a port for the same
@@ -33,6 +33,7 @@ export interface McpServerRecord {
   url?: string;
   env: Record<string, string>;
   headers: Record<string, string>;
+  addedBy?: McpServerProvenance;
 }
 
 /**
@@ -53,6 +54,7 @@ interface StoredServer {
   headerKeys?: string[];
   /** base64 safeStorage ciphertext of {@link StoredSecrets}. Absent when there are none. */
   secrets?: string;
+  addedBy?: McpServerProvenance;
 }
 
 interface StoredSecrets {
@@ -120,13 +122,13 @@ export class McpServerStore {
     return (await this.list()).find(server => server.id === id) ?? null;
   }
 
-  async add(input: McpServerInput): Promise<McpServerRecord> {
+  async add(input: McpServerInput, addedBy?: McpServerProvenance): Promise<McpServerRecord> {
     const document = await this.load();
     if (document.servers.length >= MAX_SERVERS) {
       throw new Error(`You can configure at most ${MAX_SERVERS} MCP servers.`);
     }
     const id = randomUUID();
-    const record = normalize({ ...input, id });
+    const record = { ...normalize({ ...input, id }), ...(addedBy ? { addedBy: provenance(addedBy) } : {}) };
     assertUsable(record, document.servers);
 
     document.servers.push(this.dehydrate(record));
@@ -152,6 +154,9 @@ export class McpServerStore {
       headers: input.headers ?? existing.headers,
       enabled: input.enabled ?? existing.enabled,
     });
+    // Provenance outlives an edit: the user changing an assistant-added server's args does not
+    // make it one they added themselves.
+    if (existing.addedBy) record.addedBy = existing.addedBy;
     assertUsable(
       record,
       document.servers.filter(server => server.id !== id)
@@ -189,6 +194,7 @@ export class McpServerStore {
       args: stored.args ?? [],
       ...(stored.url ? { url: stored.url } : {}),
       ...this.readSecrets(stored),
+      ...(stored.addedBy ? { addedBy: stored.addedBy } : {}),
     };
   }
 
@@ -227,6 +233,7 @@ export class McpServerStore {
       ...(record.url ? { url: record.url } : {}),
       envKeys: Object.keys(record.env),
       headerKeys: Object.keys(record.headers),
+      ...(record.addedBy ? { addedBy: record.addedBy } : {}),
       ...(hasSecrets && this.secretsPersisted()
         ? { secrets: this.cipher.encryptString(JSON.stringify(secrets)).toString('base64') }
         : {}),
@@ -257,6 +264,14 @@ export class McpServerStore {
     this.document = document;
     await this.file.write(JSON.stringify(document, null, 2));
   }
+}
+
+function provenance(value: McpServerProvenance): McpServerProvenance {
+  return {
+    sessionId: trimmed(value.sessionId, 128),
+    sessionTitle: trimmed(value.sessionTitle, 200),
+    addedAt: trimmed(value.addedAt, 64),
+  };
 }
 
 function isStored(value: unknown): value is StoredServer {
@@ -303,6 +318,14 @@ function assertUsable(record: McpServerRecord, others: readonly StoredServer[]):
     throw new Error(`Another server is already called "${record.name}".`);
   }
 
+  assertConnectable(record);
+}
+
+/**
+ * The transport half of {@link assertUsable}, exported so the assistant's add tool can refuse a
+ * config before it puts a card in front of the user rather than after they approve it.
+ */
+export function assertConnectable(record: { transport: McpTransport; command?: string; url?: string }): void {
   if (record.transport === 'stdio') {
     if (!record.command) throw new Error('Give the command that starts the server.');
     return;

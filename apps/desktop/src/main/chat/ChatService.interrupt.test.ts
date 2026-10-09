@@ -102,7 +102,7 @@ describe('ChatService interrupting a running tool', () => {
       mcp: {
         ensureConnected: async () => undefined,
         tools: () => [],
-        connectedServerNames: () => [],
+        state: async () => ({ servers: [], secretsPersisted: true }),
         findTool: (name: string) => (name === hungTool.schema.name ? hungTool : undefined),
       } as unknown as McpManager,
       logger: { debug: vi.fn(), warn: vi.fn() },

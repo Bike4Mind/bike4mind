@@ -1,5 +1,13 @@
 import { MCPClient } from '@bike4mind/mcp';
-import type { McpServerInput, McpServerState, McpServersState, McpServerStatus, McpToolSummary } from '@shared/mcp';
+import type {
+  McpServerInput,
+  McpServerProvenance,
+  McpServerState,
+  McpServersState,
+  McpServerStatus,
+  McpToolSummary,
+  McpTransport,
+} from '@shared/mcp';
 import type { ApprovalPrompt, ToolContext, ToolDefinition, ToolSchema } from '../tools/types';
 import { frameDescription, frameResult, namespacedToolName, sanitizeSchema, serverSlug } from './names';
 import type { McpServerRecord, McpServerStore } from './McpServerStore';
@@ -22,6 +30,30 @@ const STDERR_TAIL_LINES = 12;
 
 /** How much of a call's arguments the approval prompt renders. See approvalFor. */
 const MAX_APPROVAL_ARG_CHARS = 600;
+
+/** Shorter than this and a value is too likely to occur by accident in ordinary output. */
+const MIN_REDACTED_CHARS = 4;
+
+/**
+ * A change the assistant asked for and the user approved on its card. Absent fields keep what
+ * is stored. `envKeys`/`headerKeys` name the full new set: a listed key the user left blank keeps
+ * its stored value, and a stored key not listed is dropped.
+ */
+export interface McpServerChange {
+  name?: string;
+  transport?: McpTransport;
+  command?: string;
+  args?: string[];
+  url?: string;
+  envKeys?: readonly string[];
+  headerKeys?: readonly string[];
+}
+
+/** Values the user typed on the card, by key name. Held only for the length of the save. */
+export interface McpSecretValues {
+  env: Record<string, string>;
+  headers: Record<string, string>;
+}
 
 export interface McpLogger {
   debug(message: string): void;
@@ -91,6 +123,76 @@ export class McpManager {
     return this.publish();
   }
 
+  /** The assistant's add, after the user approved its card. Resolves with the new server's id. */
+  async addFromAssistant(input: McpServerInput, addedBy: McpServerProvenance): Promise<string> {
+    const record = await this.store.add(input, addedBy);
+    if (record.enabled) void this.connect(record.id);
+    await this.publish();
+    return record.id;
+  }
+
+  /**
+   * The assistant's edit, after the user approved its card. Secret values are merged here, in
+   * main, so a key the user left blank keeps the value only this process holds.
+   */
+  async updateFromAssistant(id: string, change: McpServerChange, secrets: McpSecretValues): Promise<void> {
+    const existing = await this.store.get(id);
+    if (!existing) throw new Error('That MCP server is no longer configured.');
+    const merge = (
+      keys: readonly string[] | undefined,
+      typed: Record<string, string>,
+      stored: Record<string, string>
+    ) =>
+      keys === undefined
+        ? undefined
+        : Object.fromEntries(
+            keys.flatMap(key => {
+              const value = typed[key] || stored[key];
+              return value ? [[key, value]] : [];
+            })
+          );
+    const transport = change.transport ?? existing.transport;
+    const env = merge(change.envKeys, secrets.env, existing.env);
+    const headers = merge(change.headerKeys, secrets.headers, existing.headers);
+    await this.updateServer(id, {
+      name: change.name ?? existing.name,
+      transport,
+      ...(transport === 'stdio'
+        ? { command: change.command ?? existing.command, args: change.args ?? existing.args }
+        : { url: change.url ?? existing.url }),
+      ...(env ? { env } : {}),
+      ...(headers ? { headers } : {}),
+    });
+  }
+
+  /** A configured server by id or by name (case-insensitive), as the assistant names it. */
+  async find(idOrName: string): Promise<McpServerState | null> {
+    const wanted = idOrName.trim().toLowerCase();
+    const records = await this.store.list();
+    const record =
+      records.find(candidate => candidate.id === idOrName.trim()) ??
+      records.find(candidate => candidate.name.toLowerCase() === wanted);
+    return record ? this.describe(record) : null;
+  }
+
+  /**
+   * Wait for this server's connection attempt and describe it. Starts one only when none has
+   * been made: a server that already failed is reported as failed, not quietly started twice.
+   */
+  async settle(id: string): Promise<McpServerState | null> {
+    const runtime = this.runtimes.get(id);
+    if (runtime?.connecting) await runtime.connecting;
+    else if (!runtime || runtime.status === 'idle') await this.connect(id);
+    const record = await this.store.get(id);
+    return record ? this.describe(record) : null;
+  }
+
+  /** Drop the connection and start a fresh one; what the Reconnect button and tool both do. */
+  async reconnect(id: string): Promise<McpServerState | null> {
+    await this.disconnect(id);
+    return this.settle(id);
+  }
+
   async updateServer(id: string, input: McpServerInput): Promise<McpServersState> {
     await this.disconnect(id);
     const record = await this.store.update(id, input);
@@ -136,14 +238,6 @@ export class McpManager {
     return this.tools().find(binding => binding.definition.schema.name === name)?.definition;
   }
 
-  /** The server names whose tools are live, for the system message. */
-  connectedServerNames(): string[] {
-    return [...this.runtimes.values()]
-      .filter(runtime => runtime.status === 'connected')
-      .map(runtime => runtime.connection?.record.name ?? '')
-      .filter(name => name.length > 0);
-  }
-
   async connect(id: string): Promise<void> {
     if (this.shuttingDown) return;
     const existing = this.runtimes.get(id);
@@ -168,7 +262,7 @@ export class McpManager {
       })
       .catch((err: unknown) => {
         runtime.status = 'failed';
-        runtime.error = describeFailure(err, record);
+        runtime.error = redactSecrets(describeFailure(err, record), record);
         this.logger.warn(`MCP: "${record.name}" failed to connect: ${runtime.error}`);
       })
       .finally(() => {
@@ -233,8 +327,10 @@ export class McpManager {
         : { url: record.url, headers: record.headers }),
       // Piped rather than inherited: a packaged app has no terminal to inherit to, and the
       // child's stderr is the only thing that explains most start-up failures.
+      // Redacted as it arrives, so no later reader - the log, the dialog, the model - can see a
+      // server echoing the key it was started with.
       onStderrLine: line => {
-        runtime.stderr.push(line);
+        runtime.stderr.push(redactSecrets(line, record));
         if (runtime.stderr.length > STDERR_TAIL_LINES) runtime.stderr.shift();
       },
     });
@@ -333,6 +429,7 @@ export class McpManager {
       tools,
       ...(runtime?.error ? { error: runtime.error } : {}),
       ...(stderr ? { stderr } : {}),
+      ...(record.addedBy ? { addedBy: record.addedBy } : {}),
     };
   }
 
@@ -361,6 +458,21 @@ function approvalFor(record: McpServerRecord, remoteName: string, input: Record<
     detail: `Run "${remoteName}" on the MCP server "${record.name}"${args === '{}' ? '' : ` with ${shown}`}`,
     key: `mcp\u0000${record.id}\u0000${remoteName}\u0000${args}`,
   };
+}
+
+/**
+ * Replace this server's own env and header values wherever they appear in `text`. A header value
+ * is also split on whitespace, so the token inside `Bearer <token>` is caught on its own.
+ */
+export function redactSecrets(text: string, record: Pick<McpServerRecord, 'env' | 'headers'>): string {
+  const values = [...Object.values(record.env), ...Object.values(record.headers)]
+    .flatMap(value => [value, ...value.split(/\s+/)])
+    .filter(value => value.length >= MIN_REDACTED_CHARS)
+    // Longest first, so a value that contains another is replaced whole.
+    .sort((a, b) => b.length - a.length);
+  let out = text;
+  for (const value of new Set(values)) out = out.split(value).join('[redacted]');
+  return out;
 }
 
 /** Arguments rendered the same way every time, so the approval key is stable across calls. */

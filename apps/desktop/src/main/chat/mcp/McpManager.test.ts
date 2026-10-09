@@ -1,9 +1,9 @@
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import { findTool } from '../tools/registry';
 import type { ToolContext } from '../tools/types';
-import { McpManager } from './McpManager';
+import { McpManager, redactSecrets } from './McpManager';
 import { McpServerStore, type SecretCipher, type StoreFile } from './McpServerStore';
 
 /**
@@ -13,6 +13,7 @@ import { McpServerStore, type SecretCipher, type StoreFile } from './McpServerSt
  */
 const ECHO_SERVER = fileURLToPath(new URL('./__fixtures__/echoServer.mjs', import.meta.url));
 const CRASH_SERVER = fileURLToPath(new URL('./__fixtures__/crashServer.mjs', import.meta.url));
+const LEAKY_SERVER = fileURLToPath(new URL('./__fixtures__/leakyServer.mjs', import.meta.url));
 
 const cipher: SecretCipher = {
   isEncryptionAvailable: () => true,
@@ -218,6 +219,60 @@ describe('McpManager against a real stdio server', () => {
     await waitForExit(pid!);
     expect(isAlive(pid!)).toBe(false);
   }, 30_000);
+});
+
+describe('McpManager for the assistant', () => {
+  it("redacts the server's own secret from its stderr and error before anyone reads them", async () => {
+    const token = 'fixture-secret-0123456789';
+    const { state } = await managerWith({
+      name: 'leaky',
+      transport: 'stdio',
+      command: process.execPath,
+      args: [LEAKY_SERVER],
+      env: { MCP_FIXTURE_TOKEN: token },
+    });
+
+    const server = state.servers[0];
+    expect(server.status).toBe('failed');
+    expect(server.stderr).toContain('starting with token [redacted]');
+    expect(JSON.stringify(state)).not.toContain(token);
+  }, 30_000);
+
+  it('reports a server that already failed without starting it a second time', async () => {
+    const { manager, state } = await managerWith({
+      name: 'crash',
+      transport: 'stdio',
+      command: process.execPath,
+      args: [CRASH_SERVER],
+    });
+    const id = state.servers[0].id;
+    const connect = vi.spyOn(manager, 'connect');
+
+    const settled = await manager.settle(id);
+    expect(settled?.status).toBe('failed');
+    expect(settled?.stderr).toContain('MCP_FIXTURE_TOKEN is not set');
+    expect(connect).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it('records who added a server, and keeps a blank secret field on update', async () => {
+    const store = new McpServerStore(cipher, memoryFile(), logger);
+    const manager = new McpManager(store, logger, () => undefined);
+    managers.push(manager);
+    const id = await manager.addFromAssistant(
+      { name: 'echo', transport: 'stdio', command: process.execPath, args: [ECHO_SERVER], env: { A: 'first-value' } },
+      { sessionId: 's', sessionTitle: 'Chair', addedAt: '2026-10-09T00:00:00.000Z' }
+    );
+    expect((await manager.settle(id))?.addedBy?.sessionTitle).toBe('Chair');
+
+    await manager.updateFromAssistant(id, { envKeys: ['A', 'B'] }, { env: { B: 'second-value' }, headers: {} });
+    expect((await store.get(id))?.env).toEqual({ A: 'first-value', B: 'second-value' });
+    expect((await manager.find('ECHO'))?.id).toBe(id);
+  }, 30_000);
+
+  it('redacts a bearer header value whole and by its token part', () => {
+    const record = { env: {}, headers: { Authorization: 'Bearer abcdef123456' } };
+    expect(redactSecrets('sent Bearer abcdef123456 and abcdef123456', record)).toBe('sent [redacted] and [redacted]');
+  });
 });
 
 /** The stdio child's pid, reached the same way shutdownSync reaches it. */

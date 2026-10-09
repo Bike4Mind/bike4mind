@@ -1,5 +1,6 @@
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
+import type { McpServerState, McpServersState } from '@shared/mcp';
 import type {
   ChatApprovalOption,
   ChatDiff,
@@ -222,8 +223,23 @@ export interface ToolContext {
    * is not declared at all.
    */
   skills?: SkillContext;
+  /** The user's MCP servers. Absent in a build or test without them; the mcp_* tools then refuse. */
+  mcp?: McpToolContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
+}
+
+/**
+ * The MCP manager as the mcp_* tools may drive it. No add or update here: those run in
+ * ChatService on the card's click, because they need the secret values only the click carries.
+ */
+export interface McpToolContext {
+  state(): Promise<McpServersState>;
+  find(idOrName: string): Promise<McpServerState | null>;
+  settle(id: string): Promise<McpServerState | null>;
+  reconnect(id: string): Promise<McpServerState | null>;
+  setEnabled(id: string, enabled: boolean): Promise<McpServersState>;
+  removeServer(id: string): Promise<McpServersState>;
 }
 
 /**

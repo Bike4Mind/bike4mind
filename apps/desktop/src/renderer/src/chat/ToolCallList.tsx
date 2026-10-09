@@ -14,10 +14,12 @@ import type {
   ChatToolStatus,
 } from '@shared/chat';
 import { REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
+import { isMcpConfigToolName, MCP_UPDATE_SERVER_TOOL_NAME, parseMcpServerRequest } from '@shared/mcp';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { DiffView } from './DiffView';
 import { DirectoryRequestCard } from './DirectoryRequestCard';
+import { McpServerRequestCard } from './McpServerRequestCard';
 import { ChevronIcon } from './icons';
 import { MediaAttachments } from './MediaAttachment';
 import { QuestionCard, QuestionSummary } from './QuestionCard';
@@ -612,6 +614,25 @@ export function ToolCallList({
               reason={typeof waiting.input.reason === 'string' ? waiting.input.reason : ''}
               {...(waiting.approvalWarning ? { warning: waiting.approvalWarning } : {})}
               onAdd={() => onRespond(approvalId, { decision: 'once' })}
+              onDecline={() => onRespond(approvalId, { decision: 'deny' })}
+            />
+          );
+        }
+        const mcpRequest =
+          isMcpConfigToolName(waiting.name) && waiting.status === 'awaiting-approval' && waiting.approvalId
+            ? parseMcpServerRequest(waiting.input)
+            : null;
+        if (mcpRequest && waiting.approvalId) {
+          const approvalId = waiting.approvalId;
+          return (
+            <McpServerRequestCard
+              // Keyed on the request, so a second card never inherits the first one's typed secrets.
+              key={approvalId}
+              request={mcpRequest}
+              update={waiting.name === MCP_UPDATE_SERVER_TOOL_NAME}
+              {...(waiting.approvalDetail ? { current: waiting.approvalDetail } : {})}
+              {...(waiting.approvalWarning ? { warning: waiting.approvalWarning } : {})}
+              onApprove={secrets => onRespond(approvalId, { decision: 'once', secrets })}
               onDecline={() => onRespond(approvalId, { decision: 'deny' })}
             />
           );

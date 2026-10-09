@@ -327,6 +327,12 @@ export interface ChatApprovalAnswer {
    * same way: same id, same gate, same needs-action status.
    */
   answers?: ChatQuestionAnswer[];
+  /**
+   * What the user typed into an MCP server card's secret fields, keyed by the names the card
+   * showed. Renderer -> main only: main hands the values to the server store and drops them, and
+   * they are never put back on the call, in the transcript, or in anything the model reads.
+   */
+  secrets?: { env?: Record<string, string>; headers?: Record<string, string> };
 }
 
 /**
