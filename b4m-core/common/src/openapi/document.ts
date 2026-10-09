@@ -73,14 +73,15 @@ function infoDescription(): string {
     `Each API key has a per-minute and a per-day request ceiling, by default ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerMinute} requests/minute and ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay} requests/day (a key can be minted with its own ceilings). ` +
-      'Responses from rate-limited operations carry the current state of both windows:',
+      'Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint excepted):',
     ...API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\``),
     '',
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
       'that long before retrying. The streaming completions endpoint is the exception: ' +
       '`POST /api/ai/v1/completions` opens its `200` event stream before rate-limiting, so an exceeded ' +
       'ceiling arrives as an in-stream `error` event rather than a `429`. ' +
-      '`GET /api/v1/me`, `GET /api/v1/credits` and the poll endpoints listed under ' +
+      '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, the `GET` list ' +
+      'endpoints for `/api/v1/sessions` and `/api/v1/video-generations`, and the poll endpoints listed under ' +
       'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
       'limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches ' +
       'the limiter and carries no rate-limit headers.',

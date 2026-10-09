@@ -102,7 +102,7 @@ holding scopes it doesn't literally list.
 | Requests per day | ${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay.toLocaleString('en-US')} |
 
 A key can be minted with its own ceilings. Responses from rate-limited routes called with an API
-key carry the current state of both windows:
+key carry the current state of both windows (the streaming completions endpoint excepted):
 
 ${API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\`: ${API_KEY_RATE_LIMIT_HEADERS[header]}`).join('\n')}
 
