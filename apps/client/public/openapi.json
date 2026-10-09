@@ -6845,7 +6845,7 @@
                   "items": {
                     "type": "string"
                   },
-                  "description": "Tools the agent may call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+                  "description": "Tools the agent may call. An empty list (or `null`) means the default tool policy applies."
                 },
                 "denied_tools": {
                   "type": [
@@ -6855,7 +6855,7 @@
                   "items": {
                     "type": "string"
                   },
-                  "description": "Tools the agent may never call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+                  "description": "Tools the agent may never call. An empty list (or `null`) means the default tool policy applies."
                 },
                 "trigger_words": {
                   "type": "array",
@@ -6958,7 +6958,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may call. An empty list (or `null`) means the default tool policy applies."
           },
           "denied_tools": {
             "type": [
@@ -6968,7 +6968,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may never call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may never call. An empty list (or `null`) means the default tool policy applies."
           },
           "trigger_words": {
             "type": "array",
@@ -7058,7 +7058,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may call. An empty list (or `null`) means the default tool policy applies."
           },
           "denied_tools": {
             "type": [
@@ -7068,7 +7068,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may never call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may never call. An empty list (or `null`) means the default tool policy applies."
           },
           "trigger_words": {
             "type": "array",
@@ -7145,14 +7145,14 @@
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may call. An empty list (or `null`) means the default tool policy applies."
           },
           "denied_tools": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may never call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may never call. An empty list (or `null`) means the default tool policy applies."
           },
           "trigger_words": {
             "type": "array",
@@ -7222,7 +7222,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may call. An empty list (or `null`) means the default tool policy applies."
           },
           "denied_tools": {
             "type": [
@@ -7232,7 +7232,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may never call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may never call. An empty list (or `null`) means the default tool policy applies."
           },
           "trigger_words": {
             "type": "array",
@@ -7309,14 +7309,14 @@
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may call. An empty list (or `null`) means the default tool policy applies."
           },
           "denied_tools": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Tools the agent may never call. Setting either tool list (even to an empty array) runs the agent through the tool-using executor; `null` means it was never set."
+            "description": "Tools the agent may never call. An empty list (or `null`) means the default tool policy applies."
           },
           "trigger_words": {
             "type": "array",

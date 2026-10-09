@@ -11,9 +11,7 @@ import { paginatedResponseSchema } from './pagination';
  * this file free of `@bike4mind/*` imports - the CI spec job loads it without building anything.
  */
 
-const TOOL_LIST_NOTE =
-  'Setting either tool list (even to an empty array) runs the agent through the tool-using executor; ' +
-  '`null` means it was never set.';
+const TOOL_LIST_NOTE = 'An empty list (or `null`) means the default tool policy applies.';
 
 export const AgentResourceSchema = z.object({
   id: z.string(),
