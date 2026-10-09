@@ -35,8 +35,10 @@ describe('API reference scopes table', () => {
       [...line.slice(line.indexOf(':**')).matchAll(/`([^`]+)`/g)].map(match => match[1])
     );
 
-    // Only the Projects section still states its scopes by hand; every other endpoint's live in the generated docs.
-    expect(requiredLines).toHaveLength(1);
+    // Pin both label forms (plain and "scope for X"); the tokens alone would not catch a dropped line.
+    expect(requiredLines).toHaveLength(2);
+    expect(requiredLines.some(line => line.includes('for `refineText`'))).toBe(true);
+    expect(required).toContain('ai:generate');
     expect(required).toContain('projects:read');
     expect(required).toContain('projects:write');
     for (const scope of required) {

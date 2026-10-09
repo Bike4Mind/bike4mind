@@ -154,6 +154,21 @@ between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, in
 
 ---
 
+### Sessions (Notebooks)
+
+Session create, list, get, update, delete and clone are covered by the generated docs (see above). The routes
+below are still hand-written.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/sessions/[id]/files | List session files |
+| POST | /api/sessions/semantic-search | Semantic search across sessions |
+| GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
+| PUT | /api/sessions/[id]/chat/[messageId] | Update a message |
+| DELETE | /api/sessions/[id]/chat/[messageId] | Delete a message |
+
+---
+
 ### Projects
 
 Projects organize files, sessions, and team members into workspaces.
@@ -239,6 +254,41 @@ Custom AI agents with configurable personas, system prompts, and tool access.
 | POST | /api/agents/[id]/enhance-field | AI-enhance a specific field |
 | POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
 | POST | /api/agents/create-from-context | Create agent from conversation context |
+
+---
+
+### AI Services
+
+Transcription is covered by the generated docs (see above).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /api/ai/refineText | Refine and improve text |
+
+**Required API-key scope for \`refineText\`:** \`ai:generate\`.
+
+---
+
+### Artifacts
+
+Artifact list, create, get, update, delete and version reads are covered by the generated docs (see above).
+The routes below are still hand-written.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /api/artifacts/[id]/versions | Add an artifact version |
+| GET | /api/artifacts/search | Search artifacts |
+| GET | /api/artifacts/types | List artifact types |
+
+---
+
+### Tools
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /api/tools/web-search | Web search |
+| POST | /api/tools/web-fetch | Fetch web page content |
+| POST | /api/tools/weather | Get weather data |
 
 ---
 

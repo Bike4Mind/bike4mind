@@ -85,6 +85,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/v1/voice/sessions/:id/end',
       'POST /api/v1/transcriptions/uploads',
       'POST /api/v1/transcriptions',
+      'POST /api/ai/refineText',
       'GET /api/v1/quests/:id',
       'GET /api/v1/quests/:id/files',
       'GET /api/v1/credits',
