@@ -8,8 +8,8 @@ import { isOptimisticId } from '@client/app/utils/llm';
 /**
  * The write path for a notebook's context files (`session.knowledgeIds`).
  *
- * Browser surfaces establish the target notebook before writing here. The
- * older idiom they replaced computed the new id list from a captured `currentSession`,
+ * Callers pass the target session id; this hook does not resolve it. The
+ * older idiom it replaced computed the new id list from a captured `currentSession`,
  * which loses a concurrent write, and persisted through a fire-and-forget helper that
  * swallowed failures - a silent no-op is the worst possible outcome for a feature whose
  * entire symptom is a file quietly missing from context.
@@ -31,6 +31,17 @@ export interface AddToNotebookContextOptions {
    * whole notebook). Defaults to true, matching every deliberate user gesture.
    */
   propagateToProjects?: boolean;
+}
+
+/**
+ * True (after toasting) when `file` is an image whose moderation scan has not cleared. Every
+ * path that writes `knowledgeIds` must check this: an entry propagates into clones, exports and
+ * projects, and a blocked image must never reach any of those.
+ */
+export function rejectUnscannedImage(file: IFabFileDocument): boolean {
+  if (!isImageAttachment(file.mimeType) || isImageServeable(file)) return false;
+  toast.error('That image is still being scanned - try again in a moment');
+  return true;
 }
 
 export function useNotebookContextFiles() {
@@ -87,8 +98,11 @@ export function useNotebookContextFiles() {
       options?: AddToNotebookContextOptions
     ): Promise<boolean> => {
       const sid = sessionId ?? '';
-      if (isImageAttachment(fabFile.mimeType) && !isImageServeable(fabFile)) {
-        toast.error('That image is still being scanned - try again in a moment');
+      if (rejectUnscannedImage(fabFile)) return false;
+      // persist() cannot write a client-generated id, and migrateSession does not carry the
+      // tmp workbench bucket to the real id - so an add now would report success, then vanish.
+      if (isOptimisticId(sid)) {
+        toast.info('Wait for this notebook to finish saving, then attach the file.');
         return false;
       }
       // Already present: a no-op, and the caller must not report success for it.

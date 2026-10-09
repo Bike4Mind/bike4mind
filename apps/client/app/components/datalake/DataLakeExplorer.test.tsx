@@ -260,9 +260,13 @@ const { setModeSpy, setLakeScopeSpy, toastInfo, toastError, toastSuccess } = vi.
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
-vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
-  useNotebookContextFiles: () => ({ addToNotebookContext }),
-}));
+vi.mock('@client/app/hooks/useNotebookContextFiles', async importOriginal => {
+  const actual = await importOriginal<typeof import('@client/app/hooks/useNotebookContextFiles')>();
+  return {
+    rejectUnscannedImage: actual.rejectUnscannedImage,
+    useNotebookContextFiles: () => ({ addToNotebookContext }),
+  };
+});
 const { activeNotebook } = vi.hoisted(() => ({
   activeNotebook: {
     value: { onScreen: true, sessionId: 'sess-1' } as { onScreen: boolean; sessionId?: string | null },
@@ -535,13 +539,19 @@ describe('DataLakeExplorer chat-first surface', () => {
     await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalled());
   });
 
-  it('does not claim an optimistic notebook attach persisted', async () => {
+  it('hands an optimistic session id to the shared writer, which owns the refusal', async () => {
     sessionState.currentSessionId = 'optimistic-session-1';
     activeNotebook.value = { onScreen: true, sessionId: 'optimistic-session-1' };
+    addToNotebookContext.mockResolvedValueOnce(false);
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-attach'));
-    await vi.waitFor(() => expect(toastInfo).toHaveBeenCalled());
-    expect(addToNotebookContext).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(addToNotebookContext).toHaveBeenCalledWith(
+        'optimistic-session-1',
+        expect.objectContaining({ id: 'file-123' })
+      )
+    );
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(toastSuccess).not.toHaveBeenCalled();
   });
 
@@ -591,6 +601,18 @@ describe('DataLakeExplorer chat-first surface', () => {
     await vi.waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(createSessionForFile).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('creates a session for a clean image on the mint path', async () => {
+    sessionState.currentSessionId = null;
+    activeNotebook.value = { onScreen: true, sessionId: null };
+    mockFileScan.mimeType = 'image/png';
+    mockFileScan.moderationStatus = 'clean';
+    const createSessionForFile = vi.fn().mockResolvedValue('sess-new');
+    renderExplorer({ createSessionForFile });
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() => expect(createSessionForFile).toHaveBeenCalledTimes(1));
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   it('attach create rejection toasts an error and attaches nothing', async () => {

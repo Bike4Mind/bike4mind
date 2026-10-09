@@ -19,9 +19,8 @@ import { useDataLakeSurface } from '@client/app/components/datalake/surfaceToken
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
-import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
+import { rejectUnscannedImage, useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
-import { isOptimisticId } from '@client/app/utils/llm';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import useSetIncludeLibraryFiles from '@client/app/hooks/useSetIncludeLibraryFiles';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
@@ -47,12 +46,7 @@ import { RemoveFileFromLakeCopy } from '@client/app/components/DataLakeWizard/Re
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { toast } from 'sonner';
-import {
-  isImageAttachment,
-  isImageServeable,
-  type IFabFileDocument,
-  type ManageableDataLakeConfig,
-} from '@bike4mind/common';
+import { type IFabFileDocument, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 /**
  * The Data Lake surface: a browse tree beside a chat (main app + premium /opti). File rows carry
@@ -188,6 +182,9 @@ export default function DataLakeExplorer({
   const { setWorkBenchFiles } = useWorkBenchActions();
   const { addToNotebookContext } = useNotebookContextFiles();
   const activeNotebook = useActiveNotebook();
+  // Primitives, not the object: useActiveNotebook returns a fresh object every render.
+  const activeNotebookOnScreen = activeNotebook.onScreen;
+  const activeNotebookSessionId = activeNotebook.onScreen ? activeNotebook.sessionId : null;
   // Files currently attached to the chat's prompt - drives the tree's persistent highlight, so a
   // file stays marked "already added" regardless of which action attached it (View or the menu's
   // Attach) or how far the user has since navigated the tree (#1693).
@@ -250,26 +247,28 @@ export default function DataLakeExplorer({
   // An explicit gesture, so project propagation keeps its default (as in FilesSection).
   const attachToSession = useCallback(
     async (file: IFabFileDocument): Promise<boolean> => {
-      if (chatEmbedded && !activeNotebook.onScreen) {
+      if (chatEmbedded && !activeNotebookOnScreen) {
         toast.info('Wait for the notebook to finish opening, then attach the file.');
         return false;
       }
-      const sessionId = chatEmbedded && activeNotebook.onScreen ? activeNotebook.sessionId : currentSessionId;
-      if (isOptimisticId(sessionId)) {
-        toast.info('Wait for this notebook to finish saving, then attach the file.');
-        return false;
-      }
+      const sessionId = chatEmbedded ? activeNotebookSessionId : currentSessionId;
+      // The shared writer refuses an optimistic id and an unscanned image itself.
       if (sessionId) return addToNotebookContext(sessionId, file);
       // Session creation stores knowledgeIds directly, bypassing the shared writer's scan guard.
-      if (isImageAttachment(file.mimeType) && !isImageServeable(file)) {
-        toast.error('That image is still being scanned - try again in a moment');
-        return false;
-      }
+      if (rejectUnscannedImage(file)) return false;
       const createdSessionId = await ensureSessionId(file);
       if (!createdSessionId) return false;
       return addToWorkBench(createdSessionId, file);
     },
-    [activeNotebook, chatEmbedded, currentSessionId, addToNotebookContext, ensureSessionId, addToWorkBench]
+    [
+      activeNotebookOnScreen,
+      activeNotebookSessionId,
+      chatEmbedded,
+      currentSessionId,
+      addToNotebookContext,
+      ensureSessionId,
+      addToWorkBench,
+    ]
   );
 
   const attachFileToChat = useCallback(
