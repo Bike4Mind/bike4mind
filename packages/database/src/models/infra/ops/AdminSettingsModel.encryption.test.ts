@@ -90,17 +90,17 @@ describe('AdminSettingsSchema toJSON/toObject chokepoint', () => {
   it('trusted lean reads still return plaintext after decryptSettingInPlace', async () => {
     const plaintext = 'sk-lean-trusted-path-55555';
     const ciphertext = encryptSecret(plaintext, KEY);
-    await AdminSettings.create({ settingName: 'groqDemoKey', settingValue: ciphertext });
+    await AdminSettings.create({ settingName: 'anthropicDemoKey', settingValue: ciphertext });
 
     // .lean() bypasses the toJSON transform; decryptSettingInPlace then gives plaintext.
-    const byName = await adminSettingsRepository.findBySettingName('groqDemoKey');
+    const byName = await adminSettingsRepository.findBySettingName('anthropicDemoKey');
     expect(byName?.settingValue).toBe(plaintext);
 
-    const byNames = await adminSettingsRepository.findBySettingNames(['groqDemoKey']);
+    const byNames = await adminSettingsRepository.findBySettingNames(['anthropicDemoKey']);
     expect(byNames[0]?.settingValue).toBe(plaintext);
 
     const all = await adminSettingsRepository.findAll();
-    expect(all.find(s => s.settingName === 'groqDemoKey')?.settingValue).toBe(plaintext);
+    expect(all.find(s => s.settingName === 'anthropicDemoKey')?.settingValue).toBe(plaintext);
   });
 
   // findAllByTag cannot be end-to-end tested here: 'tags' is not in AdminSettingsSchema,
