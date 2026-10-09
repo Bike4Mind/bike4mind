@@ -57,11 +57,17 @@ export function resolveOptiAgentTools(premiumToolNames: readonly string[]): stri
 
 /**
  * Explicitly denied even if a payload override tries to re-add them: image generation has a
- * history of hijacking optimizer runs, and delegation/DAG would fan the single-agent loop out
+ * history of hijacking optimizer runs (video is denied with it), and delegation/DAG would fan the single-agent loop out
  * into subagents. `pickEffectiveEnabledTools` subtracts `deniedTools` last, so this can't be
  * bypassed by shipping `enabledTools` in the start payload.
  */
-const OPTI_DENIED_TOOLS: string[] = ['image_generation', 'edit_image', 'delegate_to_agent', 'coordinate_task'];
+const OPTI_DENIED_TOOLS: string[] = [
+  'image_generation',
+  'edit_image',
+  'video_generation',
+  'delegate_to_agent',
+  'coordinate_task',
+];
 
 /**
  * A decomposition walk is decompose(1) + per-step formulate/solve/read (~2-3 iterations each),

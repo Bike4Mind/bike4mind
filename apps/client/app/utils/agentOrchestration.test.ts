@@ -120,6 +120,7 @@ describe('buildDefaultOrchestrationProfile', () => {
       'music_generation',
       'audio_generation',
       'excel_generation',
+      'video_generation',
       // Inline visualization artifacts - emit an <artifact> block, write nothing.
       'recharts',
       'mermaid_chart',

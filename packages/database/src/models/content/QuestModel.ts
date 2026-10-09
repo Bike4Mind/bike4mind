@@ -583,6 +583,8 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     images: { type: [String], required: false },
     videos: { type: [String], required: false },
     videoJobIds: { type: [String], default: undefined },
+    // Agent-mode video clips claimed by this run; the per-run cap's counter (see claimAgentVideoClip).
+    agentVideoClipsClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -1227,6 +1229,31 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   async addVideoJobIds(questId: string, jobIds: string[]): Promise<void> {
     if (!jobIds.length) return;
     await this.model.updateOne({ _id: convertId(questId) }, { $addToSet: { videoJobIds: { $each: jobIds } } });
+  }
+
+  /**
+   * Claim one of an agent run's `limit` video clip slots. The run's parent and subagents share this
+   * Quest but run in separate Lambdas, so the check and the increment must be one atomic update.
+   * Returns false when the cap is reached or no Quest matches.
+   */
+  async claimAgentVideoClip(questId: string, limit: number): Promise<boolean> {
+    if (limit <= 0) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: convertId(questId),
+        $or: [{ agentVideoClipsClaimed: { $exists: false } }, { agentVideoClipsClaimed: { $lt: limit } }],
+      },
+      { $inc: { agentVideoClipsClaimed: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Give back a slot from claimAgentVideoClip whose call started no new clip. */
+  async releaseAgentVideoClip(questId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: convertId(questId), agentVideoClipsClaimed: { $gt: 0 } },
+      { $inc: { agentVideoClipsClaimed: -1 } }
+    );
   }
 
   // Cheap existence check (Mongo `exists` returns just the `_id` of the first
