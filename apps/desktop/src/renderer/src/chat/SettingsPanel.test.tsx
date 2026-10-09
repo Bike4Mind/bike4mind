@@ -18,9 +18,21 @@ const signedIn: AuthState = {
 describe('the Settings screen', () => {
   const html = markup(<SettingsScreen auth={signedIn} onClose={() => {}} />);
 
-  it('holds the two settings that are about the app itself', () => {
+  it('holds app preferences, connection, and maintenance settings', () => {
+    expect(html).toContain('data-entry="appearance"');
+    expect(html).toContain('data-entry="prompt-suggestions"');
     expect(html).toContain('data-entry="server"');
     expect(html).toContain('data-entry="updates"');
+  });
+
+  it('offers appearance as a three-way choice', () => {
+    for (const mode of ['system', 'light', 'dark']) {
+      expect(html).toContain(`settings-appearance-${mode}-btn`);
+    }
+  });
+
+  it('offers the suggested next prompt preference', () => {
+    expect(html).toContain('data-testid="settings-suggestions-switch"');
   });
 
   it('mounts the same server picker and updater, not copies of them', () => {
@@ -34,7 +46,7 @@ describe('the Settings screen', () => {
   });
 
   it('says which half of the settings it owns', () => {
-    expect(html).toContain('What this app connects to, and how it keeps itself up to date.');
+    expect(html).toContain('How the app looks, behaves, connects, and keeps itself up to date.');
   });
 
   it('keeps a way out of the screen', () => {
@@ -47,6 +59,8 @@ describe('the Settings screen', () => {
    */
   it('still renders before auth has reported', () => {
     const early = markup(<SettingsScreen auth={null} onClose={() => {}} />);
+    expect(early).toContain('data-entry="appearance"');
+    expect(early).toContain('data-entry="prompt-suggestions"');
     expect(early).toContain('data-entry="updates"');
     expect(early).not.toContain('data-entry="server"');
   });

@@ -16,28 +16,20 @@ const testids = (html: string) => html.match(/data-testid="[^"]+"/g) ?? [];
 describe('the Customize screen', () => {
   const html = markup(<CustomizeScreen onClose={() => {}} />);
 
-  it('puts every look-and-tools setting on the page', () => {
-    expect(html).toContain('data-entry="appearance"');
-    expect(html).toContain('data-entry="prompt-suggestions"');
+  it('keeps tool configuration on the page', () => {
     expect(html).toContain('data-entry="mcp"');
   });
 
-  // Not a tidy-up: the two screens are only worth having if neither answers the other's
-  // question, and the server and the updater are both Settings.
-  it('leaves the server and the updater to Settings', () => {
+  it('leaves app preferences, the server, and the updater to Settings', () => {
+    expect(html).not.toContain('data-entry="appearance"');
+    expect(html).not.toContain('data-entry="prompt-suggestions"');
     expect(html).not.toContain('data-entry="updates"');
     expect(html).not.toContain('data-testid="update-settings"');
     expect(html).not.toContain('data-testid="environment-select-btn"');
   });
 
   it('says which half of the settings it owns', () => {
-    expect(html).toContain('How the app looks, and what it can reach.');
-  });
-
-  it('offers appearance as a three-way choice rather than one that cycles', () => {
-    for (const mode of ['system', 'light', 'dark']) {
-      expect(html).toContain(`customize-appearance-${mode}-btn`);
-    }
+    expect(html).toContain('What tools the app can reach.');
   });
 
   // The whole point of the screen: a row that opened a dialog would have added a navigation
