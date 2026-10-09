@@ -112,9 +112,12 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // gate matches ProfileMenu's source (STRICT: no admin/developer bypass) and open-core builds
   // (no overlay -> empty premiumNavItems) hide the row instead of dead-ending on a missing route.
   const { data: entitlements } = useEntitlements();
-  const isBobEnabled = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags).some(
+  const bobNavItem = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags).find(
     item => item.path === '/bob'
   );
+  // The row uses the icon the overlay contributes with its nav item (the same one ProfileMenu
+  // renders), falling back to a stock glyph when it contributes none.
+  const BobIcon = bobNavItem?.icon;
   // Gears no longer gates navigation. A feature's row is always present; the gear
   // still pays its one-time credit reward on first use, but discovery must not
   // depend on having already discovered it - Hearth was only reachable from the
@@ -191,12 +194,12 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    ...(isBobEnabled
+    ...(bobNavItem
       ? [
           {
             key: 'bob',
             label: 'Bob',
-            icon: iconSlot(<Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: iconSlot(BobIcon ? <BobIcon /> : <Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/bob'),
             onClick: () => {
               closeOnMobile();
