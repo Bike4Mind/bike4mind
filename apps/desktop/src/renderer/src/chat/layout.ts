@@ -41,7 +41,7 @@ export const contentColumnSx: SxProps = {
 };
 
 /**
- * The app's one scrollbar style, for every scroller drawn in the app's own chrome.
+ * The thin scrollbar the sidebar, the transcript and the scrollers in and beside it share.
  *
  * `scrollbar-width` rather than the ::-webkit-scrollbar pseudo-elements because Chromium ignores
  * those once it is set, and this one declaration is the whole of it. Applied per scroller and
