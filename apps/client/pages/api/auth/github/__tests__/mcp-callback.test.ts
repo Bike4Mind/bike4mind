@@ -110,7 +110,8 @@ function expectLeafUpdate(login: string, id: number) {
     'metadata.connectedAt': expect.any(String),
     'metadata.scope': 'repo,read:user',
   });
-  expect(options).toBeUndefined();
+  // Reconnect also clears the confirmed-empty tool marker.
+  expect(options).toEqual({ unset: ['toolSchemasFetchedAt'] });
 }
 
 function expectFullReplace(login: string, id: number) {
@@ -119,7 +120,7 @@ function expectFullReplace(login: string, id: number) {
     ...CONNECTION_FIELDS,
     metadata: { githubLogin: login, githubUserId: id, connectedAt: expect.any(String), scope: 'repo,read:user' },
   });
-  expect(options).toBeUndefined();
+  expect(options).toEqual({ unset: ['toolSchemasFetchedAt'] });
 }
 
 const STALE = '2026-01-01T00:00:00.000Z';
