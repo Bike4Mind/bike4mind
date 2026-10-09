@@ -318,9 +318,8 @@ export function useAgentExecutionSubscriptions(): void {
         // the iteration stream unmounting (on terminal status) and the real
         // Quest arriving (seconds via change-stream).
         // mementoIds and totalCreditsUsed are forwarded so the MementoIndicator
-        // and credits chip render now instead of waiting for the change-stream
-        // (which is silently dropped when the client-clock-set updatedAt is
-        // ahead of the server's value).
+        // and credits chip render on completion rather than when the
+        // change-stream Quest lands.
         const sessionId = store().executions[msg.executionId]?.sessionId;
         if (sessionId && msg.answer) {
           appendReplyToLatestOptimisticBubble(
