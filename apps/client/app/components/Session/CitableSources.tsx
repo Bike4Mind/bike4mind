@@ -23,6 +23,15 @@ interface CitableSourcesProps {
 /** Sources shown before the reader asks for the rest. Enough to see the list has substance. */
 const COLLAPSED_COUNT = 3;
 
+/**
+ * The detector is a pattern match over prose, and its contract is that a finding means "worth a
+ * human's eye", never a proven contradiction (b4m-core/common/src/constants/corpusInconsistency.ts).
+ * Shown once per list rather than in every badge tooltip, where it tripled the box's height.
+ * Names no specific kind, so it holds for a future kind joining the asserted list.
+ */
+const CONFLICT_NOTE =
+  'Flagged sources may disagree. This is a heuristic match over the retrieved passages, not a proven contradiction - read the sources before relying on either.';
+
 const getIconForType = (type: CitableSourceType) => {
   switch (type) {
     case 'web_url':
@@ -215,14 +224,11 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
 
   // Retrieval found this source stating a value another cited source states differently (#3041) -
   // the same finding the model was warned about, so the reader is not the only one left unaware.
-  // Worded as "may disagree" deliberately: the detector is a pattern match over prose and its own
-  // contract is that a finding means "worth a human's eye", never a proven contradiction
-  // (b4m-core/common/src/constants/corpusInconsistency.ts). Holds for a future kind joining the
-  // asserted list too, which is why the wording names no specific kind.
+  // Worded as "may disagree" deliberately; the heuristic caveat lives once under the list
+  // (CONFLICT_NOTE) so this stays one line and does not cover the chip it names.
   const conflictTooltip = conflictingTitles.length
     ? `May disagree with ${conflictingTitles.slice(0, CONFLICT_NAMES_SHOWN).join(', ')}` +
-      `${conflictingTitles.length > CONFLICT_NAMES_SHOWN ? ` and ${conflictingTitles.length - CONFLICT_NAMES_SHOWN} more` : ''}. ` +
-      'This is a heuristic match over the retrieved passages, not a proven contradiction - read the sources before relying on either.'
+      `${conflictingTitles.length > CONFLICT_NAMES_SHOWN ? ` and ${conflictingTitles.length - CONFLICT_NAMES_SHOWN} more` : ''}.`
     : '';
 
   return (
@@ -445,6 +451,8 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
 
   const visible = expanded ? uniqueCitables : uniqueCitables.slice(0, COLLAPSED_COUNT);
   const hiddenCount = uniqueCitables.length - COLLAPSED_COUNT;
+  const conflictingTitlesByIndex = visible.map(source => conflictingTitlesOf(source, titleById));
+  const showConflictNote = conflictingTitlesByIndex.some(titles => titles.length > 0);
 
   return (
     <Box sx={{ mt: 1.5, mb: 1 }} data-testid="citable-sources">
@@ -471,7 +479,7 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
             <CitableSourceItem
               key={key}
               source={source}
-              conflictingTitles={conflictingTitlesOf(source, titleById)}
+              conflictingTitles={conflictingTitlesByIndex[index]}
               conflictPlacement={conflictPlacementOf(source, visible[index - 1], visible[index + 1])}
               highlighted={!!source.id && !!openConflict?.ids.includes(source.id)}
               onConflictTooltipChange={open =>
@@ -483,6 +491,17 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
           );
         })}
       </Stack>
+
+      {/* Collapses with the Stack's 16px margin to an 8px gap above, and keeps 16px to the pill. */}
+      {showConflictNote && (
+        <Typography
+          level="body-xs"
+          data-testid="citable-sources-conflict-note"
+          sx={{ color: 'text.tertiary', mt: '-8px', mb: '16px' }}
+        >
+          {CONFLICT_NOTE}
+        </Typography>
+      )}
 
       <ExpandCollapseButton
         needsTruncation={hiddenCount > 0}
