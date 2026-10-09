@@ -1158,14 +1158,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   /**
    * One `_id`-ordered page of the files a user owns, for the public list. Owned-only, excluding
    * archived files, matching the default view of GET /api/files; shares are left to the by-id read.
-   * `search` is a case-insensitive substring match on the pre-lowered `fileNameLower`.
+   * `search` is a case-insensitive substring match on `fileName`, the same clause GET /api/files
+   * builds (buildFabFileSearchQuery), so the two doors agree on what a name search finds.
    */
   async listOwnedAfterId(
     userId: string,
     { afterId, limit, search }: { afterId?: string; limit: number; search?: string }
   ) {
     const conditions: Record<string, unknown> = { userId, deletedAt: null, archivedAt: null };
-    if (search) conditions.fileNameLower = { $regex: escapeRegex(search.toLowerCase()) };
+    if (search) conditions.fileName = { $regex: escapeRegex(search), $options: 'i' };
     if (afterId !== undefined) {
       if (!mongoose.isObjectIdOrHexString(afterId)) throw new Error(`Invalid file cursor id: ${afterId}`);
       conditions._id = { $gt: convertId(afterId) };
