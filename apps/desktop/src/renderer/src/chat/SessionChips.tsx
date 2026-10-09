@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
 import Chip from '@mui/joy/Chip';
 import Dropdown from '@mui/joy/Dropdown';
@@ -13,7 +14,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { SxProps } from '@mui/joy/styles/types';
-import type { ChatProject } from '@shared/chat';
+import type { BranchCheckout, BranchElsewhere, ChatProject } from '@shared/chat';
 import { describeChipRow, type ChipRowState } from './chipState';
 import { BranchIcon, CloseIcon, FolderIcon, FolderPlusIcon } from './icons';
 import { contentColumnSx } from './layout';
@@ -111,6 +112,11 @@ function lastSegments(path: string, count = 2): string {
   return parts.length <= count ? path : `.../${parts.slice(-count).join('/')}`;
 }
 
+/** A worktree path as the menu names it: relative to the project when it is inside it. */
+function shortCheckoutPath(path: string, root: string | undefined): string {
+  return root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : lastSegments(path);
+}
+
 /**
  * The project directory, as its folder name - and, before one is chosen, the way to choose it.
  *
@@ -156,10 +162,12 @@ function BranchChip({
   project,
   binding,
   branches,
+  elsewhere,
 }: {
   project: ChatProject | null;
   binding: ChipBinding;
   branches: readonly string[];
+  elsewhere: Readonly<Record<string, BranchCheckout>>;
 }) {
   const [filter, setFilter] = useState('');
   const { branch: branchChip, worktree, branchNotice, unset, locked } = binding.chips;
@@ -223,20 +231,43 @@ function BranchChip({
             </MenuItem>
           )}
 
-          {matches.map(entry => (
-            <MenuItem
-              key={entry}
-              disabled={locked}
-              selected={entry === onNow}
-              onClick={() => void binding.setBranch(entry)}
-              data-testid="session-chip-branch-option"
-            >
-              <Typography level="body-sm" noWrap>
-                {entry === onNow ? '* ' : ''}
-                {entry}
-              </Typography>
-            </MenuItem>
-          ))}
+          {matches.map(entry => {
+            const held = elsewhere[entry];
+            return (
+              <MenuItem
+                key={entry}
+                disabled={locked}
+                selected={entry === onNow}
+                onClick={() => void binding.setBranch(entry)}
+                data-testid="session-chip-branch-option"
+              >
+                <Typography level="body-sm" noWrap data-testid="session-chip-branch-name">
+                  {entry === onNow ? '* ' : ''}
+                  {entry}
+                </Typography>
+                {held && (
+                  <Tooltip
+                    title={heldTooltip(held, project?.workspace ?? false)}
+                    size="sm"
+                    variant="soft"
+                    placement="right"
+                  >
+                    <Typography
+                      level="body-xs"
+                      textColor="text.tertiary"
+                      noWrap
+                      startDecorator={<FolderIcon />}
+                      sx={{ ml: 'auto', pl: 1.5, minWidth: 0 }}
+                      data-testid="session-chip-branch-elsewhere-label"
+                    >
+                      {shortCheckoutPath(held.path, project?.directory)}
+                      {held.prunable ? ' (missing)' : ''}
+                    </Typography>
+                  </Tooltip>
+                )}
+              </MenuItem>
+            );
+          })}
 
           {branchNotice && (
             <Typography
@@ -272,6 +303,85 @@ function BranchChip({
         </Box>
       </Tooltip>
     </Box>
+  );
+}
+
+/**
+ * The full path behind a menu mark. With the toggle on the pick is only a base, so the mark is
+ * information there rather than a warning, and the tooltip says as much.
+ */
+function heldTooltip(held: BranchCheckout, workspace: boolean): string {
+  const where = held.prunable
+    ? `Held by a worktree at ${held.path}, whose folder is gone.`
+    : `Checked out in ${held.path}.`;
+  return workspace
+    ? `${where} With worktree on this is only the base a new branch is cut from, so that is fine.`
+    : `${where} Picking it offers to work in that folder, or to cut a worktree from it.`;
+}
+
+/**
+ * The two ways on from a toggle-off pick that git cannot check out here, in the slot the chip
+ * row's refusals use. A prunable holder has no folder to move into, so only the cut is offered.
+ */
+function ElsewhereConfirm({
+  message,
+  elsewhere,
+  binding,
+}: {
+  message: string;
+  elsewhere: BranchElsewhere;
+  binding: ProjectBindingController;
+}) {
+  return (
+    <Alert
+      size="sm"
+      color="neutral"
+      variant="soft"
+      sx={{ mb: 1, alignItems: 'flex-start' }}
+      data-testid="session-chip-elsewhere"
+      endDecorator={
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          aria-label="Dismiss"
+          onClick={() => binding.dismissError()}
+          data-testid="session-chip-elsewhere-dismiss-btn"
+        >
+          <CloseIcon />
+        </IconButton>
+      }
+    >
+      <Stack spacing={0.75}>
+        <Typography level="body-sm" textColor="inherit" data-testid="session-chip-elsewhere-message">
+          {message}
+        </Typography>
+        <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+          {!elsewhere.prunable && (
+            <Button
+              size="sm"
+              variant="solid"
+              color="primary"
+              disabled={binding.busy}
+              onClick={() => void binding.moveToCheckout(elsewhere)}
+              data-testid="session-chip-elsewhere-use-btn"
+            >
+              Use the existing checkout
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            disabled={binding.busy}
+            onClick={() => void binding.worktreeFrom(elsewhere.branch)}
+            data-testid="session-chip-elsewhere-worktree-btn"
+          >
+            Create a worktree from it
+          </Button>
+        </Stack>
+      </Stack>
+    </Alert>
   );
 }
 
@@ -368,6 +478,8 @@ export function GrantedFolderChips({
 
 interface BranchReading {
   branches: string[];
+  /** Branches another worktree has checked out, by name; see ProjectInspection. */
+  elsewhere: Record<string, BranchCheckout>;
   isRepository: boolean;
   /** HEAD of the working directory; undefined until git has answered. */
   checkedOut: string | null | undefined;
@@ -383,7 +495,7 @@ interface KeyedReading extends BranchReading {
   of: string | null;
 }
 
-const PENDING: BranchReading = { branches: [], isRepository: true, checkedOut: undefined };
+const PENDING: BranchReading = { branches: [], elsewhere: {}, isRepository: true, checkedOut: undefined };
 
 /**
  * The branches of the directory this session is currently on, and the branch it is actually on.
@@ -419,7 +531,7 @@ function useBranches(directory: string | null, workingDirectory: string | null, 
 
   useEffect(() => {
     if (!directory) {
-      setState({ branches: [], isRepository: false, checkedOut: undefined, of: key });
+      setState({ branches: [], elsewhere: {}, isRepository: false, checkedOut: undefined, of: key });
       return;
     }
     let current = true;
@@ -433,6 +545,7 @@ function useBranches(directory: string | null, workingDirectory: string | null, 
       if (!current) return;
       setState({
         branches: inspected.branches,
+        elsewhere: notIn(inspected.checkedOutElsewhere ?? {}, workspace),
         isRepository: inspected.isRepository,
         checkedOut: (inWorkspace ?? inspected).currentBranch,
         of: key,
@@ -447,6 +560,14 @@ function useBranches(directory: string | null, workingDirectory: string | null, 
   }, [directory, workingDirectory, key, reread, settledTurns]);
 
   return { ...(state.of === key ? state : PENDING), refresh };
+}
+
+/**
+ * The listing excludes the folder it was asked about, which is the project root; a session in a
+ * worktree of its own is not "elsewhere" from itself either.
+ */
+function notIn(checkouts: Record<string, BranchCheckout>, workingDirectory: string): Record<string, BranchCheckout> {
+  return Object.fromEntries(Object.entries(checkouts).filter(([, held]) => held.path !== workingDirectory));
 }
 
 function keyOf(directory: string | null, workingDirectory: string | null): string | null {
@@ -480,7 +601,7 @@ export function SessionChips({
    */
   inUse?: boolean;
 }) {
-  const { branches, isRepository, checkedOut, refresh } = useBranches(
+  const { branches, elsewhere, isRepository, checkedOut, refresh } = useBranches(
     project?.directory ?? null,
     project?.workingDirectory ?? null,
     settledTurns
@@ -488,9 +609,15 @@ export function SessionChips({
   const picked = project?.branch ?? '';
   // Unknown until git answers: the list is empty meanwhile, which is not evidence of a new name.
   const pickedExists = checkedOut === undefined ? undefined : !picked || branches.includes(picked);
+  const elsewhereCount = Object.keys(elsewhere).length;
   const chips = useMemo(
-    () => describeChipRow(project, { isRepository, count: branches.length, checkedOut, pickedExists }, inUse),
-    [project, isRepository, branches.length, checkedOut, pickedExists, inUse]
+    () =>
+      describeChipRow(
+        project,
+        { isRepository, count: branches.length, checkedOut, pickedExists, elsewhereCount },
+        inUse
+      ),
+    [project, isRepository, branches.length, checkedOut, pickedExists, elsewhereCount, inUse]
   );
   // A toggle-off pick switches HEAD without changing either folder useBranches is keyed on, so
   // nothing else would re-read it before the next focus; a created branch also joins the list.
@@ -511,22 +638,26 @@ export function SessionChips({
 
   return (
     <Box sx={{ ...contentColumnSx, pt: 1 }}>
-      {binding.error && (
-        <Alert
-          size="sm"
-          color={binding.error.busy ? 'warning' : 'danger'}
-          variant="soft"
-          sx={{ mb: 1, cursor: 'pointer' }}
-          onClick={dismiss}
-          data-testid="session-chip-error"
-        >
-          {binding.error.message}
-        </Alert>
+      {binding.error?.elsewhere ? (
+        <ElsewhereConfirm message={binding.error.message} elsewhere={binding.error.elsewhere} binding={binding} />
+      ) : (
+        binding.error && (
+          <Alert
+            size="sm"
+            color={binding.error.busy ? 'warning' : 'danger'}
+            variant="soft"
+            sx={{ mb: 1, cursor: 'pointer' }}
+            onClick={dismiss}
+            data-testid="session-chip-error"
+          >
+            {binding.error.message}
+          </Alert>
+        )
       )}
 
       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
         <ProjectChip binding={bound} />
-        <BranchChip project={project} binding={bound} branches={branches} />
+        <BranchChip project={project} binding={bound} branches={branches} elsewhere={elsewhere} />
         <ContextChips project={project} granted={grantedDirectories} binding={bound} />
       </Stack>
     </Box>

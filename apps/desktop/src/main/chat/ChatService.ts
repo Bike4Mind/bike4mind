@@ -22,6 +22,7 @@ import type {
   ChatSessionSummary,
   ChatStreamEvent,
   ChatRoundTiming,
+  BranchCheckout,
   ChatToolCall,
   ChatToolDetail,
   ChatToolNotice,
@@ -47,6 +48,7 @@ import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName } from './project/branchName';
 import {
+  branchCheckouts,
   branchExists,
   checkoutBranch,
   currentBranch,
@@ -760,12 +762,17 @@ export class ChatService {
     session: ChatSession,
     directory: string,
     branch: string
-  ): Promise<{ ok: false; error: string; busy?: boolean } | null> {
+  ): Promise<Extract<UpdateProjectResult, { ok: false }> | null> {
     if ((await currentBranch(directory)) === branch) return null;
     // Main's half of the chip lock, now that a pick has an effect on disk; see describeChipRow.
     if (session.messages.length > 0) {
       return { ok: false, error: 'This conversation has already run here. Start a new session to switch branches.' };
     }
+    // Asked before the sharer and dirty-tree checks: neither offer below touches this folder, so
+    // neither reason to stop applies to them. Read here as well as in the chip's branch list,
+    // which can be a focus out of date.
+    const holder = (await branchCheckouts(directory).catch((): Record<string, BranchCheckout> => ({})))[branch];
+    if (holder) return { ok: false, error: heldElsewhereMessage(branch, holder), elsewhere: { branch, ...holder } };
     const sharer = await this.activeSessionIn(directory, session.id);
     if (sharer) {
       return {
@@ -3524,6 +3531,19 @@ export class ChatService {
   }
 }
 
+/** Why a toggle-off pick was not switched to, for the chip row's confirm. */
+function heldElsewhereMessage(branch: string, holder: BranchCheckout): string {
+  if (holder.prunable) {
+    return (
+      `${branch} is still held by a worktree at ${holder.path} whose folder is gone. ` +
+      "Run 'git worktree prune' in a terminal to free it, or create a worktree from it."
+    );
+  }
+  return (
+    `${branch} is already checked out in ${holder.path}, and git keeps a branch in one checkout ` +
+    'at a time. Use that checkout, or create a worktree from it.'
+  );
+}
 /**
  * What a Code session tells the model about where it is.
  *

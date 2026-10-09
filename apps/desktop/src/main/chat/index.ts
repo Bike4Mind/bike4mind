@@ -50,7 +50,14 @@ import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
 import { sessionScopeFor } from './sessionScope';
-import { currentBranch, isGitRepository, listBranches, projectDisplayName, unusableProjectReason } from './project/git';
+import {
+  branchCheckouts,
+  currentBranch,
+  isGitRepository,
+  listBranches,
+  projectDisplayName,
+  unusableProjectReason,
+} from './project/git';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
@@ -434,8 +441,14 @@ export function registerChat(auth: AuthService): RegisteredChat {
     }
     const base = { directory: resolved, name: await projectDisplayName(resolved) };
     try {
-      const [branches, head] = await Promise.all([listBranches(resolved), currentBranch(resolved)]);
-      return { ...base, isRepository: true, branches, currentBranch: head };
+      // The marks are an aid, not the list: a worktree listing git cannot answer leaves the
+      // branches standing, and a toggle-off pick is still checked against git in main.
+      const [branches, head, checkedOutElsewhere] = await Promise.all([
+        listBranches(resolved),
+        currentBranch(resolved),
+        branchCheckouts(resolved).catch(() => ({})),
+      ]);
+      return { ...base, isRepository: true, branches, currentBranch: head, checkedOutElsewhere };
     } catch (err) {
       return {
         ...base,

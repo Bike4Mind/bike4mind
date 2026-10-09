@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  BranchElsewhere,
   ChatApprovalAnswer,
   ChatApprovalMode,
   ChatAttachment,
@@ -229,6 +230,8 @@ export interface ProjectBindingError {
   message: string;
   /** Refused on timing rather than validity: the same change works once the session is idle. */
   busy: boolean;
+  /** A toggle-off pick of a branch another worktree holds; the chip row offers the ways on. */
+  elsewhere?: BranchElsewhere;
 }
 
 /** Everything the chip row above the composer can change about a Code session's grounding. */
@@ -241,6 +244,10 @@ export interface ProjectBindingController {
   pickDirectory: () => Promise<void>;
   setBranch: (branch: string) => Promise<void>;
   setWorkspace: (workspace: boolean) => Promise<void>;
+  /** Move the session into the worktree that already has `elsewhere.branch` checked out. */
+  moveToCheckout: (elsewhere: BranchElsewhere) => Promise<void>;
+  /** Turn the worktree toggle on with `branch` as the base the first message cuts from. */
+  worktreeFrom: (branch: string) => Promise<void>;
   addContextDirectory: () => Promise<void>;
   removeContextDirectory: (directory: string) => Promise<void>;
 }
@@ -835,7 +842,11 @@ export function useConversation(
       try {
         const result = await window.b4m.chat.updateProject({ sessionId, ...change });
         if (!result.ok) {
-          setProjectError({ message: result.error, busy: !!result.busy });
+          setProjectError({
+            message: result.error,
+            busy: !!result.busy,
+            ...(result.elsewhere ? { elsewhere: result.elsewhere } : {}),
+          });
           return false;
         }
         applySummary(result.session);
@@ -878,6 +889,19 @@ export function useConversation(
     },
     [changeProject]
   );
+  // A move like pickDirectory's, onto a folder git has just named rather than one the picker did.
+  const moveToCheckout = useCallback(
+    async ({ path, branch }: BranchElsewhere) => {
+      await changeProject({ directory: path, branch, workspace: false });
+    },
+    [changeProject]
+  );
+  const worktreeFrom = useCallback(
+    async (branch: string) => {
+      await changeProject({ branch, workspace: true });
+    },
+    [changeProject]
+  );
 
   const addContextDirectory = useCallback(async () => {
     if (!sessionId) return;
@@ -908,6 +932,8 @@ export function useConversation(
       pickDirectory,
       setBranch,
       setWorkspace,
+      moveToCheckout,
+      worktreeFrom,
       addContextDirectory,
       removeContextDirectory,
     }),
@@ -918,6 +944,8 @@ export function useConversation(
       pickDirectory,
       setBranch,
       setWorkspace,
+      moveToCheckout,
+      worktreeFrom,
       addContextDirectory,
       removeContextDirectory,
     ]
