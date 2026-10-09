@@ -298,5 +298,9 @@ describe('main', () => {
       { fetch: unflagged.fetch, sleep: noSleep, log: makeLog() }
     );
     expect(runBody(unflagged.calls).counts.failed).toBe(0);
+
+    const unset = fakeFetch();
+    await main(args, ENV, { fetch: unset.fetch, sleep: noSleep, log: makeLog() });
+    expect(runBody(unset.calls).tests.some(t => t.test_key.startsWith('latency-gate'))).toBe(false);
   });
 });

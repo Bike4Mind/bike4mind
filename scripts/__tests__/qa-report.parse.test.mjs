@@ -173,7 +173,9 @@ describe('latency gate', () => {
       status: 'failed',
       error: 'avg 7.25s, threshold 5s',
     });
-    expect(latencyGateTest(file, { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 5 })).toBeNull();
+    const within = latencyGateTest(file, { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 5 });
+    expect(within).toMatchObject({ testKey: 'latency-gate::ai-latency-short-answers [model-x]', status: 'passed' });
+    expect(within).not.toHaveProperty('error');
   });
 
   it('fails an under-threshold cell that abandoned a gated prompt', () => {
@@ -190,10 +192,31 @@ describe('latency gate', () => {
     );
   });
 
-  it('turns a passed run failed, falling back to one gate test when no cell explains the breach', () => {
-    const parsed = { tests: [], counts: { passed: 2, failed: 0, skipped: 0, notStarted: 0, ran: 2, total: 2 } };
-    applyLatencyGate(parsed, []);
-    expect(parsed.tests.map(t => t.testKey)).toEqual(['latency-gate']);
-    expect(parsed.counts).toMatchObject({ failed: 1, ran: 3, total: 3 });
+  const counts = () => ({ passed: 2, failed: 0, skipped: 0, notStarted: 0, ran: 2, total: 2 });
+  const over = latencyGateTest(file, { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 9 });
+  const under = latencyGateTest(file, { model: 'model-y', thresholdSec: 5, averageResponseTimeSec: 1 });
+
+  it('posts within-budget cells as passed beside the breached ones, so their history is not all failures', () => {
+    const parsed = { tests: [], counts: counts() };
+    applyLatencyGate(parsed, [over, under], true);
+    expect(parsed.tests.map(t => t.status)).toEqual(['failed', 'passed']);
+    expect(parsed.counts).toMatchObject({ passed: 3, failed: 1, ran: 4, total: 4 });
+  });
+
+  it('falls back to one gate test when the workflow reports a breach no cell explains', () => {
+    const parsed = { tests: [], counts: counts() };
+    applyLatencyGate(parsed, [under], true);
+    expect(parsed.tests.map(t => [t.testKey, t.status])).toEqual([
+      ['latency-gate', 'failed'],
+      ['latency-gate::ai-latency-short-answers [model-y]', 'passed'],
+    ]);
+    expect(parsed.counts).toMatchObject({ passed: 3, failed: 1, ran: 4, total: 4 });
+  });
+
+  it('lets a no-breach verdict win over a cell the per-cell rule would fail', () => {
+    const parsed = { tests: [], counts: counts() };
+    applyLatencyGate(parsed, [over, under], false);
+    expect(parsed.tests.map(t => t.status)).toEqual(['passed']);
+    expect(parsed.counts).toMatchObject({ passed: 3, failed: 0, ran: 3, total: 3 });
   });
 });

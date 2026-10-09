@@ -206,7 +206,9 @@ export function latencyMetric(fileName, json) {
 /**
  * The Aggregate step in e2e-ai-latency.yml fails the run on a latency breach after Playwright
  * passed, so the breach has to reach /status as a failed test. Mirrors that step's per-cell rule
- * (over threshold, no threshold, or an abandoned gated prompt); keep the two in sync.
+ * (over threshold, no threshold, or an abandoned gated prompt); keep the two in sync. A cell
+ * within budget posts a passed test, so the alarm's flake history (evaluateAlarm.ts) sees the
+ * cell's passes too and does not call every repeat breach "known flaky". No data: no test.
  */
 export function latencyGateTest(fileName, json) {
   if (typeof json?.model !== 'string') return null;
@@ -215,28 +217,38 @@ export function latencyGateTest(fileName, json) {
   const abandoned = (Array.isArray(json.results) ? json.results : []).filter(
     r => r?.incomplete === true && r.measuresDeliverable !== true
   ).length;
-  if (threshold !== undefined && (avg === 0 || (avg <= threshold && abandoned === 0))) return null;
+  if (threshold !== undefined && avg === 0) return null;
   const label = `${path.basename(fileName, '-results.json')} [${json.model}]`;
+  const testKey = `latency-gate::${label}`;
+  const title = `Latency gate: ${label}`;
+  if (threshold !== undefined && avg <= threshold && abandoned === 0) return gateTest(testKey, title, 'passed');
   let error = `avg ${avg.toFixed(2)}s, ${threshold === undefined ? 'no threshold declared' : `threshold ${threshold}s`}`;
   if (abandoned > 0) error += `, ${abandoned} prompt(s) never finished`;
-  return gateTest(`latency-gate::${label}`, `Latency gate: ${label}`, error);
+  return gateTest(testKey, title, 'failed', error);
 }
 
-function gateTest(testKey, title, error) {
-  return { testKey, title, status: 'failed', durationMs: 0, retries: 0, error, artifacts: [], attachments: [] };
+function gateTest(testKey, title, status, error) {
+  const test = { testKey, title, status, durationMs: 0, retries: 0, artifacts: [], attachments: [] };
+  if (error !== undefined) test.error = error;
+  return test;
 }
 
 /** Fallback when the workflow reports a breach but no cell file explains it. */
 export const LATENCY_GATE_FALLBACK = gateTest(
   'latency-gate',
   'Latency gate',
+  'failed',
   'Latency gate failed; the Aggregate step summary in CI names the cell.'
 );
 
-export function applyLatencyGate(parsed, gateTests) {
-  const tests = gateTests.length > 0 ? gateTests : [{ ...LATENCY_GATE_FALLBACK }];
+/** `breach` is the workflow's verdict and wins over the per-cell rule if the two ever disagree. */
+export function applyLatencyGate(parsed, gateTests, breach) {
+  const tests = breach ? [...gateTests] : gateTests.filter(t => t.status === 'passed');
+  if (breach && !tests.some(t => t.status === 'failed')) tests.unshift({ ...LATENCY_GATE_FALLBACK });
+  const failed = tests.filter(t => t.status === 'failed').length;
   parsed.tests.unshift(...tests);
-  parsed.counts.failed += tests.length;
+  parsed.counts.failed += failed;
+  parsed.counts.passed += tests.length - failed;
   parsed.counts.ran += tests.length;
   parsed.counts.total += tests.length;
 }
@@ -574,8 +586,11 @@ export async function main(argv, env, deps = {}) {
     const parsed = parts.length > 0 ? mergeParsed(parts) : parseResults({});
     if (args.countsOut) await fs.writeFile(args.countsOut, JSON.stringify(parsed.counts));
 
-    // QA_LATENCY_BREACH is the Aggregate step's skip-aware verdict; never re-derive it here.
-    if (env.QA_LATENCY_BREACH === 'true') applyLatencyGate(parsed, await loadLatencyGateTests(args.latencyDir, log));
+    // QA_LATENCY_BREACH is the Aggregate step's skip-aware verdict; unset means not a latency run.
+    if (env.QA_LATENCY_BREACH === 'true' || env.QA_LATENCY_BREACH === 'false') {
+      const gateTests = await loadLatencyGateTests(args.latencyDir, log);
+      applyLatencyGate(parsed, gateTests, env.QA_LATENCY_BREACH === 'true');
+    }
 
     const metrics = await loadMetrics(args, log);
     let reportPrefix;
