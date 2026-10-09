@@ -37,7 +37,7 @@ async function findOwnedAgent(id: string, userId: string) {
 }
 
 const getRoute = nextRouteForContract(getAgentContract, {
-  rateLimit: perUserRateLimit('/api/v1/agents/[id]'),
+  rateLimit: perUserRateLimit('GET /api/v1/agents/[id]'),
 }).get(async (req, res) => {
   const agent = await agentRepository.findById(req.validatedParams.id);
   assertAgentAccess(agent, req.user.id, 'view');
