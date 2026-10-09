@@ -281,8 +281,17 @@ function BranchChip({
  * The grants are drawn rather than hidden behind the button: they widen what the tools can
  * reach, and a permission nobody can see is one nobody can take back.
  */
-function ContextChips({ project, binding }: { project: ChatProject | null; binding: ChipBinding }) {
+function ContextChips({
+  project,
+  granted,
+  binding,
+}: {
+  project: ChatProject | null;
+  granted: readonly string[];
+  binding: ChipBinding;
+}) {
   const { addContext } = binding.chips;
+  const directories = [...(project?.contextDirectories ?? []), ...granted];
 
   return (
     <>
@@ -304,22 +313,56 @@ function ContextChips({ project, binding }: { project: ChatProject | null; bindi
         </Box>
       </Tooltip>
 
-      {(project?.contextDirectories ?? []).map(directory => (
-        <Tooltip key={directory} title={directory} size="sm" variant="soft" placement="top-start">
-          <Chip
-            size="sm"
-            variant="soft"
-            color="neutral"
-            endDecorator={<CloseIcon />}
-            onClick={() => void binding.removeContextDirectory(directory)}
-            sx={chipSx}
-            data-testid="session-chip-context"
-          >
-            {lastSegments(directory)}
-          </Chip>
-        </Tooltip>
-      ))}
+      {directories
+        .filter((directory, index) => directories.indexOf(directory) === index)
+        .map(directory => (
+          <DirectoryChip key={directory} directory={directory} onRemove={binding.removeContextDirectory} />
+        ))}
     </>
+  );
+}
+
+/** One granted folder; clicking it takes the grant back. */
+function DirectoryChip({ directory, onRemove }: { directory: string; onRemove: (directory: string) => Promise<void> }) {
+  return (
+    <Tooltip title={directory} size="sm" variant="soft" placement="top-start">
+      <Chip
+        size="sm"
+        variant="soft"
+        color="neutral"
+        endDecorator={<CloseIcon />}
+        onClick={() => void onRemove(directory)}
+        sx={chipSx}
+        data-testid="session-chip-context"
+      >
+        {lastSegments(directory)}
+      </Chip>
+    </Tooltip>
+  );
+}
+
+/**
+ * The folders a Chat session was granted from a `request_directory` card. A Chat session draws no
+ * SessionChips row, and a grant nobody can see is one nobody can take back, so these get a row of
+ * their own - drawn only while there is something in it.
+ */
+export function GrantedFolderChips({
+  directories,
+  onRemove,
+}: {
+  directories: readonly string[];
+  onRemove: (directory: string) => Promise<void>;
+}) {
+  if (directories.length === 0) return null;
+  return (
+    <Box sx={{ ...contentColumnSx, pt: 1 }} data-testid="session-granted-folders">
+      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
+        <FolderIcon />
+        {directories.map(directory => (
+          <DirectoryChip key={directory} directory={directory} onRemove={onRemove} />
+        ))}
+      </Stack>
+    </Box>
   );
 }
 
@@ -419,11 +462,14 @@ function keyOf(directory: string | null, workingDirectory: string | null): strin
  */
 export function SessionChips({
   project,
+  grantedDirectories = [],
   binding,
   settledTurns,
   inUse = false,
 }: {
   project: ChatProject | null;
+  /** Folders added from a `request_directory` card while the session had no project to hold them. */
+  grantedDirectories?: readonly string[];
   binding: ProjectBindingController;
   /** Monotonic count of replies this window has watched end; see useBranches. */
   settledTurns: number;
@@ -481,7 +527,7 @@ export function SessionChips({
       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
         <ProjectChip binding={bound} />
         <BranchChip project={project} binding={bound} branches={branches} />
-        <ContextChips project={project} binding={bound} />
+        <ContextChips project={project} granted={grantedDirectories} binding={bound} />
       </Stack>
     </Box>
   );

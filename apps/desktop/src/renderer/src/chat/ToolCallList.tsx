@@ -13,9 +13,11 @@ import type {
   ChatToolNotice,
   ChatToolStatus,
 } from '@shared/chat';
+import { REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { DiffView } from './DiffView';
+import { DirectoryRequestCard } from './DirectoryRequestCard';
 import { ChevronIcon } from './icons';
 import { MediaAttachments } from './MediaAttachment';
 import { QuestionCard, QuestionSummary } from './QuestionCard';
@@ -589,6 +591,24 @@ export function ToolCallList({
               questions={questions.questions}
               onSubmit={answers => onRespond(approvalId, { decision: 'once', answers })}
               onSkip={() => onRespond(approvalId, { decision: 'deny' })}
+            />
+          );
+        }
+        if (
+          waiting.name === REQUEST_DIRECTORY_TOOL_NAME &&
+          waiting.status === 'awaiting-approval' &&
+          waiting.approvalId
+        ) {
+          const approvalId = waiting.approvalId;
+          return (
+            <DirectoryRequestCard
+              // Keyed on the request, so a second card never inherits the first one's answered state.
+              key={approvalId}
+              path={waiting.approvalDetail ?? String(waiting.input.path ?? '')}
+              reason={typeof waiting.input.reason === 'string' ? waiting.input.reason : ''}
+              {...(waiting.approvalWarning ? { warning: waiting.approvalWarning } : {})}
+              onAdd={() => onRespond(approvalId, { decision: 'once' })}
+              onDecline={() => onRespond(approvalId, { decision: 'deny' })}
             />
           );
         }

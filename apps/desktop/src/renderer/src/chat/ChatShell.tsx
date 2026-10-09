@@ -24,7 +24,7 @@ import { MessageThread } from './MessageThread';
 import { columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
-import { SessionChips } from './SessionChips';
+import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { PrStatusBar } from './PrStatusBar';
 import { usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
@@ -657,9 +657,18 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           {conversation.session?.mode === 'code' && (
             <SessionChips
               project={conversation.session.project ?? null}
+              {...(conversation.session.grantedDirectories
+                ? { grantedDirectories: conversation.session.grantedDirectories }
+                : {})}
               binding={conversation.project}
               settledTurns={conversation.settledTurns}
               inUse={conversation.messages.length > 0}
+            />
+          )}
+          {conversation.session && conversation.session.mode !== 'code' && (
+            <GrantedFolderChips
+              directories={conversation.session.grantedDirectories ?? []}
+              onRemove={conversation.project.removeContextDirectory}
             />
           )}
 

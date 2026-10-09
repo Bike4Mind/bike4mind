@@ -6,7 +6,9 @@ import { dirname, resolve } from 'node:path';
  * would train the user to click through the one prompt that protects the rest of the disk.
  *
  * Grants are added only from a native folder picker the user drives (see src/main/chat/index.ts).
- * Nothing the MODEL sends can widen this set - there is deliberately no "request access" tool.
+ * The model may only ASK for a folder, through request_directory, and even a grant the user clicks
+ * there is scoped to that one conversation and never lands here - see ChatService.awaitDirectory.
+ * Nothing the model sends can widen this set.
  */
 export class AccessStore {
   private roots: string[] | null = null;

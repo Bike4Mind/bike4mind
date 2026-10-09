@@ -176,9 +176,12 @@ describe('ChatService', () => {
     expect(preamble.role).toBe('system');
     expect(preamble.content).toMatch(/NO access/);
     expect(preamble.content).toMatch(/never invent a file name/i);
-    // Only the question tool: it reads no files, so it survives the missing grant.
+    expect(preamble.content).toMatch(/call request_directory/);
+    // Only the tools that read no files survive the missing grant: the question, and the request
+    // for a folder, which is how the conversation gets one.
     expect(post.mock.calls[0][1].options.tools).toEqual([
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'ask_user' }) }),
+      expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'request_directory' }) }),
     ]);
   });
 

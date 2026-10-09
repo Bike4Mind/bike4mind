@@ -1,6 +1,6 @@
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
   ChatApprovalMode,
   ChatMessage,
@@ -82,6 +82,8 @@ export interface CreateOptions {
    * means the mode the user last picked for themselves - see ApprovalModePreference.
    */
   approvalMode?: ChatApprovalMode;
+  /** A spawned session's copy of its parent's session-scoped grants; see ChatSession.grantedDirectories. */
+  grantedDirectories?: string[];
 }
 
 function summarize(session: ChatSession): ChatSessionSummary {
@@ -283,6 +285,7 @@ export class SessionStore {
       approvalMode,
       reasoningEffort: this.defaultReasoningEffort,
       ...(project && mode === 'code' ? { project } : {}),
+      ...(options.grantedDirectories?.length ? { grantedDirectories: [...options.grantedDirectories] } : {}),
       ...(origin ? { origin } : {}),
       messages: [],
     };
@@ -501,10 +504,33 @@ export class SessionStore {
     });
   }
 
+  /**
+   * Grant a folder to this conversation alone, for a session with no project to hold it as a
+   * context directory. Reached only from a `request_directory` card the user clicked.
+   */
+  async addGrantedDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
+    return this.mutate(id, session => {
+      const granted = session.grantedDirectories ?? [];
+      if (granted.includes(directory)) return false;
+      session.grantedDirectories = [...granted, directory];
+      return true;
+    });
+  }
+
+  /**
+   * Take a folder back from this conversation, whichever list it was granted into: a session's
+   * chips draw both, and one remove control must revoke either.
+   */
   async removeContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
     return this.mutate(id, session => {
-      if (!session.project) return null;
-      session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
+      const granted = session.grantedDirectories ?? [];
+      if (!session.project && !granted.includes(directory)) return null;
+      if (session.project) {
+        session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
+      }
+      const kept = granted.filter(entry => entry !== directory);
+      if (kept.length > 0) session.grantedDirectories = kept;
+      else delete session.grantedDirectories;
       return true;
     });
   }
@@ -609,6 +635,10 @@ export class SessionStore {
     // in a later version must not make an existing conversation unreadable.
     const project = normalizeProject(parsed.project);
     const origin = normalizeOrigin(parsed.origin);
+    // Absolute only: a relative entry would resolve against wherever the app was launched from.
+    const grantedDirectories = Array.isArray(parsed.grantedDirectories)
+      ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))
+      : [];
     return {
       id: parsed.id ?? id,
       title: parsed.title || UNTITLED,
@@ -630,6 +660,7 @@ export class SessionStore {
       // it takes the launch default, which is the environment variable or nothing at all.
       reasoningEffort: storedReasoningEffortSetting(parsed.reasoningEffort) ?? this.defaultReasoningEffort,
       ...(parsed.mode === 'code' && project ? { project } : {}),
+      ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
@@ -38,6 +39,7 @@ import { shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
+import { REQUEST_DIRECTORY_TOOL_NAME, type DirectoryRequestOutcome } from '@shared/directoryRequest';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
@@ -102,6 +104,7 @@ import type { SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager } from './mcp/McpManager';
 import type { AccessStore } from './tools/AccessStore';
 import { QUESTION_CANCELLED, type ApprovalGate } from './tools/ApprovalGate';
+import { inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
@@ -888,23 +891,28 @@ export class ChatService {
    * pure ceremony. The global grants stay because tools are not Code-only - a Code session can
    * still be pointed at a reference checkout the user shared earlier.
    *
-   * A Code session with NO project is the one case that gets nothing, not even the global
-   * grants. It has no working directory, and every path tool falls back to `roots[0]` when it
-   * has none - so handing it the grants would root an agent's shell commands in whichever
-   * folder the user happened to share first. An empty root set makes each tool refuse instead
-   * (paths.resolveWithinRoots and shellTools.resolveCwd both reject one). `send` already
-   * refuses the turn outright; this is the second lock on the same door.
+   * A Code session with NO project never gets the global grants. It has no working directory,
+   * and every path tool falls back to `roots[0]` when it has none - so handing it the grants
+   * would root an agent's shell commands in whichever folder the user happened to share first.
+   * It gets only the folders granted to it alone (`grantedDirectories`), normally none, and an
+   * empty root set makes each tool refuse (paths.resolveWithinRoots and shellTools.resolveCwd
+   * both reject one). `send` already refuses its turn outright; this is the second lock.
    */
   private async resolveToolScope(
     session: ChatSession
   ): Promise<{ roots: readonly string[]; workingDirectory?: string }> {
+    // Folders the user clicked "Add folder" for in THIS conversation. A projectless Code session
+    // takes these too: unlike the global grants, nobody shared them for some other conversation.
+    const own = session.grantedDirectories ?? [];
     const project = await this.repairBareWorkingDirectory(session);
-    if (!project) return { roots: session.mode === 'code' ? [] : await this.deps.access.list() };
+    if (!project) {
+      const global = session.mode === 'code' ? [] : await this.deps.access.list();
+      return { roots: union(global, own) };
+    }
 
     const granted = await this.deps.access.list();
-    const owned = [project.workingDirectory, ...project.contextDirectories];
-    const roots = [...owned, ...granted.filter(root => !owned.includes(root))];
-    return { roots, workingDirectory: project.workingDirectory };
+    const owned = union([project.workingDirectory, ...project.contextDirectories], own);
+    return { roots: union(owned, granted), workingDirectory: project.workingDirectory };
   }
 
   /**
@@ -1718,7 +1726,8 @@ export class ChatService {
 
     try {
       const serverConfig = await this.resolveServerConfig(api);
-      const { roots, workingDirectory } = await this.resolveToolScope(session);
+      // Re-resolved after a round in which the user added a folder; see DirectoryTurn.
+      let { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
       const host = this.buildHostContext(session);
       // Not tied to `host`: a page is keyed on the conversation id and its screenshots are
@@ -1738,8 +1747,9 @@ export class ChatService {
       const effortField = effort ? { reasoningEffort: effort } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;
-      const explore =
-        roots.length > 0 && shouldOfferExplore(catalog?.models ?? [], session.model)
+      const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
+      const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
+        granted.length > 0 && offerExplore
           ? buildExploreContext({
               axios: api.getAxiosInstance(),
               endpoint: serverConfig.endpoint,
@@ -1751,6 +1761,7 @@ export class ChatService {
               },
             })
           : undefined;
+      let explore = exploreFor(roots);
       // Per turn, from the session's current model, so a model switch changes the edit tools
       // from the next turn on.
       const patchEdits = usesApplyPatch(session.model);
@@ -1767,19 +1778,22 @@ export class ChatService {
       const skills: SkillContext | undefined = skillCatalog
         ? { available: () => skillCatalog.forModel(skillRoot) }
         : undefined;
-      const tools = toolsForRequest({
-        modelId: session.model,
-        roots,
-        media: !!media,
-        host: !!host,
-        explore: !!explore,
-        browser: !!browser,
-        memory: !!memory,
-        skills: !!skills,
-        // A spawned session has no one watching it to answer; see ToolDefinition.interactive.
-        ask: !session.origin,
-        mcp: mcpTools.map(binding => binding.definition.schema),
-      });
+      const toolsFor = (granted: readonly string[]) =>
+        toolsForRequest({
+          modelId: session.model,
+          roots: granted,
+          media: !!media,
+          host: !!host,
+          explore: !!explore,
+          browser: !!browser,
+          memory: !!memory,
+          skills: !!skills,
+          // A spawned session has no one watching it to answer; see ToolDefinition.interactive.
+          ask: !session.origin,
+          mcp: mcpTools.map(binding => binding.definition.schema),
+        });
+      let tools = toolsFor(roots);
+      const directoryTurn: DirectoryTurn = { declined: [], granted: false };
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside
       // them rather than adding a hop of their own; every later turn takes it from the cache.
@@ -1959,12 +1973,25 @@ export class ChatService {
             patchEdits,
             ask: !session.origin,
             title: session.title,
+            directories: directoryTurn,
           },
           sessionId,
           replyId,
           controller.signal
         );
         toolCalls.push(...settled);
+
+        // The system message is left as it was, so the cached prefix survives: the tool result
+        // already told the model the folder is shared, and the next turn's prompt lists it.
+        if (directoryTurn.granted) {
+          directoryTurn.granted = false;
+          const current = await this.deps.store.get(sessionId);
+          if (current) {
+            ({ roots, workingDirectory } = await this.resolveToolScope(current));
+            explore = exploreFor(roots);
+            tools = toolsFor(roots);
+          }
+        }
         round.toolCallIds = settled.map(call => call.id);
 
         // Anthropic's shape: ONE assistant turn carrying the reasoning, any text and every
@@ -2314,6 +2341,8 @@ export class ChatService {
       ask: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
+      /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
+      directories?: DirectoryTurn;
     },
     sessionId: string,
     messageId: string,
@@ -2451,7 +2480,16 @@ export class ChatService {
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
         // while it is still waiting on the user, and nothing has run if they say no.
-        const gated = await this.awaitApproval(tool, call, context, sessionId, messageId, signal, looping);
+        const gated = await this.awaitApproval(
+          tool,
+          call,
+          context,
+          sessionId,
+          messageId,
+          signal,
+          looping,
+          scope.directories
+        );
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
         // transcript, the stored session, the model on its next turn - sees what actually ran.
@@ -2759,6 +2797,9 @@ export class ChatService {
           workingDirectory: workspace?.workingDirectory ?? project.workingDirectory,
           contextDirectories: [...project.contextDirectories],
         },
+        // Copied with the context directories, for the same reason: a child is the parent's work
+        // continued, and never holds a folder the parent did not.
+        ...(parent.grantedDirectories?.length ? { grantedDirectories: [...parent.grantedDirectories] } : {}),
         origin: { parentSessionId: parent.id, depth, seedPrompt: seed },
         // Inherit, never widen - the rule the folder grants above already follow - with one
         // ceiling on top of it: 'full' does not cross into a session nobody is watching. It
@@ -2974,8 +3015,14 @@ export class ChatService {
     sessionId: string,
     messageId: string,
     signal: AbortSignal,
-    looping: boolean
+    looping: boolean,
+    directories: DirectoryTurn = { declined: [], granted: false }
   ): Promise<ApprovalOutcome> {
+    // Interactive tools never reach the approval mode below, so no mode - "Approve for me" and
+    // full access included - can answer a folder request on the user's behalf.
+    if (tool.interactive && call.name === REQUEST_DIRECTORY_TOOL_NAME) {
+      return this.awaitDirectory(call, context, sessionId, messageId, signal, directories);
+    }
     if (tool.interactive) return this.awaitAnswer(call, sessionId, messageId, signal);
 
     const gate = this.deps.approvals;
@@ -3110,6 +3157,101 @@ export class ChatService {
     }
 
     return { input: applyOption(call.input, picked ?? runnable[0], answer.value) };
+  }
+
+  /**
+   * Hold a `request_directory` call on its card until the user adds the folder, declines, or
+   * moves on - and perform the grant here, on the click, because nothing else may.
+   *
+   * The model's own `outcome` is dropped before anything else: it must not be able to report a
+   * grant the user never gave. A refusal (the root, a missing folder, one already declined this
+   * turn) settles without a card. The grant is this conversation's alone - see
+   * grantSessionDirectory - and the global AccessStore is never written from here.
+   */
+  private async awaitDirectory(
+    call: ChatToolCall,
+    context: ToolContext,
+    sessionId: string,
+    messageId: string,
+    signal: AbortSignal,
+    turn: DirectoryTurn
+  ): Promise<ApprovalOutcome> {
+    const { outcome: _ignored, ...rest } = call.input;
+    const settle = (status: 'denied' | 'error', error: string): ApprovalOutcome => {
+      const settled: ChatToolCall = { ...call, input: rest, status, error };
+      this.emit({ type: 'tool-start', sessionId, messageId, call: { ...call, input: rest } });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
+      return { settled, input: rest };
+    };
+
+    const inspection = await inspectDirectoryRequest(rest, {
+      roots: context.roots,
+      ...(context.workingDirectory ? { workingDirectory: context.workingDirectory } : {}),
+      ...(context.protectedPaths ? { protectedPaths: context.protectedPaths } : {}),
+      declined: turn.declined,
+    });
+    if (inspection.kind === 'refused') return settle('denied', inspection.message);
+    const withOutcome = (outcome: DirectoryRequestOutcome) => ({ ...rest, path: inspection.path, outcome });
+    if (inspection.kind === 'inside') return { input: withOutcome({ status: 'already' }) };
+
+    const gate = this.deps.approvals;
+    if (!gate) return { input: rest };
+    const input = { ...rest, path: inspection.path, reason: inspection.reason };
+    const answer = await gate.request(
+      sessionId,
+      `${REQUEST_DIRECTORY_TOOL_NAME}:${call.id}`,
+      signal,
+      approvalId => {
+        this.emit({
+          type: 'tool-start',
+          sessionId,
+          messageId,
+          call: {
+            ...call,
+            input,
+            status: 'awaiting-approval',
+            approvalId,
+            approvalDetail: inspection.path,
+            ...(inspection.warning ? { approvalWarning: inspection.warning } : {}),
+          },
+        });
+      },
+      // Untimed like a question, so a new message closes it via cancelQuestions; never remembered,
+      // so no earlier click stands in for this one.
+      { remember: false, untimed: true }
+    );
+
+    // Checked before the decision: a click racing a stop must not grant to a turn that has ended.
+    if (signal.aborted || answer.optionId === QUESTION_CANCELLED)
+      return { input: withOutcome({ status: 'cancelled' }) };
+    if (answer.decision !== 'once') {
+      turn.declined.push(inspection.path);
+      return { input: withOutcome({ status: 'declined' }) };
+    }
+    if (!(await this.grantSessionDirectory(sessionId, inspection.path))) {
+      return settle('error', `${inspection.path} changed or disappeared before it could be added; it was not shared.`);
+    }
+    turn.granted = true;
+    return { input: withOutcome({ status: 'granted' }) };
+  }
+
+  /**
+   * Add a folder to ONE conversation: a Code session's context directories when it has a
+   * project (so the chips show it and a spawned child inherits it like any other), and the
+   * session's own grants otherwise. Re-checked first, so a folder swapped for a symlink between
+   * the card and the click is not granted under the name the user saw.
+   */
+  private async grantSessionDirectory(sessionId: string, directory: string): Promise<boolean> {
+    const real = await realpath(directory).catch(() => null);
+    const kind = real ? await stat(real).catch(() => null) : null;
+    if (real !== directory || !kind?.isDirectory()) return false;
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return false;
+    const updated =
+      session.mode === 'code' && session.project
+        ? await this.deps.store.addContextDirectory(sessionId, directory)
+        : await this.deps.store.addGrantedDirectory(sessionId, directory);
+    return updated !== null;
   }
 
   /**
@@ -3456,9 +3598,18 @@ export function buildSystemMessage(
         'Earlier turns in this conversation may show successful file reads; that access has since',
         'been revoked and you cannot rely on it.',
         'Never claim to have read, listed or searched a file, and never invent a file name, size,',
-        'path or contents. If asked about local files, say plainly that you have no access and ask',
-        'the user to give this conversation a folder: a Code session takes one from the folder chip',
-        'above the message box, and the sidebar card shares one with every conversation.',
+        'path or contents.',
+        ...(ask
+          ? [
+              'If the task needs local files, call request_directory with the folder and your reason:',
+              'the user adds it with one click and you continue in this turn with file tools. Do not',
+              'tell the user you have no filesystem access, and do not ask them to share it themselves.',
+            ]
+          : [
+              'If asked about local files, say plainly that you have no access and ask the user to give',
+              'this conversation a folder: a Code session takes one from the folder chip above the',
+              'message box, and the sidebar card shares one with every conversation.',
+            ]),
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
@@ -3485,8 +3636,16 @@ export function buildSystemMessage(
       'These folders are shared with you, including everything beneath them:',
       ...roots.map(root => `  ${root}`),
       'Always pass absolute paths. The file tools deny any path outside those folders;',
-      'if you need one, ask the user to share it - from the chip row above the message box in a',
-      'Code session, or the sidebar card in any conversation.',
+      ...(ask
+        ? [
+            'if you need one, call request_directory with that folder and your reason - the user adds it',
+            'with one click and you continue in this turn. Never tell the user you lack access to it, and',
+            'never ask them to share it themselves.',
+          ]
+        : [
+            'if you need one, ask the user to share it - from the chip row above the message box in a',
+            'Code session, or the sidebar card in any conversation.',
+          ]),
       'Bash commands run as the user with their full environment, not inside those folders: git,',
       'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
       'on authentication, report the command error; do not conclude the user is logged out.',
@@ -3974,6 +4133,21 @@ function worktreePreamble(projectDirectory: string, workspace: { branch: string;
 interface ApprovalOutcome {
   settled?: ChatToolCall;
   input: Record<string, unknown>;
+}
+
+/**
+ * One reply's folder requests. `declined` keeps a "Not now" from being asked again in the same
+ * turn; `granted` tells the loop to re-resolve roots before its next round, so the calls that
+ * follow a grant can use it.
+ */
+interface DirectoryTurn {
+  declined: string[];
+  granted: boolean;
+}
+
+/** `first`, then whatever of `second` it does not already hold, in order. */
+function union(first: readonly string[], second: readonly string[]): string[] {
+  return [...first, ...second.filter(entry => !first.includes(entry))];
 }
 
 function findOption(prompt: ApprovalPrompt, optionId: string | undefined): ApprovalOption | undefined {
