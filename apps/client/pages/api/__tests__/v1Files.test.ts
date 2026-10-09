@@ -340,6 +340,7 @@ const ownedDoc = (id: string) => ({
 
 const SUMMARY_KEYS = ['created_at', 'file_name', 'file_size', 'id', 'mime_type', 'moderation_status'];
 const ID_2 = '507f1f77bcf86cd799439012';
+const ID_3 = '507f1f77bcf86cd799439013';
 
 describe('GET /api/v1/files', () => {
   it('returns a schema-valid page of allowlisted summaries with no download URL', async () => {
@@ -359,17 +360,17 @@ describe('GET /api/v1/files', () => {
   });
 
   it('issues a cursor when there is another page, and passes it and search back to the repository', async () => {
-    mockListOwnedBeforeId.mockResolvedValue({ data: [ownedDoc(FILE_ID)], hasMore: true });
-    const first = list({ limit: '1', search: 'Report' });
+    mockListOwnedBeforeId.mockResolvedValue({ data: [ownedDoc(ID_3), ownedDoc(FILE_ID)], hasMore: true });
+    const first = list({ limit: '2', search: 'Report' });
     await callHandler(uploadHandler, first.req, first.res);
     const { next_cursor } = first.res._getJSONData();
     expect(next_cursor).toEqual(expect.any(String));
 
     mockListOwnedBeforeId.mockResolvedValue({ data: [ownedDoc(ID_2)], hasMore: false });
-    const second = list({ limit: '1', search: 'Report', cursor: next_cursor });
+    const second = list({ limit: '2', search: 'Report', cursor: next_cursor });
     await callHandler(uploadHandler, second.req, second.res);
 
-    expect(mockListOwnedBeforeId).toHaveBeenLastCalledWith('u1', { beforeId: FILE_ID, limit: 1, search: 'Report' });
+    expect(mockListOwnedBeforeId).toHaveBeenLastCalledWith('u1', { beforeId: FILE_ID, limit: 2, search: 'Report' });
     expect(second.res._getJSONData()).toMatchObject({ data: [{ id: ID_2 }], next_cursor: null });
   });
 
