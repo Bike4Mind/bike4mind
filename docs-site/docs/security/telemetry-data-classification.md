@@ -131,7 +131,7 @@ already see the denial.
 
 ## API-key usage log
 
-Every request to a `baseApi` route that authenticates with an API key writes one `ApiKeyUsageLog` row when the response finishes. Routes served through the contract router (`/api/ai/v1`) and embed-key routes (`/api/embed`) do not write rows. The `endpoint` field stores the Next.js route template (for example `/api/agents/[id]`), never the raw URL: path ids and the query string are not recorded. The `UserApiKeyEvents.USED` analytics event carries the same templated endpoint. Rows written before templating was introduced may still hold a raw URL until they expire.
+Every request to a `baseApi` route that authenticates with an API key writes one `ApiKeyUsageLog` row when the response finishes. Routes served through the contract router (`/api/ai/v1`) and embed-key routes (`/api/embed`) do not write rows. The `endpoint` field stores the Next.js route template (for example `/api/agents/[id]`), never the raw URL: path ids and the query string are not recorded. This is best effort: a route param that shares its name and its exact value with a query-string key is left as written, because the two cannot be told apart. The `UserApiKeyEvents.USED` analytics event carries the same templated endpoint. Rows written before templating was introduced may still hold a raw URL until they expire.
 
 | Data           | Storage                           | Lifetime            | Purpose                                          |
 | -------------- | --------------------------------- | ------------------- | ------------------------------------------------ |
