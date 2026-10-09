@@ -57,7 +57,7 @@ export const listArtifactsContract = defineEndpoint({
   operationId: 'listArtifacts',
   summary: 'List artifacts',
   description:
-    'Lists the artifacts you own, excluding deleted ones. Artifacts shared with you are not listed, ' +
+    'Lists the artifacts you own, newest first, excluding deleted ones. Artifacts shared with you are not listed, ' +
     'though `GET /api/v1/artifacts/{id}` resolves them by id. Items carry `content: null`; fetch an ' +
     'artifact by id for its content. Cursor-paginated (see the pagination convention): pass ' +
     '`next_cursor` back as `cursor` until it is `null`.',
@@ -68,7 +68,7 @@ export const listArtifactsContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: {
-      description: 'One page of artifacts, oldest first.',
+      description: 'One page of artifacts, newest first.',
       schema: ListArtifactsResponseSchema,
       example: { data: [{ ...ARTIFACT_EXAMPLE, content: null }], next_cursor: null },
     },

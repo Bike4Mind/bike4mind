@@ -4,11 +4,11 @@ import { type MigrationFile } from './index';
 /**
  * Ensure the `{ userId, deletedAt, _id }` index exists on artifacts.
  *
- * GET /api/v1/artifacts pages a user's own live artifacts by `_id` (artifactRepository.listOwnedAfterId).
+ * GET /api/v1/artifacts pages a user's own live artifacts by `_id` (artifactRepository.listOwnedBeforeId).
  * Without this index the planner walks one of the (userId, ...) indexes and sorts every artifact the
  * user has in memory for each page.
  *
- * Migration rather than autoIndex, for the same reason as 20260921235999_ensure-fabfile-owned-keyset-index:
+ * Migration rather than autoIndex, for the same reason as 20260921235994_ensure-fabfile-owned-keyset-index:
  * prod runs DocumentDB, where an index build takes a foreground collection lock, and left to autoIndex
  * it would build on whichever Lambda's cold boot touches artifacts first after deploy.
  *

@@ -74,8 +74,9 @@ export const createTranscriptionContract = defineEndpoint({
     'deleted when the call ends, whether it succeeds or fails, so each upload can be transcribed once.\n\n' +
     '**Limit:** this call is synchronous. The request times out after about 60 seconds, while the AWS ' +
     'speech backend can take up to about 5 minutes on long audio, so a long recording can fail with a ' +
-    'gateway timeout (`504`) instead of returning text. The upload is deleted either way; mint a new one ' +
-    'to retry, or send shorter audio.',
+    'gateway timeout (`504`) instead of returning text. A timed-out upload may not be deleted right away ' +
+    '(it expires on its own), so do not retry with the same `file_key`: mint a new upload, or send ' +
+    'shorter audio.',
   tags: ['Transcriptions'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],

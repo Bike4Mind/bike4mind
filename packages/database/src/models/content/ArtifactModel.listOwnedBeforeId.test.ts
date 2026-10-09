@@ -35,52 +35,52 @@ const makeArtifact = (title: string, overrides: Record<string, unknown> = {}) =>
 
 async function collectAllPages(limit: number) {
   const titles: string[] = [];
-  let afterId: string | undefined;
+  let beforeId: string | undefined;
   for (let guard = 0; guard < 20; guard++) {
-    const page = await artifactRepository.listOwnedAfterId(OWNER, { afterId, limit });
+    const page = await artifactRepository.listOwnedBeforeId(OWNER, { beforeId, limit });
     titles.push(...page.data.map(a => a.title));
     if (!page.hasMore) return titles;
-    afterId = String(page.data.at(-1)!._id);
+    beforeId = String(page.data.at(-1)!._id);
   }
   throw new Error('paging did not terminate');
 }
 
-describe('ArtifactRepository.listOwnedAfterId', () => {
-  it('lists only live artifacts the user owns, in _id order', async () => {
+describe('ArtifactRepository.listOwnedBeforeId', () => {
+  it('lists only live artifacts the user owns, newest first', async () => {
     await makeArtifact('a');
     await makeArtifact('deleted', { deletedAt: new Date(), status: 'deleted' });
     await makeArtifact('theirs', { userId: OTHER, permissions: { canRead: [OWNER], canWrite: [], canDelete: [] } });
     await makeArtifact('b');
 
-    expect(await collectAllPages(10)).toEqual(['a', 'b']);
+    expect(await collectAllPages(10)).toEqual(['b', 'a']);
   });
 
   it('pages across the whole set without gaps or repeats', async () => {
     for (let i = 0; i < 5; i++) await makeArtifact(`f${i}`);
 
-    expect(await collectAllPages(2)).toEqual(['f0', 'f1', 'f2', 'f3', 'f4']);
+    expect(await collectAllPages(2)).toEqual(['f4', 'f3', 'f2', 'f1', 'f0']);
   });
 
   it('reports hasMore false on a page that ends exactly at the last row', async () => {
     for (let i = 0; i < 4; i++) await makeArtifact(`f${i}`);
 
-    const first = await artifactRepository.listOwnedAfterId(OWNER, { limit: 2 });
+    const first = await artifactRepository.listOwnedBeforeId(OWNER, { limit: 2 });
     expect(first.hasMore).toBe(true);
-    const second = await artifactRepository.listOwnedAfterId(OWNER, { afterId: String(first.data[1]._id), limit: 2 });
-    expect(second.data.map(a => a.title)).toEqual(['f2', 'f3']);
+    const second = await artifactRepository.listOwnedBeforeId(OWNER, { beforeId: String(first.data[1]._id), limit: 2 });
+    expect(second.data.map(a => a.title)).toEqual(['f1', 'f0']);
     expect(second.hasMore).toBe(false);
   });
 
   it('does not load content pointers or sharing state', async () => {
     await makeArtifact('a');
 
-    const [row] = (await artifactRepository.listOwnedAfterId(OWNER, { limit: 1 })).data as Record<string, unknown>[];
+    const [row] = (await artifactRepository.listOwnedBeforeId(OWNER, { limit: 1 })).data as Record<string, unknown>[];
     expect(row).not.toHaveProperty('permissions');
     expect(row).not.toHaveProperty('contentId');
     expect(row).not.toHaveProperty('contentHash');
   });
 
   it('throws on a non-ObjectId cursor', async () => {
-    await expect(artifactRepository.listOwnedAfterId(OWNER, { afterId: 'nope', limit: 1 })).rejects.toThrow();
+    await expect(artifactRepository.listOwnedBeforeId(OWNER, { beforeId: 'nope', limit: 1 })).rejects.toThrow();
   });
 });
