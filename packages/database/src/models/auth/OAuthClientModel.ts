@@ -16,9 +16,8 @@ import BaseRepository from '@bike4mind/db-core';
  *  - `'sub'`: the app signs its users in against B4M's OIDC provider directly, so the
  *    B4M user id is the token's `sub` and there is no Cognito hop at all.
  *
- * NOTE: this schema is hand-duplicated in `packages/scripts/src/seed-oauth-client.ts`
- * (the seed script has no dependency on this package). Any field added here must be
- * mirrored there or seeding silently strips it.
+ * Registration goes through oauthClientAdmin.ts (admin API and seed script alike), so
+ * there is no second copy of this schema to keep in sync.
  */
 export interface IOAuthClientFederatedIdp {
   /** Expected `iss` of the ID token, e.g. `https://cognito-idp.<region>.amazonaws.com/<poolId>` or B4M's own APP_URL. */

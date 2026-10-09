@@ -173,7 +173,7 @@ FEDERATED_JWKS_URI="https://<your-b4m-host>/api/oauth/jwks" \
 
 Register the trust config in the same run. Adding `federatedIdp` to an existing client by hand leaves `allowedScopes` without `ai:generate` and `me:read`, and the exchange then fails with 403 `invalid_scope`.
 
-There is no admin UI or API for registration yet.
+An admin can also register, edit, deactivate and rotate clients from the admin console (Security > OAuth Clients), which applies the same rules as the script. The script remains for installs that have no admin user yet.
 
 A stock self-hosted stack does not expose the completions API (`/api/ai/v1/completions`) on its public origin, so your app's completion calls return 404. Add this route inside the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (see [the sample in the Caddyfile](https://github.com/bike4mind/bike4mind/blob/main/selfhost/caddy/Caddyfile)):
 

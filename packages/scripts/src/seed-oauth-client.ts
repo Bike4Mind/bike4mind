@@ -4,6 +4,9 @@
  * Registers an OAuth client in B4M's MongoDB.
  * Run once per product to get a client_id + client_secret.
  *
+ * The admin console's OAuth Clients page is the normal way to do this; it shares
+ * createOAuthClient with this script. Use the script where no admin user exists yet.
+ *
  * Usage (from repo root):
  *   MONGODB_URI=<uri> CLIENT_NAME="My App" REDIRECT_URIS="https://..." \
  *     pnpm --filter @bike4mind/scripts exec tsx src/seed-oauth-client.ts
@@ -30,112 +33,29 @@
  *   FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks"
  */
 
-import crypto from 'crypto';
-import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
+import { ConflictError, type OAuthFederatedIdpInput } from '@bike4mind/common';
+import { createOAuthClient, mongoose, OAuthClientModel } from '@bike4mind/database';
 import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 
-// Hand-duplicated from packages/database/src/models/auth/OAuthClientModel.ts (this
-// script has no dependency on that package). MUST STAY IN SYNC: a field added there
-// and not mirrored here is silently stripped at seed time.
-const OAuthClientSchema = new mongoose.Schema(
-  {
-    clientId: { type: String, required: true, unique: true },
-    clientSecretHash: { type: String, required: true },
-    name: { type: String, required: true },
-    redirectUris: [{ type: String }],
-    allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
-    // External products registered through this tool are relying parties: they get a
-    // scope/audience-bound OAuth token, not a full first-party session. Default to the
-    // non-privileged class so an unclassified registration is never silently trusted as
-    // first-party (see resolveClientType + OAuthClientModel.ts).
-    clientType: {
-      type: String,
-      enum: ['first-party', 'relying-party'],
-      default: 'relying-party',
-    },
-    // Default mirrors the real model (OAuthClientModel.ts): 'none' fails safe. This script always
-    // passes 'client_secret_post' explicitly at create() because it mints a secret, so the default
-    // never fires today; keeping it aligned means a future call that omits it registers a public
-    // client, not a confidential one it cannot authenticate.
-    tokenEndpointAuthMethod: {
-      type: String,
-      enum: ['none', 'client_secret_post'],
-      default: 'none',
-    },
-    isActive: { type: Boolean, default: true },
-    federatedIdp: {
-      type: new mongoose.Schema(
-        {
-          issuer: { type: String, required: true },
-          jwksUri: {
-            type: String,
-            required: function (this: { subjectSource?: string }) {
-              return this.subjectSource === 'sub';
-            },
-          },
-          audience: { type: String, required: true },
-          providerName: {
-            type: String,
-            required: function (this: { subjectSource?: string }) {
-              return this.subjectSource !== 'sub';
-            },
-          },
-          subjectSource: { type: String, enum: ['identities', 'sub'] },
-        },
-        { _id: false }
-      ),
-      required: false,
-    },
-  },
-  { timestamps: true }
-);
-
-interface FederatedIdpConfig {
-  issuer: string;
-  audience: string;
-  jwksUri?: string;
-  providerName?: string;
-  subjectSource?: 'identities' | 'sub';
-}
-
 /**
- * Build the federated trust config from env, if provided. See the header for the two
- * shapes. `clientId` is the just-generated id, used as the default audience for the
- * `sub` shape because a B4M-issued ID token sets `aud` to the OAuth client it was
- * issued to (generateIdToken in apps/client/server/auth/oauthServer.ts).
+ * Raw federated trust config from env (see the header for the two shapes). The shape rules,
+ * including the `sub` audience defaulting to the generated client_id, live in
+ * resolveOAuthFederatedIdp so this script and the admin page enforce the same ones.
  */
-function resolveFederatedIdp(clientId: string): FederatedIdpConfig | undefined {
-  const issuer = process.env.FEDERATED_ISSUER;
-  const providerName = process.env.FEDERATED_PROVIDER_NAME;
-  const jwksUri = process.env.FEDERATED_JWKS_URI;
-  const subjectSource = process.env.FEDERATED_SUBJECT_SOURCE;
-
-  if (subjectSource && subjectSource !== 'identities' && subjectSource !== 'sub') {
-    throw new Error(`FEDERATED_SUBJECT_SOURCE must be 'identities' or 'sub', got '${subjectSource}'`);
+export function readFederatedIdpEnv(): OAuthFederatedIdpInput | undefined {
+  const rawSubjectSource = process.env.FEDERATED_SUBJECT_SOURCE || undefined;
+  if (rawSubjectSource && rawSubjectSource !== 'identities' && rawSubjectSource !== 'sub') {
+    throw new Error(`FEDERATED_SUBJECT_SOURCE must be 'identities' or 'sub', got '${rawSubjectSource}'`);
   }
-
-  if (subjectSource === 'sub') {
-    if (!issuer) throw new Error('FEDERATED_SUBJECT_SOURCE=sub requires FEDERATED_ISSUER');
-    if (!jwksUri) {
-      throw new Error(
-        'FEDERATED_SUBJECT_SOURCE=sub requires an explicit FEDERATED_JWKS_URI: B4M publishes its JWKS at ' +
-          '<issuer>/api/oauth/jwks, and the derived /.well-known/jwks.json default would 404'
-      );
-    }
-    return { issuer, audience: process.env.FEDERATED_AUDIENCE || clientId, jwksUri, subjectSource };
-  }
-
-  const audience = process.env.FEDERATED_AUDIENCE;
-  if (!issuer && !audience && !providerName) return undefined; // not a federated client
-
-  if (!issuer || !audience || !providerName) {
-    throw new Error(
-      'Federated client requires FEDERATED_ISSUER, FEDERATED_AUDIENCE, and FEDERATED_PROVIDER_NAME together'
-    );
-  }
-
-  return { issuer, audience, providerName, ...(jwksUri ? { jwksUri } : {}) };
+  const subjectSource = rawSubjectSource as OAuthFederatedIdpInput['subjectSource'];
+  const input: OAuthFederatedIdpInput = {
+    issuer: process.env.FEDERATED_ISSUER || undefined,
+    audience: process.env.FEDERATED_AUDIENCE || undefined,
+    providerName: process.env.FEDERATED_PROVIDER_NAME || undefined,
+    jwksUri: process.env.FEDERATED_JWKS_URI || undefined,
+    subjectSource,
+  };
+  return Object.values(input).some(Boolean) ? input : undefined;
 }
 
 /**
@@ -152,8 +72,6 @@ export function resolveClientType(): 'first-party' | 'relying-party' {
   return raw;
 }
 
-const OAuthClient = mongoose.model('OAuthClient', OAuthClientSchema);
-
 async function main() {
   const mongoUri = process.env.MONGODB_URI;
   if (!mongoUri) throw new Error('MONGODB_URI env var required');
@@ -165,50 +83,32 @@ async function main() {
   if (!redirectUrisRaw) throw new Error('REDIRECT_URIS env var required (comma-separated)');
   const redirectUris = redirectUrisRaw.split(',').map(u => u.trim());
 
+  const federatedIdpInput = readFederatedIdpEnv();
+  const clientType = resolveClientType();
+
   await mongoose.connect(mongoUri);
 
-  const existing = await OAuthClient.findOne({ name: clientName });
-  if (existing) {
+  let created;
+  try {
+    created = await createOAuthClient({ name: clientName, redirectUris, clientType, federatedIdp: federatedIdpInput });
+  } catch (error) {
+    if (!(error instanceof ConflictError)) throw error;
+    const existing = await OAuthClientModel.findOne({ name: clientName.trim() }).exec();
     console.log(`\nClient "${clientName}" already exists:`);
-    console.log('  client_id:', existing.clientId);
-    console.log('\nDelete it manually if you want to re-seed.\n');
+    console.log('  client_id:', existing?.clientId);
+    console.log('\nRotate its secret or edit it from the admin OAuth Clients page instead.\n');
     await mongoose.disconnect();
     process.exit(0);
   }
 
-  const clientId = `b4m_${clientName.toLowerCase().replace(/\s+/g, '_')}_${crypto.randomBytes(4).toString('hex')}`;
-  const clientSecret = crypto.randomBytes(32).toString('base64url');
-  const clientSecretHash = await bcrypt.hash(clientSecret, 10);
-
-  const federatedIdp = resolveFederatedIdp(clientId);
-  const clientType = resolveClientType();
-
-  // A federated client mints per-user ai:generate keys via /api/oauth/ai-token, and that exchange now
-  // requires the user to have approved the billable ai:generate scope (a client-identity grant is not
-  // spend authorization). So the scope must be requestable at /authorize; a non-federated client
-  // gets identity scopes only.
-  const allowedScopes = federatedIdp
-    ? ['openid', 'email', 'profile', 'ai:generate', 'me:read']
-    : ['openid', 'email', 'profile'];
-
-  await OAuthClient.create({
-    clientId,
-    clientSecretHash,
-    name: clientName,
-    redirectUris,
-    allowedScopes,
-    tokenEndpointAuthMethod: 'client_secret_post',
-    clientType,
-    isActive: true,
-    ...(federatedIdp ? { federatedIdp } : {}),
-  });
-
+  const { client, clientSecret } = created;
+  const federatedIdp = client.federatedIdp;
   console.log('\n✅ OAuth client registered!\n');
-  console.log('  client_id    :', clientId);
+  console.log('  client_id    :', client.clientId);
   console.log('  client_secret:', clientSecret);
   // Surface the trust class explicitly - it defaults to relying-party and set CLIENT_TYPE=first-party
   // to opt in, so an operator can confirm which one this registration got.
-  console.log('  client_type  :', clientType);
+  console.log('  client_type  :', client.clientType);
   if (federatedIdp) {
     console.log('  federated    : yes (may mint per-user ai:generate keys via /api/oauth/ai-token)');
     console.log('    issuer      :', federatedIdp.issuer);
@@ -217,8 +117,8 @@ async function main() {
     if (federatedIdp.providerName) console.log('    provider    :', federatedIdp.providerName);
     if (federatedIdp.jwksUri) console.log('    jwks uri    :', federatedIdp.jwksUri);
   }
-  console.log(`\nSet these SST secrets in ${clientName}:`);
-  console.log(`  sst secret set B4mOAuthClientId "${clientId}"`);
+  console.log(`\nSet these SST secrets in ${client.name}:`);
+  console.log(`  sst secret set B4mOAuthClientId "${client.clientId}"`);
   console.log(`  sst secret set B4mOAuthClientSecret "${clientSecret}"`);
   console.log('\n⚠️  The client_secret will NOT be shown again.\n');
 

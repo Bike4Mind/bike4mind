@@ -7,6 +7,7 @@ export * from './decisionMaker';
 export * from './file';
 export * from './openai';
 export * from './password';
+export * from './oauthClient';
 export * from './partnerSignupRule';
 export * from './query';
 export * from './subscriptionQueryFilter';
