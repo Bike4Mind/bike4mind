@@ -1,7 +1,7 @@
 import type { ChatMessage, ChatToolCall, ChatUsage, ModelPhase } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, autoCompactThreshold } from '@shared/contextLimit';
 import { pendingCodePhrase, type PendingCode } from './codeStream';
-import { activePhrase, namedAction } from './toolRows';
+import { activePhrase } from './toolRows';
 
 export { contextTokens, inputSide, latestReply } from '@shared/contextLimit';
 
@@ -204,17 +204,14 @@ function oneLine(text: string): string {
   return flat.length <= MAX_LABEL_CHARS ? flat : `${flat.slice(0, MAX_LABEL_CHARS - 3)}...`;
 }
 
-/** A named action as a clause rather than a sentence, so a count can follow it. */
-function withoutTrail(label: string): string {
-  return label.endsWith('...') ? label.slice(0, -3) : label;
-}
-
 /**
- * What a running call is doing, in the order the line can say it: the tool and what it was
- * called on, else whatever the tool reports about its own progress, else its bare phrase.
+ * What a running call is doing, in present tense. Never read from the call's input: the transcript row
+ * already draws the command or path, and this line must not repeat what the thread shows. Falls
+ * back from what the tool reports about its own progress (which a collapsed row does not draw)
+ * to its bare phrase.
  */
 function runningLabel(call: ChatToolCall): string {
-  return namedAction(call) || oneLine(call.progress ?? '') || activePhrase(call.name);
+  return oneLine(call.progress ?? '') || activePhrase(call.name);
 }
 
 /**
@@ -247,18 +244,9 @@ export function describeActivity(
   if (calls.some(call => call.status === 'awaiting-approval'))
     return { kind: 'approval', label: 'Waiting for your answer...' };
 
-  // What the model is doing, named: the tool's own word for itself and the thing it was called
-  // on, which is the only part of a turn the user cannot work out from the thread while it is
-  // still in flight. "Running a command" for seven minutes names nothing - it is true of every
-  // command this app has ever run.
   const running = calls.filter(call => call.status === 'running');
   if (running.length === 1) return { kind: 'tool', label: runningLabel(running[0]) };
-  if (running.length > 1) {
-    // The newest, because it is the one that just started and the one the rows have not settled
-    // yet; the others are named in full by their own rows a few lines above.
-    const newest = running[running.length - 1];
-    return { kind: 'tools', label: `${withoutTrail(runningLabel(newest))} and ${running.length - 1} more...` };
-  }
+  if (running.length > 1) return { kind: 'tools', label: `Running ${running.length} tools...` };
   // A call the model has opened but not finished, named as the tool it will be: writing the
   // call's arguments (a whole file, a long command) is what takes the time, not running it.
   if (phase?.kind === 'writing-tool') return { kind: 'writing', label: activePhrase(phase.name) };

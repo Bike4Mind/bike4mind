@@ -234,30 +234,33 @@ describe('describeActivity', () => {
     expect(label).not.toContain('\n');
   });
 
-  // The whole point of the line while a tool runs: "Running a command" is true of every command
-  // this app has ever run, and says nothing about the seven minutes you are watching.
-  it('names the tool and what it was called on', () => {
-    expect(describeActivity([call('bash_execute', 'running', undefined, { command: 'pnpm test' })], false).label).toBe(
-      'Running pnpm test...'
-    );
+  // The transcript row already draws the command or path; the line must not say it twice.
+  it('names the running tool in present tense without repeating what it was called on', () => {
+    const command = 'git filter-branch -f --tree-filter secret-path HEAD';
+    const label = describeActivity([call('bash_execute', 'running', undefined, { command })], false).label;
+    expect(label).toBe('Running a command...');
+    expect(label).not.toContain(command);
+    expect(label).not.toContain('filter-branch');
     expect(
       describeActivity([call('file_edit', 'running', undefined, { path: 'src/chat/statusLine.ts' })], false).label
-    ).toBe('Editing src/chat/statusLine.ts...');
-    expect(describeActivity([call('grep_search', 'running', undefined, { pattern: 'handleClick' })], false).label).toBe(
-      'Searching for handleClick...'
-    );
+    ).toBe('Editing files...');
   });
 
-  it('names the newest of several and counts the rest, which have rows of their own', () => {
+  it('counts the tools running at once without naming any of them', () => {
     const calls = [
       call('file_read', 'running', undefined, { path: 'src/app.ts' }),
       call('bash_execute', 'running', undefined, { command: 'pnpm lint' }),
-      call('file_edit', 'running', undefined, { path: 'src/chat/TurnStatus.tsx' }),
     ];
-    expect(describeActivity(calls, false).label).toBe('Editing src/chat/TurnStatus.tsx and 2 more...');
+    expect(describeActivity(calls, false).label).toBe('Running 2 tools...');
   });
 
-  it('falls back to the bare phrase for a tool whose call names nothing', () => {
+  it('prefers what the tool reports about its own progress', () => {
+    expect(describeActivity([call('bash_execute', 'running', 'Compiling 12 of 40')], false).label).toBe(
+      'Compiling 12 of 40'
+    );
+  });
+
+  it('falls back to the bare phrase for a tool that reports nothing', () => {
     expect(describeActivity([call('todo_write', 'running')], false).label).toBe('Updating the plan...');
   });
 
