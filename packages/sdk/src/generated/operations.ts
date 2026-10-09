@@ -13,6 +13,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/sessions/{id}/clone',
   },
+  createAgent: {
+    method: 'POST',
+    path: '/api/v1/agents',
+  },
   createCompletion: {
     method: 'POST',
     path: '/api/ai/v1/completions',
@@ -40,6 +44,14 @@ export const operations = {
   createVoiceSession: {
     method: 'POST',
     path: '/api/v1/voice/sessions',
+  },
+  deleteAgent: {
+    method: 'DELETE',
+    path: '/api/v1/agents/{id}',
+  },
+  deleteFile: {
+    method: 'DELETE',
+    path: '/api/v1/files/{id}',
   },
   deleteProject: {
     method: 'DELETE',
@@ -72,6 +84,10 @@ export const operations = {
   generateSoundEffect: {
     method: 'POST',
     path: '/api/ai/sound-effects',
+  },
+  getAgent: {
+    method: 'GET',
+    path: '/api/v1/agents/{id}',
   },
   getAgentExecution: {
     method: 'GET',
@@ -113,9 +129,17 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/video-generations/{id}',
   },
+  listAgents: {
+    method: 'GET',
+    path: '/api/v1/agents',
+  },
   listDataLakes: {
     method: 'GET',
     path: '/api/v1/data-lakes',
+  },
+  listFiles: {
+    method: 'GET',
+    path: '/api/v1/files',
   },
   listModels: {
     method: 'GET',
@@ -164,6 +188,14 @@ export const operations = {
   synthesizeSpeech: {
     method: 'POST',
     path: '/api/ai/tts',
+  },
+  updateAgent: {
+    method: 'PATCH',
+    path: '/api/v1/agents/{id}',
+  },
+  updateFile: {
+    method: 'PATCH',
+    path: '/api/v1/files/{id}',
   },
   updateProject: {
     method: 'PATCH',
