@@ -19,6 +19,7 @@ import {
   Modal,
   ModalClose,
   ModalDialog,
+  Stack,
   Tab,
   tabClasses,
   TabList,
@@ -29,6 +30,7 @@ import {
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import SubscribeButton from '../Credits/SubscribeButton';
+import ManageSubscriptionButton from './ManageSubscriptionButton';
 import PlanCard from './PlanCard';
 
 function centsToDollars(cents: number | undefined) {
@@ -219,6 +221,7 @@ const SubscriptionModalContent = () => {
               // Active-first per price: a stale delinquent row at this price must not
               // mark the plan the user is actually paying for as payment-failed.
               const isCurrentPlan = pickSubscriptionByPrice(cancellableSubscriptions, plan.priceId);
+              const hasPaymentIssue = !!isCurrentPlan && isDelinquentSubscriptionStatus(isCurrentPlan.status);
               return (
                 <PlanCard
                   key={plan.priceId}
@@ -230,11 +233,14 @@ const SubscriptionModalContent = () => {
                   features={plan.features}
                   isPopular={plan.name === 'Professional'}
                   isCurrentPlan={!!isCurrentPlan}
-                  hasPaymentIssue={!!isCurrentPlan && isDelinquentSubscriptionStatus(isCurrentPlan.status)}
+                  hasPaymentIssue={hasPaymentIssue}
                   currentPlanDetails={isCurrentPlan}
                   priceId={plan.priceId}
                   actionButton={
-                    <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                    <Stack gap={1}>
+                      {isCurrentPlan && <ManageSubscriptionButton isPrimaryAction={hasPaymentIssue} />}
+                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                    </Stack>
                   }
                 />
               );
