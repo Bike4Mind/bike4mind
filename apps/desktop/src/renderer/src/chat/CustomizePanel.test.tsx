@@ -65,15 +65,15 @@ describe('the Customize screen', () => {
     expect(byTestId('skills-settings')).toBeVisible();
   });
 
-  it('groups global and project skills using their source metadata', () => {
+  it('shows global skills and excludes project skills', () => {
     renderScreen();
     const groups = allByTestId('skill-group');
     expect(groups[0]).toHaveTextContent('Your skills');
     expect(groups[0]).toHaveTextContent('/chrome-browser');
-    expect(groups[1]).toHaveTextContent('Project skills');
-    expect(groups[1]).toHaveTextContent('/my-review');
-    expect(groups[2]).toHaveTextContent('Bike4Mind skills');
-    expect(groups[2]).toHaveTextContent('No Bike4Mind account skills loaded.');
+    expect(container).not.toHaveTextContent('Project skills');
+    expect(container).not.toHaveTextContent('/my-review');
+    expect(groups[1]).toHaveTextContent('Bike4Mind skills');
+    expect(groups[1]).toHaveTextContent('No Bike4Mind account skills loaded.');
   });
 
   it('shows an explicit empty state for either skill group', () => {
@@ -87,7 +87,6 @@ describe('the Customize screen', () => {
     ];
     renderScreen();
     expect(container).not.toHaveTextContent('No skills found in ~/.claude/skills.');
-    expect(container).toHaveTextContent('No trusted project skills found.');
     expect(container).toHaveTextContent('No Bike4Mind account skills loaded.');
   });
 
