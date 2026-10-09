@@ -468,6 +468,7 @@ describe('PATCH /api/v1/files/{id}', () => {
   it.each([
     ['an unknown field', { tags: [] }],
     ['an empty file name', { file_name: '' }],
+    ['a whitespace-only file name', { file_name: '   ' }],
     ['a file name over 255 characters', { file_name: 'a'.repeat(256) }],
     ['notes over 10,000 characters', { notes: 'a'.repeat(10_001) }],
   ])('rejects %s with a validation error (422) before updating', async (_label, body) => {
