@@ -500,9 +500,9 @@ describe('parseArtifacts — multi-line and special-character opening tags', () 
 /**
  * The fenced detectors match a fence on its own and check the promotion anchors in the
  * callback, so these cases pin the promotion decisions and the behaviour that changed
- * when the anchors moved out of the patterns. Mirrors the twin suite in apps/client/app/utils/artifactParser.test.ts,
- * except for the react-fence cases: that detector's promotion rules are not shared
- * between the two copies.
+ * when the anchors moved out of the patterns. Mirrors the client suite in apps/client/app/utils/artifactParser.test.ts,
+ * except for the react-fence cases: the client's convertCodeBlocksToArtifacts keeps its own
+ * react detector with different promotion rules.
  */
 describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
@@ -611,11 +611,11 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   });
 
   it('leaves an svg fence with no closing tag untouched', () => {
-    // Output equality only, not a regression guard: this copy's hasCompleteSvg was
-    // already a plain indexOf scan before the change (0.1ms at n=800, 0.9ms at n=25600),
-    // so there is no old-vs-new gap to pin. The growth-ratio version of this case lives
-    // in the twin client suite, whose pre-fix doubly-anchored <svg>...</svg> pattern
-    // takes ~0.6s at n=400.
+    // Output equality only, not a regression guard: core's hasCompleteSvg was already a
+    // plain indexOf scan before the change (0.1ms at n=800, 0.9ms at n=25600), so there is
+    // no old-vs-new gap to pin. The growth-ratio version of this case lives in the client
+    // suite, whose pre-fix svg fence pattern was doubly anchored on <svg>...</svg> and took
+    // ~0.6s at n=400.
     const input = '```svg\n' + '<svg '.repeat(800) + '\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });

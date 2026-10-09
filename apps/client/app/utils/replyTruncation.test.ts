@@ -189,12 +189,33 @@ describe('repairTruncatedArtifact', () => {
   });
 
   it('targets only the last opener, leaving an earlier closed artifact intact', () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const closed = '<artifact identifier="first" type="text/html" title="One"><p>one</p></artifact>';
 
     const repaired = repairTruncatedArtifact(`${closed}\nMore <artifact identifier="second" type="text/ht`);
     expect(repaired).toBe(`${closed}\nMore`);
     expect(parseArtifactsWithFallback(repaired).artifacts.map(a => a.identifier)).toEqual(['first']);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes only the dangling artifact after a closed one, trimming trailing whitespace first', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const closed = '<artifact identifier="first" type="text/html" title="One"><p>one</p></artifact>';
+    const dangling = '<artifact identifier="second" type="text/html" title="Two">\n<div>';
+
+    const repaired = repairTruncatedArtifact(`${closed}\n${dangling}  \n`);
+    expect(repaired).toBe(`${closed}\n${dangling}\n</artifact>`);
+    const ids = parseArtifactsWithFallback(repaired).artifacts.map(a => a.identifier);
+    expect(ids.sort()).toEqual(['first', 'second']);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('returns content with no opener unchanged, logging a zero-length drop', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(repairTruncatedArtifact('Intro with no artifact ')).toBe('Intro with no artifact ');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('(0 chars)');
   });
 
   it('treats a ">" inside a quoted attribute value as part of an incomplete tag', () => {

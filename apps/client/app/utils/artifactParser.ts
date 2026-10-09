@@ -575,8 +575,8 @@ ${codeContent.trim()}
   // The two-tier split is the original behavior; what changed is that two adjacent `html`
   // fences are now two artifacts, where the old regex merged them into one. A body carrying
   // a CR, U+2028 or U+2029 is also accepted now, where the old `.`/`\n`-built pattern could
-  // not reach across one - core's html fence body is the same [\s\S] class, so the twins
-  // agree on which bodies promote.
+  // not reach across one - the html fence in core's convertCodeBlocksToArtifacts uses the
+  // same [\s\S] body class, so client and core agree on which bodies promote.
   const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
