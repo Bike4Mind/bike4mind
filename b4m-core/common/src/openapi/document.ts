@@ -2,6 +2,7 @@ import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
 import { API_KEY_RATE_LIMIT_DEFAULTS } from '../types/entities/UserApiKeyTypes';
+import { API_KEY_RATE_LIMIT_HEADERS, API_KEY_RATE_LIMIT_HEADER_NAMES } from '../apiKeyRateLimitHeaders';
 
 // Importing these modules is what registers their schemas/paths against the
 // shared registry (side-effect imports). Keep them before generateDocument().
@@ -72,15 +73,18 @@ function infoDescription(): string {
     `Each API key has a per-minute and a per-day request ceiling, by default ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerMinute} requests/minute and ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay} requests/day (a key can be minted with its own ceilings). ` +
-      'Rate-limited operations return the current window state on every response:',
-    ...Object.keys(RATE_LIMIT_HEADER_SPEC).map(header => `- \`${header}\``),
+      'Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint excepted):',
+    ...API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\``),
     '',
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
-      'that long before retrying. `GET /api/v1/me`, `GET /api/v1/credits` and the poll endpoints listed under ' +
+      'that long before retrying. The streaming completions endpoint is the exception: ' +
+      '`POST /api/ai/v1/completions` opens its `200` event stream before rate-limiting, so an exceeded ' +
+      'ceiling arrives as an in-stream `error` event rather than a `429`. ' +
+      '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, the `GET` list ' +
+      'endpoints for `/api/v1/sessions` and `/api/v1/video-generations`, and the poll endpoints listed under ' +
       'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
-      'limit applies. A ' +
-      'request rejected for a bad key (`401`) or a missing scope (`403`) never reaches the limiter and carries ' +
-      'no rate-limit headers.',
+      'limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches ' +
+      'the limiter and carries no rate-limit headers.',
     '',
     '## Credits',
     'Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the ' +
@@ -99,6 +103,12 @@ function infoDescription(): string {
       'tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and ' +
       'the body for each.',
     '',
+    'The shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a ' +
+      'missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown ' +
+      'resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: "provider_rejected"` ' +
+      'means the upstream provider refused the provider key the request used - the platform key by default, ' +
+      'or your own stored provider key when you configured one - so your API key itself was accepted.',
+    '',
     '## Async jobs',
     'Work that is not provably fast is queued and polled rather than held open:',
     '- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, ' +
@@ -111,6 +121,8 @@ function infoDescription(): string {
       'the reply is ready.',
     '- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll ' +
       '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
+    '- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll ' +
+      '`GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly.',
@@ -285,22 +297,16 @@ const REQUEST_ID_HEADER_SPEC = {
 
 /**
  * The rate-limit headers `apiKeyRateLimit` actually sets - two windows, six
- * headers. These names are load-bearing: a client reading the unwindowed
- * `X-RateLimit-Limit` gets `undefined`. Must stay in sync with
- * apps/client/server/middlewares/apiKeyRateLimit.ts.
+ * headers, derived from API_KEY_RATE_LIMIT_HEADERS (apiKeyRateLimitHeaders.ts).
+ * These names are load-bearing: a client reading the unwindowed
+ * `X-RateLimit-Limit` gets `undefined`.
  */
 const INTEGER_HEADER = { type: 'integer' as const };
-const RATE_LIMIT_HEADER_SPEC = {
-  'X-RateLimit-Limit-Minute': { description: 'Request quota per minute.', schema: INTEGER_HEADER },
-  'X-RateLimit-Remaining-Minute': { description: 'Requests remaining in the current minute.', schema: INTEGER_HEADER },
-  'X-RateLimit-Reset-Minute': {
-    description: 'Unix epoch (seconds) when the minute window resets.',
-    schema: INTEGER_HEADER,
-  },
-  'X-RateLimit-Limit-Day': { description: 'Request quota per day.', schema: INTEGER_HEADER },
-  'X-RateLimit-Remaining-Day': { description: 'Requests remaining in the current day.', schema: INTEGER_HEADER },
-  'X-RateLimit-Reset-Day': { description: 'Unix epoch (seconds) when the day window resets.', schema: INTEGER_HEADER },
-};
+const RATE_LIMIT_HEADER_SPEC = Object.fromEntries(
+  API_KEY_RATE_LIMIT_HEADER_NAMES.map(
+    header => [header, { description: API_KEY_RATE_LIMIT_HEADERS[header], schema: INTEGER_HEADER }] as const
+  )
+);
 
 /**
  * The failures `registerContract` INJECTS carry no rate-limit headers:
@@ -352,7 +358,10 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
-    { name: 'Videos', description: 'Video generation, queued and polled as quests.' },
+    {
+      name: 'Videos',
+      description: 'Video generation, queued with `202` and polled at `GET /api/v1/video-generations/{id}`.',
+    },
     {
       name: 'Voice',
       description: 'Real-time voice conversations: list voices, open a call, and reconcile its credits when it ends.',

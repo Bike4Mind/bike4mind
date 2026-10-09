@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { API_KEY_RATE_LIMIT_DEFAULTS, API_KEY_RATE_LIMIT_HEADER_NAMES, MAX_REQUEST_ID_LENGTH } from '@bike4mind/common';
 import {
   GENERIC_MODAL_API_KEY_SCOPES,
   DEDICATED_FLOW_SCOPES,
@@ -71,5 +72,76 @@ describe('API reference base URL', () => {
     expect(API_REFERENCE_CONTENT).toContain('served from `https://b4m.test`');
     expect(API_REFERENCE_CONTENT).toContain('curl -i -X POST https://b4m.test/api/chat');
     expect(API_REFERENCE_CONTENT).not.toContain('https://your-deployment.example.com');
+  });
+});
+
+const section = (heading: string): string => {
+  const start = API_REFERENCE_CONTENT.indexOf(heading);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = API_REFERENCE_CONTENT.indexOf('\n---', start);
+  // A renamed heading would make indexOf return -1 and slice() silently return a
+  // truncated tail; the scoped assertions below would then check the wrong text.
+  expect(end).toBeGreaterThan(start);
+  return API_REFERENCE_CONTENT.slice(start, end);
+};
+
+describe('API reference facts shared with the generated docs', () => {
+  // Hardcoded rather than read from the constant, so a header renamed or dropped there
+  // cannot vanish from both sides of the comparison at once.
+  const EXPECTED_HEADERS = [
+    'X-RateLimit-Limit-Minute',
+    'X-RateLimit-Remaining-Minute',
+    'X-RateLimit-Reset-Minute',
+    'X-RateLimit-Limit-Day',
+    'X-RateLimit-Remaining-Day',
+    'X-RateLimit-Reset-Day',
+  ];
+
+  it('quotes the enforced rate-limit defaults', () => {
+    const rates = section('### Rate Limits');
+    const { requestsPerMinute, requestsPerDay } = API_KEY_RATE_LIMIT_DEFAULTS;
+    expect(rates).toContain(`| Requests per minute | ${requestsPerMinute.toLocaleString('en-US')} |`);
+    expect(rates).toContain(`| Requests per day | ${requestsPerDay.toLocaleString('en-US')} |`);
+  });
+
+  it('lists exactly the rate-limit headers the middleware sets', () => {
+    const listed = [...section('### Rate Limits').matchAll(/`(X-RateLimit-[A-Za-z-]+)`/g)].map(m => m[1]);
+    expect(new Set(listed)).toEqual(new Set(EXPECTED_HEADERS));
+    expect(new Set(API_KEY_RATE_LIMIT_HEADER_NAMES)).toEqual(new Set(EXPECTED_HEADERS));
+  });
+
+  it('names no rate-limit header the middleware does not set, anywhere on the page', () => {
+    const mentioned = [...API_REFERENCE_CONTENT.matchAll(/X-RateLimit-[A-Za-z-]*[A-Za-z]/g)].map(m => m[0]);
+    expect(mentioned.length).toBeGreaterThan(0);
+    for (const header of mentioned) {
+      expect(EXPECTED_HEADERS).toContain(header);
+    }
+  });
+
+  it('does not claim the rate-limit headers are on every response', () => {
+    const rates = section('### Rate Limits');
+    expect(rates).not.toMatch(/every response/i);
+    expect(rates).toContain('Retry-After');
+  });
+
+  it('quotes the real request-id length cap', () => {
+    expect(API_REFERENCE_CONTENT).toContain(`capped at ${MAX_REQUEST_ID_LENGTH} characters`);
+  });
+
+  it('links the generated docs for the error envelope and async polling instead of restating them', () => {
+    const errors = section('## Error Handling');
+    expect(errors).toContain('[generated API docs](/api/v1/docs)');
+    expect(errors).not.toContain('CONVENTIONS.md');
+    expect(errors).not.toMatch(/malformed JSON is 400/);
+    expect(errors).toContain('POST /api/auth/refreshToken');
+    const publicSection = section('## Public endpoints (generated docs)');
+    expect(publicSection).toContain('Async jobs');
+    expect(publicSection).not.toContain('(or the job resource) until it is terminal');
+  });
+
+  it('points at the generated docs for the reads exempt from the per-day ceiling', () => {
+    const rateLimits = section('### Rate Limits');
+    expect(rateLimits).toMatch(/exempt from the per-day ceiling/);
+    expect(rateLimits).toContain('[generated API docs](/api/v1/docs)');
   });
 });

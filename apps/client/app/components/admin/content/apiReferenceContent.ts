@@ -1,6 +1,13 @@
 // brand externalized
 import { getBrandName } from '@client/config/general';
-import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
+import {
+  API_KEY_RATE_LIMIT_DEFAULTS,
+  API_KEY_RATE_LIMIT_HEADER_NAMES,
+  API_KEY_RATE_LIMIT_HEADERS,
+  MAX_REQUEST_ID_LENGTH,
+  MIN_PASSAGE_TOKEN_TARGET,
+  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
+} from '@bike4mind/common';
 import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
 
 // Generated from the same catalog the New-Key modals offer, so the table can't drift from
@@ -91,18 +98,22 @@ holding scopes it doesn't literally list.
 
 | Limit | Default |
 |-------|---------|
-| Requests per minute | 60 |
-| Requests per day | 1,000 |
+| Requests per minute | ${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerMinute.toLocaleString('en-US')} |
+| Requests per day | ${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay.toLocaleString('en-US')} |
 
-Rate limit headers are included in every response:
+A key can be minted with its own ceilings. Responses from rate-limited routes called with an API
+key carry the current state of both windows (the streaming completions endpoint excepted):
 
-\`\`\`
-X-RateLimit-Limit: 60
-X-RateLimit-Remaining: 58
-X-RateLimit-Reset: 1700000000
-\`\`\`
+${API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\`: ${API_KEY_RATE_LIMIT_HEADERS[header]}`).join('\n')}
 
-When rate-limited, the API returns \`429 Too Many Requests\`.
+A request refused at the route scope gate (\`403\`) or for a bad key (\`401\`) never reaches the
+limiter and carries none of these headers. Exceeding a ceiling returns \`429 Too Many Requests\` with
+a \`Retry-After\` header giving the seconds to wait before retrying; the streaming completions
+endpoint (\`POST /api/ai/v1/completions\`) opens its event stream first, so an exceeded ceiling
+arrives there as an in-stream \`error\` event rather than a \`429\`.
+
+Some reads and job polls are exempt from the per-day ceiling and count only against the
+per-minute one; the Rate limits section of the [generated API docs](/api/v1/docs) lists them.
 
 ---
 
@@ -122,8 +133,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
 
-Image, video and chat work is asynchronous: the create call returns a quest or job, and you poll
-\`GET /api/v1/quests/{id}\` (or the job resource) until it is terminal.
+Image, video and chat work is asynchronous; the Async jobs section of the
+[generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.
 
 ---
 
@@ -341,14 +352,10 @@ Versioned content artifacts generated during conversations (code, documents, dia
 
 ## Error Handling
 
-Public endpoints share one JSON error envelope: a required \`error\` string, plus \`request_id\`
-(mirrors \`X-Request-ID\`) when present. Endpoint-specific detail is added alongside \`error\`;
-branch on the HTTP status (and \`errorCode\` where an endpoint returns one), not on the message.
-The shared status table (malformed JSON is 400, schema validation failure is 422, a missing or
-invalid credential is 401, a missing scope is 403, an unknown resource is 404, rate limiting is
-429) is defined in \`b4m-core/common/src/api-contract/CONVENTIONS.md\`, and each generated
-operation lists the statuses it can return. Older hand-written routes may not follow the envelope
-exactly.
+Public endpoints share one JSON error envelope and one status table (400 vs 422 and the rest),
+both described in the Errors section of the [generated API docs](/api/v1/docs); each generated
+operation lists the statuses it can return.
+Older hand-written routes may not follow the envelope exactly.
 
 When an access token expires the API answers 401. Exchange the refresh token at
 \`POST /api/auth/refreshToken\`: non-browser clients pass it in the body, and a browser sends an
@@ -378,13 +385,13 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 3. **Leverage RAG with file context.** Attach \`fileIds\` to chat requests to ground AI responses in your uploaded documents. Files must be chunked first via \`POST /api/files/chunk\`.
 
-4. **Handle 429s gracefully.** Implement exponential backoff when you receive rate limit responses. Check \`X-RateLimit-Reset\` header for the retry timestamp.
+4. **Handle 429s gracefully.** On a 429, wait the number of seconds in the \`Retry-After\` header before retrying. Each window's \`Reset\` header, listed under Rate Limits, gives its reset time in Unix epoch seconds.
 
 5. **Use Zod schemas for validation.** All request bodies are validated with Zod schemas on the server. Match the expected schema to avoid 422 errors. Shared schemas are in \`@bike4mind/common\`.
 
 6. **Token lifecycle matters.** Access tokens expire after 30 minutes. Use the refresh token flow (\`POST /api/auth/refreshToken\`) to get new tokens without requiring re-authentication.
 
-7. **Every response carries a request ID.** The API attaches an \`X-Request-ID\` header to every response (success and error) so you can correlate a failure with our server logs. Supply your own \`X-Request-ID\` and the server echoes it back; omit it and the server generates one. Caller-supplied values are sanitized to the characters \`A-Za-z0-9._-\` and capped at 128 characters. Include this ID in support tickets.
+7. **Every response carries a request ID.** The API attaches an \`X-Request-ID\` header to every response (success and error) so you can correlate a failure with our server logs. Supply your own \`X-Request-ID\` and the server echoes it back; omit it and the server generates one. Caller-supplied values are sanitized to the characters \`A-Za-z0-9._-\` and capped at ${MAX_REQUEST_ID_LENGTH} characters. Include this ID in support tickets.
 
     \`\`\`bash
     # Send a correlation ID and read it back from the response headers
