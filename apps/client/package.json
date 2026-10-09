@@ -137,7 +137,7 @@
     "dexie-react-hooks": "^1.1.7",
     "diff": "^9.0.0",
     "docx": "^9.7.1",
-    "dompurify": "^3.4.15",
+    "dompurify": "^3.4.16",
     "dotenv": "^17.4.2",
     "emoji-picker-react": "^4.22.2",
     "escape-string-regexp": "^5.0.0",
