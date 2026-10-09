@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LAKE_MEMORY_FINDING_SOURCE_PREFIX } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
 import MemoryLedgerEventModel, { memoryLedgerRepository, type IMemoryLedgerEvent } from '../MemoryLedgerEventModel';
@@ -488,6 +488,8 @@ describe('MemoryLedgerRepository', () => {
 
   describe('listPrincipalsNeedingVectors', () => {
     const CURRENT = 'space-v2';
+    const VECTORLESS_INDEX = 'memory_ledger_vectorless_candidates';
+    const STALE_INDEX = 'memory_ledger_stale_vector_candidates';
     const at = (kind: IMemoryLedgerEvent['principalKind'], id: string, owner: string, seq = 0) =>
       sealedEvent({ principalKind: kind, principalId: id, ownerUserId: owner, seq, hash: `${kind}:${id}:${seq}` });
 
@@ -525,6 +527,14 @@ describe('MemoryLedgerRepository', () => {
       expect(await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 10 })).toEqual([]);
     });
 
+    it('finds a current-stamped event whose vector ciphertext is missing', async () => {
+      await memoryLedgerRepository.tryInsert({ ...at('agent', 'stamp-only', 'owner'), embeddingModel: CURRENT });
+
+      expect(await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 10 })).toEqual([
+        { principalKind: 'agent', principalId: 'stamp-only', ownerUserId: 'owner' },
+      ]);
+    });
+
     it('pages by keyset cursor across a kind boundary and honours limit', async () => {
       await memoryLedgerRepository.tryInsert(at('lake', 'lake:a', 'o1'));
       await memoryLedgerRepository.tryInsert(at('lake', 'lake:b', 'o1'));
@@ -535,6 +545,51 @@ describe('MemoryLedgerRepository', () => {
 
       const rest = await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { after: first[1], limit: 2 });
       expect(rest.map(p => p.principalId)).toEqual(['u1']);
+    });
+
+    it('uses the partial repair indexes for initial and resumed pages', async () => {
+      const fullWidthCipher = 'v'.repeat(2_732);
+      await MemoryLedgerEventModel.collection.insertMany(
+        Array.from({ length: 2_000 }, (_, i) => ({
+          ...at('user', `done-${i}`, 'owner'),
+          embeddingCipher: fullWidthCipher,
+          embeddingIv: 'current-vector-iv',
+          embeddingModel: CURRENT,
+        }))
+      );
+      await memoryLedgerRepository.tryInsert(at('lake', 'needs-vector', 'owner'));
+      await memoryLedgerRepository.tryInsert({
+        ...at('user', 'stale-vector', 'owner'),
+        embeddingCipher: fullWidthCipher,
+        embeddingIv: 'stale-vector-iv',
+        embeddingModel: 'space-v1',
+      });
+
+      const declared = new Map(MemoryLedgerEventModel.schema.indexes().map(index => [index[1]?.name, index]));
+      expect(declared.get(VECTORLESS_INDEX)).toEqual([
+        { embeddingIv: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+        { name: VECTORLESS_INDEX, partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } }, background: true },
+      ]);
+      expect(declared.get(STALE_INDEX)).toEqual([
+        { embeddingModel: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+        { name: STALE_INDEX, partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } }, background: true },
+      ]);
+
+      for (const after of [undefined, { principalKind: 'lake', principalId: 'needs-vector', ownerUserId: 'owner' }]) {
+        const aggregate = vi.spyOn(MemoryLedgerEventModel, 'aggregate');
+        await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { after, limit: 25 });
+        expect(aggregate).toHaveBeenCalledTimes(2);
+
+        for (const [pipeline, indexName] of aggregate.mock.calls.map(
+          ([pipeline], index) => [pipeline, index === 0 ? VECTORLESS_INDEX : STALE_INDEX] as const
+        )) {
+          const plan = await MemoryLedgerEventModel.collection.aggregate(pipeline).explain('queryPlanner');
+          const winning = JSON.stringify(plan);
+          expect(winning).toContain(`\"indexName\":\"${indexName}\"`);
+          expect(winning).not.toContain('COLLSCAN');
+        }
+        aggregate.mockRestore();
+      }
     });
   });
 });

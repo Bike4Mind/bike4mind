@@ -214,7 +214,8 @@ export const deleteFileContract = defineEndpoint({
     403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: {
       description:
-        'No file with that id is visible to the caller. A file that does not exist and a malformed id ' +
+        'No file with that id is yours or shared with you directly (a file you reach only through a ' +
+        'group or a data lake cannot be deleted here). A file that does not exist and a malformed id ' +
         'are both reported as 404.',
       schema: ApiErrorSchema,
     },

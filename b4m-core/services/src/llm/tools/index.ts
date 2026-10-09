@@ -67,7 +67,6 @@ export type SlackLlmTools =
   | 'share_curated_file'
   | 'notebook_new'
   | 'notebook_status'
-  | 'confirm_pending_action'
   | 'cancel_pending_action';
 export { setShowUserQuestionFn };
 export type {

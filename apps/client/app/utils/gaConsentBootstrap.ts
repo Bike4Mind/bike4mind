@@ -1,4 +1,5 @@
-import { CONSENT_KEY, DECISION_COOKIE, REGION_COOKIE } from './consentRegion';
+import { DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
+import { CONSENT_KEY } from './consentRegion';
 
 // Window.__b4mGaConsentDefault is declared in types/gaConsent.d.ts, not here: this module
 // isn't imported by every file that reads/writes the global (see CookieConsentBanner), so the

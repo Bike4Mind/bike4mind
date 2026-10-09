@@ -10,9 +10,9 @@ import { dispatch as fabFileVectorizeDispatch } from '@workers/queueHandlers/fab
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@workers/queueHandlers/dataLakeTaxonomyAnalysis';
 import { dispatch as dataLakeResearchRunDispatch } from '@workers/queueHandlers/dataLakeResearchRun';
 import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
-import { dispatch as driveLakeIngestDispatch } from '@server/queueHandlers/driveLakeIngest';
-import { dispatch as githubLakeIngestDispatch } from '@server/queueHandlers/githubLakeIngest';
-import { dispatch as githubLakeRevokeDispatch } from '@server/queueHandlers/githubLakeRevoke';
+import { dispatch as driveLakeIngestDispatch } from '@workers/queueHandlers/driveLakeIngest';
+import { dispatch as githubLakeIngestDispatch } from '@workers/queueHandlers/githubLakeIngest';
+import { dispatch as githubLakeRevokeDispatch } from '@workers/queueHandlers/githubLakeRevoke';
 import { dispatch as imageGenerationDispatch } from '@workers/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@workers/queueHandlers/imageEdit';
 import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';

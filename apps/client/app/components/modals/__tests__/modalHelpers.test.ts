@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { IModal, IUser, IUserActivityCounterDocument } from '@bike4mind/common';
-import { filterModals, modalStorage } from '../modalHelpers';
+import { filterModals, filterWhatsNewSlides, modalStorage } from '../modalHelpers';
+import { releaseNoteToModal, RELEASE_NOTE_SLIDE_PREFIX } from '../releaseNoteSlides';
 
 /**
  * Creates a mock IModal for testing.
@@ -463,6 +464,54 @@ describe('modalHelpers', () => {
         const filtered = filterModals(modals, user, []);
 
         expect(filtered).toHaveLength(1); // Should show when no counters
+      });
+    });
+  });
+
+  describe('release-note slides', () => {
+    const PUBLIC_NOTE = {
+      id: 'rn1',
+      release_tag: 'v1.0.0',
+      headline: 'Release',
+      summary: 'Summary',
+      published_at: '2026-01-01T00:00:00.000Z',
+      items: [],
+    };
+    const slide = releaseNoteToModal(PUBLIC_NOTE);
+
+    it('shows an unseen release-note slide', () => {
+      expect(filterModals([slide], createMockUser(), [])).toHaveLength(1);
+    });
+
+    it('hides a release-note slide once its view counter is recorded', () => {
+      const counters = [createMockCounter('Modal Viewed', 1, [`${RELEASE_NOTE_SLIDE_PREFIX}rn1`])];
+      expect(filterModals([slide], createMockUser(), counters)).toHaveLength(0);
+    });
+
+    it('re-shows a viewed release-note slide when the whats-new tag is forced', () => {
+      const counters = [createMockCounter('Modal Viewed', 1, [`${RELEASE_NOTE_SLIDE_PREFIX}rn1`])];
+      expect(filterModals([slide], createMockUser(), counters, ['whats-new'])).toHaveLength(1);
+    });
+
+    describe('filterWhatsNewSlides', () => {
+      const seenSlide = releaseNoteToModal({ ...PUBLIC_NOTE, id: 'rn0' });
+      const newSlide = releaseNoteToModal({ ...PUBLIC_NOTE, id: 'rn2' });
+      const seenHandAuthored = createMockModal({ _id: 'm1', tags: ['whats-new'] });
+      const counters = [createMockCounter('Modal Viewed', 1, [`${RELEASE_NOTE_SLIDE_PREFIX}rn0`, 'm1'])];
+      const ids = (slides: { _id?: string | null }[]) => slides.map(modal => modal._id);
+      const all = [seenSlide, newSlide, seenHandAuthored];
+
+      it('shows only unseen release notes on auto-trigger, leaving hand-authored slides as before', () => {
+        const slides = filterWhatsNewSlides(all, createMockUser(), counters, 'whats-new', true);
+        expect(ids(slides)).toEqual(expect.arrayContaining([`${RELEASE_NOTE_SLIDE_PREFIX}rn2`, 'm1']));
+        expect(ids(slides)).not.toContain(`${RELEASE_NOTE_SLIDE_PREFIX}rn0`);
+      });
+
+      it('shows every release note on a manual open', () => {
+        const slides = filterWhatsNewSlides(all, createMockUser(), counters, 'whats-new', false);
+        expect(ids(slides)).toEqual(
+          expect.arrayContaining([`${RELEASE_NOTE_SLIDE_PREFIX}rn0`, `${RELEASE_NOTE_SLIDE_PREFIX}rn2`, 'm1'])
+        );
       });
     });
   });

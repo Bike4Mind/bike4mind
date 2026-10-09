@@ -364,3 +364,65 @@ describe('buildSharedTools: the denylist also reaches parentTools, which the ret
     expect(names).not.toContain('atlassian__jira_create_issue');
   });
 });
+
+describe('buildSharedTools: the MCP wrapper turns a confirm preview into a pending action', () => {
+  const encodeToken = (payload: unknown) => Buffer.from(JSON.stringify(payload)).toString('base64');
+  const token = encodeToken({ tool: 'create_issue', params: { owner: 'o', repo: 'r', title: 't' }, ts: 7 });
+  const previewResult = JSON.stringify({ action: 'preview', next_step: 'show the token', _confirmToken: token });
+
+  const runTool = async (
+    toolName: string,
+    result: string,
+    onPendingAction: NonNullable<ToolBuilderCallbacks['onPendingAction']>
+  ): Promise<string> => {
+    const [server, tool] = toolName.split('__');
+    const backed = { ...mcpTool(server, tool), toolFn: async () => result };
+    const built = buildSharedTools(
+      deps,
+      { ...callbacks, onPendingAction },
+      {
+        enabledTools: [],
+        mcpToolsByServer: { [server]: [backed] },
+      }
+    );
+    const wrapped = built?.find(candidate => candidate.toolSchema.name === toolName);
+    if (!wrapped) throw new Error(`${toolName} was not built`);
+    return String(await wrapped.toolFn({}));
+  };
+
+  it('persists the decoded action once and hands the model a token-free result with the rewritten next step', async () => {
+    const onPendingAction = vi.fn().mockResolvedValue(undefined);
+
+    const forModel = await runTool('github__create_issue', previewResult, onPendingAction);
+
+    expect(onPendingAction).toHaveBeenCalledTimes(1);
+    expect(onPendingAction).toHaveBeenCalledWith({
+      tool: 'create_issue',
+      params: { owner: 'o', repo: 'r', title: 't' },
+      ts: 7,
+    });
+    expect(forModel).not.toContain('_confirmToken');
+    expect(forModel).not.toContain(token);
+    expect(JSON.parse(forModel).next_step).toBe('Click the Confirm or Cancel button below to proceed.');
+  });
+
+  it('ignores a token echoed by a read tool and still strips it', async () => {
+    const onPendingAction = vi.fn().mockResolvedValue(undefined);
+
+    const forModel = await runTool('github__get_issue', previewResult, onPendingAction);
+
+    expect(onPendingAction).not.toHaveBeenCalled();
+    expect(forModel).not.toContain('_confirmToken');
+    expect(forModel).not.toContain(token);
+  });
+
+  it('still returns the stripped result when persisting the action rejects', async () => {
+    const onPendingAction = vi.fn().mockRejectedValue(new Error('db down'));
+
+    const forModel = await runTool('github__create_issue', previewResult, onPendingAction);
+
+    expect(onPendingAction).toHaveBeenCalledTimes(1);
+    expect(forModel).not.toContain('_confirmToken');
+    expect(JSON.parse(forModel).next_step).toBe('Click the Confirm or Cancel button below to proceed.');
+  });
+});

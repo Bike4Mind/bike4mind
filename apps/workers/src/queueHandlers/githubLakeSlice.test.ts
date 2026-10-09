@@ -58,7 +58,7 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOrigin
   getRecursiveTree: h.getRecursiveTree,
   getBlobBytes: h.getBlobBytes,
 }));
-vi.mock('@server/queueHandlers/lakeIngestShared', () => ({
+vi.mock('@workers/queueHandlers/lakeIngestShared', () => ({
   createLakeIngestRetirer: () => ({
     retireSupersededCopy: h.retire,
     flushReclaimedStorage: h.flush,

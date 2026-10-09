@@ -85,6 +85,7 @@ import {
 } from '@bike4mind/utils';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
+import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
@@ -241,7 +242,6 @@ import {
   shouldOfferSkillTool,
 } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
-import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 import {
   ContextTelemetryAlertsSchema,
   sanitizeTelemetryError,
@@ -3354,6 +3354,8 @@ export class ChatCompletionProcess {
       // describe a tool the model never received.
       const navigateViewAvailable = allTools?.some(t => t.toolSchema.name === 'navigate_view') ?? false;
       const editImageAvailable = allTools?.some(t => t.toolSchema.name === 'edit_image') ?? false;
+      // The built list drops video_generation without a usable config (buildSharedTools), so this is the real offer.
+      const videoGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'video_generation') ?? false;
 
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
@@ -3527,11 +3529,15 @@ export class ChatCompletionProcess {
           : [],
         mementos: featureContextMessages['mementos'],
         project: featureContextMessages['project'],
+        // Gated on the consuming tools reaching the built tool list, like the two prompts above: the
+        // requested list agrees today only because neither is auto-added, which is exactly the
+        // assumption that broke the view registry once navigate_view became auto-added.
         recentImages: buildRecentGeneratedImagesNote({
+          images: cacheInfo.recentGeneratedImages,
           editImageAvailable,
+          videoGenerationAvailable,
           sessionOwnerId: session.userId,
           callerId: this.user.id,
-          recentImages: cacheInfo.recentGeneratedImages,
         }),
         urls: urlMessages,
         attachedFiles: fabMessages,

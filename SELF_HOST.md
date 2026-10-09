@@ -987,7 +987,16 @@ Caddy provisions a Let's Encrypt certificate for `B4M_DOMAIN` on first start (th
 docker compose -f compose.selfhost.yaml -f compose.caddy.yaml logs -f caddy
 ```
 
-**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, uncomment the `/api/ai/v1/*` route in `selfhost/caddy/Caddyfile` and set `CHAT_COMPLETION_PUBLIC_URL=https://chat.example.com` in `.env.selfhost`.
+**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, add this route **inside** the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (the commented sample at the bottom of the file), and change `CHAT_COMPLETION_PUBLIC_URL` to `https://chat.example.com` in `.env.selfhost`:
+
+```caddyfile
+@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
+handle @completions {
+	reverse_proxy chatcompletion:8080
+}
+```
+
+It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @completions` loses to the catch-all `handle`, and the paths 404 from the app. Caddy reads the file only at startup, so recreate it afterwards (along with `app`, which reads `.env.selfhost`): `docker compose -f compose.selfhost.yaml -f compose.caddy.yaml --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app`.
 
 **Running on a non-standard port (80/443 already in use).** The standard 80/443 above is recommended whenever it is available - it gets an auto-renewing trusted cert with no browser warning. If another service already owns 80/443 on this host (or your router forwards them elsewhere), you can run Caddy on a spare port instead, with a cert tradeoff: Let's Encrypt's HTTP-01 and TLS-ALPN-01 challenges only answer on the standard 80/443 of the domain's IP, so on a spare port you cannot get an auto cert that way.
 
@@ -1188,4 +1197,4 @@ Startup verifies that the source queue redrives to the configured DLQ after thre
 
 Plain export artifacts use the requesting user, plan and export job ID as their stable identity. A replay rechecks plan access and reuses an existing ZIP even after midnight or a goal edit. A metadata lookup failure emits the existing failed progress status even when the queue will retry; a later successful attempt can still deliver the download. Only a definitive missing-object response allows generation; metadata permission/network failures and failed download notification remain retryable. The hosted dispatcher shares this new key scheme. Already-created legacy date/goal-named artifacts are not migrated: replay after an upgrade may generate a new scoped artifact and leave the legacy object. There is no durable plain-export receipt or concurrent exactly-once guarantee: a failure before artifact upload, or competing workers, can repeat model work. Organization summaries retain their existing persisted completion, active-window release and completed-replay behavior.
 
-Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test:integration server/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.
+Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.

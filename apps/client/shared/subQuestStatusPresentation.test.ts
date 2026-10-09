@@ -5,7 +5,7 @@ import {
   SUBQUEST_STATUS_LABELS,
   getSubQuestStatusIcon,
   getSubQuestStatusLabel,
-} from '../subQuestStatusPresentation';
+} from './subQuestStatusPresentation';
 
 describe('sub-quest status presentation', () => {
   it('has a glyph and a label for every canonical status', () => {

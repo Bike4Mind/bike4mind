@@ -64,12 +64,12 @@ import {
   slackToolDefinitions,
   createPendingActionToolDefs,
   SlackClient,
-  buildConfirmationButtons,
   formatPreviewFromParams,
   processMarkdownForSlack,
   splitTextIntoBlocks,
 } from '@bike4mind/slack';
-import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { buildPendingActionButtons } from '@server/integrations/slack/pendingActionButtons';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
@@ -422,14 +422,12 @@ export const handler = withEventContext(async (event, logger) => {
   // Slack completions always get Slack tools - no enableSlackTools flag needed
   const baseTools: Record<string, ToolDefinition> = { ...slackToolDefinitions };
 
-  if (requestBody.tools?.includes('confirm_pending_action')) {
+  if (requestBody.tools?.includes('cancel_pending_action')) {
     const pendingTools = createPendingActionToolDefs({
       sessionId: params.sessionId,
-      executePendingAction,
       cancelPendingAction: cancelPendingActionOnQuest,
       findQuestWithPendingAction: (sessionId: string) =>
         Quest.findOne({ sessionId, pendingAction: { $exists: true } }).sort({ createdAt: -1 }),
-      findUserById: (userId: string) => User.findById(userId),
     });
     Object.assign(baseTools, pendingTools);
   }
@@ -499,7 +497,7 @@ export const handler = withEventContext(async (event, logger) => {
     displayText = formattedPreview;
     formatted = formatSimpleAgentResponse(formattedPreview);
 
-    const confirmButtons = buildConfirmationButtons(params.questId);
+    const confirmButtons = buildPendingActionButtons(quest);
     formatted.blocks = [...formatted.blocks, ...confirmButtons];
 
     await Quest.findByIdAndUpdate(params.questId, {
