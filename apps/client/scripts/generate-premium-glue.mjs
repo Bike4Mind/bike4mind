@@ -39,7 +39,7 @@
  * are unaffected because both link states typecheck clean.
  */
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, realpathSync } from 'node:fs';
 import { resolve, dirname, join, sep, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,13 +52,25 @@ const INFRA_GENERATED_DIR = join(REPO_ROOT, 'infra/premium-generated');
 
 // --- Discover premium packages ---
 
+// True when node_modules/<pkgName> (at either root) resolves to packages/premium/<dir>.
+function pointsAtLink(pkgName, dir) {
+  const target = realpathSync(join(PREMIUM_DIR, dir));
+  return [CLIENT_ROOT, REPO_ROOT].some(root => {
+    try {
+      return realpathSync(join(root, 'node_modules', ...pkgName.split('/'))) === target;
+    } catch {
+      return false; // not linked at this root
+    }
+  });
+}
+
 function discoverPremiumPackages() {
   if (!existsSync(PREMIUM_DIR)) return [];
 
   const packages = [];
-  const seen = new Set();
-  // Sorted so the first dir wins deterministically when a package name repeats (e.g. a
-  // sibling git worktree of an overlay); importing it twice registers duplicate routes.
+  const byName = new Map();
+  // Sorted so the fallback is deterministic when a package name repeats (e.g. a sibling
+  // git worktree of an overlay); importing it twice registers duplicate routes.
   const entries = readdirSync(PREMIUM_DIR, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -66,14 +78,20 @@ function discoverPremiumPackages() {
     if (!existsSync(pkgPath)) continue;
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-      if (pkg.b4mContributions) {
-        if (seen.has(pkg.name)) {
-          console.warn(`[codegen] skipping ${entry.name}: package "${pkg.name}" already discovered`);
-          continue;
-        }
-        seen.add(pkg.name);
-        packages.push({ name: pkg.name, dir: entry.name, contributions: pkg.b4mContributions });
+      if (!pkg.b4mContributions) continue;
+      const candidate = { name: pkg.name, dir: entry.name, contributions: pkg.b4mContributions };
+      const index = byName.get(pkg.name);
+      if (index === undefined) {
+        byName.set(pkg.name, packages.length);
+        packages.push(candidate);
+        continue;
       }
+      // Several generators key off pkg.dir, so the survivor must be the directory pnpm
+      // actually links; sorted-first only when the link does not point at the newcomer.
+      const kept = packages[index];
+      const [winner, loser] = pointsAtLink(pkg.name, entry.name) ? [candidate, kept] : [kept, candidate];
+      packages[index] = winner;
+      console.warn(`[codegen] skipping ${loser.dir}: package "${pkg.name}" already discovered, keeping ${winner.dir}`);
     } catch {
       // malformed package.json - skip
     }
