@@ -31,14 +31,14 @@ import { encodeCursor } from '@server/utils/cursorPagination';
 const {
   mockCreatePresignedUpload,
   mockLoadAccessibleFabFile,
-  mockListOwnedAfterId,
+  mockListOwnedBeforeId,
   mockUpdateFabFile,
   mockDeleteFileForUser,
   mockLogEvent,
 } = vi.hoisted(() => ({
   mockCreatePresignedUpload: vi.fn(),
   mockLoadAccessibleFabFile: vi.fn(),
-  mockListOwnedAfterId: vi.fn(),
+  mockListOwnedBeforeId: vi.fn(),
   mockUpdateFabFile: vi.fn(),
   mockDeleteFileForUser: vi.fn(),
   mockLogEvent: vi.fn(),
@@ -81,7 +81,7 @@ vi.mock('@server/files/createPresignedUpload', () => ({
 }));
 vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: mockLoadAccessibleFabFile }));
 vi.mock('@server/files/deleteFileForUser', () => ({ deleteFileForUser: mockDeleteFileForUser }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: async () => ({ administeredOrgIds: [] }) }));
 vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
@@ -93,7 +93,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   scopedSettingsRepository: {},
-  fabFileRepository: { listOwnedAfterId: mockListOwnedAfterId },
+  fabFileRepository: { listOwnedBeforeId: mockListOwnedBeforeId },
   withTransaction: (fn: () => unknown) => fn(),
 }));
 
@@ -168,19 +168,19 @@ beforeEach(() => {
     fileKey: 'key.png',
   });
   mockLoadAccessibleFabFile.mockResolvedValue(fabFile());
-  mockListOwnedAfterId.mockResolvedValue({ data: [], hasMore: false });
+  mockListOwnedBeforeId.mockResolvedValue({ data: [], hasMore: false });
   mockUpdateFabFile.mockResolvedValue({ ...fabFile(), filePath: 'key.png' });
   mockDeleteFileForUser.mockResolvedValue('deleted');
   mockLogEvent.mockResolvedValue(undefined);
 });
 
 describe('file contracts', () => {
-  it('gate writes on files:write and reads on either files scope', () => {
+  it('gate writes on files:write and reads on files:read, with neither implying the other', () => {
     for (const contract of [createFileUploadContract, updateFileContract, deleteFileContract]) {
       expect(contract.scopes).toEqual([ApiKeyScope.WRITE_FILES]);
     }
     for (const contract of [getFileContract, listFilesContract]) {
-      expect(contract.scopes).toEqual([ApiKeyScope.READ_FILES, ApiKeyScope.WRITE_FILES]);
+      expect(contract.scopes).toEqual([ApiKeyScope.READ_FILES]);
     }
   });
 
@@ -342,7 +342,7 @@ const ID_2 = '507f1f77bcf86cd799439012';
 
 describe('GET /api/v1/files', () => {
   it('returns a schema-valid page of allowlisted summaries with no download URL', async () => {
-    mockListOwnedAfterId.mockResolvedValue({ data: [ownedDoc(FILE_ID)], hasMore: false });
+    mockListOwnedBeforeId.mockResolvedValue({ data: [ownedDoc(FILE_ID)], hasMore: false });
     const { req, res } = list();
 
     await callHandler(uploadHandler, req, res);
@@ -354,21 +354,21 @@ describe('GET /api/v1/files', () => {
     expect(Object.keys(body.data[0]).sort()).toEqual(SUMMARY_KEYS);
     expect(body.next_cursor).toBeNull();
     expect(JSON.stringify(body)).not.toMatch(/secret|private|someone-else|userId|chunkCount/);
-    expect(mockListOwnedAfterId).toHaveBeenCalledWith('u1', { afterId: undefined, limit: 25, search: undefined });
+    expect(mockListOwnedBeforeId).toHaveBeenCalledWith('u1', { beforeId: undefined, limit: 25, search: undefined });
   });
 
   it('issues a cursor when there is another page, and passes it and search back to the repository', async () => {
-    mockListOwnedAfterId.mockResolvedValue({ data: [ownedDoc(FILE_ID)], hasMore: true });
+    mockListOwnedBeforeId.mockResolvedValue({ data: [ownedDoc(FILE_ID)], hasMore: true });
     const first = list({ limit: '1', search: 'Report' });
     await callHandler(uploadHandler, first.req, first.res);
     const { next_cursor } = first.res._getJSONData();
     expect(next_cursor).toEqual(expect.any(String));
 
-    mockListOwnedAfterId.mockResolvedValue({ data: [ownedDoc(ID_2)], hasMore: false });
+    mockListOwnedBeforeId.mockResolvedValue({ data: [ownedDoc(ID_2)], hasMore: false });
     const second = list({ limit: '1', search: 'Report', cursor: next_cursor });
     await callHandler(uploadHandler, second.req, second.res);
 
-    expect(mockListOwnedAfterId).toHaveBeenLastCalledWith('u1', { afterId: FILE_ID, limit: 1, search: 'Report' });
+    expect(mockListOwnedBeforeId).toHaveBeenLastCalledWith('u1', { beforeId: FILE_ID, limit: 1, search: 'Report' });
     expect(second.res._getJSONData()).toMatchObject({ data: [{ id: ID_2 }], next_cursor: null });
   });
 
@@ -380,7 +380,7 @@ describe('GET /api/v1/files', () => {
     const { req, res } = list(query);
 
     expect(await statusOf(callHandler(uploadHandler, req, res))).toBe(422);
-    expect(mockListOwnedAfterId).not.toHaveBeenCalled();
+    expect(mockListOwnedBeforeId).not.toHaveBeenCalled();
   });
 
   // The 422 mapping itself belongs to errorHandler (stubbed out here) - see scopes.integration.test.ts.
@@ -391,7 +391,7 @@ describe('GET /api/v1/files', () => {
     const { req, res } = list(query);
 
     await expect(callHandler(uploadHandler, req, res)).rejects.toThrow();
-    expect(mockListOwnedAfterId).not.toHaveBeenCalled();
+    expect(mockListOwnedBeforeId).not.toHaveBeenCalled();
   });
 });
 
@@ -409,12 +409,49 @@ describe('PATCH /api/v1/files/{id}', () => {
     );
     expect(mockLogEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: FileEvents.UPDATE_FILE, metadata: { fileId: FILE_ID, fileContent: 'key.png' } }),
-      expect.anything()
+      expect.anything(),
+      logger
     );
     expect(mockLoadAccessibleFabFile).toHaveBeenCalledWith(req, FILE_ID);
     const body = res._getJSONData();
     expect(FileResponseSchema.safeParse(body).success).toBe(true);
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('maps notes alongside the name onto the shared update', async () => {
+    const { req, res } = patch(FILE_ID, { file_name: 'r.png', notes: 'n' });
+
+    await callHandler(getHandler, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateFabFile).toHaveBeenCalledWith(
+      req.user,
+      { id: FILE_ID, fileName: 'r.png', notes: 'n' },
+      expect.anything()
+    );
+  });
+
+  it('forwards empty notes so they are cleared, not dropped as absent', async () => {
+    const { req, res } = patch(FILE_ID, { notes: '' });
+
+    await callHandler(getHandler, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateFabFile).toHaveBeenCalledWith(req.user, { id: FILE_ID, notes: '' }, expect.anything());
+  });
+
+  // Update access is not a subset of read access: the write has committed, so a 404 would lie.
+  it('answers with the updated file, minus its stored URL, when the re-read is denied', async () => {
+    mockUpdateFabFile.mockResolvedValue({ ...fabFile({ fileName: 'renamed.png' }), filePath: 'key.png' });
+    mockLoadAccessibleFabFile.mockRejectedValue(new NotFoundError('Fabfile not found'));
+    const { req, res } = patch(FILE_ID, { file_name: 'renamed.png' });
+
+    await callHandler(getHandler, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(FileResponseSchema.safeParse(body).success).toBe(true);
+    expect(body).toMatchObject({ id: FILE_ID, file_name: 'renamed.png', download_url: null });
   });
 
   it('treats an empty body as a no-op update that returns the file', async () => {
@@ -429,6 +466,8 @@ describe('PATCH /api/v1/files/{id}', () => {
   it.each([
     ['an unknown field', { tags: [] }],
     ['an empty file name', { file_name: '' }],
+    ['a file name over 255 characters', { file_name: 'a'.repeat(256) }],
+    ['notes over 10,000 characters', { notes: 'a'.repeat(10_001) }],
   ])('rejects %s before updating', async (_label, body) => {
     const { req, res } = patch(FILE_ID, body);
 

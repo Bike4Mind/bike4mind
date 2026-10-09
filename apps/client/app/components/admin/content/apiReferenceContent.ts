@@ -1,5 +1,6 @@
 // brand externalized
 import { getBrandName } from '@client/config/general';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
 import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
 
 // Generated from the same catalog the New-Key modals offer, so the table can't drift from
@@ -137,6 +138,24 @@ treat the handler as authoritative.
 | GET | /api/quests/[id]/files | Files generated or referenced during quest processing |
 
 **Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access).
+
+---
+
+### Files (FabFiles)
+
+File list, upload, get, update and delete are covered by the generated docs (see above). The routes below are
+still hand-written.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /api/files/chunk | Trigger the chunking and embedding pipeline |
+| GET | /api/files/search | Full-text search across file content |
+| DELETE | /api/files/bulk-delete | Delete multiple files |
+| GET | /api/files/byIds | Get multiple files by ID |
+| GET | /api/files/getFabFileNameById | Get filename by ID |
+
+\`POST /api/files/chunk\` takes \`fabFileId\` (string) and \`chunkSize\`, the passage target in tokens: an integer
+between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, inclusive.
 
 ---
 

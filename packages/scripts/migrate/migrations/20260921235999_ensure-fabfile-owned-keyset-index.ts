@@ -4,7 +4,7 @@ import { type MigrationFile } from './index';
 /**
  * Ensure the `{ userId, deletedAt, archivedAt, _id }` index exists on fabfiles.
  *
- * GET /api/v1/files pages a user's own live, unarchived files by `_id` (fabFileRepository.listOwnedAfterId).
+ * GET /api/v1/files pages a user's own live, unarchived files by `_id` (fabFileRepository.listOwnedBeforeId).
  * Without this index the planner walks one of the (deletedAt, userId, ...) indexes and sorts every
  * file the user has in memory for each page.
  *

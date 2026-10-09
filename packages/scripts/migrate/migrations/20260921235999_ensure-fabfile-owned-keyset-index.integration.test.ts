@@ -42,7 +42,9 @@ describe('ensure-fabfile-owned-keyset-index migration (real DB)', () => {
 
     idx = (await FabFile.collection.indexes()).find(i => i.name === INDEX_NAME);
     // Key ORDER is the point: the equality prefix, then `_id` last so a page streams in keyset order.
+    // toEqual ignores key order, so pin it separately.
     expect(idx?.key).toEqual({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
+    expect(Object.keys(idx!.key)).toEqual(['userId', 'deletedAt', 'archivedAt', '_id']);
   });
 
   it('is idempotent on re-run', async () => {

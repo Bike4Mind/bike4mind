@@ -1118,10 +1118,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByUserId(userId: string): Promise<IFabFileDocument[]>;
 
-  /** One `_id`-ordered page of the user's own live, unarchived files; see FabFileRepository. */
-  listOwnedAfterId(
+  /** One newest-first page of the user's own live, unarchived files; see FabFileRepository. */
+  listOwnedBeforeId(
     userId: string,
-    options: { afterId?: string; limit: number; search?: string }
+    options: { beforeId?: string; limit: number; search?: string }
   ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
 
   /**

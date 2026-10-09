@@ -1,26 +1,20 @@
-import { FileEvents, IFabFile, KnowledgeType } from '@bike4mind/common';
+import { IFabFile, KnowledgeType } from '@bike4mind/common';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
-  fabFileRepository,
   adminSettingsRepository,
   scopedSettingsRepository,
-  withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { deleteFileForUser } from '@server/files/deleteFileForUser';
-import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { getFilesStorage } from '@server/utils/storage';
+import { updateFileForUser } from '@server/files/updateFileForUser';
 import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
 import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
 import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 
 // baseApi's scope gate is per route, so it admits either files scope and each method asserts its own.
 const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
@@ -76,72 +70,22 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       logger: req.logger,
     });
 
-    const updatedFabFile = await withTransaction(async () => {
-      try {
-        return await fabFilesService.updateFabFile(
-          req.user,
-          {
-            id: fabFileId,
-            type: req.body.type as KnowledgeType,
-            fileName: req.body.fileName as string,
-            mimeType: req.body.mimeType as string,
-            fileContent: req.body.fileContent,
-            system: req.body.system,
-            systemPriority: req.body.systemPriority,
-            sessionId: req.body.sessionId,
-            notes: req.body.notes,
-            // Pass through null so "unset primary" clears the field; ?? undefined
-            // would coalesce null to undefined and get dropped from the $set.
-            primaryTag: req.body.primaryTag,
-            tags: req.body.tags,
-            error: req.body.error,
-          },
-          {
-            db: {
-              fabFiles: fabFileRepository,
-              dataLakes: dataLakeRepository,
-              dataLakeAccessGrants: dataLakeAccessGrantRepository,
-              // `lakeConfigAuditDb` carries `adminSettings`, which is also what the admission
-              // contract's lever resolves from; only `scopedSettings` is additional here.
-              ...lakeConfigAuditDb,
-              ...lakeMembershipAuditDb,
-              scopedSettings: scopedSettingsRepository,
-            },
-            // `reconcileLakeTags` re-gates every lake this write JOINS, so its actor has to stay as
-            // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived
-            // from the user document this service is handed.
-            administeredOrgIds: ctx.administeredOrgIds,
-            // Same reason deleteFileForUser attaches one: a tag write here can flip a draft
-            // lake to active, and this route accepts a `b4m_live_` key.
-            auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
-            // Covers the fileTagPrefix membership arm the prologue gate above cannot see (it has no
-            // resolved file owner) - called only when reconcileLakeTags actually finds a prefix-arm
-            // join. Mirrors the toggle route's identical gate.
-            assertWriteScope: () => assertDataLakeWriteScope(req),
-            logger: req.logger,
-            storage: {
-              upload: (filepath, content, option) => {
-                return getFilesStorage().upload(content, filepath, option);
-              },
-              generateSignedUrl: (path: string, expireInSeconds: number) =>
-                getFilesStorage().getSignedUrl(path, undefined, { expiresIn: expireInSeconds }),
-            },
-          }
-        );
-      } catch (error) {
-        req.logger.error('Error updating fab file:', { error, fileId: fabFileId });
-        throw error;
-      }
+    const updatedFabFile = await updateFileForUser(req, ctx.administeredOrgIds, {
+      id: fabFileId,
+      type: req.body.type as KnowledgeType,
+      fileName: req.body.fileName as string,
+      mimeType: req.body.mimeType as string,
+      fileContent: req.body.fileContent,
+      system: req.body.system,
+      systemPriority: req.body.systemPriority,
+      sessionId: req.body.sessionId,
+      notes: req.body.notes,
+      // Pass through null so "unset primary" clears the field; ?? undefined
+      // would coalesce null to undefined and get dropped from the $set.
+      primaryTag: req.body.primaryTag,
+      tags: req.body.tags,
+      error: req.body.error,
     });
-
-    await logEvent(
-      {
-        userId,
-        type: FileEvents.UPDATE_FILE,
-        metadata: { fileId: fabFileId, fileContent: updatedFabFile.filePath ?? '' },
-      },
-      { ability: req.ability }
-    );
 
     return res.json(updatedFabFile);
   })

@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
  * Scope enforcement for /api/v1/files through the REAL baseApi chain (apiKeyAuth included), so the
- * contracts' `scopes` are proven to reach the gate: list/get accept files:read OR files:write,
- * upload/update/delete accept files:write only, and a rejected key never reaches the file code.
+ * contracts' `scopes` are proven to reach the gate: list/get accept files:read only (write does not
+ * imply read, matching the /api/files doors), upload/update/delete accept files:write only, and a rejected key never reaches the file code.
  * Same harness shape as pages/api/v1/quests/[id]/__tests__/index.integration.test.ts.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -74,7 +74,7 @@ vi.mock('@bike4mind/database', async orig => {
     withTransaction: (fn: () => unknown) => fn(),
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindUser(...a) }),
     userRepository: { findById: (...a: unknown[]) => mockFindUser(...a) },
-    fabFileRepository: { listOwnedAfterId: (...a: unknown[]) => mockList(...a) },
+    fabFileRepository: { listOwnedBeforeId: (...a: unknown[]) => mockList(...a) },
   };
 });
 
@@ -145,19 +145,38 @@ beforeEach(() => {
 });
 
 describe('/api/v1/files scope enforcement (real middleware chain)', () => {
-  it.each([[ApiKeyScope.READ_FILES], [ApiKeyScope.WRITE_FILES]])('a %s key can list and get', async scope => {
-    withScopes([scope]);
+  it('a files:read key can list and get', async () => {
+    withScopes([ApiKeyScope.READ_FILES]);
     expect((await list())._getStatusCode()).toBe(200);
     expect((await getOne())._getStatusCode()).toBe(200);
   });
 
-  it('a key without a files scope can neither list nor get (403)', async () => {
-    withScopes([ApiKeyScope.READ_NOTEBOOKS]);
-    expect((await list())._getStatusCode()).toBe(403);
-    expect((await getOne())._getStatusCode()).toBe(403);
-    expect(mockList).not.toHaveBeenCalled();
-    expect(mockLoad).not.toHaveBeenCalled();
+  // Same exemption GET {id} and every sibling v1 list carry: a page costs no daily slot.
+  it('list and get are exempt from the daily quota', async () => {
+    withScopes([ApiKeyScope.READ_FILES]);
+    for (const res of [await list(), await getOne()]) {
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRateLimit).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ meterDailyLimit: false })
+      );
+    }
   });
+
+  it.each([[ApiKeyScope.READ_NOTEBOOKS], [ApiKeyScope.WRITE_FILES]])(
+    'a %s key can neither list nor get (403)',
+    async scope => {
+      withScopes([scope]);
+      for (const res of [await list(), await getOne()]) {
+        expect(res._getStatusCode()).toBe(403);
+        expect(res._getJSONData().required_scopes).toEqual([ApiKeyScope.READ_FILES]);
+      }
+      expect(mockList).not.toHaveBeenCalled();
+      expect(mockLoad).not.toHaveBeenCalled();
+    }
+  );
 
   it('a read-only key can neither upload, update nor delete (403) and nothing is written', async () => {
     withScopes([ApiKeyScope.READ_FILES]);

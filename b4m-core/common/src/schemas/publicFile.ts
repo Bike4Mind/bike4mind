@@ -85,8 +85,9 @@ export type ListFilesResponse = z.infer<typeof ListFilesResponseSchema>;
 /** Omitted fields are left unchanged; unknown fields are rejected. */
 export const UpdateFileRequestSchema = z
   .object({
-    file_name: z.string().min(1).optional(),
-    notes: z.string().optional(),
+    file_name: z.string().min(1).max(255).optional(),
+    /** An empty string clears the notes. */
+    notes: z.string().max(10_000).optional(),
   })
   .strict();
 
