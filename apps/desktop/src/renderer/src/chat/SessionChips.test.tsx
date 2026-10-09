@@ -407,10 +407,34 @@ describe('a branch another worktree has checked out', () => {
     await show(project());
     await openMenu();
 
-    expect(mark('feat/held')).toBe('.claude/worktrees/feat-held');
+    expect(mark('feat/held')).toBe('feat-held');
     expect(mark('feat/free')).toBeUndefined();
     expect(option('feat/held').getAttribute('aria-disabled')).not.toBe('true');
     expect(await hoverMark('feat/held')).toContain(HELD);
+  });
+
+  it('keeps the menu a set width however long the names, with the full text one hover away', async () => {
+    const longBranch = `agent/${'bedrock-global-routing-'.repeat(8)}end`;
+    const longPath = `${CHECKOUT}/.claude/worktrees/${'deeply-nested-'.repeat(10)}held`;
+    inspectProject.mockResolvedValue(
+      inspection({
+        branches: ['main', longBranch, ...Array.from({ length: 10 }, (_, i) => `feat/${i}`)],
+        checkedOutElsewhere: { [longBranch]: { path: longPath } },
+      })
+    );
+    await show(project());
+    await openMenu();
+
+    const menu = document.body.querySelector('[data-testid="session-chip-branch-menu"]') as HTMLElement;
+    const style = getComputedStyle(menu);
+    expect(style.width).toBe('380px');
+    expect(style.maxWidth).toBe('calc(100vw - 32px)');
+    expect(style.minWidth).not.toBe('280px');
+
+    const name = option(longBranch).querySelector('[data-testid="session-chip-branch-name"]') as HTMLElement;
+    expect(name.getAttribute('title')).toBe(longBranch);
+    expect(mark(longBranch)).toBe(`${'deeply-nested-'.repeat(10)}held`);
+    expect(await hoverMark(longBranch)).toContain(longPath);
   });
 
   it('lists a branch named like an Object member without marking it', async () => {

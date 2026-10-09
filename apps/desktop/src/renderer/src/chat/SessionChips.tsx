@@ -112,10 +112,19 @@ function lastSegments(path: string, count = 2): string {
   return parts.length <= count ? path : `.../${parts.slice(-count).join('/')}`;
 }
 
-/** A worktree path as the menu names it: relative to the project when it is inside it. */
-function shortCheckoutPath(path: string, root: string | undefined): string {
-  return root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : lastSegments(path);
+/**
+ * A worktree path as the menu names it: its folder, the part that tells worktrees apart. The
+ * parents are shared by every worktree in the project and only cost the row its width.
+ */
+function checkoutFolderName(path: string): string {
+  return path.split('/').filter(Boolean).pop() ?? path;
 }
+
+/**
+ * The branch menu's width, set rather than left to content: a popper shrink-wraps its widest
+ * row, and a long branch with a long checkout path beside it stretched the menu across the window.
+ */
+const BRANCH_MENU_WIDTH = 380;
 
 /**
  * The project directory, as its folder name - and, before one is chosen, the way to choose it.
@@ -207,7 +216,12 @@ function BranchChip({
           </Box>
         </Tooltip>
 
-        <Menu size="sm" placement="top-start" sx={{ maxHeight: 360, overflow: 'auto', minWidth: 280 }}>
+        <Menu
+          size="sm"
+          placement="top-start"
+          sx={{ maxHeight: 360, overflow: 'auto', width: BRANCH_MENU_WIDTH, maxWidth: 'calc(100vw - 32px)' }}
+          data-testid="session-chip-branch-menu"
+        >
           {branches.length > FILTER_THRESHOLD && (
             <BranchFilter
               value={filter}
@@ -225,7 +239,7 @@ function BranchChip({
               onClick={() => void binding.setBranch(typed)}
               data-testid="session-chip-branch-new"
             >
-              <Typography level="body-sm" noWrap>
+              <Typography level="body-sm" noWrap title={canCreate ? typed : undefined} sx={{ minWidth: 0 }}>
                 {canCreate ? `Create ${typed}` : 'Type a name to start a new branch'}
               </Typography>
             </MenuItem>
@@ -241,7 +255,13 @@ function BranchChip({
                 onClick={() => void binding.setBranch(entry)}
                 data-testid="session-chip-branch-option"
               >
-                <Typography level="body-sm" noWrap data-testid="session-chip-branch-name">
+                <Typography
+                  level="body-sm"
+                  noWrap
+                  title={entry}
+                  sx={{ minWidth: 0 }}
+                  data-testid="session-chip-branch-name"
+                >
                   {entry === onNow ? '* ' : ''}
                   {entry}
                 </Typography>
@@ -252,17 +272,29 @@ function BranchChip({
                     variant="soft"
                     placement="right"
                   >
-                    <Typography
-                      level="body-xs"
-                      textColor="text.tertiary"
-                      noWrap
-                      startDecorator={<FolderIcon />}
-                      sx={{ ml: 'auto', pl: 1.5, minWidth: 0 }}
+                    {/* The outsized shrink factor makes the mark give up its width before the
+                        branch name does, down to the floor where its folder still reads. */}
+                    <Box
+                      sx={{
+                        ml: 'auto',
+                        pl: 1.5,
+                        minWidth: 64,
+                        flexShrink: 1000,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'flex-end',
+                        gap: 0.5,
+                        color: 'text.tertiary',
+                        '& > svg': { flexShrink: 0 },
+                      }}
                       data-testid="session-chip-branch-elsewhere-label"
                     >
-                      {shortCheckoutPath(held.path, project?.directory)}
-                      {held.prunable ? ' (missing)' : ''}
-                    </Typography>
+                      <FolderIcon />
+                      <Typography level="body-xs" textColor="inherit" noWrap sx={{ minWidth: 0 }}>
+                        {checkoutFolderName(held.path)}
+                        {held.prunable ? ' (missing)' : ''}
+                      </Typography>
+                    </Box>
                   </Tooltip>
                 )}
               </MenuItem>
