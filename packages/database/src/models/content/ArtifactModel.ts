@@ -188,6 +188,11 @@ ArtifactSchema.index({ deletedAt: 1 }); // Soft delete queries
 // `index: true` (see CLAUDE.md) - declaring it in both places is what produced
 // a duplicate-index warning at model load.
 ArtifactSchema.index({ sourceQuestId: 1 });
+// Public v1 artifact list (listOwnedBeforeId): equality on owner and live, then the _id keyset
+// (scanned in reverse for newest first).
+// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: prod
+// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+ArtifactSchema.index({ userId: 1, deletedAt: 1, _id: 1 });
 
 // Text search index for title and description
 ArtifactSchema.index(
@@ -297,6 +302,31 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
       { id, deletedAt: null, $or: [{ userId }, { 'permissions.canWrite': userId }] },
       updateData as Record<string, unknown>
     );
+  }
+
+  /**
+   * One newest-first page of the live artifacts a user owns, for the public list. Shares are left to
+   * the by-id read. Content and sharing fields are not loaded.
+   */
+  async listOwnedBeforeId(userId: string, { beforeId, limit }: { beforeId?: string; limit: number }) {
+    const conditions: Record<string, unknown> = { userId, deletedAt: null };
+    if (beforeId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid artifact cursor id: ${beforeId}`);
+      conditions._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+    }
+
+    const result = await this.model
+      .find(conditions)
+      .select(
+        'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt'
+      )
+      .sort({ _id: -1 })
+      .limit(limit + 1)
+      .lean()
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit), hasMore };
   }
 
   // Implement artifact-specific methods

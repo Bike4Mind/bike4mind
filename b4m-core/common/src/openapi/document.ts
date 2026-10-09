@@ -53,7 +53,7 @@ function infoDescription(): string {
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Sessions**, **Files**, **Projects**, **Data Lakes** and **Account**.',
+      '**Images**, **Audio**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Data Lakes** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -114,6 +114,9 @@ function infoDescription(): string {
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly.',
+    '- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call ' +
+      'returns the text. Long audio can outlast the request timeout and fail with a `504`; see that ' +
+      'endpoint for the limit.',
     '',
     'Poll with a backoff of a few seconds: each poll counts against the per-minute limit.',
     '',
@@ -351,6 +354,14 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'Release notes', description: 'Customer-facing notes on what changed in each release. Public.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
+    {
+      name: 'Transcriptions',
+      description: 'Speech-to-text: upload an audio file, then transcribe it.',
+    },
+    {
+      name: 'Artifacts',
+      description: 'Diagrams, charts, code and documents kept in sessions, with their version history.',
+    },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
     { name: 'Videos', description: 'Video generation, queued and polled as quests.' },
     {

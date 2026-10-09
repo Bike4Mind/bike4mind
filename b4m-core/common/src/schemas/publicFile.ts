@@ -92,3 +92,10 @@ export const UpdateFileRequestSchema = z
   .strict();
 
 export type UpdateFileRequest = z.infer<typeof UpdateFileRequestSchema>;
+
+/** GET /api/v1/quests/{id}/files. Named `files`, not `data`: bounded by the quest, so it is not paginated. */
+export const ListQuestFilesResponseSchema = z.object({
+  files: z.array(FileResponseSchema),
+});
+
+export type ListQuestFilesResponse = z.infer<typeof ListQuestFilesResponseSchema>;

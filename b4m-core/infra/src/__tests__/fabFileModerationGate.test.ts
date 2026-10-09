@@ -146,6 +146,8 @@ const ALLOWLIST: Record<string, string> = {
   // in the shared service function the closure is handed to. ---
   'apps/client/pages/api/quests/[id]/files.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFilesByQuest -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts',
+  'apps/client/pages/api/v1/quests/[id]/files.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.listFabFilesByQuest -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts; the response goes through toPublicFile, which also gates download_url on isImageServeable',
   'apps/client/pages/api/sessions/[id]/files.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFilesBySession -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/search.ts':

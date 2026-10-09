@@ -24,7 +24,17 @@ export {
   deleteFileContract,
 } from './contracts/files.contract';
 export { createEmbeddingsContract } from './contracts/embeddings.contract';
-export { getQuestContract } from './contracts/quest.contract';
+export { getQuestContract, listQuestFilesContract } from './contracts/quest.contract';
+export {
+  listArtifactsContract,
+  createArtifactContract,
+  getArtifactContract,
+  updateArtifactContract,
+  deleteArtifactContract,
+  listArtifactVersionsContract,
+  getArtifactVersionContract,
+} from './contracts/artifacts.contract';
+export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
 export { listWhatsNewContract } from './contracts/whatsNew.contract';

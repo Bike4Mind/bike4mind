@@ -22,6 +22,8 @@ export * from './llm';
 export * from './me';
 export * from './creditBalance';
 export * from './publicFile';
+export * from './artifactPublic';
+export * from './transcriptionPublic';
 export * from './embeddingsApi';
 export * from './toolSideEffects';
 export * from './bfl';
