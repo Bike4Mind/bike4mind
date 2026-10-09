@@ -162,6 +162,22 @@ describe('the branch chip against what git answers', () => {
     expect(label()).toBe('feat/chips');
   });
 
+  /** Before git answers the list is empty, which must not read as "the pick is a new name". */
+  it('does not call an existing pick new while the branch list is still being read', async () => {
+    inspectProject.mockImplementation(() => new Promise<ProjectInspection>(() => undefined));
+    await show(project({ branch: 'feat/chips', workspace: true }));
+
+    const button = host.querySelector('[data-testid="session-chip-branch-btn"]') as HTMLElement;
+    await act(async () => {
+      button.parentElement?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      // Joy's Tooltip opens after its enter delay (100ms).
+      await new Promise(resolve => setTimeout(resolve, 150));
+    });
+    const tooltip = document.body.querySelector('[role="tooltip"]')?.textContent ?? '';
+    expect(tooltip).toMatch(/cut from feat\/chips/i);
+    expect(tooltip).not.toMatch(/will be created/i);
+  });
+
   it('shows the picked base before the first message when the worktree toggle is on', async () => {
     inspectProject.mockResolvedValue(inspection({ currentBranch: 'main' }));
     await show(project({ branch: 'feat/chips', workspace: true }));

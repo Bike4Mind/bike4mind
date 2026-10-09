@@ -440,7 +440,8 @@ export function SessionChips({
     settledTurns
   );
   const picked = project?.branch ?? '';
-  const pickedExists = !picked || branches.includes(picked);
+  // Unknown until git answers: the list is empty meanwhile, which is not evidence of a new name.
+  const pickedExists = checkedOut === undefined ? undefined : !picked || branches.includes(picked);
   const chips = useMemo(
     () => describeChipRow(project, { isRepository, count: branches.length, checkedOut, pickedExists }, inUse),
     [project, isRepository, branches.length, checkedOut, pickedExists, inUse]
