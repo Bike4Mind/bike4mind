@@ -1,0 +1,63 @@
+{
+  "name": "@bike4mind/sdk",
+  "version": "0.1.0",
+  "description": "Typed client for the Bike4Mind HTTP API, generated from its OpenAPI spec",
+  "license": "UNLICENSED",
+  "author": "Bike4Mind",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bike4Mind/bike4mind.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/bike4mind/bike4mind/tree/main/packages/sdk#readme",
+  "bugs": "https://github.com/bike4mind/bike4mind/issues",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "bike4mind",
+    "api",
+    "sdk",
+    "openapi"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "generate": "node scripts/generate.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "eventsource-parser": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "openapi-typescript": "^7.13.0",
+    "tsdown": "^0.22.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
