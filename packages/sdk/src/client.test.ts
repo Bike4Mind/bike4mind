@@ -224,6 +224,11 @@ describe('quest polling', () => {
     expect(error.quest.errorCode).toBe('insufficient_credits');
   });
 
+  it('throws on type error while status is still running', async () => {
+    const { client } = setup(json(quest({ status: 'running', type: 'error', reply: 'dispatch failed' })));
+    await expect(client.pollQuest('q1')).rejects.toMatchObject({ reason: 'error', message: 'dispatch failed' });
+  });
+
   it('throws on a stopped quest even without type error', async () => {
     const { client } = setup(json(quest({ status: 'stopped', type: 'message', reply: 'cancelled' })));
     await expect(client.pollQuest('q1')).rejects.toMatchObject({ reason: 'stopped' });

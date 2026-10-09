@@ -43,7 +43,7 @@ export class B4mApiError extends Error {
 }
 
 /**
- * A polled quest (chat turn, image generation or edit) that did not succeed: it finished with `type: "error"`
+ * A polled quest (chat turn, image generation or edit) that did not succeed: it carries `type: "error"`
  * (`reason: 'error'`), ended `stopped` (`'stopped'`), or was still running when the poll's `timeoutMs` ran out
  * (`'timeout'`). `quest` is the last state seen; its `reply` carries the server's explanation.
  */
