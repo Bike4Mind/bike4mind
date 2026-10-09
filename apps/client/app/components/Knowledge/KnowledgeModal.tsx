@@ -3,6 +3,7 @@ import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
+import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
 import {
   updateFileUtility,
   createFabFileOnServerWithUpload,
@@ -38,7 +39,7 @@ import { userCanUpdateDoc } from '@client/app/utils/userPermission';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
-import { useLocation, useParams } from '@tanstack/react-router';
+import { useParams } from '@tanstack/react-router';
 import rehypeSanitize from 'rehype-sanitize';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
 import { whiteAlpha } from '@client/app/utils/themes/colors';
@@ -127,10 +128,9 @@ const KnowledgeModal: React.FC = () => {
   const { setFilesMetaDataVersion, currentSessionId } = useSessions();
   const { setWorkBenchFiles } = useWorkBenchActions();
   const { addToNotebookContext } = useNotebookContextFiles();
-  // currentSessionId outlives the notebook page (it is app-level state) and this modal is also
-  // opened from the file browser, profile and admin pages: a create there must not land in a
-  // notebook the user is not looking at.
-  const isNotebookOnScreen = useLocation({ select: location => location.pathname.startsWith('/notebooks/') });
+  // This modal also opens over projects, profile and admin pages: a create there must not land
+  // in a notebook the user is not looking at.
+  const activeNotebook = useActiveNotebook();
 
   const { currentUser } = useUser();
 
@@ -333,14 +333,13 @@ const KnowledgeModal: React.FC = () => {
         }
       } else {
         const newFabFile = await createFabFileOnServerWithUpload(fileData, new File([editedContent], 'temp'));
-        setFabFile(newFabFile as IFabFileDocument);
-        if (isNotebookOnScreen) {
-          try {
-            await addToNotebookContext(currentSessionId, newFabFile as IFabFileDocument);
-          } catch (error) {
-            // The file itself is saved; the hook already rolled back the attach and told the user.
-            console.error('Failed to attach new file to notebook', error);
-          }
+        setFabFile(newFabFile);
+        if (activeNotebook.onScreen) {
+          // Saving a file is an automatic attach, not a gesture toward every project containing
+          // this notebook - so it stays notebook-scoped (see AddToNotebookContextOptions).
+          void addToNotebookContext(activeNotebook.sessionId, newFabFile, { propagateToProjects: false }).catch(() => {
+            // Already rolled back and surfaced by the hook; the file itself is saved.
+          });
         }
 
         // If system is enabled for new file, add it to user's systemFiles
@@ -526,7 +525,12 @@ const KnowledgeModal: React.FC = () => {
                   </Button>
                 </Tooltip>
                 <Tooltip title="Save Changes">
-                  <Button sx={{ marginLeft: '0!important' }} disabled={!isDirty} onClick={handleSave}>
+                  <Button
+                    sx={{ marginLeft: '0!important' }}
+                    disabled={!isDirty}
+                    onClick={handleSave}
+                    data-testid="knowledge-modal-save-btn"
+                  >
                     {savingEditedContent ? <CircularProgress /> : <SaveIcon />}
                     <Box sx={{ marginLeft: '3px' }}>Save Changes</Box>
                   </Button>
@@ -546,6 +550,7 @@ const KnowledgeModal: React.FC = () => {
                       onChange={viewOnly ? undefined : e => setEditedFileName(e.target.value)}
                       placeholder={viewOnly ? '' : 'Enter filename...'}
                       readOnly={viewOnly}
+                      slotProps={{ input: { 'data-testid': 'knowledge-modal-name-input' } }}
                       sx={{
                         width: '100%',
                         backgroundColor: viewOnly ? 'background.level2' : undefined,

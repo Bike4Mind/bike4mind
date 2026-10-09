@@ -20,6 +20,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
+import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import useSetIncludeLibraryFiles from '@client/app/hooks/useSetIncludeLibraryFiles';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
@@ -180,6 +181,7 @@ export default function DataLakeExplorer({
   const setPendingLakeTags = usePendingLakeScope(s => s.setLakeTags);
   const { setWorkBenchFiles } = useWorkBenchActions();
   const { addToNotebookContext } = useNotebookContextFiles();
+  const activeNotebook = useActiveNotebook();
   // Files currently attached to the chat's prompt - drives the tree's persistent highlight, so a
   // file stays marked "already added" regardless of which action attached it (View or the menu's
   // Attach) or how far the user has since navigated the tree (#1693).
@@ -237,25 +239,24 @@ export default function DataLakeExplorer({
   // Resolves whether the file was newly attached. An existing session must persist
   // knowledgeIds: a workbench-only add rides one send as fabFileIds, then drops out of context.
   // A freshly minted session was created already holding the file, so the workbench suffices.
+  // Mid notebook switch (route on B, currentSessionId still A) there is no safe target yet.
+  // An explicit gesture, so project propagation keeps its default (as in FilesSection).
   const attachToSession = useCallback(
     async (file: IFabFileDocument): Promise<boolean> => {
+      if (!activeNotebook.onScreen) return false;
       if (currentSessionId) return addToNotebookContext(currentSessionId, file);
       const sessionId = await ensureSessionId(file);
       if (!sessionId) return false;
       return addToWorkBench(sessionId, file);
     },
-    [currentSessionId, addToNotebookContext, ensureSessionId, addToWorkBench]
+    [activeNotebook.onScreen, currentSessionId, addToNotebookContext, ensureSessionId, addToWorkBench]
   );
 
   const attachFileToChat = useCallback(
     async (file: IFabFileDocument) => {
-      try {
-        if (!(await attachToSession(file))) return;
-      } catch {
-        // addToNotebookContext already rolled back and told the user.
-        return;
-      }
-      toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
+      // A rejected add was already rolled back and surfaced by the hook.
+      const added = await attachToSession(file).catch(() => false);
+      if (added) toast.success(`"${file.fileName.replace(/\.[^/.]+$/, '')}" is now available to this whole notebook`);
     },
     [attachToSession]
   );

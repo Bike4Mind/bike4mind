@@ -1,10 +1,10 @@
 import { IResearchDataWithFiles } from '@bike4mind/common';
-import { useSessions } from '@client/app/contexts/SessionsContext';
+import { toast } from 'sonner';
+import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { useDeleteResearchData } from '@client/app/hooks/data/researchData';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
-import { IFabFileDocument } from '@bike4mind/common';
 import { AttachFile } from '@mui/icons-material';
 import { Box, Button, Chip, IconButton, Tooltip, Typography } from '@mui/joy';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
@@ -21,21 +21,21 @@ interface ResearchTaskFileProps {
 
 const ResearchTaskFile: FC<ResearchTaskFileProps> = ({ researchData, onView }) => {
   const { fabFile } = researchData;
-  const { currentSessionId } = useSessions();
+  const activeNotebook = useActiveNotebook();
   const { currentUser } = useUser();
   const { addToNotebookContext, isPending: isAttachPending } = useNotebookContextFiles();
   const { mutate: chunkFile, isPending } = useChunkFile();
   const { mutate: deleteResearchData, isPending: isDeleting } = useDeleteResearchData();
   const confirm = useConfirmation();
 
-  async function handleAttachFile() {
-    if (!currentSessionId) return;
-    try {
-      await addToNotebookContext(currentSessionId, fabFile as unknown as IFabFileDocument);
-    } catch (error) {
-      // addToNotebookContext already rolled back and told the user.
-      console.error('Failed to attach research file', error);
+  function handleAttachFile() {
+    if (!activeNotebook.onScreen) {
+      toast.info('Open a notebook to attach this file to it.');
+      return;
     }
+    void addToNotebookContext(activeNotebook.sessionId, fabFile).catch(() => {
+      // Already rolled back and surfaced by the hook.
+    });
   }
 
   async function handleDeleteFile() {

@@ -261,6 +261,12 @@ const { setModeSpy, setLakeScopeSpy, toastInfo, toastError, toastSuccess } = vi.
 vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
   useNotebookContextFiles: () => ({ addToNotebookContext }),
 }));
+const { activeNotebook } = vi.hoisted(() => ({
+  activeNotebook: {
+    value: { onScreen: true, sessionId: 'sess-1' } as { onScreen: boolean; sessionId?: string | null },
+  },
+}));
+vi.mock('@client/app/hooks/useActiveNotebook', () => ({ useActiveNotebook: () => activeNotebook.value }));
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => setModeSpy }));
 // Mocked for the same reason as its sibling above: the real hook reaches useUpdateSession, and
 // this harness deliberately has no QueryClient. The double also REPLAYS the real hook's
@@ -400,6 +406,7 @@ describe('DataLakeExplorer chat-first surface', () => {
       { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
     ];
     workBenchState.files = [];
+    activeNotebook.value = { onScreen: true, sessionId: 'sess-1' };
     // Re-applied each test since clearAllMocks only clears call history, not implementation -
     // runs the functional updater the way the real zustand store does, persists the result, and
     // notifies useSyncExternalStore subscribers (see the useWorkBenchFiles mock comment above),
@@ -489,6 +496,15 @@ describe('DataLakeExplorer chat-first surface', () => {
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-attach'));
     await vi.waitFor(() => expect(addToNotebookContext).toHaveBeenCalled());
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('attach while no notebook is on screen writes nothing and shows no success toast', async () => {
+    activeNotebook.value = { onScreen: false };
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(addToNotebookContext).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
   });
 
