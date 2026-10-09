@@ -87,6 +87,14 @@ const TEMPERATURE_ONLY_MODELS = [
 ];
 
 // Timeout constants for detecting streaming hangs (known anthropic-sdk streaming-hang bug)
+/**
+ * Key-table value meaning "authenticate through Anthropic workload identity federation": the
+ * client is built with no key, so the SDK resolves ANTHROPIC_FEDERATION_RULE_ID,
+ * ANTHROPIC_ORGANIZATION_ID and ANTHROPIC_IDENTITY_TOKEN_FILE from the environment. An
+ * ANTHROPIC_API_KEY left in the environment still wins, so CI must not set both.
+ */
+export const ANTHROPIC_FEDERATED_KEY = 'federated';
+
 const INITIAL_TIMEOUT_MS = 30000; // 30s to first event
 const DEFAULT_IDLE_TIMEOUT_MS = 90000; // 90s between events for standard models
 const THINKING_IDLE_TIMEOUT_MS = 180000; // 180s for thinking models (can pause during extended thinking)
@@ -184,7 +192,11 @@ export class AnthropicBackend implements ICompletionBackend {
       }
       throw new TypeError('terminated');
     };
-    this._api = new Anthropic({ apiKey, maxRetries: 5, fetch: retryFetch });
+    this._api = new Anthropic({
+      apiKey: apiKey === ANTHROPIC_FEDERATED_KEY ? undefined : apiKey,
+      maxRetries: 5,
+      fetch: retryFetch,
+    });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
   }

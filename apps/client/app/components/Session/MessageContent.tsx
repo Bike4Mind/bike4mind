@@ -765,7 +765,7 @@ const MessageContent: React.FC<ContentProps> = memo(
         {showSnipModal && (
           <ConfirmActionModal
             className="session-middle-snip-modal"
-            title="Quickstart Notebook from thisMessage?"
+            title="Quickstart Notebook from this Message?"
             description="Are you sure you want to quickstart a notebook from this message?"
             onGoBackward={() => setShowSnipModal(false)}
             onGoForward={() => {

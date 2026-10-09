@@ -1,16 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mocks, InsufficientTtsCreditsError, TtsProviderNotConfiguredError } = vi.hoisted(() => {
-  class InsufficientTtsCreditsError extends Error {}
+const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError } = vi.hoisted(() => {
+  class InsufficientCreditsPreflightError extends Error {}
   class TtsProviderNotConfiguredError extends Error {}
   return {
-    InsufficientTtsCreditsError,
+    InsufficientCreditsPreflightError,
     TtsProviderNotConfiguredError,
     mocks: {
       synthesize: vi.fn(),
       resolveTtsProvider: vi.fn(),
-      assertTtsCreditsAvailable: vi.fn(),
+      assertPreflightCredits: vi.fn(),
+      estimateTtsCreditCost: vi.fn(),
       deductTtsCredits: vi.fn(),
       upload: vi.fn(),
       getSignedUrl: vi.fn(),
@@ -23,6 +24,10 @@ const { mocks, InsufficientTtsCreditsError, TtsProviderNotConfiguredError } = vi
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ post: (fn: unknown) => fn }),
 }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  estimateTtsCreditCost: (...a: unknown[]) => mocks.estimateTtsCreditCost(...a),
+}));
 vi.mock('@bike4mind/utils', () => ({
   aiVoiceService: () => ({ synthesize: (...a: unknown[]) => mocks.synthesize(...a) }),
 }));
@@ -31,9 +36,11 @@ vi.mock('@server/utils/resolveTtsProvider', () => ({
   TtsProviderNotConfiguredError,
 }));
 vi.mock('@server/utils/deductTtsCredits', () => ({
-  assertTtsCreditsAvailable: (...a: unknown[]) => mocks.assertTtsCreditsAvailable(...a),
   deductTtsCredits: (...a: unknown[]) => mocks.deductTtsCredits(...a),
-  InsufficientTtsCreditsError,
+}));
+vi.mock('@server/utils/creditPreflight', () => ({
+  assertPreflightCredits: (...a: unknown[]) => mocks.assertPreflightCredits(...a),
+  InsufficientCreditsPreflightError,
 }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ upload: mocks.upload, getSignedUrl: mocks.getSignedUrl }),
@@ -57,7 +64,8 @@ const synthesizes = (audio: Buffer) =>
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.resolveTtsProvider.mockResolvedValue({ apiKey: 'k', voice: 'alloy' });
-  mocks.assertTtsCreditsAvailable.mockResolvedValue(undefined);
+  mocks.assertPreflightCredits.mockResolvedValue(undefined);
+  mocks.estimateTtsCreditCost.mockReturnValue(42);
   mocks.deductTtsCredits.mockResolvedValue(undefined);
   mocks.upload.mockResolvedValue(undefined);
   mocks.getSignedUrl.mockResolvedValue('https://s3/offload');
@@ -75,12 +83,29 @@ describe('POST /api/ai/text-to-speech (legacy)', () => {
     expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
   });
 
+  it('gates on the openai tts-1 estimate for the text length', async () => {
+    const { promise } = run({ text: 'hello' });
+    await promise;
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1', 5);
+    expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', estimatedCredits: 42 })
+    );
+  });
+
   it('returns 402 and never calls the provider when credits are exhausted', async () => {
-    mocks.assertTtsCreditsAvailable.mockRejectedValue(new InsufficientTtsCreditsError('broke'));
+    mocks.assertPreflightCredits.mockRejectedValue(new InsufficientCreditsPreflightError('broke'));
     const { res, promise } = run();
     await promise;
     expect(res._getStatusCode()).toBe(402);
     expect(res._getJSONData()).toEqual({ error: 'broke' });
+    expect(mocks.synthesize).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a preflight failure that is not a credit refusal, before any provider cost', async () => {
+    const boom = new Error('settings down');
+    mocks.assertPreflightCredits.mockRejectedValue(boom);
+    const { promise } = run();
+    await expect(promise).rejects.toBe(boom);
     expect(mocks.synthesize).not.toHaveBeenCalled();
   });
 

@@ -18,18 +18,15 @@ export const lakeRootTag = (lake: TagScopeLake): string =>
  * Narrows the browse surface's tag counts to the selected lakes, which is what makes the surface's
  * lake selection scope the taxonomy tree (#1645, widened to a set in #3042).
  *
- * This is a client-side filter on the SAME `/api/data-lakes/tag-counts` payload the unscoped tree
- * already reads - every taxonomy tag in a lake is namespaced under that lake's `fileTagPrefix` - so
- * changing the selection costs no request. An EMPTY selection is the all-lakes scope and returns
- * the list untouched; it is the picker's "All data lakes" row, not an absence of choice.
+ * NOT the boundary: with a selection, the Explorer reads `/api/data-lakes/tag-counts?lakeId=...`,
+ * which the server already counts over the selected lakes' membership. This prefix filter is a
+ * belt over that result. An EMPTY selection is the all-lakes scope and returns the list untouched;
+ * it is the picker's "All data lakes" row, not an absence of choice.
  *
- * KNOWN ASSUMPTION: prefix containment is the membership test, so a lake whose prefix is a prefix OF
- * ANOTHER lake's (`research:` vs `research:deep:`) would absorb that lake's tags into its scope.
- * Overlapping prefixes are refused at create time for exactly this reason (see `tagPrefixIssue` in
- * `@bike4mind/common`, which blocks an overlapping prefix with "They would share files"), so this
- * cannot arise for a lake created through the wizard. A legacy lake predating that rule could still
- * overlap; the scope would over-include rather than leak across a tenant boundary, because the
- * counts payload is already access-filtered server-side before it reaches here.
+ * Why prefix containment cannot be the boundary: overlapping prefixes are refused at create time
+ * only WITHIN one creator or org (see `tagPrefixIssue` in `@bike4mind/common`). Two creators may
+ * deliberately use the same prefix, and a viewer who reaches both lakes (an admin) would see both
+ * lakes' tags under either one if this ran over the unscoped, prefix-merged payload.
  */
 export function scopeTagCountsToLakes(tagCounts: TagPathCount[], lakes: TagScopeLake[]): TagPathCount[] {
   if (lakes.length === 0) return tagCounts;

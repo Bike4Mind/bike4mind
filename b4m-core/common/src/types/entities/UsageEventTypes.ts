@@ -3,7 +3,7 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
 import { NamedApiKeyUsage, ISourceUsage } from './CreditTransactionTypes';
-import { COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
+import { ApiKeyCompletionSource, COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
 
 /**
  * Which product surface generated the provider call.
@@ -298,9 +298,9 @@ export interface IUsageDashboardResponse {
 /**
  * Wire shape of GET /api/admin/platform-usage: the platform-wide usage summary
  * (feature/COGS/credits from UsageEvent, source- and ownerType-filterable) with
- * consumers resolved to key/owner labels, plus a distinct endpoint/latency
- * section (request counts only, from ApiKeyUsageLog). The two sections are kept
- * separate on purpose so the frontend never implies COGS-per-endpoint.
+ * consumers resolved to key/owner labels. Endpoint/latency data is a separate
+ * route (IPlatformEndpointUsageResponse) so the frontend never implies
+ * COGS-per-endpoint.
  */
 export interface IPlatformUsageDashboardResponse {
   /** Trailing window the UsageEvent summary covers. */
@@ -314,14 +314,20 @@ export interface IPlatformUsageDashboardResponse {
   byConsumer: NamedPlatformConsumerUsage[];
   byModel: IOwnerSpendModel[];
   totals: IUsageSpendBucket;
-  /**
-   * Endpoint/latency section from ApiKeyUsageLog (request counts only, no
-   * COGS/credits). Null when the source filter excludes API-key traffic (only
-   * api/cli requests are logged there). `endpointWindowDays` is clamped to the
-   * collection's 90-day TTL.
-   */
-  endpoints: IPlatformEndpointUsage | null;
-  endpointWindowDays: number;
+}
+
+/**
+ * Wire shape of GET /api/admin/platform-usage/endpoints: the endpoint/latency
+ * rollup from ApiKeyUsageLog (request counts only, no COGS/credits). Served
+ * separately from the credit summary so its filter is independent of the
+ * dashboard-wide source/owner/window controls.
+ */
+export interface IPlatformEndpointUsageResponse {
+  /** Echo of the source filter, if any (default: all API-key sources). */
+  source?: ApiKeyCompletionSource;
+  /** Always the log's full TTL; mirrors ENDPOINT_TTL_DAYS in pages/api/admin/platform-usage/endpoints.ts. */
+  windowDays: number;
+  endpoints: IPlatformEndpointUsage;
 }
 
 /** A spend bucket that also carries token quantities, for session-level detail. */

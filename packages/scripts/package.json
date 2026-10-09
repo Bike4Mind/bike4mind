@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.85",
+  "version": "0.1.86",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -59,6 +59,7 @@
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "backfill:session-image-count": "tsx src/backfill-session-image-count.ts",
     "repair:bedrock-profile-absence": "tsx src/repair-bedrock-profile-absence.ts",
+    "repair:stale-organization-pointers": "tsx src/repair-stale-organization-pointers.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
     "count-tokens-probe": "tsx count-tokens-probe.ts",
     "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
