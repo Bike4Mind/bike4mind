@@ -36,11 +36,13 @@ describe('API reference scopes table', () => {
     );
 
     // Pin both label forms (plain and "scope for X"); the tokens alone would not catch a dropped line.
-    expect(requiredLines).toHaveLength(3);
+    expect(requiredLines).toHaveLength(4);
     expect(requiredLines.some(line => line.includes('for `refineText`'))).toBe(true);
     expect(required).toContain('notebooks:read');
     expect(required).toContain('projects:read');
     expect(required).toContain('projects:write');
+    expect(required).toContain('agents:read');
+    expect(required).toContain('agents:write');
     for (const scope of required) {
       expect(listed).toContain(scope);
     }

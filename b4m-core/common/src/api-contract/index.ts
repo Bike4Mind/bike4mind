@@ -45,4 +45,11 @@ export {
   updateProjectContract,
   deleteProjectContract,
 } from './contracts/projects.contract';
+export {
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
+} from './contracts/agents.contract';
 export { CONTRACTS } from './contracts';

@@ -114,6 +114,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions[/{id}]\`
 - Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`
+- Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
 - Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`
 - Files and data lakes: \`/api/v1/files\`, \`/api/v1/files/{id}\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
@@ -253,12 +254,38 @@ still hand-written.
 
 Custom AI agents with configurable personas, system prompts, and tool access.
 
+**Required API-key scope:** \`agents:read\` (or \`agents:write\`) to list and read,
+\`agents:write\` to create, update, and delete.
+
+#### List, Get, Create, Update, and Delete Agents
+
+\`\`\`
+GET    /api/v1/agents
+GET    /api/v1/agents/[id]
+POST   /api/v1/agents
+PATCH  /api/v1/agents/[id]
+DELETE /api/v1/agents/[id]
+\`\`\`
+
+> **These endpoints are generated from their contracts.** The full request/response
+> reference lives in the [generated API docs](/api/v1/docs) under \`listAgents\`,
+> \`getAgent\`, \`createAgent\`, \`updateAgent\`, and \`deleteAgent\`.
+
+#### List Agents (existing app route)
+
 \`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\` or
 \`updatedAt\`) and \`orderDirection\`.
 
+#### Agent Endpoints Summary
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | /api/agents | List agents |
+| GET | /api/v1/agents | List agents (cursor-paginated) |
+| POST | /api/v1/agents | Create an agent |
+| GET | /api/v1/agents/[id] | Get agent details |
+| PATCH | /api/v1/agents/[id] | Update an agent |
+| DELETE | /api/v1/agents/[id] | Delete an agent |
+| GET | /api/agents | List agents (page-based pagination) |
 | POST | /api/agents | Create an agent |
 | GET | /api/agents/[id] | Get agent details |
 | PUT | /api/agents/[id] | Update agent |
