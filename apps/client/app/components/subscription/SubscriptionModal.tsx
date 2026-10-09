@@ -6,6 +6,8 @@ import {
   isCancellableSubscriptionStatus,
   isDelinquentSubscriptionStatus,
   pickSubscriptionByPrice,
+  resolveSubscriptionSource,
+  SubscriptionSource,
 } from '@client/lib/subscriptions/types';
 import {
   SubscriptionPlanInterval,
@@ -222,6 +224,9 @@ const SubscriptionModalContent = () => {
               // mark the plan the user is actually paying for as payment-failed.
               const isCurrentPlan = pickSubscriptionByPrice(cancellableSubscriptions, plan.priceId);
               const hasPaymentIssue = !!isCurrentPlan && isDelinquentSubscriptionStatus(isCurrentPlan.status);
+              // The portal route refuses admin-granted plans, so only Stripe-managed rows get Manage.
+              const isStripeManaged =
+                !!isCurrentPlan && resolveSubscriptionSource(isCurrentPlan) === SubscriptionSource.Stripe;
               return (
                 <PlanCard
                   key={plan.priceId}
@@ -238,7 +243,7 @@ const SubscriptionModalContent = () => {
                   priceId={plan.priceId}
                   actionButton={
                     <Stack gap={1}>
-                      {isCurrentPlan && <ManageSubscriptionButton isPrimaryAction={hasPaymentIssue} />}
+                      {isStripeManaged && <ManageSubscriptionButton isPrimaryAction={hasPaymentIssue} />}
                       <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
                     </Stack>
                   }

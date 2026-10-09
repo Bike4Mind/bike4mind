@@ -4,7 +4,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import SubscriptionModal from './SubscriptionModal';
 
@@ -207,6 +207,14 @@ describe('SubscriptionModal', () => {
 
       expect(manageButton()).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Change Subscription' })).toBeEnabled();
+    });
+
+    it('is not offered on an admin-granted plan, which the portal refuses', () => {
+      subscriptions = [subRow({ subscriptionId: 'admin_grant_x', source: SubscriptionSource.AdminGrant })];
+
+      renderModal();
+
+      expect(manageButton()).not.toBeInTheDocument();
     });
   });
 });
