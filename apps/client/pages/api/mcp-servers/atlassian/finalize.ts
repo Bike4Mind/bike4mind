@@ -4,6 +4,7 @@ import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { z } from 'zod';
 import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 /**
  * /api/mcp-servers/atlassian/finalize
@@ -113,11 +114,15 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
     const encryptedEnvVariables = encryptEnvVariables(plaintextEnvVariables);
 
     if (atlassianServer) {
-      atlassianServer = await mcpServerRepository.update({
-        id: atlassianServer.id,
-        envVariables: encryptedEnvVariables,
-        enabled: true,
-      });
+      atlassianServer = await mcpServerRepository.update(
+        {
+          id: atlassianServer.id,
+          envVariables: encryptedEnvVariables,
+          enabled: true,
+        },
+        // Reconnect: clear any prior "confirmed empty" marker so the fetch below is trusted.
+        { unset: ['toolSchemasFetchedAt'] }
+      );
       console.log('[Atlassian Finalize] Updated existing MCP server');
     } else {
       atlassianServer = await mcpServerRepository.create({
@@ -142,11 +147,7 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
 
       const tools = Array.isArray(result) ? result : [result].flat();
       if (atlassianServer) {
-        await mcpServerRepository.update({
-          id: atlassianServer.id,
-          tools: tools.map((tool: any) => tool.name),
-          toolSchemas: tools,
-        });
+        await mcpServerRepository.update(buildMcpToolCacheUpdate(atlassianServer.id, tools));
       }
       console.log(`[Atlassian Finalize] MCP server configured with ${tools.length} tools`);
     } catch (toolsError) {

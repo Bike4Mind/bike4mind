@@ -17,6 +17,7 @@ import { z } from 'zod';
 import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
+import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
 import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import { ToolDefinition, type ToolContext } from './base/types';
 import { validateUserCredits, validateMusicCredits, validateAudioCredits } from './base/utils';
@@ -730,20 +731,18 @@ export class ToolBuilder {
         let schemas = server.toolSchemas;
 
         // If cached schemas are missing, attempt a live fetch so the LLM still gets
-        // the tools for this request rather than silently ignoring the server.
-        if (!schemas?.length) {
+        // the tools for this request rather than silently ignoring the server. A marker
+        // younger than the TTL means the empty result is confirmed, so skip the fetch.
+        if (!schemas?.length && shouldLiveFetchTools(server)) {
           try {
             logger.info(`🛠️ [MCP] No cached tool schemas for ${server.name} - fetching live`);
             const client = await this.deps.getMcpClient(server);
             const liveTools = await client.getTools();
-            if (Array.isArray(liveTools) && liveTools.length > 0) {
+            if (Array.isArray(liveTools)) {
               schemas = liveTools;
-              // Persist so future requests don't need a live fetch
-              await this.deps.db.mcpServers.update({
-                id: server.id,
-                tools: liveTools.map((t: { name: string }) => t.name),
-                toolSchemas: liveTools,
-              });
+              // Persist so future requests don't need a live fetch. Written for an empty
+              // result too - that is the "confirmed zero tools" state the marker encodes.
+              await this.deps.db.mcpServers.update(buildMcpToolCacheUpdate(server.id, liveTools));
               logger.info(`🛠️ [MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`);
             }
           } catch (fetchError) {
