@@ -11,6 +11,7 @@ const {
   toastSuccess,
   toastError,
   invalidateQueries,
+  setWorkBenchFiles,
 } = vi.hoisted(() => ({
   addToNotebookContext: vi.fn(),
   createFabFileOnServerWithUpload: vi.fn(),
@@ -18,6 +19,7 @@ const {
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   invalidateQueries: vi.fn(),
+  setWorkBenchFiles: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/useActiveNotebook', () => ({ useActiveNotebook: () => activeNotebook.value }));
@@ -36,7 +38,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 }));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ setFilesMetaDataVersion: vi.fn(), currentSessionId: 's1' }),
-  useWorkBenchActions: () => ({ setWorkBenchFiles: vi.fn() }),
+  useWorkBenchActions: () => ({ setWorkBenchFiles }),
 }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction: () => () => {} }),
@@ -86,6 +88,7 @@ describe('KnowledgeModal create-save attach', () => {
         propagateToProjects: false,
       })
     );
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
   });
 
   it('does not attach when no notebook is on screen', async () => {

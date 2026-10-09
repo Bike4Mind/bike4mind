@@ -8,8 +8,16 @@ const { routerState, sessionState } = vi.hoisted(() => ({
 }));
 
 vi.mock('@tanstack/react-router', () => ({
-  useLocation: ({ select }: { select: (location: { pathname: string }) => string }) =>
-    select({ pathname: routerState.pathname }),
+  useMatchRoute:
+    () =>
+    ({ to }: { to: string }) => {
+      if (to === '/new') return routerState.pathname === '/new' ? {} : false;
+      if (to === '/notebooks/$id') {
+        const match = /^\/notebooks\/([^/]+)\/?$/.exec(routerState.pathname);
+        return match ? { id: match[1] } : false;
+      }
+      return false;
+    },
 }));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSessionId: sessionState.currentSessionId }),
