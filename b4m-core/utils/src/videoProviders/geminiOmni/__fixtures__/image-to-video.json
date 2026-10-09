@@ -1,0 +1,243 @@
+{
+  "scenario": "image-to-video",
+  "recordedAt": "2026-10-08T18:27:13.031Z",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "gemini-omni-1.1-flash",
+          "input": [
+            {
+              "type": "image",
+              "data": "<redacted:base64 1008 chars>",
+              "mime_type": "image/png"
+            },
+            {
+              "type": "text",
+              "text": "The color slowly ripples like water, camera static."
+            }
+          ],
+          "background": true,
+          "response_format": {
+            "type": "video",
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration": "3s"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdWdURIYXVUQ0lkREtyZmNQdGNTMzZRdxIXVnVESGF1VENJZERLcmZjUHRjUzM2UXc",
+          "status": "in_progress",
+          "created": "2026-10-08T18:26:33Z",
+          "updated": "2026-10-08T18:26:33Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_ChdWdURIYXVUQ0lkREtyZmNQdGNTMzZRdxIXVnVESGF1VENJZERLcmZjUHRjUzM2UXc"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdWdURIYXVUQ0lkREtyZmNQdGNTMzZRdxIXVnVESGF1VENJZERLcmZjUHRjUzM2UXc",
+          "status": "in_progress",
+          "created": "2026-10-08T18:26:33Z",
+          "updated": "2026-10-08T18:26:33Z",
+          "steps": [
+            {
+              "type": "user_input",
+              "content": [
+                {
+                  "data": "<redacted:base64 1008 chars>",
+                  "mime_type": "image/png",
+                  "type": "image"
+                },
+                {
+                  "text": "The color slowly ripples like water, camera static.",
+                  "type": "text"
+                }
+              ]
+            }
+          ],
+          "object": "interaction",
+          "response_format": {
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "duration": "3s",
+            "resolution": "720p",
+            "type": "video"
+          },
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_ChdWdURIYXVUQ0lkREtyZmNQdGNTMzZRdxIXVnVESGF1VENJZERLcmZjUHRjUzM2UXc"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdWdURIYXVUQ0lkREtyZmNQdGNTMzZRdxIXVnVESGF1VENJZERLcmZjUHRjUzM2UXc",
+          "status": "completed",
+          "usage": {
+            "total_tokens": 19250,
+            "total_input_tokens": 1100,
+            "input_tokens_by_modality": [
+              {
+                "modality": "image",
+                "tokens": 1089
+              },
+              {
+                "modality": "text",
+                "tokens": 11
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 17870,
+            "output_tokens_by_modality": [
+              {
+                "modality": "video",
+                "tokens": 17376
+              }
+            ],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 280,
+            "raw_prompt_token": 31164,
+            "model_invocation_token_counts": [
+              {
+                "prompt_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 1805
+                  },
+                  {
+                    "modality": "image",
+                    "tokens": 1089
+                  }
+                ],
+                "candidates_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 500
+                  }
+                ],
+                "thoughts_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 280
+                  }
+                ]
+              }
+            ],
+            "non_grounding_model_invocation_token_counts": [
+              {
+                "prompt_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 1805
+                  },
+                  {
+                    "modality": "image",
+                    "tokens": 1089
+                  }
+                ],
+                "candidates_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 500
+                  }
+                ],
+                "thoughts_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 280
+                  }
+                ]
+              }
+            ]
+          },
+          "created": "2026-10-08T18:27:02Z",
+          "updated": "2026-10-08T18:27:02Z",
+          "service_tier": "standard",
+          "steps": [
+            {
+              "type": "user_input",
+              "content": [
+                {
+                  "data": "<redacted:base64 1008 chars>",
+                  "mime_type": "image/png",
+                  "type": "image"
+                },
+                {
+                  "text": "The color slowly ripples like water, camera static.",
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "signature": "<redacted:signature 7008 chars>",
+              "type": "thought"
+            },
+            {
+              "content": [
+                {
+                  "uri": "https://generativelanguage.googleapis.com/v1beta/files/efrojcks7lww:download",
+                  "mime_type": "video/mp4",
+                  "type": "video"
+                }
+              ],
+              "type": "model_output"
+            }
+          ],
+          "object": "interaction",
+          "response_format": {
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "duration": "3s",
+            "resolution": "720p",
+            "type": "video"
+          },
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "download",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/files/efrojcks7lww:download"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "video/mp4"
+        }
+      }
+    }
+  ]
+}

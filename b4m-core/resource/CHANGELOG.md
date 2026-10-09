@@ -1,5 +1,15 @@
 # @bike4mind/resource
 
+## 1.0.0
+
+### Major Changes
+
+- [#3968](https://github.com/Bike4Mind/bike4mind/pull/3968) [`342a68a`](https://github.com/Bike4Mind/bike4mind/commit/342a68aa84d32e921432728dd90c72641da010a1) Thanks [@onoya](https://github.com/onoya)! - replace the Sora video endpoint with multi-provider video generations
+
+### Minor Changes
+
+- [#4007](https://github.com/Bike4Mind/bike4mind/pull/4007) [`bb1dd99`](https://github.com/Bike4Mind/bike4mind/commit/bb1dd99094c79ed435ceee9a152ac4eb43e1df3d) Thanks [@poysama](https://github.com/poysama)! - process quest exports with replay recovery
+
 ## 0.10.0
 
 ### Minor Changes

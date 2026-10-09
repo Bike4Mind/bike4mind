@@ -661,7 +661,7 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
 
 /**
  * Updates an existing data lake configuration. `notifySuccess: false` drops the success toast for a
- * write the user did not ask for directly (e.g. GitHubConnectAction undoing its own origin switch).
+ * write whose caller raises its own (e.g. DataLakeSettingsModal's follow-up write).
  */
 export function useUpdateDataLake({ notifySuccess = true }: { notifySuccess?: boolean } = {}) {
   const queryClient = useQueryClient();
@@ -2103,6 +2103,7 @@ export function useAddFilesToLake() {
 
 export interface DataLakeArticlesParams {
   id?: string;
+  lakeId?: string[];
   tags?: string[];
   search?: string;
   page?: number;
@@ -2174,6 +2175,33 @@ export function useGetDataLakeTagCounts(source: DataLakeBrowseSource = 'opti') {
       const response = await api.get<DataLakeTagCountsResponse>(`${browseBase(source)}/tag-counts`);
       return response.data;
     },
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 5,
+  });
+}
+
+/** Response shape for the tag-counts endpoint when scoped to selected lakes (`?lakeId=`). */
+export interface DataLakeScopedTagCountsResponse {
+  tagCounts: { tag: string; count: number; fileCount: number }[];
+}
+
+/**
+ * Tag-tree counts for the selected lakes only, counted server-side over their membership. The
+ * unscoped payload is merged by prefix, and two creators' lakes may share a prefix, so it cannot
+ * be narrowed to one lake on the client. Disabled for an empty selection.
+ */
+export function useGetScopedDataLakeTagCounts(source: DataLakeBrowseSource, lakeIds: readonly string[]) {
+  return useQuery({
+    queryKey: dataLakeKeys.tagCountsScoped(source, lakeIds),
+    queryFn: async () => {
+      const search = new URLSearchParams();
+      for (const id of lakeIds) search.append('lakeId', id);
+      const response = await api.get<DataLakeScopedTagCountsResponse>(
+        `${browseBase(source)}/tag-counts?${search.toString()}`
+      );
+      return response.data;
+    },
+    enabled: lakeIds.length > 0,
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
   });

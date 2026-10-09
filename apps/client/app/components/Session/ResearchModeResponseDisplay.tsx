@@ -38,7 +38,7 @@ import { ResearchModeConfiguration } from '../../types/ResearchMode';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { toast } from 'sonner';
 import { Settings as SettingsIcon } from '@mui/icons-material';
-import { extractThinking } from '@client/app/utils/replyUtils';
+import { extractThinking } from '@client/shared/replyUtils';
 
 interface ResearchModeResult {
   configurationId: string;

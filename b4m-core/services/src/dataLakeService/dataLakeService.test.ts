@@ -18,6 +18,7 @@ import {
   canAccessLake,
   assertLakeAccess,
   assertLakeAccessById,
+  assertLakeAccessWithGrantsById,
   assertLakeWritable,
   assertLakeGrantable,
   isFallbackLake,
@@ -613,6 +614,49 @@ describe('assertLakeAccessById - no slug fall-through', () => {
     const resolved = await assertLakeAccessById('opti-knowledge', ctx({ isAdmin: true }), { db: db(null) });
     expect(resolved.id).toBe('opti-knowledge');
     expect(() => assertLakeWritable(resolved)).toThrow(/read-only/);
+  });
+
+  const withGrants = (byId: IDataLakeDocument | null) => {
+    const d = db(byId);
+    return {
+      dataLakes: d.dataLakes,
+      dataLakeAccessGrants: {
+        listByLake: vi.fn().mockResolvedValue([]),
+        listByPrincipal: vi.fn().mockResolvedValue([]),
+      },
+    };
+  };
+
+  it('assertLakeAccessWithGrantsById refuses a slug the same way', async () => {
+    const d = withGrants(null);
+    await expect(assertLakeAccessWithGrantsById('shared', ctx({ userId: 'owner' }), { db: d })).rejects.toThrow(
+      BadRequestError
+    );
+    expect(d.dataLakes.findBySlug).not.toHaveBeenCalled();
+    expect(d.dataLakeAccessGrants.listByPrincipal).not.toHaveBeenCalled();
+  });
+
+  it('assertLakeAccessWithGrantsById resolves a lake by id and hands back its grants', async () => {
+    const owned = lake({ id: lakeHex, createdByUserId: 'owner' });
+    await expect(
+      assertLakeAccessWithGrantsById(lakeHex, ctx({ userId: 'owner' }), { db: withGrants(owned) })
+    ).resolves.toEqual({ lake: owned, grants: [] });
+  });
+
+  it.each([
+    ['assertLakeWriteAccess', assertLakeWriteAccess],
+    ['assertLakeRebuildAccess', assertLakeRebuildAccess],
+  ] as const)('%s with idOnly refuses a slug, and without it still resolves one', async (_name, gate) => {
+    const idOnly = withGrants(null);
+    await expect(gate('shared', ctx({ userId: 'owner' }), { db: idOnly }, { idOnly: true })).rejects.toThrow(
+      BadRequestError
+    );
+    expect(idOnly.dataLakes.findBySlug).not.toHaveBeenCalled();
+
+    const bySlug = withGrants(null);
+    await expect(gate('shared', ctx({ userId: 'owner' }), { db: bySlug })).resolves.toMatchObject({
+      id: 'other-lake',
+    });
   });
 });
 

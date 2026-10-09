@@ -42,6 +42,10 @@ When enabled, a daily cron job automatically imports the latest modal from the p
 
 The "Sync Latest" button triggers an immediate sync of the latest modal from the distribution URL. A refresh button reloads the sync configuration. The last sync timestamp and result are shown below the controls.
 
+### Upstream Release Notes Feed
+
+Set the `WHATS_NEW_FEED_URL` environment variable to the https URL of another deployment's `GET /api/v1/whats-new` to serve its release notes in the What's New slider. They are served ahead of local release notes, and the slider falls back to local release notes when the upstream feed fails.
+
 ## Active Modals
 
 The Active Modals section displays all local What's New modals, partitioned into two groups:

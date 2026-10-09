@@ -136,6 +136,32 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(created.includeLibraryFiles).toBe(ownerId === 'caller-1' ? false : undefined);
   });
 
+  // Create-only, so a clone that drops them can never get them back. temperature and maxToolCalls sit
+  // outside the isOwner gate; systemPromptText is write-only and unvetted, so it is owner only.
+  it.each([
+    ['owns the session', 'caller-1'],
+    ['only holds a share', 'owner-1'],
+  ])('carries temperature and maxToolCalls, and gates systemPromptText, when the caller %s', async (_, ownerId) => {
+    const { db } = makeAdapters(ownerId);
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: ownerId,
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      systemPromptText: 'Answer like a pirate.',
+      temperature: 0.2,
+      maxToolCalls: 7,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    const created = db.sessions.create.mock.calls[0][0];
+    expect(created.temperature).toBe(0.2);
+    expect(created.maxToolCalls).toBe(7);
+    expect(created.systemPromptText).toBe(ownerId === 'caller-1' ? 'Answer like a pirate.' : undefined);
+  });
+
   // Create-only too, and outside the isOwner gate: see the comment on these fields in clone.ts.
   it.each([
     ['owns the session', 'caller-1'],

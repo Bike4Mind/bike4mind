@@ -106,6 +106,49 @@ const effortMap_GPT5_1_2 = {
   complex: 'medium',
 } as const;
 
+/**
+ * Key-table value meaning "authenticate through OpenAI workload identity federation": the client is
+ * built from OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE, with
+ * the subject token taken from the GitHub Actions OIDC endpoint (the job needs `id-token: write`).
+ */
+export const OPENAI_FEDERATED_KEY = 'federated';
+
+/** A fresh GitHub Actions identity token for `audience`; the SDK calls this again on each exchange. */
+export async function githubActionsIdToken(audience: string): Promise<string> {
+  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!url || !requestToken) {
+    throw new Error('ACTIONS_ID_TOKEN_REQUEST_URL is not set; the job needs `id-token: write` permission');
+  }
+  const res = await fetch(`${url}&audience=${encodeURIComponent(audience)}`, {
+    headers: { Authorization: `Bearer ${requestToken}` },
+  });
+  if (!res.ok) throw new Error(`GitHub identity token request failed with status ${res.status}`);
+  const body = (await res.json()) as { value?: string };
+  if (!body.value) throw new Error('GitHub identity token response had no value');
+  return body.value;
+}
+
+function federatedOpenAIClient(): OpenAI {
+  const identityProviderId = process.env.OPENAI_IDENTITY_PROVIDER_ID;
+  const serviceAccountId = process.env.OPENAI_SERVICE_ACCOUNT_ID;
+  const audience = process.env.OPENAI_WIF_AUDIENCE;
+  if (!identityProviderId || !serviceAccountId || !audience) {
+    throw new Error(
+      'OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE are required for federated OpenAI auth'
+    );
+  }
+  // apiKey: null keeps an OPENAI_API_KEY in the environment from colliding with workloadIdentity.
+  return new OpenAI({
+    apiKey: null,
+    workloadIdentity: {
+      identityProviderId,
+      serviceAccountId,
+      provider: { tokenType: 'jwt', getToken: () => githubActionsIdToken(audience) },
+    },
+  });
+}
+
 export class OpenAIBackend implements ICompletionBackend {
   private _api: OpenAI;
   private logger: Logger;
@@ -118,7 +161,7 @@ export class OpenAIBackend implements ICompletionBackend {
   private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string, logger?: Logger, endUserId?: string) {
-    this._api = new OpenAI({ apiKey });
+    this._api = apiKey === OPENAI_FEDERATED_KEY ? federatedOpenAIClient() : new OpenAI({ apiKey });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
   }

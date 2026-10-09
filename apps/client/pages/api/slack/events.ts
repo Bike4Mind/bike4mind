@@ -30,7 +30,6 @@ import {
   type SlackEventData,
   CommandHandler,
   createLoadingBar,
-  buildConfirmationButtons,
   buildAttachmentDownloadButtons,
   formatPreviewFromParams,
   AttachmentDownloadInfo,
@@ -58,6 +57,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { getGeneratedImageStorage } from '@server/utils/storage';
+import { buildPendingActionButtons } from '@server/integrations/slack/pendingActionButtons';
 
 // Slack event schemas
 const SlackEventSchema = z.object({
@@ -786,7 +786,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     workspace?.id || orgWorkspaceId // Pass workspace ID for async notification
   );
 
-  // Check for pending action to conditionally enable confirm/cancel tools for the LLM
+  // Check for pending action to conditionally enable the cancel tool for the LLM
   const questWithPending = await Quest.findOne({
     sessionId: notebookId,
     pendingAction: { $exists: true },
@@ -800,9 +800,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     const expiresInMs = TOKEN_EXPIRATION_MS - ageMs;
 
     if (expiresInMs > 0) {
-      pendingActionTools = ['confirm_pending_action', 'cancel_pending_action'];
+      pendingActionTools = ['cancel_pending_action'];
 
-      logger.debug('🔐 [PENDING ACTION] Found pending action, enabling confirm/cancel tools', {
+      logger.debug('[PENDING ACTION] Found pending action, enabling cancel tool', {
         questId: questWithPending._id,
         tool: pa.tool,
         expiresInMinutes: Math.round(expiresInMs / 60000),
@@ -946,7 +946,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     fabFileIds,
     slackNotificationData, // Pass to store on Quest immediately after creation
     false, // Return early for large tables - Quest Processor handles response
-    pendingActionTools // Additional tools (confirm/cancel) when pending action exists
+    pendingActionTools // Cancel tool when a pending action exists
   );
 
   // Replace thinking message with AI response
@@ -1001,7 +1001,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // Rebuild response blocks with the formatted preview
       formatted = formatAgentResponse(commandHandler.parsedCommand.agentName || 'agent', formattedPreview, undefined);
 
-      const confirmButtons = buildConfirmationButtons(questId);
+      const confirmButtons = buildPendingActionButtons(questWithPendingAction);
       formatted.blocks = [...formatted.blocks, ...confirmButtons];
       logger.debug('🔐 [CONFIRMATION] Added formatted preview and confirmation buttons');
     }

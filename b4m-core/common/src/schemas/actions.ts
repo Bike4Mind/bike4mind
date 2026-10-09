@@ -5,6 +5,7 @@ import {
   hearthEventKindSchema,
   hearthMachineBodySchema,
   hearthEventRefsSchema,
+  hearthEventOriginSchema,
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
@@ -912,6 +913,8 @@ export const HearthEventAction = z.object({
     }),
     machine: hearthMachineBodySchema.optional(),
     refs: hearthEventRefsSchema.prefault({}),
+    // Server-set provenance; surfaces badge api-key/gateway writes.
+    origin: hearthEventOriginSchema.optional(),
     createdAt: z.string(),
   }),
 });
@@ -1510,6 +1513,10 @@ export const ReconnectResultAction = z.object({
   action: z.literal('reconnect_result'),
   found: z.boolean(),
   executionId: z.string().optional(),
+  // The session the found run belongs to, so the client stamps it from the
+  // response rather than correlating responses with requests. Absent on
+  // `found: false`, and on frames from servers that predate the echo.
+  sessionId: z.string().optional(),
   // Same enum reasoning as `ChildExecutionSnapshotSchema.status` - a free
   // string forced the client to re-narrow on every read. `.optional()` because
   // a `found: false` frame omits it.

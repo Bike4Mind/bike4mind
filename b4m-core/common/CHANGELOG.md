@@ -1,5 +1,100 @@
 # @bike4mind/common
 
+## 14.0.0
+
+### Major Changes
+
+- [#3968](https://github.com/Bike4Mind/bike4mind/pull/3968) [`342a68a`](https://github.com/Bike4Mind/bike4mind/commit/342a68aa84d32e921432728dd90c72641da010a1) Thanks [@onoya](https://github.com/onoya)! - replace the Sora video endpoint with multi-provider video generations
+
+### Minor Changes
+
+- [#4057](https://github.com/Bike4Mind/bike4mind/pull/4057) [`1b5ac9d`](https://github.com/Bike4Mind/bike4mind/commit/1b5ac9d8b5c5ca3dbeb5c23c60263d98d329a034) Thanks [@jarlacut](https://github.com/jarlacut)! - The auth mfaService drops `recordFailedAttempt` and `shouldResetFailedAttempts`, and `clearFailedAttempts` now takes the MFA config. Common adds shared MFA lockout constants.
+
+- [#3916](https://github.com/Bike4Mind/bike4mind/pull/3916) [`f0877e3`](https://github.com/Bike4Mind/bike4mind/commit/f0877e3893a2ad53d9ead07c8395792f1cb9cc80) Thanks [@onoya](https://github.com/onoya)! - show github lake sync progress, skipped counts and an ask-about-repo action
+
+- [#3922](https://github.com/Bike4Mind/bike4mind/pull/3922) [`6358d6c`](https://github.com/Bike4Mind/bike4mind/commit/6358d6c21c8e34a493d1bd7e734317eb157a8114) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - create a GitHub lake and start its connect in one call
+
+- [#3923](https://github.com/Bike4Mind/bike4mind/pull/3923) [`745dfea`](https://github.com/Bike4Mind/bike4mind/commit/745dfea4c0fdd093150fa546dd78e1510500ccb5) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - offer the lake's own source in the finish-connect banner
+
+- [#3983](https://github.com/Bike4Mind/bike4mind/pull/3983) [`50c8fa5`](https://github.com/Bike4Mind/bike4mind/commit/50c8fa5d7cb961deee0f3b14ae11234b3cd2644d) Thanks [@onoya](https://github.com/onoya)! - add the Video Studio at /studio/video
+
+- [#4003](https://github.com/Bike4Mind/bike4mind/pull/4003) [`6fa1181`](https://github.com/Bike4Mind/bike4mind/commit/6fa1181e7078c4e36a33e45d560fce7926e5fcc1) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - reconcile GitHub lakes on a schedule when push webhooks are missed
+
+- [#4006](https://github.com/Bike4Mind/bike4mind/pull/4006) [`2b0f761`](https://github.com/Bike4Mind/bike4mind/commit/2b0f7618a7cfb26689ebeceb6e236ec783cceacb) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - compose customer-facing notes from each prod release
+
+- [#4015](https://github.com/Bike4Mind/bike4mind/pull/4015) [`c9b6ce6`](https://github.com/Bike4Mind/bike4mind/commit/c9b6ce651dd88dbe666a253e439fce71435d10ea) Thanks [@vinchi777](https://github.com/vinchi777)! - support passkeys (WebAuthn) as an MFA method
+
+- [#4029](https://github.com/Bike4Mind/bike4mind/pull/4029) [`48ccf11`](https://github.com/Bike4Mind/bike4mind/commit/48ccf11ff9a536cf7c9fb7d3057ad3a3a23ea93c) Thanks [@onoya](https://github.com/onoya)! - add GET /api/v1/sessions to the generated public API docs
+
+- [#4030](https://github.com/Bike4Mind/bike4mind/pull/4030) [`85a6b07`](https://github.com/Bike4Mind/bike4mind/commit/85a6b07d0665e66ed8714c9113ea3774ff049368) Thanks [@vinchi777](https://github.com/vinchi777)! - add Bedrock inference profile ids
+
+- [#4033](https://github.com/Bike4Mind/bike4mind/pull/4033) [`5a067b0`](https://github.com/Bike4Mind/bike4mind/commit/5a067b09f79dc65f6f02d12b18280bf26b2f2268) Thanks [@onoya](https://github.com/onoya)! - let the chat agent generate videos with a live job card
+
+- [#4038](https://github.com/Bike4Mind/bike4mind/pull/4038) [`2784aea`](https://github.com/Bike4Mind/bike4mind/commit/2784aea964ef1ba610407d28e94bfef2c92198e4) Thanks [@vinchi777](https://github.com/vinchi777)! - identified SSO-passthrough embed mode with per-user memory
+
+- [#4039](https://github.com/Bike4Mind/bike4mind/pull/4039) [`766aef9`](https://github.com/Bike4Mind/bike4mind/commit/766aef961bc8b721247f51a53b8f1f8ecb052aa3) Thanks [@jjmarfa](https://github.com/jjmarfa)! - return datalake_tag from GET /api/v1/data-lakes
+
+- [#4068](https://github.com/Bike4Mind/bike4mind/pull/4068) [`45eca4d`](https://github.com/Bike4Mind/bike4mind/commit/45eca4db5004ec39ba8cc8b5d39461b87d009c4a) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - public What's New feed and admin tab
+
+- [#4126](https://github.com/Bike4Mind/bike4mind/pull/4126) [`ac71151`](https://github.com/Bike4Mind/bike4mind/commit/ac71151caf575311863f5367e55e5fa73d38b432) Thanks [@juicewaa](https://github.com/juicewaa)! - register per-family Problem/Solvers views for navigate_view
+
+### Patch Changes
+
+- [#4136](https://github.com/Bike4Mind/bike4mind/pull/4136) [`ccb4d30`](https://github.com/Bike4Mind/bike4mind/commit/ccb4d30ee6e2b6d7371b3b99774153ec8988b702) Thanks [@onoya](https://github.com/onoya)! - drop confirm_pending_action from the external tool side-effects registry
+
+- [#3874](https://github.com/Bike4Mind/bike4mind/pull/3874) [`52cccac`](https://github.com/Bike4Mind/bike4mind/commit/52cccac190a8b81c973978038cf9f14400aeceb2) Thanks [@aflordelis](https://github.com/aflordelis)! - publish GET/DELETE /api/sessions/{id} as contracts
+
+- [#3880](https://github.com/Bike4Mind/bike4mind/pull/3880) [`979b44d`](https://github.com/Bike4Mind/bike4mind/commit/979b44d71823c0b82a4c1f922b3eabbe1013b824) Thanks [@julsanchez](https://github.com/julsanchez)! - resolve API-key principals to the key name in config history
+
+- [#3892](https://github.com/Bike4Mind/bike4mind/pull/3892) [`dfb0427`](https://github.com/Bike4Mind/bike4mind/commit/dfb042798fb6c92f16859980d00c14affcbdefa2) Thanks [@aflordelis](https://github.com/aflordelis)! - show distinct file counts on inner tag-tree rows
+
+- [#3908](https://github.com/Bike4Mind/bike4mind/pull/3908) [`e76712e`](https://github.com/Bike4Mind/bike4mind/commit/e76712e59e04b64fb113f8c140b933fe81f8ced5) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - include administered orgs in account-wide excluded count
+
+- [#3926](https://github.com/Bike4Mind/bike4mind/pull/3926) [`fa6cad8`](https://github.com/Bike4Mind/bike4mind/commit/fa6cad8adffaec711268808c1d37e2adc2a2af6e) Thanks [@onoya](https://github.com/onoya)! - scan held artifact spans in one pass and drop the raw mermaid promotion
+
+- [#3933](https://github.com/Bike4Mind/bike4mind/pull/3933) [`d3156bf`](https://github.com/Bike4Mind/bike4mind/commit/d3156bf2127fbd01ea28fc50bb4360f60dee0dce) Thanks [@dea0030](https://github.com/dea0030)! - attribute API-key route usage by caller client and key owner
+
+- [#3935](https://github.com/Bike4Mind/bike4mind/pull/3935) [`14b6798`](https://github.com/Bike4Mind/bike4mind/commit/14b6798f6ac2eb43e485242db67f34fd4682b369) Thanks [@julsanchez](https://github.com/julsanchez)! - group the lake picker by a stable effective-owner key
+
+- [#3948](https://github.com/Bike4Mind/bike4mind/pull/3948) [`dbb9b9a`](https://github.com/Bike4Mind/bike4mind/commit/dbb9b9a32b6b8c41e74d4fce0fd733bd195ea0d0) Thanks [@vinchi777](https://github.com/vinchi777)! - enforce notebook import storage quota across imports
+
+- [#3950](https://github.com/Bike4Mind/bike4mind/pull/3950) [`7063e18`](https://github.com/Bike4Mind/bike4mind/commit/7063e180b2ea5c405304e5eef56c208bd6ad74c9) Thanks [@vinchi777](https://github.com/vinchi777)! - show tool-generated audio and images in the File Browser
+
+- [#3956](https://github.com/Bike4Mind/bike4mind/pull/3956) [`5ac32cf`](https://github.com/Bike4Mind/bike4mind/commit/5ac32cff321399a50eb3520ef2f2c2e9f5627fbe) Thanks [@vinchi777](https://github.com/vinchi777)! - keep clientFirstTokenTime when the pipeline saves the whole quest
+
+- [#3957](https://github.com/Bike4Mind/bike4mind/pull/3957) [`380dd56`](https://github.com/Bike4Mind/bike4mind/commit/380dd5669d9b25734410a83e5ef9240cb2baa8af) Thanks [@vinchi777](https://github.com/vinchi777)! - record refusal UsageEvents so the Spend refusal rate is populated
+
+- [#3963](https://github.com/Bike4Mind/bike4mind/pull/3963) [`b39a54f`](https://github.com/Bike4Mind/bike4mind/commit/b39a54f19f4c35c44014a07fa0b9f34db1b2985b) Thanks [@onoya](https://github.com/onoya)! - serialize lake writes up to their external step against a grant revoke
+
+- [#3967](https://github.com/Bike4Mind/bike4mind/pull/3967) [`56d4363`](https://github.com/Bike4Mind/bike4mind/commit/56d43635e2e4302cebdf4a2e6b691177be434ae5) Thanks [@jjmarfa](https://github.com/jjmarfa)! - populate first-token timing so slow-first-token anomalies fire
+
+- [#3971](https://github.com/Bike4Mind/bike4mind/pull/3971) [`d9bf1a1`](https://github.com/Bike4Mind/bike4mind/commit/d9bf1a13f467f8807a7972cc76b7fbbf0a0b9b03) Thanks [@julsanchez](https://github.com/julsanchez)! - pick a free tag prefix when recreating a deleted lake
+
+- [#3986](https://github.com/Bike4Mind/bike4mind/pull/3986) [`5907b66`](https://github.com/Bike4Mind/bike4mind/commit/5907b66551679d755253a0e546d917f9dd4b90f6) Thanks [@dea0030](https://github.com/dea0030)! - resolve lifecycle actions by lake id only
+
+- [#3991](https://github.com/Bike4Mind/bike4mind/pull/3991) [`89c5938`](https://github.com/Bike4Mind/bike4mind/commit/89c5938df001ef300d0221852b69ce2b9d2862fe) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - trust adapter price literals in model promotion
+
+- [#4004](https://github.com/Bike4Mind/bike4mind/pull/4004) [`190c592`](https://github.com/Bike4Mind/bike4mind/commit/190c59227a558b03f9993f8582fcce8e646b2da9) Thanks [@allan-gar2x](https://github.com/allan-gar2x)! - make per-user key cap atomic via insert-then-recount
+
+- [#4005](https://github.com/Bike4Mind/bike4mind/pull/4005) [`128c504`](https://github.com/Bike4Mind/bike4mind/commit/128c504ae50a80d29daa85613bba438c7acf0c2f) Thanks [@vinchi777](https://github.com/vinchi777)! - price cached context at the cache-read rate when reserving CLI credits
+
+- [#4017](https://github.com/Bike4Mind/bike4mind/pull/4017) [`fcec8c8`](https://github.com/Bike4Mind/bike4mind/commit/fcec8c8980df42d032df92b597519fd8b796a243) Thanks [@onoya](https://github.com/onoya)! - strip choices blocks from every reply slot and separate joined slots
+
+- [#4037](https://github.com/Bike4Mind/bike4mind/pull/4037) [`2142ebf`](https://github.com/Bike4Mind/bike4mind/commit/2142ebfdaeccde9177e7d9e5a301f4137790ea22) Thanks [@julsanchez](https://github.com/julsanchez)! - reach Bedrock on self-host through dedicated credentials
+
+- [#4040](https://github.com/Bike4Mind/bike4mind/pull/4040) [`1154408`](https://github.com/Bike4Mind/bike4mind/commit/1154408ea4686c9a330efac69b5e69007defa122) Thanks [@vinchi777](https://github.com/vinchi777)! - honor a declared 403 in defineLambdaRoute auth failures
+
+- [#4066](https://github.com/Bike4Mind/bike4mind/pull/4066) [`c5ce159`](https://github.com/Bike4Mind/bike4mind/commit/c5ce15963ab2d6bba555f653e331095ac7ec3275) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - pass request client to checkRateLimit on WS route
+
+- [#4069](https://github.com/Bike4Mind/bike4mind/pull/4069) [`5ef61d6`](https://github.com/Bike4Mind/bike4mind/commit/5ef61d652da7feecd8259e8f8fbcc720ca86811d) Thanks [@onoya](https://github.com/onoya)! - enforce API-key scopes on projects and agents routes
+
+- [#4071](https://github.com/Bike4Mind/bike4mind/pull/4071) [`c44d38d`](https://github.com/Bike4Mind/bike4mind/commit/c44d38d290bd775e08f65d3a6544c2b6a0121207) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - one shared Bedrock region-prefix helper
+
+- [#4128](https://github.com/Bike4Mind/bike4mind/pull/4128) [`54d7dd6`](https://github.com/Bike4Mind/bike4mind/commit/54d7dd6081da91698e0f3ca5fdc8b30680e775a3) Thanks [@juicewaa](https://github.com/juicewaa)! - echo sessionId on reconnect_result and drop client correlation queue
+
+- Updated dependencies [[`0838962`](https://github.com/Bike4Mind/bike4mind/commit/0838962cc87930266d8b4918c081b3dc4bade3eb)]:
+  - @bike4mind/hearth@0.3.1
+
 ## 13.1.0
 
 ### Minor Changes

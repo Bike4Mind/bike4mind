@@ -17,6 +17,10 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
+const mockEmitSignup = vi.fn().mockResolvedValue([]);
+vi.mock('@server/analytics/signupEvents', () => ({
+  emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
+}));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));
 vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/auth/tokenGenerator', () => ({
@@ -65,13 +69,19 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
+import { authSessionService } from '@bike4mind/services';
+import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
 
 // bike4mind.com is seeded as an internal-staff domain in vitest.setup.ts, so the real
 // registry confers optihashi:pro -> its signup-credit total for this address.
 const DOMAIN_EMAIL = 'newstaff@bike4mind.com';
 const NON_DOMAIN_EMAIL = 'nobody@example.com';
-const EXPECTED_DOMAIN_CREDITS = signupCreditsForEmail(DOMAIN_EMAIL, true);
+// Pinned literal (not derived from the registry, which would make the assertions circular):
+// the optihashi:pro grant pays 250,000. This path resolves the literal domain keys only (no
+// implication expansion), so the implied questmaster:pro credit is not in play here - the
+// implied-key de-dup is pinned in the registry test.
+const EXPECTED_DOMAIN_CREDITS = 250_000;
 
 function makeReqRes(email = DOMAIN_EMAIL) {
   const { req, res } = createMocks({ method: 'POST' });
@@ -112,10 +122,120 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
   });
 
+  const firstTouch = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
+
+  it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: { firstTouch: { source: 'widgets' } },
+      method: 'otc',
+    });
+  });
+
+  // The account exists once registerViaOTC returns and a retry is a login, not a signup, so an
+  // emit placed after the session mint would be lost for good when the mint fails.
+  it('still sends the signup when minting the session fails', async () => {
+    vi.mocked(authSessionService.issueSession).mockRejectedValueOnce(new Error('session store down'));
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
+
+    await Promise.resolve(handler(req, res)).catch(() => {});
+
+    expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
+  });
+
+  // The REGISTER log and the emit are separate statements; folding the emit into the log's
+  // error handling would drop a signup whenever the log write fails.
+  it('still sends the signup when the REGISTER log fails', async () => {
+    vi.mocked(logEvent).mockRejectedValueOnce(new Error('log store down'));
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
+  });
+
+  // This cookie is the reason the gate has to exist. `b4m-first-touch` lives on the parent
+  // domain, `clearAttributionCookies` deliberately leaves it alone on a decline, and
+  // readAcquisitionCookies PREFERS it over the app's own first-touch cookie - so a visitor who
+  // declined still arrives here carrying a perfectly readable touch. Without the gate they would
+  // be attributed anyway.
+  it('withholds a surviving marketing touch when consent was declined', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=denied`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
+  });
+
+  // The case SameSite=Lax exists for, and the one the first version of this gate suppressed: a
+  // visitor who never saw the marketing site, landed here, and accepted this app's own banner.
+  // Their decision is in localStorage, which this handler cannot read, so the banner publishes
+  // it to `b4m_consent`.
+  it('credits a visitor who consented on this origin, with no marketing cookie', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m_consent=granted`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: { firstTouch: { source: 'widgets' } },
+      method: 'otc',
+    });
+  });
+
+  // This origin outranks the shared cookie rather than supplementing it, so a decline here is
+  // not overridden by a grant given on the other host - matching checkout's own precedence.
+  it('withholds touches when this origin was declined but the marketing cookie says granted', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m_consent=denied; b4m-consent-decision=granted`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
+  });
+
+  // The guard is structural, not conditional: the emit sits after the existingUser branch has
+  // already returned. Nothing asserted that until now, so moving the emit above that return - or
+  // adding a second call site on the login path - left this whole suite green while every
+  // returning login re-emitted a `signup`. OAuth has the counterpart assertion in
+  // [strategy]/__tests__/callback.test.ts ("sends nothing for a returning user").
+  it('sends nothing when the code proves a returning user rather than a new one', async () => {
+    mockFindByEmail.mockResolvedValue({
+      id: 'u-existing',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tokenVersion: 0,
+      toJSON: () => ({ id: 'u-existing', username: 'bob' }),
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m_consent=granted`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+    expect(mockEmitSignup).not.toHaveBeenCalled();
+  });
+
   it('is a sanity check that the fixture domain actually confers the product credit sum', () => {
     // Guards the suite: if bike4mind.com ever stops conferring the product, the credit
     // assertions below would silently pass on 0.
-    expect(EXPECTED_DOMAIN_CREDITS).toBe(250_000);
+    expect(signupCreditsForEmail(DOMAIN_EMAIL, true)).toBe(EXPECTED_DOMAIN_CREDITS);
   });
 
   it('grants domain-grant signup credits to a new OTC registration on a partner domain', async () => {
@@ -130,7 +250,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       expect.objectContaining({
         ownerId: 'user-1',
         ownerType: CreditHolderType.User,
-        credits: EXPECTED_DOMAIN_CREDITS,
+        credits: 250_000,
         type: 'generic_add',
         transactionId: 'domain-grant-credits:user-1',
       })

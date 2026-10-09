@@ -185,6 +185,8 @@ export async function reportCcAgentPresence(input: CcAgentPresenceInput): Promis
       },
       machine: { schema: PRESENCE_PAYLOAD_SCHEMA_NAME, payload },
       refs: {},
+      // The bridge authenticates with a cc-bridge:connect API key.
+      origin: 'api-key',
     });
 
     // Roster projection through the SAME function the HTTP route uses, so the

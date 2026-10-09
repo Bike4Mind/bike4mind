@@ -1,5 +1,6 @@
 import type { Request } from 'express';
 import type { OverwatchUtm } from '@bike4mind/common';
+import { ACQUISITION_COOKIES } from '@client/lib/subscriptions/acquisition';
 
 /**
  * First-party cookies the analytics emitter reads.
@@ -12,11 +13,9 @@ import type { OverwatchUtm } from '@bike4mind/common';
  * outcome of throwing is a 500 on a page load.
  */
 
-// Named on both sides of the wire: the client writer is app/utils/utmCapture.ts and the
-// client reader is app/utils/attributionCookies.ts, which declares its own constant for the
-// same name. A rename has to touch both - there is no shared module a server file and a
-// browser file can both import without one layer reaching into the other.
-export const UTM_COOKIE = 'b4m_utm';
+// Cookie names shared with the browser live in apps/client/lib/, the one seam both layers may
+// import: this one is written by app/utils/utmCapture.ts from the same constant.
+const UTM_COOKIE = ACQUISITION_COOKIES.session;
 
 export function parseCookies(cookieHeader: string | undefined): Record<string, string> {
   const result: Record<string, string> = {};

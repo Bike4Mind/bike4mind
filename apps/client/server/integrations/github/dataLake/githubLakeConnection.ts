@@ -73,7 +73,7 @@ export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state'
 /** Files purged per revoke-queue receive (revoke and disconnect alike), sized to finish well inside its 10-minute timeout (infra/queues.ts). */
 export const REVOKE_PURGE_SLICE_SIZE = 1000;
 
-/** The githubLakeRevokeQueue message (queueHandlers/githubLakeRevoke.ts parses the same shape). */
+/** The githubLakeRevokeQueue message (apps/workers/src/queueHandlers/githubLakeRevoke.ts parses the same shape). */
 export type GitHubLakeRevokeMessage = { connectionId: string; installationId: number };
 
 type GitHubLakeStatePayload = BaseStatePayload & { userId: string; dataLakeId: string };
@@ -92,10 +92,27 @@ const POLICY_MESSAGES: Record<GitHubLakeInstallationPolicyViolation, string> = {
     'The GitHub App installation cannot read repository contents. Accept its requested permissions in the installation settings, then refresh.',
 };
 
+/**
+ * Where the Access lost state's "Fix on GitHub" sends the user: GitHub's install page targeted at the
+ * installation's account, NOT the installation's settingsUrl, which 404s for a non-owner. Unsigned
+ * (no `state`): this is a repair link out of a broken connection, not a leg of the connect flow, so
+ * the user returns through a fresh Re-sync or Connect rather than a callback. Null when the App is
+ * unconfigured, or when the row predates `accountId` and has nothing to target.
+ */
+export function buildGitHubLakeFixAccessUrl(
+  config: GitHubLakeAppConfig | null,
+  accountId: number | undefined
+): string | null {
+  if (!config) return null;
+  const base = `https://github.com/apps/${encodeURIComponent(config.slug)}/installations/new`;
+  return accountId === undefined ? base : `${base}/permissions?target_id=${accountId}`;
+}
+
 /** Model defaults (enabled true, status 'connected') are applied here too, for rows that predate them. */
 export function toGitHubLakeConnectionResponse(
   conn: IOrgGitHubLakeConnectionDocument,
-  fileCount: number
+  fileCount: number,
+  config: GitHubLakeAppConfig | null = getGitHubLakeAppConfig()
 ): IOrgGitHubLakeConnectionResponse {
   return {
     id: conn.id,
@@ -116,6 +133,7 @@ export function toGitHubLakeConnectionResponse(
     fileCount,
     disconnecting: !!conn.disconnectRequestedAt,
     disconnectStalled: !!conn.disconnectRequestedAt && isGitHubDisconnectStalled(conn.disconnectRequestedAt),
+    fixAccessUrl: buildGitHubLakeFixAccessUrl(config, conn.accountId),
   };
 }
 
@@ -137,8 +155,15 @@ export function requireGitHubLakeAppConfig(config: GitHubLakeAppConfig | null): 
  * The org lake a user may bind a repository to right now, or a thrown HTTP error saying why not.
  * Runs at every step of the connect (start, authorize return, picker, completion): the flow can take
  * minutes, during which the lake can be archived, re-originated, or connected by someone else.
+ *
+ * `allowCurated` lets a curated lake through with `curated: true`, for the start route's switch-and-connect
+ * (it switches the origin itself, after these checks). Every later step keeps refusing a curated lake.
  */
-export async function resolveConnectableLake(user: LakeUser, dataLakeId: string) {
+export async function resolveConnectableLake(
+  user: LakeUser,
+  dataLakeId: string,
+  { allowCurated = false }: { allowCurated?: boolean } = {}
+) {
   const lake = await dataLakeRepository.findById(dataLakeId);
   if (!lake) {
     throw new NotFoundError('Data lake not found');
@@ -153,14 +178,16 @@ export async function resolveConnectableLake(user: LakeUser, dataLakeId: string)
   if (!isLakeIngestable(lake.status)) {
     throw new BadRequestError(`Cannot connect a GitHub repository to a data lake in '${lake.status}' status`);
   }
-  // Binding never flips origin: the owner declaring the lake connector-fed is the consent (drive-sync.ts).
-  if (!acceptsConnectorContent(lake.origin)) {
+  // Later steps never flip origin: the owner declaring the lake connector-fed is the consent (drive-sync.ts).
+  // Only the start route's explicit switch admits a curated lake (allowCurated).
+  const curated = !acceptsConnectorContent(lake.origin);
+  if (curated && !allowCurated) {
     throw new BadRequestError(
       `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a GitHub repository.`
     );
   }
   await assertLakeConnectorFree(lake.id, { includeClaim: true });
-  return { lakeId: lake.id, organizationId: lake.organizationId };
+  return { lakeId: lake.id, organizationId: lake.organizationId, curated };
 }
 
 /**
@@ -424,6 +451,7 @@ export async function completeGitHubLakeConnection(params: {
           targetDataLakeId: lakeId,
           installationId,
           accountLogin: installation.accountLogin,
+          accountId: installation.accountId ?? undefined,
           repositoryId: repository.id,
           repositoryFullName: repository.fullName,
           connectedBy: user.id,

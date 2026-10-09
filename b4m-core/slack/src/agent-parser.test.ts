@@ -143,7 +143,8 @@ describe('Agent Command Parser', () => {
       });
       expect(prompt).toContain('PENDING ACTION');
       expect(prompt).toContain('github_create_issue');
-      expect(prompt).toContain('confirm_pending_action');
+      expect(prompt).toContain('clicking Confirm');
+      expect(prompt).not.toContain('confirm_pending_action');
     });
 
     it('should include conversation context when provided', async () => {

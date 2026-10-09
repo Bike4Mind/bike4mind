@@ -136,7 +136,8 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.ME_READ,
     label: 'Account: Read',
-    description: "Read the key owner's own plan tier, credit balance, and entitlements",
+    // Keep in sync with the me:read consent label in app/routes/oauth/consentScopes.ts.
+    description: "Read the key owner's own name, plan tier, subscription, credit balance, and entitlements",
     endpoints: ['GET /api/v1/me', 'GET /api/v1/credits'],
   },
   {
