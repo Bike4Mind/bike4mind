@@ -57,7 +57,7 @@ const agentFields = {
 /** Strict, so a camelCase field (the SPA route's spelling) is a 422 rather than silently dropped. */
 export const CreateAgentRequestSchema = z
   .object({
-    name: z.string().min(1),
+    name: z.string().trim().min(1),
     description: agentFields.description.optional(),
     system_prompt: agentFields.system_prompt.optional(),
     preferred_model: agentFields.preferred_model.optional(),
@@ -76,8 +76,9 @@ export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
  */
 export const UpdateAgentRequestSchema = z
   .object({
-    name: z.string().min(1).optional(),
-    description: agentFields.description.optional(),
+    name: z.string().trim().min(1).optional(),
+    // Create maps an empty description to a default; an update rejects one rather than guess.
+    description: agentFields.description.trim().min(1).optional(),
     system_prompt: agentFields.system_prompt.optional(),
     preferred_model: agentFields.preferred_model.nullable().optional(),
     temperature: agentFields.temperature.nullable().optional(),

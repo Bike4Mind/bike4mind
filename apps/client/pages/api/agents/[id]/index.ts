@@ -3,25 +3,11 @@ import { baseApi } from '@client/server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { agentRepository } from '@bike4mind/database';
-import {
-  IAgent,
-  IAgentCapabilities,
-  supportedChatModels,
-  supportedImageModels,
-  groupShareSchema,
-  userShareSchema,
-} from '@bike4mind/common';
+import { IAgent, IAgentCapabilities, groupShareSchema, userShareSchema } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
 import { deleteAgent } from '@server/agents/deleteAgent';
-import {
-  validateToolList,
-  validateMaxIterations,
-  validateDefaultThoroughness,
-  validateStringList,
-  validateDefaultVariables,
-  validateTriggerWords,
-} from '@server/utils/agentValidation';
+import { validateAgentUpdate } from '@server/utils/agentValidation';
 import { z } from 'zod';
 
 // The whole body is spread into `agentRepository.update`, i.e. a `$set`, and update payloads cast
@@ -284,50 +270,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     const agent = await agentRepository.findById(id as string);
     assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to update this agent");
 
-    // Validate model config fields
-    if (agentData.preferredModel && !supportedChatModels.safeParse(agentData.preferredModel).success) {
-      throw new BadRequestError(`Invalid model: ${agentData.preferredModel}`);
-    }
-    if (agentData.preferredImageModel && !supportedImageModels.safeParse(agentData.preferredImageModel).success) {
-      throw new BadRequestError(`Invalid image model: ${agentData.preferredImageModel}`);
-    }
-    if (agentData.temperature !== undefined && (agentData.temperature < 0 || agentData.temperature > 2)) {
-      throw new BadRequestError('Temperature must be between 0 and 2');
-    }
-    if (agentData.maxTokens !== undefined && (agentData.maxTokens < 1 || agentData.maxTokens > 128000)) {
-      throw new BadRequestError('Max tokens must be between 1 and 128000');
-    }
-
-    // Reject malformed trigger words before they reach MongoDB - keeps the
-    // PUT route in sync with POST and stops a silent regression where a
-    // valid create is followed by a malformed edit.
-    if (agentData.triggerWords !== undefined) {
-      agentData.triggerWords = validateTriggerWords(agentData.triggerWords);
-    }
-
-    // Orchestration fields - mirror the POST endpoint bounds so PUT can't
-    // bypass the array-size / max-iteration guards.
-    if (agentData.allowedTools !== undefined) {
-      agentData.allowedTools = validateToolList(agentData.allowedTools, 'allowedTools');
-    }
-    if (agentData.deniedTools !== undefined) {
-      agentData.deniedTools = validateToolList(agentData.deniedTools, 'deniedTools');
-    }
-    if (agentData.maxIterations !== undefined) {
-      agentData.maxIterations = validateMaxIterations(agentData.maxIterations);
-    }
-    if (agentData.defaultThoroughness !== undefined) {
-      agentData.defaultThoroughness = validateDefaultThoroughness(agentData.defaultThoroughness);
-    }
-    if (agentData.defaultVariables !== undefined) {
-      agentData.defaultVariables = validateDefaultVariables(agentData.defaultVariables);
-    }
-    if (agentData.exclusiveMcpServers !== undefined) {
-      agentData.exclusiveMcpServers = validateStringList(agentData.exclusiveMcpServers, 'exclusiveMcpServers');
-    }
-    if (agentData.fallbackModels !== undefined) {
-      agentData.fallbackModels = validateStringList(agentData.fallbackModels, 'fallbackModels');
-    }
+    validateAgentUpdate(agentData);
 
     // Handle capabilities conversion if it's in the old format
     if (

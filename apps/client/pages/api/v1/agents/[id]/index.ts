@@ -6,14 +6,14 @@
  * Auth mode, scopes and validation come from the contracts; the SPA route is unchanged. Unlike it,
  * a sharee asking to update or delete gets the same 404 as a stranger, so ownership is not probed.
  */
-import { deleteAgentContract, getAgentContract, supportedChatModels, updateAgentContract } from '@bike4mind/common';
+import { deleteAgentContract, getAgentContract, IAgent, updateAgentContract } from '@bike4mind/common';
 import { agentRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
-import { ForbiddenError, NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
-import { validateToolList, validateTriggerWords } from '@server/utils/agentValidation';
+import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { validateAgentUpdate } from '@server/utils/agentValidation';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { deleteAgent } from '@server/agents/deleteAgent';
 import { toPublicAgent } from '@server/agents/toPublicAgent';
@@ -22,6 +22,9 @@ import { toV1AgentError } from '@server/agents/v1AgentErrors';
 // Named so every agent id shares one bucket per method instead of one per pathname.
 const perUserRateLimit = (bucket: string) =>
   rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
+
+// validateAgentUpdate names the stored camelCase field; a v1 error names the caller's spelling.
+const V1_FIELD_NAMES: Record<string, string> = { allowedTools: 'allowed_tools', deniedTools: 'denied_tools' };
 
 // A malformed or unknown id, a soft-deleted agent and a system/org agent all come back null or
 // ownerless from findById, so assertAgentAccess answers 404 for every one of them.
@@ -50,18 +53,6 @@ const updateRoute = nextRouteForContract(updateAgentContract, {
   const { id } = await findOwnedAgent(req.validatedParams.id, req.user.id);
   const body = req.validated;
 
-  if (body.preferred_model != null && !supportedChatModels.safeParse(body.preferred_model).success) {
-    throw new UnprocessableEntityError(`Invalid model: ${body.preferred_model}`);
-  }
-  let triggerWords, allowedTools, deniedTools;
-  try {
-    triggerWords = validateTriggerWords(body.trigger_words);
-    allowedTools = validateToolList(body.allowed_tools, 'allowed_tools');
-    deniedTools = validateToolList(body.denied_tools, 'denied_tools');
-  } catch (error) {
-    throw toV1AgentError(error);
-  }
-
   // Only the fields that were sent are written; an omitted one stays absent rather than set undefined.
   const fields = {
     name: body.name,
@@ -70,13 +61,18 @@ const updateRoute = nextRouteForContract(updateAgentContract, {
     preferredModel: body.preferred_model,
     temperature: body.temperature,
     maxTokens: body.max_tokens,
-    allowedTools,
-    deniedTools,
-    triggerWords,
+    allowedTools: body.allowed_tools,
+    deniedTools: body.denied_tools,
+    triggerWords: body.trigger_words,
   };
   // A null clears the field back to the default; the request schema allows it only on these three.
   const reset = (['preferredModel', 'temperature', 'maxTokens'] as const).filter(field => fields[field] === null);
-  const changes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null));
+  const changes: Partial<IAgent> = Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null));
+  try {
+    validateAgentUpdate(changes, field => V1_FIELD_NAMES[field] ?? field);
+  } catch (error) {
+    throw toV1AgentError(error);
+  }
 
   const updated = await agentRepository.update(
     { id, ...changes },

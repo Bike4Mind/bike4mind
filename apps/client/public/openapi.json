@@ -7502,7 +7502,8 @@
             "minLength": 1
           },
           "description": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "system_prompt": {
             "type": "string"

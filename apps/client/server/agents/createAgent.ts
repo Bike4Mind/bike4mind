@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import {
+  AgentValidationError,
   validateToolList,
   validateMaxIterations,
   validateDefaultThoroughness,
@@ -18,35 +19,30 @@ import {
   validateTriggerWords,
 } from '@server/utils/agentValidation';
 
-// Extend IAgent to include systemPrompt temporarily
-export interface IAgentWithSystemPrompt extends IAgent {
-  systemPrompt?: string;
-}
-
 /**
  * Validates and creates an agent owned by `userId`, enforcing the per-tier agent cap and, when
  * `useOwnCredits` is set, debiting the allocation from the owner in the same transaction.
- * Shared by POST /api/agents and POST /api/v1/agents. Throws BadRequestError on any rejection; the
- * tier cap carries `errorCode: agent_limit_reached` so callers can tell it apart.
+ * Shared by POST /api/agents and POST /api/v1/agents. Throws BadRequestError on any rejection: an
+ * AgentValidationError for an invalid body field, and the tier cap carries `errorCode: agent_limit_reached`.
  */
-export async function createAgent(agentData: Partial<IAgentWithSystemPrompt>, userId: string) {
+export async function createAgent(agentData: Partial<IAgent>, userId: string) {
   // Validate required fields
   if (!agentData.name) {
-    throw new BadRequestError('Agent name is required');
+    throw new AgentValidationError('Agent name is required');
   }
 
   // Validate model config fields
   if (agentData.preferredModel && !supportedChatModels.safeParse(agentData.preferredModel).success) {
-    throw new BadRequestError(`Invalid model: ${agentData.preferredModel}`);
+    throw new AgentValidationError(`Invalid model: ${agentData.preferredModel}`);
   }
   if (agentData.preferredImageModel && !supportedImageModels.safeParse(agentData.preferredImageModel).success) {
-    throw new BadRequestError(`Invalid image model: ${agentData.preferredImageModel}`);
+    throw new AgentValidationError(`Invalid image model: ${agentData.preferredImageModel}`);
   }
   if (agentData.temperature !== undefined && (agentData.temperature < 0 || agentData.temperature > 2)) {
-    throw new BadRequestError('Temperature must be between 0 and 2');
+    throw new AgentValidationError('Temperature must be between 0 and 2');
   }
   if (agentData.maxTokens !== undefined && (agentData.maxTokens < 1 || agentData.maxTokens > 128000)) {
-    throw new BadRequestError('Max tokens must be between 1 and 128000');
+    throw new AgentValidationError('Max tokens must be between 1 and 128000');
   }
 
   // Reject malformed trigger words before they reach MongoDB - the chat

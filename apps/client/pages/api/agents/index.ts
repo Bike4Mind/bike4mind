@@ -5,7 +5,7 @@ import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCO
 import { agentRepository } from '@bike4mind/database';
 import { IAgent } from '@bike4mind/common';
 import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
-import { createAgent, type IAgentWithSystemPrompt } from '@server/agents/createAgent';
+import { createAgent } from '@server/agents/createAgent';
 
 // baseApi's scope gate is per route, so it admits either agents scope and each method asserts its own.
 const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
@@ -39,7 +39,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
   .post(async (req, res) => {
     assertAgentsWriteScope(req);
     try {
-      const { agent, userCredits } = await createAgent(req.body as Partial<IAgentWithSystemPrompt>, req.user!.id);
+      const { agent, userCredits } = await createAgent(req.body as Partial<IAgent>, req.user!.id);
 
       // Return agent and updated user credits
       return res.status(201).json({
