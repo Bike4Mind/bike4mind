@@ -67,3 +67,35 @@ describe('handleLLMCommand - id-less rapid-reply registration', () => {
     settleRapidReply();
   });
 });
+
+describe('handleLLMCommand - skipRapidReply', () => {
+  const optiArgs = (skipRapidReply?: boolean): HandlerArgs =>
+    ({
+      ...args(null),
+      workBenchFiles: [],
+      currentSession: { id: 'session-1', surface: 'opti' },
+      skipRapidReply,
+    }) as HandlerArgs;
+  const firedRapidReply = () => post.mock.calls.some(([url]) => url === '/api/ai/rapid-reply');
+
+  beforeEach(() => {
+    post.mockReset();
+    post.mockResolvedValue({ data: { success: true, quest: { id: 'quest-1' }, session: { id: 'session-1' } } });
+  });
+
+  it('acks an ordinary opti-surface send', async () => {
+    await handleLLMCommand(optiArgs());
+    expect(firedRapidReply()).toBe(true);
+  });
+
+  it('skips the ack for a tool-directed send, even on the opti surface', async () => {
+    await handleLLMCommand(optiArgs(true));
+    expect(firedRapidReply()).toBe(false);
+  });
+
+  it('keeps the flag out of the request params', async () => {
+    await handleLLMCommand(optiArgs(true));
+    const llmCall = post.mock.calls.find(([url]) => url !== '/api/ai/rapid-reply');
+    expect(JSON.stringify(llmCall?.[1] ?? {})).not.toContain('skipRapidReply');
+  });
+});

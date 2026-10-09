@@ -726,6 +726,8 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
+    // A briefcase launch is a scripted instruction to the main model, not a question to ack.
+    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0;
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
     // models: for image models "vision" is irrelevant - image-input capability is handled by
@@ -796,6 +798,7 @@ export function useSendMessage({
           organizationId,
           researchMode,
           skipAutoOffers,
+          skipRapidReply,
           agentMode: effectiveAgentMode,
           deepResearchConfig,
           imageConfig: imageSettings,
@@ -842,6 +845,7 @@ export function useSendMessage({
           organizationId,
           researchMode,
           skipAutoOffers,
+          skipRapidReply,
           deepResearchConfig,
           imageConfig: imageSettings,
           audioConfig: audioSettings,
