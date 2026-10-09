@@ -30,8 +30,9 @@ export async function claimPendingAction(questId: string, pendingActionTs: numbe
  * button posted in a shared Slack channel is clickable by anyone there, so the click handler must
  * check this before acting. The requester is the turn's actor (promptMeta.session.userId), which can
  * differ from the session owner when a turn is routed into someone else's shared notebook; a quest
- * written before promptMeta existed falls back to the session owner, the rule the web executor
- * (pages/api/mcp/confirm.ts) applies.
+ * written before promptMeta existed falls back to the session owner. The web executor
+ * (pages/api/mcp/confirm.ts) always checks the session owner, so the two surfaces differ for a turn
+ * routed into a shared notebook.
  */
 export async function isPendingActionRequester(questId: string, userId: string): Promise<boolean> {
   if (!isValidObjectId(questId)) return false;
@@ -396,6 +397,11 @@ function buildSuccessMessage(
     msg += `📎 Attachment uploaded to page ${pageId}`;
     if (filename) msg += `\n"${filename}"`;
     if (sizeFormatted) msg += ` (${sizeFormatted})`;
+  } else if (pendingAction.tool === 'jira_bulk_create_issues') {
+    const created = Number(resultData?.created) || 0;
+    const failed = Number(resultData?.failed) || 0;
+    msg += `Created ${created} of ${created + failed} Jira issues`;
+    if (failed > 0) msg += `; ${failed} failed`;
   } else {
     msg += 'Action completed';
     if (title) msg += `\n"${title}"`;

@@ -136,6 +136,7 @@ ${tools.map(t => `\`${t}\``).join(', ')}
 1. ALWAYS call with \`confirmed=false\` to show a preview. NEVER set \`confirmed=true\`.
 2. Only the button click executes the action. You cannot execute it.
 3. DO NOT show the \`_confirmToken\` value — it is internal only.
+4. Only ONE preview can be pending at a time: each new preview replaces the previous one, and only the latest card can be confirmed. Call at most one preview-first tool per turn. For several items, use the bulk tool if one exists; otherwise preview the first item, tell the user the rest will follow one at a time, and do not report them as awaiting confirmation.
 The system will automatically add Confirm/Cancel buttons and format the preview.`;
 }
 

@@ -319,6 +319,11 @@ const handler = baseApi().post(async (req, res) => {
       } else if (pendingAction.tool === 'confluence_create_page') {
         message = `Confluence page created`;
         if (title) message += `: "${title}"`;
+      } else if (pendingAction.tool === 'jira_bulk_create_issues') {
+        const created = Number(resultData?.created) || 0;
+        const failed = Number(resultData?.failed) || 0;
+        message = `Created ${created} of ${created + failed} Jira issues`;
+        if (failed > 0) message += `; ${failed} failed`;
       } else {
         message = `Action completed successfully`;
       }
@@ -329,9 +334,14 @@ const handler = baseApi().post(async (req, res) => {
         url,
       });
     } else {
+      const bulkFailed = Number(resultData?.failed) || 0;
+      const bulkMessage =
+        pendingAction.tool === 'jira_bulk_create_issues' && bulkFailed > 0
+          ? `No Jira issues were created; ${bulkFailed} failed`
+          : undefined;
       return res.status(200).json({
         success: false,
-        message: resultData?.error || resultData?.message || 'Action failed',
+        message: bulkMessage || resultData?.error || resultData?.message || 'Action failed',
       });
     }
   } catch (error: any) {
