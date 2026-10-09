@@ -23,7 +23,17 @@ import {
   deleteFileContract,
 } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
-import { getQuestContract } from './quest.contract';
+import { getQuestContract, listQuestFilesContract } from './quest.contract';
+import {
+  listArtifactsContract,
+  createArtifactContract,
+  getArtifactContract,
+  updateArtifactContract,
+  deleteArtifactContract,
+  listArtifactVersionsContract,
+  getArtifactVersionContract,
+} from './artifacts.contract';
+import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
 import { listWhatsNewContract } from './whatsNew.contract';
@@ -75,6 +85,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteFileContract,
   createEmbeddingsContract,
   getQuestContract,
+  listQuestFilesContract,
   createSessionContract,
   listSessionsContract,
   listDataLakesContract,
@@ -92,4 +103,13 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createVoiceSessionContract,
   endVoiceSessionContract,
   listWhatsNewContract,
+  listArtifactsContract,
+  createArtifactContract,
+  getArtifactContract,
+  updateArtifactContract,
+  deleteArtifactContract,
+  listArtifactVersionsContract,
+  getArtifactVersionContract,
+  createTranscriptionUploadContract,
+  createTranscriptionContract,
 ];

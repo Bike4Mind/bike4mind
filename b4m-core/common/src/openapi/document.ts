@@ -53,7 +53,7 @@ function infoDescription(): string {
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Sessions**, **Files**, **Data Lakes** and **Account**.',
+      '**Images**, **Audio**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Data Lakes** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -351,6 +351,14 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'Release notes', description: 'Customer-facing notes on what changed in each release. Public.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
+    {
+      name: 'Transcriptions',
+      description: 'Speech-to-text: upload an audio file, then transcribe it.',
+    },
+    {
+      name: 'Artifacts',
+      description: 'Diagrams, charts, code and documents kept in sessions, with their version history.',
+    },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
     { name: 'Videos', description: 'Video generation, queued and polled as quests.' },
     {
