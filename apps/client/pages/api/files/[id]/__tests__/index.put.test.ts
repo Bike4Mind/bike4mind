@@ -292,8 +292,20 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     // look the lake up, asserted below) but never the reconciler, so no stamp is minted and
     // `tags` stays untouched (explicit undefined, same as the omitted-tags rename case above).
     expect(h.findByDatalakeTag).toHaveBeenCalled();
-    const persisted = h.update.mock.calls[0][0] as { tags?: { name: string }[] };
+    const persisted = h.update.mock.calls[0][0] as { tags?: { name: string }[]; primaryTag?: string | null };
     expect(persisted.tags).toBeUndefined();
+    expect(persisted.primaryTag).toBe(META);
+  });
+
+  // null is "unset the primary tag"; coalescing it to undefined would drop it from the $set.
+  it('persists primaryTag: null as null, not undefined', async () => {
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: [], primaryTag: META }));
+    const { res } = makeRes();
+
+    await run({ primaryTag: null }, res);
+
+    const persisted = h.update.mock.calls[0][0] as { primaryTag?: string | null };
+    expect(persisted).toHaveProperty('primaryTag', null);
   });
 
   it('404s a malformed id before the lake write gate or any persistence runs', async () => {

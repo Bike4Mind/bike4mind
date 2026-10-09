@@ -42,6 +42,20 @@ describe('toPublicFile', () => {
       download_url_expires_at: null,
     });
   });
+
+  it('has no download URL for a clean file that carries no signed URL', () => {
+    expect(toPublicFile({ ...doc, fileUrl: undefined })).toMatchObject({
+      download_url: null,
+      download_url_expires_at: null,
+    });
+  });
+
+  it('serves a clean file whose URL has no recorded expiry, with a null expiry', () => {
+    expect(toPublicFile({ ...doc, fileUrlExpireAt: undefined })).toMatchObject({
+      download_url: doc.fileUrl,
+      download_url_expires_at: null,
+    });
+  });
 });
 
 describe('toPublicFileSummary', () => {
