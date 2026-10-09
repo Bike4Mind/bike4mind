@@ -62,7 +62,7 @@ const handler = baseApi({
 
     if (body.advance) assertHearthWriteScope(req);
 
-    const actor = await resolveRequestActor(req.user, body.actor, body.session);
+    const actor = await resolveRequestActor(req.user, body.actor, body.session, Boolean(req.apiKeyInfo));
     const actorId = actor._id.toString();
 
     const events = await hearthLog.catchup(actorId, body.channelId, {
