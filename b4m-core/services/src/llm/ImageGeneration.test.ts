@@ -1165,6 +1165,22 @@ describe('ImageGenerationService.process (size normalization)', () => {
     expect(billed?.inputImageCount).toBe(2);
   });
 
+  it('holds the workbench primary on top of the references', async () => {
+    const { billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI, undefined, {
+      fabFileIds: ['primary'],
+      referenceImageFabFileIds: ['a', 'b'],
+    });
+    expect(billed?.inputImageCount).toBe(3);
+  });
+
+  it('holds only the references when no primary can be sent', async () => {
+    const { billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI, undefined, {
+      intent: 'continuation',
+      referenceImageFabFileIds: ['a', 'b'],
+    });
+    expect(billed?.inputImageCount).toBe(2);
+  });
+
   it('holds no input images for a plain text-to-image request', async () => {
     const { billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI);
     expect(billed?.inputImageCount).toBe(0);

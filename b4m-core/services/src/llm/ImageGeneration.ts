@@ -896,9 +896,16 @@ export class ImageGenerationService {
             model,
             size: effectiveSize,
             quality: mapQualityForModel(model, quality),
-            // The primary image is picked after this hold (workbench or history), so only the
-            // references are billed; resolveReferenceImages de-dupes them the same way.
-            inputImageCount: new Set(referenceImageFabFileIds ?? []).size,
+            // The primary is picked after this hold (selectInputImage), so hold one whenever
+            // a workbench upload or history carry-forward could send it - over-holding by one
+            // beats under-billing. References are de-duped as resolveReferenceImages does.
+            inputImageCount:
+              new Set(referenceImageFabFileIds ?? []).size +
+              (fabFileIds?.length ||
+              requiresImageInput(model) ||
+              (modelInfo.supportsImageVariation && intent === 'continuation')
+                ? 1
+                : 0),
           },
           logger,
           organization
