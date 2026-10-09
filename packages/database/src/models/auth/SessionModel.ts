@@ -398,24 +398,16 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     knowledgeIds: string[],
     opts?: { includeGlobalWrite?: boolean }
   ): Promise<ISessionDocument | null> {
-    // Stripped at runtime, not only by type: a hydrated doc passes structurally, and `knowledgeIds`
-    // would conflict with the $addToSet while `__v` would rewind the version (see _plainUpdate).
-    const {
-      id,
-      knowledgeIds: _replacedList,
-      __v: _ignoredVersion,
-      ...setData
-    } = data as typeof data & { knowledgeIds?: unknown; __v?: unknown };
+    // `knowledgeIds` is written by the `$addToSet` below, so it must not also reach the `$set` - a
+    // hydrated doc passes the parameter type structurally. `__v` is stripped by _plainUpdate.
+    const { id, knowledgeIds: _replacedList, ...setData } = data as typeof data & { knowledgeIds?: unknown };
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    const query = this.sessionModel.findOneAndUpdate(
+    return this._plainUpdate(
       { _id: convertId(id), deletedAt: null, $or: updateAccessArms(user, opts) },
-      { $set: setData, $addToSet: { knowledgeIds: { $each: knowledgeIds } } },
-      { new: true }
+      setData as Record<string, unknown>,
+      undefined,
+      { $addToSet: { knowledgeIds: { $each: knowledgeIds } } }
     );
-    // See BaseModel._plainUpdate: an explicit `.session(null)` would defeat ALS propagation.
-    if (this._txn) query.session(this._txn);
-    const result = await query;
-    return (result?.toJSON() as ISessionDocument) ?? null;
   }
 
   async upsertByOpenaiConversationId(openaiConversationId: string, update: Partial<ISession>) {

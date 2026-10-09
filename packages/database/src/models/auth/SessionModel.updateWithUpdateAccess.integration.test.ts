@@ -140,6 +140,29 @@ describe('SessionRepository.addKnowledgeIdsWithUpdateAccess', () => {
     expect(await knowledgeOf(id)).toEqual(['a', 'b', 'c']);
   });
 
+  it.each([
+    ['owner', OWNER],
+    ['user sharee', SHAREE],
+    ['group sharee', GROUP_MEMBER],
+  ])('adds for the %s and returns the updated doc', async (_label, user) => {
+    const id = await seed({ knowledgeIds: ['a'] });
+
+    const updated = await sessionRepository.addKnowledgeIdsWithUpdateAccess(user, { id }, ['c']);
+
+    expect(updated).toBeTruthy();
+    expect(await knowledgeOf(id)).toEqual(['a', 'c']);
+  });
+
+  it('honours a global-write share only when includeGlobalWrite is passed', async () => {
+    const id = await seed({ knowledgeIds: ['a'], isGlobalWrite: true });
+
+    expect(await sessionRepository.addKnowledgeIdsWithUpdateAccess(STRANGER, { id }, ['c'])).toBeNull();
+    expect(await knowledgeOf(id)).toEqual(['a']);
+
+    await sessionRepository.addKnowledgeIdsWithUpdateAccess(STRANGER, { id }, ['c'], { includeGlobalWrite: true });
+    expect(await knowledgeOf(id)).toEqual(['a', 'c']);
+  });
+
   it('returns null and adds nothing once the sharee entry is removed', async () => {
     const id = await seed({ knowledgeIds: ['a'] });
     await Session.updateOne({ _id: id }, { $set: { users: [] } });
