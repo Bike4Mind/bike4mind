@@ -1059,8 +1059,8 @@ jobs:
   # failures (none of which are individually required checks) through the one
   # required "CI Complete" check instead of letting them pass silently.
   #
-  # `!cancelled()` rather than `always()`: in a run cancelled by cancel-in-progress every leg ends
-  # `cancelled`, none is the literal `failure`, so `always()` reported a false green on the
+  # `!cancelled()` rather than `always()`: in a run cancelled by cancel-in-progress the unfinished
+  # legs end `cancelled`, not the literal `failure`, so `always()` reported a false green on the
   # required check with nothing tested. Gated this way the job itself ends `cancelled`.
   #
   # NOTE: this job name IS the required-check context. Renaming it must happen
