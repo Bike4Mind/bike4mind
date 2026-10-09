@@ -167,6 +167,7 @@ const ResearchTaskFile: FC<ResearchTaskFileProps> = ({ researchData, onView }) =
             sx={{ gap: '5px', flexShrink: 0 }}
             onClick={handleAttachFile}
             disabled={isAttachPending(fabFile.id)}
+            data-testid="research-file-attach-btn"
           >
             <AttachFile />
           </IconButton>
