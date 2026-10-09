@@ -1607,6 +1607,20 @@
               "thinking": {
                 "type": "array",
                 "items": {}
+              },
+              "toolStarted": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
               }
             },
             "required": [
