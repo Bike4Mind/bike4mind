@@ -16,26 +16,33 @@ import {
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import {
+  API_KEY_COMPLETION_SOURCES,
   COMPLETION_SOURCES,
   CreditHolderType,
+  type ApiKeyCompletionSource,
   type CompletionSource,
   type IPlatformEndpointUsage,
+  type IPlatformEndpointUsageResponse,
   type NamedPlatformConsumerUsage,
   type UsageOwnerType,
 } from '@bike4mind/common';
 import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
 import { formatCredits, formatUsd, numberCell } from '../utils/format';
 import { zeroFillDailySeries } from '../utils/dailySeries';
+import { useEndpointUsage } from '../hooks/useEndpointUsage';
 import { usePlatformUsage } from '../hooks/usePlatformUsage';
 import { DailyAreaChart } from './DailyAreaChart';
 import ViewUserProfile from './ViewUserProfile';
 
-// The route accepts 1-365; endpoint data is further clamped server-side to its 90-day TTL.
+// The route accepts 1-365.
 const DAY_RANGES = [7, 30, 90, 365] as const;
 type DayRange = (typeof DAY_RANGES)[number];
 
 const ALL = 'all';
 type SourceFilter = CompletionSource | typeof ALL;
+type EndpointSourceFilter = ApiKeyCompletionSource | typeof ALL;
+// The endpoint log's TTL; the endpoint route always spans it.
+const ENDPOINT_WINDOW_DAYS = 90;
 type OwnerTypeFilter = UsageOwnerType | typeof ALL;
 
 const OWNER_TYPE_OPTIONS: { value: OwnerTypeFilter; label: string }[] = [
@@ -172,17 +179,20 @@ const EndpointTable: React.FC<{ endpoints: IPlatformEndpointUsage['byEndpoint'] 
 /**
  * Endpoint traffic from the API-key request log. Deliberately a separate, outlined
  * panel in a different chart color: this data carries request counts and latency
- * only, and must never read as COGS-per-endpoint next to the credit sections.
+ * only, and must never read as COGS-per-endpoint next to the credit sections. It
+ * has its own source filter and always spans the log's full 90 days, independent of
+ * the page-wide controls that drive the credit sections.
  */
 const EndpointSection: React.FC<{
-  endpoints: IPlatformEndpointUsage | null;
-  endpointWindowDays: number;
-  requestedDays: number;
-  isFiltered: boolean;
-}> = ({ endpoints, endpointWindowDays, requestedDays, isFiltered }) => {
+  source: EndpointSourceFilter;
+  onSourceChange: (source: EndpointSourceFilter) => void;
+  data: IPlatformEndpointUsageResponse | undefined;
+  isLoading: boolean;
+  error: unknown;
+}> = ({ source, onSourceChange, data, isLoading, error }) => {
   const chartData = useMemo(
-    () => zeroFillDailySeries(endpoints?.overTime ?? [], endpointWindowDays, d => d.requests),
-    [endpoints, endpointWindowDays]
+    () => zeroFillDailySeries(data?.endpoints.overTime ?? [], data?.windowDays ?? 0, d => d.requests),
+    [data]
   );
 
   return (
@@ -197,18 +207,37 @@ const EndpointSection: React.FC<{
         <Chip size="sm" variant="soft" color="warning">
           Request volume only - no credits or COGS
         </Chip>
+        <Box sx={{ flex: 1 }} />
+        <Select<EndpointSourceFilter>
+          size="sm"
+          value={source}
+          onChange={(_, value) => value && onSourceChange(value)}
+          sx={{ minWidth: 150 }}
+          data-testid="platform-usage-endpoint-source-select"
+        >
+          <Option value={ALL}>All sources</Option>
+          {API_KEY_COMPLETION_SOURCES.map(s => (
+            <Option key={s} value={s}>
+              {s}
+            </Option>
+          ))}
+        </Select>
       </Stack>
       <Typography level="body-xs" color="neutral" sx={{ mb: 2 }}>
         From the API-key request log, which records api and cli traffic only.
-        {isFiltered ? ' Filtering excludes requests logged before source and owner type were recorded.' : ''} Last{' '}
-        {endpointWindowDays} days
-        {endpointWindowDays < requestedDays ? ' (the log keeps 90 days of history)' : ''}.
+        {source !== ALL
+          ? ' Filtering excludes requests logged before source and owner type were recorded.'
+          : ''} Last {data?.windowDays ?? ENDPOINT_WINDOW_DAYS} days, independent of the filters above.
       </Typography>
 
-      {endpoints === null ? (
-        <Typography level="body-sm" color="neutral" data-testid="platform-usage-endpoint-na">
-          Not applicable for this source: only API-key (api / cli) requests are logged per endpoint.
-        </Typography>
+      {error ? (
+        <Alert color="danger" data-testid="platform-usage-endpoint-error">
+          {(error as Error)?.message || 'Failed to load endpoint traffic'}
+        </Alert>
+      ) : isLoading || !data ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }} data-testid="platform-usage-endpoint-loading">
+          <CircularProgress />
+        </Box>
       ) : (
         <Stack spacing={2}>
           <Box>
@@ -223,7 +252,7 @@ const EndpointSection: React.FC<{
               testid="platform-usage-endpoint-chart"
             />
           </Box>
-          <EndpointTable endpoints={endpoints.byEndpoint} />
+          <EndpointTable endpoints={data.endpoints.byEndpoint} />
         </Stack>
       )}
     </Sheet>
@@ -234,7 +263,8 @@ const EndpointSection: React.FC<{
  * Platform-wide API usage for admins: which APIs are consumed, by whom, from
  * where. Credit/COGS cuts (consumer, feature, model) come from usage events and
  * honour the source + owner-type filters; the endpoint panel comes from the
- * API-key request log and is kept visually apart. See GET /api/admin/platform-usage.
+ * API-key request log, keeps its own source filter and window, and is kept
+ * visually apart. See GET /api/admin/platform-usage and /platform-usage/endpoints.
  */
 export const PlatformUsageDashboard: React.FC = () => {
   // Defaults to 'api': the third-party / programmatic consumer view this tab exists for.
@@ -247,6 +277,15 @@ export const PlatformUsageDashboard: React.FC = () => {
     source: source === ALL ? undefined : source,
     ownerType: ownerType === ALL ? undefined : ownerType,
   });
+
+  const [endpointSource, setEndpointSource] = useState<EndpointSourceFilter>(ALL);
+  const {
+    data: endpointData,
+    isLoading: endpointsLoading,
+    isFetching: endpointsFetching,
+    error: endpointsError,
+    refetch: refetchEndpoints,
+  } = useEndpointUsage(endpointSource === ALL ? undefined : endpointSource);
 
   const hasUsage = (data?.totals.requests ?? 0) > 0;
   const creditsSeries = useMemo(
@@ -305,8 +344,11 @@ export const PlatformUsageDashboard: React.FC = () => {
           </ToggleButtonGroup>
           <IconButton
             size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
+            onClick={() => {
+              refetch();
+              refetchEndpoints();
+            }}
+            disabled={isFetching || endpointsFetching}
             data-testid="platform-usage-refresh-btn"
           >
             <RefreshIcon />
@@ -390,16 +432,19 @@ export const PlatformUsageDashboard: React.FC = () => {
                 creditsCharged: r.creditsCharged,
               }))}
             />
-
-            <EndpointSection
-              endpoints={data.endpoints}
-              endpointWindowDays={data.endpointWindowDays}
-              requestedDays={data.days}
-              isFiltered={!!data.source || !!data.ownerType}
-            />
           </Stack>
         )
       )}
+
+      <Box sx={{ mt: 3 }}>
+        <EndpointSection
+          source={endpointSource}
+          onSourceChange={setEndpointSource}
+          data={endpointData}
+          isLoading={endpointsLoading}
+          error={endpointsError}
+        />
+      </Box>
     </Box>
   );
 };
