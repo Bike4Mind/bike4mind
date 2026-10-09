@@ -75,6 +75,7 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   edit_image: 'external',
   music_generation: 'external',
   audio_generation: 'external',
+  video_generation: 'external',
   excel_generation: 'external',
   create_data_lake: 'external',
   save_content_to_data_lake: 'external',
@@ -121,7 +122,6 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   notebook_status: 'none',
   share_curated_file: 'external',
   notebook_new: 'external',
-  confirm_pending_action: 'external',
   cancel_pending_action: 'external',
 
   // Premium overlay
@@ -131,7 +131,6 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   send_slack_message: 'external',
   coordinate_task: 'external',
   code_execute: 'external',
-  video_generation: 'external',
 };
 
 const TOOL_SIDE_EFFECTS: Readonly<Record<string, ToolSideEffects>> = {

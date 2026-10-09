@@ -491,7 +491,7 @@ declare module "sst" {
       "tavern-heartbeat": string
       "type": "sst.sst.Linkable"
       "webhook-delivery": string
-      "whats-new-generation": string
+      "release-notes": string
       "whats-new-highlights": string
     }
     "emailAnalysisQueue": {

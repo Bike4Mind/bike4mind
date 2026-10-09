@@ -83,6 +83,50 @@ export interface IMFAConfig {
 }
 
 /**
+ * A WebAuthn credential (passkey) enrolled as an additional MFA method. Lives in its own
+ * collection rather than on `IMFAConfig`: the user model's guard strips any `mfa` write that
+ * lacks the select:false `totpSecret`, which a credential write would routinely trip.
+ * Binary fields are base64url-encoded.
+ */
+export interface IPasskeyCredential {
+  id: string;
+  userId: string;
+  credentialId: string;
+  /** COSE-encoded public key. */
+  publicKey: string;
+  /** Authenticator signature counter; a regression on use signals a cloned authenticator. */
+  counter: number;
+  transports?: string[];
+  deviceType: 'singleDevice' | 'multiDevice';
+  backedUp: boolean;
+  name: string;
+  createdAt: Date;
+  lastUsedAt?: Date;
+}
+
+export type PasskeyChallengePurpose = 'registration' | 'authentication';
+
+export interface IPasskeyCredentialRepository {
+  create(input: Omit<IPasskeyCredential, 'id' | 'createdAt' | 'lastUsedAt'>): Promise<IPasskeyCredential>;
+  listByUser(userId: string): Promise<IPasskeyCredential[]>;
+  countByUser(userId: string): Promise<number>;
+  findByCredentialId(userId: string, credentialId: string): Promise<IPasskeyCredential | null>;
+  recordUse(id: string, counter: number): Promise<void>;
+  /** Returns true when a credential was actually removed (false = unknown id or not this user's). */
+  remove(id: string, userId: string): Promise<boolean>;
+  removeAllForUser(userId: string): Promise<number>;
+}
+
+/**
+ * Server-held WebAuthn challenges. One live challenge per user + purpose; `consume` returns it
+ * at most once, so a captured ceremony response cannot be replayed.
+ */
+export interface IPasskeyChallengeRepository {
+  issue(userId: string, purpose: PasskeyChallengePurpose, challenge: string): Promise<void>;
+  consume(userId: string, purpose: PasskeyChallengePurpose): Promise<string | null>;
+}
+
+/**
  * User preferences that are synced to the database for cross-device persistence.
  * All fields are optional - missing/null means "use default".
  */

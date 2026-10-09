@@ -35,6 +35,8 @@ import {
   useLakeConfigHistory,
   useReviewDataLakeProposal,
   reviewProposalFailureMessage,
+  serverRefusalMessage,
+  type LakeVisibilityChoice,
   useSetLakeVisibility,
   useStartDataLakeResearchRun,
   useUpdateDataLake,
@@ -189,7 +191,8 @@ const formSeed = (lake: EditableLake) => ({
 const ownerOnlyMsg = "Only the lake's owner can change who it is shared with.";
 
 export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
-  const updateLake = useUpdateDataLake();
+  // Save toasts per call so it can say when a visibility change made in this modal was refused.
+  const updateLake = useUpdateDataLake({ notifySuccess: false });
   const setVisibility = useSetLakeVisibility();
   const [tab, setTab] = useState<DataLakeSettingsTab>('settings');
   const [spendDays, setSpendDays] = useState<30 | 60 | 90>(30);
@@ -288,6 +291,18 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // Publishing exposes every file in the lake to all users, so it takes an explicit confirm.
   const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+  // The radio snaps back on a refusal, so keep the reason on screen next to it, not just in a toast.
+  const [visibilityError, setVisibilityError] = useState<string | null>(null);
+  const changeVisibility = (id: string, next: LakeVisibilityChoice, onSettled?: () => void) => {
+    setVisibilityError(null);
+    setVisibility.mutate(
+      { id, visibility: next },
+      {
+        onSettled,
+        onError: e => setVisibilityError(serverRefusalMessage(e) || 'Visibility was not changed.'),
+      }
+    );
+  };
   const [researchDirty, setResearchDirty] = useState(false);
   const [proposalsDirty, setProposalsDirty] = useState(false);
   // Snapshotted with the form, not rebuilt from the live `lake`: a background refetch that brings in
@@ -364,6 +379,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setConfirmPublicOpen(false);
     setConfirmDiscardOpen(false);
+    setVisibilityError(null);
   }, [lake?.id]);
 
   const settingsDirty =
@@ -419,6 +435,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
 
   const handleSave = () => {
     if (!lake) return;
+    // Nothing to write. A PUT here would still toast success and touch lastUpdatedByUserId for no change.
+    if (!settingsDirty) {
+      onClose();
+      return;
+    }
     if (widensAsNonOwner) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
@@ -464,7 +485,12 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // to be able to return to: it is what turns convergence back off for this lake.
         ...(lake.canManage ? { requiredPassageTokenTarget: parsedTarget } : {}),
       },
-      { onSuccess: onClose }
+      {
+        onSuccess: () => {
+          toast.success(visibilityError ? 'Data lake updated. Visibility was not changed.' : 'Data lake updated');
+          onClose();
+        },
+      }
     );
   };
 
@@ -695,7 +721,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
               setConfirmPublicOpen(true);
               return;
             }
-            setVisibility.mutate({ id: lake.id, visibility: next });
+            changeVisibility(lake.id, next);
           }}
           data-testid="datalake-settings-visibility"
         >
@@ -741,6 +767,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     ? 'Private. Switch to your team account (the profile card at the bottom left) to share with your organization, or make it public.'
                     : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
         </FormHelperText>
+        {visibilityError && (
+          <FormHelperText data-testid="datalake-settings-visibility-error" sx={{ color: 'danger.plainColor' }}>
+            {visibilityError}
+          </FormHelperText>
+        )}
         {lake && !lake.isOwn && (
           <FormHelperText data-testid="datalake-settings-visibility-owner-only">{ownerOnlyMsg}</FormHelperText>
         )}
@@ -998,10 +1029,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
               data-testid="datalake-publish-confirm-btn"
               onClick={() => {
                 if (!lake) return;
-                setVisibility.mutate(
-                  { id: lake.id, visibility: 'public' },
-                  { onSuccess: () => setConfirmPublicOpen(false) }
-                );
+                // Closed on a refusal too, so the inline reason under Visibility is not hidden behind it.
+                changeVisibility(lake.id, 'public', () => setConfirmPublicOpen(false));
               }}
             >
               Make public

@@ -19,9 +19,15 @@ export interface BackendGateContext {
   apiKeys: ApiKeyTable | null;
   /**
    * B4M_SELF_HOST. Opens the IMAGE_GEN_BASE_URL fallback in resolveListingKey and
-   * closes the AWS-credentialed backends in isBackendUsable.
+   * closes the AWS (Transcribe) backend in isBackendUsable.
    */
   isSelfHost: boolean;
+  /**
+   * Bedrock has credentials: always on hosted (IAM role), on self-host only with
+   * BEDROCK_AWS_* set. Required, not optional: a ctx that left it undefined would
+   * hide Bedrock on hosted. Compute it with bedrockClientCredentials (@bike4mind/common).
+   */
+  bedrockReachable: boolean;
 }
 
 /**
@@ -57,7 +63,7 @@ export interface EffectiveLLMKeys {
  *
  * A backend that takes no credential (Bedrock, AWS - both AWS-IAM) maps to
  * undefined: absence here means "no key to pass", and `isBackendUsable` decides
- * their availability from `isSelfHost` instead.
+ * their availability from `bedrockReachable` / `isSelfHost` instead.
  */
 export function buildApiKeyTable(keys: EffectiveLLMKeys): ApiKeyTable {
   const table: Record<ModelBackend, string | null | undefined> = {
@@ -87,7 +93,7 @@ export function buildApiKeyTable(keys: EffectiveLLMKeys): ApiKeyTable {
  * table - there is no key to pass.
  */
 export function apiKeyTableForBackend(backend: ModelBackend, apiKey: string): ApiKeyTable {
-  return LISTING_KIND[backend] === 'keyless' ? {} : { [backend]: apiKey };
+  return isKeyless(LISTING_KIND[backend]) ? {} : { [backend]: apiKey };
 }
 
 /**
@@ -95,17 +101,20 @@ export function apiKeyTableForBackend(backend: ModelBackend, apiKey: string): Ap
  * ModelBackend, so a new provider is a compile error here instead of a silent
  * fail-closed omission.
  *
- * - `keyless`: takes no credential. Still needs real AWS credentials at dispatch,
- *   which a self-host install does not have (its AWS_ACCESS_KEY_ID is the local
- *   MinIO credential), so `isSelfHost` withholds them rather than offering choices
- *   that can only fail once selected.
+ * - `aws-bedrock` / `aws-hosted`: take no key, but need real AWS credentials at
+ *   dispatch. A self-host install's AWS_ACCESS_KEY_ID is the local MinIO credential,
+ *   so Bedrock is listed there only with the dedicated BEDROCK_AWS_* credentials
+ *   (`bedrockReachable`), and the AWS (Transcribe) backend never is - it reads media
+ *   from S3, which self-host keeps in MinIO.
  * - `keyed`: constructed with a credential from resolveListingKey.
  * - `unlisted`: no entry in the getAvailableModels fan-out at all (VoyageAI), so no
  *   caller can list it and a catalog row naming it must fail closed.
  */
-const LISTING_KIND: Readonly<Record<ModelBackend, 'keyless' | 'keyed' | 'unlisted'>> = {
-  [ModelBackend.Bedrock]: 'keyless',
-  [ModelBackend.AWS]: 'keyless',
+type ListingKind = 'aws-bedrock' | 'aws-hosted' | 'keyed' | 'unlisted';
+
+const LISTING_KIND: Readonly<Record<ModelBackend, ListingKind>> = {
+  [ModelBackend.Bedrock]: 'aws-bedrock',
+  [ModelBackend.AWS]: 'aws-hosted',
   [ModelBackend.OpenAI]: 'keyed',
   [ModelBackend.Anthropic]: 'keyed',
   [ModelBackend.Gemini]: 'keyed',
@@ -117,6 +126,8 @@ const LISTING_KIND: Readonly<Record<ModelBackend, 'keyless' | 'keyed' | 'unliste
   [ModelBackend.LocalImage]: 'keyed',
   [ModelBackend.VoyageAI]: 'unlisted',
 };
+
+const isKeyless = (kind: ListingKind) => kind === 'aws-bedrock' || kind === 'aws-hosted';
 
 /** Catalog rows carry a plain string backend, which may name no enum member. */
 const listingKindOf = (backend: string) =>
@@ -154,7 +165,8 @@ export function resolveListingKey(backend: ModelBackend, ctx: BackendGateContext
  */
 export function isBackendUsable(backend: string, ctx: BackendGateContext): boolean {
   const kind = listingKindOf(backend);
-  if (kind === 'keyless') return !ctx.isSelfHost;
+  if (kind === 'aws-bedrock') return ctx.bedrockReachable;
+  if (kind === 'aws-hosted') return !ctx.isSelfHost;
   if (kind === 'unlisted') return false;
   return resolveListingKey(backend as ModelBackend, ctx) !== null;
 }

@@ -96,6 +96,8 @@ export async function apiCreateTestUser(
     password: string;
     isAdmin?: boolean;
     tags?: string[];
+    // Pass false to skip the server's PREDEFINED_USER_TAGS, so the user gets only `tags`.
+    includePredefinedTags?: boolean;
     emailVerified?: boolean;
     // Pass false to mint an UNCONSENTED user (for a spec that exercises the consent gate /
     // /accept-policies interstitial). Suppresses both the server-side stamp and the auto-accept

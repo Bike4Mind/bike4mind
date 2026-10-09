@@ -10,6 +10,14 @@ export enum ApiKeyScope {
   AI_CHAT = 'ai:chat',
   READ_PROJECTS = 'projects:read',
   WRITE_PROJECTS = 'projects:write',
+  /** List and read the key owner's agents (and agents shared with them). */
+  READ_AGENTS = 'agents:read',
+  /**
+   * Create, update, delete and fund agents, manage their embed keys, and run the
+   * agent-authoring assistants (description/avatar/system-prompt/field generation),
+   * which spend the owner's credits on the agent's behalf.
+   */
+  WRITE_AGENTS = 'agents:write',
   /** Authorizes only the cc-bridge WS actions (cc_agent_register /
    *  cc_agent_event / cc_agent_disconnect). Keys with this scope CANNOT
    *  call chat/completions - a leaked bridge key has the narrow blast
@@ -285,6 +293,12 @@ export interface IUserApiKey {
   /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
   allowedOrigins?: string[];
   /**
+   * OAuth client ids allowed to mint identified (user-pays) sessions on this embed key.
+   * Absent or empty = anonymous only. The opt-in binds a federated client to this key's
+   * tenant; without it any federated client could pair its users with any public key.
+   */
+  identifiedClientIds?: string[];
+  /**
    * Lake ids this key is bound to for the manage-but-not-member session admission (see
    * `preauthorizedLakeIds` on the session, and its containment check at
    * pages/api/v1/sessions/index.ts). Admin-minted only; a key's presence in this list is not itself
@@ -365,6 +379,19 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    * `pool` selects which per-user cap the count feeds (see ApiKeyCapPool); defaults to 'standard'.
    */
   countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
+  /**
+   * Inserts the document then recounts active keys for the same (userId, pool).
+   * Returns the document when the count is within `cap`; revokes the just-inserted
+   * document and returns 'at_cap' when it would exceed `cap`. Deterministic
+   * tie-breaking (oldest `cap` keys survive by createdAt/id sort) prevents the
+   * both-rollback corner case that arises when two concurrent callers both insert
+   * and both naively undo their own key.
+   */
+  createIfUnderCap: (
+    doc: Parameters<IUserApiKeyRepository['create']>[0],
+    cap: number,
+    pool: ApiKeyCapPool
+  ) => Promise<IUserApiKeyDocument | 'at_cap'>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
   countActiveByProductId: (productId: string) => Promise<number>;

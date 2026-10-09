@@ -1,10 +1,4 @@
-import {
-  appFilesBucket,
-  fabFileBucket,
-  generatedImagesBucket,
-  slackExportBucket,
-  whatsNewDistributionBucket,
-} from './buckets';
+import { appFilesBucket, fabFileBucket, generatedImagesBucket, slackExportBucket } from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
@@ -17,7 +11,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { router, whatsNewDistributionId, appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
+import { appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
 import { searxngUrl } from './searxng';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
@@ -356,7 +350,7 @@ const imageGenerationQueue = new sst.aws.Queue('imageGenerationQueue', {
 });
 const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/imageGeneration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/imageGeneration.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -407,7 +401,7 @@ const imageEditQueue = new sst.aws.Queue('imageEditQueue', {
 });
 const imageEditQueueSubscription = imageEditQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/imageEdit.dispatch',
+    handler: 'apps/workers/src/queueHandlers/imageEdit.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -484,7 +478,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// What's New Modal Generation Queue
+// Release notes generation queue (keeps the retired What's New generator's resource names)
 const whatsNewGenerationQueueDLQ = new sst.aws.Queue('whatsNewGenerationQueueDLQ', {
   transform: {
     queue: {
@@ -507,15 +501,10 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
 });
 const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/whatsNewGeneration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/releaseNotes.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [
-      ...allSecrets,
-      websocketApi,
-      ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
-      ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
-    ],
+    link: [...allSecrets, websocketApi],
     logging: {
       retention: '3 days',
     },
@@ -536,13 +525,6 @@ const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
       {
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
-      },
-      {
-        // CloudFront cache invalidation for What's New modal distribution
-        actions: ['cloudfront:CreateInvalidation'],
-        resources: [
-          $interpolate`arn:aws:cloudfront::${aws.getCallerIdentityOutput().accountId}:distribution/${router.distributionID}`,
-        ],
       },
     ],
     copyFiles: [
@@ -795,7 +777,7 @@ const questExportQueue = new sst.aws.Queue('questExportQueue', {
 });
 const questExportQueueSubscription = questExportQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/questExport.dispatch',
+    handler: 'apps/workers/src/queueHandlers/questExport.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     memory: '1024 MB',
@@ -949,7 +931,7 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
 
 const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/driveLakeIngest.dispatch',
+    handler: 'apps/workers/src/queueHandlers/driveLakeIngest.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -999,7 +981,7 @@ const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscrib
 
 const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/githubLakeIngest.dispatch',
+    handler: 'apps/workers/src/queueHandlers/githubLakeIngest.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -1017,7 +999,7 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
 
 const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/githubLakeRevoke.dispatch',
+    handler: 'apps/workers/src/queueHandlers/githubLakeRevoke.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -1058,7 +1040,7 @@ const whatsNewHighlightsQueue = new sst.aws.Queue('whatsNewHighlightsQueue', {
 });
 const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/whatsNewHighlights.dispatch',
+    handler: 'apps/workers/src/queueHandlers/whatsNewHighlights.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],

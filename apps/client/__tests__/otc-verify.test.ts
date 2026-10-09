@@ -7,6 +7,7 @@ const mockValidateAndRotateNonce = vi.fn();
 const mockVerifyPendingOTC = vi.fn();
 const mockRegisterViaOTC = vi.fn();
 const mockUserHasMFA = vi.fn();
+const mockCountPasskeys = vi.fn();
 const mockJwtVerify = vi.fn();
 const mockJwtSign = vi.fn();
 
@@ -74,6 +75,7 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: {},
   creditTransactionRepository: {},
   authSessionRepository: {},
+  passkeyCredentialRepository: { countByUser: (...a: unknown[]) => mockCountPasskeys(...a) },
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -108,6 +110,10 @@ vi.mock('@server/auth/tokenGenerator', () => ({
 }));
 vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+const mockEmitSignup = vi.fn().mockResolvedValue([]);
+vi.mock('@server/analytics/signupEvents', () => ({
+  emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
+}));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('jsonwebtoken', () => ({
   default: { verify: (...a: unknown[]) => mockJwtVerify(...a), sign: (...a: unknown[]) => mockJwtSign(...a) },
@@ -146,6 +152,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
     mockJwtSign.mockReturnValue('reissued-token');
     mockValidateAndRotateNonce.mockResolvedValue(true);
     mockUserHasMFA.mockReturnValue(false);
+    mockCountPasskeys.mockResolvedValue(0);
     sentCookies = [];
     mockRes = {
       json: vi.fn().mockReturnThis(),
@@ -199,6 +206,34 @@ describe('/api/otc/verify — enumeration resistance', () => {
       handler(makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' }), mockRes)
     ).rejects.toThrow('Invalid code.');
     expect(mockFindByEmail).not.toHaveBeenCalled();
+  });
+
+  // `signup` means a new account, and this suite owns the returning-user path. The emit sits
+  // after the existingUser branch returns, so the guard is structural - move it, or add a
+  // second call site on the login path, and every returning login would report itself as a
+  // signup to whichever product its cookies name. Consent is granted here on purpose: the gate
+  // is not what should be stopping this, the branch is.
+  it('does not report a signup when the code proves a returning user', async () => {
+    mockJwtVerify.mockReturnValue(validToken());
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue({
+      id: 'u1',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tokenVersion: 0,
+      toJSON: () => ({ id: 'u1', username: 'bob' }),
+    });
+    const req = makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' });
+    (req as any).headers = {
+      ...((req as any).headers ?? {}),
+      cookie: `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}; b4m_consent=granted`,
+    };
+
+    await handler(req, mockRes);
+
+    expect(mockRes.status).toHaveBeenCalledWith(200);
+    expect(mockEmitSignup).not.toHaveBeenCalled();
   });
 
   it('logs in an existing user on a correct code (existence checked only AFTER verification)', async () => {
@@ -284,10 +319,32 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockRes.status).toHaveBeenCalledWith(200);
     const body = mockRes.json.mock.calls[0][0];
     expect(body.mfaRequired).toBe(true);
+    expect(body.passkeyAvailable).toBe(false);
     expect(body.accessToken).toBe('mfa-access-token');
     // Critical: no refreshToken - a client can't exchange it for a full session
     // by POSTing to /api/auth/refreshToken before completing MFA.
     expect(body.refreshToken).toBeUndefined();
+  });
+
+  it('flags passkeyAvailable on the MFA challenge when the user has enrolled a passkey', async () => {
+    mockJwtVerify.mockReturnValue(validToken());
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockUserHasMFA.mockReturnValue(true);
+    mockCountPasskeys.mockResolvedValue(2);
+    mockFindByEmail.mockResolvedValue({
+      id: 'u1',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tokenVersion: 0,
+      mfa: { totpEnabled: true },
+      toJSON: () => ({ id: 'u1' }),
+    });
+
+    await handler(makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' }), mockRes);
+
+    expect(mockCountPasskeys).toHaveBeenCalledWith('u1');
+    expect(mockRes.json.mock.calls[0][0]).toMatchObject({ mfaRequired: true, passkeyAvailable: true });
   });
 
   it('mfaSetupRequired response has NO refreshToken', async () => {

@@ -61,9 +61,9 @@ const DLQ_REGISTRY = [
     sourceQueue: 'researchEngineQueue',
   },
   {
-    label: 'whats-new-generation',
-    displayName: "What's New Generation",
-    application: 'WhatsNewGeneration',
+    label: 'release-notes',
+    displayName: 'Release Notes',
+    application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
   },
   {

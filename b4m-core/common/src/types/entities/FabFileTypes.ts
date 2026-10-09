@@ -9,6 +9,27 @@ export type MimeType =
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
 
+// The Files type filter. getMimeTypeFilter (packages/database/src/queries/fabFileSearchQuery.ts) maps every value
+// to a query and FILE_TYPE_OPTIONS (apps/client/app/components/Files/Browser/constants.ts) labels every value.
+export const FAB_FILE_TYPE_FILTERS = [
+  'text',
+  'pdf',
+  'url',
+  'image',
+  'excel',
+  'word',
+  'json',
+  'csv',
+  'markdown',
+  'code',
+  'audio',
+  'video',
+] as const;
+export type FabFileTypeFilter = (typeof FAB_FILE_TYPE_FILTERS)[number];
+
+export const isFabFileTypeFilter = (value: unknown): value is FabFileTypeFilter =>
+  typeof value === 'string' && (FAB_FILE_TYPE_FILTERS as readonly string[]).includes(value);
+
 export enum KnowledgeType {
   /**
    * A knowledge that is from a URL.
@@ -1224,7 +1245,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+      type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
@@ -1239,6 +1260,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[]; // Include files tagged with these datalake: meta-tags
       dataLakeTagPrefixes?: string[]; // OPEN static-registry prefixes (e.g. 'opti:') — ownership-bypass by design
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
+      admitFileIds?: string[]; // With restrictToDataLake: attached files admitted beside the lake arms, still access-checked
       /**
        * One arm per lake's membership scope, matching the whole-lake writes exactly. Server-
        * supplied only: each scope names the creator whose OWNED files its prefix arm matches, so
@@ -1321,7 +1343,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
     }
-  ): Promise<{ tag: string; count: number }[]>;
+  ): Promise<{ tag: string; count: number; fileCount: number }[]>;
 
   /**
    * Count unique data-lake FILES (not tag occurrences) under the same scoping as

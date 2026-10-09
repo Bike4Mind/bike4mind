@@ -11,6 +11,7 @@ const rangeCaps: VideoModelCapabilities = {
   aspectRatios: ['16:9', '9:16'],
   resolutions: ['720p', '1080p'],
   defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
+  typicalRenderSeconds: 8,
   audio: 'optional',
   pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1, '1080p': 0.2 } },
   defaultEnabled: true,
@@ -82,6 +83,29 @@ describe('validateAgainstCapabilities', () => {
     expect(validateAgainstCapabilities({ ...base, inputImageFileId: 'f1' }, rangeCaps)).toMatchObject({
       ok: false,
       code: 'unexpected_input_image',
+    });
+  });
+
+  it('accepts a generated image key as the image_to_video input', () => {
+    expect(
+      validateAgainstCapabilities({ ...base, mode: 'image_to_video', inputGeneratedImageKey: 'k.png' }, rangeCaps)
+    ).toMatchObject({ ok: true });
+  });
+
+  it('rejects image_to_video with both a file id and a generated key', () => {
+    expect(
+      validateAgainstCapabilities(
+        { ...base, mode: 'image_to_video', inputImageFileId: 'f1', inputGeneratedImageKey: 'k.png' },
+        rangeCaps
+      )
+    ).toMatchObject({ ok: false, code: 'unexpected_input_image' });
+  });
+
+  it('rejects a generated image key on text_to_video', () => {
+    expect(validateAgainstCapabilities({ ...base, inputGeneratedImageKey: 'k.png' }, rangeCaps)).toMatchObject({
+      ok: false,
+      code: 'unexpected_input_image',
+      message: 'inputGeneratedImageKey is only valid for image_to_video',
     });
   });
 

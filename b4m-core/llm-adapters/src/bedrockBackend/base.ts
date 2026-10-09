@@ -7,10 +7,11 @@ import {
   stripToolArtifactMarkup,
   ARTIFACT_DELIVERED_PLACEHOLDER,
   ARTIFACT_REMOVED_PLACEHOLDER,
+  bedrockClientConfig,
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
-import { executeToolsBatch } from '../executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from '../executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
   ChoiceEndReason,
@@ -147,6 +148,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     };
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
+      ...bedrockClientConfig(),
       ...BEDROCK_RETRY_CONFIG,
       requestHandler: BEDROCK_REQUEST_HANDLER,
     });
@@ -214,6 +216,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // Always create a fresh client to avoid stale credentials in warm Lambdas
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
+      ...bedrockClientConfig(),
       ...BEDROCK_RETRY_CONFIG,
       requestHandler: BEDROCK_REQUEST_HANDLER,
     });
@@ -455,6 +458,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // the old code returned silently, so the chat had nothing to render and hung until the client
         // timed out (~2 min). Track real output so we can fail LOUD instead. See the guard after the loop.
         let emittedTextChars = 0;
+        // This round's visible answer text (no reasoning), for shouldEndTurnAfterTools.
+        let streamedRoundText = '';
         // @see signalsStreamTermination - only meaningful for adapters that opt in.
         let sawTerminalEvent = false;
         const isToolArgument = (choice: IChoice) => Boolean(func[choice.index]?.name) && (choice.toolArguments ?? true);
@@ -499,6 +504,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
             // Reasoning arrives on its own chunk, so the tag is frame-wide.
             const channel = chunk?.choices.find(c => c.channel)?.channel;
+            if (channel !== 'reasoning') streamedRoundText += streamedText.join('');
 
             // Send streamed text from chunk text data
             await callback(streamedText, { ...buildCompletionInfo(), ...(channel ? { channel } : {}) });
@@ -709,6 +715,22 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               }
             }
 
+            if (
+              shouldEndTurnAfterTools(
+                toolCalls.map(t => t.name),
+                options.tools,
+                streamedRoundText
+              )
+            ) {
+              Logger.globalInstance.info(
+                '[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran',
+                { model, toolsExecuted: toolCalls.map(t => t.name) }
+              );
+              await (artifactGuard?.callback ?? callback)([], { ...buildCompletionInfo(), stopReason: 'tool_use' });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // Add newline separator before recursive call to ensure proper markdown rendering
             await callback(['\n\n'], buildCompletionInfo());
 
@@ -846,6 +868,22 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 );
                 recordToolResult(toolsUsed, { id, name }, sanitizedResult, succeeded);
                 this.pushToolMessages(messages, { id, name, parameters }, sanitizedResult, roundReasoningBlocks);
+              }
+
+              if (
+                shouldEndTurnAfterTools(
+                  toolChoices.map(tc => tc.tool.name),
+                  options.tools,
+                  streamedText.join('')
+                )
+              ) {
+                Logger.globalInstance.info(
+                  '[Tool Execution] Ending turn: answer already sent, only end-of-turn tools ran',
+                  { model, toolsExecuted: toolChoices.map(tc => tc.tool.name) }
+                );
+                await (artifactGuard?.callback ?? callback)([], { ...buildCompletionInfo(), stopReason: 'tool_use' });
+                if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+                return;
               }
 
               // Add newline separator before recursive call to ensure proper markdown rendering

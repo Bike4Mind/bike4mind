@@ -1,5 +1,8 @@
 import { sessionService, dataLakeService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
+import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
+import { UnprocessableEntityError } from '@server/utils/errors';
 import {
   agentRepository,
   dataLakeAccessGrantRepository,
@@ -21,6 +24,9 @@ import {
   ProjectEvents,
   redactSessionForClient,
   createSessionContract,
+  listSessionsContract,
+  type ISessionDocument,
+  type SessionResponse,
   BadRequestError,
   ForbiddenError,
   NotFoundError,
@@ -36,7 +42,8 @@ import { CreateSessionRequestBody } from '../../../../types/api';
 /** See the cap check in the handler - bounds a sequential, two-reads-per-id authorization loop. */
 const MAX_PREAUTHORIZED_LAKES = 10;
 
-const handler = nextRouteForContract(createSessionContract).post(async (req, res) => {
+// Exported for the legacy POST /api/sessions/create alias, which must not also answer GET.
+export const createSessionRouter = nextRouteForContract(createSessionContract).post(async (req, res) => {
   const userId = req.user.id;
   const body = req.validated;
   const { projectId } = body;
@@ -256,10 +263,62 @@ const handler = nextRouteForContract(createSessionContract).post(async (req, res
   return res.json(redactSessionForClient(newSession));
 });
 
+const LIST_CURSOR_SCOPE = 'v1.sessions';
+
+/**
+ * Explicit allowlist onto the public SessionResponse shape. Redaction already strips the
+ * server-owned fields; the allowlist additionally keeps every undocumented internal field off
+ * the wire, so a new ISession field is private until someone adds it here and to the schema.
+ */
+function toPublicSession(session: ISessionDocument): SessionResponse {
+  const redacted = redactSessionForClient(session);
+  return {
+    id: redacted.id,
+    _id: redacted.id,
+    name: redacted.name,
+    userId: redacted.userId,
+    knowledgeIds: redacted.knowledgeIds,
+    artifactIds: redacted.artifactIds,
+    tags: redacted.tags?.map(({ name, strength }) => ({ name, strength })),
+    forceKnowledgeRetrieval: redacted.forceKnowledgeRetrieval,
+    retrievalTags: redacted.retrievalTags,
+    lakeScopeExplicit: redacted.lakeScopeExplicit,
+    lastUsedModel: redacted.lastUsedModel,
+    firstCreated: redacted.firstCreated,
+    lastUpdated: redacted.lastUpdated,
+  };
+}
+
+// Lists only the caller's OWN sessions (userId match); shared sessions stay on the SPA's
+// GET /api/sessions/shared. Paged by _id rather than lastUpdated: lastUpdated moves on every edit,
+// which would skip or repeat rows across pages.
+const listSessionsRouter = nextRouteForContract(listSessionsContract, {
+  exemptReadsFromDailyRateLimit: true,
+}).get(async (req, res) => {
+  const { limit, cursor, search, surface, origin } = req.validatedQuery;
+  const beforeId = cursor === undefined ? undefined : decodeCursor(cursor, LIST_CURSOR_SCOPE);
+  // A decoded id is client-controlled; keep a malformed one away from Mongo.
+  if (beforeId !== undefined && !isValidObjectId(beforeId)) {
+    throw new UnprocessableEntityError('Invalid cursor');
+  }
+  // One extra row tells whether another page exists without a count query.
+  const rows = await sessionRepository.listByUserId({
+    userId: req.user.id,
+    search,
+    surface,
+    filters: origin ? { origin } : undefined,
+    beforeId,
+    limit: limit + 1,
+  });
+  const page = rows.slice(0, limit);
+  const nextCursor = rows.length > limit ? encodeCursor(LIST_CURSOR_SCOPE, page[page.length - 1].id) : null;
+  return res.json({ data: page.map(toPublicSession), next_cursor: nextCursor });
+});
+
 export const config = {
   api: {
     externalResolver: true,
   },
 };
 
-export default handler;
+export default dispatchByMethod({ GET: listSessionsRouter, POST: createSessionRouter });

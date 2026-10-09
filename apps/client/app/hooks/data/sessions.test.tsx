@@ -10,7 +10,11 @@ import {
   useUpdateSessionTags,
   sessionMatchesListFilters,
   updateSessionsQueryData,
+  useCloneSession,
+  useForkSession,
+  useSnipSession,
 } from './sessions';
+import { api } from '@client/app/contexts/ApiContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { ISessionDocument } from '@bike4mind/common';
 // Mocked below (vi.mock is hoisted); imported so the toast assertions can read the spy.
@@ -22,6 +26,7 @@ vi.mock('@client/app/utils/sessionsAPICalls', async () => {
   const actual = await vi.importActual<object>('@client/app/utils/sessionsAPICalls');
   return {
     ...actual,
+    cloneSession: vi.fn(),
     getChatMessages: vi.fn(),
     getSessionsFromServer: vi.fn(),
     getSessionByIdFromServer: vi.fn(),
@@ -47,6 +52,7 @@ vi.mock('@client/app/hooks/useJobStatus', () => ({
 }));
 
 import {
+  cloneSession,
   getChatMessages,
   getSessionsFromServer,
   getSessionByIdFromServer,
@@ -481,5 +487,101 @@ describe('updateSessionsQueryData', () => {
     updateSessionsQueryData(queryClient, 'write', apiOriginSession);
 
     expect(dataOf(queryClient, hideApiKey)).toContainEqual(expect.objectContaining({ name: 'From API key' }));
+  });
+});
+
+// A snip lives in its source's surface, and the cached lists don't filter by surface, so a surfaced
+// snip must be re-placed by refetch rather than spliced into the main list.
+describe('useSnipSession', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const snip = async (snipped: Partial<ISessionDocument>) => {
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: { id: 'snip-1', name: 'Snip', ...snipped } });
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useSnipSession(), { wrapper });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    return invalidate;
+  };
+
+  it('refetches the own-session lists when the snip carries a surface', async () => {
+    const invalidate = await snip({ surface: 'opti' });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
+  });
+
+  it('does not refetch the own-session lists for a main-list snip', async () => {
+    const invalidate = await snip({});
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
+  });
+});
+
+// The copy-path write (writeCopiedSession) is shared by clone, fork and snip and delegates to
+// updateSessionsQueryData, so a copy failing a cached list's Content/Origin filter must not be
+// spliced into it - the same "Hide API" regression the gate exists for.
+describe('copy-path cache writes', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  const unfilteredKey = ['sessions', 'own', '', ''];
+  const hideApiKey = ['sessions', 'own', '', '', { excludeOrigin: 'api' }];
+  const apiCopy = { id: 'copy-1', name: 'Copy', origin: { channel: 'api' } } as ISessionDocument;
+
+  const dataOf = (queryClient: QueryClient, key: unknown[]) =>
+    queryClient.getQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[])?.pages[0]?.data ?? [];
+
+  const seedLists = (queryClient: QueryClient) => {
+    for (const key of [unfilteredKey, hideApiKey]) {
+      queryClient.setQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[], {
+        pages: [{ data: [], hasMore: false }],
+        pageParams: [{ page: 1 }],
+      });
+    }
+  };
+
+  const wrapperFor = (queryClient: QueryClient) => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    return wrapper;
+  };
+
+  const expectGatedCopy = (queryClient: QueryClient) => {
+    expect(dataOf(queryClient, unfilteredKey)).toContainEqual(expect.objectContaining({ id: 'copy-1' }));
+    expect(dataOf(queryClient, hideApiKey)).toHaveLength(0);
+  };
+
+  it('clone writes the copy through the filter gate', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    vi.mocked(cloneSession).mockResolvedValueOnce(apiCopy);
+    const { result } = renderHook(() => useCloneSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate(SESSION_ID);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expectGatedCopy(queryClient);
+  });
+
+  it('fork writes the copy through the filter gate', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: apiCopy });
+    const { result } = renderHook(() => useForkSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expectGatedCopy(queryClient);
+  });
+
+  it('snip writes the copy through the filter gate', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: apiCopy });
+    const { result } = renderHook(() => useSnipSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expectGatedCopy(queryClient);
   });
 });

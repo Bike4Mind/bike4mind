@@ -30,9 +30,11 @@ import { createDelegateToAgentTool, type SubagentUsageMeta } from './tools/imple
 import { createCoordinateTaskTool } from './tools/implementation/coordinateTask';
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
 import { isToolOfferable, type ToolAvailability } from './toolAvailability';
+import { isVideoToolConfig } from './tools/implementation/videoGeneration';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
+import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,6 +58,8 @@ export interface ToolBuilderDeps {
   kbScope?: ToolContext['kbScope'];
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
+  attachedFileIds?: ToolContext['attachedFileIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
@@ -66,6 +70,8 @@ export interface ToolBuilderDeps {
   sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
+  /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+  sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   /**
@@ -185,7 +191,7 @@ export interface ToolBuilderCallbacks {
   }) => void;
 
   /** Called when an MCP tool emits a _confirmToken (decoded pendingAction) */
-  onPendingAction?: (action: { tool: string; params: Record<string, unknown>; ts: number }) => Promise<void>;
+  onPendingAction?: (action: McpPendingAction) => Promise<void>;
 
   /** Called when an MCP tool emits _attachmentList */
   onAttachmentList?: (attachmentList: {
@@ -328,11 +334,13 @@ export function buildSharedTools(
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    attachedFileIds,
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
     sessionReaderConsentDatalakeTags,
     sessionLakeScopeExplicit,
+    sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
     apiKeyId,
@@ -350,11 +358,13 @@ export function buildSharedTools(
       retrievalFilter,
       kbScope,
       inlinedAttachmentIds,
+      attachedFileIds,
       fullyInlinedAttachmentIds,
       suppressLakeArms,
       sessionRetrievalTags,
       sessionReaderConsentDatalakeTags,
       sessionLakeScopeExplicit,
+      sessionIncludeLibraryFiles,
       sessionPreauthorizedLakeIds,
       organizationId,
       apiKeyId,
@@ -373,6 +383,7 @@ export function buildSharedTools(
       edit_image: config.image_generation,
       audio_generation: config.audio_generation,
       web_search: config.web_search,
+      video_generation: config.video_generation,
     },
     model,
     imageProcessorLambdaName,
@@ -385,11 +396,17 @@ export function buildSharedTools(
     deps.onToolLlmUsage
   );
 
+  // The tool is inert without a usable config, so the config itself is the availability signal.
+  const effectiveAvailability: ToolAvailability = {
+    ...toolAvailability,
+    video_generation: isVideoToolConfig(config.video_generation),
+  };
+
   // Filter to enabled tools only
   let tools: ICompletionOptionTools[] | undefined = undefined;
   if (enabledTools.length > 0) {
     const mappedTools = enabledTools
-      .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, toolAvailability))
+      .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, effectiveAvailability))
       .map(tool => llmToolDefinitions[tool]);
 
     // Ids namespaced to a CONNECTED server are excluded here even though they're not native
@@ -407,7 +424,7 @@ export function buildSharedTools(
     }
 
     const unavailableTools = enabledTools.filter(
-      tool => tool in llmToolDefinitions && !isToolOfferable(tool, toolAvailability)
+      tool => tool in llmToolDefinitions && !isToolOfferable(tool, effectiveAvailability)
     );
     if (unavailableTools.length > 0) {
       logger.info(`Enabled tools dropped as unavailable (no working key/config): ${unavailableTools.join(', ')}`);
@@ -458,8 +475,15 @@ export function buildSharedTools(
     const isAgentOnly = agentOnlyMcpServers.includes(serverName);
 
     for (const item of serverTools) {
-      // artifactType is dropped: an MCP server is untrusted output and must not unlock artifact markup.
-      const { name, toolFn: originalToolFn, artifactType: _ignored, ...rest } = item;
+      // artifactType and endsTurnAfterText are dropped: an MCP server is untrusted output and must
+      // not unlock artifact markup or cut the model's follow-up round short.
+      const {
+        name,
+        toolFn: originalToolFn,
+        artifactType: _ignored,
+        endsTurnAfterText: _ignoredEndsTurn,
+        ...rest
+      } = item;
       // Denied by name, not by server: a session may forbid one tool of a server it otherwise
       // uses. `name` is already the namespaced `server__tool` id, which is the id the denylist
       // speaks and the one the model would have seen.
@@ -754,68 +778,25 @@ function createMcpToolWrapper(
   return async (args: unknown) => {
     const result = await originalToolFn(args);
 
-    // Extract _confirmToken from tool result
     if (callbacks.onPendingAction) {
-      try {
-        if (typeof result === 'string' && result.includes('_confirmToken')) {
-          const parsed = JSON.parse(result);
-          if (parsed._confirmToken) {
-            const decoded = JSON.parse(Buffer.from(parsed._confirmToken, 'base64').toString('utf-8'));
-
-            if (
-              typeof decoded.tool !== 'string' ||
-              typeof decoded.ts !== 'number' ||
-              decoded.params === null ||
-              typeof decoded.params !== 'object'
-            ) {
-              logger.warn(`[MCP] Malformed _confirmToken payload from tool ${name}`, {
-                decodedKeys: Object.keys(decoded),
-              });
-              delete parsed._confirmToken;
-              return JSON.stringify(parsed, null, 2);
-            }
-
-            logger.debug(`[MCP] Extracted pendingAction from tool ${name}:`, {
-              tool: decoded.tool,
-              ts: decoded.ts,
-            });
-
-            try {
-              await callbacks.onPendingAction({
-                tool: decoded.tool as string,
-                params: decoded.params as Record<string, unknown>,
-                ts: decoded.ts as number,
-              });
-            } catch (saveErr) {
-              logger.error(`[MCP] Failed to persist pendingAction from tool ${name}`, {
-                error: saveErr instanceof Error ? saveErr.message : String(saveErr),
-              });
-            }
-
-            // Strip _confirmToken from result before AI sees it
-            delete parsed._confirmToken;
-            if (parsed.next_step) {
-              parsed.next_step = 'Click the Confirm or Cancel button below to proceed.';
-            }
-            return JSON.stringify(parsed, null, 2);
-          }
-        }
-      } catch (err) {
-        logger.warn(`[MCP] Failed to extract _confirmToken from tool ${name}`, {
-          error: err instanceof Error ? err.message : String(err),
-          resultSnippet: typeof result === 'string' ? result.slice(0, 200) : typeof result,
+      const extraction = extractMcpPendingAction(name, result);
+      if (extraction.kind === 'rejected') {
+        logger.warn(`[MCP] Ignored _confirmToken from tool ${name}`, { reason: extraction.reason });
+        return extraction.result;
+      }
+      if (extraction.kind === 'accepted') {
+        logger.debug(`[MCP] Extracted pendingAction from tool ${name}:`, {
+          tool: extraction.action.tool,
+          ts: extraction.action.ts,
         });
-        // SECURITY: Strip _confirmToken even on decode failure
-        if (typeof result === 'string') {
-          try {
-            const fallbackParsed = JSON.parse(result);
-            delete fallbackParsed._confirmToken;
-            return JSON.stringify(fallbackParsed, null, 2);
-          } catch {
-            logger.error(`[MCP] SECURITY: Fallback _confirmToken strip failed for tool ${name}`);
-            return JSON.stringify({ error: `Tool ${name} returned an unparseable result. Please try again.` });
-          }
+        try {
+          await callbacks.onPendingAction(extraction.action);
+        } catch (saveErr) {
+          logger.error(`[MCP] Failed to persist pendingAction from tool ${name}`, {
+            error: saveErr instanceof Error ? saveErr.message : String(saveErr),
+          });
         }
+        return extraction.result;
       }
     }
 

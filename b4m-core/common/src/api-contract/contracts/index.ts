@@ -4,6 +4,7 @@ import { startAgentExecutionContract, getAgentExecutionContract } from './agentE
 import { sessionUpdateContract } from './sessionUpdate.contract';
 import { sessionGetContract } from './sessionGet.contract';
 import { sessionDeleteContract } from './sessionDelete.contract';
+import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
 import { synthesizeSpeechContract } from './tts.contract';
@@ -18,6 +19,8 @@ import { createFileUploadContract, getFileContract } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
 import { getQuestContract } from './quest.contract';
 import { createSessionContract } from './sessionCreate.contract';
+import { listSessionsContract } from './sessionList.contract';
+import { listWhatsNewContract } from './whatsNew.contract';
 import {
   listDataLakesContract,
   getDataLakeContract,
@@ -48,6 +51,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   sessionGetContract,
   sessionUpdateContract,
   sessionDeleteContract,
+  sessionCloneContract,
   executeToolContract,
   createCompletionContract,
   synthesizeSpeechContract,
@@ -63,6 +67,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createEmbeddingsContract,
   getQuestContract,
   createSessionContract,
+  listSessionsContract,
   listDataLakesContract,
   getDataLakeContract,
   getDataLakeFileContract,
@@ -77,4 +82,5 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listVoicesContract,
   createVoiceSessionContract,
   endVoiceSessionContract,
+  listWhatsNewContract,
 ];

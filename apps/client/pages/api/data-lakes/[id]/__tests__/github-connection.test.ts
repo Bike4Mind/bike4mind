@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ConflictError, InternalServerError } from '@server/utils/errors';
+import { ZodError } from 'zod';
+import { ConflictError, InternalServerError, NotFoundError } from '@server/utils/errors';
 
 // Unit test of the per-lake GitHub connection status/install/disconnect route. Repo + auth gate +
 // the githubLakeConnection lib (which has its own dedicated unit tests) are mocked.
 const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
+  verifyOrgAdminRead: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
   countByGitHubConnectionIdInDataLake: vi.fn(),
@@ -15,6 +17,20 @@ const h = vi.hoisted(() => ({
   resolveConnectableLake: vi.fn(),
   toGitHubLakeConnectionResponse: vi.fn(),
   requireFeatureEnabled: vi.fn(() => () => {}),
+  assertLakeAccess: vi.fn(),
+  assertLakeWritable: vi.fn(),
+  updateDataLake: vi.fn(),
+  inTransaction: false,
+  updateDataLakeInTxn: false,
+  accessInTxn: false,
+  withTransaction: vi.fn(async (fn: () => Promise<unknown>) => {
+    h.inTransaction = true;
+    try {
+      return await fn();
+    } finally {
+      h.inTransaction = false;
+    }
+  }),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -32,7 +48,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@server/utils/orgAccess', () => ({
+  verifyOrgAccess: h.verifyOrgAccess,
+  verifyOrgAdminRead: h.verifyOrgAdminRead,
+}));
 vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
@@ -43,10 +62,21 @@ vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   resolveConnectableLake: h.resolveConnectableLake,
   toGitHubLakeConnectionResponse: h.toGitHubLakeConnectionResponse,
 }));
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: {
+    assertLakeAccess: h.assertLakeAccess,
+    assertLakeWritable: h.assertLakeWritable,
+    updateDataLake: h.updateDataLake,
+  },
+}));
+vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: async () => ({ userId: 'u1' }) }));
+vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
+vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => ({ kind: 'user' }) }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
     ...actual,
+    withTransaction: h.withTransaction,
     dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById },
     fabFileRepository: {
       ...actual.fabFileRepository,
@@ -80,6 +110,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA' });
     h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgAdminRead.mockResolvedValue({ org: { id: 'orgA' }, canManage: true });
     h.requireGitHubLakeAppConfig.mockImplementation(config => {
       if (!config) throw new InternalServerError('The data-lake GitHub App is not configured');
       return config;
@@ -91,11 +122,12 @@ describe('/api/data-lakes/[id]/github-connection', () => {
   });
 
   describe('GET', () => {
-    it('resolves null for a personal (org-less) lake without checking org access', async () => {
+    it('resolves null with canManage false for a personal (org-less) lake without checking org access', async () => {
       h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
       const { res, json } = makeRes();
       await run(makeReq('GET'), res);
-      expect(json).toHaveBeenCalledWith({ connection: null });
+      expect(json).toHaveBeenCalledWith({ connection: null, canManage: false });
+      expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
       expect(h.verifyOrgAccess).not.toHaveBeenCalled();
     });
 
@@ -114,15 +146,26 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       await run(makeReq('GET'), res);
       expect(h.countByGitHubConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:one');
       expect(h.toGitHubLakeConnectionResponse).toHaveBeenCalledWith({ id: 'conn1', organizationId: 'orgA' }, 7);
-      expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 7 } });
+      expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 7 }, canManage: true });
     });
 
     it('resolves null without counting when the org lake has no connection', async () => {
       h.connFindByDataLakeIdAny.mockResolvedValue(null);
       const { res, json } = makeRes();
       await run(makeReq('GET'), res);
-      expect(json).toHaveBeenCalledWith({ connection: null });
+      expect(json).toHaveBeenCalledWith({ connection: null, canManage: true });
       expect(h.countByGitHubConnectionIdInDataLake).not.toHaveBeenCalled();
+    });
+
+    it('reads through the read gate and hands its canManage verdict to the response', async () => {
+      h.verifyOrgAdminRead.mockResolvedValue({ org: { id: 'orgA' }, canManage: false });
+      h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
+      h.toGitHubLakeConnectionResponse.mockReturnValue({ id: 'conn1' });
+      const { res, json } = makeRes();
+      await run(makeReq('GET'), res);
+      expect(h.verifyOrgAdminRead).toHaveBeenCalledWith(expect.anything(), 'orgA');
+      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1' }, canManage: false });
     });
 
     it('404s a connection whose org does not match the lake (global finder, org-scoped defence)', async () => {
@@ -135,7 +178,20 @@ describe('/api/data-lakes/[id]/github-connection', () => {
   describe('POST', () => {
     beforeEach(() => {
       h.getGitHubLakeAppConfig.mockReturnValue({ slug: 'test-app', clientId: 'client-1' });
-      h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA' });
+      h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: false });
+      // Records whether the re-gate ran inside the transaction, so the test can pin it there.
+      h.assertLakeAccess.mockImplementation(async () => {
+        h.accessInTxn = h.inTransaction;
+        return { id: 'lake1', status: 'active' };
+      });
+      h.inTransaction = false;
+      h.updateDataLakeInTxn = false;
+      h.accessInTxn = false;
+      // Records whether it ran inside the transaction so the test can pin the wrapper.
+      h.updateDataLake.mockImplementation(async () => {
+        h.updateDataLakeInTxn = h.inTransaction;
+        return { id: 'lake1', origin: 'connector-fed' };
+      });
       h.buildGitHubLakeAuthorizeUrl.mockReturnValue(
         'https://github.com/login/oauth/authorize?client_id=client-1&state=abc'
       );
@@ -149,7 +205,19 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
     });
 
-    it('500s when the GitHub App is not configured on this deployment', async () => {
+    it('refuses an API key even with the write scope, since it cannot finish the connect', async () => {
+      const { res } = makeRes();
+      const req = makeReq('POST', {
+        apiKeyInfo: { keyId: 'key-1', scopes: ['datalake:write'] },
+        body: { ensureConnectorFed: true },
+      });
+      await expect(run(req, res)).rejects.toThrow(/signed-in session/i);
+      expect(h.resolveConnectableLake).not.toHaveBeenCalled();
+      expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
+      expect(h.updateDataLake).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the GitHub App is not configured on this deployment', async () => {
       h.getGitHubLakeAppConfig.mockReturnValue(null);
       const { res } = makeRes();
       await expect(run(makeReq('POST'), res)).rejects.toThrow(/not configured/i);
@@ -179,6 +247,119 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       const { res } = makeRes();
       await expect(run(makeReq('POST'), res)).rejects.toThrow(/already connected/i);
       expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
+    });
+
+    describe('ensureConnectorFed', () => {
+      const switchReq = (body: unknown = { ensureConnectorFed: true }) => makeReq('POST', { body });
+
+      it('a plain start passes allowCurated: false', async () => {
+        const { res } = makeRes();
+        await run(makeReq('POST', { body: '' }), res);
+        expect(h.resolveConnectableLake).toHaveBeenCalledWith(expect.anything(), 'lake1', { allowCurated: false });
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+      });
+
+      it('passes allowCurated: false for an explicit ensureConnectorFed: false', async () => {
+        const { res } = makeRes();
+        await run(makeReq('POST', { body: { ensureConnectorFed: false } }), res);
+        expect(h.resolveConnectableLake).toHaveBeenCalledWith(expect.anything(), 'lake1', { allowCurated: false });
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+      });
+
+      it('rejects an unknown body key before any check runs', async () => {
+        const { res } = makeRes();
+        await expect(run(makeReq('POST', { body: { foo: 1 } }), res)).rejects.toThrow(ZodError);
+        expect(h.resolveConnectableLake).not.toHaveBeenCalled();
+      });
+
+      it('switches a curated lake to connector-fed after the start checks pass, then returns the authorizeUrl', async () => {
+        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        const { res, json } = makeRes();
+        await run(switchReq(), res);
+        expect(h.resolveConnectableLake).toHaveBeenCalledWith(expect.anything(), 'lake1', { allowCurated: true });
+        expect(h.assertLakeAccess).toHaveBeenCalledWith(
+          'lake1',
+          { userId: 'u1' },
+          expect.objectContaining({ db: expect.anything() })
+        );
+        expect(h.assertLakeWritable).toHaveBeenCalledWith({ id: 'lake1', status: 'active' });
+        expect(h.updateDataLake).toHaveBeenCalledWith(
+          expect.objectContaining({ auditPrincipal: { kind: 'user' } }),
+          'lake1',
+          { origin: 'connector-fed' },
+          expect.anything()
+        );
+        // The re-gate and the write must both run inside the transaction that reads live grants.
+        expect(h.accessInTxn).toBe(true);
+        expect(h.updateDataLakeInTxn).toBe(true);
+        expect(h.resolveConnectableLake.mock.invocationCallOrder[0]).toBeLessThan(
+          h.updateDataLake.mock.invocationCallOrder[0]
+        );
+        expect(json).toHaveBeenCalledWith({ authorizeUrl: expect.stringContaining('github.com') });
+      });
+
+      it('writes nothing on a lake that is already connector-fed', async () => {
+        const { res, json } = makeRes();
+        await run(switchReq(), res);
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+        expect(json).toHaveBeenCalled();
+      });
+
+      it('writes nothing when the start is refused (e.g. another connector holds the lake)', async () => {
+        h.resolveConnectableLake.mockRejectedValue(new ConflictError('already connected to a Google Drive folder'));
+        const { res } = makeRes();
+        await expect(run(switchReq(), res)).rejects.toThrow(/Google Drive/);
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+      });
+
+      it('writes nothing when the GitHub App is not configured', async () => {
+        h.getGitHubLakeAppConfig.mockReturnValue(null);
+        const { res } = makeRes();
+        await expect(run(switchReq(), res)).rejects.toThrow(/not configured/i);
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+      });
+
+      it('does not return an authorizeUrl when the switch itself is refused', async () => {
+        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.updateDataLake.mockRejectedValue(new Error('You do not have permission to update this data lake'));
+        const { res, json } = makeRes();
+        await expect(run(switchReq(), res)).rejects.toThrow(/permission/);
+        expect(json).not.toHaveBeenCalled();
+      });
+
+      it('writes nothing and returns no authorizeUrl when the in-transaction access re-check refuses', async () => {
+        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.assertLakeAccess.mockRejectedValue(new NotFoundError('Data lake not found'));
+        const { res, json } = makeRes();
+        await expect(run(switchReq(), res)).rejects.toThrow(/not found/i);
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+        expect(json).not.toHaveBeenCalled();
+      });
+
+      it('writes nothing when the lake was archived between the resolve and the switch', async () => {
+        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'archived' });
+        const { res, json } = makeRes();
+        await expect(run(switchReq(), res)).rejects.toThrow(/'archived' status/i);
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+        expect(json).not.toHaveBeenCalled();
+      });
+
+      it('writes nothing when the authorize URL cannot be minted for a curated switch', async () => {
+        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.buildGitHubLakeAuthorizeUrl.mockImplementation(() => {
+          throw new Error('Missing JWT_SECRET configuration for OAuth state signing');
+        });
+        const { res } = makeRes();
+        await expect(run(switchReq(), res)).rejects.toThrow(/JWT_SECRET/);
+        expect(h.updateDataLake).not.toHaveBeenCalled();
+      });
+
+      it('rejects a malformed body before any check runs', async () => {
+        const { res } = makeRes();
+        await expect(run(switchReq({ ensureConnectorFed: 'yes' }), res)).rejects.toThrow(ZodError);
+        expect(h.resolveConnectableLake).not.toHaveBeenCalled();
+      });
     });
   });
 

@@ -114,6 +114,8 @@ export interface ToolBuilderConfig {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
+  attachedFileIds?: ToolContext['attachedFileIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
@@ -124,6 +126,8 @@ export interface ToolBuilderConfig {
   sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
+  /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+  sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   logger: Logger;
@@ -276,7 +280,12 @@ export function applyQuestStatusChanges(
   changes: Partial<IChatHistoryItemDocument>,
   userId: string
 ): void {
-  const { promptMeta: changedPromptMeta, images: changedImages, ...otherChanges } = changes;
+  const {
+    promptMeta: changedPromptMeta,
+    images: changedImages,
+    videoJobIds: changedVideoJobIds,
+    ...otherChanges
+  } = changes;
 
   if (changedPromptMeta && quest.promptMeta) {
     const mergedCitables = [...(quest.promptMeta.citables || []), ...(changedPromptMeta.citables || [])];
@@ -350,6 +359,10 @@ export function applyQuestStatusChanges(
       }
     }
     quest.images = accumulated;
+  }
+
+  if (changedVideoJobIds) {
+    quest.videoJobIds = [...new Set([...(quest.videoJobIds ?? []), ...changedVideoJobIds])];
   }
 
   Object.assign(quest, otherChanges);
@@ -613,6 +626,21 @@ export class ToolBuilder {
   }
 
   /**
+   * Write new video job ids straight onto the stored quest. Otherwise only the ~10s streaming
+   * heartbeat persists them, so a chat process dying in that window leaves a running, billed
+   * job with no card in the chat. The in-memory quest already carries the ids
+   * (applyQuestStatusChanges), so later whole-quest saves keep them. A failed write is logged,
+   * never thrown: the job exists and is billed, so failing the tool call would only hide it.
+   */
+  private async persistVideoJobIds(questId: string, jobIds: string[]): Promise<void> {
+    try {
+      await this.deps.db.quests.addVideoJobIds(questId, jobIds);
+    } catch (err) {
+      this.deps.logger.error(`[videoJobIds] failed to persist ${jobIds.join(',')} on quest ${questId}:`, err);
+    }
+  }
+
+  /**
    * Reserve credits for a started image_generation/edit_image call (onToolStart). Image
    * cost is known up front from the model + n/size/quality, so it reserves at start
    * (unlike music, which reserves on delivery in settleMusicCredits). One reservation per
@@ -826,11 +854,13 @@ export class ToolBuilder {
         entitlementKeys: this.deps.entitlementKeys,
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
+        attachedFileIds: this.deps.attachedFileIds,
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
         sessionReaderConsentDatalakeTags: this.deps.sessionReaderConsentDatalakeTags,
         sessionLakeScopeExplicit: this.deps.sessionLakeScopeExplicit,
+        sessionIncludeLibraryFiles: this.deps.sessionIncludeLibraryFiles,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         organizationId: organization?.id,
         apiKeyId: this.deps.apiKeyId,
@@ -851,6 +881,7 @@ export class ToolBuilder {
           // images) instead of overwriting them wholesale - see
           // applyQuestStatusChanges.
           applyQuestStatusChanges(quest, changes as Partial<IChatHistoryItemDocument>, this.deps.user.id);
+          if (changes.videoJobIds?.length) await this.persistVideoJobIds(quest.id, changes.videoJobIds);
           await this.deps.sendStatusUpdate(quest, status ?? null);
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -881,6 +912,7 @@ export class ToolBuilder {
             }
           }
 
+          // video_generation bills in createVideoJob, not here.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} started with data: ${JSON.stringify(data)}`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;

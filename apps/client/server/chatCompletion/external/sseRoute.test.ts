@@ -71,6 +71,9 @@ vi.mock('@server/utils/logCompletionAnalytics', () => ({
 
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
+const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
+
 import { registerExternalRoutes } from './sseRoute';
 import { CompletionStreamEventSchema, spendCapExceededError } from '@bike4mind/common';
 
@@ -169,6 +172,26 @@ function errorFrame(body: string) {
 }
 
 describe('POST /api/ai/v1/completions', () => {
+  it('never streams reasoning text to the caller', async () => {
+    mockExecuteCompletion.mockImplementationOnce(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['<think>'], { channel: 'reasoning' });
+        await params.onChunk(['private reasoning'], {
+          channel: 'reasoning',
+          toolsUsed: [{ name: 'search', arguments: '{}' }],
+        });
+        await params.onChunk(['</think>'], { channel: 'reasoning' });
+        await params.onChunk(['', 'hello'], { outputTokens: 5 });
+      }
+    );
+    const body = await (await post()).text();
+    // Join every frame, not just content: a reasoning frame in a tool loop goes out as tool_use.
+    const text = frames(body)
+      .map(f => f.text)
+      .join('');
+    expect(text).toBe('hello');
+  });
+
   it('streams content and terminates with [DONE]', async () => {
     const res = await post();
     expect(res.status).toBe(200);
@@ -228,6 +251,10 @@ describe('POST /api/ai/v1/completions', () => {
     const text = await res.text();
     expect(errorFrame(text).code).toBeUndefined();
     expect(text).not.toContain('"code"');
+    expect(mockEmitProcessingFailed).toHaveBeenCalledWith(
+      'cli-sse',
+      expect.objectContaining({ message: 'model backend blew up' })
+    );
   });
 
   it('reports an unclassified auth failure in-band with no classifier', async () => {
@@ -236,5 +263,7 @@ describe('POST /api/ai/v1/completions', () => {
     expect(res.status).toBe(200);
     expect(errorFrame(await res.text()).code).toBeUndefined();
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    // A caller's auth failure is handled in-band before the catch; it is not a processing failure.
+    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
   });
 });

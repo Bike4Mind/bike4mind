@@ -43,7 +43,8 @@ import {
   BadRequestError,
   ConflictError,
   ForbiddenError,
-  InternalServerError,
+  HTTPError,
+  HttpStatus,
   NotFoundError,
 } from '@server/utils/errors';
 import { Resource } from 'sst';
@@ -72,7 +73,7 @@ export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state'
 /** Files purged per revoke-queue receive (revoke and disconnect alike), sized to finish well inside its 10-minute timeout (infra/queues.ts). */
 export const REVOKE_PURGE_SLICE_SIZE = 1000;
 
-/** The githubLakeRevokeQueue message (queueHandlers/githubLakeRevoke.ts parses the same shape). */
+/** The githubLakeRevokeQueue message (apps/workers/src/queueHandlers/githubLakeRevoke.ts parses the same shape). */
 export type GitHubLakeRevokeMessage = { connectionId: string; installationId: number };
 
 type GitHubLakeStatePayload = BaseStatePayload & { userId: string; dataLakeId: string };
@@ -120,7 +121,14 @@ export function toGitHubLakeConnectionResponse(
 
 export function requireGitHubLakeAppConfig(config: GitHubLakeAppConfig | null): GitHubLakeAppConfig {
   if (!config) {
-    throw new InternalServerError('The data-lake GitHub App is not configured on this deployment');
+    // 503 + expected: an unprovisioned App is a deployment state to fix, not a server fault to page
+    // on; the message reaches the connect UI's toast verbatim.
+    const error = new HTTPError(
+      HttpStatus.ServiceUnavailable,
+      'GitHub App not configured: the data-lake GitHub App credentials are not set on this deployment.'
+    );
+    error.expected = true;
+    throw error;
   }
   return config;
 }
@@ -129,8 +137,15 @@ export function requireGitHubLakeAppConfig(config: GitHubLakeAppConfig | null): 
  * The org lake a user may bind a repository to right now, or a thrown HTTP error saying why not.
  * Runs at every step of the connect (start, authorize return, picker, completion): the flow can take
  * minutes, during which the lake can be archived, re-originated, or connected by someone else.
+ *
+ * `allowCurated` lets a curated lake through with `curated: true`, for the start route's switch-and-connect
+ * (it switches the origin itself, after these checks). Every later step keeps refusing a curated lake.
  */
-export async function resolveConnectableLake(user: LakeUser, dataLakeId: string) {
+export async function resolveConnectableLake(
+  user: LakeUser,
+  dataLakeId: string,
+  { allowCurated = false }: { allowCurated?: boolean } = {}
+) {
   const lake = await dataLakeRepository.findById(dataLakeId);
   if (!lake) {
     throw new NotFoundError('Data lake not found');
@@ -145,14 +160,16 @@ export async function resolveConnectableLake(user: LakeUser, dataLakeId: string)
   if (!isLakeIngestable(lake.status)) {
     throw new BadRequestError(`Cannot connect a GitHub repository to a data lake in '${lake.status}' status`);
   }
-  // Binding never flips origin: the owner declaring the lake connector-fed is the consent (drive-sync.ts).
-  if (!acceptsConnectorContent(lake.origin)) {
+  // Later steps never flip origin: the owner declaring the lake connector-fed is the consent (drive-sync.ts).
+  // Only the start route's explicit switch admits a curated lake (allowCurated).
+  const curated = !acceptsConnectorContent(lake.origin);
+  if (curated && !allowCurated) {
     throw new BadRequestError(
       `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a GitHub repository.`
     );
   }
   await assertLakeConnectorFree(lake.id, { includeClaim: true });
-  return { lakeId: lake.id, organizationId: lake.organizationId };
+  return { lakeId: lake.id, organizationId: lake.organizationId, curated };
 }
 
 /**

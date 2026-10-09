@@ -17,6 +17,7 @@ import {
 import MFAModal from '@client/app/components/common/MFAModal';
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import TrustedDevicesSection from './TrustedDevicesSection';
+import PasskeysSection from './PasskeysSection';
 import { toast } from 'sonner';
 
 // Styled button to match profile styling
@@ -352,6 +353,7 @@ const MFASection: React.FC = () => {
         </Stack>
       </Card>
 
+      <PasskeysSection enabled={isEnabled} />
       <TrustedDevicesSection enabled={isEnabled} />
 
       {/* MFA Setup Modal */}

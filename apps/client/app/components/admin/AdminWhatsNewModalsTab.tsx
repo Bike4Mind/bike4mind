@@ -122,7 +122,7 @@ import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import {
   HIGHLIGHTS_TEMPLATE_VARIABLES,
   getDefaultHighlightsTemplate,
-} from '@server/queueHandlers/whatsNewHighlights.prompt';
+} from '@server/whatsNew/whatsNewHighlights.prompt';
 import { toast } from 'sonner';
 import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
@@ -2290,6 +2290,7 @@ function WeeklyHighlightsCard() {
   const [highlightsStartDate, setHighlightsStartDate] = useState('');
   const [highlightsEndDate, setHighlightsEndDate] = useState('');
   const [highlightsResult, setHighlightsResult] = useState<{
+    skipped?: boolean;
     modalCount?: number;
     modals?: Array<{ title: string; subtitle: string; descriptionPreview: string; createdAt: string }>;
     dateRange?: { startDate: string; endDate: string };
@@ -2397,6 +2398,7 @@ function WeeklyHighlightsCard() {
       case 'failed':
         return 'danger';
       case 'no_modals':
+      case 'skipped':
         return 'warning';
       default:
         return 'neutral';
@@ -2410,7 +2412,9 @@ function WeeklyHighlightsCard() {
       case 'failed':
         return 'Failed';
       case 'no_modals':
-        return 'No modals found';
+        return 'No release notes found';
+      case 'skipped':
+        return 'Skipped: release notes disabled';
       default:
         return 'Never run';
     }
@@ -2510,7 +2514,7 @@ function WeeklyHighlightsCard() {
         </Stack>
 
         <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
-          Automatically generate weekly highlights from What&apos;s New modals and post them to a Slack channel. Runs
+          Automatically generate weekly highlights from published release notes and post them to a Slack channel. Runs
           every Saturday at 2am CST (production only).
         </Typography>
 
@@ -2991,8 +2995,8 @@ function WeeklyHighlightsCard() {
           </Typography>
           <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
             {highlightsDryRun
-              ? 'Preview which modals would be included without posting to Slack.'
-              : 'Generate highlights from modals in the date range and post them to Slack.'}
+              ? 'Preview which release notes would be included without posting to Slack.'
+              : 'Generate highlights from release notes in the date range and post them to Slack.'}
           </Typography>
           <Stack spacing={2}>
             <Stack direction="row" spacing={2}>
@@ -3025,7 +3029,8 @@ function WeeklyHighlightsCard() {
             {highlightsResult && (
               <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm', maxHeight: 300, overflow: 'auto' }}>
                 <Typography level="title-sm" sx={{ mb: 1 }}>
-                  Results: {highlightsResult.modalCount ?? 0} modal{highlightsResult.modalCount !== 1 ? 's' : ''} found
+                  Results: {highlightsResult.modalCount ?? 0} release note{highlightsResult.modalCount !== 1 ? 's' : ''}{' '}
+                  found
                 </Typography>
                 {highlightsResult.dateRange && (
                   <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 1 }}>
@@ -3047,7 +3052,9 @@ function WeeklyHighlightsCard() {
                   </Stack>
                 ) : (
                   <Alert variant="outlined" color="warning" size="sm">
-                    No modals found in this date range. Generation would result in &quot;no_modals&quot; status.
+                    {highlightsResult.skipped
+                      ? 'Release notes are disabled, so generation would be skipped.'
+                      : 'No release notes were published in this date range. Generation would post a warning instead.'}
                   </Alert>
                 )}
               </Sheet>

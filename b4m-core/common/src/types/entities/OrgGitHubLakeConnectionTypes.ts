@@ -51,6 +51,12 @@ export interface IOrgGitHubLakeConnection {
    * While set the connection stays disabled; the row is hard-deleted once the purge finishes.
    */
   disconnectRequestedAt?: Date;
+  /** When the scheduled reconcile last compared this repo's HEAD; drives its oldest-checked-first order. */
+  reconcileCheckedAt?: Date;
+  /** HEAD the reconcile last enqueued a sync for (null: access was lost before HEAD could be read). */
+  reconcileEnqueuedSha?: string | null;
+  /** When that enqueue happened; the reconcile's retry cooldown runs from here. */
+  reconcileEnqueuedAt?: Date;
 }
 
 /**
@@ -219,4 +225,13 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
   setEnabledForLake(targetDataLakeId: string, enabled: boolean): Promise<boolean>;
   /** Best-effort visibility for a failure outside any sync claim (e.g. the connect-time enqueue). */
   recordLastError(id: string, lastError: string): Promise<boolean>;
+  /**
+   * The scheduled reconcile's batch: enabled, not disconnecting, status connected (or legacy unset) or a
+   * stale 'syncing' claim, least recently checked first. 'error' is excluded - the App cannot read it.
+   */
+  findDueForReconcile(limit: number): Promise<IOrgGitHubLakeConnectionDocument[]>;
+  /** Stamps reconcileCheckedAt without touching updatedAt. */
+  markReconcileChecked(ids: readonly string[], at: Date): Promise<void>;
+  /** Records the reconcile's enqueue target for its retry cooldown, without touching updatedAt. */
+  markReconcileEnqueued(id: string, sha: string | null, at: Date): Promise<void>;
 }

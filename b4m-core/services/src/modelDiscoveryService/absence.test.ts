@@ -83,6 +83,74 @@ describe('planAbsence', () => {
     expect(plan.sighted).not.toContain('global.anthropic.claude-sonnet-4-6');
   });
 
+  it('reports an unlisted Bedrock profile id as frozen, in neither sighted nor missed', () => {
+    const plan = planAbsence({
+      coveredBackends: new Set([ModelBackend.Bedrock]),
+      sightedModelIds: new Set(),
+      base: bedrockBase,
+    });
+
+    expect(plan.frozenProfileIds).toEqual(['global.anthropic.claude-sonnet-4-6']);
+    expect(plan.sighted).not.toContain('global.anthropic.claude-sonnet-4-6');
+    expect(plan.missed).not.toContain('global.anthropic.claude-sonnet-4-6');
+  });
+
+  it('returns frozenProfileIds sorted and disjoint from sighted and missed', () => {
+    const plan = planAbsence({
+      coveredBackends: new Set([ModelBackend.Bedrock]),
+      sightedModelIds: new Set(),
+      base: new Map([
+        known('us.anthropic.claude-x-v1:0', ModelBackend.Bedrock),
+        known('global.anthropic.claude-x-v1:0', ModelBackend.Bedrock),
+      ]),
+    });
+
+    expect(plan.frozenProfileIds).toEqual(['global.anthropic.claude-x-v1:0', 'us.anthropic.claude-x-v1:0']);
+    for (const id of plan.frozenProfileIds) {
+      expect(plan.sighted).not.toContain(id);
+      expect(plan.missed).not.toContain(id);
+    }
+  });
+
+  it('leaves frozenProfileIds empty when Bedrock was not covered', () => {
+    const plan = planAbsence({ coveredBackends: new Set(), sightedModelIds: new Set(), base: bedrockBase });
+
+    expect(plan.frozenProfileIds).toEqual([]);
+    expect(plan.frozenBackends).toEqual([ModelBackend.Bedrock]);
+  });
+
+  it('does not freeze a profile id whose foundation id was listed', () => {
+    const plan = planAbsence({
+      coveredBackends: new Set([ModelBackend.Bedrock]),
+      sightedModelIds: new Set(['anthropic.claude-sonnet-4-6']),
+      base: bedrockBase,
+    });
+
+    expect(plan.frozenProfileIds).toEqual([]);
+  });
+
+  it('does not report a profile id the catalog already holds as deprecated or retired', () => {
+    const retired = 'us.anthropic.claude-3-sonnet-20240229-v1:0';
+    const plan = planAbsence({
+      coveredBackends: new Set([ModelBackend.Bedrock]),
+      sightedModelIds: new Set(),
+      base: new Map([
+        ...bedrockBase,
+        [
+          retired,
+          {
+            modelId: retired,
+            record: { id: retired, backend: ModelBackend.Bedrock, lifecycle: { status: 'retired' } },
+            ownedGroups: ['identity'],
+          },
+        ],
+      ]),
+    });
+
+    expect(plan.frozenProfileIds).toEqual(['global.anthropic.claude-sonnet-4-6']);
+    expect(plan.missed).not.toContain(retired);
+  });
+
   it('still misses a bare Bedrock id the listing did not report', () => {
     const plan = planAbsence({
       coveredBackends: new Set([ModelBackend.Bedrock]),
@@ -99,7 +167,11 @@ describe('applyAbsence', () => {
     const repository = { recordSighting: vi.fn(), recordMiss: vi.fn() };
     const at = new Date('2026-07-26T10:00:00Z');
 
-    await applyAbsence({ sighted: ['gpt-6'], missed: ['gpt-5'], frozenBackends: [] }, repository, at);
+    await applyAbsence(
+      { sighted: ['gpt-6'], missed: ['gpt-5'], frozenBackends: [], frozenProfileIds: [] },
+      repository,
+      at
+    );
 
     expect(repository.recordSighting).toHaveBeenCalledWith('gpt-6', at);
     expect(repository.recordMiss).toHaveBeenCalledWith('gpt-5', at);

@@ -179,3 +179,60 @@ it('skips notebook admission without its DLQ and continues unrelated queue and c
   expect(attributes).not.toHaveBeenCalled();
   expect(dispatch).not.toHaveBeenCalled();
 });
+
+it.each(['success', 'recovered', 'final failure'])(
+  'handles three renewals through the real worker: %s',
+  async outcome => {
+    const worker = new SelfHostWorker(logger as unknown as ConstructorParameters<typeof SelfHostWorker>[0]);
+    await registerNotebookCurationQueue(worker, 'http://queue/source', logger);
+    let finish!: () => void;
+    dispatch.mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        })
+    );
+    if (outcome === 'recovered') renew.mockRejectedValueOnce(new Error('transient renewal'));
+    if (outcome === 'final failure')
+      renew.mockResolvedValueOnce({}).mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('last renewal'));
+    const control = worker as unknown as {
+      queues: unknown[];
+      handleMessage: (queue: unknown, message: unknown) => Promise<void>;
+    };
+    const running = control.handleMessage(control.queues[0], {
+      MessageId: 'id',
+      ReceiptHandle: 'receipt',
+      Body: '{}',
+      Attributes: { ApproximateReceiveCount: '1' },
+    });
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(renew).toHaveBeenCalledTimes(3);
+    for (const [command] of renew.mock.calls)
+      expect(command.input).toEqual({
+        QueueUrl: 'http://queue/source',
+        ReceiptHandle: 'receipt',
+        VisibilityTimeout: 900,
+      });
+    expect(deleteMessage).not.toHaveBeenCalled();
+    finish();
+    await running;
+    expect(deleteMessage).toHaveBeenCalledTimes(outcome === 'final failure' ? 0 : 1);
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(renew).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  }
+);
+it.each(['rejected', 'missing ARN'])('disables only this consumer when the DLQ is %s', async failure => {
+  const original = attributes.getMockImplementation()!;
+  attributes.mockImplementation(command => {
+    if (command.input.QueueUrl.endsWith('DLQ')) {
+      if (failure === 'rejected') return Promise.reject(new Error('DLQ unavailable'));
+      return Promise.resolve({ Attributes: {} });
+    }
+    return original(command);
+  });
+  const worker = { registerQueueHandler: vi.fn() };
+  await registerNotebookCurationQueue(worker, 'http://queue/source', logger);
+  expect(worker.registerQueueHandler).not.toHaveBeenCalled();
+  expect(logger.error).toHaveBeenCalledOnce();
+});

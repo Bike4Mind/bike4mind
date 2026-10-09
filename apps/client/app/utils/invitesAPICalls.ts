@@ -1,20 +1,18 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { IInviteDocument, IInviteDocumentWithDetails, InviteType } from '@bike4mind/common';
+import { isAxiosError } from 'axios';
 import { isNull, isUndefined, pickBy } from 'lodash';
 
-export const fetchInvite = async (id: string): Promise<IInviteDocumentWithDetails | null> => {
+export const fetchInvite = async (id: string): Promise<IInviteDocumentWithDetails | null | 'expired'> => {
   try {
-    const response = await api.get(`/api/invites/${id}`);
-
-    if (response.status === 200) {
-      return response.data;
-    } else {
-      console.error('Failed fetching Invite');
-      return null;
-    }
+    const { data } = await api.get(`/api/invites/${id}`);
+    return data;
   } catch (error) {
-    console.error('Error fetching Invite:', error);
-    return null;
+    if (isAxiosError(error)) {
+      if (error.response?.status === 404) return null;
+      if (error.response?.status === 410) return 'expired';
+    }
+    throw error;
   }
 };
 

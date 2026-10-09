@@ -44,7 +44,7 @@ vi.mock('@bike4mind/database/content', () => ({ Quest: { find: vi.fn(() => ({ le
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
 }));
-vi.mock('@bike4mind/services/llm', () => ({
+vi.mock('@bike4mind/services/llm/SmallLLMService', () => ({
   // Query expansion is best-effort behind a try/catch; throwing exercises its keyword fallback
   // and keeps these tests on the provider-resolution path.
   SmallLLMService: class {
@@ -52,6 +52,8 @@ vi.mock('@bike4mind/services/llm', () => ({
       throw new Error('expansion unavailable in test');
     }
   },
+}));
+vi.mock('@bike4mind/services/llm/reranker', () => ({
   ReRankService: class {},
 }));
 vi.mock('@client/services/operationsModelService', () => ({

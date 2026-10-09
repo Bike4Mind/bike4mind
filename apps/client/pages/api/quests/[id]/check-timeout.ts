@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
-import { resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
+import { resolveQuestTimeoutRecovery, STUCK_QUEST_RECOVERED_LOG } from '@server/chatCompletion/questTimeoutRecovery';
 import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import type { Request } from 'express';
 
@@ -49,6 +49,10 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
   // An applied recovery settles the quest; same settle-site dispatch as the poll route's recovery.
   // A lost race means another settle site won and dispatches for itself.
   if (applied) {
+    // Error level is what feeds the LiveOps Slack subscription on this Lambda's log group
+    // (infra/logMonitor.ts); this is the path that actually recovers a watched quest, so the
+    // sweep rarely gets the chance to log it.
+    req.logger.error(STUCK_QUEST_RECOVERED_LOG, { questId: quest.id, via: 'check-timeout' });
     await dispatchQuestCallback(quest.id, req.logger);
   }
   return res.json(updatedQuest);

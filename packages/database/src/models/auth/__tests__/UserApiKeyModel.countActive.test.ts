@@ -124,3 +124,106 @@ describe('UserApiKeyRepository.countActiveByUserId - cap pools', () => {
     await expect(userApiKeyRepository.countActiveByUserId(userId, 'oauth-exchange')).resolves.toBe(0);
   });
 });
+
+describe('UserApiKeyRepository.createIfUnderCap', () => {
+  const userId = 'cap-create-user';
+  const future = () => new Date(Date.now() + 60 * 60 * 1000);
+
+  it('returns the document when count is under cap', async () => {
+    const result = await userApiKeyRepository.createIfUnderCap(
+      {
+        userId,
+        name: 'k',
+        keyHash: 'h',
+        keyPrefix: 'b4m_live_cicu0001',
+        scopes: [ApiKeyScope.AI_GENERATE],
+        metadata: { createdFrom: 'dashboard' as const },
+      },
+      10,
+      'standard'
+    );
+    expect(result).not.toBe('at_cap');
+    expect((result as { userId: string }).userId).toBe(userId);
+  });
+
+  it('returns at_cap and revokes the key when inserting would exceed the cap', async () => {
+    // Fill up to the cap first.
+    for (let i = 0; i < 3; i++) {
+      await createKey({ userId, expiresAt: future() });
+    }
+    const result = await userApiKeyRepository.createIfUnderCap(
+      {
+        userId,
+        name: 'over',
+        keyHash: 'h',
+        keyPrefix: 'b4m_live_cicu0010',
+        scopes: [ApiKeyScope.AI_GENERATE],
+        metadata: { createdFrom: 'dashboard' as const },
+      },
+      3,
+      'standard'
+    );
+    expect(result).toBe('at_cap');
+    // Rejected key must be deleted entirely, not left as a DISABLED row.
+    await expect(UserApiKey.countDocuments({ userId, name: 'over' })).resolves.toBe(0);
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(3);
+  });
+
+  it('keeps exactly cap keys when two concurrent inserts race at cap - 1', async () => {
+    const cap = 3;
+    // Seed cap - 1 active keys so both concurrent calls see room and both insert.
+    for (let i = 0; i < cap - 1; i++) {
+      await createKey({ userId, expiresAt: future() });
+    }
+    const docA = {
+      userId,
+      name: 'a',
+      keyHash: 'ha',
+      keyPrefix: 'b4m_live_cicuA001',
+      scopes: [ApiKeyScope.AI_GENERATE],
+      metadata: { createdFrom: 'dashboard' as const },
+    };
+    const docB = {
+      userId,
+      name: 'b',
+      keyHash: 'hb',
+      keyPrefix: 'b4m_live_cicuB001',
+      scopes: [ApiKeyScope.AI_GENERATE],
+      metadata: { createdFrom: 'dashboard' as const },
+    };
+    // Fire both concurrently without awaiting between them.
+    const [resultA, resultB] = await Promise.all([
+      userApiKeyRepository.createIfUnderCap(docA, cap, 'standard'),
+      userApiKeyRepository.createIfUnderCap(docB, cap, 'standard'),
+    ]);
+    // Exactly one must succeed and one must be at_cap, landing at exactly cap active keys.
+    const atCapCount = [resultA, resultB].filter(r => r === 'at_cap').length;
+    expect(atCapCount).toBe(1);
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(cap);
+  });
+
+  it('isolates standard and oauth-exchange pools', async () => {
+    const cap = 2;
+    // Fill the standard pool to the cap.
+    for (let i = 0; i < cap; i++) {
+      await createKey({ userId, expiresAt: future() });
+    }
+    // An exchange-pool insert should still succeed.
+    const result = await userApiKeyRepository.createIfUnderCap(
+      {
+        userId,
+        name: 'ex',
+        keyHash: 'hex',
+        keyPrefix: 'b4m_live_cicuEX01',
+        scopes: [ApiKeyScope.AI_GENERATE],
+        expiresAt: future(),
+        metadata: { createdFrom: 'oauth-exchange' as const, oauthClientId: 'client-x' },
+      },
+      cap,
+      'oauth-exchange'
+    );
+    expect(result).not.toBe('at_cap');
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(cap);
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'oauth-exchange')).resolves.toBe(1);
+  });
+});

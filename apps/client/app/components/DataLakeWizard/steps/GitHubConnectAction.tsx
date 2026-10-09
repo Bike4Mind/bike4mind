@@ -3,18 +3,17 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import SyncIcon from '@mui/icons-material/Sync';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-import { useState } from 'react';
-import { isAxiosError } from 'axios';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { acceptsConnectorContent } from '@bike4mind/common';
 import {
   useDisconnectLakeGitHub,
   useLakeGitHubConnection,
+  useLakeGitHubCanManage,
   useResyncLakeGitHub,
   type LakeGitHubConnection,
 } from '@client/app/hooks/data/githubLake';
 import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGitHubConnect';
-import { useUpdateDataLake } from '@client/app/hooks/data/dataLakes';
 import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectionDisplay';
 import { getServerErrorField } from '@client/app/utils/error';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
@@ -99,7 +98,8 @@ function GitHubSyncSummary({ connection }: { connection: LakeGitHubConnection })
  * Callers gate this on EnableDataLakeGitHub and canConnectLakeDrive (org + manage), as for Drive.
  *
  * The start route refuses a lake that is not connector-fed (githubLakeConnection.ts), so a curated or
- * unknown origin asks to switch it first; an absent origin reads as curated, the stored default.
+ * unknown origin asks to switch it first; an absent origin reads as curated, the stored default. The
+ * switch rides on the start request (`ensureConnectorFed`), so a refused start leaves the origin alone.
  */
 export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLake }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
@@ -109,18 +109,25 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
   const confirmingSwitch = switchPromptLakeId === lake.id;
 
   const { data: connection, isLoading, isError } = useLakeGitHubConnection(lake.id);
+  const canManage = useLakeGitHubCanManage(lake.id).data === true;
   const { begin: beginConnect, isPending: connecting } = useBeginLakeGitHubConnect(lake.id);
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
-  const updateLake = useUpdateDataLake({ notifySuccess: false });
   const needsSwitch = !acceptsConnectorContent(lake.origin);
+  // List-backed callers drop the prompt once the refetched lake reads connector-fed. The wizard's
+  // targetLake is a snapshot, so a handoff failure after an accepted switch clears it explicitly
+  // (onFailed with no error).
+  const promptingSwitch = confirmingSwitch && needsSwitch;
+  useEffect(() => {
+    if (!needsSwitch) setSwitchPromptLakeId(null);
+  }, [needsSwitch]);
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="github-connection-loading" />;
   }
 
-  if (isError) {
-    // Same steady state as DriveConnectAction: the read needs org owner/manager, narrower than canManage.
+  if (isError || (!connection && !canManage)) {
+    // Same as DriveConnectAction: the read admits an appointed org admin, but connecting is owner/manager only.
     return (
       <Tooltip title="GitHub connect is available to organization owners/managers on an organization data lake.">
         <span>
@@ -146,14 +153,14 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
           variant="outlined"
           color="neutral"
           startDecorator={<GitHubIcon />}
-          loading={connecting && !confirmingSwitch}
-          disabled={confirmingSwitch}
+          loading={connecting && !promptingSwitch}
+          disabled={promptingSwitch}
           onClick={() => (needsSwitch ? setSwitchPromptLakeId(lake.id) : beginConnect())}
           sx={{ alignSelf: 'flex-start' }}
         >
           Connect GitHub
         </Button>
-        {confirmingSwitch && (
+        {promptingSwitch && (
           <Stack gap={0.5} data-testid="github-switch-origin-prompt">
             <Typography level="body-sm">Switch this lake to connector-fed to connect a repository?</Typography>
             <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
@@ -166,29 +173,17 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
                 size="sm"
                 variant="soft"
                 color="primary"
-                loading={updateLake.isPending || connecting}
-                onClick={() => {
-                  const lakeId = lake.id;
-                  // The update hook toasts its own failure; the connect only starts once the origin is written.
-                  updateLake.mutate(
-                    { id: lakeId, origin: 'connector-fed' },
-                    {
-                      onSuccess: () => {
-                        setSwitchPromptLakeId(null);
-                        // Undo the switch if the start is refused, so a failed connect does not leave the
-                        // lake connector-fed with nothing connected. Abandoning GitHub's page keeps it: the
-                        // user confirmed the switch, and the lake's origin chip shows it. A 409 means another
-                        // connector (or someone else's connect) holds the lake, which needs connector-fed.
-                        beginConnect({
-                          onFailed: error => {
-                            if (isAxiosError(error) && error.response?.status === 409) return;
-                            updateLake.mutate({ id: lakeId, origin: 'curated' });
-                          },
-                        });
-                      },
-                    }
-                  );
-                }}
+                loading={connecting}
+                // The begin hook toasts a refusal. Abandoning GitHub's page keeps the switch: the user
+                // confirmed it, and the lake's origin chip shows it.
+                onClick={() =>
+                  beginConnect({
+                    ensureConnectorFed: true,
+                    onFailed: e => {
+                      if (e === undefined) setSwitchPromptLakeId(null);
+                    },
+                  })
+                }
               >
                 Switch and connect
               </Button>
@@ -197,7 +192,7 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
                 size="sm"
                 variant="plain"
                 color="neutral"
-                disabled={updateLake.isPending || connecting}
+                disabled={connecting}
                 onClick={() => setSwitchPromptLakeId(null)}
               >
                 Cancel
@@ -243,7 +238,7 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
           </StartLakeChatButton>
         )}
         {/* A pending disconnect is disabled too, so the archive-pause tooltip would misread it. */}
-        {!connection.disconnecting && (
+        {canManage && !connection.disconnecting && (
           <Tooltip title={blockedReason ?? ''} disableHoverListener={!blockedReason}>
             <span>
               <Button
@@ -274,70 +269,71 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
               : `Removing ${connection.fileCount} remaining file${connection.fileCount === 1 ? '' : 's'} in the background.`}
           </Typography>
         )}
-        {confirmingDisconnect ? (
-          <>
-            <Typography
-              level="body-xs"
-              color="danger"
-              data-testid="github-disconnect-warning"
-              sx={{ flexBasis: '100%' }}
-            >
-              Disconnecting permanently deletes the {connection.fileCount} file{connection.fileCount === 1 ? '' : 's'}{' '}
-              this repository synced into the data lake.
-            </Typography>
+        {canManage &&
+          (confirmingDisconnect ? (
+            <>
+              <Typography
+                level="body-xs"
+                color="danger"
+                data-testid="github-disconnect-warning"
+                sx={{ flexBasis: '100%' }}
+              >
+                Disconnecting permanently deletes the {connection.fileCount} file{connection.fileCount === 1 ? '' : 's'}{' '}
+                this repository synced into the data lake.
+              </Typography>
+              <Button
+                data-testid="github-disconnect-confirm-btn"
+                size="sm"
+                variant="soft"
+                color="danger"
+                startDecorator={<LinkOffIcon />}
+                loading={disconnect.isPending}
+                onClick={() =>
+                  disconnect.mutate(lake.id, {
+                    onSuccess: () => {
+                      setConfirmingDisconnect(false);
+                      toast.success(
+                        `Disconnecting ${connection.repositoryFullName}. Its files are being removed in the background.`
+                      );
+                    },
+                    // Surfaces the 409 "a sync is in progress" so the user knows to retry later.
+                    onError: (e: unknown) =>
+                      toast.error(getServerErrorField(e) || 'Could not disconnect. Please try again.'),
+                  })
+                }
+              >
+                Confirm disconnect
+              </Button>
+              <Button
+                data-testid="github-disconnect-cancel-btn"
+                size="sm"
+                variant="plain"
+                color="neutral"
+                disabled={disconnect.isPending}
+                onClick={() => setConfirmingDisconnect(false)}
+              >
+                Cancel
+              </Button>
+            </>
+          ) : (
             <Button
-              data-testid="github-disconnect-confirm-btn"
-              size="sm"
-              variant="soft"
-              color="danger"
-              startDecorator={<LinkOffIcon />}
-              loading={disconnect.isPending}
-              onClick={() =>
-                disconnect.mutate(lake.id, {
-                  onSuccess: () => {
-                    setConfirmingDisconnect(false);
-                    toast.success(
-                      `Disconnecting ${connection.repositoryFullName}. Its files are being removed in the background.`
-                    );
-                  },
-                  // Surfaces the 409 "a sync is in progress" so the user knows to retry later.
-                  onError: (e: unknown) =>
-                    toast.error(getServerErrorField(e) || 'Could not disconnect. Please try again.'),
-                })
-              }
-            >
-              Confirm disconnect
-            </Button>
-            <Button
-              data-testid="github-disconnect-cancel-btn"
+              data-testid="github-disconnect-btn"
               size="sm"
               variant="plain"
-              color="neutral"
-              disabled={disconnect.isPending}
-              onClick={() => setConfirmingDisconnect(false)}
+              color="danger"
+              startDecorator={<LinkOffIcon />}
+              // The route declines to re-queue a purge that is still progressing, so only offer a retry
+              // once it looks stalled.
+              disabled={connection.disconnecting && !connection.disconnectStalled}
+              onClick={() => setConfirmingDisconnect(true)}
             >
-              Cancel
+              {!connection.disconnecting
+                ? 'Disconnect'
+                : connection.disconnectStalled
+                  ? 'Retry disconnect'
+                  : 'Disconnecting'}
             </Button>
-          </>
-        ) : (
-          <Button
-            data-testid="github-disconnect-btn"
-            size="sm"
-            variant="plain"
-            color="danger"
-            startDecorator={<LinkOffIcon />}
-            // The route declines to re-queue a purge that is still progressing, so only offer a retry
-            // once it looks stalled.
-            disabled={connection.disconnecting && !connection.disconnectStalled}
-            onClick={() => setConfirmingDisconnect(true)}
-          >
-            {!connection.disconnecting
-              ? 'Disconnect'
-              : connection.disconnectStalled
-                ? 'Retry disconnect'
-                : 'Disconnecting'}
-          </Button>
-        )}
+          ))}
       </Stack>
       {connection.lastError && (
         <Typography level="body-xs" color={color} data-testid="github-connection-last-error">

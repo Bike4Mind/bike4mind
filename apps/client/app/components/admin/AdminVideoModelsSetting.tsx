@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Card, Stack, Switch, Typography } from '@mui/joy';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import { toast } from 'sonner';
@@ -6,22 +6,24 @@ import {
   VIDEO_MODEL_CATALOG,
   VIDEO_MODEL_IDS,
   isVideoModelEnabled,
-  type VideoGenerationSettings,
+  VideoGenerationSettingsSchema,
   type VideoModelId,
 } from '@bike4mind/common';
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
+import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 
-type Props = {
-  // Undefined until the admin settings have loaded; every model then shows its catalog default.
-  settings: VideoGenerationSettings | undefined;
-};
-
-export const AdminVideoModelsSetting: React.FC<Props> = ({ settings }) => {
+export const AdminVideoModelsSetting: React.FC = () => {
   const updateSettings = useUpdateSettings();
+  const { getSettingObject } = useAdminSettings();
+  // getSettingObject does not validate; malformed stored data falls back to catalog defaults.
+  const settings = useMemo(() => {
+    const parsed = VideoGenerationSettingsSchema.safeParse(getSettingObject('videoGeneration', { enabledModels: {} }));
+    return parsed.success ? parsed.data : { enabledModels: {} };
+  }, [getSettingObject]);
 
   const handleToggle = (id: VideoModelId, enabled: boolean) => {
     updateSettings.mutate(
-      { key: 'videoGeneration', value: { enabledModels: { ...settings?.enabledModels, [id]: enabled } } },
+      { key: 'videoGeneration', value: { enabledModels: { ...settings.enabledModels, [id]: enabled } } },
       {
         onSuccess: () => {
           toast.success(`${VIDEO_MODEL_CATALOG[id].displayName} ${enabled ? 'enabled' : 'disabled'}`);
@@ -45,7 +47,7 @@ export const AdminVideoModelsSetting: React.FC<Props> = ({ settings }) => {
       <Stack spacing={1.5}>
         {VIDEO_MODEL_IDS.map(id => {
           const { displayName, provider, defaultEnabled } = VIDEO_MODEL_CATALOG[id];
-          const hasOverride = settings?.enabledModels[id] !== undefined;
+          const hasOverride = settings.enabledModels[id] !== undefined;
           return (
             <Box key={id} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
               <Box>

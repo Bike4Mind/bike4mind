@@ -179,13 +179,10 @@ export class AdminSettingsCache {
     const fetchStart = Date.now();
 
     const settings = await db.adminSettings.findAll();
-    const settingsMap = settings.reduce(
-      (out: Record<string, string>, s: any) => {
-        out[s.settingName] = s.settingValue;
-        return out;
-      },
-      {} as Record<string, string>
-    );
+    const settingsMap = settings.reduce<Record<string, string>>((out, s) => {
+      out[s.settingName] = s.settingValue;
+      return out;
+    }, {});
 
     const fetchTime = Date.now() - fetchStart;
     this.logger.info?.(`📦 Cached ${Object.keys(settingsMap).length} admin settings in ${fetchTime}ms`);
@@ -297,7 +294,7 @@ export class AdminSettingsCache {
 
       // Cache and add to result
       const ttl = this.getTTL();
-      settings.forEach((setting: any) => {
+      settings.forEach(setting => {
         result[setting.settingName] = setting.settingValue;
         this.individualCache.set(setting.settingName, {
           value: setting.settingValue,
@@ -308,7 +305,7 @@ export class AdminSettingsCache {
 
       // Cache null values for settings that weren't found
       uncachedSettings.forEach(settingName => {
-        if (!settings.some((s: any) => s.settingName === settingName)) {
+        if (!settings.some(s => s.settingName === settingName)) {
           this.individualCache.set(settingName, {
             value: null,
             timestamp: Date.now(),
@@ -387,7 +384,7 @@ export class AdminSettingsCache {
   /**
    * Warm up the cache by fetching all settings
    */
-  async warmUp(db: any): Promise<void> {
+  async warmUp(db: { adminSettings: Pick<IAdminSettingsRepository, 'findAll'> }): Promise<void> {
     this.logger.info?.('🔥 Warming up admin settings cache...');
     await this.getSettingsMap(db);
     this.logger.info?.('✅ Admin settings cache warmed up');

@@ -2,12 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { VIDEO_MODEL_CATALOG, VIDEO_MODEL_IDS, type VideoGenerationSettings } from '@bike4mind/common';
+import { VIDEO_MODEL_CATALOG, VIDEO_MODEL_IDS } from '@bike4mind/common';
 
 const mutate = vi.fn();
 let updatePending = false;
 vi.mock('@client/app/hooks/data/settings', () => ({
   useUpdateSettings: () => ({ mutate, isPending: updatePending }),
+}));
+let storedSetting: unknown;
+vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
+  useAdminSettings: () => ({ getSettingObject: (_key: string, fallback: unknown) => storedSetting ?? fallback }),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast }));
@@ -15,12 +19,14 @@ vi.mock('sonner', () => ({ toast }));
 import { AdminVideoModelsSetting } from './AdminVideoModelsSetting';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderSetting = (settings: VideoGenerationSettings | undefined) =>
-  render(
+const renderSetting = (settings: unknown) => {
+  storedSetting = settings;
+  return render(
     <CssVarsProvider theme={appTheme}>
-      <AdminVideoModelsSetting settings={settings} />
+      <AdminVideoModelsSetting />
     </CssVarsProvider>
   );
+};
 
 const switchFor = (id: string) =>
   screen.getByTestId(`admin-video-models-${id}-switch`).querySelector('input') as HTMLInputElement;
@@ -49,6 +55,11 @@ describe('AdminVideoModelsSetting', () => {
 
   it('falls back to the catalog default when settings are not loaded yet', () => {
     renderSetting(undefined);
+    expect(switchFor(firstId).checked).toBe(defaultEnabled);
+  });
+
+  it('falls back to the catalog default when the stored value is malformed', () => {
+    renderSetting({ enabledModels: 'not-a-record' });
     expect(switchFor(firstId).checked).toBe(defaultEnabled);
   });
 

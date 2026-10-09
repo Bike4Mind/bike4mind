@@ -163,6 +163,7 @@ describe('other object settings use makeObjectSetting', () => {
     'contextTelemetryAlerts',
     'logoSettings',
     'RapidReplySettings',
+    'releaseNotesConfig',
     'whatsNewConfig',
     'whatsNewSyncConfig',
   ] as const;
@@ -172,6 +173,17 @@ describe('other object settings use makeObjectSetting', () => {
     // All object settings should handle JSON strings
     const result = schema.safeParse('{}');
     expect(result.success).toBe(true);
+  });
+});
+
+describe('releaseNotesConfig', () => {
+  it('defaults to disabled', () => {
+    expect(settingsMap.releaseNotesConfig.schema.parse('{}')).toEqual({
+      enabled: false,
+      modelId: 'gpt-4o-mini',
+      embargoHours: 12,
+      denylist: [],
+    });
   });
 });
 

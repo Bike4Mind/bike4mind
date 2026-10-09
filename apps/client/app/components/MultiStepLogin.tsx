@@ -26,6 +26,7 @@ import GoogleColorIcon from './svgs/flags/GoogleColorIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
+import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
@@ -104,6 +105,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [mfaMode, setMfaMode] = useState<'verify' | 'setup'>('verify');
   const [mfaSetupData, setMfaSetupData] = useState<MFASetupResponse | null>(null);
+  const [mfaPasskeyAvailable, setMfaPasskeyAvailable] = useState(false);
 
   // Resend cooldown
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -114,6 +116,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
   const verifyMFA = useVerifyMFA();
+  const verifyPasskeyMFA = useVerifyPasskeyMFA();
   const { data: publicConfig } = usePublicConfig();
   const setupMFA = useSetupMFA();
   const verifyMFASetup = useVerifyMFASetup();
@@ -266,6 +269,27 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }
   };
 
+  const finishMfaLogin = (result: { accessToken: string; user: Parameters<typeof setCurrentUser>[0] }) => {
+    resetRefreshCoordinator();
+    // Drop the cached cold-load result: this browser just acquired a session, so the next
+    // protected navigation must not reuse the "no session" answer from before login.
+    resetSessionBootstrap();
+    useAccessToken.getState().setVerifiedSession(result.accessToken);
+    setShowMFAModal(false);
+    setMfaPasskeyAvailable(false);
+    setCurrentUser(result.user);
+  };
+
+  const handlePasskeyVerification = async (rememberDevice: boolean) => {
+    if (!mfaUserId) return;
+    setMfaError(null);
+    try {
+      finishMfaLogin(await verifyPasskeyMFA.mutateAsync({ rememberDevice }));
+    } catch (error: unknown) {
+      setMfaError(describePasskeyMfaError(error));
+    }
+  };
+
   const handleMFAVerification = async (token: string, rememberDevice = false) => {
     if (!mfaUserId) return;
     setMfaError(null);
@@ -276,13 +300,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       } else {
         result = await verifyMFA.mutateAsync({ token, rememberDevice });
       }
-      resetRefreshCoordinator();
-      // Drop the cached cold-load result: this browser just acquired a session, so the next
-      // protected navigation must not reuse the "no session" answer from before login.
-      resetSessionBootstrap();
-      useAccessToken.getState().setVerifiedSession(result.accessToken);
-      setShowMFAModal(false);
-      setCurrentUser(result.user);
+      finishMfaLogin(result);
     } catch (error: unknown) {
       const errorData = (error as Record<string, Record<string, Record<string, unknown>>>)?.response?.data;
       if (errorData?.forceLogout) {
@@ -304,6 +322,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const handleMFACancel = () => {
     useAccessToken.getState().resetTokens();
     setShowMFAModal(false);
+    setMfaPasskeyAvailable(false);
     setMfaUserId(null);
     setMfaError(null);
     setMfaMode('verify');
@@ -353,6 +372,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         }
         setMfaUserId(response.userId);
         setMfaMode('verify');
+        setMfaPasskeyAvailable(!!response.passkeyAvailable);
         setShowMFAModal(true);
         return;
       }
@@ -464,6 +484,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         }
         setMfaUserId(response.userId);
         setMfaMode('verify');
+        setMfaPasskeyAvailable(!!response.passkeyAvailable);
         setShowMFAModal(true);
         return;
       }
@@ -1122,13 +1143,17 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         description={
           mfaMode === 'setup'
             ? 'Your administrator requires MFA. Scan the QR code with your authenticator app to set up MFA.'
-            : 'Enter your 6-digit code or backup code to continue.'
+            : mfaPasskeyAvailable && passkeysSupported()
+              ? 'Use your passkey, or enter your 6-digit code or backup code to continue.'
+              : 'Enter your 6-digit code or backup code to continue.'
         }
         qrCodeUrl={mfaSetupData?.qrCodeUrl}
         manualEntryKey={mfaSetupData?.manualEntryKey}
         backupCodes={mfaSetupData?.backupCodes}
         showVerify={true}
         allowRememberDevice={publicConfig?.allowTrustedDevices ?? false}
+        onPasskeyVerify={mfaPasskeyAvailable ? handlePasskeyVerification : undefined}
+        passkeyLoading={verifyPasskeyMFA.isPending}
       />
     </Box>
   );

@@ -23,9 +23,10 @@ export {
   expireNoncurrentVersionsAfterDays,
   RETAINED_BUCKET_STAGES,
 } from './bucketFactory.js';
-export type { FunctionDefaultsOptions, FunctionDefaultArgs } from './functionFactory.js';
+export type { FunctionDefaultsOptions, FunctionDefaultArgs, FunctionLogging } from './functionFactory.js';
 export {
   buildFunctionDefaults,
+  resolveDefaultLogging,
   stageGatedConcurrency,
   DEFAULT_FUNCTION_RUNTIME,
   DEFAULT_LOG_RETENTION,
@@ -77,3 +78,5 @@ export {
   evaluateTier1Secrets,
   formatTier1DeployFailure,
 } from './tier1Secrets.js';
+export type { QuestMetricName } from './questMetricSpecs.js';
+export { QUESTS_NAMESPACE, QUEST_METRICS } from './questMetricSpecs.js';

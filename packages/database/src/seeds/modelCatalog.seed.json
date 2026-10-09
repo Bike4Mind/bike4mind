@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-01T13:25:52.203Z",
-  "notice": "Fallback defaults last maintained on 2026-10-01. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-07T10:30:57.943Z",
+  "notice": "Fallback defaults last maintained on 2026-10-07. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -1501,6 +1501,76 @@
       }
     },
     {
+      "modelId": "global.anthropic.claude-fable-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-fable-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude Fable 5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude Fable 5 model via AWS Bedrock for complex, long-running agentic tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-fable-5-1",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-fable-5-1",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude Fable 5.1",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude Fable 5.1 model via AWS Bedrock for complex, long-running agentic tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
+      }
+    },
+    {
       "modelId": "global.anthropic.claude-opus-4-5-20251101-v1:0",
       "ownedGroups": [
         "identity",
@@ -1647,6 +1717,76 @@
       }
     },
     {
+      "modelId": "global.anthropic.claude-opus-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-opus-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 5 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5 Opus model via AWS Bedrock for coding, reasoning, and agentic tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-opus-5-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 5.5 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5.5 Opus model via AWS Bedrock for coding, reasoning, and agentic tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
+      }
+    },
+    {
       "modelId": "global.anthropic.claude-sonnet-4-6",
       "ownedGroups": [
         "identity",
@@ -1715,6 +1855,40 @@
         "rank": 1,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-07-01"
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-sonnet-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-sonnet-5-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 5.5 Sonnet",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5.5 Sonnet model via AWS Bedrock, with adaptive extended thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1
       }
     },
     {

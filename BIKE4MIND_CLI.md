@@ -125,21 +125,28 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 
 ## Serve Bike4Mind as an MCP server (`b4m mcp serve`)
 
-`b4m mcp serve` turns your Bike4Mind backend into a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client (Claude Desktop, editors, other agents) can drive your notebooks, chat, and files. This is the opposite direction from `b4m mcp add`, which attaches external MCP servers *into* the CLI.
+`b4m mcp serve` turns your Bike4Mind backend into a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client (Claude Desktop, editors, other agents) can drive your notebooks, chat, and files, and use your Briefcase prompts. This is the opposite direction from `b4m mcp add`, which attaches external MCP servers *into* the CLI.
 
-### Tools and resources
+### Tools, resources and prompts
 
 | Tool | Does | Scope |
 | --- | --- | --- |
 | `list_notebooks` | List your notebooks (sessions) | `notebooks:read` |
 | `get_notebook` | Fetch one notebook by id | `notebooks:read` |
 | `create_notebook` | Create a notebook (optionally in a project, or grounded in a data lake via `dataLakeId`) | `notebooks:write` |
-| `send_message` | Send a chat message and wait for the reply; returns the reply's cited sources (`citables`) | `ai:chat` |
+| `rename_notebook` | Rename a notebook | `notebooks:write` |
+| `clone_notebook` | Clone a notebook into a new one (rate-limited to 10 per minute) | `notebooks:write` |
+| `delete_notebook` | Permanently delete a notebook; requires `confirm: true` | `notebooks:write` |
+| `list_projects` | List the projects you can access, including shared ones | `projects:read` |
+| `get_project` | Fetch one project by id | `projects:read` |
+| `create_project` | Create a project (`name` and `description` required; optional `sessionIds`/`fileIds`); pass its id as `projectId` to `create_notebook` | `projects:write` |
+| `send_message` | Send a chat message and wait for the reply (sends progress for a `progressToken`, stops on cancel); returns its cited sources (`citables`) | `ai:chat` |
 | `search_knowledge_base` | Semantic search across your notebooks | `notebooks:read` |
 | `list_lakes` | List the data lakes you can reach (cursor-paged via `nextCursor`) | `datalake:read` |
 | `list_files` | Search your files | `files:read` |
 | `get_file` | File metadata plus a signed download URL | `files:read` |
 | `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
+| `generate_image` | Generate an image from a text prompt and return its quest id, file names, and URLs | `ai:generate` |
 | `text_to_speech` | Synthesize speech from text; return a saved file URL or inline audio | `ai:generate` |
 
 `text_to_speech` accepts `text` and optional provider, voice, model, format, and voice settings. It uses the scoped `/api/ai/tts` route and spends generation credits. Set `preview: true` to skip saving a copy. The result takes one of three shapes:
@@ -164,6 +171,8 @@ Alongside those, `b4m://agent-quest` is a single fixed-URI resource (nothing to 
 For a lake-grounded answer, chain `list_lakes` -> `create_notebook { dataLakeId }` -> `send_message { notebookId }`; the reply comes back with its `citables`. Unlike most tools here, the data-lake routes do enforce their scopes, the instance must have data lakes enabled, and a key used with a lake must be bound to it.
 
 Resource *listing* is capped at 100 entries per template and takes no paging arguments. A listing that fails (for example, a key without `projects:read`) degrades to an empty list for that template only, so the other three still enumerate. Because an empty list can therefore also mean an auth failure and not just an empty account, the underlying error is written to the server's stderr; under stdio transport your MCP host captures that stream (for example Claude Desktop's `~/Library/Logs/Claude/mcp-server-*.log`), so check it there if a resource picker comes back unexpectedly empty. There is no `artifacts:*` API-key scope, so an artifact 403 carries no scope recommendation.
+
+It also serves your **Briefcase** prompt catalog as MCP prompts, so a client's prompt picker (for example Claude Desktop's) offers the same one-click prompts as the in-app launcher. Each prompt is named by its id and titled by its display name. A `prompts/get` resolves the template's `{{placeholders}}`: the clock keys (`currentDate`, `currentTime`, `currentDateTime`, `currentYear`) are filled in automatically, and `userName`, `userEmail`, `userRole` and `organization` are optional arguments you supply. A placeholder left unsupplied stays as written. The instance must have the **Enable Briefcase** admin setting on (off by default). With it off, or on any other listing failure, the prompt list comes back empty and the error goes to stderr, the same as resources do. An API key sees the shared system prompts only. Your personal prompts are listed only under `b4m login`. Because a login caller's catalog fetch is a CSRF-protected POST, the origin of the endpoint the CLI resolves (see Auth and endpoint below) must equal the instance's `APP_URL`; if they differ (a split-origin deployment), a login caller's prompt list comes back empty, while API-key callers are CSRF-exempt and unaffected. A prompt that the app runs with specific tools (web search, say) arrives as plain text; your MCP client runs it with whatever tools it has.
 
 The **Scope** column in both tables is the *recommended* key configuration for that tool or resource, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope.
 

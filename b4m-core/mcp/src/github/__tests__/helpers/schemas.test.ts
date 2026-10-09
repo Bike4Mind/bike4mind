@@ -178,6 +178,13 @@ describe('Schema Validations', () => {
       expect(confirmationParams._executeFromButton.parse(true)).toBe(true);
       expect(confirmationParams._executeFromButton.parse(false)).toBe(false);
     });
+
+    // Button-only keys must be stripped from model tool calls by SERVER_ONLY_MCP_ARG_KEYS in
+    // b4m-core/services/src/llm/tools/toolGenerators.ts. Adding one here means adding it there.
+    it('has no button-only keys beyond the ones the model->MCP seam strips', () => {
+      const underscoreKeys = Object.keys(confirmationParams).filter(key => key.startsWith('_'));
+      expect(underscoreKeys).toEqual(['_executeFromButton']);
+    });
   });
 
   describe('paginationParams', () => {

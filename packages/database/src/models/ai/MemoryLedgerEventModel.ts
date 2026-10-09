@@ -72,10 +72,11 @@ export interface IMemoryLedgerEvent extends IMongoDocument {
    * vector, not a semantic image of the fact, so it leaks nothing a shred needs to destroy - and it
    * has to be readable WITHOUT the key in order to decide whether the vector is even worth decrypting.
    *
-   * The ledger is append-only, so a vector written here can never be re-embedded in place. That makes
-   * the stamp load-bearing: an event from an older embedding model must be recognisable as such and
-   * its vector ignored, or it silently shadows the re-embedded memento twin (see mergeStores) and
-   * every cosine becomes cross-space noise.
+   * The vector sits outside the chain hash, so it is rewritten in place by `rewriteEmbedding` (the
+   * backfill/migration in reembedMementos.ts). The stamp is what tells that migration and every read
+   * path which space a vector is in: a vector from another model must be recognisable as such and
+   * ignored, or it silently shadows the re-embedded memento twin (see mergeStores) and every cosine
+   * becomes cross-space noise.
    */
   embeddingModel?: string;
   evidenceTier?: MemoryEvidenceTier;
@@ -97,6 +98,9 @@ export interface IMemoryLedgerEvent extends IMongoDocument {
 }
 
 interface IMemoryLedgerEventModel extends Model<IMemoryLedgerEvent> {}
+
+/** One chain plus its DEK owner; the sort key and keyset cursor of `listPrincipalsNeedingVectors`. */
+export type PrincipalCursor = { principalKind: MemoryPrincipalKind; principalId: string; ownerUserId: string };
 
 const MemoryLedgerEventSchema = new Schema<IMemoryLedgerEvent>(
   {
@@ -134,6 +138,20 @@ const MemoryLedgerEventSchema = new Schema<IMemoryLedgerEvent>(
 MemoryLedgerEventSchema.index({ principalKind: 1, principalId: 1, seq: 1 }, { unique: true });
 // Owner-scoped ordered read: a caller lists only chains they own (scope isolation, no existence leak).
 MemoryLedgerEventSchema.index({ ownerUserId: 1, principalKind: 1, principalId: 1, seq: 1 });
+MemoryLedgerEventSchema.index(
+  { embeddingIv: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+  {
+    name: 'memory_ledger_vectorless_candidates',
+    partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } },
+  }
+);
+MemoryLedgerEventSchema.index(
+  { embeddingModel: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+  {
+    name: 'memory_ledger_stale_vector_candidates',
+    partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } },
+  }
+);
 
 // --- Repository ---
 
@@ -239,7 +257,9 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
       // Keyed by the event's chain HASH, not its _id: the hash is what uniquely identifies an event in
       // the chain, and it is the field that actually comes back from a lean read. Scoped to the
       // principal as well, so a caller cannot rewrite someone else's vector by guessing a hash.
-      { principalKind, principalId, ownerUserId, hash },
+      // Never onto a shredded event: a per-subject or per-source shred keeps the DEK, so a rewrite that
+      // races in after it would put back a readable semantic image of the destroyed fact.
+      { principalKind, principalId, ownerUserId, hash, shredded: { $ne: true } },
       {
         $set: {
           embeddingCipher: embedding.cipher,
@@ -250,6 +270,66 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
       }
     );
     return res.modifiedCount ?? 0;
+  }
+
+  /**
+   * Distinct chains holding at least one surviving, non-retract event with a fact whose vector is
+   * missing or not stamped `currentSpaceId`, sorted by (kind, id, owner) and paged by keyset `after`.
+   * Found from the data rather than a fixed list of kinds, so a principal kind gains coverage the
+   * moment it gains a writer.
+   */
+  async listPrincipalsNeedingVectors(
+    currentSpaceId: string,
+    opts: { after?: PrincipalCursor; limit: number }
+  ): Promise<PrincipalCursor[]> {
+    const { after } = opts;
+    const commonMatch: Record<string, unknown>[] = [
+      { shredded: { $ne: true }, kind: { $in: ['assert', 'affirm'] } },
+      { $or: [{ factCipher: { $nin: [null, ''] } }, { fact: { $nin: [null, ''] } }] },
+    ];
+    if (after) {
+      commonMatch.push({
+        $or: [
+          { principalKind: { $gt: after.principalKind } },
+          { principalKind: after.principalKind, principalId: { $gt: after.principalId } },
+          {
+            principalKind: after.principalKind,
+            principalId: after.principalId,
+            ownerUserId: { $gt: after.ownerUserId },
+          },
+        ],
+      });
+    }
+    const page = (vectorMatch: Record<string, unknown>) =>
+      this.model.aggregate<{ _id: PrincipalCursor }>([
+        { $match: { $and: [...commonMatch, vectorMatch] } },
+        // Ciphertext out before the group - see aggregateLakeMemoryCoverage for the measured cost.
+        { $project: { _id: 0, principalKind: 1, principalId: 1, ownerUserId: 1 } },
+        {
+          $group: {
+            _id: { principalKind: '$principalKind', principalId: '$principalId', ownerUserId: '$ownerUserId' },
+          },
+        },
+        { $sort: { '_id.principalKind': 1, '_id.principalId': 1, '_id.ownerUserId': 1 } },
+        { $limit: opts.limit },
+      ]);
+
+    // DocumentDB has no $unionWith, so keep the two selective index scans separate and merge their
+    // bounded pages. A row may occur in both arms and is deduplicated by the full principal key.
+    const [vectorless, stale] = await Promise.all([
+      page({ embeddingIv: { $in: [null, ''] }, embeddingCipher: { $in: [null, ''] } }),
+      page({ embeddingModel: { $ne: currentSpaceId } }),
+    ]);
+    const principals = new Map<string, PrincipalCursor>();
+    for (const row of [...vectorless, ...stale]) principals.set(JSON.stringify(row._id), row._id);
+    const compare = (left: PrincipalCursor, right: PrincipalCursor) => {
+      for (const key of ['principalKind', 'principalId', 'ownerUserId'] as const) {
+        const order = Buffer.compare(Buffer.from(left[key]), Buffer.from(right[key]));
+        if (order !== 0) return order;
+      }
+      return 0;
+    };
+    return [...principals.values()].sort(compare).slice(0, opts.limit);
   }
 
   /**

@@ -1,12 +1,5 @@
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
-import {
-  settingsMap,
-  SETTING_TABS,
-  API_SERVICE_GROUPS,
-  Category,
-  CATEGORY_ICONS,
-  VideoGenerationSettingsSchema,
-} from '@bike4mind/common';
+import { settingsMap, SETTING_TABS, API_SERVICE_GROUPS, Category, CATEGORY_ICONS } from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import {
   Checkbox,
@@ -285,11 +278,6 @@ const AdminSettingsTab: React.FC = () => {
     return map;
   }, [settingsFromServer.data]);
 
-  const videoGenerationSettings = useMemo(() => {
-    const parsed = VideoGenerationSettingsSchema.safeParse(settingValueByName.get('videoGeneration'));
-    return parsed.success ? parsed.data : undefined;
-  }, [settingValueByName]);
-
   // Returns true when EVERY whitespace-separated token in `searchTerm` appears in
   // the setting's name, description, key, or (non-sensitive) live value. Checking
   // all four fields matches the standard path to custom-rendered settings, and
@@ -346,6 +334,8 @@ const AdminSettingsTab: React.FC = () => {
           'whatsNewAutomationEnabled',
           'whatsNewConfig',
           'whatsNewSyncConfig',
+          // Release notes config is edited in the Release notes tab
+          'releaseNotesConfig',
           // SRE Agent config has its own dedicated admin tab
           'sreAgentConfig',
           // Context Telemetry settings are managed in the Context Inspector tab
@@ -576,7 +566,7 @@ const AdminSettingsTab: React.FC = () => {
         {/* Operations Model component for the AI category */}
         {category === 'AI' && <AdminOperationsModelSetting />}
 
-        {category === 'AI' && <AdminVideoModelsSetting settings={videoGenerationSettings} />}
+        {category === 'AI' && <AdminVideoModelsSetting />}
 
         {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
             seven of the nine scope-capable settings are AI, and the panel lists all nine wherever

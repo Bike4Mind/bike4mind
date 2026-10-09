@@ -1,0 +1,109 @@
+import {
+  THINK_CLOSE_TAG,
+  THINK_OPEN_TAG,
+  joinReplySlots,
+  stripChoicesFromReplies,
+  visibleReplyText,
+} from '@bike4mind/common';
+
+type ReplyBearingMessage = { reply?: string | null; replies?: string[] | undefined };
+
+export function extractReplies(messageData: ReplyBearingMessage) {
+  // Prefer the authoritative array when present, because the server streams into replies[0]
+  const rawReplies =
+    Array.isArray(messageData.replies) && messageData.replies.length > 0
+      ? messageData.replies
+      : messageData.reply
+        ? [messageData.reply]
+        : [];
+  // The server strips the choices block on finalize; this hides it while it streams. Same rule as
+  // the server: every slot's block is hidden, options come only from the answer slot.
+  const sourceReplies = stripChoicesFromReplies(rawReplies).replies;
+
+  // Process and deduplicate short repeated segments that can occur during streaming
+  const processedParts: string[] = [];
+  for (const part of sourceReplies) {
+    if (!part || !part.trim()) continue;
+
+    // Shared with the TTFVT latency metric, which must consider text "seen" only once this
+    // renders it - see visibleReplyText in @bike4mind/common.
+    const cleaned = visibleReplyText(part);
+
+    if (!cleaned) continue;
+
+    // Drop exact duplicates of the immediately previous segment
+    const prev = processedParts.length > 0 ? processedParts[processedParts.length - 1] : '';
+    if (prev && prev === cleaned) {
+      continue;
+    }
+
+    processedParts.push(cleaned);
+  }
+
+  const combined = joinReplySlots(processedParts);
+  return combined ? [combined] : [];
+}
+
+/**
+ * The assistant text an export should carry for one turn: the single combined string the chat
+ * bubble renders, or '' when the turn produced no visible text.
+ *
+ * Exporters must not walk `replies` themselves. A tool-using turn persists several slots (see
+ * appendStreamedChunk) and some hold only a thinking block, so a raw walk writes blank "AI:"
+ * entries and leaks `<think>` markers into the exported file.
+ */
+export function visibleReplyForExport(messageData: ReplyBearingMessage): string {
+  return extractReplies(messageData)[0] ?? '';
+}
+
+export function extractThinking(messageData: ReplyBearingMessage) {
+  // Handle both reply and replies arrays
+  let initialReplies: string[] = [];
+
+  if (messageData.reply) {
+    initialReplies.push(messageData.reply);
+  }
+
+  if (messageData.replies && messageData.replies.length > 0) {
+    initialReplies = messageData.reply ? initialReplies.concat(messageData.replies) : messageData.replies;
+  }
+
+  // Extract thinking content from each reply
+  const thinkingParts = initialReplies
+    .filter(r => r && r.trim()) // Remove empty or null replies
+    .flatMap(extractThinkingBlocks)
+    .filter(thinking => thinking && thinking.trim());
+
+  return thinkingParts.join('\n\n');
+}
+
+/**
+ * Every thinking block in one reply slot, in order.
+ *
+ * A turn that answers, calls a tool and thinks again reopens its thinking inside the slot
+ * that already holds the partial answer (the provider restarts its content-block indices -
+ * see appendStreamedChunk), so a slot holds neither exactly one block nor one that
+ * necessarily starts at position 0. A trailing block with no close marker is still streaming
+ * and is taken as-is.
+ */
+function extractThinkingBlocks(reply: string): string[] {
+  const blocks: string[] = [];
+
+  let cursor = 0;
+  for (;;) {
+    const open = reply.indexOf(THINK_OPEN_TAG, cursor);
+    if (open === -1) break;
+
+    const contentStart = open + THINK_OPEN_TAG.length;
+    const close = reply.indexOf(THINK_CLOSE_TAG, contentStart);
+    if (close === -1) {
+      blocks.push(reply.substring(contentStart).trim());
+      break;
+    }
+
+    blocks.push(reply.substring(contentStart, close).trim());
+    cursor = close + THINK_CLOSE_TAG.length;
+  }
+
+  return blocks;
+}
