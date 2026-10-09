@@ -6,6 +6,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { runningTasksLabel, splitTasks, taskElapsedMs, taskTitle } from './backgroundTasks';
 import { ChevronIcon, CloseIcon, ExpandIcon, StopIcon, TrashIcon } from './icons';
+import { thinScrollbarSx } from './layout';
 import { formatElapsed } from './statusLine';
 import type { BackgroundProcessView } from './useBackgroundProcesses';
 
@@ -65,7 +66,15 @@ function OutputTail({ text }: { text: string }) {
         const node = event.currentTarget;
         pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight < 24;
       }}
-      sx={{ mt: 0.75, maxHeight: 220, overflowY: 'auto', bgcolor: 'background.surface', borderRadius: 'sm', p: 1 }}
+      sx={{
+        mt: 0.75,
+        maxHeight: 220,
+        overflowY: 'auto',
+        bgcolor: 'background.surface',
+        borderRadius: 'sm',
+        p: 1,
+        ...thinScrollbarSx,
+      }}
     >
       <Typography
         level="body-xs"
@@ -208,7 +217,7 @@ export function BackgroundTaskPanel({
         </IconButton>
       </Stack>
 
-      <Box sx={{ flex: 1, overflowY: 'auto', px: 1, pb: 1.5 }}>
+      <Box sx={{ flex: 1, overflowY: 'auto', px: 1, pb: 1.5, ...thinScrollbarSx }}>
         {running.length > 0 && (
           <>
             <Typography level="body-xs" fontWeight="lg" textColor="text.tertiary" sx={{ px: 0.5, py: 0.75 }}>

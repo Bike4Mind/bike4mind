@@ -1,4 +1,5 @@
 import type { SxProps } from '@mui/joy/styles/types';
+import { thinScrollbarSx } from '../layout';
 
 /**
  * Markdown prose, styled through Joy tokens so it follows both themes without a second palette.
@@ -79,6 +80,7 @@ export const markdownSx: SxProps = {
     width: 'fit-content',
     maxWidth: '100%',
     overflowX: 'auto',
+    ...thinScrollbarSx,
     my: 1.5,
     borderCollapse: 'collapse',
     fontSize: 'var(--joy-fontSize-xs)',
@@ -103,6 +105,7 @@ export const codeBlockSx: SxProps = {
   my: 1.5,
   p: 1.5,
   overflowX: 'auto',
+  ...thinScrollbarSx,
   borderRadius: 'var(--joy-radius-sm)',
   backgroundColor: 'var(--joy-palette-background-level1)',
   border: '1px solid var(--joy-palette-divider)',

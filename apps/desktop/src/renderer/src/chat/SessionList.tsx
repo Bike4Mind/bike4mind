@@ -19,6 +19,7 @@ import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
 import { ArtifactIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon } from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
 import { ResizeHandle } from './ResizeHandle';
+import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
 import {
   clampSidebarWidth,
@@ -487,15 +488,7 @@ export function SessionList({
           flex: 1,
           px: 1,
           pb: 1,
-          // Scoped to this one box and never to the document: layout.ts measures the classic
-          // scrollbar once and the transcript's reading column is centred on the number, so a
-          // global rule here would quietly move that column off the line its own rows sit on.
-          // `scrollbar-width` rather than the ::-webkit-scrollbar pseudo-elements because
-          // Chromium ignores those once it is set, and this one declaration is the whole of it.
-          // Nothing to see on a machine where scrollbars overlay the content, which is macOS
-          // unless the user asked for them permanently.
-          scrollbarWidth: 'thin',
-          scrollbarColor: 'var(--joy-palette-neutral-outlinedBorder) transparent',
+          ...thinScrollbarSx,
         }}
       >
         {loading ? (

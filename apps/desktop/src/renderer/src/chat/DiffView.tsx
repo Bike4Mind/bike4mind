@@ -6,6 +6,7 @@ import Typography from '@mui/joy/Typography';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import type { ChatDiff, ChatDiffLine, ChatDiffLineKind } from '@shared/chat';
 import { diffLanguage } from './diffLanguage';
+import { thinScrollbarSx } from './layout';
 import { highlightElement } from './markdown/highlightElements';
 import { SYNTAX_THEMES } from './markdown/syntaxTheme';
 
@@ -189,7 +190,7 @@ export function DiffView({ diff }: { diff: ChatDiff }) {
         </Typography>
       </Box>
 
-      <Box sx={{ maxHeight: 320, overflow: 'auto', py: 0.25 }}>
+      <Box sx={{ maxHeight: 320, overflow: 'auto', py: 0.25, ...thinScrollbarSx }}>
         {diff.lines.length > 0 && <HighlightedLines diff={diff} mode={mode} />}
       </Box>
 

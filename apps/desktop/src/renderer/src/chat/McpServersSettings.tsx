@@ -18,6 +18,7 @@ import Switch from '@mui/joy/Switch';
 import Typography from '@mui/joy/Typography';
 import type { McpServerInput, McpServerState, McpServerStatus, McpTransport } from '@shared/mcp';
 import { ChevronIcon, PlusIcon, ServerIcon } from './icons';
+import { thinScrollbarSx } from './layout';
 import type { McpServersController } from './useMcpServers';
 
 type StatusLook = { color: 'success' | 'danger' | 'neutral' | 'warning'; label: string };
@@ -182,7 +183,14 @@ function ServerRow({
                 level="body-xs"
                 textColor="text.tertiary"
                 component="pre"
-                sx={{ m: 0, whiteSpace: 'pre-wrap', fontFamily: 'code', maxHeight: 140, overflow: 'auto' }}
+                sx={{
+                  m: 0,
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'code',
+                  maxHeight: 140,
+                  overflow: 'auto',
+                  ...thinScrollbarSx,
+                }}
                 data-testid="mcp-server-stderr"
               >
                 {server.stderr}

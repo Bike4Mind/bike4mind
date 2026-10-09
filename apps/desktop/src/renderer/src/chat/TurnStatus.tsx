@@ -5,6 +5,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { ChevronIcon } from './icons';
+import { thinScrollbarSx } from './layout';
 import {
   activityDetail,
   describeSplit,
@@ -51,7 +52,14 @@ function ActivityDetailView({
           level="body-xs"
           fontFamily="monospace"
           textColor="text.tertiary"
-          sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 160, overflowY: 'auto', mt: 0.25 }}
+          sx={{
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+            maxHeight: 160,
+            overflowY: 'auto',
+            mt: 0.25,
+            ...thinScrollbarSx,
+          }}
           data-testid="chat-turn-status-detail-body"
         >
           {detail.body}

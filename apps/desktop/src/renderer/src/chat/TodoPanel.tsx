@@ -3,7 +3,7 @@ import Box from '@mui/joy/Box';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { countTodos, type TodoItem, type TodoStatus } from '@shared/todos';
-import { contentColumnSx } from './layout';
+import { contentColumnSx, thinScrollbarSx } from './layout';
 
 const MARKER: Record<TodoStatus, string> = {
   completed: '\u2713',
@@ -51,7 +51,7 @@ export function TodoPanel({ todos, turnOpen }: { todos: readonly TodoItem[] | nu
           <Stack
             component="ul"
             spacing={0.25}
-            sx={{ m: 0, mt: 0.5, p: 0, listStyle: 'none', maxHeight: '25vh', overflowY: 'auto' }}
+            sx={{ m: 0, mt: 0.5, p: 0, listStyle: 'none', maxHeight: '25vh', overflowY: 'auto', ...thinScrollbarSx }}
           >
             {todos.map((todo, index) => (
               <Stack

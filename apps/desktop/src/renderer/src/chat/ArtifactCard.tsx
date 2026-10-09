@@ -9,6 +9,7 @@ import type { ChatArtifact, ChatArtifactView } from '@shared/chat';
 import { ArtifactPublishControl } from './ArtifactPublishControl';
 import { HtmlArtifactFrame } from './HtmlArtifactFrame';
 import { ChevronIcon } from './icons';
+import { thinScrollbarSx } from './layout';
 import { type MermaidFailure, renderMermaidDiagram } from './mermaidDiagram';
 
 /**
@@ -302,7 +303,14 @@ export function ArtifactCard({ artifact }: { artifact: ChatArtifactView }) {
           <Typography
             level="body-xs"
             fontFamily="monospace"
-            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 360, overflowY: 'auto', mt: 0.5 }}
+            sx={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: 360,
+              overflowY: 'auto',
+              mt: 0.5,
+              ...thinScrollbarSx,
+            }}
             textColor="text.secondary"
             data-testid="chat-artifact-source-text"
           >

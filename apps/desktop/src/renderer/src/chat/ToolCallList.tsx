@@ -22,6 +22,7 @@ import { DirectoryRequestCard } from './DirectoryRequestCard';
 import { McpServerRequestCard } from './McpServerRequestCard';
 import { ChevronIcon } from './icons';
 import { MediaAttachments } from './MediaAttachment';
+import { thinScrollbarSx } from './layout';
 import { QuestionCard, QuestionSummary } from './QuestionCard';
 import { VideoJobsForCall } from './VideoJobCard';
 import {
@@ -227,6 +228,7 @@ function ApprovalPrompt({
             bgcolor: 'background.surface',
             maxHeight: 200,
             overflowY: 'auto',
+            ...thinScrollbarSx,
           }}
         >
           <Typography
@@ -354,7 +356,14 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
       <Typography
         level="body-xs"
         fontFamily="monospace"
-        sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflowY: 'auto', mt: 0.5 }}
+        sx={{
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          maxHeight: 260,
+          overflowY: 'auto',
+          mt: 0.5,
+          ...thinScrollbarSx,
+        }}
         textColor={call.error ? 'danger.400' : 'text.tertiary'}
         data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
       >

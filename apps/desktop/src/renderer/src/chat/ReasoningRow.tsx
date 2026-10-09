@@ -3,6 +3,7 @@ import Box from '@mui/joy/Box';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { ChevronIcon } from './icons';
+import { thinScrollbarSx } from './layout';
 import { shortenArgument } from './toolRows';
 
 /**
@@ -80,7 +81,14 @@ export function ReasoningRow({ reasoning }: { reasoning: string }) {
           <Typography
             level="body-xs"
             textColor="text.tertiary"
-            sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 260, overflowY: 'auto', py: 0.5 }}
+            sx={{
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+              maxHeight: 260,
+              overflowY: 'auto',
+              py: 0.5,
+              ...thinScrollbarSx,
+            }}
             data-testid="chat-reasoning-row-body"
           >
             {reasoning}
