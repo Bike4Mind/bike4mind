@@ -1,5 +1,6 @@
 import { IResearchDataWithFiles } from '@bike4mind/common';
-import { useSessions, useWorkBenchStore } from '@client/app/contexts/SessionsContext';
+import { useSessions } from '@client/app/contexts/SessionsContext';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { useDeleteResearchData } from '@client/app/hooks/data/researchData';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
@@ -22,14 +23,19 @@ const ResearchTaskFile: FC<ResearchTaskFileProps> = ({ researchData, onView }) =
   const { fabFile } = researchData;
   const { currentSessionId } = useSessions();
   const { currentUser } = useUser();
-  const { setWorkBenchFiles } = useWorkBenchStore();
+  const { addToNotebookContext, isPending: isAttachPending } = useNotebookContextFiles();
   const { mutate: chunkFile, isPending } = useChunkFile();
   const { mutate: deleteResearchData, isPending: isDeleting } = useDeleteResearchData();
   const confirm = useConfirmation();
 
   async function handleAttachFile() {
     if (!currentSessionId) return;
-    setWorkBenchFiles(currentSessionId, prev => [...prev, fabFile as unknown as IFabFileDocument]);
+    try {
+      await addToNotebookContext(currentSessionId, fabFile as unknown as IFabFileDocument);
+    } catch (error) {
+      // addToNotebookContext already rolled back and told the user.
+      console.error('Failed to attach research file', error);
+    }
   }
 
   async function handleDeleteFile() {
@@ -160,6 +166,7 @@ const ResearchTaskFile: FC<ResearchTaskFileProps> = ({ researchData, onView }) =
             size="sm"
             sx={{ gap: '5px', flexShrink: 0 }}
             onClick={handleAttachFile}
+            disabled={isAttachPending(fabFile.id)}
           >
             <AttachFile />
           </IconButton>

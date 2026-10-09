@@ -9,6 +9,10 @@ const { fetchCalls, tagCountsState } = vi.hoisted(() => ({
   tagCountsState: { tagCounts: [] as { tag: string; count: number; fileCount?: number }[] },
 }));
 
+// The attach writer needs a QueryClient; these tests never attach.
+vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
+  useNotebookContextFiles: () => ({ addToNotebookContext: vi.fn() }),
+}));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
   useSessions: () => ({

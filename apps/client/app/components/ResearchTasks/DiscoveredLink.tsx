@@ -3,8 +3,10 @@ import { FC, useState } from 'react';
 import { OpenInNew, FileDownload, AttachFile } from '@mui/icons-material';
 import { DiscoveredLink } from '@bike4mind/common';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { getFabFileByIdFromServer } from '@client/app/utils/filesAPICalls';
-import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { useSessions } from '@client/app/contexts/SessionsContext';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 
 interface ResearchTaskDiscoveredLinkProps {
   link: DiscoveredLink;
@@ -14,7 +16,7 @@ interface ResearchTaskDiscoveredLinkProps {
 const ResearchTaskDiscoveredLink: FC<ResearchTaskDiscoveredLinkProps> = ({ link, getFabFileId }) => {
   const relevanceValue = (link.relevance ?? 0) * 100;
   const { currentSessionId } = useSessions();
-  const { setWorkBenchFiles } = useWorkBenchActions();
+  const { addToNotebookContext } = useNotebookContextFiles();
   const [isAttaching, setIsAttaching] = useState(false);
 
   const getProgressColor = (value: number) => {
@@ -24,18 +26,28 @@ const ResearchTaskDiscoveredLink: FC<ResearchTaskDiscoveredLinkProps> = ({ link,
   };
 
   async function handleAttachFile() {
+    const fabFileId = link.researchDataId ? getFabFileId(link.researchDataId) : undefined;
+    if (!fabFileId || !currentSessionId) return;
+
     setIsAttaching(true);
-    if (link.researchDataId) {
-      const fabFileId = getFabFileId(link.researchDataId);
-      console.log('fabFileId', fabFileId);
-      if (fabFileId && currentSessionId) {
-        const response = await getFabFileByIdFromServer(fabFileId);
-        if (response) {
-          setWorkBenchFiles(currentSessionId, prev => [...prev, response]);
-        }
-      }
+    try {
+      const fabFile = await fetchFabFile(fabFileId);
+      // addToNotebookContext rolls back and toasts its own failure.
+      if (fabFile) await addToNotebookContext(currentSessionId, fabFile);
+    } catch (error) {
+      console.error('Failed to attach research file', error);
+    } finally {
+      setIsAttaching(false);
     }
-    setIsAttaching(false);
+  }
+
+  async function fetchFabFile(fabFileId: string) {
+    try {
+      return await getFabFileByIdFromServer(fabFileId);
+    } catch (error) {
+      toast.error('Could not load that file');
+      throw error;
+    }
   }
 
   function handleDownload() {

@@ -30,6 +30,7 @@ const tree = () => screen.getByTestId('mock-tree');
 // attached the file and of the viewer opening or closing afterward.
 const {
   setWorkBenchFiles,
+  addToNotebookContext,
   setSessionLayout,
   sessionState,
   removeFileMutate,
@@ -41,6 +42,8 @@ const {
 } = vi.hoisted(() => ({
   lakesHookSessionIds: [] as Array<string | null | undefined>,
   setWorkBenchFiles: vi.fn(),
+  // The persisting writer an existing session attaches through (it writes session.knowledgeIds).
+  addToNotebookContext: vi.fn(),
   setSessionLayout: vi.fn(),
   // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
   // `current` is the session document the lake scope now lives on: the picker reads its
@@ -255,6 +258,9 @@ const { setModeSpy, setLakeScopeSpy, toastInfo, toastError, toastSuccess } = vi.
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
+vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
+  useNotebookContextFiles: () => ({ addToNotebookContext }),
+}));
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => setModeSpy }));
 // Mocked for the same reason as its sibling above: the real hook reaches useUpdateSession, and
 // this harness deliberately has no QueryClient. The double also REPLAYS the real hook's
@@ -408,6 +414,13 @@ describe('DataLakeExplorer chat-first surface', () => {
     // The store defaults to 'hide'; start from the docked layout an external-chat host runs, so
     // a close request is an actual transition rather than a no-op write.
     useSessionLayoutStore.setState({ layout: 'dockRight' });
+    // Mirrors the real hook's contract: a no-op (false) for a file already attached, otherwise an
+    // optimistic workbench append (which drives the highlight) and true once persisted.
+    addToNotebookContext.mockImplementation(async (sessionId: string, file: { id: string; fileName: string }) => {
+      if (workBenchState.files.some(f => f.id === file.id)) return false;
+      setWorkBenchFiles(sessionId, (prev: typeof workBenchState.files) => [...prev, file]);
+      return true;
+    });
   });
 
   it('asks for the lake labels of the current session and surfaces a server false on the header', () => {
@@ -454,17 +467,38 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setSessionLayout).not.toHaveBeenCalled();
   });
 
-  it('attach action adds the file to the workbench and toasts, never touching layout', async () => {
+  it('attach on an existing session persists it to the notebook and toasts, never touching layout', async () => {
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-attach'));
-    await vi.waitFor(() => expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function)));
-    expect(toastSuccess).toHaveBeenCalled();
+    // Through the persisting writer, not a bare workbench write: a workbench-only file rides one
+    // send as fabFileIds and then drops out of context.
+    await vi.waitFor(() =>
+      expect(addToNotebookContext).toHaveBeenCalledWith('sess-1', expect.objectContaining({ id: 'file-123' }))
+    );
+    await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalled());
     expect(setSessionLayout).not.toHaveBeenCalled();
     // Attaching alone (no View, no viewer ever opened) still highlights the row: the highlight
     // tracks workbench membership (#1693), not viewer state. waitFor (not vi.waitFor) because
     // this depends on React actually flushing the mocked store's reactive update - see the
     // useWorkBenchFiles mock comment above.
     await waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
+  });
+
+  it('attach of an already-attached file is a silent no-op', async () => {
+    workBenchState.files = [{ id: 'file-123', fileName: 'Attached.md' }];
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() => expect(addToNotebookContext).toHaveBeenCalled());
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('attach whose persist fails reports no success (the writer rolls back and toasts)', async () => {
+    addToNotebookContext.mockRejectedValueOnce(new Error('PUT failed'));
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() => expect(addToNotebookContext).toHaveBeenCalled());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(toastSuccess).not.toHaveBeenCalled();
   });
 
   it('attach on /new with createSessionForFile mints the session, then attaches', async () => {
@@ -479,6 +513,8 @@ describe('DataLakeExplorer chat-first surface', () => {
     // The minting host needs the file: the session must be created already holding it
     // (knowledgeIds), or the adoption-time workbench rehydration wipes the store write.
     expect(createSessionForFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-123' }));
+    // The create call already persisted the file; a second knowledgeIds write would be redundant.
+    expect(addToNotebookContext).not.toHaveBeenCalled();
   });
 
   it('attach with no session and no create path guides via toast, writes nothing', () => {

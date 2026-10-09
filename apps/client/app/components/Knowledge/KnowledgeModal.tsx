@@ -2,6 +2,7 @@ import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import {
   updateFileUtility,
   createFabFileOnServerWithUpload,
@@ -125,6 +126,7 @@ const KnowledgeModal: React.FC = () => {
   const queryClient = useQueryClient();
   const { setFilesMetaDataVersion, currentSessionId } = useSessions();
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const { addToNotebookContext } = useNotebookContextFiles();
 
   const { currentUser } = useUser();
 
@@ -328,7 +330,12 @@ const KnowledgeModal: React.FC = () => {
       } else {
         const newFabFile = await createFabFileOnServerWithUpload(fileData, new File([editedContent], 'temp'));
         setFabFile(newFabFile as IFabFileDocument);
-        setWorkBenchFiles(currentSessionId ?? '', files => [...files, newFabFile as IFabFileDocument]);
+        try {
+          await addToNotebookContext(currentSessionId, newFabFile as IFabFileDocument);
+        } catch (error) {
+          // The file itself is saved; the hook already rolled back the attach and told the user.
+          console.error('Failed to attach new file to notebook', error);
+        }
 
         // If system is enabled for new file, add it to user's systemFiles
         if (systemEnabled && currentUser && newFabFile) {
