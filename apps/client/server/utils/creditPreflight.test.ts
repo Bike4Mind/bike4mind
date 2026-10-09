@@ -4,7 +4,6 @@ const { mocks } = vi.hoisted(() => ({
   mocks: {
     findById: vi.fn(),
     getSettingsMap: vi.fn(),
-    enforceCredits: vi.fn(),
   },
 }));
 
@@ -12,9 +11,11 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
 }));
-vi.mock('@bike4mind/utils', () => ({
+// Keep the real getSettingsValue: the hosted default (enforcement on when the
+// setting is unset) is the behaviour these tests exist to pin.
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: (...a: unknown[]) => mocks.getSettingsMap(...a),
-  getSettingsValue: (key: string) => (key === 'enforceCredits' ? mocks.enforceCredits() : undefined),
 }));
 
 import { assertPreflightCredits, InsufficientCreditsPreflightError } from './creditPreflight';
@@ -25,26 +26,23 @@ const check = (estimatedCredits?: number) =>
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.getSettingsMap.mockResolvedValue({});
-  mocks.enforceCredits.mockReturnValue(true);
 });
 
 describe('assertPreflightCredits', () => {
-  it.each([true, false])('rejects an unknown user whatever enforceCredits says (%s)', async enforced => {
-    mocks.enforceCredits.mockReturnValue(enforced);
-    mocks.findById.mockResolvedValue(null);
-    await expect(check()).rejects.toBeInstanceOf(InsufficientCreditsPreflightError);
-  });
+  describe('enforcement on (the hosted default when the setting is unset)', () => {
+    it('rejects a user that does not exist', async () => {
+      mocks.findById.mockResolvedValue(null);
+      await expect(check()).rejects.toBeInstanceOf(InsufficientCreditsPreflightError);
+    });
 
-  it.each([undefined, false])('admits a zero-balance user when enforceCredits is %s', async v => {
-    mocks.enforceCredits.mockReturnValue(v);
-    mocks.findById.mockResolvedValue({ currentCredits: 0 });
-    await expect(check(100)).resolves.toBeUndefined();
-  });
-
-  describe('with credit enforcement on', () => {
-    it.each([0, -5])('rejects a balance of %s even when the call is estimated free', async balance => {
-      mocks.findById.mockResolvedValue({ currentCredits: balance });
+    it('rejects a zero balance even when the call is estimated free', async () => {
+      mocks.findById.mockResolvedValue({ currentCredits: 0 });
       await expect(check(0)).rejects.toThrow('Insufficient credits for text-to-speech');
+    });
+
+    it('rejects a negative balance', async () => {
+      mocks.findById.mockResolvedValue({ currentCredits: -5 });
+      await expect(check(0)).rejects.toBeInstanceOf(InsufficientCreditsPreflightError);
     });
 
     it('treats a missing currentCredits field as zero', async () => {
@@ -67,6 +65,35 @@ describe('assertPreflightCredits', () => {
     it('admits a balance that exactly covers the estimate', async () => {
       mocks.findById.mockResolvedValue({ currentCredits: 10 });
       await expect(check(10)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('enforcement off (an explicit false setting)', () => {
+    beforeEach(() => mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' }));
+
+    it('admits a zero-balance user', async () => {
+      mocks.findById.mockResolvedValue({ currentCredits: 0 });
+      await expect(check(100)).resolves.toBeUndefined();
+    });
+
+    it('still rejects a user that does not exist', async () => {
+      mocks.findById.mockResolvedValue(null);
+      await expect(check()).rejects.toBeInstanceOf(InsufficientCreditsPreflightError);
+    });
+  });
+
+  describe('read failures', () => {
+    it('propagates a settings read failure rather than admitting', async () => {
+      const boom = new Error('settings down');
+      mocks.getSettingsMap.mockRejectedValue(boom);
+      mocks.findById.mockResolvedValue({ currentCredits: 100 });
+      await expect(check()).rejects.toBe(boom);
+    });
+
+    it('propagates a user read failure rather than admitting', async () => {
+      const boom = new Error('db down');
+      mocks.findById.mockRejectedValue(boom);
+      await expect(check()).rejects.toBe(boom);
     });
   });
 });
