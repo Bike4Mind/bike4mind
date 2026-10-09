@@ -44,6 +44,13 @@ import {
   updateProjectContract,
   deleteProjectContract,
 } from './projects.contract';
+import {
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
+} from './agents.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -95,4 +102,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createProjectContract,
   updateProjectContract,
   deleteProjectContract,
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
 ];

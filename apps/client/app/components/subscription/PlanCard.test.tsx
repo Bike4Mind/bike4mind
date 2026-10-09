@@ -48,4 +48,10 @@ describe('PlanCard', () => {
     expect(screen.getByText('subscription_modal.subscription_renewal')).toBeInTheDocument();
     expect(screen.queryByText('subscriptions.payment_issue')).not.toBeInTheDocument();
   });
+
+  it('does not render a masked card-number placeholder', () => {
+    renderCard(true);
+
+    expect(screen.queryByText('****')).not.toBeInTheDocument();
+  });
 });

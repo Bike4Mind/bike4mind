@@ -65,4 +65,15 @@ describe('POST /api/agents - credit allocation', () => {
     expect(json).toHaveBeenCalledWith({ error: 'User not found' });
     expect(h.agentCreate).not.toHaveBeenCalled();
   });
+
+  it('answers 400 with the cap message at the tier cap and creates nothing', async () => {
+    h.countByUserId.mockResolvedValue(10);
+    const { res, json, status } = makeRes();
+
+    await h.handler!({ user: { id: 'user-1' }, body: { name: 'Agent' } }, res);
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'Agent limit reached for your tier (10 max)' });
+    expect(h.agentCreate).not.toHaveBeenCalled();
+  });
 });

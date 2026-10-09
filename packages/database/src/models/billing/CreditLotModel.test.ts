@@ -29,6 +29,16 @@ describe('CreditLotModel', () => {
     expect(lot.id).toBeTruthy();
   });
 
+  it('keeps settlement absent on grants and persists an explicit stale settlement', async () => {
+    const lot = await creditLotRepository.create(makeLot());
+    expect(lot.settledAt).toBeUndefined();
+    const settledAt = new Date('2027-01-01T00:00:00Z');
+    await creditLotRepository.update({ id: lot.id, consumedAssigned: 100, settledAt });
+    const persisted = await CreditLot.findById(lot.id).lean();
+    expect(persisted?.settledAt).toEqual(settledAt);
+    expect(persisted?.consumedAssigned).toBe(100);
+  });
+
   it('findByOwner returns only lots for that owner, sorted soonest-expiry-first', async () => {
     await creditLotRepository.create(makeLot({ expiresAt: new Date('2027-06-01T00:00:00.000Z') }));
     await creditLotRepository.create(makeLot({ expiresAt: new Date('2027-01-01T00:00:00.000Z') }));

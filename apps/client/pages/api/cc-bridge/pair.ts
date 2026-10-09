@@ -3,6 +3,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
+import { CcBridgeDeviceLabelSchema } from '@server/utils/ccBridgeDeviceLabel';
 import { ensureTavernAccess } from '@server/utils/errors';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
@@ -12,15 +13,7 @@ const PAIRING_TOKEN_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_DEVICE_LABEL_PREFIX = 'cc-bridge';
 
 const PairRequestSchema = z.object({
-  // Restrict characters so device labels stay safely renderable in settings
-  // UI / audit logs without introducing a separate escaping story. Spaces
-  // and basic punctuation are allowed; control chars and HTML are not.
-  deviceLabel: z
-    .string()
-    .min(1)
-    .max(100)
-    .regex(/^[\w\s.\-+:]+$/, 'deviceLabel can only contain letters, digits, spaces, or . - + : _')
-    .optional(),
+  deviceLabel: CcBridgeDeviceLabelSchema.optional(),
   platform: z.string().max(50).optional(),
 });
 

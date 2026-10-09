@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import {
+  canCopyWithinSurface,
   canUseSurface,
   getWorkspaceSurface,
   WORKSPACE_SURFACES,
@@ -8,6 +9,7 @@ import {
 } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
+import { premiumWorkspaceCopyEntitlements } from '@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generated';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 
 // A product surface ships only in builds that carry its route; offering one without it dead-ends.
@@ -36,7 +38,12 @@ export function useWorkspaceTargets(session: Pick<ISessionDocument, 'surface' | 
     const current = session ? getWorkspaceSurface(session.surface) : undefined;
     if (!session || !current?.movable) return { current, copyTargets: [], moveTargets: [] };
 
-    const accessUser = { isAdmin, tags: currentUser?.tags, entitlements };
+    const accessUser = {
+      isAdmin,
+      tags: currentUser?.tags,
+      entitlements,
+      copyEntitlements: premiumWorkspaceCopyEntitlements,
+    };
     const others = WORKSPACE_SURFACES.filter(
       surface =>
         surface.id !== current.id &&
@@ -46,9 +53,10 @@ export function useWorkspaceTargets(session: Pick<ISessionDocument, 'surface' | 
     );
     const isOwner = !!currentUser && session.userId === currentUser.id;
     // A copy into "current" is sent as a plain clone/fork (no explicit targetSurface), which the
-    // server only inherits when the caller can use that workspace - offering it otherwise would
-    // check the box but silently land the copy in the main list instead. Omit it in that case.
-    const copyTargets = canUseSurface(accessUser, current.id) ? [current, ...others] : others;
+    // server only inherits when the caller can copy within that workspace (use it, or hold a copy
+    // grant for it) - offering it otherwise would check the box but silently land the copy in the
+    // main list instead. Omit it in that case.
+    const copyTargets = canCopyWithinSurface(accessUser, current.id) ? [current, ...others] : others;
     return { current, copyTargets, moveTargets: isOwner ? others : [] };
   }, [session, currentUser, isAdmin, entitlements]);
 }

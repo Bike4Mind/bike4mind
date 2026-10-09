@@ -54,7 +54,7 @@ function infoDescription(): string {
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Sessions**, **Files**, **Projects**, **Data Lakes** and **Account**.',
+      '**Images**, **Audio**, **Sessions**, **Files**, **Projects**, **Agents**, **Data Lakes** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -378,6 +378,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       name: 'Projects',
       description:
         'Workspaces that group sessions and files: list and read the projects you can reach, and create new ones.',
+    },
+    {
+      name: 'Agents',
+      description:
+        'Custom agents with their own system prompt, model settings and tool access: list, read and manage them.',
     },
   ];
 

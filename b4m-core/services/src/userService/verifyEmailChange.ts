@@ -1,7 +1,7 @@
 import { IUserDocument } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import { safeCompareTokens } from '../utils/crypto';
+import { safeCompareTokens } from '@bike4mind/auth/crypto';
 
 const verifyEmailChangeSchema = z.object({
   token: z.string(),
