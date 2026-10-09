@@ -1244,12 +1244,18 @@ export class AnthropicBackend implements ICompletionBackend {
           `[AnthropicBackend] ${isQuestMaster ? 'QuestMaster' : 'User'} thinking enabled (${currentModelInfo.thinkingStyle ?? 'legacy'}): max_tokens=${apiParams.max_tokens}, effort=${effort}`
         );
       } else if (options.reasoningEffort) {
-        const plan = planReasoningEffort(
+        const requested = planReasoningEffort(
           model,
           currentModelInfo,
           options.reasoningEffort,
           apiParams.max_tokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS
         );
+        // The synthesized response_format tool is forced via tool_choice, which the API rejects
+        // alongside thinking - so only the off switch survives there.
+        const plan: ReasoningEffortPlan =
+          usingResponseFormatToolUse && (requested.kind === 'adaptive' || requested.kind === 'budget')
+            ? { kind: 'default' }
+            : requested;
         this.isThinkingEnabled = this.applyReasoningEffortPlan(apiParams, plan);
         this.logger.debug(
           `[AnthropicBackend] reasoningEffort=${options.reasoningEffort} -> ${plan.kind}: max_tokens=${apiParams.max_tokens}`

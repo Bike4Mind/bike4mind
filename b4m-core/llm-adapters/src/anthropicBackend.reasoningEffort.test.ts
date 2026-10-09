@@ -27,7 +27,7 @@ function buildBackend() {
   return { backend, getCaptured: () => captured };
 }
 
-async function requestFor(model: string, options: Partial<ICompletionOptions>): Promise<Record<string, unknown>> {
+async function run(model: string, options: Partial<ICompletionOptions>) {
   const { backend, getCaptured } = buildBackend();
   try {
     await backend.complete(
@@ -39,8 +39,19 @@ async function requestFor(model: string, options: Partial<ICompletionOptions>): 
   } catch (err) {
     if (err !== SENTINEL) throw err;
   }
-  return getCaptured()[0];
+  // isThinkingEnabled drives replaying thinking blocks on a tool turn; the API 400s without them.
+  const thinkingEnabled = (backend as unknown as { isThinkingEnabled: boolean }).isThinkingEnabled;
+  return { request: getCaptured()[0], thinkingEnabled };
 }
+
+async function requestFor(model: string, options: Partial<ICompletionOptions>): Promise<Record<string, unknown>> {
+  return (await run(model, options)).request;
+}
+
+const jsonSchemaFormat: ICompletionOptions['responseFormat'] = {
+  type: 'json_schema',
+  json_schema: { name: 'answer', schema: { type: 'object', properties: {} }, strict: true },
+};
 
 describe('AnthropicBackend reasoningEffort', () => {
   it('switches thinking off for `none` and keeps the caller max_tokens', async () => {
@@ -81,6 +92,38 @@ describe('AnthropicBackend reasoningEffort', () => {
 
     expect(request.thinking).toEqual({ type: 'adaptive' });
     expect(request.output_config).toEqual({ effort: 'high' });
+  });
+
+  it.each([
+    [ChatModels.CLAUDE_5_OPUS, 'medium', true],
+    [ChatModels.CLAUDE_4_5_SONNET, 'high', true],
+    [ChatModels.CLAUDE_5_SONNET, 'none', false],
+  ] as const)('marks thinking on for %s at %s: %s', async (model, reasoningEffort, expected) => {
+    const { thinkingEnabled } = await run(model, { reasoningEffort, maxTokens: 8192 });
+
+    expect(thinkingEnabled).toBe(expected);
+  });
+
+  it('keeps thinking off under the forced response_format tool, which cannot run alongside it', async () => {
+    const request = await requestFor(ChatModels.CLAUDE_4_5_SONNET, {
+      reasoningEffort: 'high',
+      maxTokens: 8192,
+      responseFormat: jsonSchemaFormat,
+    });
+
+    expect(request.tool_choice).toMatchObject({ type: 'tool' });
+    expect(request.thinking).toBeUndefined();
+    expect(request.output_config).toBeUndefined();
+  });
+
+  it('still honours `none` under the forced response_format tool', async () => {
+    const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+      reasoningEffort: 'none',
+      maxTokens: 800,
+      responseFormat: jsonSchemaFormat,
+    });
+
+    expect(request.thinking).toEqual({ type: 'disabled' });
   });
 
   it('sends no thinking config when reasoningEffort is absent', async () => {

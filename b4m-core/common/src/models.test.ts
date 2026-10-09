@@ -8,6 +8,7 @@ describe('isClaudeModelId', () => {
     ChatModels.CLAUDE_3_HAIKU_BEDROCK,
     ChatModels.CLAUDE_4_SONNET_BEDROCK,
     ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+    'us-gov.anthropic.claude-3-5-sonnet-20240620-v1:0',
   ])('matches %s', id => {
     expect(isClaudeModelId(id)).toBe(true);
   });

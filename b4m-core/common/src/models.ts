@@ -332,7 +332,7 @@ export type ChatModelName = z.infer<typeof supportedChatModels>;
 export const isGeminiModelId = (model: string): boolean => model.startsWith('gemini');
 
 /** Claude ids, direct (`claude-...`) or on Bedrock (`anthropic.claude-...`, optionally region-prefixed). */
-export const isClaudeModelId = (model: string): boolean => /^(?:(?:[a-z]+\.)?anthropic\.)?claude-/.test(model);
+export const isClaudeModelId = (model: string): boolean => /^(?:(?:[a-z-]+\.)?anthropic\.)?claude-/.test(model);
 
 /**
  * Models that support the reasoning_effort parameter.
