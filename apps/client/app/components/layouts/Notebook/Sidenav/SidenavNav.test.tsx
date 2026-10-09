@@ -18,7 +18,13 @@ const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock, navIte
   useGearsNavSignalMock: vi.fn(),
   useVideoModelsMock: vi.fn(),
   // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
-  navItems: [] as Array<{ path: string; label: string; icon?: ComponentType; requireEntitlement?: string }>,
+  navItems: [] as Array<{
+    path: string;
+    label: string;
+    icon?: ComponentType;
+    requireEntitlement?: string;
+    sidebar?: boolean;
+  }>,
   entitlements: [] as string[],
 }));
 
@@ -185,5 +191,55 @@ describe('SidenavNav Bob row', () => {
     navItems.push({ path: '/bob', label: 'Bob' });
     renderNav();
     expect(bobRow()).toContainElement(screen.getByTestId('Diversity3OutlinedIcon'));
+  });
+});
+
+describe('SidenavNav overlay-contributed sidebar rows', () => {
+  const contributedRow = () => screen.queryByTestId('sidenav-nav-premium-launch');
+
+  it('draws no row when no overlay contributes one (open-core build)', () => {
+    renderNav();
+    expect(screen.queryByTestId(/^sidenav-nav-premium-/)).not.toBeInTheDocument();
+  });
+
+  it('draws a nav item that opts into the sidebar, with its label and gate', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', requireEntitlement: 'launch:pro', sidebar: true });
+    renderNav();
+    expect(contributedRow()).not.toBeInTheDocument();
+
+    entitlements.push('launch:pro');
+    renderNav();
+    expect(contributedRow()).toHaveTextContent('Launch Pad');
+  });
+
+  it('leaves a nav item that does not opt in to the More flyout', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad' });
+    renderNav();
+    expect(contributedRow()).not.toBeInTheDocument();
+  });
+
+  it('uses the contributed icon, falling back to a stock glyph', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', sidebar: true });
+    renderNav();
+    expect(contributedRow()).toContainElement(screen.getByTestId('ExtensionOutlinedIcon'));
+
+    navItems.length = 0;
+    navItems.push({
+      path: '/launch',
+      label: 'Launch Pad',
+      sidebar: true,
+      icon: () => <svg data-testid="contributed-sidebar-icon" />,
+    });
+    renderNav();
+    expect(screen.getAllByTestId('sidenav-nav-premium-launch').at(-1)).toContainElement(
+      screen.getByTestId('contributed-sidebar-icon')
+    );
+  });
+
+  it('does not draw Bob twice when its nav item opts in too', () => {
+    navItems.push({ path: '/bob', label: 'Bob', sidebar: true });
+    renderNav();
+    expect(screen.getAllByTestId('sidenav-nav-bob')).toHaveLength(1);
+    expect(screen.queryByTestId('sidenav-nav-premium-bob')).not.toBeInTheDocument();
   });
 });

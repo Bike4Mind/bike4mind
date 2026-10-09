@@ -16,6 +16,7 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
+import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
@@ -112,12 +113,14 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // gate matches ProfileMenu's source (STRICT: no admin/developer bypass) and open-core builds
   // (no overlay -> empty premiumNavItems) hide the row instead of dead-ending on a missing route.
   const { data: entitlements } = useEntitlements();
-  const bobNavItem = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags).find(
-    item => item.path === '/bob'
-  );
+  const visibleNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
+  const bobNavItem = visibleNavItems.find(item => item.path === '/bob');
   // The row uses the icon the overlay contributes with its nav item (the same one ProfileMenu
   // renders), falling back to a stock glyph when it contributes none.
   const BobIcon = bobNavItem?.icon;
+  // Nav items an overlay opts into the sidebar (`sidebar: true`), under the same STRICT gate as Bob
+  // and drawn the same way. Bob keeps its dedicated row, so its path is skipped rather than drawn twice.
+  const sidebarNavItems = visibleNavItems.filter(item => item.sidebar && item.path !== '/bob');
   // Gears no longer gates navigation. A feature's row is always present; the gear
   // still pays its one-time credit reward on first use, but discovery must not
   // depend on having already discovered it - Hearth was only reachable from the
@@ -210,6 +213,21 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
+    ...sidebarNavItems.map(item => {
+      const ContributedIcon = item.icon;
+      return {
+        // Prefixed so a contributed path can never collide with a core row's key or test id.
+        key: `premium${item.path.replace(/[^a-z0-9]+/gi, '-')}`,
+        label: item.label,
+        icon: iconSlot(ContributedIcon ? <ContributedIcon /> : <ExtensionOutlinedIcon sx={{ fontSize: '18px' }} />),
+        isActive: location.pathname === item.path || location.pathname.startsWith(`${item.path}/`),
+        onClick: () => {
+          closeOnMobile();
+          // Codegen-mounted, so not in Tanstack's statically-typed route union - same cast as /bob.
+          navigate({ to: item.path } as never);
+        },
+      };
+    }),
     ...(isMeetingsEnabled
       ? [
           {

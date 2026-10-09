@@ -96,6 +96,11 @@ export interface PremiumNavDescriptor {
   requireEntitlement?: string;
   /** Show only when the user carries the tag; OR with `requireEntitlement` when both set. */
   requireFeatureTag?: string;
+  /**
+   * `true` -> also render the item as a row in the primary notebook sidebar (SidenavNav), under the
+   * same visibility rule. Omitted -> the "More" flyout only. Use for a product's main launch point.
+   */
+  sidebar?: boolean;
 }
 
 /**
