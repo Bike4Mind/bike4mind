@@ -239,7 +239,14 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
   // smooth at a full page of rows without a debounce timer to manage.
   const deferredQuery = useDeferredValue(query);
   const indexed = useMemo(() => indexArtifacts(summaries ?? []), [summaries]);
-  const typeCounts = useMemo(() => countTypes(indexed), [indexed]);
+  // The selected type keeps its chip even after a refresh drops its last row, so the filter can
+  // still be turned off where it was turned on.
+  const typeCounts = useMemo(() => {
+    const counts = countTypes(indexed);
+    return type === null || counts.some(entry => entry.type === type)
+      ? counts
+      : [...counts, { type, label: typeLabel(type), count: 0 }];
+  }, [indexed, type]);
   const visible = useMemo(
     () => selectArtifacts(indexed, { query: deferredQuery, type, sort }),
     [indexed, deferredQuery, type, sort]

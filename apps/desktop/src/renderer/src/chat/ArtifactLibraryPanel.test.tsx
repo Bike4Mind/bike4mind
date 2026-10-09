@@ -21,7 +21,7 @@ window.matchMedia ??= ((query: string) => ({
 })) as typeof window.matchMedia;
 
 const summaries: ChatArtifactSummary[] = [
-  { id: 'a1', title: 'Beta chart', type: 'html', createdAt: '2026-03-02T00:00:00.000Z' },
+  { id: 'a1', title: 'Beta chart', type: 'html', createdAt: '2025-12-02T00:00:00.000Z' },
   { id: 'a2', title: 'Alpha flow', type: 'mermaid', createdAt: '2026-01-05T00:00:00.000Z', description: 'Login steps' },
   { id: 'a3', title: 'Gamma page', type: 'html', createdAt: '2026-06-10T00:00:00.000Z' },
 ];
@@ -127,9 +127,9 @@ describe('ArtifactLibraryPanel list', () => {
 
   it('lists newest first with an initial avatar and a type label per row', async () => {
     await mount();
-    expect(titles()).toEqual(['Gamma page', 'Beta chart', 'Alpha flow']);
-    expect(allByTestId('artifact-library-row-avatar').map(node => node.textContent)).toEqual(['G', 'B', 'A']);
-    expect(allByTestId('artifact-library-row-type').map(node => node.textContent)).toEqual(['HTML', 'HTML', 'Diagram']);
+    expect(titles()).toEqual(['Gamma page', 'Alpha flow', 'Beta chart']);
+    expect(allByTestId('artifact-library-row-avatar').map(node => node.textContent)).toEqual(['G', 'A', 'B']);
+    expect(allByTestId('artifact-library-row-type').map(node => node.textContent)).toEqual(['HTML', 'Diagram', 'HTML']);
     expect(byTestId('artifact-library-truncated')).toBeNull();
   });
 
@@ -144,6 +144,19 @@ describe('ArtifactLibraryPanel list', () => {
 
     await click(byTestId('artifact-library-filter-mermaid-chip'));
     expect(titles()).toHaveLength(3);
+  });
+
+  it('keeps the selected type chip when a refresh drops its last row', async () => {
+    await mount();
+    await click(byTestId('artifact-library-filter-mermaid-chip'));
+    listArtifacts.mockResolvedValueOnce({ artifacts: summaries.filter(row => row.type !== 'mermaid'), total: 2 });
+    await click(byTestId('artifact-library-refresh-btn'));
+    expect(chipText('artifact-library-filter-mermaid-chip')).toBe('Diagram 0');
+    expect(byTestId('artifact-library-no-matches')).not.toBeNull();
+
+    await click(byTestId('artifact-library-filter-mermaid-chip'));
+    expect(titles()).toHaveLength(2);
+    expect(byTestId('artifact-library-filter-mermaid-chip')).toBeNull();
   });
 
   it('searches titles and descriptions, and clears to the whole list', async () => {
@@ -167,11 +180,11 @@ describe('ArtifactLibraryPanel list', () => {
       await click(document.querySelector<HTMLElement>(`[data-testid="artifact-library-sort-${value}"]`));
     };
     await pick('oldest');
-    expect(titles()).toEqual(['Alpha flow', 'Beta chart', 'Gamma page']);
+    expect(titles()).toEqual(['Beta chart', 'Alpha flow', 'Gamma page']);
     await pick('title');
     expect(titles()).toEqual(['Alpha flow', 'Beta chart', 'Gamma page']);
     await pick('newest');
-    expect(titles()).toEqual(['Gamma page', 'Beta chart', 'Alpha flow']);
+    expect(titles()).toEqual(['Gamma page', 'Alpha flow', 'Beta chart']);
   });
 
   it('fetches a body only when its row is opened, and only once', async () => {
@@ -195,7 +208,7 @@ describe('ArtifactLibraryPanel list', () => {
   it('keeps an opened row open and fetched when a filter hides it and brings it back', async () => {
     readArtifact.mockResolvedValue({ artifact: { id: 'a2', type: 'code', title: 'Alpha flow', content: 'body' } });
     await mount();
-    await click(allByTestId('artifact-library-row-summary')[2] ?? null);
+    await click(allByTestId('artifact-library-row-summary')[1] ?? null);
     expect(readArtifact).toHaveBeenCalledWith('a2');
 
     await click(byTestId('artifact-library-filter-html-chip'));
