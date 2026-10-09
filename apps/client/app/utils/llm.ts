@@ -4,7 +4,7 @@ import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { QueryClient } from '@tanstack/react-query';
 import perfLogger from './performanceLogger';
-import { replaceQueryData, setOptimisticQueryData, updateSingleQueryDataFast } from './react-query';
+import { markOptimistic, replaceQueryData, setOptimisticQueryData, updateSingleQueryDataFast } from './react-query';
 import { useStreamingState } from '../hooks/useStreamingState';
 
 function getErrorMessage(error: unknown): string {
@@ -177,7 +177,7 @@ export function appendReplyToLatestOptimisticBubble(
       // without waiting for the change-stream to deliver the persisted Quest.
       // creditsUsed rides the same path so the credits chip appears on
       // completion instead of only after the change-stream Quest lands.
-      const patched: IChatHistoryItemDocument = {
+      const patched = markOptimistic({
         ...page.data[idx],
         replies: [reply],
         updatedAt: new Date(),
@@ -191,7 +191,7 @@ export function appendReplyToLatestOptimisticBubble(
               },
             }
           : {}),
-      };
+      });
       const data = [...page.data];
       data[idx] = patched;
       return { ...page, data };
@@ -254,11 +254,11 @@ export async function createOptimisticQuest(
     return data;
   } catch (error) {
     const errorMessage = getErrorMessage(error);
-    const failedQuest: IChatHistoryItemDocument = {
+    const failedQuest = markOptimistic({
       ...optimisticQuest,
-      status: 'done',
+      status: 'done' as const,
       replies: [`**Error:** ${errorMessage}`],
-    };
+    });
     replaceQueryData(queryClient, ['quests', 'session', sessionId], optimisticQuest.id, failedQuest);
     // Reset streaming state on error so collection subscription resumes
     useStreamingState.getState().resetStreaming(sessionId);
@@ -287,7 +287,7 @@ export async function updateOptimisticQuest(
       queryClient,
       ['quests', 'session', sessionId],
       'write',
-      { id: questId, ...updates } as IChatHistoryItemDocument,
+      markOptimistic({ id: questId, ...updates } as IChatHistoryItemDocument),
       { keysAllowedToCreate: [] }
     );
   }
@@ -331,7 +331,7 @@ export async function updateOptimisticQuest(
           createdAt: new Date(),
           updatedAt: new Date(),
         };
-        updateSingleQueryDataFast(queryClient, queryKey, 'write', failedQuest, {
+        updateSingleQueryDataFast(queryClient, queryKey, 'write', markOptimistic(failedQuest), {
           keysAllowedToCreate: [],
         });
       }

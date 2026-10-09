@@ -7,6 +7,11 @@ import {
   appendReplyToLatestOptimisticBubble,
   updateOptimisticQuest,
 } from './llm';
+import { OPTIMISTIC_KEY, updateSingleQueryDataFast } from './react-query';
+
+type WithOptimisticMarker = { [OPTIMISTIC_KEY]?: true };
+const marked = (quest: IChatHistoryItemDocument): IChatHistoryItemDocument & WithOptimisticMarker =>
+  quest as IChatHistoryItemDocument & WithOptimisticMarker;
 
 const sessionId = 'sess_abc';
 const queryKey = ['quests', 'session', sessionId];
@@ -153,6 +158,60 @@ describe('swapOptimisticPromptBubbleId', () => {
 
     const otherData = qc.getQueryData(otherKey) as { pages: Array<{ data: IChatHistoryItemDocument[] }> } | undefined;
     expect(otherData?.pages[0].data[0].id).toBe('optimistic-quest-sess_xyz-99999');
+  });
+});
+
+// The client stamps optimistic bubbles with `new Date()`. When that client clock runs
+// ahead of the server's, the authoritative document used to lose the LWW check and get
+// dropped. These cover the optimistic marker that lets the server win regardless.
+describe('optimistic marker', () => {
+  it('appendReply keeps the entry marked optimistic and the id stable', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'hi');
+    const id = readQuests(qc)[0].id;
+
+    appendReplyToLatestOptimisticBubble(qc, sessionId, 'the answer', 'exec_1');
+
+    const quest = marked(readQuests(qc)[0]);
+    expect(quest.id).toBe(id);
+    expect(quest.replies).toEqual(['the answer']);
+    expect(quest[OPTIMISTIC_KEY]).toBe(true);
+  });
+
+  it('swapOptimisticPromptBubbleId preserves the marker', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'hi');
+
+    swapOptimisticPromptBubbleId(qc, sessionId, 'real_quest_id');
+
+    const quest = marked(readQuests(qc)[0]);
+    expect(quest.id).toBe('real_quest_id');
+    expect(quest[OPTIMISTIC_KEY]).toBe(true);
+  });
+
+  it('a server doc with an older timestamp supersedes the optimistic bubble (full flow)', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'hi');
+    appendReplyToLatestOptimisticBubble(qc, sessionId, 'partial', 'exec_1');
+    const id = readQuests(qc)[0].id;
+
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      makeQuest({
+        id,
+        updatedAt: new Date('2020-01-01T00:00:00.000Z'),
+        replies: ['authoritative'],
+        creditsUsed: 42,
+      }),
+      { keysAllowedToCreate: [] }
+    );
+
+    const quest = marked(readQuests(qc)[0]);
+    expect(quest.replies).toEqual(['authoritative']);
+    expect(quest.creditsUsed).toBe(42);
+    expect(quest[OPTIMISTIC_KEY]).toBeUndefined();
   });
 });
 

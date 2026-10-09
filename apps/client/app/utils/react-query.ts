@@ -11,6 +11,55 @@ import { useWebsocket } from '@/app/contexts/WebsocketContext';
 import { uniqBy } from 'lodash';
 
 /**
+ * Marks a cache entry written by an optimistic (client-authored) patch. The reconciler
+ * below lets an authoritative server document supersede a marked entry regardless of
+ * `updatedAt`, because the client clock that stamped an optimistic timestamp can run
+ * ahead of the server's. The marker is cleared when the server document lands, so
+ * server-vs-server last-write-wins is unaffected.
+ */
+export const OPTIMISTIC_KEY = '_optimistic';
+export type OptimisticMarker = { [OPTIMISTIC_KEY]?: true };
+
+export const markOptimistic = <T extends object>(data: T): T & OptimisticMarker => ({
+  ...data,
+  [OPTIMISTIC_KEY]: true,
+});
+
+const isOptimistic = (obj: unknown): boolean =>
+  !!obj && typeof obj === 'object' && (obj as OptimisticMarker)[OPTIMISTIC_KEY] === true;
+
+/**
+ * Merge an incoming document over an existing cache entry, carrying the optimistic
+ * marker from whichever side owns it: an optimistic incoming keeps `_optimistic`, an
+ * authoritative incoming drops any marker the existing entry carried.
+ */
+const mergeIncoming = <T extends object>(existing: T, incoming: T): T => {
+  const merged = { ...existing, ...incoming } as Record<string, unknown>;
+  if (isOptimistic(incoming)) {
+    merged[OPTIMISTIC_KEY] = true;
+  } else {
+    delete merged[OPTIMISTIC_KEY];
+  }
+  return merged as T;
+};
+
+/**
+ * True when `incoming` may replace `existing`. An authoritative (unmarked) document
+ * always supersedes an optimistic placeholder, regardless of timestamps - the
+ * placeholder's `updatedAt` is client-clock and may be ahead of the server's. Every
+ * other pair keeps the pre-existing `updatedAt` last-write-wins rule.
+ */
+const canApplyIncoming = <T extends object>(
+  existing: T,
+  incoming: T,
+  newUpdatedAt: number | null,
+  existingUpdatedAt: number | null
+): boolean => {
+  if (isOptimistic(existing) && !isOptimistic(incoming)) return true;
+  return !existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt;
+};
+
+/**
  * This function is used to update the cached data that exists in the react-query cache.
  * It handles updating both infinite queries and regular queries, supporting write and delete operations.
  *
@@ -169,9 +218,9 @@ export const updateSingleQueryDataFast = <
               const existingItem = page.data[itemIndex];
               const existingUpdatedAt = getTs(existingItem);
 
-              if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
+              if (canApplyIncoming(existingItem, data, newUpdatedAt, existingUpdatedAt)) {
                 const updatedData = [...page.data];
-                updatedData[itemIndex] = { ...existingItem, ...data, cachedUpdate: cacheTime } as any;
+                updatedData[itemIndex] = { ...mergeIncoming(existingItem, data), cachedUpdate: cacheTime } as any;
                 return { ...page, data: updatedData };
               }
             }
@@ -207,8 +256,8 @@ export const updateSingleQueryDataFast = <
             const existingItem = currentData.data[itemIndex];
             const existingUpdatedAt = getTs(existingItem);
 
-            if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
-              updatedData[itemIndex] = { ...existingItem, ...data, cachedUpdate: cacheTime } as any;
+            if (canApplyIncoming(existingItem, data, newUpdatedAt, existingUpdatedAt)) {
+              updatedData[itemIndex] = { ...mergeIncoming(existingItem, data), cachedUpdate: cacheTime } as any;
             }
           } else if (allowCreate) {
             updatedData = [{ ...data, cachedUpdate: cacheTime } as any, ...currentData.data];
@@ -230,8 +279,8 @@ export const updateSingleQueryDataFast = <
             const existingItem = currentData[itemIndex];
             const existingUpdatedAt = getTs(existingItem);
 
-            if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
-              updatedData[itemIndex] = { ...existingItem, ...data } as any;
+            if (canApplyIncoming(existingItem, data, newUpdatedAt, existingUpdatedAt)) {
+              updatedData[itemIndex] = mergeIncoming(existingItem, data) as any;
             }
           } else if (allowCreate) {
             updatedData = [data, ...currentData];
@@ -241,8 +290,8 @@ export const updateSingleQueryDataFast = <
       } else if ((currentData as any).id === (data as any).id) {
         const existingUpdatedAt = getTs(currentData as any);
 
-        if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
-          return { ...(currentData as any), ...(data as any) };
+        if (canApplyIncoming(currentData as any, data as any, newUpdatedAt, existingUpdatedAt)) {
+          return mergeIncoming(currentData as any, data as any);
         }
       }
 
@@ -481,10 +530,11 @@ export const setOptimisticQueryData = async <T extends { id: string }>(
   queryKey: readonly unknown[],
   data: T
 ) => {
+  const optimisticData = markOptimistic(data);
   queryClient.setQueryData<InfiniteData<{ data: T[] }, { page: number }>>(queryKey, currentData => {
     if (!currentData) {
       return {
-        pages: [{ data: [data], hasMore: false }],
+        pages: [{ data: [optimisticData], hasMore: false }],
         pageParams: [{ page: 1 }],
       };
     }
@@ -502,7 +552,7 @@ export const setOptimisticQueryData = async <T extends { id: string }>(
         if (firstPage) {
           updatedPages[0] = {
             ...firstPage,
-            data: [{ ...data }, ...firstPage.data],
+            data: [optimisticData, ...firstPage.data],
           };
         }
       } else {
@@ -539,9 +589,12 @@ export const replaceQueryData = async <
         const itemIndex = page.data.findIndex(item => item.id === replaceId);
 
         if (itemIndex >= 0) {
-          const existing = page.data.find(item => item.id === replaceId);
+          const existingItem = page.data[itemIndex];
           const updatedData = [...page.data];
-          updatedData[itemIndex] = { ...existing, ...data, id: data.id }; // Make sure id is changed
+          // Make sure id is changed. mergeIncoming drops the optimistic marker when the
+          // replacement is an authoritative server document, and keeps it for a client-
+          // authored replacement (e.g. the error reply built from the optimistic quest).
+          updatedData[itemIndex] = { ...mergeIncoming(existingItem, data), id: data.id };
           return { ...page, data: uniqBy(updatedData, 'id') };
         }
         return page;
