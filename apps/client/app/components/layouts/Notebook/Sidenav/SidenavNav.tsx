@@ -120,7 +120,13 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const BobIcon = bobNavItem?.icon;
   // Nav items an overlay opts into the sidebar (`sidebar: true`), under the same STRICT gate as Bob
   // and drawn the same way. Bob keeps its dedicated row, so its path is skipped rather than drawn twice.
-  const sidebarNavItems = visibleNavItems.filter(item => item.sidebar && item.path !== '/bob');
+  // Keyed by path, prefixed so a contributed row can never collide with a core row's key or test id.
+  // Paths that differ only in punctuation map to one key, so the first such item wins rather than
+  // two rows sharing a React key and a test id.
+  const sidebarNavItems = visibleNavItems
+    .filter(item => item.sidebar && item.path !== '/bob')
+    .map(item => ({ item, key: `premium${item.path.replace(/[^a-z0-9]+/gi, '-')}` }))
+    .filter(({ key }, index, all) => all.findIndex(other => other.key === key) === index);
   // Gears no longer gates navigation. A feature's row is always present; the gear
   // still pays its one-time credit reward on first use, but discovery must not
   // depend on having already discovered it - Hearth was only reachable from the
@@ -213,21 +219,6 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    ...sidebarNavItems.map(item => {
-      const ContributedIcon = item.icon;
-      return {
-        // Prefixed so a contributed path can never collide with a core row's key or test id.
-        key: `premium${item.path.replace(/[^a-z0-9]+/gi, '-')}`,
-        label: item.label,
-        icon: iconSlot(ContributedIcon ? <ContributedIcon /> : <ExtensionOutlinedIcon sx={{ fontSize: '18px' }} />),
-        isActive: location.pathname === item.path || location.pathname.startsWith(`${item.path}/`),
-        onClick: () => {
-          closeOnMobile();
-          // Codegen-mounted, so not in Tanstack's statically-typed route union - same cast as /bob.
-          navigate({ to: item.path } as never);
-        },
-      };
-    }),
     ...(isMeetingsEnabled
       ? [
           {
@@ -255,6 +246,22 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         setFileBrowserOpen(true);
       },
     },
+    // Overlay-contributed rows go after Files Manager, so they never take the pinned slot (see the
+    // split below) and never push a core row out of it.
+    ...sidebarNavItems.map(({ item, key }) => {
+      const ContributedIcon = item.icon;
+      return {
+        key,
+        label: item.label,
+        icon: iconSlot(ContributedIcon ? <ContributedIcon /> : <ExtensionOutlinedIcon sx={{ fontSize: '18px' }} />),
+        isActive: location.pathname === item.path || location.pathname.startsWith(`${item.path}/`),
+        onClick: () => {
+          closeOnMobile();
+          // Codegen-mounted, so not in Tanstack's statically-typed route union - same cast as /bob.
+          navigate({ to: item.path } as never);
+        },
+      };
+    }),
     ...(isAgentsEnabled
       ? [
           {
@@ -411,10 +418,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   ];
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
-  // pinned at the top. items[0] is always New Chat; items[1] is whichever conditional
-  // entry comes first for this user - OptiHashi, Bob, or Files Manager - since each
-  // is elided when absent. The split is purely positional, so it
-  // holds regardless of which entries are present.
+  // pinned at the top. items[0] is always New Chat; items[1] is the first core row
+  // present for this user - one of the conditional rows above Files Manager, each
+  // elided when absent, else Files Manager itself, which is always present.
+  // Overlay-contributed rows sit after Files Manager, so they can never be items[1].
+  // The split is purely positional, so it holds regardless of which entries are present.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
 
   return (
