@@ -214,8 +214,35 @@ export type PremiumLocalStorageKeyPrefixes = string[];
  *
  * DATA, like `PremiumLocalStorageKeyPrefixes`: read straight out of package.json, so server-side
  * enforcement sees it without importing overlay code. Grants from several overlays are merged.
+ *
+ * An entry may also be an object, `{ "key": "<entitlement key>", "label": "...", "sessionHref": "..." }`,
+ * which grants `key` exactly as the bare string does and also says how the workspace is shown to a
+ * user who reaches it only through that key (see `PremiumWorkspaceGrantDisplay`). This table keeps
+ * only the keys; the display half lands in `premiumWorkspaceGrantDisplays.generated.ts`.
  */
 export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * How a workspace is named and opened for a user whose access to it comes through a copy grant: one
+ * who holds `key` but cannot use the workspace outright (`canUseSurface` is false). Without it that
+ * user sees the registry's label and link, which name a product they do not hold. Declared as the
+ * object form of a `workspaceCopyEntitlements` entry; everyone else keeps the registry's values.
+ */
+export interface PremiumWorkspaceGrantDisplay {
+  /** The granted entitlement key, lowercased. */
+  key: string;
+  /** Name shown for the workspace in the clone/fork/move menus and dialogs, in place of the registry label. */
+  label: string;
+  /**
+   * Same-origin path template with exactly one `{sessionId}` slot, e.g. `/route?session={sessionId}`,
+   * that opens a session for this user. Its path (before `?`) also stands in for the registry's
+   * `routePrefix` when checking the build ships the route. Omitted -> the registry's link.
+   */
+  sessionHref?: string;
+}
+
+/** Grant displays per registered workspace id, in declaration order; a user holding several gets the first. */
+export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly PremiumWorkspaceGrantDisplay[]>>;
 
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {

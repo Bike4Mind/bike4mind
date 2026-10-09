@@ -46,13 +46,20 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 const workspaceTargets = vi.hoisted(() => ({
   value: { current: undefined, copyTargets: [], moveTargets: [] } as Record<string, unknown>,
 }));
+// Shared so a test can follow a fork from the mutation to where the user is sent.
+const forkFlow = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+  navigate: vi.fn(),
+  present: vi.fn((surface: unknown) => surface),
+}));
 vi.mock('@client/app/hooks/useWorkspaceTargets', () => ({
   surfaceRouteExists: () => true,
+  useWorkspacePresenter: () => forkFlow.present,
   useWorkspaceTargets: () => workspaceTargets.value,
 }));
 vi.mock('@client/app/hooks/data/sessions', () => ({
   useGetSession: () => ({ data: undefined }),
-  useForkSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useForkSession: () => ({ mutateAsync: forkFlow.mutateAsync, isPending: false }),
   useSnipSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/quests', () => ({
@@ -95,7 +102,7 @@ vi.mock('@client/app/hooks/useSubscribeChatCompletion', () => ({
   useSubscribeChatCompletion: vi.fn(),
 }));
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => forkFlow.navigate,
 }));
 
 // --- utils with API/server dependencies ------------------------------------
@@ -123,7 +130,15 @@ vi.mock('@client/app/components/Session/ToolsUsed', () => ({ default: () => null
 vi.mock('@client/app/components/Session/AgentExecution/ReasoningDisclosure', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/AgentExecution/AutoRouteBadge', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/ResearchModeResponseDisplay', () => ({ default: () => null }));
-vi.mock('@client/app/components/ConfirmActionModal', () => ({ default: () => null }));
+// Only the fork confirmation is driven by these tests; every other confirmation stays inert.
+vi.mock('@client/app/components/ConfirmActionModal', () => ({
+  default: ({ className, onGoForward }: { className?: string; onGoForward: () => void }) =>
+    className === 'session-middle-fork-modal' ? (
+      <button data-testid="fork-confirm-mock" onClick={onGoForward}>
+        confirm fork
+      </button>
+    ) : null,
+}));
 vi.mock('@client/app/components/BugReportModal', () => ({
   default: ({
     open,
@@ -767,5 +782,23 @@ describe('MessageContent actions menu - Fork into', () => {
     expect(screen.getByTestId('message-menu-fork-into-main')).toBeInTheDocument();
     expect(screen.getByTestId('message-menu-fork-into-opti')).toBeInTheDocument();
     expect(screen.queryByTestId('message-menu-fork')).not.toBeInTheDocument();
+  });
+
+  it('opens the fork at the link its workspace presents to this user', async () => {
+    const home = WORKSPACE_SURFACES.find(surface => surface.id !== null);
+    if (!home) throw new Error('expected a registered workspace');
+    forkFlow.mutateAsync.mockResolvedValueOnce({ id: 'fork-1', surface: home.id });
+    forkFlow.present.mockImplementationOnce(surface => ({
+      ...(surface as typeof home),
+      sessionHref: (id: string) => `/desk?session=${id}`,
+    }));
+    workspaceTargets.value = { current: main, copyTargets: [main], moveTargets: [] };
+
+    renderAndOpenActionsMenu();
+    fireEvent.click(screen.getByTestId('message-menu-fork'));
+    fireEvent.click(screen.getByTestId('fork-confirm-mock'));
+
+    await waitFor(() => expect(forkFlow.navigate).toHaveBeenCalledWith({ href: '/desk?session=fork-1' }));
+    expect(forkFlow.present).toHaveBeenCalledWith(home);
   });
 });
