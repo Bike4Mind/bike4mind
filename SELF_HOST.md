@@ -833,6 +833,36 @@ Publishing stages each bundle under a temporary `drafts/` prefix in the artifact
 
 Notebook exports are written under `exports/` in the FabFile bucket and downloaded via a short-lived signed URL; `createbuckets` sets a MinIO lifecycle rule that expires them after 1 day. On a different S3 backend, add an equivalent 1-day rule on the `exports/` prefix of that bucket.
 
+### Browser downloads from a private object store
+
+QuestMaster ZIP exports use `S3Storage.getSignedUrl`. With the default container endpoint, the returned URL contains the internal MinIO hostname, which a browser cannot resolve. Set the optional `S3_PRESIGN_ENDPOINT` in the environment of both the app and workers to the S3 API origin the browser can reach. `AWS_ENDPOINT_URL_S3` stays on the private backend endpoint for uploads, metadata reads and downloads. If the signing override is unset, the existing signing behavior is unchanged.
+
+For the local Compose evaluation stack, MinIO's API is already published on loopback port 9000. Add this to `.env.selfhost`, then recreate the app and worker services so both receive the new environment:
+
+```bash
+AWS_ENDPOINT_URL_S3=http://minio:9000
+S3_PRESIGN_ENDPOINT=http://localhost:9000
+```
+
+If `MINIO_HOST_PORT` is changed, use that host port in `S3_PRESIGN_ENDPOINT`. The signing origin is the API port, not MinIO's console port 9001.
+
+For the Kubernetes evaluation chart, keep the internal service endpoint and add the signing override to the existing values `config` map. With release `b4m` in namespace `bike4mind-eval`, the local browser configuration is:
+
+```yaml
+config:
+  S3_PRESIGN_ENDPOINT: http://localhost:19000
+```
+
+Apply the values with the normal Helm upgrade, then keep a separate loopback-bound forward open alongside the app and WebSocket forwards:
+
+```bash
+kubectl port-forward --namespace bike4mind-eval svc/b4m-minio 19000:9000
+```
+
+For a remote browser, use a trusted HTTPS S3 API origin that routes to the same backend and bucket namespace. A reverse proxy must preserve the signed host, path and query. Sign that origin directly; changing the hostname of an already signed URL invalidates its signature. Keep the backing service private, and configure the object store's CORS policy for the browser origin if using cross-origin fetches or PUT uploads.
+
+This override covers consumers of `S3Storage.getSignedUrl`, including QuestMaster ZIP exports. Routes that construct their own S3 client and call the SDK presigner directly do not use this override; it does not establish parity for every file upload or download path.
+
 ## Share your instance with friends (secure internet exposure)
 
 The self-host stack is built for local, single-host use: it comes up on `localhost` with no authentication on its backing services. To let a few trusted people reach it, you have two supported paths (and a no-third-party variant of the first):

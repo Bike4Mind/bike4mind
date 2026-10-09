@@ -21,6 +21,7 @@ import { createS3Client } from './createS3Client';
 
 export class S3Storage extends BaseStorage {
   private s3: S3Client;
+  private presignS3: S3Client;
 
   constructor(
     private bucketName: string,
@@ -48,6 +49,17 @@ export class S3Storage extends BaseStorage {
         requestTimeout: 60000, // 1 minute
       }),
     });
+
+    const presignEndpoint = process.env.S3_PRESIGN_ENDPOINT?.trim();
+    // Signing uses the browser's origin; storage operations keep the private endpoint.
+    this.presignS3 = presignEndpoint
+      ? createS3Client({
+          region: this.region,
+          credentials: this.s3.config.credentials,
+          endpoint: presignEndpoint,
+          forcePathStyle: true,
+        })
+      : this.s3;
   }
 
   /**
@@ -155,7 +167,7 @@ export class S3Storage extends BaseStorage {
     } = {}
   ): Promise<string> {
     return await getSignedUrl(
-      this.s3,
+      this.presignS3,
       method !== 'get'
         ? new PutObjectCommand({
             Bucket: this.bucketName,
