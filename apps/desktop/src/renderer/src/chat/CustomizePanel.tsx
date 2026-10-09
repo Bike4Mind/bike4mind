@@ -90,15 +90,47 @@ function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSumm
   );
 }
 
+function skillScope(filePath: string): string | null {
+  const parts = filePath.split(/[\\/]+/);
+  const claudeIndex = parts.lastIndexOf('.claude');
+  if (claudeIndex < 0 || parts[claudeIndex + 1] !== 'skills') return null;
+  return parts[claudeIndex + 2] ?? null;
+}
+
 function SkillsSettings({ sessionId }: { sessionId: string | null }) {
   const { skills } = useSkills(sessionId);
-  const userSkills = skills.filter(
-    skill => skill.source === 'global' && /[\\/]\.claude[\\/]skills[\\/]/.test(skill.filePath)
-  );
+  const userSkillScopes = new Map<string, SkillSummary[]>();
+  for (const skill of skills) {
+    if (skill.source !== 'global') continue;
+    const scope = skillScope(skill.filePath);
+    if (!scope) continue;
+    userSkillScopes.set(scope, [...(userSkillScopes.get(scope) ?? []), skill]);
+  }
+  const userSkillCount = [...userSkillScopes.values()].reduce((total, scopedSkills) => total + scopedSkills.length, 0);
 
   return (
     <Stack spacing={2.5} data-testid="skills-settings">
-      <SkillGroup title="Your skills" skills={userSkills} empty="No skills found in ~/.claude/skills." />
+      <Box component="section" data-testid="user-skill-scopes">
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+          <Typography level="title-md">Your skills</Typography>
+          <Chip size="sm" variant="soft" color="neutral">
+            {userSkillCount}
+          </Chip>
+        </Stack>
+        {userSkillScopes.size === 0 ? (
+          <Sheet variant="soft" sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}>
+            <Typography level="body-sm" textColor="text.tertiary">
+              No skills found in ~/.claude/skills.
+            </Typography>
+          </Sheet>
+        ) : (
+          <Stack spacing={2}>
+            {[...userSkillScopes].map(([scope, scopedSkills]) => (
+              <SkillGroup key={scope} title={scope} skills={scopedSkills} empty="" />
+            ))}
+          </Stack>
+        )}
+      </Box>
       <SkillGroup title="Bike4Mind skills" skills={[]} empty="No Bike4Mind account skills loaded." />
     </Stack>
   );

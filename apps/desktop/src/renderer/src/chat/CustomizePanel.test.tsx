@@ -22,6 +22,18 @@ const skills = vi.hoisted(() => ({
         source: 'global',
         filePath: '/home/.claude/commands/legacy-command.md',
       },
+      {
+        name: 'hyperframes',
+        description: 'Create videos',
+        source: 'global',
+        filePath: '/home/.claude/skills/hyperframes/SKILL.md',
+      },
+      {
+        name: 'brief-format',
+        description: 'Defines the brief format',
+        source: 'global',
+        filePath: '/home/.claude/skills/hyperframes/references/brief-format.md',
+      },
     ] as SkillSummary[],
     projectDirectory: '/repo',
     untrustedProject: null as string | null,
@@ -66,6 +78,18 @@ describe('the Customize screen', () => {
         source: 'global',
         filePath: '/home/.claude/commands/legacy-command.md',
       },
+      {
+        name: 'hyperframes',
+        description: 'Create videos',
+        source: 'global',
+        filePath: '/home/.claude/skills/hyperframes/SKILL.md',
+      },
+      {
+        name: 'brief-format',
+        description: 'Defines the brief format',
+        source: 'global',
+        filePath: '/home/.claude/skills/hyperframes/references/brief-format.md',
+      },
     ];
   });
 
@@ -77,16 +101,20 @@ describe('the Customize screen', () => {
     expect(byTestId('skills-settings')).toBeVisible();
   });
 
-  it('shows only global skills from ~/.claude/skills', () => {
+  it('groups global skills by their top-level ~/.claude/skills scope', () => {
     renderScreen();
     const groups = allByTestId('skill-group');
-    expect(groups[0]).toHaveTextContent('Your skills');
+    expect(byTestId('user-skill-scopes')).toHaveTextContent('Your skills');
+    expect(groups[0]).toHaveTextContent('chrome-browser');
     expect(groups[0]).toHaveTextContent('/chrome-browser');
+    expect(groups[1]).toHaveTextContent('hyperframes');
+    expect(groups[1]).toHaveTextContent('/hyperframes');
+    expect(groups[1]).toHaveTextContent('/brief-format');
     expect(container).not.toHaveTextContent('Project skills');
     expect(container).not.toHaveTextContent('/my-review');
     expect(container).not.toHaveTextContent('/legacy-command');
-    expect(groups[1]).toHaveTextContent('Bike4Mind skills');
-    expect(groups[1]).toHaveTextContent('No Bike4Mind account skills loaded.');
+    expect(groups[2]).toHaveTextContent('Bike4Mind skills');
+    expect(groups[2]).toHaveTextContent('No Bike4Mind account skills loaded.');
   });
 
   it('shows an explicit empty state for either skill group', () => {
