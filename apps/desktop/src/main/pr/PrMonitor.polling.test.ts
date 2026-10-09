@@ -27,9 +27,50 @@ function manualTimers() {
       const entries = [...pending.entries()];
       pending.clear();
       for (const [, entry] of entries) entry.callback();
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await settle();
     },
   };
+}
+
+/**
+ * A monitor that tracks every read, schedule and publish it starts, including the ones it fires
+ * and forgets, so a test can wait for all of them instead of sleeping. A fixed sleep raced the
+ * binding store's real disk writes and failed under load.
+ */
+class TrackedMonitor extends PrMonitor {
+  private readonly work = new Set<Promise<unknown>>();
+
+  private track<T>(promise: Promise<T>): Promise<T> {
+    this.work.add(promise);
+    void promise.then(
+      () => this.work.delete(promise),
+      () => this.work.delete(promise)
+    );
+    return promise;
+  }
+
+  protected override read(sessionId: string): Promise<void> {
+    return this.track(super.read(sessionId));
+  }
+
+  protected override schedule(sessionId: string): Promise<void> {
+    return this.track(super.schedule(sessionId));
+  }
+
+  protected override publish(sessionId: string): Promise<void> {
+    return this.track(super.publish(sessionId));
+  }
+
+  async idle(): Promise<void> {
+    while (this.work.size > 0) await Promise.allSettled([...this.work]);
+  }
+}
+
+const monitors: TrackedMonitor[] = [];
+
+/** Every monitor this file made has finished what it started. */
+async function settle(): Promise<void> {
+  for (const monitor of monitors) await monitor.idle();
 }
 
 function setup(initial = snapshot({ checks: [check('Build', 'pending')] }), store = tempStore()) {
@@ -38,7 +79,7 @@ function setup(initial = snapshot({ checks: [check('Build', 'pending')] }), stor
   const fake = fakeGithub(initial);
   const clock = manualTimers();
   const out = collector();
-  const monitor = new PrMonitor({
+  const monitor = new TrackedMonitor({
     store,
     github: fake.github,
     chat: {
@@ -55,6 +96,7 @@ function setup(initial = snapshot({ checks: [check('Build', 'pending')] }), stor
     random: () => 0,
     batchWindowMs: 0,
   });
+  monitors.push(monitor);
   return {
     store,
     fake,
@@ -66,8 +108,6 @@ function setup(initial = snapshot({ checks: [check('Build', 'pending')] }), stor
     },
   };
 }
-
-const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 
 describe('PrMonitor polling', () => {
   it('does no GitHub work at start, and arms only PRs with automation on', async () => {
