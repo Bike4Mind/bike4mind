@@ -203,15 +203,35 @@ describe('migrateLedgerVectorsForPrincipal', () => {
     expect(rewriteEmbedding).not.toHaveBeenCalled();
   });
 
-  it('still truncates with no provider key, failing the embeds and recording the reason once', async () => {
+  it('still truncates with no provider key, counting the embeds as noProviderKey and the reason once', async () => {
     missingKey = 'openai';
     chain = [ev('full', vec('text-embedding-3-small')), ev('h1'), ev('h2')];
 
     const stats = await migrateLedgerVectorsForPrincipal(lake);
 
-    expect(stats).toMatchObject({ truncated: 1, backfilled: 0, failed: 2 });
+    expect(stats).toMatchObject({ truncated: 1, backfilled: 0, noProviderKey: 2, failed: 0, providerCalls: 0 });
     expect(stats.errors).toHaveLength(1);
     expect(stats.errors[0]).toContain('owner owner1');
+    expect(stats.embedderError).toContain('OpenAI API key required');
+  });
+
+  it('spends no limit on a keyless principal, so a long chain is walked to the end', async () => {
+    missingKey = 'openai';
+    chain = Array.from({ length: 5 }, (_, i) => ev(`h${i}`));
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { limit: 2 });
+
+    expect(stats).toMatchObject({ noProviderKey: 5, failed: 0, providerCalls: 0, stoppedAtLimit: false });
+  });
+
+  it('keeps truncating after a keyless embed and never trips the limit', async () => {
+    missingKey = 'openai';
+    chain = [ev('h1'), ev('full', vec('text-embedding-3-small')), ev('h2')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { limit: 1 });
+
+    expect(stats).toMatchObject({ truncated: 1, noProviderKey: 2, providerCalls: 0, stoppedAtLimit: false });
+    expect(rewriteEmbedding).toHaveBeenCalledTimes(1);
   });
 
   it('makes no provider call and no write on a dry run, but still counts', async () => {
@@ -220,7 +240,7 @@ describe('migrateLedgerVectorsForPrincipal', () => {
 
     const stats = await migrateLedgerVectorsForPrincipal(lake, { dryRun: true });
 
-    expect(stats).toMatchObject({ truncated: 1, backfilled: 1, failed: 0, errors: [] });
+    expect(stats).toMatchObject({ truncated: 1, backfilled: 1, failed: 0, providerCalls: 1, errors: [] });
     expect(generateEmbedding).not.toHaveBeenCalled();
     expect(rewriteEmbedding).not.toHaveBeenCalled();
   });
@@ -230,7 +250,7 @@ describe('migrateLedgerVectorsForPrincipal', () => {
 
     const stats = await migrateLedgerVectorsForPrincipal(lake, { limit: 1 });
 
-    expect(stats).toMatchObject({ truncated: 1, backfilled: 1, stoppedAtLimit: true });
+    expect(stats).toMatchObject({ truncated: 1, backfilled: 1, providerCalls: 1, stoppedAtLimit: true });
   });
 
   it('does not report stoppedAtLimit when the last provider call lands exactly on the limit', async () => {

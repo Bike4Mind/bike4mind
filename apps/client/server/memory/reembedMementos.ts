@@ -151,8 +151,12 @@ export async function reembedMementosForUser(
  *     did exactly that, and a real user's woodworking memory dropped out of its own recall.
  *
  * Idempotent: an event already in the current space is skipped. `limit` caps PROVIDER calls (embeds,
- * successful or not), never truncations; `stoppedAtLimit` says the principal has more to do. A dry run
- * makes no provider call and no write, and its counts mean "would".
+ * successful or not), never truncations; `providerCalls` is how many were made and `stoppedAtLimit` says
+ * the principal has more to do. An event that needs an embed while the owner has no provider key counts
+ * as `noProviderKey`, not `failed`: no call was made, so it spends no budget. `embedderError` carries
+ * why the embedding service could not be built (also recorded once in `errors`), so a caller reports
+ * the real cause rather than assuming a missing key. A dry run makes no provider call and no write, and
+ * its counts mean "would".
  */
 export async function migrateLedgerVectorsForPrincipal(
   target: { principal: Principal; ownerUserId: string },
@@ -164,7 +168,10 @@ export async function migrateLedgerVectorsForPrincipal(
   reembedded: number;
   backfilled: number;
   noFact: number;
+  noProviderKey: number;
   failed: number;
+  providerCalls: number;
+  embedderError: string | null;
   stoppedAtLimit: boolean;
   errors: string[];
 }> {
@@ -180,7 +187,10 @@ export async function migrateLedgerVectorsForPrincipal(
     reembedded: 0,
     backfilled: 0,
     noFact: 0,
+    noProviderKey: 0,
     failed: 0,
+    providerCalls: 0,
+    embedderError: null as string | null,
     stoppedAtLimit: false,
     errors: [] as string[],
   };
@@ -226,12 +236,13 @@ export async function migrateLedgerVectorsForPrincipal(
       }
 
       const arm = vector ? 'truncated' : hasVector ? 'reembedded' : 'backfilled';
-      if (!vector && stats.backfilled + stats.reembedded + stats.failed >= limit) {
+      if (!vector && stats.providerCalls >= limit) {
         stats.stoppedAtLimit = true;
         break;
       }
       if (opts.dryRun) {
         stats[arm] += 1;
+        if (!vector) stats.providerCalls += 1;
         continue;
       }
       if (!vector) {
@@ -241,13 +252,15 @@ export async function migrateLedgerVectorsForPrincipal(
           } catch (err) {
             // Recorded once: a missing key would otherwise repeat the same message for every event.
             service = null;
-            stats.errors.push(`owner ${ownerUserId}: ${err instanceof Error ? err.message : String(err)}`);
+            stats.embedderError = err instanceof Error ? err.message : String(err);
+            stats.errors.push(`owner ${ownerUserId}: ${stats.embedderError}`);
           }
         }
         if (!service) {
-          stats.failed += 1;
+          stats.noProviderKey += 1;
           continue;
         }
+        stats.providerCalls += 1;
         vector = toMementoVector(await service.generateEmbedding(fact));
       }
 
