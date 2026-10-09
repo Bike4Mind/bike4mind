@@ -180,10 +180,9 @@ export function createClient(options: ClientOptions) {
     for (;;) {
       const quest = await call('getQuest', { params: { id: questId }, signal });
       if (quest.status === 'stopped') throw new B4mQuestError('stopped', quest);
-      if (quest.status === 'done') {
-        if (quest.type === 'error') throw new B4mQuestError('error', quest);
-        return quest;
-      }
+      // A failed chat dispatch sets `type: 'error'` without settling `status`, so it ends the poll on its own.
+      if (quest.type === 'error') throw new B4mQuestError('error', quest);
+      if (quest.status === 'done') return quest;
       if (deadline !== undefined && Date.now() + delay > deadline) throw new B4mQuestError('timeout', quest);
       await sleep(delay, signal);
       delay = Math.min(delay * 1.5, maxIntervalMs);
