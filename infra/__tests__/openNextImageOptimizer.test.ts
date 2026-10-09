@@ -17,7 +17,7 @@ const resolvedClientSharp = () => {
   if (start < 0) return undefined;
   const next = lock.slice(start + 1).search(/\n {2}\S/);
   const block = next < 0 ? lock.slice(start) : lock.slice(start, start + 1 + next);
-  return block.match(/\n {6}sharp:\n {8}specifier: \S+\n {8}version: (\d+\.\d+\.\d+)/)?.[1];
+  return block.match(/\n {6}sharp:\n {8}specifier: .+\n {8}version: (\d+\.\d+\.\d+)(?=\(|\n)/)?.[1];
 };
 
 const install = openNextConfig.imageOptimization.install;
@@ -49,7 +49,7 @@ describe('OpenNext image optimizer sharp install', () => {
   });
 
   it('stays at or above the root pnpm override floor for sharp', () => {
-    const floorKey = Object.keys(rootPkg.pnpm.overrides).find(k => k.startsWith('sharp@<'));
+    const floorKey = Object.keys(rootPkg.pnpm?.overrides ?? {}).find(k => k.startsWith('sharp@<'));
     expect(floorKey).toBeDefined();
     expect(compare(sharpVersion, (floorKey ?? '').slice('sharp@<'.length))).toBeGreaterThanOrEqual(0);
   });
