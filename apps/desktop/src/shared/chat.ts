@@ -132,6 +132,11 @@ export interface ChatToolCall {
    */
   approvalIrreversible?: boolean;
   /**
+   * Set with `approvalId` when what is being allowed is unusually broad - a request for the whole
+   * home folder or a system directory. Drawn on the card as a warning; it never blocks the answer.
+   */
+  approvalWarning?: string;
+  /**
    * Set with `approvalId` on a shell call: the SCOPE an "always" would grant, ready to display
    * beside the buttons. Capped and with its paths abbreviated, because it is written from the
    * command and a command can name any number of directories. Never a button label: the card
@@ -906,6 +911,12 @@ interface ChatSessionMeta {
    * broken one, and the only thing it cannot do is run a turn.
    */
   project?: ChatProject;
+  /**
+   * Folders the user granted this conversation alone from a `request_directory` card, for a
+   * session with no project to hold them as `contextDirectories`. Never global: the AccessStore
+   * is widened only from the sidebar's own picker.
+   */
+  grantedDirectories?: string[];
   /** Pinned to the top of the sidebar, above both the groups and the loose conversations. */
   pinned?: boolean;
   /** Set when the agent spawned this session rather than the user starting it. */

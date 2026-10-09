@@ -373,7 +373,10 @@ export async function resolveCwd(
   const requested = typeof input.cwd === 'string' && input.cwd.length > 0 ? input.cwd : null;
   if (requested) return resolveWithinRoots(requested, roots, workingDirectory);
   if (workingDirectory) return workingDirectory;
-  if (roots.length === 0) throw new Error('No folder has been shared, so there is nowhere to run a command.');
+  if (roots.length === 0)
+    throw new Error(
+      'No folder has been shared, so there is nowhere to run a command. Call request_directory to ask for one.'
+    );
   return roots[0];
 }
 

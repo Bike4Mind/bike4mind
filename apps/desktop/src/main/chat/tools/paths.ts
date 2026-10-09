@@ -11,9 +11,9 @@ export class PathAccessDenied extends Error {
   constructor(requested: string, reason?: string) {
     super(
       reason ??
-        `Access denied: ${requested} is outside the folders you have granted. ` +
-          'Ask the user to share that folder: a Code session takes one from the chip row above ' +
-          'the message box, and the sidebar card shares one with every conversation.'
+        `Access denied: ${requested} is outside the folders shared with you. ` +
+          'Call request_directory with the folder that holds it and your reason, and the user can ' +
+          'add it with one click. Do not tell the user you lack access instead.'
     );
     this.name = 'PathAccessDenied';
   }

@@ -21,6 +21,7 @@ import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
+import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
 
@@ -467,6 +468,23 @@ export function useConversation(
         event.type === 'tool-progress';
       if (live) {
         if (event.sessionId !== activeSessionId.current) return;
+        // A folder the user just added has to show up in the chips at once - that row is where it
+        // is revoked - and main pushes no summary for it.
+        if (
+          event.type === 'tool-end' &&
+          event.call.name === REQUEST_DIRECTORY_TOOL_NAME &&
+          parseDirectoryOutcome(event.call.input.outcome)?.status === 'granted'
+        ) {
+          const granted = event.sessionId;
+          void window.b4m.chat.getSession(granted).then(loaded => {
+            if (!loaded || activeSessionId.current !== granted) return;
+            setSession(current =>
+              current?.id === granted
+                ? { ...current, project: loaded.project, grantedDirectories: loaded.grantedDirectories }
+                : current
+            );
+          });
+        }
         // The call has arrived, so the tool's own status takes over; the next round sends a phase anew.
         if (event.type === 'tool-start') setPhase(null);
         queued.push(event);
@@ -800,7 +818,9 @@ export function useConversation(
   // A summary main just wrote, folded into both the open conversation and the sidebar row.
   const applySummary = useCallback(
     (updated: ChatSessionSummary) => {
-      setSession(current => (current ? { ...current, project: updated.project } : current));
+      setSession(current =>
+        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
+      );
       onSummaryChanged(updated);
     },
     [onSummaryChanged]

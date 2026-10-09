@@ -81,7 +81,10 @@ function isBinary(buffer: Buffer): boolean {
 function defaultBase(context: ToolContext): string {
   if (context.workingDirectory) return context.workingDirectory;
   if (context.roots.length === 1) return context.roots[0];
-  if (context.roots.length === 0) throw new Error('No folder has been shared, so there is nothing to look in.');
+  if (context.roots.length === 0)
+    throw new Error(
+      'No folder has been shared, so there is nothing to look in. Call request_directory to ask for one.'
+    );
   throw new Error(
     `Specify "path": several folders are granted (${context.roots.join(', ')}), so a relative pattern is ambiguous.`
   );

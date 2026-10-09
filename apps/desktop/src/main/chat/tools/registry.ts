@@ -7,6 +7,7 @@ import { fileRead, globFiles, grepSearch } from './fileTools';
 import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, sessionSpawn } from './hostTools';
 import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
+import { requestDirectory } from './requestDirectoryTool';
 import { bashExecute } from './shellTools';
 import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
@@ -119,6 +120,7 @@ const BY_NAME = new Map(
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
     askUser,
+    requestDirectory,
   ].map(tool => [tool.schema.name, tool])
 );
 
@@ -179,7 +181,8 @@ export function toolsForRequest(options: {
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
-    ...(options.ask ? [askUser] : []),
+    // Offered with no folder granted too: asking for one is exactly what that conversation needs.
+    ...(options.ask ? [askUser, requestDirectory] : []),
   ];
   return [
     ...available.map(tool => ({ toolSchema: tool.schema })),

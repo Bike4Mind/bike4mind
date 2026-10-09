@@ -103,6 +103,7 @@ describe('ChatService tool loop', () => {
       'todo_write',
       'explore',
       'ask_user',
+      'request_directory',
     ]);
   });
 
@@ -217,7 +218,7 @@ describe('ChatService tool loop', () => {
 
     const result = post.mock.calls[1][1].messages[3].content[0];
     expect(result).toMatchObject({ type: 'tool_result', is_error: true });
-    expect(result.content).toMatch(/outside the folders you have granted/);
+    expect(result.content).toMatch(/outside the folders shared with you/);
 
     streams[1].write(frame({ type: 'content', text: 'I cannot read that.' }));
     streams[1].write(frame('[DONE]'));

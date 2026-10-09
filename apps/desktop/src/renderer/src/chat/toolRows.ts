@@ -1,4 +1,5 @@
 import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
+import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 
 /**
@@ -75,6 +76,15 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Asked ${n} questions`,
     doing: 'Asking:',
     active: 'Asking a question...',
+  },
+  request_directory: {
+    did: 'Asked for',
+    didAlone: 'Asked for a folder',
+    to: 'get',
+    toAlone: 'get a folder',
+    many: n => `Asked for ${n} folders`,
+    doing: 'Asking for',
+    active: 'Asking for a folder...',
   },
   explore: {
     did: 'Explored',
@@ -351,6 +361,12 @@ export function toolRowLabel(call: ChatToolCall): string {
   // panel, so "Ran x" would report an outcome this row never saw.
   if (call.status === 'moved') {
     return argument ? `Moved ${argument} to the background` : 'Moved a command to the background';
+  }
+
+  if (call.name === REQUEST_DIRECTORY_TOOL_NAME && call.status === 'done') {
+    const outcome = parseDirectoryOutcome(call.input.outcome);
+    if (outcome?.status === 'granted') return argument ? `Added ${argument}` : 'Added a folder';
+    if (outcome?.status === 'already') return argument ? `Already shared ${argument}` : 'Folder already shared';
   }
 
   // The first question and, for a single one, what the user said: the row is the record.
