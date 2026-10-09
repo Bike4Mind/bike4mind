@@ -335,6 +335,17 @@ describe('GitHubConnectAction', () => {
     expect(h.disconnectMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
   });
 
+  // lake.canManage admits an appointed admin, who cannot manage the org's GitHub connection.
+  it('hides the Access lost Disconnect and Re-sync hint from an appointed admin even when the lake says canManage', () => {
+    h.canManage.current = false;
+    h.connection.current = connected({ status: 'access_lost' });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1', canManage: true }} />);
+
+    expect(screen.getByTestId('github-access-lost-state')).toBeInTheDocument();
+    expect(screen.queryByTestId('github-access-lost-disconnect-btn')).toBeNull();
+    expect(screen.queryByTestId('github-access-lost-resync-hint')).toBeNull();
+  });
+
   it('does not show the Access lost state on a paused lake, which needs no repair on GitHub', () => {
     h.connection.current = connected({ status: 'access_lost', enabled: false });
     wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);

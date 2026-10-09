@@ -342,7 +342,7 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
           connection={connection}
           onDisconnect={() => setConfirmingDisconnect(true)}
           disconnectDisabled={confirmingDisconnect}
-          canManage={!!lake.canManage}
+          canManage={canManage}
         />
       ) : (
         connection.lastError && (
