@@ -62,6 +62,7 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { orgIdOfAccount } from '@client/app/components/datalake/lakeSourceShared';
 
 /**
  * The server's own refusal text, if it sent one. The body key is `error`, per
@@ -102,7 +103,7 @@ function isPermissionRejection(error: unknown): boolean {
  */
 export function activeOrgId(): string | undefined {
   const { selectedAccount } = useSelectedAccount.getState();
-  return selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+  return orgIdOfAccount(selectedAccount);
 }
 
 // ── Lake catalog & lifecycle ────────────────────────────────────────────────

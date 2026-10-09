@@ -4,6 +4,7 @@ import { checkApiKeyRateLimit, type RateLimitCounter } from '@server/utils/apiKe
 import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { ApiKeyScope } from '@bike4mind/common';
+import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
 export interface ApiKeyRateLimitOptions {
   /**
@@ -70,7 +71,7 @@ export const apiKeyRateLimit =
         rateLimit,
         {
           userId: req.user?.id,
-          endpoint: req.originalUrl || req.url,
+          endpoint: resolveRouteTemplate(req),
           method: req.method,
         },
         { meterDailyLimit, counter: options.counter }

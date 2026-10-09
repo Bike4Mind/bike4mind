@@ -50,7 +50,10 @@ const handler = baseApi()
     // Config changed, so clear cached tool schemas
     const updatedServer = await McpServer.findOneAndUpdate(
       { _id: id, userId: req.user.id }, // Ensure user owns the server
-      { $set: { name, envVariables: encryptEnvVariables(envVariables), enabled }, $unset: { toolSchemas: '' } },
+      {
+        $set: { name, envVariables: encryptEnvVariables(envVariables), enabled },
+        $unset: { toolSchemas: '', toolSchemasFetchedAt: '' },
+      },
       { new: true, runValidators: true }
     );
 

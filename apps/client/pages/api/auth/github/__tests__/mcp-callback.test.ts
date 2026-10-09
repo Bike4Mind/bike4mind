@@ -110,7 +110,8 @@ function expectLeafUpdate(login: string, id: number) {
     'metadata.connectedAt': expect.any(String),
     'metadata.scope': 'repo,read:user',
   });
-  expect(options).toBeUndefined();
+  // Reconnect also clears the confirmed-empty tool marker.
+  expect(options).toEqual({ unset: ['toolSchemasFetchedAt'] });
 }
 
 function expectFullReplace(login: string, id: number) {
@@ -119,7 +120,7 @@ function expectFullReplace(login: string, id: number) {
     ...CONNECTION_FIELDS,
     metadata: { githubLogin: login, githubUserId: id, connectedAt: expect.any(String), scope: 'repo,read:user' },
   });
-  expect(options).toBeUndefined();
+  expect(options).toEqual({ unset: ['toolSchemasFetchedAt'] });
 }
 
 const STALE = '2026-01-01T00:00:00.000Z';
@@ -308,5 +309,21 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
 
     expect(global.fetch).toHaveBeenCalled();
     expectLeafUpdate('octocat', OCTOCAT.id);
+  });
+
+  it('stamps the confirmed-empty marker after a successful tool discovery', async () => {
+    mockFindOne.mockResolvedValue(
+      existingServer({ ...OCTOCAT, githubUserId: OCTOCAT.id, connectedAt: STALE, webhooks: { github: WEBHOOK } })
+    );
+    stubGitHub(OCTOCAT);
+    vi.mocked(invokeMcpHandler).mockResolvedValue([]);
+
+    await run();
+
+    // Update #1 is the reconnect write (which clears the marker); #2 is the tool-cache stamp.
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ id: 'server-1', tools: [], toolSchemas: [], toolSchemasFetchedAt: expect.any(Date) })
+    );
   });
 });

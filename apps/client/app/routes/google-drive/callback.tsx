@@ -82,6 +82,7 @@ const resumeDriveConnect = (oauthState: string) => {
   useDataLakeWizardStore.getState().openWizard();
   useDataLakeWizardStore.setState({
     step: 'source',
+    createSource: 'googleDrive',
     config: handoff.config,
     autoDerivedTagPrefix: handoff.autoDerivedTagPrefix,
     optionalSteps: handoff.optionalSteps,
