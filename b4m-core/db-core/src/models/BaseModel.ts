@@ -160,7 +160,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     /**
      * Extra update operators merged beside the `$set` (e.g. a `$addToSet`). Lets a repo override
      * with a non-`$set` write while keeping this core's `__v` strip, query-option handling and
-     * transaction propagation in one place.
+     * transaction propagation in one place. The `$set`/`$unset` this core builds win over any the
+     * extra operators try to carry, so they cannot clobber the field set.
      */
     extraOps?: Record<string, unknown>
   ): Promise<D | null> {
@@ -174,8 +175,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     const query = this.model.findOneAndUpdate(
       idFilter as mongoose.FilterQuery<T>,
       (unsetOperand
-        ? { $set: setData, $unset: unsetOperand, ...extraOps }
-        : { $set: setData, ...extraOps }) as mongoose.UpdateQuery<T>,
+        ? { ...extraOps, $set: setData, $unset: unsetOperand }
+        : { ...extraOps, $set: setData }) as mongoose.UpdateQuery<T>,
       { new: true, ...queryOptions }
     );
     // Only attach an explicit session when one is set. Passing `.session(null)` tells Mongoose "no

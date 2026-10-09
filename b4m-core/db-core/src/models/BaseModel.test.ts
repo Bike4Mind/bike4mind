@@ -13,6 +13,17 @@ class TestRepository extends BaseRepository<TestDoc> {
   constructor(model: mongoose.Model<TestDoc>) {
     super(model);
   }
+
+  // `_plainUpdate` is protected; expose its extraOps seam so a test can prove the core's `$set`
+  // and `$unset` win over operators a caller passes there.
+  updateWithExtraOps(
+    id: string,
+    data: Record<string, unknown>,
+    extraOps: Record<string, unknown>,
+    options?: Record<string, unknown>
+  ) {
+    return this._plainUpdate({ _id: new mongoose.Types.ObjectId(id) }, data, options, extraOps);
+  }
 }
 
 /**
@@ -112,6 +123,33 @@ describe('BaseRepository', () => {
 
       expect(updateQuery.session).toHaveBeenCalledTimes(1);
       expect(updateQuery.session).toHaveBeenCalledWith(session);
+    });
+
+    // The extraOps seam (used by the add-only knowledge write) must not let a caller overwrite the
+    // field set: the core owns `$set`/`$unset`, so they win over anything the extra operators carry.
+    it('lets the core $set win over a $set passed as extraOps', async () => {
+      await repo.updateWithExtraOps(
+        '507f1f77bcf86cd799439011',
+        { name: 'updated' },
+        { $set: { name: 'clobbered' }, $addToSet: { tags: 'x' } }
+      );
+
+      const [, update] = mockFindOneAndUpdate.mock.calls[0];
+      expect(update.$set).toEqual({ name: 'updated' });
+      expect(update.$addToSet).toEqual({ tags: 'x' });
+    });
+
+    it('lets the core $unset win over a $unset passed as extraOps', async () => {
+      await repo.updateWithExtraOps(
+        '507f1f77bcf86cd799439011',
+        { name: 'updated' },
+        { $unset: { name: '' } },
+        { unset: ['userId'] }
+      );
+
+      const [, update] = mockFindOneAndUpdate.mock.calls[0];
+      expect(update.$set).toEqual({ name: 'updated' });
+      expect(update.$unset).toEqual({ userId: '' });
     });
   });
 
