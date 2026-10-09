@@ -1,5 +1,12 @@
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
-import { settingsMap, SETTING_TABS, API_SERVICE_GROUPS, Category, CATEGORY_ICONS } from '@bike4mind/common';
+import {
+  isBlankSettingValue,
+  settingsMap,
+  SETTING_TABS,
+  API_SERVICE_GROUPS,
+  Category,
+  CATEGORY_ICONS,
+} from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import {
   Checkbox,
@@ -533,7 +540,13 @@ const AdminSettingsTab: React.FC = () => {
                   key={`${setting.key}-${groupId || 'ungrouped'}-${setting.name}-${index}`}
                   index={index}
                   setting={setting}
-                  defaultValue={settingValueByName.get(setting.key) ?? setting.defaultValue}
+                  // clearDeletesRow: no stored row (or a blank one, which the resolver also reads as unset)
+                  // means unset, NOT the declared default - pass null so the field renders its unset label.
+                  defaultValue={
+                    setting.clearDeletesRow && isBlankSettingValue(settingValueByName.get(setting.key))
+                      ? null
+                      : (settingValueByName.get(setting.key) ?? setting.defaultValue)
+                  }
                   subSettings={subSettings}
                 />
               );

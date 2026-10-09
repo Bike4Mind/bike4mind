@@ -166,7 +166,9 @@ import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note-status-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
-import EnsureFabFileOwnedKeysetIndex from './20260921235999_ensure-fabfile-owned-keyset-index';
+import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -303,6 +305,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureOAuthGrantClientUserIndex,
   ReplaceReleaseNoteStatusIndex,
   EnsureFabFileOwnedKeysetIndex,
+  UnsetStoredDefaultForcedRetrievalFloor,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

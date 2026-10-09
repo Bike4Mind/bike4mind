@@ -20,7 +20,7 @@ import { type MigrationFile } from './index';
  * migration's id the highest on disk - its own test asserts that invariant.
  */
 const migration: MigrationFile = {
-  id: 20260921235999,
+  id: 20260921235994,
   name: 'ensure fabfile owned keyset index',
 
   up: async () => {

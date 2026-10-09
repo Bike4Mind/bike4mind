@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 // Same guard as the sibling fabfile index migrations' tests.
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921235999_ensure-fabfile-owned-keyset-index';
+import migration from './20260921235994_ensure-fabfile-owned-keyset-index';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
