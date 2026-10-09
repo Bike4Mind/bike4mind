@@ -160,6 +160,14 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
 
+  it('rethrows a preflight failure that is not a credit refusal, before any provider cost', async () => {
+    const boom = new Error('settings down');
+    mocks.assertPreflightCredits.mockRejectedValue(boom);
+    const { promise } = run({ text: 'hi' });
+    await expect(promise).rejects.toBe(boom);
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
   it('prices the pre-flight from the requested text so the gate is cost-aware', async () => {
     const { promise } = run({ text: 'hello' });
     await promise;

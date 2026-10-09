@@ -106,6 +106,14 @@ describe('POST /api/elabs/text-to-speech (legacy)', () => {
     expect(mocks.synthesize).not.toHaveBeenCalled();
   });
 
+  it('rethrows a preflight failure that is not a credit refusal, before any provider cost', async () => {
+    const boom = new Error('settings down');
+    mocks.assertPreflightCredits.mockRejectedValue(boom);
+    const { promise } = run();
+    await expect(promise).rejects.toBe(boom);
+    expect(mocks.synthesize).not.toHaveBeenCalled();
+  });
+
   it('returns the url variant for oversized audio instead of a 413, and still bills', async () => {
     synthesizes(Buffer.alloc(OVERSIZED));
     const { res, promise } = run();
