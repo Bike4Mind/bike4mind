@@ -182,6 +182,18 @@ describe('FilesSection message-scoped files', () => {
     expect(mockToastSuccess).not.toHaveBeenCalled();
   });
 
+  it('reports success when the shared writer accepts the file', async () => {
+    messageFiles = [{ ...fab('m1', 'shot.png', 'me', 'image/png'), moderationStatus: 'clean' } as IFabFileDocument];
+    mockAdd.mockResolvedValueOnce(true);
+    renderPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('files-section-promote-btn-m1'));
+    });
+
+    expect(mockToastSuccess).toHaveBeenCalledOnce();
+  });
+
   it('promotes an image once it has cleared moderation', () => {
     messageFiles = [{ ...fab('m1', 'shot.png', 'me', 'image/png'), moderationStatus: 'clean' } as IFabFileDocument];
     renderPanel();

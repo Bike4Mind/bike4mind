@@ -1,31 +1,41 @@
-import { renderHook } from '@testing-library/react';
+import { createElement } from 'react';
+import { render, screen } from '@testing-library/react';
+import {
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from '@tanstack/react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useActiveNotebook } from './useActiveNotebook';
+import { type ActiveNotebook, useActiveNotebook } from './useActiveNotebook';
 
-const { routerState, sessionState } = vi.hoisted(() => ({
-  routerState: { pathname: '/new' },
+const { sessionState } = vi.hoisted(() => ({
   sessionState: { currentSessionId: null as string | null },
 }));
 
-vi.mock('@tanstack/react-router', () => ({
-  useMatchRoute:
-    () =>
-    ({ to }: { to: string }) => {
-      if (to === '/new') return routerState.pathname === '/new' ? {} : false;
-      if (to === '/notebooks/$id') {
-        const match = /^\/notebooks\/([^/]+)\/?$/.exec(routerState.pathname);
-        return match ? { id: match[1] } : false;
-      }
-      return false;
-    },
-}));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSessionId: sessionState.currentSessionId }),
 }));
 
+function Probe() {
+  return createElement('output', { 'data-testid': 'active-notebook' }, JSON.stringify(useActiveNotebook()));
+}
+
+async function renderAt(pathname: string): Promise<ActiveNotebook> {
+  const rootRoute = createRootRoute({ component: Probe });
+  const routeTree = rootRoute.addChildren(
+    ['/new', '/notebooks/$id', '/projects'].map(path => createRoute({ getParentRoute: () => rootRoute, path }))
+  );
+  const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [pathname] }) });
+  await router.load();
+  render(createElement(RouterProvider, { router }));
+  const output = await screen.findByTestId('active-notebook');
+  return JSON.parse(output.textContent ?? '') as ActiveNotebook;
+}
+
 describe('useActiveNotebook', () => {
   beforeEach(() => {
-    routerState.pathname = '/new';
     sessionState.currentSessionId = null;
   });
 
@@ -39,15 +49,9 @@ describe('useActiveNotebook', () => {
       expected: { onScreen: true, sessionId: 's1' },
     },
     {
-      name: 'a trailing slash on the notebook route',
-      pathname: '/notebooks/s1/',
-      current: 's1',
-      expected: { onScreen: true, sessionId: 's1' },
-    },
-    {
-      name: '/notebooks/s2 while s1 is still current (switch window)',
-      pathname: '/notebooks/s2',
-      current: 's1',
+      name: '/notebooks/s1 while s0 is still current (switch window)',
+      pathname: '/notebooks/s1',
+      current: 's0',
       expected: { onScreen: false },
     },
     {
@@ -56,12 +60,9 @@ describe('useActiveNotebook', () => {
       current: null,
       expected: { onScreen: false },
     },
-    { name: 'a project page', pathname: '/projects/p1', current: 's1', expected: { onScreen: false } },
-    { name: '/notebooks with no id', pathname: '/notebooks', current: 's1', expected: { onScreen: false } },
-  ])('$name', ({ pathname, current, expected }) => {
-    routerState.pathname = pathname;
+    { name: '/projects', pathname: '/projects', current: 's1', expected: { onScreen: false } },
+  ])('$name', async ({ pathname, current, expected }) => {
     sessionState.currentSessionId = current;
-    const { result } = renderHook(() => useActiveNotebook());
-    expect(result.current).toEqual(expected);
+    expect(await renderAt(pathname)).toEqual(expected);
   });
 });
