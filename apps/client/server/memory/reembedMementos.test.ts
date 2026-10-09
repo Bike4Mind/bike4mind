@@ -212,6 +212,7 @@ describe('migrateLedgerVectorsForPrincipal', () => {
     expect(stats).toMatchObject({ truncated: 1, backfilled: 0, noProviderKey: 2, failed: 0, providerCalls: 0 });
     expect(stats.errors).toHaveLength(1);
     expect(stats.errors[0]).toContain('owner owner1');
+    expect(stats.embedderError).toContain('OpenAI API key required');
   });
 
   it('spends no limit on a keyless principal, so a long chain is walked to the end', async () => {

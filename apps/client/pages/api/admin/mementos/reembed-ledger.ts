@@ -111,8 +111,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         });
       } else if (stats.noProviderKey > 0) {
         // Its embeds cost no budget, so the rest of the page still runs; listed so the operator knows
-        // it stays on every walk until the owner has a provider key.
-        failedPrincipals.push({ ...target, error: `no provider key for owner ${target.ownerUserId}` });
+        // it stays on every walk until the owner's embedding service can be built.
+        failedPrincipals.push({
+          ...target,
+          error: `embedding service unavailable for owner ${target.ownerUserId}: ${stats.embedderError ?? 'unknown error'}`,
+        });
       }
     } catch (err) {
       failedPrincipals.push({ ...target, error: err instanceof Error ? err.message : String(err) });

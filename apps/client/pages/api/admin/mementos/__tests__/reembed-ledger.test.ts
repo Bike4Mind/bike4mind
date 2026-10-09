@@ -54,6 +54,7 @@ const stats = (over: Record<string, unknown> = {}) => ({
   noProviderKey: 0,
   failed: 0,
   providerCalls: 0,
+  embedderError: null,
   stoppedAtLimit: false,
   errors: [],
   ...over,
@@ -153,13 +154,15 @@ describe('/api/admin/mementos/reembed-ledger', () => {
   it('lists a keyless principal without spending the budget, so the rest of the page still runs', async () => {
     listPrincipals.mockResolvedValue([p('a'), p('b')]);
     migrateMock
-      .mockResolvedValueOnce(stats({ noProviderKey: 150, truncated: 2, errors: ['owner o1: no key'] }))
+      .mockResolvedValueOnce(
+        stats({ noProviderKey: 150, truncated: 2, embedderError: 'no key', errors: ['owner o1: no key'] })
+      )
       .mockResolvedValueOnce(stats({ backfilled: 5, providerCalls: 5 }));
 
     const data = (await post({ execute: true }))._getJSONData();
 
     expect(migrateMock.mock.calls[1][1]).toEqual({ limit: 100 });
-    expect(data.failedPrincipals).toEqual([{ ...p('a'), error: 'no provider key for owner o1' }]);
+    expect(data.failedPrincipals).toEqual([{ ...p('a'), error: 'embedding service unavailable for owner o1: no key' }]);
     expect(data).toMatchObject({
       noProviderKey: 150,
       failed: 0,
