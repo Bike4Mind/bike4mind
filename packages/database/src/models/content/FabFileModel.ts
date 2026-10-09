@@ -3886,6 +3886,8 @@ FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
 // Public v1 file list (listOwnedAfterId): equality on the owned/live/unarchived filter, then the
 // `_id` keyset, so each page streams in order instead of sorting the user's whole file set.
+// Pre-built by 20260921235999_ensure-fabfile-owned-keyset-index rather than left to autoIndex: prod
+// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
 FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 
 // Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'
