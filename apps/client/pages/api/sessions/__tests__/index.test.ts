@@ -86,6 +86,8 @@ describe('/api/sessions API-key scopes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // A staged notebooks:write would turn the 403 cases into staged allows; pin it off.
+    vi.stubEnv('API_KEY_SCOPE_STAGING', '');
     // apiKeyAuth calls logEvent(...).catch(...), so the stub has to be thenable.
     mockLogEvent.mockResolvedValue(undefined);
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
@@ -102,6 +104,7 @@ describe('/api/sessions API-key scopes', () => {
 
   afterEach(() => {
     mockDeleteMany.mockRestore();
+    vi.unstubAllEnvs();
   });
 
   it.each([
