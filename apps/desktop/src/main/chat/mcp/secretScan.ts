@@ -23,6 +23,8 @@ export interface SecretFlag {
   /** Where, as the card and the model read it: "argument 3", "the URL". */
   where: string;
   why: string;
+  /** For an argument, its position in args. */
+  index?: number;
 }
 
 /** Bits per character over the string's own alphabet. */
@@ -62,20 +64,47 @@ export function scanArgs(args: readonly string[]): SecretFlag[] {
   const flags: SecretFlag[] = [];
   args.forEach((arg, index) => {
     const where = `argument ${index + 1}`;
+    const flag = (why: string) => flags.push({ where, why, index });
     const assigned = /^-{0,2}([A-Za-z0-9_.-]+)=(.+)$/.exec(arg);
     if (assigned && SECRET_NAME.test(assigned[1])) {
-      flags.push({ where, why: `sets ${assigned[1]}, which names a secret` });
+      flag(`sets ${assigned[1]}, which names a secret`);
       return;
     }
     const previous = index > 0 ? args[index - 1] : '';
     if (/^-{1,2}[A-Za-z]/.test(previous) && SECRET_NAME.test(previous) && !arg.startsWith('-')) {
-      flags.push({ where, why: `is the value of ${previous}, which names a secret` });
+      flag(`is the value of ${previous}, which names a secret`);
       return;
     }
     const why = looksLikeSecret(assigned ? assigned[2] : arg);
-    if (why) flags.push({ where, why });
+    if (why) flag(why);
   });
   return flags;
+}
+
+const HIDDEN = '[hidden: looks like a secret]';
+
+/**
+ * A server's args and URL as the MODEL may see them: flagged arguments replaced, and a URL that
+ * carries a credential cut back to its origin. The card shows the real values to the user; this
+ * is for listings, results and the call input the transcript replays, which can hold a key the
+ * user typed into Customize -> MCP rather than into a secret field.
+ */
+export function maskForModel(server: { args?: readonly string[]; url?: string }): { args?: string[]; url?: string } {
+  const out: { args?: string[]; url?: string } = {};
+  if (server.args) {
+    const hidden = new Set(scanArgs(server.args).map(flag => flag.index));
+    out.args = server.args.map((arg, index) => (hidden.has(index) ? HIDDEN : arg));
+  }
+  if (server.url !== undefined) {
+    let origin = server.url;
+    try {
+      origin = new URL(server.url).origin;
+    } catch {
+      // Not a URL; scanUrl flags nothing in it either.
+    }
+    out.url = scanUrl(server.url).length > 0 ? `${origin}/${HIDDEN}` : server.url;
+  }
+  return out;
 }
 
 /** Flags in an http server's URL: a password in it, or a query parameter that names or looks like a secret. */

@@ -301,3 +301,21 @@ async function waitForExit(pid: number): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
 }
+
+describe('McpManager connecting once', () => {
+  it('starts one child when two connects race', async () => {
+    const store = new McpServerStore(cipher, memoryFile(), logger);
+    const manager = new McpManager(store, logger, () => undefined);
+    managers.push(manager);
+    const record = await store.add({
+      name: 'echo',
+      transport: 'stdio',
+      command: process.execPath,
+      args: [ECHO_SERVER],
+    });
+    const open = vi.spyOn(manager as unknown as { open: (...args: unknown[]) => Promise<unknown> }, 'open');
+    void manager.connect(record.id);
+    await manager.settle(record.id);
+    expect(open).toHaveBeenCalledTimes(1);
+  }, 30_000);
+});

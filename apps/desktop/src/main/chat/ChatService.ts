@@ -113,7 +113,7 @@ import { SkillsPromptCache } from './skills/prompt';
 import type { SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpServerLines } from './mcp/prompt';
-import { describeFlags, planMcpServerRequest } from './tools/mcpTools';
+import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
 import { QUESTION_CANCELLED, type ApprovalGate } from './tools/ApprovalGate';
 import { inspectDirectoryRequest } from './tools/requestDirectoryTool';
@@ -3324,9 +3324,12 @@ export class ChatService {
 
     const gate = this.deps.approvals;
     const mcp = this.deps.mcp;
+    // The card is drawn from the verbatim request; what is stored and replayed to the model is
+    // masked, since an update carries args the user may have typed a key into.
     const input: Record<string, unknown> = { ...plan.request };
-    const withOutcome = (outcome: McpServerRequestOutcome) => ({ input: { ...input, outcome } });
-    if (!gate || !mcp) return { input };
+    const stored = modelSafeRequest(plan.request, plan.flags);
+    const withOutcome = (outcome: McpServerRequestOutcome) => ({ input: { ...stored, outcome } });
+    if (!gate || !mcp) return { input: stored };
 
     const warning = describeFlags(plan.flags);
     const answer = await gate.request(
@@ -3386,9 +3389,9 @@ export class ChatService {
     } catch (err) {
       // The store's own messages ("another server is already called ...") never carry a value.
       const message = err instanceof Error ? err.message : String(err);
-      const settled: ChatToolCall = { ...call, input, status: 'error', error: `Nothing was saved: ${message}` };
+      const settled: ChatToolCall = { ...call, input: stored, status: 'error', error: `Nothing was saved: ${message}` };
       this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
-      return { settled, input };
+      return { settled, input: stored };
     }
   }
 

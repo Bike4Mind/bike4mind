@@ -9,7 +9,7 @@ import {
 } from '@shared/mcp';
 import type { McpServerChange } from '../mcp/McpManager';
 import { assertConnectable } from '../mcp/McpServerStore';
-import { scanArgs, scanUrl, type SecretFlag } from '../mcp/secretScan';
+import { maskForModel, scanArgs, scanUrl, type SecretFlag } from '../mcp/secretScan';
 import { requireString, type McpToolContext, type ToolContext, type ToolDefinition } from './types';
 
 /**
@@ -49,9 +49,27 @@ async function requireServer(context: ToolContext, input: Record<string, unknown
   return server;
 }
 
+/** Verbatim, for an approval card the user reads. The model gets {@link modelCommandLine}. */
 function commandLine(server: Pick<McpServerState, 'transport' | 'command' | 'args' | 'url'>): string {
   if (server.transport === 'http') return `url: ${server.url ?? ''}`;
   return `command: ${JSON.stringify([server.command ?? '', ...(server.args ?? [])])}`;
+}
+
+function modelCommandLine(server: Pick<McpServerState, 'transport' | 'command' | 'args' | 'url'>): string {
+  return commandLine({ ...server, ...maskForModel(server) });
+}
+
+/**
+ * The input an approved add or update is stored and replayed with: the card's request with any
+ * secret-looking argument or URL masked, plus where the flags were (never what they held), for
+ * `run` to warn the model about.
+ */
+export function modelSafeRequest(request: McpServerRequest, flags: readonly SecretFlag[]): Record<string, unknown> {
+  return {
+    ...request,
+    ...maskForModel(request),
+    ...(flags.length > 0 ? { secret_flags: flags.map(flag => `${flag.where} ${flag.why}`) } : {}),
+  };
 }
 
 /** The child's own output, fenced as third-party data like an mcp__ tool result is. */
@@ -68,7 +86,7 @@ function stderrTail(server: McpServerState): string[] {
 export function describeServerForModel(server: McpServerState): string {
   const lines = [
     `- ${server.name} (id ${server.id}): ${server.status}, ${server.transport}`,
-    `  ${commandLine(server)}`,
+    `  ${modelCommandLine(server)}`,
   ];
   if (server.envKeys.length > 0) lines.push(`  env keys set: ${server.envKeys.join(', ')}`);
   if (server.headerKeys.length > 0) lines.push(`  header keys set: ${server.headerKeys.join(', ')}`);
@@ -290,10 +308,10 @@ export function describeFlags(flags: readonly SecretFlag[]): string | undefined 
 }
 
 /** What the model is told about a flag, alongside the outcome. Names where, never the value. */
-function flagNote(flags: readonly SecretFlag[]): string {
+function flagNote(flags: readonly string[]): string {
   if (flags.length === 0) return '';
   return (
-    `\nNote: ${flags.map(flag => `${flag.where} ${flag.why}`).join('; ')}. Never put a secret in args or ` +
+    `\nNote: ${flags.join('; ')} (masked here). Never put a secret in args or ` +
     'the URL: list its NAME in env_keys (or header_keys) and the user types the value on the card.'
   );
 }
@@ -417,12 +435,11 @@ async function runConfigOutcome(input: Record<string, unknown>, context: ToolCon
       'The card was closed before the user answered (they stopped the reply or sent a new message). Nothing was changed.'
     );
   }
-  const flags = Array.isArray(input.args)
-    ? scanArgs(input.args.filter((arg): arg is string => typeof arg === 'string'))
+  const flags = Array.isArray(input.secret_flags)
+    ? input.secret_flags.filter((flag): flag is string => typeof flag === 'string')
     : [];
-  const urlFlags = typeof input.url === 'string' ? scanUrl(input.url) : [];
   const server = await requireMcp(context).settle(outcome.serverId);
-  return reportConnection(server, verb) + flagNote([...flags, ...urlFlags]);
+  return reportConnection(server, verb) + flagNote(flags);
 }
 
 export const mcpListServers: ToolDefinition = {

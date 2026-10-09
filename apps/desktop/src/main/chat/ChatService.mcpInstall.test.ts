@@ -277,6 +277,8 @@ describe('ChatService installing an MCP server', () => {
 
     const { result } = await secondRequest();
     expect(result.content).toContain('env_keys');
+    // The replayed tool_use and the result carry the position of the flag, never the token.
+    expect(JSON.stringify(post.mock.calls[1][1])).not.toContain('ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4');
   }, 30_000);
 
   it('returns the error and a stderr tail when the added server fails', async () => {
@@ -322,11 +324,13 @@ describe('ChatService installing an MCP server', () => {
     await service.stop(id);
     approvals.resolve(shown.approvalId!, { decision: 'once', secrets: { env: {} } });
 
-    await vi.waitUntil(() => events.some(event => event.type === 'done' || event.type === 'error'), {
-      timeout: 10_000,
-      interval: 5,
-    });
+    const done = await vi.waitUntil(
+      () => events.find((event): event is Extract<ChatStreamEvent, { type: 'done' }> => event.type === 'done'),
+      { timeout: 10_000, interval: 5 }
+    );
     expect((await mcp.state()).servers).toHaveLength(0);
+    // The renderer swaps in these settled calls on 'done', so no live approve button remains.
+    expect(done.toolCalls?.some(call => call.status === 'awaiting-approval' || call.approvalId)).toBe(false);
   }, 30_000);
 
   it('asks before removing a server, even with full access on', async () => {

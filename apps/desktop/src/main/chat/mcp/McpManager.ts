@@ -101,6 +101,8 @@ interface Runtime {
  */
 export class McpManager {
   private readonly runtimes = new Map<string, Runtime>();
+  /** A connect between its call and its runtime existing; see connect. */
+  private readonly starting = new Map<string, Promise<void>>();
   private shuttingDown = false;
 
   constructor(
@@ -240,10 +242,20 @@ export class McpManager {
 
   async connect(id: string): Promise<void> {
     if (this.shuttingDown) return;
+    const starting = this.starting.get(id);
+    if (starting) return starting;
     const existing = this.runtimes.get(id);
     if (existing?.connecting) return existing.connecting;
     if (existing?.status === 'connected') return;
 
+    // Registered before the first await: a second caller arriving while the record is read
+    // would otherwise start a second child, and the runtime it overwrites leaks the first.
+    const work = this.start(id).finally(() => this.starting.delete(id));
+    this.starting.set(id, work);
+    return work;
+  }
+
+  private async start(id: string): Promise<void> {
     const record = await this.store.get(id);
     if (!record || !record.enabled) return;
 
@@ -275,6 +287,7 @@ export class McpManager {
   }
 
   async disconnect(id: string): Promise<void> {
+    await this.starting.get(id);
     const runtime = this.runtimes.get(id);
     if (!runtime) return;
     await runtime.connecting?.catch(() => undefined);

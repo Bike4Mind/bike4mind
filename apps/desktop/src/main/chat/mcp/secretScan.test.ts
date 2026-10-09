@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { looksLikeSecret, scanArgs, scanUrl } from './secretScan';
+import { describeServerForModel } from '../tools/mcpTools';
+import { looksLikeSecret, maskForModel, scanArgs, scanUrl } from './secretScan';
 
 describe('secret scanning', () => {
   it('flags vendor tokens, JWTs and long random strings', () => {
@@ -34,5 +35,26 @@ describe('secret scanning', () => {
     expect(scanUrl('https://example.com/mcp?api_key=abc')).toHaveLength(1);
     expect(scanUrl('https://user:pass@example.com/mcp')).toHaveLength(1);
     expect(scanUrl('https://example.com/mcp')).toEqual([]);
+  });
+
+  it('masks a key the user typed into args or the URL before the model sees the server', () => {
+    expect(maskForModel({ args: ['srv', '--api-key', 'abc123'] }).args).toEqual([
+      'srv',
+      '--api-key',
+      '[hidden: looks like a secret]',
+    ]);
+    const text = describeServerForModel({
+      id: 'i',
+      name: 'n',
+      transport: 'http',
+      enabled: true,
+      status: 'connected',
+      url: 'https://mcp.example.com/sse?api_key=k3y-VALUE-123',
+      envKeys: [],
+      headerKeys: [],
+      tools: [],
+    });
+    expect(text).not.toContain('k3y-VALUE-123');
+    expect(text).toContain('https://mcp.example.com');
   });
 });
