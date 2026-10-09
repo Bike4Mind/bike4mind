@@ -5,6 +5,7 @@ import {
   swapOptimisticPromptBubbleId,
   createOptimisticPromptBubble,
   appendReplyToLatestOptimisticBubble,
+  createOptimisticQuest,
   updateOptimisticQuest,
 } from './llm';
 import { OPTIMISTIC_KEY, updateSingleQueryDataFast } from './react-query';
@@ -165,6 +166,33 @@ describe('swapOptimisticPromptBubbleId', () => {
 // ahead of the server's, the authoritative document used to lose the LWW check and get
 // dropped. These cover the optimistic marker that lets the server win regardless.
 describe('optimistic marker', () => {
+  it('createOptimisticQuest marks its pending entry and clears the marker on a server replacement', async () => {
+    const qc = seedQueryClient([]);
+
+    await createOptimisticQuest(qc, sessionId, 'hi', async () => {
+      expect(marked(readQuests(qc)[0])[OPTIMISTIC_KEY]).toBe(true);
+      return { quest: makeQuest({ id: 'server-quest' }), session: { id: sessionId } as never };
+    });
+
+    const quest = marked(readQuests(qc)[0]);
+    expect(quest.id).toBe('server-quest');
+    expect(quest[OPTIMISTIC_KEY]).toBeUndefined();
+  });
+
+  it('createOptimisticQuest keeps the error reply marked when the request fails', async () => {
+    const qc = seedQueryClient([]);
+
+    await expect(
+      createOptimisticQuest(qc, sessionId, 'hi', async () => {
+        throw new Error('request failed');
+      })
+    ).rejects.toThrow('request failed');
+
+    const quest = marked(readQuests(qc)[0]);
+    expect(quest.replies?.[0]).toContain('request failed');
+    expect(quest[OPTIMISTIC_KEY]).toBe(true);
+  });
+
   it('appendReply keeps the entry marked optimistic and the id stable', () => {
     const qc = seedQueryClient([]);
     createOptimisticPromptBubble(qc, sessionId, 'hi');
@@ -186,6 +214,7 @@ describe('optimistic marker', () => {
 
     const quest = marked(readQuests(qc)[0]);
     expect(quest.id).toBe('real_quest_id');
+    expect(quest.prompt).toBe('hi');
     expect(quest[OPTIMISTIC_KEY]).toBe(true);
   });
 
@@ -220,17 +249,21 @@ describe('updateOptimisticQuest (same-id re-run)', () => {
     const qc = seedQueryClient([makeQuest({ id: 'rerun', status: 'done', replies: ['old answer'] })]);
     let statusDuringRequest: string | undefined = 'unset';
     let repliesDuringRequest: string[] | undefined;
+    let markedDuringRequest: boolean | undefined;
 
     await updateOptimisticQuest(qc, 'rerun', sessionId, { replies: [], status: undefined }, async () => {
       const [cached] = readQuests(qc);
       statusDuringRequest = cached.status;
       repliesDuringRequest = cached.replies;
+      markedDuringRequest = marked(cached)[OPTIMISTIC_KEY];
       return { quest: makeQuest({ id: 'rerun', status: 'running' }), session: { id: sessionId } as never };
     });
 
     expect(statusDuringRequest).toBeUndefined();
     expect(repliesDuringRequest).toEqual([]);
+    expect(markedDuringRequest).toBe(true);
     expect(readQuests(qc)[0].status).toBe('running');
+    expect(marked(readQuests(qc)[0])[OPTIMISTIC_KEY]).toBeUndefined();
   });
 
   it('still writes the error state when the request fails', async () => {
@@ -245,5 +278,6 @@ describe('updateOptimisticQuest (same-id re-run)', () => {
     const [cached] = readQuests(qc);
     expect(cached.status).toBe('done');
     expect(cached.replies?.[0]).toContain('**Error:**');
+    expect(marked(cached)[OPTIMISTIC_KEY]).toBe(true);
   });
 });

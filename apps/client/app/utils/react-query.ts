@@ -29,25 +29,40 @@ const isOptimistic = (obj: unknown): boolean =>
   !!obj && typeof obj === 'object' && (obj as OptimisticMarker)[OPTIMISTIC_KEY] === true;
 
 /**
- * Merge an incoming document over an existing cache entry, carrying the optimistic
- * marker from whichever side owns it: an optimistic incoming keeps `_optimistic`, an
- * authoritative incoming drops any marker the existing entry carried.
+ * A timestamp-free patch has no evidence that it came from the server. Keep an
+ * existing marker until a full, timestamped server document replaces the entry.
  */
-const mergeIncoming = <T extends object>(existing: T, incoming: T): T => {
+const mergeIncoming = <T extends object>(existing: T, incoming: T, hasServerTimestamp: boolean): T => {
   const merged = { ...existing, ...incoming } as Record<string, unknown>;
   if (isOptimistic(incoming)) {
     merged[OPTIMISTIC_KEY] = true;
-  } else {
+  } else if (hasServerTimestamp) {
     delete merged[OPTIMISTIC_KEY];
   }
   return merged as T;
 };
 
+/** The dispatch-time Quest can arrive after the local completion frame. */
+const isEarlierPendingQuest = (existing: object, incoming: object): boolean => {
+  const current = existing as Record<string, unknown>;
+  const next = incoming as Record<string, unknown>;
+  return (
+    current.status === 'done' &&
+    typeof current.agentExecutionId === 'string' &&
+    current.agentExecutionId === next.agentExecutionId &&
+    Array.isArray(current.replies) &&
+    current.replies.length > 0 &&
+    next.status === 'pending' &&
+    Array.isArray(next.replies) &&
+    next.replies.length === 0
+  );
+};
+
 /**
- * True when `incoming` may replace `existing`. An authoritative (unmarked) document
- * always supersedes an optimistic placeholder, regardless of timestamps - the
- * placeholder's `updatedAt` is client-clock and may be ahead of the server's. Every
- * other pair keeps the pre-existing `updatedAt` last-write-wins rule.
+ * True when `incoming` may replace `existing`. A server document supersedes an
+ * optimistic placeholder despite clock skew, except when the same execution's
+ * earlier pending Quest would erase a completed local reply. Other pairs retain
+ * the pre-existing `updatedAt` last-write-wins rule.
  */
 const canApplyIncoming = <T extends object>(
   existing: T,
@@ -55,7 +70,9 @@ const canApplyIncoming = <T extends object>(
   newUpdatedAt: number | null,
   existingUpdatedAt: number | null
 ): boolean => {
-  if (isOptimistic(existing) && !isOptimistic(incoming)) return true;
+  if (isOptimistic(existing) && !isOptimistic(incoming)) {
+    return !isEarlierPendingQuest(existing, incoming);
+  }
   return !existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt;
 };
 
@@ -220,7 +237,10 @@ export const updateSingleQueryDataFast = <
 
               if (canApplyIncoming(existingItem, data, newUpdatedAt, existingUpdatedAt)) {
                 const updatedData = [...page.data];
-                updatedData[itemIndex] = { ...mergeIncoming(existingItem, data), cachedUpdate: cacheTime } as any;
+                updatedData[itemIndex] = {
+                  ...mergeIncoming(existingItem, data, newUpdatedAt !== null),
+                  cachedUpdate: cacheTime,
+                } as any;
                 return { ...page, data: updatedData };
               }
             }
@@ -257,7 +277,10 @@ export const updateSingleQueryDataFast = <
             const existingUpdatedAt = getTs(existingItem);
 
             if (canApplyIncoming(existingItem, data, newUpdatedAt, existingUpdatedAt)) {
-              updatedData[itemIndex] = { ...mergeIncoming(existingItem, data), cachedUpdate: cacheTime } as any;
+              updatedData[itemIndex] = {
+                ...mergeIncoming(existingItem, data, newUpdatedAt !== null),
+                cachedUpdate: cacheTime,
+              } as any;
             }
           } else if (allowCreate) {
             updatedData = [{ ...data, cachedUpdate: cacheTime } as any, ...currentData.data];
@@ -280,18 +303,21 @@ export const updateSingleQueryDataFast = <
             const existingUpdatedAt = getTs(existingItem);
 
             if (canApplyIncoming(existingItem, data, newUpdatedAt, existingUpdatedAt)) {
-              updatedData[itemIndex] = mergeIncoming(existingItem, data) as any;
+              updatedData[itemIndex] = mergeIncoming(existingItem, data, newUpdatedAt !== null) as any;
             }
           } else if (allowCreate) {
             updatedData = [data, ...currentData];
           }
           return updatedData;
         }
-      } else if ((currentData as any).id === (data as any).id) {
-        const existingUpdatedAt = getTs(currentData as any);
+      } else {
+        // The paged, data and array cache shapes have been handled above.
+        const existingItem = currentData as T;
+        if (existingItem.id !== data.id) return currentData;
+        const existingUpdatedAt = getTs(existingItem);
 
-        if (canApplyIncoming(currentData as any, data as any, newUpdatedAt, existingUpdatedAt)) {
-          return mergeIncoming(currentData as any, data as any);
+        if (canApplyIncoming(existingItem, data, newUpdatedAt, existingUpdatedAt)) {
+          return mergeIncoming(existingItem, data, newUpdatedAt !== null);
         }
       }
 
@@ -594,7 +620,10 @@ export const replaceQueryData = async <
           // Make sure id is changed. mergeIncoming drops the optimistic marker when the
           // replacement is an authoritative server document, and keeps it for a client-
           // authored replacement (e.g. the error reply built from the optimistic quest).
-          updatedData[itemIndex] = { ...mergeIncoming(existingItem, data), id: data.id };
+          updatedData[itemIndex] = {
+            ...mergeIncoming(existingItem, data, !!(data.updatedAt ?? data.lastUpdated)),
+            id: data.id,
+          };
           return { ...page, data: uniqBy(updatedData, 'id') };
         }
         return page;

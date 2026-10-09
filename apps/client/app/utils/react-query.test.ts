@@ -4,6 +4,7 @@ import {
   stableSubscriptionKey,
   updateSingleQueryDataFast,
   setOptimisticQueryData,
+  replaceQueryData,
   OPTIMISTIC_KEY,
 } from './react-query';
 
@@ -75,8 +76,10 @@ describe('updateSingleQueryDataFast optimistic supersede', () => {
     id: string;
     updatedAt: Date;
     replies?: string[];
+    status?: 'pending' | 'done';
     title?: string;
     creditsUsed?: number;
+    agentExecutionId?: string;
     [OPTIMISTIC_KEY]?: true;
   };
 
@@ -105,6 +108,7 @@ describe('updateSingleQueryDataFast optimistic supersede', () => {
 
     const entry = (qc.getQueryData(key) as { data: Row[] }).data[0];
     expect(entry.title).toBe('from server');
+    expect(entry.updatedAt).toEqual(SERVER_CLOCK_BEHIND);
     expect(entry[OPTIMISTIC_KEY]).toBeUndefined();
   });
 
@@ -119,6 +123,7 @@ describe('updateSingleQueryDataFast optimistic supersede', () => {
 
     const entry = (qc.getQueryData(key) as { pages: { data: Row[] }[] }).pages[0].data[0];
     expect(entry.title).toBe('from server');
+    expect(entry.updatedAt).toEqual(SERVER_CLOCK_BEHIND);
     expect(entry[OPTIMISTIC_KEY]).toBeUndefined();
   });
 
@@ -133,6 +138,7 @@ describe('updateSingleQueryDataFast optimistic supersede', () => {
 
     const entry = (qc.getQueryData(key) as Row[])[0];
     expect(entry.title).toBe('from server');
+    expect(entry.updatedAt).toEqual(SERVER_CLOCK_BEHIND);
     expect(entry[OPTIMISTIC_KEY]).toBeUndefined();
   });
 
@@ -147,6 +153,7 @@ describe('updateSingleQueryDataFast optimistic supersede', () => {
 
     const entry = qc.getQueryData(key) as Row;
     expect(entry.title).toBe('from server');
+    expect(entry.updatedAt).toEqual(SERVER_CLOCK_BEHIND);
     expect(entry[OPTIMISTIC_KEY]).toBeUndefined();
   });
 
@@ -203,5 +210,74 @@ describe('updateSingleQueryDataFast optimistic supersede', () => {
     const entry = (qc.getQueryData(key) as { pages: { data: Row[] }[] }).pages[0].data[0];
     expect(entry.creditsUsed).toBe(42);
     expect(entry[OPTIMISTIC_KEY]).toBeUndefined();
+  });
+
+  it('keeps the marker through a timestamp-free local patch until the server document arrives', () => {
+    const qc = new QueryClient();
+    const key = ['quests', 'session', 's1'];
+    qc.setQueryData(key, { pages: [{ data: [optimisticRow('q1')] }], pageParams: [{ page: 1 }] });
+
+    updateSingleQueryDataFast(qc, key, 'write', { id: 'q1', pinned: true }, { keysAllowedToCreate: [] });
+
+    const afterPin = (qc.getQueryData(key) as { pages: { data: Array<Row & { pinned?: boolean }> }[] }).pages[0]
+      .data[0];
+    expect(afterPin.pinned).toBe(true);
+    expect(afterPin[OPTIMISTIC_KEY]).toBe(true);
+
+    updateSingleQueryDataFast(qc, key, 'write', serverRow('q1', { replies: ['from server'] }), {
+      keysAllowedToCreate: [],
+    });
+
+    const landed = (qc.getQueryData(key) as { pages: { data: Row[] }[] }).pages[0].data[0];
+    expect(landed.replies).toEqual(['from server']);
+    expect(landed[OPTIMISTIC_KEY]).toBeUndefined();
+  });
+
+  it('does not let a delayed dispatch-time pending Quest erase a completed optimistic reply', () => {
+    const qc = new QueryClient();
+    const key = ['quests', 'session', 's1'];
+    qc.setQueryData(key, {
+      pages: [{ data: [optimisticRow('q1', { agentExecutionId: 'exec-1', status: 'done', replies: ['completed'] })] }],
+      pageParams: [{ page: 1 }],
+    });
+
+    updateSingleQueryDataFast(
+      qc,
+      key,
+      'write',
+      serverRow('q1', { agentExecutionId: 'exec-1', status: 'pending', replies: [] }),
+      {
+        keysAllowedToCreate: [],
+      }
+    );
+
+    const afterPending = (qc.getQueryData(key) as { pages: { data: Row[] }[] }).pages[0].data[0];
+    expect(afterPending.replies).toEqual(['completed']);
+    expect(afterPending[OPTIMISTIC_KEY]).toBe(true);
+
+    updateSingleQueryDataFast(qc, key, 'write', serverRow('q1', { status: 'done', replies: ['authoritative'] }), {
+      keysAllowedToCreate: [],
+    });
+
+    const landed = (qc.getQueryData(key) as { pages: { data: Row[] }[] }).pages[0].data[0];
+    expect(landed.replies).toEqual(['authoritative']);
+    expect(landed[OPTIMISTIC_KEY]).toBeUndefined();
+  });
+
+  it('replaceQueryData clears a marker for a server replacement and keeps it for a client replacement', async () => {
+    const qc = new QueryClient();
+    const key = ['quests', 'session', 's1'];
+    qc.setQueryData(key, { pages: [{ data: [optimisticRow('temp')] }], pageParams: [{ page: 1 }] });
+
+    await replaceQueryData(qc, key, 'temp', optimisticRow('still-local'));
+    const local = (qc.getQueryData(key) as { pages: { data: Row[] }[] }).pages[0].data[0];
+    expect(local.id).toBe('still-local');
+    expect(local[OPTIMISTIC_KEY]).toBe(true);
+
+    await replaceQueryData(qc, key, 'still-local', serverRow('q1', { replies: ['authoritative'] }));
+    const landed = (qc.getQueryData(key) as { pages: { data: Row[] }[] }).pages[0].data[0];
+    expect(landed.id).toBe('q1');
+    expect(landed.replies).toEqual(['authoritative']);
+    expect(landed[OPTIMISTIC_KEY]).toBeUndefined();
   });
 });
