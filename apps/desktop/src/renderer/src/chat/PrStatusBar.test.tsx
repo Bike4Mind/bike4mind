@@ -1,0 +1,128 @@
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { PrBarState, PrBinding, PrSnapshot } from '@shared/pullRequest';
+import { describe, expect, it } from 'vitest';
+import { PrStatusBar } from './PrStatusBar';
+import { timeAgo } from './prBarModel';
+
+/** Rendered to a string, like ApprovalChoice's tests and for the same reason: this package's vitest runs on `node`. */
+
+const BINDING: PrBinding = {
+  owner: 'example-org',
+  repo: 'widgets',
+  number: 611,
+  url: 'https://github.com/example-org/widgets/pull/611',
+  source: 'shell',
+  boundAt: '',
+  autoFix: true,
+  autoMerge: true,
+};
+
+function snapshot(overrides: Partial<PrSnapshot> = {}): PrBarState['snapshot'] {
+  return {
+    owner: 'example-org',
+    repo: 'widgets',
+    number: 611,
+    url: BINDING.url,
+    title: 'feat: ladder',
+    author: 'octo-dev',
+    state: 'OPEN',
+    isDraft: false,
+    headRefName: 'feat/widget-ladder',
+    headSha: 'sha-1',
+    baseRefName: 'main',
+    additions: 103,
+    deletions: 16,
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: null,
+    autoMergeArmed: false,
+    checks: [],
+    repoSettings: { autoMergeAllowed: false, allowedMethods: ['squash'] },
+    viewer: 'octo-dev',
+    fetchedAt: 0,
+    ...overrides,
+  };
+}
+
+function markup(overrides: Partial<PrSnapshot> = {}, refreshing = false): string {
+  const state: PrBarState = {
+    sessionId: 'session-1',
+    binding: BINDING,
+    snapshot: snapshot(overrides),
+    gh: 'ok',
+    refreshing,
+    autoMerge: { mode: 'desktop' },
+    autoFix: { status: 'watching', attempts: 0, max: 3 },
+  };
+  return renderToStaticMarkup(
+    <PrStatusBar
+      state={state}
+      onDismiss={async () => ({ ok: true })}
+      onRefresh={() => {}}
+      onSetOption={async () => ({ ok: true })}
+    />
+  );
+}
+
+const has = (html: string, testId: string) => html.includes(`data-testid="${testId}"`);
+
+describe('PrStatusBar', () => {
+  it('draws a merged PR as finished, with nothing left to refresh or automate', () => {
+    const html = markup({ state: 'MERGED', mergedAt: new Date(Date.now() - 3 * 3_600_000).toISOString() });
+    expect(has(html, 'pr-bar-refresh-btn')).toBe(false);
+    expect(has(html, 'pr-bar-merged-icon')).toBe(true);
+    expect(html).toContain('data-state="MERGED"');
+    expect(html).toMatch(/data-testid="pr-bar-merged-at"[^>]*>merged 3h ago</);
+    for (const testId of ['pr-bar-ci-btn', 'pr-bar-autofix-status', 'pr-bar-automerge-armed', 'pr-bar-closed-icon']) {
+      expect(has(html, testId)).toBe(false);
+    }
+    for (const testId of ['pr-bar-open-btn', 'pr-bar-dismiss-btn', 'pr-bar-number-btn', 'pr-bar-diff']) {
+      expect(has(html, testId)).toBe(true);
+    }
+  });
+
+  it('leaves out the merged time when the read did not carry one', () => {
+    expect(has(markup({ state: 'MERGED' }), 'pr-bar-merged-at')).toBe(false);
+  });
+
+  it('keeps a manual refresh for a closed PR, which can be reopened', () => {
+    const html = markup({ state: 'CLOSED' });
+    expect(has(html, 'pr-bar-refresh-btn')).toBe(true);
+    expect(has(html, 'pr-bar-closed-icon')).toBe(true);
+    expect(html).toContain('data-state="CLOSED"');
+    for (const testId of ['pr-bar-merged-icon', 'pr-bar-merged-at', 'pr-bar-ci-btn', 'pr-bar-autofix-status']) {
+      expect(has(html, testId)).toBe(false);
+    }
+  });
+
+  it('leaves an open PR as it was', () => {
+    const html = markup();
+    for (const testId of ['pr-bar-refresh-btn', 'pr-bar-ci-btn', 'pr-bar-autofix-status', 'pr-bar-automerge-armed']) {
+      expect(has(html, testId)).toBe(true);
+    }
+    expect(has(html, 'pr-bar-merged-icon')).toBe(false);
+    expect(has(html, 'pr-bar-closed-icon')).toBe(false);
+  });
+
+  it('spins the refresh button only while a read runs', () => {
+    expect(markup({ state: 'CLOSED' }, true)).toContain('role="progressbar"');
+    expect(markup({ state: 'CLOSED' }, false)).not.toContain('role="progressbar"');
+  });
+});
+
+describe('timeAgo', () => {
+  const now = Date.parse('2026-10-09T12:00:00Z');
+  it.each([
+    ['2026-10-09T11:59:40Z', 'just now'],
+    ['2026-10-09T11:55:00Z', '5m ago'],
+    ['2026-10-09T09:00:00Z', '3h ago'],
+    ['2026-10-02T12:00:00Z', '7d ago'],
+  ])('%s reads %s', (iso, expected) => {
+    expect(timeAgo(iso, now)).toBe(expected);
+  });
+
+  it('names the date once a month has passed, and gives up on a bad time', () => {
+    expect(timeAgo('2026-01-02T12:00:00Z', now)).toMatch(/^on .*2026/);
+    expect(timeAgo('not a time', now)).toBeNull();
+  });
+});

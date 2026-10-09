@@ -32,10 +32,9 @@ function manualTimers() {
   };
 }
 
-function setup(initial = snapshot({ checks: [check('Build', 'pending')] })) {
+function setup(initial = snapshot({ checks: [check('Build', 'pending')] }), store = tempStore()) {
   // On the 15s grid, so the delays below are the cadences themselves.
   let now = 990_000;
-  const store = tempStore();
   const fake = fakeGithub(initial);
   const clock = manualTimers();
   const out = collector();
@@ -192,5 +191,151 @@ describe('PrMonitor polling', () => {
     });
     await settle();
     expect(clock.delays()).toEqual([15_000]);
+  });
+
+  it.each([
+    ['open', snapshot()],
+    ['draft', snapshot({ isDraft: true })],
+    ['merged', snapshot({ state: 'MERGED' })],
+    ['closed', snapshot({ state: 'CLOSED' })],
+  ])('clears the spinner once a read of a %s PR lands', async (_name, answer) => {
+    const { store, out, monitor } = setup(answer);
+    await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });
+    await monitor.refresh(SESSION);
+    await settle();
+    expect(out.last()?.refreshing).toBe(false);
+  });
+
+  it('clears the spinner when a read fails', async () => {
+    const { store, fake, out, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });
+    fake.answer(new GhError('failed', 'boom'));
+    await monitor.refresh(SESSION);
+    await settle();
+    expect(out.last()).toMatchObject({ refreshing: false, error: 'boom' });
+  });
+
+  it('clears the spinner when a read is skipped during a rate-limit pause', async () => {
+    const { store, fake, out, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });
+    fake.answer(new GhError('rate-limited', 'API rate limit exceeded'));
+    await monitor.refresh(SESSION);
+    await monitor.refresh(SESSION);
+    await settle();
+    expect(fake.calls).toEqual(['snapshot']);
+    expect(out.last()?.refreshing).toBe(false);
+  });
+
+  describe('a finished PR', () => {
+    const merged = snapshot({ state: 'MERGED', mergedAt: '2026-10-01T00:00:00Z', checks: [check('Build', 'pass')] });
+
+    async function finishOnScreen(answer = merged) {
+      const env = setup();
+      await env.store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });
+      await env.monitor.watch(1, SESSION);
+      await settle();
+      env.fake.answer(answer);
+      await env.clock.fire();
+      env.fake.calls.length = 0;
+      return env;
+    }
+
+    it.each([
+      ['merged', merged],
+      ['closed', snapshot({ state: 'CLOSED' })],
+    ])('arms no timer once %s', async (_name, answer) => {
+      const { clock, out } = await finishOnScreen(answer);
+      expect(clock.delays()).toEqual([]);
+      expect(out.last()).toMatchObject({ refreshing: false, snapshot: { state: answer.state } });
+    });
+
+    it('is not read again when it leaves the screen and comes back', async () => {
+      const { fake, clock, monitor, advance } = await finishOnScreen();
+      await monitor.watch(1, 'another-session');
+      advance(POLL_MS.openedSettled);
+      const state = await monitor.watch(1, SESSION);
+      await settle();
+      expect(fake.calls).toEqual([]);
+      expect(clock.delays()).toEqual([]);
+      expect(state).toMatchObject({ refreshing: false, snapshot: { state: 'MERGED' } });
+    });
+
+    it('keeps its last read across a relaunch, so opening it reads nothing', async () => {
+      const { store } = await finishOnScreen();
+      expect((await store.get(SESSION))?.finalSnapshot).toMatchObject({ state: 'MERGED', checks: [] });
+
+      const relaunched = setup(merged, store);
+      await relaunched.monitor.start();
+      const state = await relaunched.monitor.watch(1, SESSION);
+      await settle();
+      expect(relaunched.fake.calls).toEqual([]);
+      expect(relaunched.clock.delays()).toEqual([]);
+      expect(state?.snapshot).toMatchObject({ state: 'MERGED', additions: 157, mergedAt: '2026-10-01T00:00:00Z' });
+      expect(state?.binding?.finalSnapshot).toBeUndefined();
+    });
+
+    it('reads a merged PR stored before its last read was kept, once', async () => {
+      const { store, fake, monitor } = setup(merged);
+      await store.set(SESSION, { ...REF, source: 'shell', boundAt: '', lastState: 'MERGED' });
+      await monitor.watch(1, SESSION);
+      await settle();
+      await monitor.watch(1, 'another-session');
+      await monitor.watch(1, SESSION);
+      await settle();
+      expect(fake.calls).toEqual(['snapshot']);
+    });
+
+    it('is not re-armed by a push or a finished turn', async () => {
+      const { fake, clock, monitor } = await finishOnScreen();
+      monitor.observeToolEnd(SESSION, {
+        id: 'c',
+        name: 'bash_execute',
+        input: { command: 'git push' },
+        status: 'done',
+        preview: 'Everything up-to-date',
+      });
+      monitor.turnSettled(SESSION);
+      await settle();
+      expect(clock.delays()).toEqual([]);
+      expect(fake.calls).toEqual([]);
+    });
+
+    it('refuses to switch an automation on, without reading', async () => {
+      const { fake, clock, monitor } = await finishOnScreen();
+      for (const option of ['autoFix', 'autoMerge', 'autoArchive'] as const) {
+        expect(await monitor.setOption(SESSION, option, true)).toMatchObject({ ok: false });
+      }
+      await settle();
+      expect(fake.calls).toEqual([]);
+      expect(clock.delays()).toEqual([]);
+    });
+
+    it('arms nothing after the bar is dismissed', async () => {
+      const { fake, clock, monitor } = await finishOnScreen();
+      await monitor.dismiss(SESSION);
+      await monitor.watch(1, 'another-session');
+      await monitor.watch(1, SESSION);
+      await settle();
+      expect(fake.calls).toEqual([]);
+      expect(clock.delays()).toEqual([]);
+    });
+
+    it('reads a closed PR once on a manual refresh, still unarmed', async () => {
+      const { fake, clock, monitor, out } = await finishOnScreen(snapshot({ state: 'CLOSED' }));
+      await monitor.refresh(SESSION);
+      await settle();
+      expect(fake.calls).toEqual(['snapshot']);
+      expect(clock.delays()).toEqual([]);
+      expect(out.last()?.refreshing).toBe(false);
+    });
+
+    it('polls again, and forgets its kept read, once a closed PR is reopened', async () => {
+      const { store, fake, clock, monitor } = await finishOnScreen(snapshot({ state: 'CLOSED' }));
+      fake.answer(snapshot({ checks: [check('Build', 'pending')] }));
+      await monitor.refresh(SESSION);
+      expect(clock.delays()).toEqual([POLL_MS.onScreenActive]);
+      expect(await store.get(SESSION)).toMatchObject({ lastState: 'OPEN' });
+      expect((await store.get(SESSION))?.finalSnapshot).toBeUndefined();
+    });
   });
 });
