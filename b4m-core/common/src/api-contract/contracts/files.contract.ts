@@ -5,6 +5,7 @@ import {
   CreateFileUploadResponseSchema,
   FileIdParamSchema,
   FileResponseSchema,
+  FileSummarySchema,
   ListFilesQuerySchema,
   ListFilesResponseSchema,
   UpdateFileRequestSchema,
@@ -174,7 +175,8 @@ export const updateFileContract = defineEndpoint({
   description:
     'Renames a file you can edit or changes its notes: a file you own, or one shared with you with ' +
     'edit (`update`) permission. Omitted fields are left unchanged. Unknown body fields are rejected. ' +
-    '`download_url` is null in the response when you can edit the file but not read it.',
+    'The response is the file summary, with no `download_url`: fetch the bytes from ' +
+    '`GET /api/v1/files/{id}`, which requires `files:read`.',
   tags: ['Files'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.WRITE_FILES],
@@ -183,7 +185,7 @@ export const updateFileContract = defineEndpoint({
   requestExample: UPDATE_EXAMPLE,
   emitsRateLimitHeaders: true,
   responses: {
-    200: { description: 'The updated file, and a download URL if it is downloadable.', schema: FileResponseSchema },
+    200: { description: 'The updated file summary.', schema: FileSummarySchema },
     403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: {
       description:

@@ -16,10 +16,9 @@ import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
 import { deleteFileForUser } from '@server/files/deleteFileForUser';
 import { updateFileForUser } from '@server/files/updateFileForUser';
-import { toPublicFile, type PublicFileSource } from '@server/files/toPublicFile';
+import { toPublicFile, toPublicFileSummary } from '@server/files/toPublicFile';
 import { isValidObjectId } from '@server/utils/objectId';
 import { NotFoundError } from '@server/utils/errors';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 // A malformed id is a 404, not a CastError from deep in the query (CONVENTIONS.md status table).
 function assertValidFileId(id: string) {
@@ -46,11 +45,10 @@ const updateRoute = nextRouteForContract(updateFileContract, {
   assertValidFileId(id);
   const { file_name, notes } = req.validated;
 
-  // updateFabFile only reaches the lake gates when `tags` is passed, which this body cannot carry;
-  // they are wired exactly as PUT /api/files/[id] wires them so that stays true by construction
-  // rather than by stub. Its update-access lookup answers a denial with NotFoundError.
-  const ctx = await toAccessContext(req);
-  const updated = await updateFileForUser(req, ctx.administeredOrgIds, {
+  // No administeredOrgIds: they only widen the lake-tag join gate, and this body cannot carry tags
+  // (updateFileForUser's params type forbids them). The update-access lookup answers a denial with
+  // NotFoundError.
+  const updated = await updateFileForUser(req, undefined, {
     id,
     // Spread so an omitted field stays absent instead of being set undefined.
     ...(file_name !== undefined && { fileName: file_name }),
@@ -58,16 +56,9 @@ const updateRoute = nextRouteForContract(updateFileContract, {
   });
 
   res.setHeader('Cache-Control', 'private, no-store');
-  try {
-    // Re-read rather than project `updated`: the read path signs a fresh download URL.
-    return res.json(toPublicFile(await loadAccessibleFabFile(req, id)));
-  } catch (error) {
-    if (!(error instanceof NotFoundError)) throw error;
-    // Update access is not a subset of read access, and the write has already committed, so answer
-    // with the updated file minus its stored (possibly stale) URL rather than a 404. The cast is safe:
-    // updateFabFile returns the whole loaded document with the changes spread over it.
-    return res.json(toPublicFile({ ...(updated as PublicFileSource), fileUrl: undefined }));
-  }
+  // The summary, never a download URL: this door is gated on files:write, and handing back bytes
+  // here would let a write-only key read what GET (files:read) denies it.
+  return res.json(toPublicFileSummary(updated));
 });
 
 const deleteRoute = nextRouteForContract(deleteFileContract, {
