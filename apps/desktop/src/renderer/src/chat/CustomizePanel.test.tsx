@@ -6,6 +6,27 @@ import type { SkillSummary } from '@shared/skills';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// jsdom ships no matchMedia, and Joy's colour-scheme provider asks for one on mount.
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener: () => {},
+  removeListener: () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+})) as typeof window.matchMedia;
+
+(window as unknown as { b4m: unknown }).b4m = {
+  mcp: {
+    getServers: async () => ({ servers: [], secretsPersisted: true }),
+    onChanged: () => () => {},
+  },
+};
+
 const skills = vi.hoisted(() => ({
   state: {
     skills: [
@@ -59,6 +80,16 @@ const renderScreen = () => renderNode(<CustomizeScreen sessionId="session-1" onC
 
 const byTestId = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 const allByTestId = (id: string) => [...container.querySelectorAll<HTMLElement>(`[data-testid="${id}"]`)];
+const text = (node: Element | null | undefined) => node?.textContent?.replace(/\s+/g, ' ');
+
+const isVisible = (node: HTMLElement | null) => {
+  if (!node?.isConnected) return false;
+  for (let el: HTMLElement | null = node; el; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    if (el.hidden || style.display === 'none' || style.opacity === '0') return false;
+  }
+  return !['hidden', 'collapse'].includes(getComputedStyle(node).visibility);
+};
 
 describe('the Customize screen', () => {
   beforeEach(() => {
@@ -97,24 +128,24 @@ describe('the Customize screen', () => {
     renderScreen();
     const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
     expect(tabs.map(tab => tab.textContent)).toEqual(['Skills', 'MCP']);
-    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
-    expect(byTestId('skills-settings')).toBeVisible();
+    expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(isVisible(byTestId('skills-settings'))).toBe(true);
   });
 
   it('groups global skills by their top-level ~/.claude/skills scope', () => {
     renderScreen();
     const groups = allByTestId('skill-group');
-    expect(byTestId('user-skill-scopes')).toHaveTextContent('Your skills');
-    expect(groups[0]).toHaveTextContent('chrome-browser');
-    expect(groups[0]).toHaveTextContent('/chrome-browser');
-    expect(groups[1]).toHaveTextContent('hyperframes');
-    expect(groups[1]).toHaveTextContent('/hyperframes');
-    expect(groups[1]).toHaveTextContent('/brief-format');
-    expect(container).not.toHaveTextContent('Project skills');
-    expect(container).not.toHaveTextContent('/my-review');
-    expect(container).not.toHaveTextContent('/legacy-command');
-    expect(groups[2]).toHaveTextContent('Bike4Mind skills');
-    expect(groups[2]).toHaveTextContent('No Bike4Mind account skills loaded.');
+    expect(text(byTestId('user-skill-scopes'))).toContain('Your skills');
+    expect(text(groups[0])).toContain('chrome-browser');
+    expect(text(groups[0])).toContain('/chrome-browser');
+    expect(text(groups[1])).toContain('hyperframes');
+    expect(text(groups[1])).toContain('/hyperframes');
+    expect(text(groups[1])).toContain('/brief-format');
+    expect(text(container)).not.toContain('Project skills');
+    expect(text(container)).not.toContain('/my-review');
+    expect(text(container)).not.toContain('/legacy-command');
+    expect(text(groups[2])).toContain('Bike4Mind skills');
+    expect(text(groups[2])).toContain('No Bike4Mind account skills loaded.');
   });
 
   it('shows an explicit empty state for either skill group', () => {
@@ -127,41 +158,41 @@ describe('the Customize screen', () => {
       },
     ];
     renderScreen();
-    expect(container).not.toHaveTextContent('No skills found in ~/.claude/skills.');
-    expect(container).toHaveTextContent('No Bike4Mind account skills loaded.');
+    expect(text(container)).not.toContain('No skills found in ~/.claude/skills.');
+    expect(text(container)).toContain('No Bike4Mind account skills loaded.');
   });
 
   it('switches to MCP and preserves its inline controls', () => {
     renderScreen();
     act(() => byTestId('customize-mcp-tab')?.click());
-    expect(byTestId('customize-mcp-tab')).toHaveAttribute('aria-selected', 'true');
-    expect(byTestId('mcp-settings')).toBeVisible();
-    expect(byTestId('mcp-settings-add-btn')).toBeVisible();
-    expect(byTestId('config-entry-btn')).not.toBeInTheDocument();
+    expect(byTestId('customize-mcp-tab')?.getAttribute('aria-selected')).toBe('true');
+    expect(isVisible(byTestId('mcp-settings'))).toBe(true);
+    expect(isVisible(byTestId('mcp-settings-add-btn'))).toBe(true);
+    expect(byTestId('config-entry-btn')).toBeNull();
   });
 
   it('leaves app preferences, the server, and the updater to Settings', () => {
     renderScreen();
-    expect(container.querySelector('[data-entry="appearance"]')).not.toBeInTheDocument();
-    expect(container.querySelector('[data-entry="prompt-suggestions"]')).not.toBeInTheDocument();
-    expect(byTestId('update-settings')).not.toBeInTheDocument();
-    expect(byTestId('environment-select-btn')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-entry="appearance"]')).toBeNull();
+    expect(container.querySelector('[data-entry="prompt-suggestions"]')).toBeNull();
+    expect(byTestId('update-settings')).toBeNull();
+    expect(byTestId('environment-select-btn')).toBeNull();
   });
 
   it('keeps a way out of the screen', () => {
     renderScreen();
-    expect(byTestId('customize-close-btn')).toBeVisible();
+    expect(isVisible(byTestId('customize-close-btn'))).toBe(true);
   });
 });
 
 describe('the Customize nav row', () => {
   it('opens the screen and keeps its stable hook', () => {
     renderNode(<CustomizeNavItem onOpen={() => {}} />);
-    expect(byTestId('chat-customize-btn')).toBeVisible();
+    expect(isVisible(byTestId('chat-customize-btn'))).toBe(true);
   });
 
   it('shows no attention badge when nothing needs attention', () => {
     renderNode(<CustomizeNavItem onOpen={() => {}} />);
-    expect(byTestId('customize-attention-chip')).not.toBeInTheDocument();
+    expect(byTestId('customize-attention-chip')).toBeNull();
   });
 });
