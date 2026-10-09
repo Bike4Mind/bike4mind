@@ -3,7 +3,7 @@
  *
  * The unit tests drive `runCompletion` and each transport in isolation. This is
  * the regression net the CLI epic (#182, line item 1) calls for on a refactor:
- * a REAL `ServerLlmBackend` (SSE transport -> runCompletion -> streamBridge)
+ * a REAL `ServerLlmBackend` (SDK SSE transport -> runCompletion)
  * driven by a REAL `ReActAgent`, so the whole path is exercised end to end - no
  * faux `complete()` shortcut. The SSE stream is faked with an in-memory
  * PassThrough (no network), one fresh stream per attempt so retries are real.
@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { PassThrough } from 'stream';
+import { PassThrough, Readable } from 'stream';
 import { ReActAgent } from '@bike4mind/agents';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { ApiClient } from '../../src/auth/ApiClient';
@@ -35,15 +35,16 @@ const sse = (obj: unknown): string => `data: ${JSON.stringify(obj)}\n\n`;
 function makeSseBackend(producers: Array<(stream: PassThrough) => void>): ServerLlmBackend {
   let attempt = 0;
   const apiClient = {
-    getAxiosInstance: () => ({
-      post: async () => {
-        const stream = new PassThrough();
-        const producer = producers[Math.min(attempt, producers.length - 1)];
-        attempt++;
-        setTimeout(() => producer(stream), 0);
-        return { status: 200, statusText: 'OK', data: stream };
-      },
-    }),
+    baseURL: 'http://localhost:3000',
+    fetch: async () => {
+      const stream = new PassThrough();
+      const producer = producers[Math.min(attempt, producers.length - 1)];
+      attempt++;
+      setTimeout(() => producer(stream), 0);
+      return new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    },
   } as unknown as ApiClient;
   return new ServerLlmBackend({ apiClient, model: 'faux-model', sseCompletionsUrl: '/completions' });
 }

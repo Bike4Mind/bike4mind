@@ -1,9 +1,9 @@
 import { isAxiosError } from 'axios';
 import type { z } from 'zod';
+import { B4mApiError, createClient, parseRetryAfterSeconds, type B4mClient, type JsonBody } from '@bike4mind/sdk';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
-import type { ZodType, output } from 'zod';
 import {
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
@@ -24,15 +24,17 @@ import {
 
 export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
 
+export { parseRetryAfterSeconds };
+
 /**
  * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
  * notebook the caller owns, so write paths refuse anything that is not an ObjectId before any request.
  */
-function notebookPath(notebookId: string): string {
+function writableNotebookId(notebookId: string): string {
   if (!NOTEBOOK_ID_PATTERN.test(notebookId)) {
     throw new Error(`Invalid notebook id: ${JSON.stringify(notebookId)}`);
   }
-  return `/api/sessions/${notebookId}`;
+  return notebookId;
 }
 
 /**
@@ -137,7 +139,7 @@ export interface RawDataLake {
   [key: string]: unknown;
 }
 
-/** Arguments for POST /api/ai/generate-image; a subset of `GenerateImageRequestBodySchema`. */
+/** Arguments for POST /api/v1/image-generations; a subset of `GenerateImageRequestBodySchema`. */
 export interface GenerateImageArgs {
   prompt: string;
   model: string;
@@ -193,14 +195,22 @@ export type RawBriefcasePrompt = Pick<IBriefcasePrompt, 'name' | 'description'> 
  * endpoints the MCP tools call. All routes are `baseApi()` routes that accept
  * either an OAuth JWT or an instance API key, so a caller supplies whichever it
  * has via the underlying ApiClient.
+ *
+ * Operations with a public contract go through `@bike4mind/sdk` (`this.sdk`), whose fetch is the
+ * ApiClient's, so auth and refresh are shared. The axios `this.client` calls are routes with no public
+ * contract, plus four that do have one but whose v1 shape would change the MCP output: the session and
+ * project lists (v1 pages by cursor, the tools by page number) and getFile/getProject (the tools return the
+ * whole document; v1 is a narrower snake_case resource).
  */
 export class B4mApiClient {
   private readonly client: ApiClient;
+  private readonly sdk: B4mClient;
   readonly baseURL: string;
 
   constructor(baseURL: string, configStore?: ConfigStore, apiKey?: string) {
     this.baseURL = baseURL;
     this.client = new ApiClient(baseURL, configStore, apiKey);
+    this.sdk = createClient({ baseUrl: baseURL, fetch: this.client.fetch });
   }
 
   private toList<T>(result: T[] | ListEnvelope<T>): { data: T[]; hasMore: boolean } {
@@ -225,40 +235,39 @@ export class B4mApiClient {
   }
 
   async getNotebook(notebookId: string): Promise<RawNotebook> {
-    return this.client.get<RawNotebook>(`/api/sessions/${encodeURIComponent(notebookId)}`);
+    return this.sdk.call('getSession', { params: { id: notebookId } });
   }
 
-  async createNotebook(args: { name?: string; projectId?: string; dataLakeId?: string }): Promise<RawNotebook> {
-    return this.client.post<RawNotebook>('/api/sessions/create', {
-      ...(args.name ? { name: args.name } : {}),
-      ...(args.projectId ? { projectId: args.projectId } : {}),
-      ...(args.dataLakeId ? { dataLakeId: args.dataLakeId } : {}),
+  async createNotebook(args: { name: string; projectId?: string; dataLakeId?: string }): Promise<RawNotebook> {
+    return this.sdk.call('createSession', {
+      body: {
+        name: args.name,
+        ...(args.projectId ? { projectId: args.projectId } : {}),
+        ...(args.dataLakeId ? { dataLakeId: args.dataLakeId } : {}),
+      },
     });
   }
 
   async renameNotebook(notebookId: string, name: string): Promise<RawNotebook> {
-    return this.client.put<RawNotebook>(notebookPath(notebookId), { name });
+    return this.sdk.call('updateSession', { params: { id: writableNotebookId(notebookId) }, body: { name } });
   }
 
   /** Returns the new (cloned) notebook. */
   async cloneNotebook(notebookId: string): Promise<RawNotebook> {
-    return this.client.post<RawNotebook>(`${notebookPath(notebookId)}/clone`, {});
+    return this.sdk.call('cloneSession', { params: { id: writableNotebookId(notebookId) }, body: {} });
   }
 
   async deleteNotebook(notebookId: string): Promise<SessionDeleteResponse> {
-    return this.client.delete<SessionDeleteResponse>(notebookPath(notebookId), { maxRedirects: 0 });
+    return this.sdk.call('deleteSession', { params: { id: writableNotebookId(notebookId) }, redirect: 'manual' });
   }
 
-  /**
-   * GET /api/v1/data-lakes is cursor-paginated (flat `limit`/`cursor` params,
-   * `{ data, next_cursor }` body), so `toList` does not apply.
-   */
+  /** GET /api/v1/data-lakes is cursor-paginated (`{ data, next_cursor }` body), so `toList` does not apply. */
   async listDataLakes(args: {
     limit: number;
     cursor?: string;
   }): Promise<{ data: RawDataLake[]; nextCursor: string | null }> {
-    const result = await this.client.get<{ data: RawDataLake[]; next_cursor: string | null }>('/api/v1/data-lakes', {
-      params: { limit: args.limit, ...(args.cursor ? { cursor: args.cursor } : {}) },
+    const result = await this.sdk.call('listDataLakes', {
+      query: { limit: args.limit, ...(args.cursor ? { cursor: args.cursor } : {}) },
     });
     return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
   }
@@ -269,7 +278,7 @@ export class B4mApiClient {
     model?: string;
     systemPrompt?: string;
   }): Promise<ChatAckResponse> {
-    return this.client.post<ChatAckResponse>('/api/chat', {
+    const body: JsonBody<'sendChatMessage'> = {
       // No notebookId means "start a fresh conversation": without newConversation a JWT caller
       // would post into the user's last-opened notebook (the very context bleed this endpoint was
       // fixed to remove for API keys). The new notebook's id comes back in the response.
@@ -280,11 +289,13 @@ export class B4mApiClient {
       // Queue the turn and poll its quest rather than hold one request open for the whole
       // completion, so the tool can report progress and honour cancellation while it waits.
       wait: false,
-    });
+    };
+    return this.sdk.call('sendChatMessage', { body });
   }
 
   async getQuest(questId: string): Promise<QuestResponse> {
-    return this.client.get<QuestResponse>(`/api/quests/${encodeURIComponent(questId)}`);
+    // The spec types `promptMeta` as an open record; QuestResponse narrows the citables the tools read.
+    return (await this.sdk.call('getQuest', { params: { id: questId } })) as QuestResponse;
   }
 
   async searchKnowledgeBase(args: { query: string; limit: number; minSimilarity?: number }): Promise<SessionScore[]> {
@@ -314,98 +325,44 @@ export class B4mApiClient {
     return this.client.get<RawFile>(`/api/files/${encodeURIComponent(fileId)}`);
   }
 
-  /** Generate a sound effect; see {@link postGeneratedAudio} for the normalized response. */
+  /** Generate a sound effect. The SDK requests base64 and rebuilds an old server's raw-bytes answer. */
   async generateSoundEffect(args: SoundEffectArgs): Promise<GeneratedAudioResponse> {
-    return this.postGeneratedAudio(
-      '/api/ai/sound-effects',
-      {
-        provider: args.provider,
-        text: args.text,
-        ...(args.durationSeconds !== undefined ? { durationSeconds: args.durationSeconds } : {}),
-        ...(args.promptInfluence !== undefined ? { promptInfluence: args.promptInfluence } : {}),
-        ...(args.format ? { format: args.format } : {}),
-      },
-      generatedAudioResponseSchema
-    );
+    const body = {
+      provider: args.provider,
+      text: args.text,
+      ...(args.durationSeconds !== undefined ? { durationSeconds: args.durationSeconds } : {}),
+      ...(args.promptInfluence !== undefined ? { promptInfluence: args.promptInfluence } : {}),
+      ...(args.format ? { format: args.format } : {}),
+    } as Parameters<B4mClient['soundEffects']>[0];
+    return generatedAudioResponseSchema.parse(await this.sdk.soundEffects(body));
   }
 
   async synthesizeSpeech(args: Omit<TTSRequest, 'encoding'>) {
-    try {
-      const data = await this.postGeneratedAudio('/api/ai/tts', args, ttsBase64ResponseSchema);
-      return { kind: 'audio' as const, data };
-    } catch (error) {
-      if (isAxiosError(error) && error.response?.status === 413) {
-        // Only a server predating the oversized-audio URL offload puts a saved copy
-        // on the 413. The billed audio is then only reachable through its FabFile, so
-        // keep the id even when no signed URL was minted. A substitution rides only
-        // the header here.
-        const oversized = ttsResponseTooLargeSchema.safeParse(error.response.data);
-        if (oversized.success && oversized.data.saved && oversized.data.fabFileId) {
-          const fallbackFrom = supportedVoiceGenerationVendor.safeParse(
-            error.response.headers?.['x-b4m-tts-provider-fallback-from']
-          );
-          return {
-            kind: 'saved-too-large' as const,
-            data: { ...oversized.data, fabFileId: oversized.data.fabFileId },
-            ...(fallbackFrom.success ? { fallbackFrom: fallbackFrom.data } : {}),
-          };
-        }
-      }
-      throw error;
+    const result = await this.sdk.tts(args as Parameters<B4mClient['tts']>[0]);
+    if (result.kind === 'audio') {
+      return { kind: 'audio' as const, data: ttsBase64ResponseSchema.parse(result.data) };
     }
+    // Only a server predating the oversized-audio URL offload puts a saved copy on the 413. The billed audio is
+    // then only reachable through its FabFile, so keep the id even when no signed URL was minted.
+    const oversized = ttsResponseTooLargeSchema.parse(result.data);
+    const fallbackFrom = supportedVoiceGenerationVendor.safeParse(result.fallbackFrom);
+    return {
+      kind: 'saved-too-large' as const,
+      data: { ...oversized, fabFileId: result.data.fabFileId },
+      ...(fallbackFrom.success ? { fallbackFrom: fallbackFrom.data } : {}),
+    };
   }
 
   async generateImage(args: GenerateImageArgs): Promise<GenerateImageResponse> {
-    return this.client.post<GenerateImageResponse>('/api/ai/generate-image', {
+    const body = {
       prompt: args.prompt,
       model: args.model,
       ...(args.size ? { size: args.size } : {}),
       ...(args.notebookId ? { sessionId: args.notebookId } : {}),
       ...(args.projectId ? { projectId: args.projectId } : {}),
       ...(args.promptResolution ? { prompt_resolution: args.promptResolution } : {}),
-    });
-  }
-
-  /**
-   * POST a generated-audio request with `encoding: 'base64'` and normalize any
-   * server's answer into the JSON shape `schema` describes. Base64 (never binary)
-   * because an oversized result is a 303 in binary mode, and axios drops the
-   * X-B4M headers when following it. A server predating the `encoding` field
-   * ignores it and streams raw bytes with the save result in X-B4M-Audio-* headers;
-   * those are rebuilt into the inline variant. The request is arraybuffer-typed, so
-   * a failure body arrives as bytes; {@link decodeArrayBufferErrorBody} restores
-   * its JSON shape for {@link mapApiError}.
-   */
-  private async postGeneratedAudio<Schema extends ZodType>(
-    path: string,
-    body: Record<string, unknown>,
-    schema: Schema
-  ): Promise<output<Schema>> {
-    const response = await this.client
-      .getAxiosInstance()
-      .post<ArrayBuffer>(path, { ...body, encoding: 'base64' }, { responseType: 'arraybuffer' })
-      .catch((error: unknown) => {
-        throw decodeArrayBufferErrorBody(error);
-      });
-
-    const contentType = String(response.headers['content-type'] ?? 'application/octet-stream');
-    const bytes = Buffer.from(response.data);
-    if (/json/i.test(contentType)) {
-      return schema.parse(JSON.parse(bytes.toString('utf8')));
-    }
-
-    // Node duplicates a repeated header into an array; keep only the scalar string form.
-    const headerString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
-    const saved = String(response.headers['x-b4m-audio-saved'] ?? '') === 'true';
-    return schema.parse({
-      delivery: 'inline',
-      audio: bytes.toString('base64'),
-      contentType,
-      saved,
-      fabFileId: saved ? headerString(response.headers['x-b4m-audio-fab-file-id']) : undefined,
-      fileName: saved ? headerString(response.headers['x-b4m-audio-file-name']) : undefined,
-      fileUrl: saved ? headerString(response.headers['x-b4m-audio-file-url']) : undefined,
-    });
+    } as JsonBody<'generateImage'>;
+    return (await this.sdk.call('generateImage', { body })) as GenerateImageResponse;
   }
 
   async listProjects(args: {
@@ -432,12 +389,23 @@ export class B4mApiClient {
     sessionIds?: string[];
     fileIds?: string[];
   }): Promise<RawProject> {
-    return this.client.post<RawProject>('/api/projects', {
-      name: args.name,
-      description: args.description,
-      ...(args.sessionIds?.length ? { sessionIds: args.sessionIds } : {}),
-      ...(args.fileIds?.length ? { fileIds: args.fileIds } : {}),
+    const project = await this.sdk.call('createProject', {
+      body: {
+        name: args.name,
+        description: args.description,
+        ...(args.sessionIds?.length ? { session_ids: args.sessionIds } : {}),
+        ...(args.fileIds?.length ? { file_ids: args.fileIds } : {}),
+      },
     });
+    return {
+      id: project.id,
+      name: project.name,
+      description: project.description,
+      sessionIds: project.session_ids,
+      fileIds: project.file_ids,
+      createdAt: project.created_at ?? undefined,
+      updatedAt: project.updated_at ?? undefined,
+    };
   }
 
   /**
@@ -507,36 +475,38 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
   if (error instanceof NotAuthenticatedError) {
     return 'not authenticated: no credential configured (set B4M_API_KEY or run `b4m login`)';
   }
+  const failure = httpFailure(error);
+  if (!failure) return error instanceof Error ? error.message : String(error);
+  const { status, data } = failure;
+  if (status === 401) {
+    // A provider-key failure also wears a 401 (e.g. /api/ai/tts); re-authenticating
+    // to Bike4Mind would not fix it, so surface the server's message instead.
+    const providerKeyMessage = providerKeyFailureMessage(data);
+    if (providerKeyMessage) return providerKeyMessage;
+    return 'authentication failed (run `b4m login` or set B4M_API_KEY)';
+  }
+  if (status === 403) {
+    // requireFeatureEnabled answers 403 too; no key scope fixes an instance-disabled feature.
+    if ((data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
+      return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
+    }
+    // csrfProtection answers 403 when no Origin matches the deployment's APP_URL and
+    // names the expected origin in the body - the actual fix for a login (JWT) caller,
+    // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
+    // The match is wording-based: must stay in sync with the ForbiddenError messages in
+    // apps/client/server/middlewares/csrfProtection.ts.
+    const csrfMessage = extractServerMessage(data);
+    if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
+    const base = "API key forbidden: check the key's scopes and account access";
+    return scope ? `${base} (recommended scope: ${scope})` : base;
+  }
+  if (status === 429) {
+    const retryAfterSeconds = apiErrorRetryAfterSeconds(error);
+    const serverMsg = extractServerMessage(data);
+    const base = serverMsg || 'rate limit exceeded';
+    return retryAfterSeconds !== undefined ? `${base} (retry after ${retryAfterSeconds}s)` : base;
+  }
   if (isAxiosError(error)) {
-    const status = error.response?.status;
-    if (status === 401) {
-      // A provider-key failure also wears a 401 (e.g. /api/ai/tts); re-authenticating
-      // to Bike4Mind would not fix it, so surface the server's message instead.
-      const providerKeyMessage = providerKeyFailureMessage(error.response?.data);
-      if (providerKeyMessage) return providerKeyMessage;
-      return 'authentication failed (run `b4m login` or set B4M_API_KEY)';
-    }
-    if (status === 403) {
-      // requireFeatureEnabled answers 403 too; no key scope fixes an instance-disabled feature.
-      if ((error.response?.data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
-        return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
-      }
-      // csrfProtection answers 403 when no Origin matches the deployment's APP_URL and
-      // names the expected origin in the body - the actual fix for a login (JWT) caller,
-      // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
-      // The match is wording-based: must stay in sync with the ForbiddenError messages in
-      // apps/client/server/middlewares/csrfProtection.ts.
-      const csrfMessage = extractServerMessage(error.response?.data);
-      if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
-      const base = "API key forbidden: check the key's scopes and account access";
-      return scope ? `${base} (recommended scope: ${scope})` : base;
-    }
-    if (status === 429) {
-      const retryAfterSeconds = parseRetryAfterSeconds(error.response?.headers?.['retry-after']);
-      const serverMsg = extractServerMessage(error.response?.data);
-      const base = serverMsg || 'rate limit exceeded';
-      return retryAfterSeconds !== undefined ? `${base} (retry after ${retryAfterSeconds}s)` : base;
-    }
     // A request timeout (axios aborts with ECONNABORTED; a connect timeout is ETIMEDOUT)
     // carries no response, so map it before the response-body fallbacks below.
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' || /timeout/i.test(error.message)) {
@@ -545,62 +515,34 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     if (error.code === 'ECONNREFUSED' || error.message.includes('ECONNREFUSED')) {
       return `cannot reach Bike4Mind at ${baseURL}`;
     }
-    const serverMsg = extractServerMessage(error.response?.data);
-    if (serverMsg) {
-      return serverMsg;
-    }
-    return error.message;
+  }
+  const serverMsg = extractServerMessage(data);
+  if (serverMsg) {
+    return serverMsg;
   }
   return error instanceof Error ? error.message : String(error);
 }
 
 /**
- * A request made with `responseType: 'arraybuffer'` also decodes its error body
- * as bytes, so a JSON `{ error }` payload reaches us as a Buffer that
- * {@link mapApiError} can't read. Decode it back to a parsed object in place so
- * the server's message survives; leave a non-JSON body untouched.
+ * Status and body of an HTTP failure from either transport: a `B4mApiError` from the SDK calls or an
+ * AxiosError from the axios ones (with no status when the request never got a response). Undefined for
+ * anything else.
  */
-function decodeArrayBufferErrorBody(error: unknown): unknown {
-  if (!isAxiosError(error) || !error.response) return error;
-  const { data } = error.response;
-  // A non-Node axios adapter may hand back an already-decoded string body; parse it
-  // directly so the server message survives without going through the byte path.
-  if (typeof data === 'string') {
-    try {
-      error.response.data = JSON.parse(data);
-    } catch {
-      // Non-JSON string body; leave it for mapApiError's fallback.
-    }
-    return error;
-  }
-  const bytes = Buffer.isBuffer(data)
-    ? data
-    : data instanceof ArrayBuffer
-      ? Buffer.from(data)
-      : ArrayBuffer.isView(data)
-        ? Buffer.from(data.buffer, data.byteOffset, data.byteLength)
-        : undefined;
-  if (!bytes) return error;
-  try {
-    error.response.data = JSON.parse(bytes.toString('utf8'));
-  } catch {
-    // Non-JSON body (e.g. an HTML error page); leave it for mapApiError's fallback.
-  }
-  return error;
+function httpFailure(error: unknown): { status?: number; data?: unknown } | undefined {
+  if (error instanceof B4mApiError) return { status: error.status, data: error.body };
+  if (isAxiosError(error)) return { status: error.response?.status, data: error.response?.data };
+  return undefined;
 }
 
-/**
- * Normalize a Retry-After header (RFC 7231: either delta-seconds or an HTTP-date)
- * to a whole, non-negative number of seconds. Returns undefined when the header is
- * absent or parses as neither, so callers can omit the retry hint entirely.
- */
-export function parseRetryAfterSeconds(value: unknown): number | undefined {
-  if (value === undefined || value === null) return undefined;
-  const raw = String(value).trim();
-  if (/^\d+$/.test(raw)) return Number(raw);
-  const dateMs = Date.parse(raw);
-  if (Number.isNaN(dateMs)) return undefined;
-  return Math.max(0, Math.ceil((dateMs - Date.now()) / 1000));
+/** The HTTP status of a failed API call from either transport. */
+export function apiErrorStatus(error: unknown): number | undefined {
+  return httpFailure(error)?.status;
+}
+
+/** The Retry-After of a failed API call from either transport, in seconds. */
+export function apiErrorRetryAfterSeconds(error: unknown): number | undefined {
+  if (error instanceof B4mApiError) return error.retryAfterSeconds;
+  return isAxiosError(error) ? parseRetryAfterSeconds(error.response?.headers?.['retry-after']) : undefined;
 }
 
 /** Pull a human-readable message out of a JSON error body (`error` or `message` field). */

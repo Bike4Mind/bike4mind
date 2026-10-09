@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Readable } from 'node:stream';
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 
 vi.mock('../utils/Logger', () => ({ logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -313,5 +314,138 @@ describe('ApiClient API key auth', () => {
 
     expect(seen?.headers.Authorization).toBe('Bearer jwt-token');
     expect(seen?.headers['x-api-key']).toBeUndefined();
+  });
+});
+
+describe('ApiClient.fetch (the transport handed to @bike4mind/sdk)', () => {
+  const respond = (config: InternalAxiosRequestConfig, status: number, data: unknown, headers = {}) =>
+    ({ data, status, statusText: '', headers, config }) as AxiosResponse;
+  const httpError = (config: InternalAxiosRequestConfig, status: number, body: unknown) =>
+    new AxiosError('failed', 'ERR_BAD_REQUEST', config, {}, respond(config, status, Buffer.from(JSON.stringify(body))));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('sends through the axios instance with the API key and returns a Response', async () => {
+    const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
+    let seen: InternalAxiosRequestConfig | undefined;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      seen = config;
+      return Promise.resolve(
+        respond(config, 200, Buffer.from('{"id":"q1"}'), { 'content-type': 'application/json', 'x-request-id': 'r1' })
+      );
+    }) as AxiosAdapter;
+
+    const response = await client.fetch('http://localhost:3000/api/v1/quests/q1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"a":1}',
+    });
+
+    expect(seen?.headers['x-api-key']).toBe('b4m_live_secret');
+    expect(seen?.method).toBe('post');
+    expect(seen?.data).toBe('{"a":1}');
+    expect(seen?.responseType).toBe('arraybuffer');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-request-id')).toBe('r1');
+    expect(await response.json()).toEqual({ id: 'q1' });
+  });
+
+  it('resolves an HTTP error status as a Response for the SDK to map', async () => {
+    const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(httpError(config, 404, { error: 'Not found' }))) as AxiosAdapter;
+
+    const response = await client.fetch('http://localhost:3000/api/v1/quests/missing');
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Not found' });
+  });
+
+  it('refreshes an expired JWT on 401 and retries with the new token', async () => {
+    const stale = {
+      accessToken: 'stale',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      userId: 'user-1',
+    };
+    // The request and refresh interceptors read the stale token; the retry reads what the refresh stored.
+    mockGetAuthTokens
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue({ ...stale, accessToken: 'fresh', expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    mockRefreshToken.mockResolvedValue({ access_token: 'fresh', refresh_token: 'refresh-2', expires_in: 900 });
+    const client = new ApiClient('http://localhost:3000');
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      config.headers.Authorization === 'Bearer fresh'
+        ? Promise.resolve(respond(config, 200, Buffer.from('{}')))
+        : Promise.reject(make401(config))) as AxiosAdapter;
+
+    const response = await client.fetch('http://localhost:3000/api/v1/me');
+
+    expect(response.status).toBe(200);
+    expect(mockRefreshToken).toHaveBeenCalledWith('refresh');
+  });
+
+  it('throws SessionRevokedError when the refresh token is rejected', async () => {
+    mockGetAuthTokens.mockResolvedValue({
+      accessToken: 'stale',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      userId: 'user-1',
+    });
+    mockRefreshToken.mockRejectedValue(refreshHttpError(400));
+    const client = new ApiClient('http://localhost:3000');
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+
+    expect(await rejection(client.fetch('http://localhost:3000/api/v1/me'))).toBeInstanceOf(SessionRevokedError);
+  });
+
+  it('passes a provider-key 401 through as a Response without refreshing', async () => {
+    mockGetAuthTokens.mockResolvedValue({
+      accessToken: 'stale',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      userId: 'user-1',
+    });
+    const client = new ApiClient('http://localhost:3000');
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(
+        httpError(config, 401, { error: 'No TTS provider', errorCode: 'provider_not_configured' })
+      )) as AxiosAdapter;
+
+    const response = await client.fetch('http://localhost:3000/api/ai/tts', { method: 'POST' });
+
+    expect(response.status).toBe(401);
+    expect(mockRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it('streams an event-stream response and refuses redirects when asked', async () => {
+    const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
+    let seen: InternalAxiosRequestConfig | undefined;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      seen = config;
+      return Promise.resolve(respond(config, 200, Readable.from([Buffer.from('data: [DONE]\n\n')])));
+    }) as AxiosAdapter;
+
+    const response = await client.fetch('http://localhost:3000/api/ai/v1/completions', {
+      method: 'POST',
+      headers: { accept: 'text/event-stream' },
+      redirect: 'manual',
+    });
+
+    expect(seen?.responseType).toBe('stream');
+    expect(seen?.maxRedirects).toBe(0);
+    expect(await response.text()).toBe('data: [DONE]\n\n');
+  });
+
+  it('rethrows a failure with no response (a timeout) as the axios error', async () => {
+    const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(new AxiosError('timeout of 10ms exceeded', 'ECONNABORTED', config))) as AxiosAdapter;
+
+    await expect(client.fetch('http://localhost:3000/api/v1/me')).rejects.toMatchObject({ code: 'ECONNABORTED' });
   });
 });

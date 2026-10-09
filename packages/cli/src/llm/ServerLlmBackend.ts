@@ -1,8 +1,7 @@
 import { IMessage, ModelInfo, ChatModels, MessageContentObject } from '@bike4mind/common';
 import { ICompletionBackend, ICompletionOptions, CompletionInfo } from '@bike4mind/llm-adapters';
+import { B4mApiError, createClient, type B4mClient, type JsonBody } from '@bike4mind/sdk';
 import { ApiClient } from '../auth/ApiClient';
-import { createParser } from 'eventsource-parser';
-import type { AxiosResponse } from 'axios';
 import { isAxiosError } from 'axios';
 import { htmlErrorTitle, htmlFirstH1 } from '../utils/htmlErrorTitle';
 import { logger } from '../utils/Logger';
@@ -10,7 +9,6 @@ import { StreamLogger } from '../utils/StreamLogger';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
 import { createTransientRetryPolicy } from './retryPolicy';
-import { bridgeToAsyncIterable } from './streamBridge';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
 
 /**
@@ -24,11 +22,14 @@ import type { CompletionRequest, StreamTransport } from './streamTransport';
  */
 export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   private apiClient: ApiClient;
+  private readonly sdk: B4mClient;
   public currentModel: string;
   private readonly completionsEndpoint: string;
 
   constructor(options: { apiClient: ApiClient; model: string; sseCompletionsUrl?: string }) {
     this.apiClient = options.apiClient;
+    // The ApiClient's fetch carries its auth, refresh-on-401 and timeout, so the SDK stream inherits them.
+    this.sdk = createClient({ baseUrl: options.apiClient.baseURL, fetch: options.apiClient.fetch });
     this.currentModel = options.model;
     if (options.sseCompletionsUrl) {
       this.completionsEndpoint = options.sseCompletionsUrl;
@@ -84,117 +85,58 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
       return;
     }
 
-    logger.debug('[ServerLlmBackend] Making streaming request...');
-    let response: AxiosResponse;
-    try {
-      response = await this.makeStreamingRequest(req.model, req.messages, req.options);
-    } catch (error) {
-      // Abort / cancel is graceful - end the stream, don't surface an error.
-      if (signal?.aborted) {
-        logger.debug('[ServerLlmBackend] Request was aborted, resolving gracefully');
-        return;
-      }
-      if (isAxiosError(error) && error.code === 'ERR_CANCELED') {
-        logger.debug('[ServerLlmBackend] Request was canceled, resolving gracefully');
-        return;
-      }
-      throw this.toStreamingRequestError(error);
-    }
-
-    logger.debug('[ServerLlmBackend] Got response, setting up SSE parser');
-    yield* this.readSseStream(response, signal);
-  }
-
-  /**
-   * Bridge the push-based eventsource-parser + Node response stream into a
-   * pull-based iterable of {@link StreamEvent}s. `[DONE]` / stream `end` ends
-   * iteration, a server `error` event or stream `error` throws. The abort
-   * listener and socket teardown run in the bridge's teardown, so an early
-   * `break` by the core (on cancel) also destroys the socket.
-   */
-  private readSseStream(response: AxiosResponse, signal?: AbortSignal): AsyncGenerator<StreamEvent> {
     const isVerbose = process.env.B4M_VERBOSE === '1';
     const isUltraVerbose = process.env.B4M_DEBUG_STREAM === '1';
     const streamLogger = new StreamLogger(logger, 'ServerLlmBackend', isVerbose, isUltraVerbose);
-    streamLogger.streamStart();
 
     // A running copy of the text purely so the verbose StreamLogger can report
     // accumulated length / preview; the core owns the real accumulation.
     let loggedText = '';
     let eventCount = 0;
+    streamLogger.streamStart();
+    try {
+      for await (const event of this.sdk.completions(this.requestBody(req), {
+        signal,
+        url: this.completionsEndpoint,
+      })) {
+        eventCount++;
+        streamLogger.onEvent(eventCount, JSON.stringify(event));
 
-    return bridgeToAsyncIterable<StreamEvent>(sink => {
-      const parser = createParser({
-        onEvent: event => {
-          eventCount++;
-          const data = event.data;
-          streamLogger.onEvent(eventCount, data || '');
+        const parsed = parseStreamEvent(event);
+        // Unknown event shape - silently skip, preserving prior fall-through.
+        if (!parsed) continue;
 
-          if (data === '[DONE]') {
-            streamLogger.streamComplete(loggedText);
-            sink.end();
-            return;
-          }
+        if (parsed.type === 'error') {
+          streamLogger.onCriticalEvent(eventCount, 'ERROR', parsed.message || 'Server error');
+          throw new Error(parsed.message || 'Server error');
+        }
 
-          try {
-            const parsed = parseStreamEvent(JSON.parse(data));
-            // Unknown event shape - silently skip, preserving prior fall-through.
-            if (!parsed) return;
+        if (parsed.type === 'content') {
+          loggedText += parsed.text ?? '';
+          streamLogger.onContent(eventCount, parsed.text || '', loggedText);
+        } else if (parsed.type === 'tool_use') {
+          streamLogger.onCriticalEvent(eventCount, 'TOOL_USE', `tools: ${parsed.tools?.length}`);
+          if (parsed.text) loggedText += parsed.text;
+        }
 
-            if (parsed.type === 'error') {
-              streamLogger.onCriticalEvent(eventCount, 'ERROR', parsed.message || 'Server error');
-              sink.fail(new Error(parsed.message || 'Server error'));
-              return;
-            }
-
-            if (parsed.type === 'content') {
-              loggedText += parsed.text ?? '';
-              streamLogger.onContent(eventCount, parsed.text || '', loggedText);
-            } else if (parsed.type === 'tool_use') {
-              streamLogger.onCriticalEvent(eventCount, 'TOOL_USE', `tools: ${parsed.tools?.length}`);
-              if (parsed.text) loggedText += parsed.text;
-            }
-
-            sink.push(parsed);
-          } catch (parseError) {
-            streamLogger.streamError(parseError);
-            // Continue processing other events (matches prior behavior).
-          }
-        },
-      });
-
-      const onData = (chunk: Buffer) => {
-        if (signal?.aborted) return;
-        parser.feed(chunk.toString());
-      };
+        yield parsed;
+      }
       // Stream closed. If we never saw [DONE] and accumulated nothing, the core's
       // empty-completion handling retries; if we accumulated content, it delivers.
-      const onEnd = () => sink.end();
-      // An abort-caused stream error is benign - end gracefully; the core sees the
-      // aborted signal and settles without the callback. Otherwise surface it.
-      const onError = (error: Error) => (signal?.aborted ? sink.end() : sink.fail(error));
-      const onAbort = () => {
-        logger.debug('[ServerLlmBackend] Abort signal received, destroying stream');
-        response.data.destroy();
-        sink.end();
-      };
-
-      response.data.on('data', onData);
-      response.data.on('end', onEnd);
-      response.data.on('error', onError);
-      if (signal) {
-        if (signal.aborted) onAbort();
-        else signal.addEventListener('abort', onAbort, { once: true });
+      streamLogger.streamComplete(loggedText);
+    } catch (error) {
+      // Abort / cancel is graceful - end the stream, don't surface an error; the core
+      // sees the aborted signal and settles without the callback.
+      if (signal?.aborted || (isAxiosError(error) && error.code === 'ERR_CANCELED')) {
+        logger.debug('[ServerLlmBackend] Request was aborted, resolving gracefully');
+        return;
       }
-
-      return () => {
-        signal?.removeEventListener('abort', onAbort);
-        response.data.off?.('data', onData);
-        response.data.off?.('end', onEnd);
-        response.data.off?.('error', onError);
-        response.data.destroy?.();
-      };
-    });
+      // An HTTP status or a connect failure happened before the stream; map it. A server
+      // `error` event and a mid-stream socket drop pass through raw, so the retry policy
+      // can classify the drop.
+      if (error instanceof B4mApiError || isAxiosError(error)) throw this.toStreamingRequestError(error);
+      throw error;
+    }
   }
 
   /**
@@ -205,54 +147,31 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   private toStreamingRequestError(error: unknown): Error {
     logger.error('LLM completion failed', error);
 
-    if (isAxiosError(error)) {
+    if (error instanceof B4mApiError) {
       logger.debug(
-        `[ServerLlmBackend] Axios error details: ${JSON.stringify({
-          status: error.response?.status,
-          statusText: error.response?.statusText,
-          url: error.config?.url,
-          method: error.config?.method,
+        `[ServerLlmBackend] HTTP error details: ${JSON.stringify({
+          status: error.status,
+          requestId: error.requestId,
+          url: this.completionsEndpoint,
         })}`
       );
 
-      if (error.response?.status === 403 && error.response.data) {
+      if (error.status === 403 && error.body) {
+        const responseText = typeof error.body === 'string' ? error.body : JSON.stringify(error.body);
+        logger.debug(`[ServerLlmBackend] Response preview: ${responseText.substring(0, 200)}`);
+
         let errorDetails = '';
-        try {
-          let responseText = '';
-          // response.data is a stream when responseType: 'stream'
-          const stream = error.response.data;
-
-          if (Buffer.isBuffer(stream)) {
-            responseText = stream.toString('utf-8');
-          } else if (stream?._readableState?.buffer?.length > 0) {
-            const chunks: Buffer[] = [];
-            for (const chunk of stream._readableState.buffer) {
-              if (chunk?.data) {
-                chunks.push(Buffer.from(chunk.data));
-              }
-            }
-            responseText = Buffer.concat(chunks).toString('utf-8');
-          } else if (typeof stream === 'string') {
-            responseText = stream;
+        // If it's HTML (a WAF / edge block page), try to extract a meaningful error message
+        if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
+          const title = htmlErrorTitle(responseText);
+          const h1 = htmlFirstH1(responseText);
+          if (title !== null) {
+            errorDetails = title;
+          } else if (h1 !== null) {
+            errorDetails = h1.trim();
           }
-
-          logger.debug(`[ServerLlmBackend] Response preview: ${responseText.substring(0, 200)}`);
-
-          // If it's HTML, try to extract a meaningful error message
-          if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
-            const title = htmlErrorTitle(responseText);
-            const h1 = htmlFirstH1(responseText);
-
-            if (title !== null) {
-              errorDetails = title;
-            } else if (h1 !== null) {
-              errorDetails = h1.trim();
-            }
-          } else if (responseText) {
-            errorDetails = responseText.substring(0, 100).trim();
-          }
-        } catch (extractError) {
-          logger.error('[ServerLlmBackend] Error extracting response:', extractError);
+        } else if (responseText) {
+          errorDetails = responseText.substring(0, 100).trim();
         }
 
         return new Error(
@@ -262,11 +181,8 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
         );
       }
 
-      if (error.response) {
-        return new Error(
-          `Request failed with status ${error.response.status}: ${error.response.statusText || 'Unknown error'}`
-        );
-      }
+      // Keep this wording: utils/handoff.ts isLlmUnavailableError matches on it.
+      return new Error(`Request failed with status ${error.status}: ${error.message}`);
     }
 
     if (error instanceof Error) {
@@ -385,47 +301,26 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
     ] as ModelInfo[];
   }
 
-  /**
-   * Make streaming HTTP request to completions endpoint
-   * Uses axios with responseType 'stream' for SSE
-   */
-  private async makeStreamingRequest(
-    model: string,
-    messages: IMessage[],
-    options: Partial<ICompletionOptions>
-  ): Promise<AxiosResponse> {
-    // Use the underlying axios client directly for streaming
-    // ApiClient.post() returns response.data, but we need the raw response for streaming
-    const axiosInstance = this.apiClient.getAxiosInstance();
-
+  private requestBody(req: CompletionRequest): JsonBody<'createCompletion'> {
     const requestBody = {
-      model,
-      messages,
+      model: req.model,
+      messages: req.messages,
       options: {
-        temperature: options.temperature,
-        maxTokens: options.maxTokens,
+        temperature: req.options.temperature,
+        maxTokens: req.options.maxTokens,
         stream: true, // Always use streaming for SSE
-        tools: options.tools || [],
+        tools: req.options.tools || [],
       },
     };
 
     // Log HTTP request
     const bodyStr = JSON.stringify(requestBody);
     const bodySize = Buffer.byteLength(bodyStr, 'utf-8');
-    logger.debug(`→ POST ${this.completionsEndpoint}`);
+    logger.debug(`\u2192 POST ${this.completionsEndpoint}`);
     logger.debug(`  Body: ${logger.formatBytes(bodySize)}`);
     logger.debug(`  Preview: ${bodyStr.substring(0, 200)}`);
 
-    const response = await axiosInstance.post(this.completionsEndpoint, requestBody, {
-      responseType: 'stream',
-      // Auth header is automatically injected by ApiClient interceptor
-      // Pass abort signal to cancel request if user presses ESC
-      signal: options.abortSignal,
-    });
-
-    // Log HTTP response
-    logger.debug(`← ${response.status} ${response.statusText}`);
-
-    return response;
+    // IMessage / ICompletionOptions are the CLI's own types; the server accepts this shape as-is.
+    return requestBody as unknown as JsonBody<'createCompletion'>;
   }
 }
