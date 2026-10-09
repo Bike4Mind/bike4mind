@@ -9,7 +9,8 @@ type RouteRequest = Pick<Request, 'originalUrl' | 'url' | 'query'>;
  * Next.js merges the matched route's dynamic params into `req.query`, so a path segment that
  * equals a param value is that param's slot. Catch-all params (array values) collapse to
  * `[...key]`. A literal segment that happens to equal a param value is indistinguishable
- * from the param, which is why this runs from the route match and not on stored URLs.
+ * from the param, which is why this runs from the route match and not on stored URLs. Ties
+ * resolve to the rightmost matching segment so a static route prefix is never relabeled.
  */
 export function resolveRouteTemplate(req: RouteRequest): string {
   const raw = req.originalUrl || req.url || '';
@@ -31,9 +32,12 @@ export function resolveRouteTemplate(req: RouteRequest): string {
     return !(fromSearch.length === values.length && fromSearch.every((v, i) => v === values[i]));
   });
 
+  // Scan right to left: a param's own segment is never before the static route prefix, so when a
+  // value also equals an earlier static segment (`/api/admin/gears/admin` with key=admin) the
+  // rightmost match is the real slot and a caller cannot relabel the static prefix.
   const used = new Set<string>();
   const out: string[] = [];
-  for (let i = 0; i < segments.length; i++) {
+  for (let i = segments.length - 1; i >= 0; i--) {
     const segment = safeDecode(segments[i]);
     if (!segment) {
       out.push(segments[i]);
@@ -45,12 +49,12 @@ export function resolveRouteTemplate(req: RouteRequest): string {
         !used.has(key) &&
         Array.isArray(value) &&
         value.length > 0 &&
-        value.every((part, offset) => safeDecode(segments[i + offset] ?? '') === part)
+        value.every((part, offset) => safeDecode(segments[i - value.length + 1 + offset] ?? '') === part)
     );
     if (catchAll) {
       used.add(catchAll[0]);
       out.push(`[...${catchAll[0]}]`);
-      i += (catchAll[1] as string[]).length - 1;
+      i -= (catchAll[1] as string[]).length - 1;
       continue;
     }
 
@@ -64,7 +68,7 @@ export function resolveRouteTemplate(req: RouteRequest): string {
     out.push(segments[i]);
   }
 
-  return out.join('/') || '/';
+  return out.reverse().join('/') || '/';
 }
 
 function safeDecode(value: string): string {
