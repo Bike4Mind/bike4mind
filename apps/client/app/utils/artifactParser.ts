@@ -719,7 +719,7 @@ export function generateCompleteArtifactId(type: string, identifier: string, tim
 /**
  * Returns true when `tail` (the substring from `<artifact` onward) contains
  * a complete opening tag (i.e. the closing `>` arrived before the stream was
- * cut). Used by the truncated-artifact detector in PromptReplies to decide
+ * cut). Used by repairTruncatedArtifact (./replyTruncation) to decide
  * whether to best-effort close the tag or drop the partial.
  */
 export function hasCompleteOpeningTag(tail: string): boolean {

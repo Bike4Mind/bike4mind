@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { getReplyTruncationState } from './replyTruncation';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { parseArtifactsWithFallback } from './artifactParser';
+import { getReplyTruncationState, repairTruncatedArtifact } from './replyTruncation';
 
 const OPEN_ARTIFACT = '<artifact identifier="x" type="text/html" title="Dashboard"><html><body>';
 
@@ -158,5 +159,48 @@ describe('degenerate-repetition stop reason', () => {
     // The property the original exact-match comment was protecting: pre-existing
     // quests with no finishReason must not grow a false banner.
     expect(getReplyTruncationState({ reply: 'some prose', completed: true }).notice).toBeNull();
+  });
+});
+
+describe('repairTruncatedArtifact', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('closes an artifact whose opening tag arrived whole, so the partial parses', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const repaired = repairTruncatedArtifact('Intro <artifact identifier="a" type="text/html" title="P">\n<div>');
+
+    expect(repaired.endsWith('\n</artifact>')).toBe(true);
+    const { artifacts, cleanedContent } = parseArtifactsWithFallback(repaired);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({ identifier: 'a', type: 'html', content: '<div>' });
+    expect(cleanedContent).toBe('Intro');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('drops a tail whose opening tag was cut mid-attribute, and logs it', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tail = '<artifact identifier="a" type="text/ht';
+
+    expect(repairTruncatedArtifact(`Intro ${tail}`)).toBe('Intro');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain(`(${tail.length} chars)`);
+  });
+
+  it('targets only the last opener, leaving an earlier closed artifact intact', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const closed = '<artifact identifier="first" type="text/html" title="One"><p>one</p></artifact>';
+
+    const repaired = repairTruncatedArtifact(`${closed}\nMore <artifact identifier="second" type="text/ht`);
+    expect(repaired).toBe(`${closed}\nMore`);
+    expect(parseArtifactsWithFallback(repaired).artifacts.map(a => a.identifier)).toEqual(['first']);
+  });
+
+  it('treats a ">" inside a quoted attribute value as part of an incomplete tag', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(repairTruncatedArtifact('Intro <artifact identifier="a" type="text/html" title="A -> B')).toBe('Intro');
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });
