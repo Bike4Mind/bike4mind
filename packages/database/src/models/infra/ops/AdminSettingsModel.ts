@@ -1,5 +1,13 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IAdminSettings, IAdminSettingsRepository, SettingKey, settingsMap, SettingValue } from '@bike4mind/common';
+import {
+  AdminSettingDoc,
+  IAdminSettings,
+  IAdminSettingsRepository,
+  redactSettingSecrets,
+  SettingKey,
+  settingsMap,
+  SettingValue,
+} from '@bike4mind/common';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { softDeletePlugin } from '../../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
@@ -37,9 +45,16 @@ const AdminSettingsSchema = new Schema<IAdminSettings, IAdminSettingsModel, IAdm
     virtuals: true,
     toJSON: {
       virtuals: true,
+      // Chokepoint: any code path that serialises a hydrated AdminSettings document
+      // (e.g. res.json, JSON.stringify) gets a masked settingValue automatically.
+      // Trusted reads that need plaintext must use .lean() + decryptSettingInPlace,
+      // which bypasses this transform entirely. Does NOT decrypt -- decryption stays
+      // in the repository layer where the key is available.
+      transform: (_doc, ret) => redactSettingSecrets(ret as AdminSettingDoc),
     },
     toObject: {
       virtuals: true,
+      transform: (_doc, ret) => redactSettingSecrets(ret as AdminSettingDoc),
     },
   }
 );
@@ -63,18 +78,20 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
   }
 
   async findBySettingNames(settingNames: IAdminSettings['settingName'][]) {
-    const result = await this.model.find({ settingName: { $in: settingNames } });
-    return result.map(r => decryptSettingInPlace(r.toJSON()));
+    // lean({ virtuals: true }) bypasses the toJSON masking transform so these trusted
+    // callers receive plaintext after decryptSettingInPlace, same as findBySettingName.
+    const result = await this.model.find({ settingName: { $in: settingNames } }).lean({ virtuals: true });
+    return result.map(r => decryptSettingInPlace(r as IAdminSettings & { settingName: string }));
   }
 
   async findAllByTag(tag: string) {
-    const result = await this.model.find({ tags: { $in: [tag] } });
-    return result.map(r => decryptSettingInPlace(r.toJSON()));
+    const result = await this.model.find({ tags: { $in: [tag] } }).lean({ virtuals: true });
+    return result.map(r => decryptSettingInPlace(r as IAdminSettings & { settingName: string }));
   }
 
   async findAll() {
-    const result = await this.model.find();
-    return result.map(r => decryptSettingInPlace(r.toJSON()));
+    const result = await this.model.find().lean({ virtuals: true });
+    return result.map(r => decryptSettingInPlace(r as IAdminSettings & { settingName: string }));
   }
 
   async getSettingsValue<K extends SettingKey>(settingName: K): Promise<SettingValue<K> | undefined> {

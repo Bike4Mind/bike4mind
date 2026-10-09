@@ -48,3 +48,58 @@ describe('AdminSettingsRepository decrypt-on-read', () => {
     expect(raw?.settingValue).not.toBe(plaintext);
   });
 });
+
+describe('AdminSettingsSchema toJSON/toObject chokepoint', () => {
+  setupMongoTest();
+
+  beforeAll(() => {
+    configureSecretsAtRest(KEY);
+  });
+
+  // Acceptance criterion for #1606: a hydrated document serialised via toJSON()
+  // must return a masked value, not plaintext and not raw ciphertext. This pins the
+  // chokepoint without per-caller co-operation -- any code path that does
+  // AdminSettings.find() + res.json() or JSON.stringify() is automatically safe.
+  it('toJSON() masks a sensitive settingValue without requiring per-caller redaction', async () => {
+    const plaintext = 'sk-chokepoint-test-key-12345';
+    const ciphertext = encryptSecret(plaintext, KEY);
+    await AdminSettings.create({ settingName: 'anthropicDemoKey', settingValue: ciphertext });
+
+    const doc = await AdminSettings.findOne({ settingName: 'anthropicDemoKey' });
+    const serialised = doc!.toJSON();
+
+    expect(serialised.settingValue).not.toBe(plaintext);
+    expect(serialised.settingValue).not.toBe(ciphertext);
+    expect(typeof serialised.settingValue).toBe('string');
+    expect(serialised.settingValue as string).toMatch(/^\*+/);
+  });
+
+  it('toObject() masks a sensitive settingValue', async () => {
+    const plaintext = 'sk-toobject-test-key-99999';
+    const ciphertext = encryptSecret(plaintext, KEY);
+    await AdminSettings.create({ settingName: 'openaiDemoKey', settingValue: ciphertext });
+
+    const doc = await AdminSettings.findOne({ settingName: 'openaiDemoKey' });
+    const obj = doc!.toObject();
+
+    expect(obj.settingValue).not.toBe(plaintext);
+    expect(obj.settingValue).not.toBe(ciphertext);
+    expect(obj.settingValue as string).toMatch(/^\*+/);
+  });
+
+  it('trusted lean reads still return plaintext after decryptSettingInPlace', async () => {
+    const plaintext = 'sk-lean-trusted-path-55555';
+    const ciphertext = encryptSecret(plaintext, KEY);
+    await AdminSettings.create({ settingName: 'groqDemoKey', settingValue: ciphertext });
+
+    // .lean() bypasses the toJSON transform; decryptSettingInPlace then gives plaintext.
+    const byName = await adminSettingsRepository.findBySettingName('groqDemoKey');
+    expect(byName?.settingValue).toBe(plaintext);
+
+    const byNames = await adminSettingsRepository.findBySettingNames(['groqDemoKey']);
+    expect(byNames[0]?.settingValue).toBe(plaintext);
+
+    const all = await adminSettingsRepository.findAll();
+    expect(all.find(s => s.settingName === 'groqDemoKey')?.settingValue).toBe(plaintext);
+  });
+});
