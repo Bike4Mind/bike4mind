@@ -128,7 +128,7 @@ describe('GET /api/v1/models', () => {
     await run(req, res);
 
     const [image, text] = res._getJSONData().data;
-    expect(image.image.supports).toMatchObject({ transparent_background: true, max_reference_images: 4 });
+    expect(image.image.supports).toMatchObject({ transparent_background: true, max_reference_images: 15 });
     expect(text.image).toBeNull();
   });
 

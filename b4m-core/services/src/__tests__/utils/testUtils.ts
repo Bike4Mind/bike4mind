@@ -57,6 +57,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   updateWithUpdateAccess: vi.fn(async (_user, data) => data as IProjectDocument),
   findByIdAndUserId: vi.fn(),
   searchAccessible: vi.fn(),
+  listAccessibleAfterId: vi.fn(),
   removeSession: vi.fn(),
   findAllBySessionId: vi.fn(),
 });
@@ -195,6 +196,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     ...createMockRepository<ISessionDocument>(),
     shareable: createMockShareableRepository<ISessionDocument>(),
     updateWithUpdateAccess: vi.fn(),
+    addKnowledgeIdsWithUpdateAccess: vi.fn(),
     upsertByOpenaiConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByOpenaiConversationId']>,
     upsertByClaudeConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByClaudeConversationId']>,
     search: vi.fn(),
@@ -236,6 +238,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     ...createMockRepository<IUserDocument>(),
     findByEmail: vi.fn(),
     removeGroupsFromAllUsers: vi.fn(),
+    clearOrganizationPointer: vi.fn(),
     addGroupToUser: vi.fn(),
     removeGroupFromUser: vi.fn(),
     recordReferrals: vi.fn(),

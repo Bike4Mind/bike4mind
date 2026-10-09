@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DELEGATION_PAYLOAD_SCHEMA_NAME, delegationPayloadSchema } from '@bike4mind/hearth';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { IHearthService } from './IHearthService.js';
 import { PostEventRequestSchema } from './types.js';
@@ -57,7 +58,8 @@ const CatchupParamsSchema = z.object({
 const DelegateParamsSchema = z.object({
   channel_id: z.string().min(1),
   target_actor_id: z.string().min(1),
-  task: z.string().min(1),
+  // Same bounds the server enforces on the delegation payload.
+  task: delegationPayloadSchema.shape.task,
   payload: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -273,7 +275,7 @@ function createDelegateTool(service: IHearthService): ICompletionOptionTools {
         kind: 'delegation',
         human: { text: `Delegation to ${target_actor_id}: ${task}`, format: 'text' },
         machine: {
-          schema: 'hearth.delegation@1',
+          schema: DELEGATION_PAYLOAD_SCHEMA_NAME,
           // Spread first so payload keys can never clobber the canonical fields.
           payload: { ...(payload ?? {}), targetActorId: target_actor_id, task },
         },

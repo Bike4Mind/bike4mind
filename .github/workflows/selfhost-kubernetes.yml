@@ -1,0 +1,61 @@
+name: selfhost-kubernetes
+
+on:
+  pull_request:
+    paths:
+      - 'selfhost/kubernetes/**'
+      - 'selfhost/minio/Dockerfile.mc'
+      - 'elasticmq.conf'
+      - '.env.selfhost.example'
+      - '.github/workflows/selfhost-kubernetes.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'selfhost/kubernetes/**'
+      - 'selfhost/minio/Dockerfile.mc'
+      - 'elasticmq.conf'
+      - '.env.selfhost.example'
+      - '.github/workflows/selfhost-kubernetes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Match the mc runtime JSON parser
+        if: matrix.runner == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          jq_package_version="$(apt-cache policy jq | awk '/Candidate:/ {print $2}')"
+          case "$jq_package_version" in
+            1.6-*) ;;
+            *) echo 'Expected the jq 1.6 package candidate' >&2; exit 1 ;;
+          esac
+          sudo apt-get install -y --allow-downgrades "jq=$jq_package_version" "libjq1=$jq_package_version"
+          test "$(/usr/bin/jq --version)" = jq-1.6
+          mkdir -p "$RUNNER_TEMP/runtime-jq"
+          ln -s /usr/bin/jq "$RUNNER_TEMP/runtime-jq/jq"
+          echo "$RUNNER_TEMP/runtime-jq" >> "$GITHUB_PATH"
+      - name: Install YAML test dependency
+        run: python3 -m pip install PyYAML==6.0.2
+      - name: Check lifecycle JSON parser
+        run: jq --version
+      - name: Validate rendered runtime and DNS guard contracts
+        run: python3 -m unittest discover -s selfhost/kubernetes/tests
+      - name: Lint deployment package
+        run: helm lint selfhost/kubernetes -f selfhost/kubernetes/images.example.yaml

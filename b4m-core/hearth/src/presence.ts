@@ -41,6 +41,10 @@ export const PRESENCE_PAYLOAD_SCHEMA_NAME = 'hearth.presence@1';
  * still refresh lastSeen rather than being rejected. No length caps here on
  * purpose - the projection truncates, because losing a whole presence update
  * over a long workspace name is the worse failure.
+ *
+ * This is the bare SHAPE only. Validate a stored or wire payload with
+ * `presencePayloadWithDefaults`, which reads a null payload as `{}`; this schema
+ * alone would reject one.
  */
 export const presencePayloadSchema = z.object({
   /** Claude Code lifecycle event name; the reason fallback for tiers 0 and 1. */
@@ -78,3 +82,11 @@ export const presencePayloadSchema = z.object({
 });
 
 export type PresencePayload = z.infer<typeof presencePayloadSchema>;
+
+/**
+ * The payload contract above with a null/undefined payload read as `{}`, so a
+ * contentless post still refreshes lastSeen instead of being rejected. The write
+ * route and the roster projection both parse presence with THIS, so the "a null
+ * payload counts as {}" rule lives in one place and cannot drift between them.
+ */
+export const presencePayloadWithDefaults = z.preprocess(v => v ?? {}, presencePayloadSchema);

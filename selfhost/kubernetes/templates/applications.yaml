@@ -1,0 +1,190 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-app
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: app}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: app}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      terminationGracePeriodSeconds: 30
+      {{ include "b4m.wait" . | nindent 6 }}
+      containers:
+        - name: app
+          image: {{ required "images.app is required" .Values.images.app | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          {{ include "b4m.env" . | nindent 10 }}
+          resources: {{ .Values.resources.app | toJson }}
+          ports: [{name: http, containerPort: 3000}]
+          startupProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-app
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: app}
+  ports: [{name: http, port: 3000, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-chatcompletion
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: chatcompletion}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: chatcompletion}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      terminationGracePeriodSeconds: 150
+      {{ include "b4m.wait" . | nindent 6 }}
+      containers:
+        - name: chatcompletion
+          image: {{ required "images.chatcompletion is required" .Values.images.chatcompletion | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          {{ include "b4m.env" . | nindent 10 }}
+          resources: {{ .Values.resources.chatcompletion | toJson }}
+          ports: [{name: http, containerPort: 8080}]
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-chatcompletion
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: chatcompletion}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-worker
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: worker}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: worker}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      terminationGracePeriodSeconds: 30
+      {{ include "b4m.wait" . | nindent 6 }}
+      containers:
+        - name: worker
+          image: {{ required "images.chatcompletion is required" .Values.images.chatcompletion | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          {{ include "b4m.env" . | nindent 10 }}
+          resources: {{ .Values.resources.worker | toJson }}
+          workingDir: /app/apps/workers
+          command: [pnpm, exec, tsx, --tsconfig, tsconfig.selfhost.json, --import, ../client/server/chatCompletion/selfhostSstAlias.mjs, src/selfhost/main.ts]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-ws
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: ws}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: ws}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      terminationGracePeriodSeconds: 30
+      {{ include "b4m.wait" . | nindent 6 }}
+      containers:
+        - name: ws
+          image: {{ required "images.ws is required" .Values.images.ws | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          {{ include "b4m.env" . | nindent 10 }}
+            - {name: PORT, value: '3001'}
+            - {name: APP_INTERNAL_URL, value: 'http://{{ .Release.Name }}-app:3000'}
+          resources: {{ .Values.resources.ws | toJson }}
+          ports: [{name: http, containerPort: 3001}]
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ws
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: ws}
+  ports: [{name: http, port: 3001, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-subscriber-fanout
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: subscriber-fanout}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: subscriber-fanout}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      terminationGracePeriodSeconds: 30
+      {{ include "b4m.wait" . | nindent 6 }}
+      containers:
+        - name: subscriber-fanout
+          image: {{ required "images.subscriberFanout is required" .Values.images.subscriberFanout | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          {{ include "b4m.env" . | nindent 10 }}
+            - name: STAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Release.Name }}-config
+                  key: APP_STAGE
+          resources: {{ .Values.resources.subscriberFanout | toJson }}

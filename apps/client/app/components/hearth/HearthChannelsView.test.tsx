@@ -203,6 +203,27 @@ describe('HearthChannelsView', () => {
     expect(await screen.findByTestId('hearth-event-actor-kind-chip')).toHaveTextContent('Agent');
   });
 
+  it('marks API-key and gateway writes with an origin chip, and session or legacy writes with none', async () => {
+    apiPostMock.mockResolvedValue({
+      data: {
+        events: [
+          wireEvent({ id: 'e-key', seq: 1, origin: 'api-key' }),
+          wireEvent({ id: 'e-gw', seq: 2, origin: 'gateway' }),
+          wireEvent({ id: 'e-session', seq: 3, origin: 'session' }),
+          wireEvent({ id: 'e-legacy', seq: 4 }),
+        ],
+        cursor: 4,
+      },
+    });
+    await openChannel();
+
+    await screen.findAllByTestId('hearth-event-kind-chip');
+    expect(screen.getAllByTestId('hearth-event-origin-chip').map(c => c.textContent)).toEqual([
+      'via API key',
+      'via gateway',
+    ]);
+  });
+
   it('leaves the actor name in normal ink - two palette slots are sub-3:1 on the light surface', async () => {
     apiPostMock.mockResolvedValue({ data: { events: [wireEvent()], cursor: 1 } });
     await openChannel();

@@ -1,7 +1,9 @@
 import {
   BATCH_NON_TERMINAL_STATUSES,
+  isGitHubLakeFailureStatus,
   isLakeIngestable,
   settingsMap,
+  type GitHubLakeReleaseStatus,
   type IUserDocument,
   type SettingKey,
 } from '@bike4mind/common';
@@ -89,7 +91,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     };
     const enqueue = (body: z.input<typeof Payload>, delaySeconds?: number) =>
       sendToQueue(Resource.githubLakeIngestQueue.url, body, delaySeconds);
-    const release = async (lastError: string | null, status: 'connected' | 'error' = 'connected') => {
+    const release = async (lastError: string | null, status: GitHubLakeReleaseStatus = 'connected') => {
       if (!claimToken) return;
       const token = claimToken;
       claimToken = undefined;
@@ -124,7 +126,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     };
     // A drop must not heal an error state it did not resolve, nor clear a message it did not replace.
     const releaseUnchanged = () =>
-      release(connection.lastError ?? null, connection.status === 'error' ? 'error' : 'connected');
+      release(
+        connection.lastError ?? null,
+        isGitHubLakeFailureStatus(connection.status) ? connection.status : 'connected'
+      );
 
     // claimForSync only claims an enabled connection; adopt reports it so a disabled chain ends at the gate below.
     let enabledAtClaim = true;
@@ -294,7 +299,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // 422 is what the repo-scoped token mint returns once the repository leaves the installation's selection.
       if (status === 404 || status === 422) {
         await settle(resumeBatchId);
-        await release(GITHUB_LAKE_RECONNECT_MESSAGE, 'error');
+        await release(GITHUB_LAKE_RECONNECT_MESSAGE, 'access_lost');
         return true;
       }
       return false;
@@ -389,7 +394,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     if (claimToken && connectionId) {
       const message = notFound ? GITHUB_LAKE_RECONNECT_MESSAGE : err instanceof Error ? err.message : String(err);
       await orgGitHubLakeConnectionRepository
-        .releaseSyncClaim(connectionId, claimToken, message, notFound ? 'error' : 'connected')
+        .releaseSyncClaim(connectionId, claimToken, message, notFound ? 'access_lost' : 'connected')
         .catch(e => {
           logger.error(
             `[githubLakeIngest] failed to release sync claim: ${e instanceof Error ? e.message : String(e)}`

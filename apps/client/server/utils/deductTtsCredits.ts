@@ -4,27 +4,6 @@ import { usdToCredits } from '@bike4mind/utils';
 import { userRepository, creditTransactionRepository, usageEventRepository } from '@bike4mind/database';
 import { type ILogger } from '@bike4mind/observability';
 
-// Thrown by assertTtsCreditsAvailable when the caller can't pay. Callers map this
-// to a 422 tagged `insufficient_credits` - it's a billing state, not a bug, and
-// the classifier is what a caller matches on. Metering is what stops an
-// authenticated user from draining the operator's admin provider key for free.
-export class InsufficientTtsCreditsError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'InsufficientTtsCreditsError';
-  }
-}
-
-// Pre-flight balance gate. Run BEFORE calling the provider so a broke caller
-// never incurs provider cost. Mirrors the transcribe route's pre-check.
-export async function assertTtsCreditsAvailable(userId: string): Promise<void> {
-  const user = await userRepository.findById(userId);
-  if (!user) throw new InsufficientTtsCreditsError('User not found');
-  if ((user.currentCredits ?? 0) <= 0) {
-    throw new InsufficientTtsCreditsError('Insufficient credits for text-to-speech');
-  }
-}
-
 export interface DeductTtsArgs {
   userId: string;
   vendor: VoiceGenerationVendor;

@@ -10,11 +10,15 @@ import {
   normalizeTag,
   resolveEntitlements,
   signupCreditsForEmail,
+  signupCreditsForKeys,
+  SIGNUP_CREDITS,
   KNOWN_ENTITLEMENT_KEYS,
   unknownEntitlementKeys,
   BYPASS_EXEMPT_ENTITLEMENTS,
   isBypassExemptEntitlement,
   EMBED_WHITELABEL_ENTITLEMENT_KEY,
+  IMPLIED_ENTITLEMENTS,
+  applyImpliedEntitlements,
 } from './registry';
 
 // Behavior tests are table-driven over the real registry rows (no product
@@ -106,6 +110,193 @@ describe('registry invariants', () => {
       expect(Number.isInteger(row.credits), `signup credit for '${row.key}' must be an integer`).toBe(true);
       expect(row.credits, `signup credit for '${row.key}' must be positive`).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('implied-entitlement invariants', () => {
+  it('every implied row is in canonical form and implies at least one key', () => {
+    for (const row of __registryRows.impliedRows) {
+      expect(row.ifHeld).toBe(normalizeTag(row.ifHeld));
+      expect(row.alsoGrant.length, `'${row.ifHeld}' implies nothing`).toBeGreaterThan(0);
+      for (const key of row.alsoGrant) expect(key).toBe(normalizeTag(key));
+    }
+  });
+
+  it('has no duplicate ifHeld rows (Map build would silently drop the earlier one)', () => {
+    const heads = __registryRows.impliedRows.map(r => normalizeTag(r.ifHeld));
+    expect(new Set(heads).size).toBe(heads.length);
+  });
+
+  it('only implies between known grantable keys, never a key from itself', () => {
+    const known = new Set(KNOWN_ENTITLEMENT_KEYS);
+    for (const row of __registryRows.impliedRows) {
+      expect(known.has(row.ifHeld), `'${row.ifHeld}' is not a known key`).toBe(true);
+      for (const key of row.alsoGrant) {
+        expect(known.has(key), `'${key}' is not a known key`).toBe(true);
+        expect(key).not.toBe(row.ifHeld);
+      }
+    }
+  });
+
+  // `signupCreditsForKeys` zeroes a key another held key implies, so an implying
+  // key must be worth at least as much as anything it implies - otherwise a
+  // bundle would under-pay versus holding the implied key directly. Checked over
+  // the full closure (chains included), not just direct alsoGrant rows.
+  it('every implying key pays at least as much signup credits as the keys it implies', () => {
+    for (const row of __registryRows.impliedRows) {
+      const sourceCredits = SIGNUP_CREDITS.get(normalizeTag(row.ifHeld)) ?? 0;
+      // slice(1) drops the implying key itself; the rest is everything it reaches through chains.
+      for (const key of applyImpliedEntitlements([row.ifHeld]).slice(1)) {
+        const impliedCredits = SIGNUP_CREDITS.get(key) ?? 0;
+        expect(
+          sourceCredits,
+          `'${row.ifHeld}' (${sourceCredits}) must pay >= its implied '${key}' (${impliedCredits})`
+        ).toBeGreaterThanOrEqual(impliedCredits);
+      }
+    }
+  });
+});
+
+describe('applyImpliedEntitlements', () => {
+  it('adds every implied key for each real row, after the input keys', () => {
+    for (const row of __registryRows.impliedRows) {
+      expect(applyImpliedEntitlements(['other', row.ifHeld.toUpperCase()])).toEqual([
+        'other',
+        row.ifHeld,
+        ...row.alsoGrant.filter(key => key !== 'other'),
+      ]);
+    }
+  });
+
+  it('leaves a set with no implying key unchanged (normalized, de-duplicated, order kept)', () => {
+    expect(applyImpliedEntitlements(['B', 'a', 'b', ' '])).toEqual(['b', 'a']);
+  });
+
+  it('does not duplicate an implied key that is already held', () => {
+    expect(IMPLIED_ENTITLEMENTS.size).toBeGreaterThan(0);
+    const [ifHeld, alsoGrant] = [...IMPLIED_ENTITLEMENTS.entries()][0] ?? [];
+    if (!ifHeld || !alsoGrant) return;
+    expect(applyImpliedEntitlements([...alsoGrant, ifHeld])).toEqual([...alsoGrant, ifHeld]);
+  });
+
+  it('resolves a chain fully and terminates on a cycle, deterministically', () => {
+    const chain = new Map([
+      ['a', ['b']],
+      ['b', ['c', 'a']],
+      ['c', ['d']],
+    ]);
+    expect(applyImpliedEntitlements(['a'], chain)).toEqual(['a', 'b', 'c', 'd']);
+    expect(applyImpliedEntitlements(['c', 'a'], chain)).toEqual(['c', 'a', 'd', 'b']);
+  });
+});
+
+describe('implied-entitlement graph safety', () => {
+  // Every key reachable from `start` through IMPLIED_ENTITLEMENTS chains (excluding `start`
+  // unless a cycle leads back to it).
+  const reachableFrom = (start: string): Set<string> => {
+    const reached = new Set<string>();
+    const queue = [...(IMPLIED_ENTITLEMENTS.get(start) ?? [])];
+    while (queue.length > 0) {
+      const key = queue.shift()!;
+      if (reached.has(key)) continue;
+      reached.add(key);
+      queue.push(...(IMPLIED_ENTITLEMENTS.get(key) ?? []));
+    }
+    return reached;
+  };
+
+  it('is acyclic: no implying key can reach itself through chains', () => {
+    expect(IMPLIED_ENTITLEMENTS.size).toBeGreaterThan(0);
+    for (const ifHeld of IMPLIED_ENTITLEMENTS.keys()) {
+      expect(reachableFrom(ifHeld).has(ifHeld), `'${ifHeld}' implies itself`).toBe(false);
+    }
+  });
+
+  it('never implies a bypass-exempt key or a datalake grant (both need a literal grant)', () => {
+    for (const ifHeld of IMPLIED_ENTITLEMENTS.keys()) {
+      for (const key of reachableFrom(ifHeld)) {
+        expect(isBypassExemptEntitlement(key), `'${key}' is bypass-exempt`).toBe(false);
+        expect(BYPASS_EXEMPT_ENTITLEMENTS.has(key)).toBe(false);
+        expect(isDatalakeEntitlementKey(key), `'${key}' is a datalake grant`).toBe(false);
+      }
+    }
+    expect(BYPASS_EXEMPT_ENTITLEMENTS.has(EMBED_WHITELABEL_ENTITLEMENT_KEY)).toBe(true);
+  });
+
+  it('keeps the reverse closed: questmaster:pro alone, or its grant tag, never yields optihashi:pro', () => {
+    expect(applyImpliedEntitlements(['questmaster:pro'])).toEqual(['questmaster:pro']);
+    const fromTag = applyImpliedEntitlements(entitlementsForTags(['questmaster-pro']));
+    expect(fromTag).toContain('questmaster:pro');
+    expect(fromTag).not.toContain('optihashi:pro');
+  });
+
+  it('keeps a pre-existing key in its input position when it is also implied', () => {
+    expect(applyImpliedEntitlements(['questmaster:pro', 'other', 'optihashi:pro'])).toEqual([
+      'questmaster:pro',
+      'other',
+      'optihashi:pro',
+    ]);
+  });
+
+  it('skips non-string entries instead of throwing', () => {
+    expect(applyImpliedEntitlements([123, null, 'OptiHashi:Pro'] as unknown as string[])).toEqual([
+      'optihashi:pro',
+      'questmaster:pro',
+    ]);
+  });
+});
+
+describe('questmaster-pro grant tag', () => {
+  it('keeps its hyphen through normalization and grants questmaster:pro', () => {
+    expect(normalizeTag('questmaster-pro')).toBe('questmaster-pro');
+    expect(grantTagForEntitlement('questmaster:pro')).toBe('questmaster-pro');
+    expect(entitlementsForTags(['QuestMaster-Pro'])).toContain('questmaster:pro');
+  });
+
+  it('does NOT grant questmaster:pro from the existing QuestMaster cohort tag, in any casing', () => {
+    for (const tag of ['QuestMaster', 'questmaster', ' QUESTMASTER ']) {
+      expect(applyImpliedEntitlements(entitlementsForTags([tag]))).not.toContain('questmaster:pro');
+    }
+    expect(__registryRows.tagGrantRows.map(row => normalizeTag(row.tag))).not.toContain('questmaster');
+  });
+});
+
+describe('signupCreditsForKeys (pinned amounts)', () => {
+  it('pays 250,000 for optihashi:pro alone', () => {
+    expect(signupCreditsForKeys(['optihashi:pro'])).toBe(250_000);
+  });
+
+  it('pays 250,000 for questmaster:pro alone', () => {
+    expect(signupCreditsForKeys(['questmaster:pro'])).toBe(250_000);
+  });
+
+  it('pays 250,000 (not 500,000) when optihashi:pro and the questmaster:pro it implies are both held', () => {
+    expect(signupCreditsForKeys(['optihashi:pro', 'questmaster:pro'])).toBe(250_000);
+    expect(signupCreditsForKeys(['questmaster:pro', 'OptiHashi:Pro', 'optihashi:pro'])).toBe(250_000);
+  });
+
+  it('still sums two unrelated products', () => {
+    // No unrelated paying pair exists in today's rows, so pin the rule with a fixture map.
+    const credits = new Map([
+      ['optihashi:pro', 250_000],
+      ['unrelated:pro', 100_000],
+    ]);
+    expect(signupCreditsForKeys(['optihashi:pro', 'unrelated:pro'], credits)).toBe(350_000);
+    expect(signupCreditsForKeys(['optihashi:pro', 'questmaster:pro', 'unrelated:pro'], credits)).toBe(350_000);
+  });
+
+  it('counts a key implied through a chain as zero', () => {
+    const credits = new Map([
+      ['a', 10],
+      ['b', 20],
+      ['c', 40],
+    ]);
+    const chain = new Map([
+      ['a', ['b']],
+      ['b', ['c']],
+    ]);
+    expect(signupCreditsForKeys(['c', 'a'], credits, chain)).toBe(10);
+    expect(signupCreditsForKeys(['b', 'c'], credits, chain)).toBe(20);
   });
 });
 
@@ -259,6 +450,16 @@ describe('allKnownEntitlementKeys', () => {
     expect(new Set(known).size).toBe(known.length);
   });
 
+  // `questmaster:pro` is also a TAG_GRANTS target, so the real catalog cannot detect a dropped
+  // implied loop. Inject a key with no grant row of its own: it must still reach the catalog
+  // (the Product Access / partner-rule option set) and pass the write-boundary check.
+  it('includes a key that is only ever implied', () => {
+    const implications = new Map([['x:a', ['only:implied']]]);
+    const known = allKnownEntitlementKeys(implications);
+    expect(known).toContain('only:implied');
+    expect(unknownEntitlementKeys(['only:implied'], new Set(known))).toEqual([]);
+  });
+
   // Deleting the embed-whitelabel grant row silently un-gates nothing (the key
   // simply stops being grantable), so pin its presence and grant path explicitly.
   it('includes the embed whitelabel key with its comp-tag grant path', () => {
@@ -322,9 +523,9 @@ describe('KNOWN_ENTITLEMENT_KEYS / unknownEntitlementKeys', () => {
   it('is the sorted union of every grant source, deduped (matches allKnownEntitlementKeys)', () => {
     const expected = Array.from(
       new Set(
-        [...__registryRows.priceRows, ...__registryRows.tagGrantRows, ...__registryRows.domainGrantRows].flatMap(
-          r => r.entitlements
-        )
+        [...__registryRows.priceRows, ...__registryRows.tagGrantRows, ...__registryRows.domainGrantRows]
+          .flatMap(r => r.entitlements)
+          .concat(__registryRows.impliedRows.flatMap(r => r.alsoGrant))
       )
     ).sort();
     expect([...KNOWN_ENTITLEMENT_KEYS]).toEqual(expected);
