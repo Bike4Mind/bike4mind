@@ -224,13 +224,23 @@ describe('migrateLedgerVectorsForPrincipal', () => {
     expect(stats).toMatchObject({ noProviderKey: 5, failed: 0, providerCalls: 0, stoppedAtLimit: false });
   });
 
+  it('keeps truncating after a keyless embed and never trips the limit', async () => {
+    missingKey = 'openai';
+    chain = [ev('h1'), ev('full', vec('text-embedding-3-small')), ev('h2')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { limit: 1 });
+
+    expect(stats).toMatchObject({ truncated: 1, noProviderKey: 2, providerCalls: 0, stoppedAtLimit: false });
+    expect(rewriteEmbedding).toHaveBeenCalledTimes(1);
+  });
+
   it('makes no provider call and no write on a dry run, but still counts', async () => {
     missingKey = 'openai';
     chain = [ev('full', vec('text-embedding-3-small')), ev('h1')];
 
     const stats = await migrateLedgerVectorsForPrincipal(lake, { dryRun: true });
 
-    expect(stats).toMatchObject({ truncated: 1, backfilled: 1, failed: 0, errors: [] });
+    expect(stats).toMatchObject({ truncated: 1, backfilled: 1, failed: 0, providerCalls: 1, errors: [] });
     expect(generateEmbedding).not.toHaveBeenCalled();
     expect(rewriteEmbedding).not.toHaveBeenCalled();
   });

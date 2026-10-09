@@ -155,7 +155,8 @@ export async function reembedMementosForUser(
  * the principal has more to do. An event that needs an embed while the owner has no provider key counts
  * as `noProviderKey`, not `failed`: no call was made, so it spends no budget. `embedderError` carries
  * why the embedding service could not be built (also recorded once in `errors`), so a caller reports
- * the real cause rather than assuming a missing key. A dry run makes no provider call and no write, and its counts mean "would".
+ * the real cause rather than assuming a missing key. A dry run makes no provider call and no write, and
+ * its counts mean "would".
  */
 export async function migrateLedgerVectorsForPrincipal(
   target: { principal: Principal; ownerUserId: string },
