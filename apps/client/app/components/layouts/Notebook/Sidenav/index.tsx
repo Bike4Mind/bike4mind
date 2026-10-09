@@ -31,22 +31,30 @@ const CombinedNotebooks = dynamic(() => import('./CombinedNotebooks'), {
   ),
 });
 
-// Dedicated, fully surface-scoped nav for /opti - the OptiHashi premium overlay
-// contributes it via b4mContributions.notebookSidenavExport, and codegen emits the
-// import into premiumNotebookSidenav.generated.ts (dynamic + ssr:false, so its code
-// stays out of the bundle on every other route). Core imports the GENERATED glue, never
-// the premium package directly, so the open-core fork (overlay absent -> null) still
-// builds. Replaces CombinedNotebooks on the opti surface so the nav no longer intermixes
-// default-surface sessions, projects, and agents.
-import { premiumNotebookSidenav as OptiSidenav } from '@client/app/premium-generated/premiumNotebookSidenav.generated';
+// Dedicated, fully surface-scoped navs contributed by premium overlays. An overlay
+// declares b4mContributions.notebookSidenavExport as { path, exportFrom }, and codegen
+// emits one entry per overlay into premiumNotebookSidenavs.generated.ts (each dynamic +
+// ssr:false, so an overlay's code stays out of the bundle on every other route). Core
+// imports the GENERATED glue, never the premium package directly, so the open-core fork
+// (no overlays -> empty array) still builds. On a matching route the overlay's nav
+// REPLACES CombinedNotebooks, so the nav no longer intermixes default-surface sessions,
+// projects, and agents with that surface's own list.
+//
+// The match is on `path` from the manifest, not a pathname this file names: which route
+// a premium nav owns is the overlay's knowledge. That is what lets a SECOND overlay have
+// one at all - the slot used to be a single component core matched against a hardcoded
+// '/opti', so any other overlay's nav was dropped with a codegen warning.
+import { premiumNotebookSidenavs } from '@client/app/premium-generated/premiumNotebookSidenavs.generated';
 
 const NotebookSideNav = () => {
   // Tablet + mobile: slide off-screen when closed and show a dismiss backdrop
   // when open (overlay behavior). Desktop pins the sidebar in flow.
   const isTablet = useIsTablet();
   const [openSideNav, setOpenSideNav] = useNotebookLayout(useShallow(s => [s.openSideNav, s.setOpenSideNav]));
-  // /opti owns a dedicated, surface-scoped nav; every other route uses the shared one.
-  const isOpti = useLocation({ select: l => l.pathname === '/opti' });
+  // A route an overlay claims owns a dedicated, surface-scoped nav; every other route
+  // uses the shared one. First match wins (codegen warns on a duplicate path).
+  const pathname = useLocation({ select: l => l.pathname });
+  const PremiumSidenav = premiumNotebookSidenavs.find(s => s.path === pathname)?.component;
 
   return (
     <Stack
@@ -92,11 +100,11 @@ const NotebookSideNav = () => {
       <SideNavHeader />
 
       {/* minHeight:0 lets this flex child shrink below its content height so the nav's inner
-          scroll region (OptiSidenav's conversation list) stays bounded and scrolls in place —
+          scroll region (a premium nav's own list) stays bounded and scrolls in place -
           without it, on short viewports the content overflows the sidebar and pushes the list
           (and footer) off-screen instead of scrolling. */}
       <Stack flexGrow={1} sx={{ minHeight: 0 }}>
-        {isOpti && OptiSidenav ? <OptiSidenav /> : <CombinedNotebooks />}
+        {PremiumSidenav ? <PremiumSidenav /> : <CombinedNotebooks />}
       </Stack>
 
       <SidenavFooter />
