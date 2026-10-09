@@ -74,7 +74,8 @@ export function resolveRouteTemplate(req: RouteRequest): string {
 /**
  * The request path with the query string and fragment removed, percent-decoded and with repeated
  * slashes collapsed, for prefix checks that must see the path the router sees (`/api/%61dmin` is
- * `/api/admin`). Decoding repeats until stable, so a double-encoded path cannot hide a prefix.
+ * `/api/admin`). Decodes up to 3 times (Next decodes once before routing), so a double-encoded
+ * path cannot hide a prefix.
  */
 export function resolveRequestPathname(req: Pick<RouteRequest, 'originalUrl' | 'url'>): string {
   let path = (req.originalUrl || req.url || '').split(/[?#]/, 1)[0];
