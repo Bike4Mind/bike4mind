@@ -67,9 +67,19 @@ describe('POST /api/mcp-servers/[id]/connect', () => {
   it('still clears the marker when the reconnect fetch fails, so the next turn retries', async () => {
     mockInvoke.mockRejectedValue(new Error('lambda cold start'));
 
-    await expect(run()).rejects.toThrow();
+    await expect(run()).rejects.toThrow('Unable to connect to MCP server');
 
     expect(mockUpdate).toHaveBeenCalledTimes(1);
     expect(mockUpdate).toHaveBeenCalledWith({ id: SERVER_ID }, { unset: ['toolSchemasFetchedAt'] });
+  });
+
+  it('leaves the marker cleared when the handler returns no payload, so the next turn retries', async () => {
+    mockInvoke.mockResolvedValue(undefined);
+
+    const res = await run();
+
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockUpdate).toHaveBeenCalledWith({ id: SERVER_ID }, { unset: ['toolSchemasFetchedAt'] });
+    expect(res._getJSONData()).toEqual([]);
   });
 });

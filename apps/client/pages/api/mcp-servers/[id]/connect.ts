@@ -15,7 +15,7 @@ const handler = baseApi().post(async (req, res) => {
     throw new NotFoundError('Server not found');
   }
 
-  let result: MCPClient['tools'] = [];
+  let result: MCPClient['tools'] | null = null;
 
   // Reconnect invalidates any prior "confirmed empty" marker: clear it before the fetch so a
   // failed reconnect retries next turn instead of trusting a stale empty cache.
@@ -37,9 +37,13 @@ const handler = baseApi().post(async (req, res) => {
     throw new BadRequestError('Unable to connect to MCP server', { reason: message });
   }
 
-  await mcpServerRepository.update(buildMcpToolCacheUpdate(server.id, result));
+  // A falsy payload is not a successful fetch: leaving the marker cleared lets the next turn
+  // retry, rather than caching the empty result and skipping the fetch for the full TTL.
+  if (result) {
+    await mcpServerRepository.update(buildMcpToolCacheUpdate(server.id, result));
+  }
 
-  return res.status(200).json(result);
+  return res.status(200).json(result ?? []);
 });
 
 export const config = {
