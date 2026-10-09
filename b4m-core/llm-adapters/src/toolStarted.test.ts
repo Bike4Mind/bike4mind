@@ -58,17 +58,18 @@ describe('AnthropicBackend announces a tool call when it opens', () => {
       { type: 'message_stop' },
     ];
     const backend = new AnthropicBackend('test-key');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the SDK client has no exported mock shape
-    (backend as unknown as { _api: any })._api = {
-      messages: {
-        create: async () => ({
-          [Symbol.asyncIterator]: async function* () {
-            for (const e of events) yield e;
-          },
-          controller: { abort: () => {} },
-        }),
+    Object.assign(backend, {
+      _api: {
+        messages: {
+          create: async () => ({
+            [Symbol.asyncIterator]: async function* () {
+              for (const e of events) yield e;
+            },
+            controller: { abort: () => {} },
+          }),
+        },
       },
-    };
+    });
     const { frames, cb } = capture();
 
     await backend.complete(
@@ -128,6 +129,62 @@ describe('OpenAIBackend announces a tool call when it opens', () => {
     const announced = frames.filter(f => f.info?.toolStarted);
     expect(announced.map(f => f.info?.toolStarted)).toEqual([{ name: 'file_write', id: 'call_1' }]);
     expect(startedAt(frames)).toBeLessThan(finishedAt(frames));
+  });
+
+  it('announces every call when one chat-completions chunk opens parallel tools', async () => {
+    const chunks = [
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, id: 'call_1', type: 'function', function: { name: 'file_write', arguments: '' } },
+                { index: 1, id: 'call_2', type: 'function', function: { name: 'file_read', arguments: '' } },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, function: { arguments: ARGS } },
+                { index: 1, function: { arguments: '{"path":"a.ts"}' } },
+              ],
+            },
+          },
+        ],
+      },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+    ];
+    const backend = new OpenAIBackend('test-key');
+    const create = vi.fn(async () => {
+      const iterator = () =>
+        (async function* () {
+          for (const chunk of chunks) yield chunk;
+        })();
+      return new Stream(iterator as never, new AbortController());
+    });
+    (backend as unknown as { _api: unknown })._api = { chat: { completions: { create } } };
+    const { frames, cb } = capture();
+
+    await backend.complete(
+      ChatModels.GPT4o,
+      [{ role: 'user', content: 'write and read a.ts' }],
+      { stream: true, tools: [fileWriteTool], executeTools: false },
+      cb
+    );
+
+    expect(frames.filter(frame => frame.info?.toolStarted).map(frame => frame.info?.toolStarted)).toEqual([
+      { name: 'file_write', id: 'call_1' },
+      { name: 'file_read', id: 'call_2' },
+    ]);
+    expect(frames.filter(frame => frame.info?.toolStarted).every(frame => frame.text.length === 0)).toBe(true);
+    expect(frames.findIndex(frame => frame.info?.toolStarted?.id === 'call_2')).toBeLessThan(finishedAt(frames));
   });
 
   it('emits toolStarted on the Responses output_item.added event for a function call', async () => {
