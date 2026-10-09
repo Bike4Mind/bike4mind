@@ -70,15 +70,18 @@ export const CreateAgentRequestSchema = z
   .strict();
 export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 
-/** Strict for the same reason as the create body. Omitted fields are left unchanged. */
+/**
+ * Strict for the same reason as the create body. Omitted fields are left unchanged; `null` on
+ * preferred_model, temperature or max_tokens clears it back to the default.
+ */
 export const UpdateAgentRequestSchema = z
   .object({
     name: z.string().min(1).optional(),
     description: agentFields.description.optional(),
     system_prompt: agentFields.system_prompt.optional(),
-    preferred_model: agentFields.preferred_model.optional(),
-    temperature: agentFields.temperature.optional(),
-    max_tokens: agentFields.max_tokens.optional(),
+    preferred_model: agentFields.preferred_model.nullable().optional(),
+    temperature: agentFields.temperature.nullable().optional(),
+    max_tokens: agentFields.max_tokens.nullable().optional(),
     allowed_tools: agentFields.allowed_tools.optional(),
     denied_tools: agentFields.denied_tools.optional(),
     trigger_words: agentFields.trigger_words.optional(),

@@ -272,6 +272,7 @@ describe('POST /api/v1/agents', () => {
     const tools = Array.from({ length: 101 }, (_, i) => `t${i}`);
     const error = await errorOf({ method: 'POST', body: { name: 'x', denied_tools: tools } });
     expect(error.statusCode).toBe(422);
+    expect(error.message).toContain('denied_tools');
     expect(mockCreate).not.toHaveBeenCalled();
   });
 

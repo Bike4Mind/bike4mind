@@ -50,7 +50,7 @@ const updateRoute = nextRouteForContract(updateAgentContract, {
   const { id } = await findOwnedAgent(req.validatedParams.id, req.user.id);
   const body = req.validated;
 
-  if (body.preferred_model !== undefined && !supportedChatModels.safeParse(body.preferred_model).success) {
+  if (body.preferred_model != null && !supportedChatModels.safeParse(body.preferred_model).success) {
     throw new UnprocessableEntityError(`Invalid model: ${body.preferred_model}`);
   }
   let triggerWords, allowedTools, deniedTools;
@@ -74,9 +74,14 @@ const updateRoute = nextRouteForContract(updateAgentContract, {
     deniedTools,
     triggerWords,
   };
-  const changes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
+  // A null clears the field back to the default; the request schema allows it only on these three.
+  const reset = (['preferredModel', 'temperature', 'maxTokens'] as const).filter(field => fields[field] === null);
+  const changes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null));
 
-  const updated = await agentRepository.update({ id, ...changes }, { new: true });
+  const updated = await agentRepository.update(
+    { id, ...changes },
+    reset.length ? { new: true, unset: reset } : { new: true }
+  );
   if (!updated) throw new NotFoundError('Agent not found');
 
   return res.json(toPublicAgent(updated, req.user.id));

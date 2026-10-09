@@ -7290,17 +7290,26 @@
             "type": "string"
           },
           "preferred_model": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "minLength": 1,
             "description": "A chat model id. An unknown model is rejected with a 422."
           },
           "temperature": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 2
           },
           "max_tokens": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "minimum": 1,
             "maximum": 128000
           },

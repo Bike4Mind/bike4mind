@@ -162,6 +162,21 @@ describe('PATCH /api/v1/agents/{id}', () => {
     expect(res._getJSONData()).toMatchObject({ temperature: 0.9, trigger_words: ['@sources'], name: 'Researcher' });
   });
 
+  it('clears preferred_model, temperature and max_tokens sent as null', async () => {
+    const res = await call('PATCH', AGENT_ID, {
+      preferred_model: null,
+      temperature: null,
+      max_tokens: null,
+      name: 'x',
+    });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdate).toHaveBeenCalledWith(
+      { id: AGENT_ID, name: 'x' },
+      { new: true, unset: ['preferredModel', 'temperature', 'maxTokens'] }
+    );
+  });
+
   it.each([
     ['an unknown id', UNKNOWN],
     ["another user's agent", STRANGERS],

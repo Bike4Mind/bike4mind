@@ -14,6 +14,7 @@ import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isValidObjectId } from '@server/utils/objectId';
 import { UnprocessableEntityError } from '@server/utils/errors';
+import { validateToolList } from '@server/utils/agentValidation';
 import { createAgent } from '@server/agents/createAgent';
 import { toPublicAgent } from '@server/agents/toPublicAgent';
 import { toV1AgentError } from '@server/agents/v1AgentErrors';
@@ -50,6 +51,9 @@ const createRoute = nextRouteForContract(createAgentContract, {
   // useOwnCredits/currentCredits are never sent, so createAgent's credit debit is never taken.
   let agent;
   try {
+    // createAgent names the stored camelCase field in its errors, so check here under the caller's spelling.
+    validateToolList(body.allowed_tools, 'allowed_tools');
+    validateToolList(body.denied_tools, 'denied_tools');
     ({ agent } = await createAgent(
       {
         name: body.name,
