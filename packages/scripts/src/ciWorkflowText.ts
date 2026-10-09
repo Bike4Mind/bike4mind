@@ -48,3 +48,54 @@ export function readJobCondition(body: string): string {
   }
   return folded.join(' ');
 }
+
+/** A job's `needs:` as a list, from the inline (`needs: a` / `needs: [a, b]`) or block-list form. */
+export function readNeeds(body: string): string[] {
+  const lines = body.split('\n');
+  const start = lines.findIndex(line => /^ {4}needs:/.test(line));
+  if (start === -1) return [];
+
+  const inline = lines[start].replace(/^ {4}needs:\s*/, '').trim();
+  if (inline !== '') {
+    return inline
+      .replace(/[[\]]/g, '')
+      .split(',')
+      .map(name => name.trim())
+      .filter(Boolean);
+  }
+
+  const listed: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const item = /^ {6}-\s+(\S+)\s*$/.exec(line);
+    if (!item) break;
+    listed.push(item[1]);
+  }
+  return listed;
+}
+
+/** An input's default pathspecs, one per line, with any leading `:(magic)` stripped. */
+export function readDefaultSpecs(entry: string): string[] {
+  const block = /^ {4}default: \|\n((?: {6}.*\n)+)/m.exec(entry)?.[1] ?? '';
+  return block
+    .split('\n')
+    .map(line => line.trim().replace(/^:\([^)]*\)/, ''))
+    .filter(Boolean);
+}
+
+/** A job's steps, each as source text, split on the `- ` list markers under `steps:`. */
+export function readSteps(body: string): string[] {
+  const lines = body.split('\n');
+  const start = lines.findIndex(line => /^ {4}steps:\s*$/.test(line));
+  if (start === -1) return [];
+
+  const steps: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() !== '' && !/^ {6}/.test(line)) break;
+    if (/^ {6}- /.test(line)) {
+      steps.push(`${line}\n`);
+    } else if (steps.length > 0) {
+      steps[steps.length - 1] += `${line}\n`;
+    }
+  }
+  return steps;
+}

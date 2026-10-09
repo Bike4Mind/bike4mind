@@ -46,8 +46,8 @@ export interface FirecrawlScrapeResult {
 // The slice of the firecrawl-js client services calls, declared locally so the published .d.ts
 // never imports @mendable/firecrawl-js (its types drag in DOM-only event listener types).
 export interface FirecrawlClient {
-  scrapeUrl(url: string, params?: FirecrawlScrapeParams): Promise<FirecrawlScrapeResult>;
-  search(query: string): Promise<{ data: { url?: string; title?: string; description?: string }[] }>;
+  scrapeUrl: (url: string, params?: FirecrawlScrapeParams) => Promise<FirecrawlScrapeResult>;
+  search: (query: string) => Promise<{ data: { url?: string; title?: string; description?: string }[] }>;
 }
 
 /**

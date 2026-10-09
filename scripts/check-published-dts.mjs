@@ -9,6 +9,7 @@
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,24 +57,10 @@ export function run(command, args, options = {}) {
   return result.stdout;
 }
 
-// Version pnpm-lock.yaml resolves for a dependency of an importer ('.' is the root), peer suffix stripped.
-export function lockfileVersion(lockText, importer, name) {
-  const keyOf = line => /^'?(.*?)'?:$/.exec(line.trim())?.[1];
-  let inImporters = false;
-  let inImporter = false;
-  let inDependency = false;
-  for (const line of lockText.split('\n')) {
-    if (!line.trim()) continue;
-    const indent = line.length - line.trimStart().length;
-    if (indent === 0) inImporters = line.trim() === 'importers:';
-    else if (inImporters && indent === 2) inImporter = keyOf(line) === importer;
-    else if (inImporter && indent === 6) inDependency = keyOf(line) === name;
-    else if (inImporter && inDependency && indent === 8) {
-      const version = /^version: ([^\s(]+)/.exec(line.trim())?.[1];
-      if (version) return version;
-    }
-  }
-  throw new Error(`cannot find ${name} in the "${importer}" importer of pnpm-lock.yaml`);
+// Versions of typescript and @types/node installed in the repo, pinned so the consumer type-checks with the same compiler.
+function installedPins() {
+  const requireFromRoot = createRequire(path.join(repoRoot, 'package.json'));
+  return ['typescript', '@types/node'].map(name => `${name}@${requireFromRoot(`${name}/package.json`).version}`);
 }
 
 // Messages for every packed @bike4mind entry in the consumer's lockfile (nested copies included) that npm resolved from
@@ -127,8 +114,8 @@ export function groupTscErrors(output) {
   return groups;
 }
 
-function discoverPackages() {
-  const coreDir = path.join(repoRoot, 'b4m-core');
+export function discoverPackages(root = repoRoot) {
+  const coreDir = path.join(root, 'b4m-core');
   const packages = [];
   for (const name of fs.readdirSync(coreDir).sort()) {
     const dir = path.join(coreDir, name);
@@ -188,9 +175,9 @@ function writeTsconfigs(consumerDir) {
   }
 }
 
-function typecheck(consumerDir, project) {
+function typecheck(consumerDir, project, extraArgs = []) {
   const tsc = path.join(consumerDir, 'node_modules', 'typescript', 'bin', 'tsc');
-  const result = spawnSync(process.execPath, [tsc, '-p', project, '--pretty', 'false'], {
+  const result = spawnSync(process.execPath, [tsc, '-p', project, '--pretty', 'false', ...extraArgs], {
     cwd: consumerDir,
     encoding: 'utf8',
     maxBuffer: 256 * 1024 * 1024,
@@ -200,11 +187,33 @@ function typecheck(consumerDir, project) {
   return { status: result.status, signal: result.signal, output: `${killed}${result.stdout}${result.stderr}` };
 }
 
+// `tsc --listFiles` prints one absolute path per line after the diagnostics.
+export function splitTscOutput(output) {
+  const listing = [];
+  const diagnostics = [];
+  for (const line of output.split('\n')) {
+    (/^(?:\/|[A-Za-z]:[\\/])/.test(line) && !line.includes('error TS') ? listing : diagnostics).push(line);
+  }
+  return { listing: listing.join('\n'), diagnostics: diagnostics.join('\n') };
+}
+
+// DOM-style lib files (dom, webworker, and their variants) in a file listing; any hit means the consumer program
+// is not DOM-free.
+export function domLibFiles(listing) {
+  return listing.split('\n').filter(line => /(?:^|[\\/])lib\.(?:dom|webworker)[\w.]*\.d\.ts$/.test(line.trim()));
+}
+
+// The fixture declaration each consumer entry resolves to (esm.mts -> index.d.mts, cjs.cts -> index.d.cts).
+export const fixtureDeclarations = entries => entries.map(entry => `index.d${path.extname(entry)}`);
+
 // Null when the fixture failed for both expected reasons (a dangling name, and the DOM-only Document that proves the
 // consumer is DOM-free); otherwise why the self-test cannot be trusted.
-export function selfTestVerdict(status, output) {
+export function selfTestVerdict(status, output, declarations = ['index.d.mts']) {
   if (status === 0) return 'self-test passed unexpectedly: lib checking is not active';
-  if (!output.includes('ns$1')) return `self-test failed without naming ns$1\n${output}`;
+  for (const declaration of declarations) {
+    const named = output.split('\n').some(line => line.includes(`${declaration}(`) && line.includes('ns$1'));
+    if (!named) return `self-test failed without naming ns$1 in ${declaration}\n${output}`;
+  }
   if (!/error TS2304: Cannot find name 'Document'/.test(output)) {
     return 'self-test: DOM types are present in the consumer (lib or a /// <reference lib="dom"> leaked them in); DOM leaks from our packages would pass';
   }
@@ -225,9 +234,9 @@ function selfTest(consumerDir) {
     path.join(consumerDir, 'selftest.cts'),
     `import f = require('${FIXTURE_PACKAGE}');\nvoid f;\nexport {};\n`
   );
-  for (const { name } of CONFIGS) {
+  for (const { name, entries } of CONFIGS) {
     const { status, output } = typecheck(consumerDir, `tsconfig.selftest-${name}.json`);
-    const verdict = selfTestVerdict(status, output);
+    const verdict = selfTestVerdict(status, output, fixtureDeclarations(entries));
     // The config tag goes on the headline, ahead of any tsc output that follows it.
     if (verdict) throw new Error(verdict.replace(/\n|$/, ` (${name} config)$&`));
   }
@@ -270,16 +279,30 @@ function writeEntries(consumerDir) {
   return specifiers.length;
 }
 
-function report(output) {
+function report(failed) {
+  for (const { output } of failed.filter(result => result.dom)) console.error(output);
+  const tscFailed = failed.filter(result => !result.dom);
+  const output = tscFailed.map(result => result.output).join('\n');
   const groups = groupTscErrors(output);
-  if (groups.size === 0) console.error(output);
+  if (groups.size === 0 && output.trim()) console.error(output);
   for (const [owner, blocks] of groups) {
     console.error(`\n${owner} (${blocks.size})`);
     for (const block of blocks) console.error(`  ${block.split('\n').join('\n  ')}`);
   }
-  console.error(
-    '\na published declaration references a name that does not exist; rebuild and inspect dist/*.d.{mts,cts}'
-  );
+  if (tscFailed.some(result => result.output.trim())) {
+    console.error(
+      '\na published declaration references a name that does not exist; rebuild and inspect dist/*.d.{mts,cts}'
+    );
+  }
+}
+
+// A non-zero or null (killed) status is a failure.
+export function failedResults(results) {
+  return results.filter(result => result.status !== 0);
+}
+
+export function checkExitCode(results) {
+  return failedResults(results).length ? 1 : 0;
 }
 
 function check(packages, pins, tmp) {
@@ -294,25 +317,32 @@ function check(packages, pins, tmp) {
   const entryCount = writeEntries(consumerDir);
   console.log(`self-test passed; checking ${entryCount} entry points`);
 
-  const failures = [];
+  const results = [];
   for (const { name } of CONFIGS) {
-    const { status, signal, output } = typecheck(consumerDir, `tsconfig.${name}.json`);
-    const ok = status === 0;
-    console.log(`${name}: ${ok ? 'clean' : signal ? `tsc killed by ${signal}` : 'errors'}`);
-    if (!ok) failures.push(output);
+    const result = typecheck(consumerDir, `tsconfig.${name}.json`, ['--listFiles']);
+    const { listing, diagnostics } = splitTscOutput(result.output);
+    const domFiles = domLibFiles(listing).map(file => path.basename(file));
+    const tscResult = { status: result.status, output: diagnostics };
+    results.push(tscResult);
+    if (domFiles.length > 0) {
+      const output = `${name}: DOM lib files are in the consumer program (${domFiles.join(', ')}); a published declaration or one of its dependencies references a DOM lib. Re-run with KEEP_TMP=1 and run "npx tsc -p tsconfig.${name}.json --explainFiles" in the consumer to find which.`;
+      results.push({ status: 1, output, dom: true });
+    }
+    const clean = result.status === 0 && domFiles.length === 0;
+    console.log(`${name}: ${clean ? 'clean' : result.signal ? `tsc killed by ${result.signal}` : 'errors'}`);
   }
-  if (failures.length === 0) {
+  const exitCode = checkExitCode(results);
+  if (exitCode === 0) {
     console.log('OK: every published declaration type-checks with skipLibCheck off');
-    return 0;
+  } else {
+    report(failedResults(results));
   }
-  report(failures.join('\n'));
-  return 1;
+  return exitCode;
 }
 
 function main() {
   const packages = discoverPackages();
-  const lockText = fs.readFileSync(path.join(repoRoot, 'pnpm-lock.yaml'), 'utf8');
-  const pins = ['typescript', '@types/node'].map(name => `${name}@${lockfileVersion(lockText, '.', name)}`);
+  const pins = installedPins();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'published-dts-'));
   try {
     return check(packages, pins, tmp);

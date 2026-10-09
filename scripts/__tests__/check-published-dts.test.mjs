@@ -1,12 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
+  checkExitCode,
+  discoverPackages,
+  domLibFiles,
   entryImports,
   exportSubpaths,
+  failedResults,
+  fixtureDeclarations,
   groupTscErrors,
-  lockfileVersion,
   nonTarballResolutions,
   run,
   selfTestVerdict,
+  splitTscOutput,
 } from '../check-published-dts.mjs';
 
 const dual = stem => ({
@@ -84,65 +92,6 @@ describe('groupTscErrors', () => {
 
   it('returns no groups for output without errors', () => {
     expect(groupTscErrors('').size).toBe(0);
-  });
-});
-
-describe('lockfileVersion', () => {
-  const lock = [
-    "lockfileVersion: '9.0'",
-    '',
-    'importers:',
-    '',
-    '  .:',
-    '    dependencies:',
-    '      sst:',
-    '        specifier: 4.17.1',
-    '        version: 4.17.1',
-    '    devDependencies:',
-    "      '@types/node':",
-    '        specifier: ^24.0.0',
-    '        version: 24.12.3',
-    '      vitest:',
-    '        specifier: ^4.1.11',
-    '        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(jsdom@29.1.1(canvas@3.2.1))',
-    '',
-    '  apps/client:',
-    '    devDependencies:',
-    "      '@types/node':",
-    '        specifier: ^24.0.0',
-    '        version: 24.1.0',
-    '',
-    'packages:',
-    '',
-    "  '@types/node@24.12.3':",
-    '    resolution: {integrity: sha512-x}',
-    '',
-  ].join('\n');
-
-  it('reads a plain version, quoted or not', () => {
-    expect(lockfileVersion(lock, '.', '@types/node')).toBe('24.12.3');
-    expect(lockfileVersion(lock, '.', 'sst')).toBe('4.17.1');
-  });
-
-  it('strips a parenthesised peer suffix', () => {
-    expect(lockfileVersion(lock, '.', 'vitest')).toBe('4.1.11');
-  });
-
-  it('reads the requested importer only', () => {
-    expect(lockfileVersion(lock, 'apps/client', '@types/node')).toBe('24.1.0');
-  });
-
-  it('names the dependency and importer when the entry is missing', () => {
-    expect(() => lockfileVersion(lock, '.', 'typescript')).toThrow(
-      'cannot find typescript in the "." importer of pnpm-lock.yaml'
-    );
-    expect(() => lockfileVersion(lock, 'apps/missing', 'sst')).toThrow(/"apps\/missing" importer/);
-  });
-
-  it('does not read a package entry outside the importers section', () => {
-    expect(() => lockfileVersion('packages:\n  .:\n      sst:\n        version: 1.0.0\n', '.', 'sst')).toThrow(
-      /cannot find sst/
-    );
   });
 });
 
@@ -228,7 +177,7 @@ describe('selfTestVerdict', () => {
   });
 
   it('checks the dangling name before the DOM canary', () => {
-    expect(selfTestVerdict(2, noDocument)).toBe(`self-test failed without naming ns$1\n${noDocument}`);
+    expect(selfTestVerdict(2, noDocument)).toBe(`self-test failed without naming ns$1 in index.d.mts\n${noDocument}`);
   });
 
   it('rejects a fixture that type-checks, since lib checking is then not active', () => {
@@ -237,7 +186,24 @@ describe('selfTestVerdict', () => {
 
   it('rejects a failure that does not name ns$1 and keeps the output for diagnosis', () => {
     const output = "error TS2307: Cannot find module '@bike4mind-fixture/dangling'.";
-    expect(selfTestVerdict(2, output)).toBe(`self-test failed without naming ns$1\n${output}`);
+    expect(selfTestVerdict(2, output)).toBe(`self-test failed without naming ns$1 in index.d.mts\n${output}`);
+  });
+
+  describe('nodenext, where both fixture declarations must be named', () => {
+    const declarations = ['index.d.mts', 'index.d.cts'];
+    const cts = dangling.replace('index.d.mts', 'index.d.cts');
+
+    it('is fine when the .mts and .cts entries both name ns$1', () => {
+      expect(selfTestVerdict(2, `${dangling}\n${cts}\n${noDocument}`, declarations)).toBeNull();
+    });
+
+    it('rejects output where only the .mts entry names ns$1 and the .cts entry fails for another reason', () => {
+      const ctsOther =
+        "node_modules/@bike4mind-fixture/dangling/index.d.cts(2,17): error TS2307: Cannot find module 'x'.";
+      expect(selfTestVerdict(2, `${dangling}\n${ctsOther}\n${noDocument}`, declarations)).toMatch(
+        /^self-test failed without naming ns\$1 in index\.d\.cts/
+      );
+    });
   });
 
   it('treats a killed tsc (null status) as a failure for the wrong reason', () => {
@@ -257,6 +223,114 @@ describe('entryImports', () => {
       entryImports([typed, { name: '@bike4mind/bare' }, { name: '@bike4mind/js', exports: { '.': './dist/i.js' } }])
     ).toThrow(
       'no importable export resolves a types file in: @bike4mind/bare, @bike4mind/js; its declarations would go unchecked'
+    );
+  });
+});
+
+describe('checkExitCode', () => {
+  it('is 0 when every tsc run exits 0', () => {
+    expect(checkExitCode([{ status: 0 }, { status: 0 }])).toBe(0);
+  });
+
+  it('is 1 for any non-zero status, and for a null status from a killed tsc', () => {
+    expect(checkExitCode([{ status: 0 }, { status: 2 }])).toBe(1);
+    expect(checkExitCode([{ status: null }, { status: 0 }])).toBe(1);
+  });
+});
+
+describe('failedResults', () => {
+  it('returns every result whose status is not 0, null included', () => {
+    const bad = [{ status: 2 }, { status: null }];
+    expect(failedResults([{ status: 0 }, ...bad])).toEqual(bad);
+    expect(failedResults([{ status: 0 }])).toEqual([]);
+  });
+});
+
+describe('fixtureDeclarations', () => {
+  it('maps each consumer entry to the fixture declaration it resolves to', () => {
+    expect(fixtureDeclarations(['esm.mts'])).toEqual(['index.d.mts']);
+    expect(fixtureDeclarations(['esm.mts', 'cjs.cts'])).toEqual(['index.d.mts', 'index.d.cts']);
+  });
+});
+
+describe('splitTscOutput', () => {
+  it('separates absolute-path listing lines from diagnostics', () => {
+    const out = [
+      "node_modules/@bike4mind/a/dist/index.d.mts(1,1): error TS2304: Cannot find name 'X'.",
+      '  more detail',
+      '/c/node_modules/typescript/lib/lib.es2022.d.ts',
+      'C:\\c\\lib.dom.d.ts',
+    ].join('\n');
+    const { listing, diagnostics } = splitTscOutput(out);
+    expect(listing).toBe('/c/node_modules/typescript/lib/lib.es2022.d.ts\nC:\\c\\lib.dom.d.ts');
+    expect(diagnostics).toBe(out.split('\n').slice(0, 2).join('\n'));
+  });
+});
+
+describe('domLibFiles', () => {
+  it('finds lib.dom.d.ts and lib.dom.iterable.d.ts in a file listing', () => {
+    const listing = [
+      '/c/node_modules/typescript/lib/lib.es2022.d.ts',
+      '/c/node_modules/typescript/lib/lib.dom.d.ts',
+      '/c/node_modules/typescript/lib/lib.dom.iterable.d.ts',
+    ].join('\n');
+    expect(domLibFiles(listing)).toEqual([
+      '/c/node_modules/typescript/lib/lib.dom.d.ts',
+      '/c/node_modules/typescript/lib/lib.dom.iterable.d.ts',
+    ]);
+  });
+
+  it('finds webworker and dom.asynciterable libs', () => {
+    const listing = [
+      '/c/lib/lib.webworker.d.ts',
+      '/c/lib/lib.webworker.importscripts.d.ts',
+      '/c/lib/lib.dom.asynciterable.d.ts',
+    ].join('\n');
+    expect(domLibFiles(listing)).toHaveLength(3);
+  });
+
+  it('returns nothing for a DOM-free listing', () => {
+    expect(
+      domLibFiles('/c/node_modules/typescript/lib/lib.es2022.d.ts\n/c/node_modules/@types/node/index.d.ts')
+    ).toEqual([]);
+  });
+});
+
+describe('discoverPackages', () => {
+  const common = { manifest: { name: '@bike4mind/common', version: '1.0.0' }, built: true };
+  const roots = {};
+
+  function makeRoot(packages) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'discover-packages-'));
+    for (const [dir, { manifest, built }] of Object.entries(packages)) {
+      fs.mkdirSync(path.join(root, 'b4m-core', dir), { recursive: true });
+      fs.writeFileSync(path.join(root, 'b4m-core', dir, 'package.json'), JSON.stringify(manifest));
+      if (built) fs.mkdirSync(path.join(root, 'b4m-core', dir, 'dist'));
+    }
+    return root;
+  }
+
+  beforeAll(() => {
+    roots.ok = makeRoot({
+      common,
+      internal: { manifest: { name: '@bike4mind/internal', version: '1.0.0', private: true }, built: false },
+    });
+    roots.unbuilt = makeRoot({
+      common,
+      utils: { manifest: { name: '@bike4mind/utils', version: '1.0.0' }, built: false },
+      agents: { manifest: { name: '@bike4mind/agents', version: '1.0.0' }, built: false },
+    });
+  });
+
+  afterAll(() => Object.values(roots).forEach(root => fs.rmSync(root, { recursive: true, force: true })));
+
+  it('skips private manifests and returns the built published ones', () => {
+    expect(discoverPackages(roots.ok).map(pkg => pkg.packageName)).toEqual(['@bike4mind/common']);
+  });
+
+  it('names every published package that has no dist', () => {
+    expect(() => discoverPackages(roots.unbuilt)).toThrow(
+      'no dist/ in b4m-core/{agents,utils}; run pnpm turbo:core:build first'
     );
   });
 });

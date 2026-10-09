@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readJobCondition, readJobs } from './ciWorkflowText';
+import { readDefaultSpecs, readJobCondition, readJobs, readNeeds, readSteps } from './ciWorkflowText';
 
 /**
  * Guard on ci.yml's `published-dts` job and the changes-filter wiring that triggers it.
@@ -26,30 +26,6 @@ import { readJobCondition, readJobs } from './ciWorkflowText';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const CI_WORKFLOW = path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml');
 const CHANGES_FILTER = path.join(REPO_ROOT, '.github', 'actions', 'changes-filter', 'action.yml');
-
-/** A job's `needs:` as a list, from the inline (`needs: a` / `needs: [a, b]`) or block-list form. */
-function readNeeds(body: string): string[] {
-  const lines = body.split('\n');
-  const start = lines.findIndex(line => /^ {4}needs:/.test(line));
-  if (start === -1) return [];
-
-  const inline = lines[start].replace(/^ {4}needs:\s*/, '').trim();
-  if (inline !== '') {
-    return inline
-      .replace(/[[\]]/g, '')
-      .split(',')
-      .map(name => name.trim())
-      .filter(Boolean);
-  }
-
-  const listed: string[] = [];
-  for (const line of lines.slice(start + 1)) {
-    const item = /^ {6}-\s+(\S+)\s*$/.exec(line);
-    if (!item) break;
-    listed.push(item[1]);
-  }
-  return listed;
-}
 
 /** The env var `ci-complete` maps `needs.published-dts.result` to, if it maps it at all. */
 function readResultEnvVar(body: string): string | undefined {
@@ -93,15 +69,6 @@ function readActionEntry(action: string, section: 'inputs' | 'outputs', key: str
   return `${entryLines.join('\n')}\n`;
 }
 
-/** An input's default pathspecs, one per line, with any leading `:(magic)` stripped. */
-function readDefaultSpecs(entry: string): string[] {
-  const block = /^ {4}default: \|\n((?: {6}.*\n)+)/m.exec(entry)?.[1] ?? '';
-  return block
-    .split('\n')
-    .map(line => line.trim().replace(/^:\([^)]*\)/, ''))
-    .filter(Boolean);
-}
-
 const ci = fs.readFileSync(CI_WORKFLOW, 'utf8');
 const action = fs.readFileSync(CHANGES_FILTER, 'utf8');
 const jobs = readJobs(ci);
@@ -131,7 +98,16 @@ describe('published-dts job in ci.yml', () => {
   });
 
   it('gates on published-changed', () => {
-    expect(readJobCondition(body)).toContain("needs.changes.outputs.published-changed == 'true'");
+    expect(readJobCondition(body)).toBe("needs.changes.outputs.published-changed == 'true'");
+  });
+
+  // A swallowed failure would leave the job green, so neither the job nor the check step may set it.
+  it('does not continue on error', () => {
+    const checkStep = readSteps(body).find(step => runsCheck(step));
+    expect(checkStep, 'published-dts has no check step').toBeDefined();
+    const jobLevel = body.split(/^ {4}steps:/m)[0];
+    expect(jobLevel).not.toMatch(/continue-on-error:/);
+    expect(checkStep).not.toMatch(/continue-on-error:/);
   });
 
   it('is aggregated into the required ci-complete check', () => {
@@ -161,12 +137,14 @@ describe('changes-filter published-paths', () => {
 
   // published-dts is the only job that runs the script and fixture, so listing b4m-core alone
   // would let a change to the check skip the check; the lockfile decides what gets installed.
-  it('covers b4m-core, the lockfile and the check itself', () => {
+  it('covers b4m-core, the lockfile, the check itself and the CI wiring', () => {
     const specs = readDefaultSpecs(input ?? '');
     expect(specs).toContain('b4m-core/**');
     expect(specs).toContain('pnpm-lock.yaml');
     expect(specs).toContain('scripts/check-published-dts.mjs');
     expect(specs).toContain('scripts/fixtures/dangling-dts/**');
+    expect(specs).toContain('.github/workflows/ci.yml');
+    expect(specs).toContain('.github/actions/changes-filter/**');
   });
 
   it('declares the published-changed output, bound to the filter step', () => {

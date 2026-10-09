@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readJobCondition, readJobs } from './ciWorkflowText';
+import { readDefaultSpecs, readJobCondition, readJobs, readNeeds, readSteps } from './ciWorkflowText';
 
 /**
  * Guard on ci.yml's `help-docs` job and the artifact fallback that makes it work.
@@ -39,24 +39,6 @@ const CHANGES_FILTER = path.join(REPO_ROOT, '.github', 'actions', 'changes-filte
 
 /** The artifact name every consumer of the core build downloads by. */
 const CORE_ARTIFACT = 'core-build-${{ needs.core-build.outputs.core-content-hash }}';
-
-/** A job's steps, each as source text, split on the `- ` list markers under `steps:`. */
-function readSteps(body: string): string[] {
-  const lines = body.split('\n');
-  const start = lines.findIndex(line => /^ {4}steps:\s*$/.test(line));
-  if (start === -1) return [];
-
-  const steps: string[] = [];
-  for (const line of lines.slice(start + 1)) {
-    if (line.trim() !== '' && !/^ {6}/.test(line)) break;
-    if (/^ {6}- /.test(line)) {
-      steps.push(`${line}\n`);
-    } else if (steps.length > 0) {
-      steps[steps.length - 1] += `${line}\n`;
-    }
-  }
-  return steps;
-}
 
 /**
  * Whether a job `if` lifts the implicit `success()` that GitHub otherwise applies to `needs`.
@@ -118,7 +100,7 @@ describe('help-docs job in ci.yml', () => {
   });
 
   it('needs both the changes gate and core-build', () => {
-    const needs = /^ {4}needs:\s*(.+)$/m.exec(helpDocs?.body ?? '')?.[1] ?? '';
+    const needs = readNeeds(helpDocs?.body ?? '');
     expect(needs).toContain('changes');
     expect(needs).toContain('core-build');
   });
@@ -127,7 +109,7 @@ describe('help-docs job in ci.yml', () => {
   // only required check, so dropping help-docs from its `needs` silently un-gates the guards.
   it('is aggregated into the required ci-complete check', () => {
     const ciComplete = jobs.find(job => job.name === 'ci-complete');
-    expect(/^ {4}needs:\s*(.+)$/m.exec(ciComplete?.body ?? '')?.[1] ?? '').toContain('help-docs');
+    expect(readNeeds(ciComplete?.body ?? '')).toContain('help-docs');
     expect(ciComplete?.body).toContain('needs.help-docs.result');
   });
 
@@ -189,16 +171,15 @@ describe('jobs that tolerate a skipped core-build', () => {
 
 describe('changes-filter docs-paths', () => {
   const action = fs.readFileSync(CHANGES_FILTER, 'utf8');
-  const defaultBlock =
-    /^ {4}default: \|\n((?: {6}.*\n)+)/m.exec(action.slice(action.indexOf('docs-paths:')))?.[1] ?? '';
+  const specs = readDefaultSpecs(action.slice(action.indexOf('docs-paths:')));
 
   // The trigger half of the same wiring: help-docs is the only job that runs
   // packages/scripts/help/**, so dropping it from the pathspec list lets a change to those
   // scripts skip the guard that covers it - which is how the resolve error this job now
   // fixes first reached main.
   it('covers the help tooling as well as the docs corpus', () => {
-    expect(defaultBlock).toContain('docs-site/**');
-    expect(defaultBlock).toContain('packages/scripts/help/**');
+    expect(specs).toContain('docs-site/**');
+    expect(specs).toContain('packages/scripts/help/**');
   });
 });
 

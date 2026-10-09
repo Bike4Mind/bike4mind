@@ -14,11 +14,11 @@ docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
 
 ## Outputs
 
-| Output | Meaning |
-|---|---|
-| `deployable` | `'true'` to run test + deploy, `'false'` to skip. Fails **open** (`true`) when the diff range can't be resolved. |
-| `docs-changed` | `'true'` when the changeset touches `docs-site/` or the help tooling in `packages/scripts/help/`. Fails **open** (`true`) on an unresolved range. Gates the `help-docs` job. |
-| `published-changed` | `'true'` when the changeset touches b4m-core, the lockfile or the check and its fixture. Fails **open** (`true`) on an unresolved range. Gates the `published-dts` job. |
+| Output              | Meaning                                                                                                                                                                      |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deployable`        | `'true'` to run test + deploy, `'false'` to skip. Fails **open** (`true`) when the diff range can't be resolved.                                                             |
+| `docs-changed`      | `'true'` when the changeset touches `docs-site/` or the help tooling in `packages/scripts/help/`. Fails **open** (`true`) on an unresolved range. Gates the `help-docs` job. |
+| `published-changed` | `'true'` when the changeset touches b4m-core, the lockfile or the check and its fixture. Fails **open** (`true`) on an unresolved range. Gates the `published-dts` job.      |
 
 `deployable` and `docs-changed` are orthogonal: a docs-only PR is
 `deployable=false, docs-changed=true`; a code+docs PR is `true, true`; a
@@ -28,7 +28,7 @@ third, independent signal.
 ## Why this and not `paths-ignore` / a marketplace action
 
 - **Per-PR, not per-push.** GitHub `paths-ignore` (and `dorny/paths-filter`'s PR
-  mode) match the *whole PR diff vs base*; a workflow-level `paths-ignore` also
+  mode) match the _whole PR diff vs base_; a workflow-level `paths-ignore` also
   skips the entire workflow, so a required `CI Complete`/`Run Tests` context never
   reports and the PR hangs. Here the `changes` gate job always runs and downstream
   jobs skip via `if:`, which branch protection counts as passing.
@@ -106,11 +106,11 @@ is what turns that into a local build instead of a red leg. That pairing is enfo
 
 ## Inputs
 
-| Input | Default | Notes |
-|---|---|---|
-| `exclude-paths` | curated docs/config list | Newline-separated **git pathspecs**. If every changed file matches one, `deployable=false`. Blank lines and `#` comments ignored. |
-| `docs-paths` | `docs-site/**`, `packages/scripts/help/**` | INCLUDE-form pathspecs defining the docs site for `docs-changed`. Includes the help tooling, so a change to those scripts runs the `help-docs` guard that covers them. |
-| `published-paths` | `b4m-core/**`, `pnpm-lock.yaml`, `scripts/check-published-dts.mjs`, `scripts/fixtures/dangling-dts/**` | INCLUDE-form pathspecs the published declaration check covers, for `published-changed`. |
+| Input             | Default                                                                                                                                                                 | Notes                                                                                                                                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exclude-paths`   | curated docs/config list                                                                                                                                                | Newline-separated **git pathspecs**. If every changed file matches one, `deployable=false`. Blank lines and `#` comments ignored.                                      |
+| `docs-paths`      | `docs-site/**`, `packages/scripts/help/**`                                                                                                                              | INCLUDE-form pathspecs defining the docs site for `docs-changed`. Includes the help tooling, so a change to those scripts runs the `help-docs` guard that covers them. |
+| `published-paths` | `b4m-core/**`, `pnpm-lock.yaml`, `scripts/check-published-dts.mjs`, `scripts/fixtures/dangling-dts/**`, `.github/workflows/ci.yml`, `.github/actions/changes-filter/**` | INCLUDE-form pathspecs the published declaration check covers, for `published-changed`.                                                                                |
 
 ## Gotchas baked into the default list
 
@@ -132,7 +132,7 @@ Every uncertain state resolves to "deploy + build docs + check published declara
 look identical to a skip to the downstream `if:` checks, so failing open trades one
 unnecessary deploy for never silently dropping one.
 
-That posture only holds for a *one-off* unresolved range. An event with no arm in the
+That posture only holds for a _one-off_ unresolved range. An event with no arm in the
 action's `case "$EVENT_NAME"` block fails open on **every** run of that trigger, and
 the run looks entirely normal - nothing errors, some extra jobs just run. That is what
 `merge_group` did before it was handled: the merge queue evaluated

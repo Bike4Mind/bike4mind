@@ -1029,6 +1029,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-published-dts-
 
+      # The consumer installs third-party deps at their newest in-range versions, so an upstream type break can fail
+      # this job. That is intended: real consumers resolve the same versions.
       - name: Check published declarations
         run: node scripts/check-published-dts.mjs
 
