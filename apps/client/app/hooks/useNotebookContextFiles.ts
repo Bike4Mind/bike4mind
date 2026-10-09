@@ -102,7 +102,7 @@ export function useNotebookContextFiles() {
       // persist() cannot write a client-generated id, and migrateSession does not carry the
       // tmp workbench bucket to the real id - so an add now would report success, then vanish.
       if (isOptimisticId(sid)) {
-        toast.info('Wait for this notebook to finish saving, then attach the file.');
+        toast.info('This notebook is still saving, so the file was not pinned to it. Pin it once saving finishes.');
         return false;
       }
       // Already present: a no-op, and the caller must not report success for it.
