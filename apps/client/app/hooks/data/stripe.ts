@@ -10,8 +10,10 @@ export function useStripePortal() {
   return useMutation({
     mutationFn: async ({ ownerType, ownerId }: { ownerType: SubscriptionOwnerType; ownerId: string }) => {
       // Use origin (root path) so CloudFront can serve the SPA's index.html on return.
-      // Callers must store '__stripe_return' in sessionStorage in their mutate onSuccess so the
-      // router can restore the intended destination after Stripe redirects back.
+      // Callers must store '__stripe_return' in sessionStorage before the page navigates away so the
+      // router can restore the intended destination after Stripe redirects back. The user hook stores
+      // it in its mutate onSuccess (no orphaned key on failure); the org billing caller stores it
+      // before mutate.
       const response = await api.post<{ url: string }>('/api/stripe/portal', {
         callbackUrl: window.location.origin,
         ownerType,
