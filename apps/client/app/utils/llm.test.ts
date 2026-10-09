@@ -94,7 +94,10 @@ describe('appendReplyToLatestOptimisticBubble creditsUsed (live chip)', () => {
 
 describe('swapOptimisticPromptBubbleId', () => {
   it('renames the optimistic bubble to the real id when no collision exists', () => {
-    const optimistic = makeQuest({ id: 'optimistic-quest-sess_abc-12345', prompt: 'do the thing' });
+    const optimistic = {
+      ...makeQuest({ id: 'optimistic-quest-sess_abc-12345', prompt: 'do the thing' }),
+      _optimistic: true,
+    };
     const qc = seedQueryClient([optimistic]);
 
     swapOptimisticPromptBubbleId(qc, sessionId, 'real_quest_id');
@@ -103,6 +106,7 @@ describe('swapOptimisticPromptBubbleId', () => {
     expect(quests).toHaveLength(1);
     expect(quests[0].id).toBe('real_quest_id');
     expect(quests[0].prompt).toBe('do the thing');
+    expect(quests[0]).toMatchObject({ _optimistic: true });
   });
 
   it('drops the optimistic bubble when the real id is already present (change-stream race)', () => {

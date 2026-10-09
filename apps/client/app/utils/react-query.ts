@@ -120,7 +120,12 @@ const updateAllQueryDataAsync = <
  * timestamp recalculation.
  */
 export const updateSingleQueryDataFast = <
-  T extends { id: string; updatedAt?: Date | string | number; lastUpdated?: Date | string | number },
+  T extends {
+    id: string;
+    updatedAt?: Date | string | number;
+    lastUpdated?: Date | string | number;
+    _optimistic?: boolean;
+  },
 >(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
@@ -135,6 +140,18 @@ export const updateSingleQueryDataFast = <
   const getTs = (obj: any): number | null => {
     const v = obj?.updatedAt ?? obj?.lastUpdated;
     return v ? new Date(v).getTime() : null;
+  };
+
+  const shouldApplyUpdate = (existing: T, existingUpdatedAt: number | null, newUpdatedAt: number | null) =>
+    (existing._optimistic && !data._optimistic) ||
+    !existingUpdatedAt ||
+    !newUpdatedAt ||
+    newUpdatedAt >= existingUpdatedAt;
+
+  const mergeUpdate = (existing: T): T => {
+    const merged = { ...existing, ...data };
+    if (!data._optimistic) delete merged._optimistic;
+    return merged;
   };
 
   queryClient.setQueryData<InfiniteData<{ data: T[] }, { page: number }> | T[] | T | PaginatedResponse<T>>(
@@ -169,9 +186,9 @@ export const updateSingleQueryDataFast = <
               const existingItem = page.data[itemIndex];
               const existingUpdatedAt = getTs(existingItem);
 
-              if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
+              if (shouldApplyUpdate(existingItem, existingUpdatedAt, newUpdatedAt)) {
                 const updatedData = [...page.data];
-                updatedData[itemIndex] = { ...existingItem, ...data, cachedUpdate: cacheTime } as any;
+                updatedData[itemIndex] = { ...mergeUpdate(existingItem), cachedUpdate: cacheTime } as any;
                 return { ...page, data: updatedData };
               }
             }
@@ -207,8 +224,8 @@ export const updateSingleQueryDataFast = <
             const existingItem = currentData.data[itemIndex];
             const existingUpdatedAt = getTs(existingItem);
 
-            if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
-              updatedData[itemIndex] = { ...existingItem, ...data, cachedUpdate: cacheTime } as any;
+            if (shouldApplyUpdate(existingItem, existingUpdatedAt, newUpdatedAt)) {
+              updatedData[itemIndex] = { ...mergeUpdate(existingItem), cachedUpdate: cacheTime } as any;
             }
           } else if (allowCreate) {
             updatedData = [{ ...data, cachedUpdate: cacheTime } as any, ...currentData.data];
@@ -230,8 +247,8 @@ export const updateSingleQueryDataFast = <
             const existingItem = currentData[itemIndex];
             const existingUpdatedAt = getTs(existingItem);
 
-            if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
-              updatedData[itemIndex] = { ...existingItem, ...data } as any;
+            if (shouldApplyUpdate(existingItem, existingUpdatedAt, newUpdatedAt)) {
+              updatedData[itemIndex] = mergeUpdate(existingItem);
             }
           } else if (allowCreate) {
             updatedData = [data, ...currentData];
@@ -241,8 +258,8 @@ export const updateSingleQueryDataFast = <
       } else if ((currentData as any).id === (data as any).id) {
         const existingUpdatedAt = getTs(currentData as any);
 
-        if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
-          return { ...(currentData as any), ...(data as any) };
+        if (shouldApplyUpdate(currentData as T, existingUpdatedAt, newUpdatedAt)) {
+          return mergeUpdate(currentData as T);
         }
       }
 
@@ -521,7 +538,12 @@ export const setOptimisticQueryData = async <T extends { id: string }>(
 
 // Replace optimistic temp data with the real data (including the new id).
 export const replaceQueryData = async <
-  T extends { id: string; updatedAt?: Date | string | number; lastUpdated?: Date | string | number },
+  T extends {
+    id: string;
+    updatedAt?: Date | string | number;
+    lastUpdated?: Date | string | number;
+    _optimistic?: boolean;
+  },
 >(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
@@ -541,7 +563,9 @@ export const replaceQueryData = async <
         if (itemIndex >= 0) {
           const existing = page.data.find(item => item.id === replaceId);
           const updatedData = [...page.data];
-          updatedData[itemIndex] = { ...existing, ...data, id: data.id }; // Make sure id is changed
+          const updatedItem = { ...existing, ...data, id: data.id };
+          if (!data._optimistic) delete updatedItem._optimistic;
+          updatedData[itemIndex] = updatedItem;
           return { ...page, data: uniqBy(updatedData, 'id') };
         }
         return page;

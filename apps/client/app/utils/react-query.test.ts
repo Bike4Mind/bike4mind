@@ -1,5 +1,66 @@
 import { describe, it, expect } from 'vitest';
-import { stableSubscriptionKey } from './react-query';
+import { QueryClient } from '@tanstack/react-query';
+import { stableSubscriptionKey, updateSingleQueryDataFast } from './react-query';
+
+type CacheItem = {
+  id: string;
+  updatedAt: Date;
+  value: string;
+  _optimistic?: boolean;
+};
+
+const queryKey = ['items'];
+const options = { keysAllowedToCreate: [] };
+
+describe('updateSingleQueryDataFast', () => {
+  it('replaces an optimistic infinite-query item with an older authoritative document', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKey, {
+      pages: [
+        {
+          data: [
+            {
+              id: 'item-1',
+              updatedAt: new Date('2030-01-01'),
+              value: 'client placeholder',
+              _optimistic: true,
+            },
+          ],
+        },
+      ],
+      pageParams: [{ page: 1 }],
+    });
+
+    updateSingleQueryDataFast(
+      queryClient,
+      queryKey,
+      'write',
+      { id: 'item-1', updatedAt: new Date('2025-01-01'), value: 'server value' },
+      options
+    );
+
+    const result = queryClient.getQueryData<{ pages: Array<{ data: CacheItem[] }> }>(queryKey);
+    expect(result?.pages[0].data[0]).toMatchObject({ value: 'server value' });
+    expect(result?.pages[0].data[0]).not.toHaveProperty('_optimistic');
+  });
+
+  it('keeps the newer document when both cache entries are authoritative', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<CacheItem[]>(queryKey, [
+      { id: 'item-1', updatedAt: new Date('2030-01-01'), value: 'newer server value' },
+    ]);
+
+    updateSingleQueryDataFast(
+      queryClient,
+      queryKey,
+      'write',
+      { id: 'item-1', updatedAt: new Date('2025-01-01'), value: 'stale server value' },
+      options
+    );
+
+    expect(queryClient.getQueryData<CacheItem[]>(queryKey)?.[0].value).toBe('newer server value');
+  });
+});
 
 describe('stableSubscriptionKey', () => {
   it('produces identical keys for distinct-but-equal query objects', () => {

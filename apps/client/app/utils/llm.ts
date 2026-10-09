@@ -73,7 +73,7 @@ export function createOptimisticPromptBubble(
   // survives until the real Quest replaces the bubble.
   routingSource?: IChatHistoryItemDocument['routingSource']
 ) {
-  const optimisticQuest: IChatHistoryItemDocument = {
+  const optimisticQuest: IChatHistoryItemDocument & { _optimistic: true } = {
     id: `optimistic-quest-${sessionId}-${Date.now()}`,
     sessionId,
     type: 'message',
@@ -84,6 +84,7 @@ export function createOptimisticPromptBubble(
     timestamp: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),
+    _optimistic: true,
     ...(routingSource ? { routingSource } : {}),
   };
   setOptimisticQueryData(queryClient, ['quests', 'session', sessionId], optimisticQuest);
@@ -206,7 +207,10 @@ export function appendReplyToLatestOptimisticBubble(
  * exact same id/shape; the later createOptimisticQuest then replaces it in place instead
  * of creating a duplicate.
  */
-export function buildOptimisticQuest(sessionId: string, prompt: string): IChatHistoryItemDocument {
+export function buildOptimisticQuest(
+  sessionId: string,
+  prompt: string
+): IChatHistoryItemDocument & { _optimistic: true } {
   return {
     id: `optimistic-quest-${sessionId}`,
     sessionId,
@@ -218,6 +222,7 @@ export function buildOptimisticQuest(sessionId: string, prompt: string): IChatHi
     timestamp: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),
+    _optimistic: true,
   };
 }
 
