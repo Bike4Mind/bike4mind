@@ -24,7 +24,8 @@ const handler = baseApi().post(
     }
     // fileSize is validated by the schema for fail-fast UX; the authoritative
     // size check is S3's content-length-range policy condition.
-    return res.json(await createTranscribeUpload({ userId: req.user.id, mimeType: parsed.data.mimeType }));
+    const { mimeType, fileSize } = parsed.data;
+    return res.json(await createTranscribeUpload({ userId: req.user.id, mimeType, fileSize }));
   })
 );
 

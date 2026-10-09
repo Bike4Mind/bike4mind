@@ -9,22 +9,21 @@ import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
 import { BadRequestError } from '@server/utils/errors';
 import { MIME_TO_EXTENSION, TRANSCRIBE_UPLOAD_PREFIX } from '@server/utils/transcribeConstants';
+import {
+  assertTranscriptionCredits,
+  estimateTranscriptionCost,
+  MIN_TRANSCRIPTION_USD_PER_MINUTE,
+  transcriptionUsdPerMinute,
+} from '@server/utils/transcriptionCost';
 import { speechToTextService, creditService } from '@bike4mind/services';
 import { Resource } from 'sst';
-import { usdToCredits } from '@bike4mind/utils';
 import { type ILogger } from '@bike4mind/observability';
 import { CreditHolderType } from '@bike4mind/common';
 import { userRepository, creditTransactionRepository, usageEventRepository } from '@bike4mind/database';
 import { v4 as uuidv4 } from 'uuid';
 
 export type TranscribeRejection =
-  | 'user_not_found'
-  | 'insufficient_credits'
-  | 'invalid_key'
-  | 'not_found'
-  | 'unsupported_type'
-  | 'size_out_of_range'
-  | 'not_configured';
+  'insufficient_credits' | 'invalid_key' | 'not_found' | 'unsupported_type' | 'size_out_of_range' | 'not_configured';
 
 export class TranscribeRequestError extends BadRequestError {
   constructor(
@@ -37,24 +36,16 @@ export class TranscribeRequestError extends BadRequestError {
 
 export const PRESIGNED_POST_EXPIRY_SECONDS = 300; // 5 minutes
 
-// File size is used as a proxy for duration since the actual duration is not
-// available pre-transcription. PCM baseline (16-bit 16kHz mono) is multiplied
-// by COMPRESSION_FACTOR as a conservative factor to account for compressed
-// formats (MP3, OGG, WebM) that can be 10-20x smaller than PCM for the same
-// duration. This intentionally over-charges slightly to avoid free usage.
-const COMPRESSION_FACTOR = 5;
-const PCM_BYTES_PER_MINUTE = 16000 * 2 * 60;
-const AWS_USD_PER_MINUTE = 0.024;
-const OPENAI_USD_PER_MINUTE = 0.006;
-
 const s3Client = new S3Client();
 const bucketName = Resource.appFilesBucket.name;
 
-async function assertCanPay(userId: string): Promise<void> {
-  const user = await userRepository.findById(userId);
-  if (!user) throw new TranscribeRequestError('user_not_found', 'User not found');
-  if ((user.currentCredits ?? 0) <= 0) {
-    throw new TranscribeRequestError('insufficient_credits', 'Insufficient credits for transcription');
+// assertTranscriptionCredits throws BadRequestError only for a caller who cannot pay (or does not exist).
+async function assertCanPay(userId: string, estimatedCredits: number): Promise<void> {
+  try {
+    await assertTranscriptionCredits(userId, estimatedCredits);
+  } catch (err) {
+    if (err instanceof BadRequestError) throw new TranscribeRequestError('insufficient_credits', err.message);
+    throw err;
   }
 }
 
@@ -62,14 +53,18 @@ async function assertCanPay(userId: string): Promise<void> {
 export async function createTranscribeUpload({
   userId,
   mimeType,
+  fileSize,
 }: {
   userId: string;
   mimeType: speechToTextService.AllowedAudioMimeType;
+  fileSize: number;
 }): Promise<{ url: string; fields: Record<string, string>; fileKey: string }> {
   // Credit precheck so we don't issue an upload URL for users who can't pay.
-  // The transcribe endpoint re-checks credits at consumption time - this is
-  // a fail-fast UX guard, not the authoritative check.
-  await assertCanPay(userId);
+  // The transcribe endpoint re-checks credits at consumption time against the
+  // S3-attested size and the resolved backend - this is a fail-fast UX guard
+  // on the client-declared size, priced at the cheapest backend so it never
+  // refuses what that check admits.
+  await assertCanPay(userId, estimateTranscriptionCost(fileSize, MIN_TRANSCRIPTION_USD_PER_MINUTE).credits);
 
   const fileKey = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/${uuidv4()}.${MIME_TO_EXTENSION[mimeType]}`;
 
@@ -147,7 +142,8 @@ export async function transcribeUpload({
       );
     }
 
-    await assertCanPay(userId);
+    const cost = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(speechModelInfo.backend));
+    await assertCanPay(userId, cost.credits);
 
     const apiKey = await getEffectiveApiKeyByBackend(userId || 'system', speechModelInfo.backend);
     if (!apiKey && speechModelInfo.backend !== 'aws') {
@@ -197,10 +193,10 @@ interface DeductArgs {
 }
 
 async function deductTranscriptionCredits({ userId, backend, contentLength, logger }: DeductArgs): Promise<void> {
-  const durationMinutes = (contentLength * COMPRESSION_FACTOR) / PCM_BYTES_PER_MINUTE;
-  const usdPerMinute = backend === 'aws' ? AWS_USD_PER_MINUTE : OPENAI_USD_PER_MINUTE;
-  const costUsd = durationMinutes * usdPerMinute;
-  const credits = usdToCredits(costUsd);
+  const { durationMinutes, costUsd, credits } = estimateTranscriptionCost(
+    contentLength,
+    transcriptionUsdPerMinute(backend)
+  );
   if (credits <= 0) return;
 
   const sessionId = `transcribe-${userId}-${Date.now()}`;

@@ -23,6 +23,11 @@ export interface OpenAIGPTImageInput extends BaseOpenAIInput {
   model: OpenAIModel;
   quality?: OpenAIImageQuality;
   size?: GPTImage1Size | (string & {}) | null;
+  /**
+   * Images sent to OpenAI alongside the prompt (references, plus the primary on edits).
+   * Billed once per request, not per output image - see getInputImageCost.
+   */
+  inputImageCount?: number;
 }
 
 export type OpenAICostInput = OpenAIGPTImageInput;
@@ -147,6 +152,27 @@ const PRICE_TABLES: Partial<Record<ImageModels, Partial<Record<ExtendedPriceKey,
   [ImageModels.GPT_IMAGE_2_5_FLARE]: GPT_IMAGE_2_5_PRICES,
 };
 
+// Worst-case input tokens per image, from OpenAI's GPT Image input formula: 65 base + 129 per
+// 512px tile, at most 4 tiles (581). High fidelity adds up to 6240 for a non-square image.
+// gpt-image-2 always runs inputs at high fidelity; 2.5 is undocumented, so assumed high. We
+// never send input_fidelity, so the older models use the 'low' default.
+const LOW_FIDELITY_MAX_INPUT_TOKENS = 581;
+const HIGH_FIDELITY_MAX_INPUT_TOKENS = 6240 + LOW_FIDELITY_MAX_INPUT_TOKENS;
+const inputImageUsd = (tokens: number, usdPerMillion: number) => (tokens * usdPerMillion) / 1_000_000;
+
+// ponytail: fixed worst case per image, because the credit hold runs before the input images
+// are fetched and FabFile stores no dimensions; price real dimensions once it does.
+const INPUT_IMAGE_USD: Partial<Record<ImageModels, number>> = {
+  [ImageModels.GPT_IMAGE_1]: inputImageUsd(LOW_FIDELITY_MAX_INPUT_TOKENS, 10),
+  [ImageModels.GPT_IMAGE_1_5]: inputImageUsd(LOW_FIDELITY_MAX_INPUT_TOKENS, 8),
+  [ImageModels.GPT_IMAGE_1_MINI]: inputImageUsd(LOW_FIDELITY_MAX_INPUT_TOKENS, 2.5),
+  [ImageModels.GPT_IMAGE_2]: inputImageUsd(HIGH_FIDELITY_MAX_INPUT_TOKENS, 8),
+  [ImageModels.GPT_IMAGE_2_5_SUNBURST]: inputImageUsd(HIGH_FIDELITY_MAX_INPUT_TOKENS, 8),
+  [ImageModels.GPT_IMAGE_2_5_FLARE]: inputImageUsd(HIGH_FIDELITY_MAX_INPUT_TOKENS, 8),
+};
+// A GPT model missing from the table is billed at the highest rate: under-billing is unrecoverable.
+const MAX_INPUT_IMAGE_USD = Math.max(...Object.values(INPUT_IMAGE_USD));
+
 /**
  * Normalize versioned model IDs to their base model for pricing lookup.
  * 'gpt-image-2-2026-04-21' -> GPT_IMAGE_2, 'gpt-image-2.5-flare-2026-09-08' -> GPT_IMAGE_2_5_FLARE, etc.
@@ -233,5 +259,18 @@ export class OpenAIImageCostCalculator implements CostCalculator<OpenAICostInput
       throw new Error(`No ${tier} price for ${input.model} at ${size}`);
     }
     return price;
+  }
+
+  /**
+   * USD for the input images of one request, independent of tier, size and n: OpenAI bills
+   * the inputs once however many images it renders, so callers add this outside the `* n`.
+   * A missing or negative count is 0, never a throw (same leniency as normalizeInput).
+   */
+  getInputImageCost(input: OpenAICostInput): number {
+    const count = Math.max(0, Math.floor(input.inputImageCount ?? 0));
+    if (!count) return 0;
+    const normalizedModel = normalizeModelId(input.model as string);
+    const perImage = (normalizedModel && INPUT_IMAGE_USD[normalizedModel]) ?? MAX_INPUT_IMAGE_USD;
+    return count * perImage;
   }
 }

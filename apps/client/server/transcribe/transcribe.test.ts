@@ -26,8 +26,12 @@ vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
   getEffectiveApiKeyByBackend: async () => 'sk-test',
 }));
+vi.mock('@server/utils/creditPreflight', () => ({
+  assertPreflightCredits: async () => undefined,
+  InsufficientCreditsPreflightError: class extends Error {},
+}));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: async () => ({ id: 'u1', currentCredits: 10 }) },
+  userRepository: {},
   creditTransactionRepository: {},
   usageEventRepository: { record: vi.fn() },
 }));

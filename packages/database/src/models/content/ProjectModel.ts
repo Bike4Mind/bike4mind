@@ -3,7 +3,12 @@ import { IProject, IProjectDocument, IProjectMethods, IProjectRepository, IUserD
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { ShareableDocumentSchema, ShareableDocumentRepository, updateAccessArms } from './SharableDocumentModel';
+import {
+  ShareableDocumentSchema,
+  ShareableDocumentRepository,
+  readAccessArms,
+  updateAccessArms,
+} from './SharableDocumentModel';
 
 const ModelName = 'Project';
 
@@ -104,6 +109,29 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     };
   }
 
+  async listAccessibleAfterId(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    { afterId, limit }: { afterId?: string; limit: number }
+  ) {
+    // readAccessArms, not searchAccessible's CASL scope: that scope also reaches other owners'
+    // isGlobalRead projects, which shareable.findAccessibleById (the by-id read) does not.
+    const conditions: Record<string, unknown> = { $or: readAccessArms(user), deletedAt: null };
+
+    if (afterId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(afterId)) throw new Error(`Invalid project cursor id: ${afterId}`);
+      conditions._id = { $gt: convertId(afterId) };
+    }
+
+    const result = await this.projectModel
+      .find(conditions)
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit).map(doc => doc.toJSON()), hasMore };
+  }
+
   async findAllBySessionId(sessionId: string) {
     return this.projectModel.find({ sessionIds: { $in: [sessionId] } });
   }
@@ -149,6 +177,9 @@ ProjectSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
 // /api/gears/status poll (Mongo can only index-union an $or when EVERY clause
 // is indexed).
 ProjectSchema.index({ 'users.userId': 1 });
+
+// Group-share arm of the same $or; the v1 list walks _id order and needs every arm indexed.
+ProjectSchema.index({ 'groups.groupId': 1 });
 
 // Unique constraint on project name per user (excluding soft-deleted projects).
 // Keyed on `deletedAt: null` (not `$exists: false`, which Mongo rejects in a

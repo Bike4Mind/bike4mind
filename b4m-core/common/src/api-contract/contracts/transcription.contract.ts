@@ -21,7 +21,8 @@ import {
 const FORBIDDEN = { description: 'The API key lacks `ai:generate`.', schema: ScopeForbiddenErrorSchema };
 const RATE_LIMITED = { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema };
 const NO_CREDITS =
-  'Request body failed validation, or the caller has no credits left (`errorCode: "insufficient_credits"`).';
+  'Request body failed validation, or the balance cannot cover the estimated cost of transcribing `file_size` ' +
+  'bytes (`errorCode: "insufficient_credits"`).';
 
 const UPLOAD_EXAMPLE = { mime_type: 'audio/mpeg', file_size: 482133 };
 
@@ -94,8 +95,8 @@ export const createTranscriptionContract = defineEndpoint({
     },
     422: {
       description:
-        'Request body failed validation, the stored audio has an unsupported type or size, or the caller ' +
-        'has no credits left (`errorCode: "insufficient_credits"`).',
+        'Request body failed validation, the stored audio has an unsupported type or size, or the balance ' +
+        'cannot cover its estimated cost (`errorCode: "insufficient_credits"`).',
       schema: InsufficientCreditsErrorSchema,
     },
     429: RATE_LIMITED,

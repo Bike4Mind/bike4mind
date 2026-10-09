@@ -31,6 +31,12 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     isLoading: false,
     isError: false,
   }),
+  // Stands in for the server's membership-scoped count; the explorer's prefix belt narrows it.
+  useGetScopedDataLakeTagCounts: () => ({
+    data: { tagCounts: [] },
+    isLoading: false,
+    isError: false,
+  }),
   useGetDataLakeUncategorizedFiles: (lakeId: string | null, enabled: boolean) => {
     if (enabled && lakeId) fetchCalls.push(lakeId);
     return {

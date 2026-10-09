@@ -1,7 +1,8 @@
 import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { resolveAccessibleLakes, queryDataLakeTagCounts } from '@server/dataLakes';
+import { resolveAccessibleLakes, queryDataLakeTagCounts, queryScopedDataLakeTagCounts } from '@server/dataLakes';
+import { narrowAccessibleLakes } from '@server/dataLakes/narrowAccessibleLakes';
 
 /**
  * GET /api/data-lakes/tag-counts
@@ -15,9 +16,16 @@ import { resolveAccessibleLakes, queryDataLakeTagCounts } from '@server/dataLake
  * is files tagged exactly `tag` and `fileCount` is distinct files at or under it. Every ancestor
  * path of a stored tag gets a row, so a row with `count: 0` is an ancestor-only path that no file
  * carries itself - an API-key caller listing tags should skip those (see countDataLakeTagsByPrefix).
+ *
+ * With one or more `lakeId` params (repeatable), returns `{ tagCounts }` for just those lakes,
+ * counted over their membership (see queryScopedDataLakeTagCounts). Without it, the full
+ * all-lakes payload.
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(async (req: Request, res) => {
   const lakes = await resolveAccessibleLakes(req);
+  if (req.query.lakeId !== undefined) {
+    return res.json(await queryScopedDataLakeTagCounts(req, narrowAccessibleLakes(lakes, req.query.lakeId)));
+  }
   const result = await queryDataLakeTagCounts(req, lakes);
   return res.json(result);
 });

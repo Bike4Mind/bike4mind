@@ -16,3 +16,6 @@ server/node_modules
 packages/database/src/seeds/modelCatalog.seed.json
 packages/database/src/seeds/modelPrices.seed.json
 packages/database/src/seeds/__fixtures__/aggregatorKeys.json
+
+# Helm parses these Go templates before validating the resulting YAML.
+selfhost/kubernetes/templates/**

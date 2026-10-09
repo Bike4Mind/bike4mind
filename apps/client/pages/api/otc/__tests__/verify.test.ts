@@ -77,7 +77,11 @@ import handler from '@pages/api/otc/verify';
 // registry confers optihashi:pro -> its signup-credit total for this address.
 const DOMAIN_EMAIL = 'newstaff@bike4mind.com';
 const NON_DOMAIN_EMAIL = 'nobody@example.com';
-const EXPECTED_DOMAIN_CREDITS = signupCreditsForEmail(DOMAIN_EMAIL, true);
+// Pinned literal (not derived from the registry, which would make the assertions circular):
+// the optihashi:pro grant pays 250,000. This path resolves the literal domain keys only (no
+// implication expansion), so the implied questmaster:pro credit is not in play here - the
+// implied-key de-dup is pinned in the registry test.
+const EXPECTED_DOMAIN_CREDITS = 250_000;
 
 function makeReqRes(email = DOMAIN_EMAIL) {
   const { req, res } = createMocks({ method: 'POST' });
@@ -231,7 +235,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
   it('is a sanity check that the fixture domain actually confers the product credit sum', () => {
     // Guards the suite: if bike4mind.com ever stops conferring the product, the credit
     // assertions below would silently pass on 0.
-    expect(EXPECTED_DOMAIN_CREDITS).toBe(250_000);
+    expect(signupCreditsForEmail(DOMAIN_EMAIL, true)).toBe(EXPECTED_DOMAIN_CREDITS);
   });
 
   it('grants domain-grant signup credits to a new OTC registration on a partner domain', async () => {
@@ -246,7 +250,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       expect.objectContaining({
         ownerId: 'user-1',
         ownerType: CreditHolderType.User,
-        credits: EXPECTED_DOMAIN_CREDITS,
+        credits: 250_000,
         type: 'generic_add',
         transactionId: 'domain-grant-credits:user-1',
       })

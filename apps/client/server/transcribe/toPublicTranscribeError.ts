@@ -1,5 +1,5 @@
 import { insufficientCreditsError, type ApiErrorCode } from '@bike4mind/common';
-import { HTTPError, NotFoundError, UnauthorizedError, UnprocessableEntityError } from '@server/utils/errors';
+import { HTTPError, NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
 import { TranscribeRequestError } from './transcribe';
 
 /**
@@ -19,7 +19,5 @@ export function toPublicTranscribeError(err: unknown): unknown {
       return insufficientCreditsError(err.message);
     case 'not_configured':
       return new HTTPError(503, err.message, { errorCode: 'provider_not_configured' satisfies ApiErrorCode });
-    case 'user_not_found':
-      return new UnauthorizedError(err.message);
   }
 }

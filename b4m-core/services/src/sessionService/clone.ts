@@ -72,6 +72,9 @@ export const cloneSession = async (
     // Create-only (not in SessionUpdateRequestSchema), so a copy that drops them can never get them back.
     // Outside the isOwner gate: citationStyle is a rendering contract, and the retrieval keys only narrow.
     citationStyle: session.citationStyle,
+    // temperature and maxToolCalls are plain numeric tuning knobs, safe for a share holder to inherit.
+    temperature: session.temperature,
+    maxToolCalls: session.maxToolCalls,
     retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
     retrievalVectorizedOnly: session.retrievalVectorizedOnly,
     // Also outside the gate. disabledTools/disableUserIntegrations only restrict. enabledTools and
@@ -116,6 +119,9 @@ export const cloneSession = async (
           forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
           // Rides with the lake scope, which a non-owner does not inherit.
           corpusGroundingMode: session.corpusGroundingMode,
+          // Injected verbatim with no allowlist, and write-only (stripped from responses), so a
+          // share holder could neither read nor vet it: owner only, like the lake scope.
+          systemPromptText: session.systemPromptText,
         }
       : {}),
   };

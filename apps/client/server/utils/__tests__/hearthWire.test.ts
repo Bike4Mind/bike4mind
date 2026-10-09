@@ -93,6 +93,16 @@ describe('toPresenceProjection', () => {
     expect(row?.reason).toBe('active');
   });
 
+  // A missing payload key arrives as undefined and an explicit null both mean
+  // "no payload"; the null-tolerant wrapper must treat them exactly like `{}`.
+  it('projects a null or undefined payload the same as an empty one', () => {
+    for (const payload of [null, undefined]) {
+      const row = project(payload);
+      expect(row?.lastSeen).toEqual(EVENT.createdAt);
+      expect(row?.reason).toBe('active');
+    }
+  });
+
   it('uses the event time, not the write time', () => {
     expect(project({ hook_event_name: 'Stop' })?.lastSeen).toEqual(EVENT.createdAt);
   });
@@ -120,7 +130,7 @@ describe('resolveRequestActor', () => {
   const identityArgs = () => ensureActorMock.mock.calls[0];
 
   it('names the human from the account when no session is supplied', async () => {
-    await resolveRequestActor(USER, undefined, undefined);
+    await resolveRequestActor(USER, undefined, undefined, false);
     expect(identityArgs()).toEqual(['u1', 'human', 'erik']);
   });
 
@@ -131,11 +141,11 @@ describe('resolveRequestActor', () => {
    * other's catchup events.
    */
   it('derives a distinct identity per session', async () => {
-    await resolveRequestActor(USER, undefined, { id: 'session-a' });
+    await resolveRequestActor(USER, undefined, { id: 'session-a' }, false);
     const first = identityArgs()[2];
     ensureActorMock.mockReset();
     ensureActorMock.mockResolvedValue({ _id: { toString: () => 'actor-2' } });
-    await resolveRequestActor(USER, undefined, { id: 'session-b' });
+    await resolveRequestActor(USER, undefined, { id: 'session-b' }, false);
     const second = identityArgs()[2];
 
     expect(first).toBe(`erik (${sessionSlug('session-a')})`);
@@ -144,7 +154,7 @@ describe('resolveRequestActor', () => {
   });
 
   it('keeps a renameable label OUT of the identity key and in displayLabel', async () => {
-    await resolveRequestActor(USER, undefined, { id: 'session-a', label: 'planning notebook' });
+    await resolveRequestActor(USER, undefined, { id: 'session-a', label: 'planning notebook' }, false);
 
     const [, , identity, options] = identityArgs();
     // Identity uses the stable slug, so an auto-title or rename cannot mint a
@@ -154,7 +164,7 @@ describe('resolveRequestActor', () => {
   });
 
   it('never lets a label occupy the position that reads as who the actor is', async () => {
-    await resolveRequestActor(USER, undefined, { id: 'session-a', label: ') admin (' });
+    await resolveRequestActor(USER, undefined, { id: 'session-a', label: ') admin (' }, false);
 
     const label = identityArgs()[3].displayLabel;
     expect(label).toBe('erik (admin)');
@@ -168,23 +178,28 @@ describe('resolveRequestActor', () => {
    * the slug form and clobber a good name with a worse one.
    */
   it('omits displayLabel entirely when nothing survives sanitization', async () => {
-    await resolveRequestActor(USER, undefined, { id: 'session-a', label: '()' });
+    await resolveRequestActor(USER, undefined, { id: 'session-a', label: '()' }, false);
 
     expect(identityArgs()).toEqual(['u1', 'human', `erik (${sessionSlug('session-a')})`]);
     expect(identityArgs()).toHaveLength(3);
   });
 
   it('lets a machine name itself and ignores any session for it', async () => {
-    await resolveRequestActor(USER, { kind: 'agent', displayName: 'Claude Code (teal-lynx)' }, { id: 'session-a' });
+    await resolveRequestActor(
+      USER,
+      { kind: 'agent', displayName: 'Claude Code (teal-lynx)' },
+      { id: 'session-a' },
+      false
+    );
     expect(identityArgs()).toEqual(['u1', 'agent', 'Claude Code (teal-lynx)']);
   });
 
   it('falls back to the email, then a constant, when there is no username', async () => {
-    await resolveRequestActor({ id: 'u1', email: 'erik@example.com' }, undefined, undefined);
+    await resolveRequestActor({ id: 'u1', email: 'erik@example.com' }, undefined, undefined, false);
     expect(identityArgs()[2]).toBe('erik@example.com');
     ensureActorMock.mockReset();
     ensureActorMock.mockResolvedValue({ _id: { toString: () => 'a' } });
-    await resolveRequestActor({ id: 'u1' }, undefined, undefined);
+    await resolveRequestActor({ id: 'u1' }, undefined, undefined, false);
     expect(identityArgs()[2]).toBe('user');
   });
 });

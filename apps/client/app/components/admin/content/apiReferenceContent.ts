@@ -139,7 +139,27 @@ treat the handler as authoritative.
 
 Projects organize files, sessions, and team members into workspaces.
 
-#### List Projects
+**Required API-key scope:** \`projects:read\` (or \`projects:write\`) to list and read,
+\`projects:write\` to create.
+
+#### List, Get, and Create Projects
+
+\`\`\`
+GET  /api/v1/projects
+GET  /api/v1/projects/[id]
+POST /api/v1/projects
+\`\`\`
+
+> **These endpoints are generated from their contracts.** The full request/response
+> reference - every field, its type, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`listProjects\`, \`getProject\`, and
+> \`createProject\`, derived from the same objects the handlers validate with.
+>
+> The list is cursor-paginated: pass \`next_cursor\` back as \`cursor\` until it is
+> \`null\`. A project's \`file_ids\` and \`session_ids\` are shared with it, so anyone the
+> project is shared with can read them.
+
+#### List Projects (existing app route)
 
 \`\`\`
 GET /api/projects
@@ -161,7 +181,10 @@ The response is \`{ data, hasMore, total }\`, where \`data\` is the page of proj
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | /api/projects | List projects |
+| GET | /api/v1/projects | List projects (cursor-paginated) |
+| POST | /api/v1/projects | Create a project |
+| GET | /api/v1/projects/[id] | Get project details |
+| GET | /api/projects | List projects (page-based pagination) |
 | POST | /api/projects | Create a project |
 | GET | /api/projects/[id] | Get project details |
 | PUT | /api/projects/[id] | Update project |

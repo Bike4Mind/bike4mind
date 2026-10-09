@@ -20,11 +20,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockPlatformUsageSummary = vi.fn();
-const mockPlatformEndpointUsage = vi.fn();
 const mockUserApiKeyFind = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   usageEventRepository: { platformUsageSummary: (...a: unknown[]) => mockPlatformUsageSummary(...a) },
-  apiKeyUsageLogRepository: { platformEndpointUsage: (...a: unknown[]) => mockPlatformEndpointUsage(...a) },
   userApiKeyRepository: { find: (...a: unknown[]) => mockUserApiKeyFind(...a) },
 }));
 
@@ -61,7 +59,6 @@ describe('GET /api/admin/platform-usage', () => {
       byModel: [],
       totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
     });
-    mockPlatformEndpointUsage.mockResolvedValue(null);
     mockUserApiKeyFind.mockResolvedValue([]);
     mockOrgFind.mockResolvedValue([]);
     mockResolveUserNames.mockResolvedValue(new Map());
@@ -136,39 +133,10 @@ describe('GET /api/admin/platform-usage', () => {
     });
   });
 
-  describe('endpoint traffic filters', () => {
-    it.each(['api', 'cli'] as const)('passes source %s and the owner type to the endpoint rollup', async source => {
-      const { run } = call({ query: { source, ownerType: CreditHolderType.Organization } });
-      await run();
-      expect(mockPlatformEndpointUsage).toHaveBeenCalledWith({
-        days: 30,
-        source,
-        ownerType: CreditHolderType.Organization,
-      });
-    });
-
-    it('spans all sources and owner types when neither filter is set', async () => {
-      const { run } = call({});
-      await run();
-      expect(mockPlatformEndpointUsage).toHaveBeenCalledWith({ days: 30, source: undefined, ownerType: undefined });
-    });
-
-    it('filters by owner type alone and clamps the window to the log TTL', async () => {
-      const { res, run } = call({ query: { days: '365', ownerType: CreditHolderType.User } });
-      await run();
-      expect(mockPlatformEndpointUsage).toHaveBeenCalledWith({
-        days: 90,
-        source: undefined,
-        ownerType: CreditHolderType.User,
-      });
-      expect(res._getJSONData().endpointWindowDays).toBe(90);
-    });
-
-    it('skips the rollup for a source the API-key log never records', async () => {
-      const { res, run } = call({ query: { source: 'web' } });
-      await run();
-      expect(mockPlatformEndpointUsage).not.toHaveBeenCalled();
-      expect(res._getJSONData().endpoints).toBeNull();
-    });
+  it('no longer serves endpoint traffic (moved to platform-usage/endpoints)', async () => {
+    const { res, run } = call({});
+    await run();
+    expect(res._getJSONData()).not.toHaveProperty('endpoints');
+    expect(res._getJSONData()).not.toHaveProperty('endpointWindowDays');
   });
 });

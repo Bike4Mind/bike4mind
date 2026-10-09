@@ -81,6 +81,9 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
       // Create-only (not in SessionUpdateRequestSchema), so a copy that drops them can never get them back.
       citationStyle: session.citationStyle,
+      systemPromptText: session.systemPromptText,
+      temperature: session.temperature,
+      maxToolCalls: session.maxToolCalls,
       corpusGroundingMode: session.corpusGroundingMode,
       retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
       retrievalVectorizedOnly: session.retrievalVectorizedOnly,

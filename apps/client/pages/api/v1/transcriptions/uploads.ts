@@ -17,12 +17,14 @@ const handler = nextRouteForContract(createTranscriptionUploadContract, {
     bucket: 'POST /api/v1/transcriptions/uploads',
   }),
 }).post(async (req, res) => {
-  const { mime_type } = req.validated;
-  const { url, fields, fileKey } = await createTranscribeUpload({ userId: req.user.id, mimeType: mime_type }).catch(
-    err => {
-      throw toPublicTranscribeError(err);
-    }
-  );
+  const { mime_type, file_size } = req.validated;
+  const { url, fields, fileKey } = await createTranscribeUpload({
+    userId: req.user.id,
+    mimeType: mime_type,
+    fileSize: file_size,
+  }).catch(err => {
+    throw toPublicTranscribeError(err);
+  });
 
   return res.status(201).json({
     upload_url: url,

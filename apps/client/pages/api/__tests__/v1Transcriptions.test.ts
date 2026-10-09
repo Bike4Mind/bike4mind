@@ -125,7 +125,7 @@ describe('POST /api/v1/transcriptions/uploads', () => {
     expect(body).toMatchObject({ upload_url: 'https://bucket.example/', upload_fields: { key: KEY }, file_key: KEY });
     expect(Date.parse(body.expires_at)).toBeGreaterThanOrEqual(before + 300_000);
     expect(Date.parse(body.expires_at)).toBeLessThanOrEqual(Date.now() + 300_000);
-    expect(mockCreateUpload).toHaveBeenCalledWith({ userId: 'u1', mimeType: 'audio/mpeg' });
+    expect(mockCreateUpload).toHaveBeenCalledWith({ userId: 'u1', mimeType: 'audio/mpeg', fileSize: 1000 });
   });
 
   it.each([
@@ -176,7 +176,6 @@ describe('POST /api/v1/transcriptions', () => {
     ['size_out_of_range', 422, undefined],
     ['insufficient_credits', 422, 'insufficient_credits'],
     ['not_configured', 503, 'provider_not_configured'],
-    ['user_not_found', 401, undefined],
   ])('maps a %s rejection to %i', async (kind, status, errorCode) => {
     mockTranscribe.mockRejectedValue(new TranscribeRequestError(kind, 'rejected'));
     const { req, res } = post({ file_key: KEY });

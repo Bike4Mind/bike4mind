@@ -57,6 +57,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   updateWithUpdateAccess: vi.fn(async (_user, data) => data as IProjectDocument),
   findByIdAndUserId: vi.fn(),
   searchAccessible: vi.fn(),
+  listAccessibleAfterId: vi.fn(),
   removeSession: vi.fn(),
   findAllBySessionId: vi.fn(),
 });
@@ -236,6 +237,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     ...createMockRepository<IUserDocument>(),
     findByEmail: vi.fn(),
     removeGroupsFromAllUsers: vi.fn(),
+    clearOrganizationPointer: vi.fn(),
     addGroupToUser: vi.fn(),
     removeGroupFromUser: vi.fn(),
     recordReferrals: vi.fn(),
