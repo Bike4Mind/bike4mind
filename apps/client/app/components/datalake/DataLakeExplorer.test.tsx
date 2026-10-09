@@ -14,7 +14,7 @@ import DataLakeExplorer, { buildLakePrefixLookup } from './DataLakeExplorer';
 import type { DataLakeUncategorized } from './DataLakeTreeView';
 
 const U = '__uncategorized__';
-const NAV_PATHS = [[U], ['lakea'], ['lakea', U], ['acme', 'legal']];
+const NAV_PATHS = [[U], ['lakea'], ['lakea', U], ['acme', 'legal'], ['docs', 'alpha']];
 const nav = (path: string[]) => fireEvent.click(screen.getByTestId(`mock-nav-${path.join('/')}`));
 const tree = () => screen.getByTestId('mock-tree');
 
@@ -118,6 +118,12 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
 const { tagCountsState, uncategorizedState, articleParams } = vi.hoisted(() => ({
   tagCountsState: {
     tagCounts: [] as { tag: string; count: number }[],
+    // The membership-scoped tree for a lake selection. null stands in for a server that agrees
+    // with the unscoped payload (the explorer's prefix belt still narrows it).
+    scoped: null as { tag: string; count: number }[] | null,
+    scopedLoading: false,
+    scopedError: false,
+    scopedLakeIds: [] as string[][],
     total: 0,
     lakeFileCounts: {} as Record<string, number>,
     uncategorizedFileCounts: {} as Record<string, number>,
@@ -132,7 +138,7 @@ const { tagCountsState, uncategorizedState, articleParams } = vi.hoisted(() => (
     isError: false,
     isLoading: undefined as boolean | undefined,
   },
-  articleParams: [] as Array<{ tags?: string[] } | null | undefined>,
+  articleParams: [] as Array<{ tags?: string[]; lakeId?: string[] } | null | undefined>,
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -148,6 +154,18 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     isLoading: false,
     isError: false,
   }),
+  // Mirrors the real hook's `enabled: lakeIds.length > 0`: a disabled query is never loading.
+  useGetScopedDataLakeTagCounts: (_source: string, lakeIds: string[]) => {
+    if (lakeIds.length > 0) tagCountsState.scopedLakeIds.push([...lakeIds]);
+    return {
+      data:
+        lakeIds.length > 0 && !tagCountsState.scopedLoading
+          ? { tagCounts: tagCountsState.scoped ?? tagCountsState.tagCounts }
+          : undefined,
+      isLoading: lakeIds.length > 0 && tagCountsState.scopedLoading,
+      isError: lakeIds.length > 0 && tagCountsState.scopedError,
+    };
+  },
   // Records whether the query would actually RUN, mirroring the hook's own `enabled && !!lakeId`
   // gate: the explorer calls this unconditionally, with a null id whenever there is no bucket lake
   // (merged root, multi-lake scope), and counting that as a fetch would misread a disabled query.
@@ -161,7 +179,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     };
   },
   // id query (deep-link) resolves to a file; tag query resolves empty.
-  useGetDataLakeArticles: (params?: { id?: string; tags?: string[] } | null) => {
+  useGetDataLakeArticles: (params?: { id?: string; tags?: string[]; lakeId?: string[] } | null) => {
     articleParams.push(params);
     return {
       data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
@@ -291,6 +309,7 @@ vi.mock('./DataLakeChatTree', () => ({
         data-can-delete={String(props.canDeleteFile(file))}
         data-drop-hint={props.dropHint ?? ''}
         data-segments={props.tree.map(n => n.segment).join(',')}
+        data-child-segments={props.tree.flatMap(n => n.children.map(c => `${n.segment}:${c.segment}`)).join(',')}
         data-error={String(!!props.isError)}
         data-loading={String(!!props.isLoading)}
         data-lake-labels={JSON.stringify({
@@ -754,7 +773,66 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
   });
   afterEach(() => {
     tagCountsState.tagCounts = [];
+    tagCountsState.scoped = null;
+    tagCountsState.scopedLoading = false;
+    tagCountsState.scopedError = false;
+    tagCountsState.scopedLakeIds = [];
     tagCountsState.total = 0;
+  });
+
+  // Prefixes are unique per creator only, so two creators' lakes can both use `docs`. The unscoped
+  // payload is merged by prefix and cannot tell them apart; the selected lake's tree has to come
+  // from the server's membership-scoped count.
+  it("builds a selected lake's tree from the scoped count, not another creator's same-prefix lake", () => {
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'docs', canManage: true },
+      { id: 'lake-2', name: 'Lake B', datalakeTag: 'datalake:lake-b', fileTagPrefix: 'docs', canManage: false },
+    ];
+    tagCountsState.tagCounts = [
+      { tag: 'docs:alpha', count: 1 },
+      { tag: 'docs:beta', count: 1 },
+    ];
+    tagCountsState.scoped = [{ tag: 'docs:alpha', count: 1 }];
+    renderExplorer();
+
+    expect(tree()).toHaveAttribute('data-child-segments', 'docs:alpha,docs:beta');
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+    expect(tree()).toHaveAttribute('data-child-segments', 'docs:alpha');
+    expect(tagCountsState.scopedLakeIds.at(-1)).toEqual(['lake-1']);
+
+    fireEvent.click(screen.getByTestId('mock-nav-docs/alpha'));
+    expect(articleParams).toContainEqual({ tags: ['docs:alpha'], lakeId: ['lake-1'], limit: 50 });
+  });
+
+  it('shows the tree as loading, not the empty-lake CTA, while the scoped count is in flight', () => {
+    tagCountsState.scopedLoading = true;
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    expect(tree()).toHaveAttribute('data-loading', 'true');
+    expect(screen.queryByTestId('datalake-tree-empty')).not.toBeInTheDocument();
+  });
+
+  // A failed scoped read leaves no tree data, and with an empty lake that would read as the
+  // "lake is empty" CTA; the failure has to surface as the tree's error state instead.
+  it('shows the tree error, not the empty-lake CTA, when the scoped count fails', () => {
+    tagCountsState.tagCounts = [];
+    tagCountsState.total = 0;
+    tagCountsState.scopedError = true;
+    renderExplorer();
+
+    expect(tree()).toHaveAttribute('data-error', 'false');
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    expect(tree()).toHaveAttribute('data-error', 'true');
+    expect(screen.queryByTestId('datalake-tree-empty')).not.toBeInTheDocument();
   });
 
   it('offers the lake picker in the tree, opening on the all-lakes scope', () => {

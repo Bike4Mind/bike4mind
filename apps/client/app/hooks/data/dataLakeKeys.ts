@@ -106,6 +106,10 @@ export const dataLakeKeys = {
    *  a build is running. */
   lakeMemory: (dataLakeId: string) => ['dataLakeMemory', dataLakeId] as const,
   tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
+  /** The tree for the selected lakes only (`?lakeId=`). Under `tagCountsRoot`, so every tag-count
+   *  invalidation reaches it; ids sorted so selection order does not split the cache. */
+  tagCountsScoped: (source: DataLakeBrowseSource, lakeIds: readonly string[]) =>
+    ['dataLakeTagCounts', source, 'scoped', ...[...lakeIds].sort()] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>
     ['dataLakeArticles', source, params] as const,
