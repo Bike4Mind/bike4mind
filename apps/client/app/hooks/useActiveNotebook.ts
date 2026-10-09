@@ -1,4 +1,4 @@
-import { useLocation } from '@tanstack/react-router';
+import { useMatchRoute } from '@tanstack/react-router';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 
 /**
@@ -15,15 +15,14 @@ import { useSessions } from '@client/app/contexts/SessionsContext';
  */
 export type ActiveNotebook = { onScreen: false } | { onScreen: true; sessionId: string | null };
 
-const NOTEBOOK_PATH = /^\/notebooks\/([^/]+)\/?$/;
-
 export function useActiveNotebook(): ActiveNotebook {
   const { currentSessionId } = useSessions();
-  const pathname = useLocation({ select: location => location.pathname });
+  const matchRoute = useMatchRoute();
 
-  if (pathname === '/new') return { onScreen: true, sessionId: currentSessionId };
+  if (matchRoute({ to: '/new' })) return { onScreen: true, sessionId: currentSessionId };
 
-  const routeSessionId = NOTEBOOK_PATH.exec(pathname)?.[1];
+  const notebookMatch = matchRoute({ to: '/notebooks/$id' });
+  const routeSessionId = notebookMatch ? notebookMatch.id : null;
   if (routeSessionId && routeSessionId === currentSessionId) return { onScreen: true, sessionId: routeSessionId };
 
   return { onScreen: false };

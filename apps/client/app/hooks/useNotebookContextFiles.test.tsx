@@ -74,6 +74,17 @@ describe('useNotebookContextFiles', () => {
     expect(mockMutateAsync).toHaveBeenCalledWith({ id: SID, knowledgeIds: ['a'], propagateToProjects: false });
   });
 
+  it('does not attach an image before its scan completes', async () => {
+    const { result } = renderHook(() => useNotebookContextFiles());
+    const scanningImage = { ...file('image'), mimeType: 'image/png', moderationStatus: 'scanning' };
+    await act(async () => {
+      expect(await result.current.addToNotebookContext(SID, scanningImage)).toBe(false);
+    });
+    expect(ids()).toEqual([]);
+    expect(mockMutateAsync).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith('That image is still being scanned - try again in a moment');
+  });
+
   it('writes once when the same file is added twice before the first write lands', async () => {
     // A real double-click, unlike the sequential case below: the second call starts
     // while the first write is still in flight. It returns on the contents check

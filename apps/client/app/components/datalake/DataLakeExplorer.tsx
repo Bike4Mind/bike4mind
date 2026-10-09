@@ -21,6 +21,7 @@ import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
+import { isOptimisticId } from '@client/app/utils/llm';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import useSetIncludeLibraryFiles from '@client/app/hooks/useSetIncludeLibraryFiles';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
@@ -46,7 +47,12 @@ import { RemoveFileFromLakeCopy } from '@client/app/components/DataLakeWizard/Re
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { toast } from 'sonner';
-import type { IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
+import {
+  isImageAttachment,
+  isImageServeable,
+  type IFabFileDocument,
+  type ManageableDataLakeConfig,
+} from '@bike4mind/common';
 
 /**
  * The Data Lake surface: a browse tree beside a chat (main app + premium /opti). File rows carry
@@ -240,16 +246,30 @@ export default function DataLakeExplorer({
   // knowledgeIds: a workbench-only add rides one send as fabFileIds, then drops out of context.
   // A freshly minted session was created already holding the file, so the workbench suffices.
   // Mid notebook switch (route on B, currentSessionId still A) there is no safe target yet.
+  // The docked overlay chat is outside the notebook routes, so its current session is the target.
   // An explicit gesture, so project propagation keeps its default (as in FilesSection).
   const attachToSession = useCallback(
     async (file: IFabFileDocument): Promise<boolean> => {
-      if (!activeNotebook.onScreen) return false;
-      if (currentSessionId) return addToNotebookContext(currentSessionId, file);
-      const sessionId = await ensureSessionId(file);
-      if (!sessionId) return false;
-      return addToWorkBench(sessionId, file);
+      if (chatEmbedded && !activeNotebook.onScreen) {
+        toast.info('Wait for the notebook to finish opening, then attach the file.');
+        return false;
+      }
+      const sessionId = chatEmbedded && activeNotebook.onScreen ? activeNotebook.sessionId : currentSessionId;
+      if (isOptimisticId(sessionId)) {
+        toast.info('Wait for this notebook to finish saving, then attach the file.');
+        return false;
+      }
+      if (sessionId) return addToNotebookContext(sessionId, file);
+      // Session creation stores knowledgeIds directly, bypassing the shared writer's scan guard.
+      if (isImageAttachment(file.mimeType) && !isImageServeable(file)) {
+        toast.error('That image is still being scanned - try again in a moment');
+        return false;
+      }
+      const createdSessionId = await ensureSessionId(file);
+      if (!createdSessionId) return false;
+      return addToWorkBench(createdSessionId, file);
     },
-    [activeNotebook.onScreen, currentSessionId, addToNotebookContext, ensureSessionId, addToWorkBench]
+    [activeNotebook, chatEmbedded, currentSessionId, addToNotebookContext, ensureSessionId, addToWorkBench]
   );
 
   const attachFileToChat = useCallback(
