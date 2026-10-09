@@ -56,13 +56,22 @@ function discoverPremiumPackages() {
   if (!existsSync(PREMIUM_DIR)) return [];
 
   const packages = [];
-  for (const entry of readdirSync(PREMIUM_DIR, { withFileTypes: true })) {
+  const seen = new Set();
+  // Sorted so the first dir wins deterministically when a package name repeats (e.g. a
+  // sibling git worktree of an overlay); importing it twice registers duplicate routes.
+  const entries = readdirSync(PREMIUM_DIR, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const pkgPath = join(PREMIUM_DIR, entry.name, 'package.json');
     if (!existsSync(pkgPath)) continue;
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
       if (pkg.b4mContributions) {
+        if (seen.has(pkg.name)) {
+          console.warn(`[codegen] skipping ${entry.name}: package "${pkg.name}" already discovered`);
+          continue;
+        }
+        seen.add(pkg.name);
         packages.push({ name: pkg.name, dir: entry.name, contributions: pkg.b4mContributions });
       }
     } catch {
