@@ -2,11 +2,7 @@ import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
 import { API_KEY_RATE_LIMIT_DEFAULTS } from '../types/entities/UserApiKeyTypes';
-import {
-  API_KEY_RATE_LIMIT_HEADERS,
-  API_KEY_RATE_LIMIT_HEADER_NAMES,
-  type ApiKeyRateLimitHeader,
-} from '../apiKeyRateLimitHeaders';
+import { API_KEY_RATE_LIMIT_HEADERS, API_KEY_RATE_LIMIT_HEADER_NAMES } from '../apiKeyRateLimitHeaders';
 
 // Importing these modules is what registers their schemas/paths against the
 // shared registry (side-effect imports). Keep them before generateDocument().
@@ -78,14 +74,16 @@ function infoDescription(): string {
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerMinute} requests/minute and ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay} requests/day (a key can be minted with its own ceilings). ` +
       'Rate-limited operations return the current window state on every response:',
-    ...Object.keys(RATE_LIMIT_HEADER_SPEC).map(header => `- \`${header}\``),
+    ...API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\``),
     '',
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
-      'that long before retrying. `GET /api/v1/me`, `GET /api/v1/credits` and the poll endpoints listed under ' +
+      'that long before retrying. The streaming completions endpoint is the exception: ' +
+      '`POST /api/ai/v1/completions` opens its `200` event stream before rate-limiting, so an exceeded ' +
+      'ceiling arrives as an in-stream `error` event rather than a `429`. ' +
+      '`GET /api/v1/me`, `GET /api/v1/credits` and the poll endpoints listed under ' +
       'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
-      'limit applies. A ' +
-      'request rejected for a bad key (`401`) or a missing scope (`403`) never reaches the limiter and carries ' +
-      'no rate-limit headers.',
+      'limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches ' +
+      'the limiter and carries no rate-limit headers.',
     '',
     '## Credits',
     'Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the ' +
@@ -107,7 +105,8 @@ function infoDescription(): string {
     'The shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a ' +
       'missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown ' +
       'resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: "provider_rejected"` ' +
-      'means the upstream provider refused the platform key, not that your credential is bad.',
+      'means the upstream provider refused the provider key the request used - the platform key by default, ' +
+      'or your own stored provider key when you configured one - so your API key itself was accepted.',
     '',
     '## Async jobs',
     'Work that is not provably fast is queued and polled rather than held open:',
@@ -303,11 +302,10 @@ const REQUEST_ID_HEADER_SPEC = {
  */
 const INTEGER_HEADER = { type: 'integer' as const };
 const RATE_LIMIT_HEADER_SPEC = Object.fromEntries(
-  API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => [
-    header,
-    { description: API_KEY_RATE_LIMIT_HEADERS[header], schema: INTEGER_HEADER },
-  ])
-) as Record<ApiKeyRateLimitHeader, { description: string; schema: typeof INTEGER_HEADER }>;
+  API_KEY_RATE_LIMIT_HEADER_NAMES.map(
+    header => [header, { description: API_KEY_RATE_LIMIT_HEADERS[header], schema: INTEGER_HEADER }] as const
+  )
+);
 
 /**
  * The failures `registerContract` INJECTS carry no rate-limit headers:
@@ -359,7 +357,10 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
-    { name: 'Videos', description: 'Video generation, queued and polled as quests.' },
+    {
+      name: 'Videos',
+      description: 'Video generation, queued with `202` and polled at `GET /api/v1/video-generations/{id}`.',
+    },
     {
       name: 'Voice',
       description: 'Real-time voice conversations: list voices, open a call, and reconcile its credits when it ends.',
