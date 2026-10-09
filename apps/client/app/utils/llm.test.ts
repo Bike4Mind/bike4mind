@@ -125,6 +125,31 @@ describe('appendReplyToLatestOptimisticBubble creditsUsed (live chip)', () => {
       creditsUsed: 42,
     });
   });
+
+  it('recovers a completed reply after a late dispatch insert temporarily blanks it', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'do the thing');
+    swapOptimisticPromptBubbleId(qc, sessionId, 'real_quest_id');
+    appendReplyToLatestOptimisticBubble(qc, sessionId, 'client reply', 'exec_1');
+
+    const dispatchInsert = makeQuest({
+      id: 'real_quest_id',
+      updatedAt: new Date('2025-01-01'),
+      prompt: 'do the thing',
+      replies: [],
+    });
+    updateSingleQueryDataFast(qc, queryKey, 'write', dispatchInsert, { keysAllowedToCreate: [] });
+    expect(readQuests(qc)[0].replies).toEqual([]);
+
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      { ...dispatchInsert, updatedAt: new Date('2025-01-02'), replies: ['server reply'] },
+      { keysAllowedToCreate: [] }
+    );
+    expect(readQuests(qc)[0].replies).toEqual(['server reply']);
+  });
 });
 
 describe('optimistic quest marker', () => {
@@ -243,5 +268,48 @@ describe('updateOptimisticQuest (same-id re-run)', () => {
     const [cached] = readQuests(qc);
     expect(cached.status).toBe('done');
     expect(cached.replies?.[0]).toContain('**Error:**');
+    expect(cached).not.toHaveProperty('_optimistic');
+  });
+
+  it('keeps the rerun error when an older running server frame arrives', async () => {
+    const qc = seedQueryClient([
+      makeQuest({ id: 'rerun', status: 'done', updatedAt: new Date('2025-01-01'), replies: ['old answer'] }),
+    ]);
+
+    await expect(
+      updateOptimisticQuest(qc, 'rerun', sessionId, { status: undefined }, async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      makeQuest({ id: 'rerun', status: 'running', updatedAt: new Date('2020-01-01'), replies: [] }),
+      { keysAllowedToCreate: [] }
+    );
+
+    expect(readQuests(qc)[0]).toMatchObject({ status: 'done', replies: [expect.stringContaining('**Error:**')] });
+  });
+
+  it('replaces the rerun error with a genuinely newer server document', async () => {
+    const qc = seedQueryClient([makeQuest({ id: 'rerun', status: 'done' })]);
+
+    await expect(
+      updateOptimisticQuest(qc, 'rerun', sessionId, { status: undefined }, async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      makeQuest({ id: 'rerun', status: 'done', updatedAt: new Date('2100-01-01'), replies: ['server result'] }),
+      { keysAllowedToCreate: [] }
+    );
+
+    expect(readQuests(qc)[0]).toMatchObject({ status: 'done', replies: ['server result'] });
   });
 });

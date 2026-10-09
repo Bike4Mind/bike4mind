@@ -134,6 +134,7 @@ export function swapOptimisticPromptBubbleId(queryClient: QueryClient, sessionId
       if (realAlreadyPresent) {
         data.splice(optimisticIdx, 1);
       } else {
+        // Keep _optimistic through the re-id so the eventual server document wins across clock domains.
         data[optimisticIdx] = { ...data[optimisticIdx], id: realQuestId };
       }
       return { ...page, data };
@@ -182,6 +183,7 @@ export function appendReplyToLatestOptimisticBubble(
         ...page.data[idx],
         replies: [reply],
         updatedAt: new Date(),
+        // The final persisted frame repairs any transient overwrite by an older dispatch insert.
         _optimistic: true,
         ...(agentExecutionId ? { agentExecutionId } : {}),
         ...(typeof creditsUsed === 'number' ? { creditsUsed } : {}),
@@ -257,7 +259,7 @@ export async function createOptimisticQuest(
     return data;
   } catch (error) {
     const errorMessage = getErrorMessage(error);
-    const failedQuest: IChatHistoryItemDocument = {
+    const failedQuest: Optimistic<IChatHistoryItemDocument> = {
       ...optimisticQuest,
       status: 'done',
       replies: [`**Error:** ${errorMessage}`],
@@ -323,7 +325,7 @@ export async function updateOptimisticQuest(
       if (!queryData || !('pages' in queryData)) continue;
       const hasQuest = queryData.pages.some(page => page.data.some(q => q.id === questId));
       if (hasQuest) {
-        const failedQuest: Optimistic<IChatHistoryItemDocument> = {
+        const failedQuest: IChatHistoryItemDocument = {
           id: questId,
           sessionId: '',
           type: 'message',
@@ -333,7 +335,6 @@ export async function updateOptimisticQuest(
           timestamp: new Date(),
           createdAt: new Date(),
           updatedAt: new Date(),
-          _optimistic: true,
         };
         updateSingleQueryDataFast(queryClient, queryKey, 'write', failedQuest, {
           keysAllowedToCreate: [],

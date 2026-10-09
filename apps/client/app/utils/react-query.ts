@@ -11,6 +11,9 @@ import { useWebsocket } from '@/app/contexts/WebsocketContext';
 import { uniqBy } from 'lodash';
 
 type CacheTimestamp = Date | string | number;
+
+// Client-clock timestamps are not authoritative. Keep this marker on local placeholders
+// and patches until a timestamped server document replaces them.
 export type Optimistic<T> = T & { _optimistic: true };
 
 const getCacheTimestamp = (entry: { updatedAt?: CacheTimestamp; lastUpdated?: CacheTimestamp }): number | null => {
@@ -23,6 +26,7 @@ const mergeCacheEntry = <T extends { updatedAt?: CacheTimestamp; lastUpdated?: C
   incoming: T
 ): T => {
   const merged = { ...existing, ...incoming };
+  // Timestamp-less client patches must not make a client-clock timestamp authoritative.
   if (!incoming._optimistic && getCacheTimestamp(incoming) !== null) delete merged._optimistic;
   return merged;
 };
