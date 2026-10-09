@@ -1,22 +1,16 @@
 import Box from '@mui/joy/Box';
-import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
-import Switch from '@mui/joy/Switch';
-import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import Typography from '@mui/joy/Typography';
-import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { entryAttentionChip, EntrySection, type ConfigEntry } from './ConfigEntry';
-import { CloseIcon, ContrastIcon, ServerIcon, SlidersIcon, SparkIcon } from './icons';
+import { CloseIcon, ServerIcon, SlidersIcon } from './icons';
 import { McpServersSettings } from './McpServersSettings';
 import { NavItem } from './SessionList';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
-import { promptSuggestionsSummary, usePromptSuggestions } from './promptSuggestions';
-import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 
 /** What this screen is for, said on the screen so it does not have to be inferred from a name. */
-const CUSTOMIZE_INTRO = 'How the app looks, and what it can reach.';
+const CUSTOMIZE_INTRO = 'What tools the app can reach.';
 
 function mcpEntry(controller: McpServersController): ConfigEntry {
   const connected = controller.servers.filter(server => server.status === 'connected').length;
@@ -42,78 +36,8 @@ function mcpEntry(controller: McpServersController): ConfigEntry {
   };
 }
 
-const THEME_MODE_LABEL: Record<ThemeMode, string> = { system: 'System', light: 'Light', dark: 'Dark' };
-
 /**
- * Light, dark or follow the OS, as three buttons with the current one pressed.
- *
- * It used to cycle in place, because a sidebar row had space for one click and not for a
- * choice. A screen has the space, so the three states are all on show and reaching any of them
- * costs one click rather than up to two - and, more to the point, the control now says what it
- * will do before it is touched instead of only afterwards.
- *
- * `useColorScheme` is used for `setMode` only. The scheme being PAINTED comes from the theme,
- * because `useColorScheme().mode` can be the string 'system', which is not a scheme.
- */
-function appearanceEntry(
-  mode: string | undefined,
-  setMode: (mode: ThemeMode) => void,
-  resolved: ResolvedThemeMode
-): ConfigEntry {
-  return {
-    id: 'appearance',
-    icon: <ContrastIcon />,
-    label: 'Appearance',
-    summary: themeModeSummary(mode, resolved),
-    control: (
-      <ToggleButtonGroup
-        size="sm"
-        value={currentThemeMode(mode)}
-        // Joy reports null when the pressed button is clicked again; the app is always in one of
-        // the three, so that is a no-op rather than a fourth state.
-        onChange={(_event, next) => {
-          if (next) setMode(next as ThemeMode);
-        }}
-        data-testid="customize-appearance-group"
-      >
-        {THEME_MODES.map(themeMode => (
-          <Button key={themeMode} value={themeMode} data-testid={`customize-appearance-${themeMode}-btn`}>
-            {THEME_MODE_LABEL[themeMode]}
-          </Button>
-        ))}
-      </ToggleButtonGroup>
-    ),
-  };
-}
-
-/**
- * Whether the composer offers a guess at the next message.
- *
- * What it needs is a place to be turned OFF: it is on by default and it spends a model call per
- * reply, so a user who does not want either has to be able to find the switch. There is
- * deliberately no third state - nothing here makes a suggestion send itself.
- */
-function suggestionsEntry(enabled: boolean, toggle: () => void): ConfigEntry {
-  return {
-    id: 'prompt-suggestions',
-    icon: <SparkIcon />,
-    label: 'Suggested next prompt',
-    summary: promptSuggestionsSummary(enabled),
-    control: (
-      <Switch
-        size="sm"
-        checked={enabled}
-        onChange={toggle}
-        slotProps={{
-          input: { 'aria-label': 'Suggested next prompt', 'data-testid': 'customize-suggestions-switch' },
-        }}
-      />
-    ),
-  };
-}
-
-/**
- * Every appearance-and-tools setting, built once and read by both the nav row and the screen.
+ * Every tool setting, built once and read by both the nav row and the screen.
  *
  * The row needs only `attention` out of this, but it has to come from the same list the screen
  * draws or the badge would be answering a different question from the section it points at.
@@ -122,15 +46,7 @@ function suggestionsEntry(enabled: boolean, toggle: () => void): ConfigEntry {
  */
 function useCustomizeEntries(): ConfigEntry[] {
   const mcp = useMcpServers();
-  const { mode, setMode } = useColorScheme();
-  const theme = useTheme();
-  const [suggestions, toggleSuggestions] = usePromptSuggestions();
-
-  return [
-    appearanceEntry(mode, setMode, theme.palette.mode),
-    suggestionsEntry(suggestions, toggleSuggestions),
-    mcpEntry(mcp),
-  ];
+  return [mcpEntry(mcp)];
 }
 
 /**
@@ -160,15 +76,15 @@ export function CustomizeNavItem({ onOpen }: { onOpen: () => void }) {
 }
 
 /**
- * "Customize": how the app looks and what it can reach, as a screen beside Artifacts.
+ * "Customize": what tools the app can reach, as a screen beside Artifacts.
  *
  * Each setting is on the page rather than behind a row that opens something else. A list of
  * three links that each lead somewhere would be a navigation step bought with a whole screen -
  * strictly worse than the one-row collapse it replaces - so the screen shows the controls
  * themselves and MCP, the one that used to need a window, is a section like the rest.
  *
- * The server and the app's own updates are NOT here; they are Settings. The two screens say
- * which half they own under their titles, so neither has to be searched for the other's half.
+ * App preferences, the server and updates are Settings. The two screens say which half they own
+ * under their titles, so neither has to be searched for the other's half.
  */
 export function CustomizeScreen({ onClose }: { onClose: () => void }) {
   const entries = useCustomizeEntries();
