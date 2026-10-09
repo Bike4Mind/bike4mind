@@ -13,7 +13,7 @@ import { ghFixLine, lifecycleLabel, middleTruncate, timeAgo } from './prBarModel
 import { PrAutomations, autoFixDescription, autoMergeDescription } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
 import { PrStateIcon, prStateColor } from './prStateStyle';
-import { SYSTEM_BROWSER_HINT, routePrLink, type BuiltInBrowserOpener } from './prLinks';
+import { SYSTEM_BROWSER_HINT, openInSystemBrowser, routePrLink, type BuiltInBrowserOpener } from './prLinks';
 
 const BRANCH_MAX_CHARS = 44;
 
@@ -94,7 +94,7 @@ export function PrStatusBar({
             level="body-sm"
             component="button"
             type="button"
-            onClick={event => routePrLink(binding.url, event, onOpenLink)}
+            onClick={() => openInSystemBrowser(binding.url)}
             sx={{
               all: 'unset',
               cursor: 'pointer',

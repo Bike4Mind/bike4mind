@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isBrowsableUrl, openInSessionBrowser, routePrLink, type PrLinkTargets } from './prLinks';
+import { isBrowsableUrl, openInSessionBrowser, openInSystemBrowser, routePrLink, type PrLinkTargets } from './prLinks';
 
 const PR = 'https://github.com/example-org/widgets/pull/611';
 const PLAIN = { metaKey: false, ctrlKey: false };
@@ -89,6 +89,21 @@ describe('openInSessionBrowser', () => {
     openInSessionBrowser('javascript:alert(1)', 'session-1', showPane, targets);
     expect(showPane).not.toHaveBeenCalled();
     expect(targets.navigate).not.toHaveBeenCalled();
+    expect(targets.openExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe('openInSystemBrowser', () => {
+  it('opens a web url in the system browser and never the pane', () => {
+    const targets = fakeTargets();
+    openInSystemBrowser(PR, targets);
+    expect(targets.openExternal).toHaveBeenCalledWith(PR);
+    expect(targets.navigate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-web url', () => {
+    const targets = fakeTargets();
+    openInSystemBrowser('javascript:alert(1)', targets);
     expect(targets.openExternal).not.toHaveBeenCalled();
   });
 });

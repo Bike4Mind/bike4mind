@@ -1,7 +1,8 @@
 /**
  * Where the PR bar's GitHub links open: this conversation's built-in browser pane by default,
  * the system browser on a Cmd-click (Ctrl-click off macOS), and the system browser too when
- * there is no conversation to own a pane.
+ * there is no conversation to own a pane. The bar's #number link is the exception and always
+ * opens the system browser.
  *
  * The pane is not signed in to GitHub unless the user imported cookies into it themselves;
  * nothing here copies any.
@@ -36,6 +37,11 @@ export function isBrowsableUrl(url: string): boolean {
 
 export function wantsSystemBrowser(click: LinkClick | undefined): boolean {
   return !!click && (click.metaKey || click.ctrlKey);
+}
+
+/** For links that always leave the app, like the bar's #number. Refuses anything but http(s). */
+export function openInSystemBrowser(url: string, targets: PrLinkTargets = defaultTargets()): void {
+  if (isBrowsableUrl(url)) void targets.openExternal(url);
 }
 
 /** One PR bar link click. Refuses anything but http(s) outright. */
