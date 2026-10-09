@@ -1,18 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { CookieImportState } from '@shared/browserCookies';
 import type { BrowserGoAction, BrowserPaneBounds, BrowserPaneState } from '@shared/ipc';
 import { BrowserNavbar } from './BrowserNavbar';
+import { BROWSER_PANE_WIDTH, coveredByOverlay, overlayRects, sameBounds, toPaneBounds } from './agentBrowser';
 import {
-  BROWSER_PANE_MAX_FRACTION,
-  BROWSER_PANE_WIDTH,
-  coveredByOverlay,
-  overlayRects,
-  sameBounds,
-  toPaneBounds,
-} from './agentBrowser';
+  BROWSER_PANE_MIN_WIDTH,
+  browserPaneMaxWidth,
+  clampBrowserPaneWidth,
+  readBrowserPaneWidth,
+  writeBrowserPaneWidth,
+} from './browserPaneWidth';
+import { ResizeHandle } from './ResizeHandle';
 
 /** The element React renders the app into; everything else in the body is a portalled layer. */
 const ROOT_ID = 'root';
@@ -50,9 +51,33 @@ const NO_COOKIES: CookieImportState = { supported: false, unsupported: '', sites
  * as part of it would be a bar nobody can see or click.
  *
  * The empty state underneath is visible exactly when there is no page to cover it.
+ *
+ * Its left edge is a resize handle. The page is taken off the window for as long as a drag is
+ * moving: once the pointer crossed into the native view this document would stop hearing about
+ * it, and the drag would stick there. `conversation` is the column it trades width with, which
+ * is what the drag's maximum is measured from.
  */
-export function BrowserPane({ sessionId, suspended }: { sessionId: string | null; suspended: boolean }) {
+export function BrowserPane({
+  sessionId,
+  suspended,
+  conversation,
+}: {
+  sessionId: string | null;
+  suspended: boolean;
+  conversation: RefObject<HTMLElement | null>;
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const pane = useRef<HTMLDivElement | null>(null);
+  const [preferred, setPreferred] = useState(readBrowserPaneWidth);
+  const [limit, setLimit] = useState(() => browserPaneMaxWidth(window.innerWidth, Number.POSITIVE_INFINITY));
+  const [dragging, setDragging] = useState(false);
+  // `resizing` is set on the first move rather than the press, so a click or the double-click
+  // reset does not blink the page off and on.
+  const live = useRef({ dragging: false, resizing: false, width: 0, frame: 0 });
+  const width = clampBrowserPaneWidth(preferred, limit);
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
+  const settleRef = useRef<(() => void) | null>(null);
   const [state, setState] = useState<BrowserPaneState>(NO_PAGE);
   // Not per conversation: the jar is one for the whole window, so what is imported is imported
   // everywhere. The pane says as much; see CookieImporter for what scoping it would take.
@@ -103,9 +128,12 @@ export function BrowserPane({ sessionId, suspended }: { sessionId: string | null
     if (!element || !sessionId) return null;
     const rect = element.getBoundingClientRect();
     if (rect.width < 1 || rect.height < 1) return null;
-    if (suspended || coveredByOverlay(rect, overlayRects(Array.from(document.body.children), ROOT_ID))) return null;
+    const hidden = suspendedRef.current || live.current.resizing;
+    if (hidden || coveredByOverlay(rect, overlayRects(Array.from(document.body.children), ROOT_ID))) {
+      return null;
+    }
     return toPaneBounds(rect);
-  }, [sessionId, suspended]);
+  }, [sessionId]);
 
   useEffect(() => {
     let last: BrowserPaneBounds | null | undefined;
@@ -138,6 +166,7 @@ export function BrowserPane({ sessionId, suspended }: { sessionId: string | null
       backstop = setTimeout(push, SETTLE_MS);
     };
 
+    settleRef.current = settle;
     push();
     // The pane's own box covers a resize of the window's height and of the pane itself; the
     // document element covers a resize that moves the pane without changing its size, which is
@@ -157,6 +186,7 @@ export function BrowserPane({ sessionId, suspended }: { sessionId: string | null
     });
 
     return () => {
+      settleRef.current = null;
       resizes.disconnect();
       overlays.disconnect();
       window.removeEventListener('resize', settle);
@@ -169,10 +199,81 @@ export function BrowserPane({ sessionId, suspended }: { sessionId: string | null
     };
   }, [sessionId, measure, report]);
 
+  // Read through a ref by `measure`, so standing down and coming back is one report each rather
+  // than tearing the observers down - whose cleanup is a report of its own.
+  useEffect(() => settleRef.current?.(), [suspended]);
+
+  // The window, the sidebar and the task panel all move the maximum. The pane and the
+  // conversation together are the width those leave over, however the two split it, so a drag
+  // does not move it and the observer settles after one measurement.
+  useLayoutEffect(() => {
+    const measureLimit = () => {
+      const other = conversation.current?.getBoundingClientRect().width;
+      const own = pane.current?.getBoundingClientRect().width ?? 0;
+      setLimit(browserPaneMaxWidth(window.innerWidth, other === undefined ? Number.POSITIVE_INFINITY : own + other));
+    };
+    measureLimit();
+    const resizes = new ResizeObserver(measureLimit);
+    if (conversation.current) resizes.observe(conversation.current);
+    window.addEventListener('resize', measureLimit);
+    return () => {
+      resizes.disconnect();
+      window.removeEventListener('resize', measureLimit);
+    };
+  }, [conversation]);
+
+  useEffect(() => {
+    const current = live.current;
+    return () => cancelAnimationFrame(current.frame);
+  }, []);
+
+  // A drag writes the width straight to the element, once a frame, and commits state only on
+  // release: a render per pointermove would re-lay the transcript beside it each time for nothing.
+  const applyWidth = (next: number) => {
+    if (pane.current) pane.current.style.width = `${next}px`;
+  };
+
+  const onWidth = useCallback((next: number) => {
+    const current = live.current;
+    current.width = next;
+    if (current.dragging && !current.resizing) {
+      // Straight away rather than from a render: the first width lands on a frame, which can come
+      // before React would have rendered a stand-down, and the page would follow it once.
+      current.resizing = true;
+      settleRef.current?.();
+    }
+    if (!current.frame) {
+      current.frame = requestAnimationFrame(() => {
+        current.frame = 0;
+        applyWidth(current.width);
+      });
+    }
+  }, []);
+
+  const onCommit = useCallback((next: number) => {
+    cancelAnimationFrame(live.current.frame);
+    live.current.frame = 0;
+    live.current.resizing = false;
+    applyWidth(next);
+    // After the width, so coming back from a drag is the one report at the final size.
+    settleRef.current?.();
+    setPreferred(next);
+    writeBrowserPaneWidth(next);
+  }, []);
+
+  const onDraggingChange = useCallback((next: boolean) => {
+    live.current.dragging = next;
+    setDragging(next);
+  }, []);
+
+  const clamp = useCallback((next: number) => clampBrowserPaneWidth(next, limit), [limit]);
+
   return (
     <Box
+      ref={pane}
+      style={{ width }}
       sx={{
-        width: `min(${BROWSER_PANE_WIDTH}px, ${BROWSER_PANE_MAX_FRACTION})`,
+        position: 'relative',
         flexShrink: 0,
         height: '100%',
         display: 'flex',
@@ -184,6 +285,23 @@ export function BrowserPane({ sessionId, suspended }: { sessionId: string | null
       }}
       data-testid="chat-browser-pane"
     >
+      {/* Entirely left of the page: the native view covers every pixel of the hole, a handle
+        reaching into it would be a handle nobody can find below the navbar. */}
+      <ResizeHandle
+        edge="left"
+        label="Resize browser"
+        testId="browser-resize-handle"
+        width={width}
+        min={Math.min(BROWSER_PANE_MIN_WIDTH, limit)}
+        max={limit}
+        defaultWidth={BROWSER_PANE_WIDTH}
+        clamp={clamp}
+        dragging={dragging}
+        onWidth={onWidth}
+        onCommit={onCommit}
+        onDraggingChange={onDraggingChange}
+        sx={{ left: -5 }}
+      />
       <BrowserNavbar state={state} cookies={cookies} onNavigate={navigate} onGo={go} onCookieState={setCookies} />
       <Box ref={ref} sx={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center' }}>
         {!state.url && (

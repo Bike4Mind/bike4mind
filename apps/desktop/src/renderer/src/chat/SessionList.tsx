@@ -1,12 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-} from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Dropdown from '@mui/joy/Dropdown';
@@ -26,6 +18,7 @@ import type { PrSummary } from '@shared/pullRequest';
 import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
 import { ArtifactIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon } from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
+import { ResizeHandle } from './ResizeHandle';
 import { SessionBadge } from './SessionBadge';
 import {
   clampSidebarWidth,
@@ -282,132 +275,6 @@ function ProjectHeader({
   );
 }
 
-/** Arrow-key step. A sixth of the range, so the whole of it is a handful of presses away. */
-const RESIZE_STEP = 16;
-
-/**
- * The strip on the sidebar's right edge that sets its width.
- *
- * The drag runs on window listeners rather than on the handle's own pointer capture. Capture
- * reads better but cannot be relied on here: the pointer leaves this 5px strip on the first
- * frame of any drag worth making, and where the capture does not hold - which is anywhere the
- * input is synthesised rather than a real device, so every driven test of this - the width
- * stops following the pointer after one step and silently commits short. Listening on the
- * window is the same handful of lines and has nothing to come loose.
- *
- * The width is held in a ref as well as pushed up, because a pointermove is not a discrete
- * event: React is free to defer the state it sets, and the value read on pointerup would then
- * be a frame or two behind the pointer.
- *
- * Wider than the line it draws: 5px is the thinnest strip a pointer finds without aiming, and
- * it straddles the border so the two pixels either side of the edge both work.
- */
-function SidebarResizeHandle({
-  width,
-  dragging,
-  onWidth,
-  onCommit,
-  onDraggingChange,
-}: {
-  width: number;
-  dragging: boolean;
-  onWidth: (width: number) => void;
-  onCommit: (width: number) => void;
-  onDraggingChange: (dragging: boolean) => void;
-}) {
-  const drag = useRef<{ x: number; from: number; to: number } | null>(null);
-
-  useEffect(() => {
-    if (!dragging) return;
-
-    const onMove = (event: PointerEvent) => {
-      const current = drag.current;
-      if (!current) return;
-      current.to = clampSidebarWidth(current.from + event.clientX - current.x);
-      onWidth(current.to);
-    };
-    const onEnd = () => {
-      const current = drag.current;
-      drag.current = null;
-      onDraggingChange(false);
-      if (current) onCommit(current.to);
-    };
-
-    // The pointer spends the drag over the transcript, which selects text and draws an I-beam.
-    // Both are set on the document because that is how far the drag reaches.
-    const { userSelect, cursor } = document.body.style;
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onEnd);
-    window.addEventListener('pointercancel', onEnd);
-    return () => {
-      document.body.style.userSelect = userSelect;
-      document.body.style.cursor = cursor;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onEnd);
-      window.removeEventListener('pointercancel', onEnd);
-    };
-  }, [dragging, onWidth, onCommit, onDraggingChange]);
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    // Without this the press that starts the drag also starts a selection in the titles it
-    // began next to, before the rule above has had a render to take effect.
-    event.preventDefault();
-    drag.current = { x: event.clientX, from: width, to: width };
-    onDraggingChange(true);
-  };
-
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const step = event.key === 'ArrowLeft' ? -RESIZE_STEP : event.key === 'ArrowRight' ? RESIZE_STEP : 0;
-    if (step === 0) return;
-    event.preventDefault();
-    const next = clampSidebarWidth(width + step);
-    onWidth(next);
-    onCommit(next);
-  };
-
-  const reset = () => {
-    onWidth(SIDEBAR_DEFAULT_WIDTH);
-    onCommit(SIDEBAR_DEFAULT_WIDTH);
-  };
-
-  return (
-    <Box
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize sidebar"
-      aria-valuenow={width}
-      aria-valuemin={SIDEBAR_MIN_WIDTH}
-      aria-valuemax={SIDEBAR_MAX_WIDTH}
-      tabIndex={0}
-      onPointerDown={onPointerDown}
-      onKeyDown={onKeyDown}
-      onDoubleClick={reset}
-      sx={{
-        position: 'absolute',
-        top: 0,
-        bottom: 0,
-        right: -2,
-        width: 5,
-        zIndex: 2,
-        cursor: 'col-resize',
-        // The pointer stream is the whole mechanism; without this a trackpad drag scrolls the
-        // list under it instead.
-        touchAction: 'none',
-        bgcolor: 'transparent',
-        transition: 'background-color 120ms',
-        '&:hover, &:focus-visible, &[data-dragging="true"]': { bgcolor: 'primary.outlinedBorder' },
-        '&:focus-visible': { outline: 'none' },
-      }}
-      data-dragging={dragging ? 'true' : undefined}
-      data-testid="sidebar-resize-handle"
-    />
-  );
-}
-
 /**
  * The sidebar: primary nav, a pinned section, then the sessions for the current mode - Code
  * sessions under a header per project, Chat sessions in one flat list - and the account strip.
@@ -563,12 +430,21 @@ export function SessionList({
       }}
       data-testid="sidebar"
     >
-      <SidebarResizeHandle
+      {/* Straddles the border, so the two pixels either side of the edge both work. */}
+      <ResizeHandle
+        edge="right"
+        label="Resize sidebar"
+        testId="sidebar-resize-handle"
         width={width}
+        min={SIDEBAR_MIN_WIDTH}
+        max={SIDEBAR_MAX_WIDTH}
+        defaultWidth={SIDEBAR_DEFAULT_WIDTH}
+        clamp={clampSidebarWidth}
         dragging={dragging}
         onWidth={setWidth}
         onCommit={writeSidebarWidth}
         onDraggingChange={setDragging}
+        sx={{ right: -2 }}
       />
       <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1.5, pt: 1.5, pb: 1 }}>
         <ModeSwitcher mode={mode} onChange={onModeChange} />

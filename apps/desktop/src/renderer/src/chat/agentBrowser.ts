@@ -27,7 +27,7 @@ export function writeBrowserPaneOpen(open: boolean): void {
 }
 
 /**
- * How wide the pane opens.
+ * How wide the pane opens, until it is dragged; see browserPaneWidth.ts.
  *
  * A page rendered at the pane's width is the page the agent then snapshots, so this is not
  * only a layout number: under about 500px most sites switch to their phone layout, and the
@@ -46,7 +46,7 @@ export const BROWSER_PANE_WIDTH = 560;
  * honest outcome - at that size the two cannot both be read, and the window is the thing to
  * widen.
  */
-export const BROWSER_PANE_MAX_FRACTION = '42vw';
+export const BROWSER_PANE_MAX_FRACTION = 0.42;
 
 interface Rect {
   x: number;

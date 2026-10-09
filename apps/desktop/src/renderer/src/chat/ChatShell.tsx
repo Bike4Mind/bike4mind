@@ -182,6 +182,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const nextPrompt = usePromptSuggestion(activeId);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
+  // What the browser pane trades width with; see BrowserPane.
+  const conversationColumn = useRef<HTMLDivElement | null>(null);
 
   // Stable, because the account strip is rebuilt on every turn of the conversation and this is
   // the one thing in it that has no reason to change.
@@ -487,7 +489,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       ) : screen === 'settings' ? (
         <SettingsScreen auth={auth ?? null} onClose={() => setScreen('conversation')} />
       ) : (
-        <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
+        <Stack ref={conversationColumn} sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
             <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
               <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -767,7 +769,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         page floating over them would be unreachable - and it is told to stand down while the
         drop overlay is up, which is drawn in the React tree and so would be behind it. */}
       {browserOpen && browserAvailable && screen === 'conversation' && (
-        <BrowserPane sessionId={activeId} suspended={drop.over} />
+        <BrowserPane sessionId={activeId} suspended={drop.over} conversation={conversationColumn} />
       )}
     </Box>
   );
