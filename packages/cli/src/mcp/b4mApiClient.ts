@@ -24,8 +24,6 @@ import {
 
 export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
 
-export { parseRetryAfterSeconds };
-
 /**
  * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
  * notebook the caller owns, so write paths refuse anything that is not an ObjectId before any request.
