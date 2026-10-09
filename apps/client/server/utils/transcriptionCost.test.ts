@@ -34,7 +34,10 @@ describe('estimateTranscriptionCost', () => {
     expect(cost.credits).toBe(24);
   });
 
-  it('never prices the backend-agnostic floor above a real backend', () => {
+  it('prices each backend at its own rate and floors at the cheapest', () => {
+    expect(transcriptionUsdPerMinute('aws')).toBe(0.024);
+    expect(transcriptionUsdPerMinute('openai')).toBe(0.006);
+    expect(MIN_TRANSCRIPTION_USD_PER_MINUTE).toBe(0.006);
     for (const backend of ['aws', 'openai']) {
       expect(MIN_TRANSCRIPTION_USD_PER_MINUTE).toBeLessThanOrEqual(transcriptionUsdPerMinute(backend));
     }

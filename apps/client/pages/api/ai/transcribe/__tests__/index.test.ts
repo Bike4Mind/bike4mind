@@ -103,7 +103,12 @@ describe('POST /api/ai/transcribe', () => {
         featureLabel: 'transcription',
       });
       expect(res._getJSONData()).toEqual({ text: 'hi' });
-      expect(mocks.subtractCredits).toHaveBeenCalledTimes(1);
+      // Charged at the same backend-rate estimate the gate admitted on, so the
+      // two cannot drift (e.g. billing every backend at the cheapest rate).
+      expect(mocks.subtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ credits: expected, model: backend }),
+        expect.anything()
+      );
     }
   );
 
