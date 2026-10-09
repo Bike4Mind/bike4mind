@@ -230,7 +230,7 @@ describe('PlatformUsageDashboard endpoint section', () => {
   });
 
   it('notes that a source filter excludes rows logged before those fields existed, only while one is applied', async () => {
-    const note = 'Filtering excludes requests logged before source and owner type were recorded.';
+    const note = 'Filtering excludes requests logged before source was recorded.';
     renderDashboard();
     expect(screen.getByTestId('platform-usage-endpoint-section')).not.toHaveTextContent(note);
 
