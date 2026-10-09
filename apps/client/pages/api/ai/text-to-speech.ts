@@ -2,17 +2,16 @@ import { baseApi } from '@server/middlewares/baseApi';
 import * as z from 'zod';
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
+import { estimateTtsCreditCost } from '@bike4mind/common';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
-import {
-  assertTtsCreditsAvailable,
-  deductTtsCredits,
-  InsufficientTtsCreditsError,
-} from '@server/utils/deductTtsCredits';
+import { deductTtsCredits } from '@server/utils/deductTtsCredits';
+import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
 
 // Legacy OpenAI TTS adapter, scheduled for deprecation (CONVENTIONS.md section 7).
 // Thin wrapper over the unified aiVoiceService: body { text, voice? } -> raw
 // audio/mpeg bytes. Shares response delivery (size ceiling, oversized -> 303 to a
 // signed URL) with POST /api/ai/tts. New integrations should use /api/ai/tts.
+const MODEL = 'tts-1'; // standard model for faster response
 const handler = baseApi().post(async (req, res) => {
   const { text, voice } = z
     .object({
@@ -39,9 +38,13 @@ const handler = baseApi().post(async (req, res) => {
   const userId = req.user?.id;
   if (userId) {
     try {
-      await assertTtsCreditsAvailable(userId);
+      await assertPreflightCredits({
+        userId,
+        estimatedCredits: estimateTtsCreditCost('openai', MODEL, text.length),
+        featureLabel: 'text-to-speech',
+      });
     } catch (error) {
-      if (error instanceof InsufficientTtsCreditsError) {
+      if (error instanceof InsufficientCreditsPreflightError) {
         return res.status(402).json({ error: error.message });
       }
       throw error;
@@ -51,7 +54,7 @@ const handler = baseApi().post(async (req, res) => {
   try {
     const { audio, model, characters } = await aiVoiceService('openai', resolved.apiKey, req.logger).synthesize(text, {
       voice: resolved.voice,
-      model: 'tts-1', // standard model for faster response
+      model: MODEL,
       format: 'mp3',
     });
 

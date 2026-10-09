@@ -35,6 +35,21 @@ describe('resolveGitHubLakeCallbackStep', () => {
     });
   });
 
+  it('treats a handoff-less install return as a repair', () => {
+    expect(resolveGitHubLakeCallbackStep({ setup_action: 'update' }, null)).toEqual({ kind: 'repaired' });
+  });
+
+  it('treats a handoff-less return with an installation id and code but no state as a repair', () => {
+    expect(resolveGitHubLakeCallbackStep({ installation_id: '42', code: 'c1' }, null)).toEqual({ kind: 'repaired' });
+  });
+
+  it('still fails a handoff-less return that carries a state', () => {
+    expect(resolveGitHubLakeCallbackStep({ setup_action: 'update', state: 's1' }, null)).toEqual({
+      kind: 'failed',
+      message: RESTART_MESSAGE,
+    });
+  });
+
   it('reads a declined authorize as a cancel', () => {
     expect(resolveGitHubLakeCallbackStep({ error: 'access_denied', state: 's1' }, handoff)).toEqual({
       kind: 'cancelled',

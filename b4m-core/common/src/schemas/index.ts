@@ -32,6 +32,7 @@ export * from './dataLake';
 export * from './dataLakePublic';
 export * from './agentPublic';
 export * from './pagination';
+export * from './projectPublic';
 export * from './publicModel';
 export * from './briefcasePrompt';
 export * from './imageGenerationTemplate';

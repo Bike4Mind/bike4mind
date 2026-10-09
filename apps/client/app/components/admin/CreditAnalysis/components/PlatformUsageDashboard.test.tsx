@@ -3,12 +3,20 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { CreditHolderType, type IPlatformUsageDashboardResponse } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  type IPlatformEndpointUsageResponse,
+  type IPlatformUsageDashboardResponse,
+} from '@bike4mind/common';
 
 const mockUsePlatformUsage = vi.fn();
+const mockUseEndpointUsage = vi.fn();
 
 vi.mock('../hooks/usePlatformUsage', () => ({
   usePlatformUsage: (...args: unknown[]) => mockUsePlatformUsage(...args),
+}));
+vi.mock('../hooks/useEndpointUsage', () => ({
+  useEndpointUsage: (...args: unknown[]) => mockUseEndpointUsage(...args),
 }));
 vi.mock('./ViewUserProfile', () => ({
   default: ({ userId }: { userId: string }) => <button data-testid={`view-profile-${userId}`}>View</button>,
@@ -34,9 +42,31 @@ const responseWith = (overrides: Partial<IPlatformUsageDashboardResponse>): IPla
   byConsumer: [],
   byModel: [],
   totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
-  endpoints: { byEndpoint: [], overTime: [] },
-  endpointWindowDays: 30,
   ...overrides,
+});
+
+const endpointResponseWith = (overrides: Partial<IPlatformEndpointUsageResponse>): IPlatformEndpointUsageResponse => ({
+  windowDays: 90,
+  endpoints: { byEndpoint: [], overTime: [] },
+  ...overrides,
+});
+
+const setEndpointData = (
+  overrides: Partial<IPlatformEndpointUsageResponse> = {},
+  state: { isLoading?: boolean; isFetching?: boolean; error?: unknown; refetch?: () => void } = {}
+) => {
+  mockUseEndpointUsage.mockReturnValue({
+    data: state.isLoading ? undefined : endpointResponseWith(overrides),
+    isLoading: false,
+    isFetching: false,
+    error: null,
+    refetch: vi.fn(),
+    ...state,
+  });
+};
+
+beforeEach(() => {
+  setEndpointData();
 });
 
 const setData = (overrides: Partial<IPlatformUsageDashboardResponse> = {}) => {
@@ -146,10 +176,12 @@ describe('PlatformUsageDashboard consumers', () => {
 describe('PlatformUsageDashboard endpoint section', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setData();
+    setEndpointData();
   });
 
   it('renders the request-volume chart and endpoint table, labelled as having no credits', () => {
-    setData({
+    setEndpointData({
       endpoints: {
         byEndpoint: [
           {
@@ -179,39 +211,64 @@ describe('PlatformUsageDashboard endpoint section', () => {
     expect(row).toHaveTextContent('2,100 ms');
   });
 
-  it('says "not applicable" rather than empty when the source has no endpoint log', () => {
-    setData({ source: 'web', endpoints: null });
+  it('defaults to all sources over the full 90 days, regardless of the page-wide source and range', () => {
     renderDashboard();
-
-    expect(screen.getByTestId('platform-usage-endpoint-na')).toBeInTheDocument();
-    expect(screen.queryByTestId('platform-usage-endpoint-table')).not.toBeInTheDocument();
-    expect(screen.queryByText('No API-key requests in this window.')).not.toBeInTheDocument();
+    expect(mockUseEndpointUsage.mock.calls.at(-1)).toEqual([undefined]);
+    expect(screen.getByTestId('platform-usage-endpoint-section')).toHaveTextContent('Last 90 days');
   });
 
-  it('notes the TTL clamp when the requested window exceeds the endpoint log history', () => {
-    setData({ days: 365, endpointWindowDays: 90 });
+  it('keeps the endpoint filter independent of the credit filters, in both directions', async () => {
     renderDashboard();
 
-    expect(screen.getByTestId('platform-usage-endpoint-section')).toHaveTextContent(
-      'Last 90 days (the log keeps 90 days of history)'
-    );
+    await pickOption('platform-usage-source-select', 'All sources');
+    fireEvent.click(within(screen.getByTestId('platform-usage-range-toggle')).getByRole('button', { name: '7d' }));
+    expect(mockUseEndpointUsage.mock.calls.at(-1)).toEqual([undefined]);
+
+    await pickOption('platform-usage-endpoint-source-select', 'cli');
+    expect(mockUseEndpointUsage.mock.calls.at(-1)).toEqual(['cli']);
+    expect(lastFilters()).toEqual({ days: 7, source: undefined, ownerType: undefined });
   });
 
-  it('notes that a source or owner filter excludes rows logged before those fields existed', () => {
-    const note = 'Filtering excludes requests logged before source and owner type were recorded.';
-    setData({ source: 'cli' });
-    const { unmount } = renderDashboard();
-    expect(screen.getByTestId('platform-usage-endpoint-section')).toHaveTextContent(note);
-    unmount();
-
-    setData({ source: undefined, ownerType: undefined });
-    const { unmount: unmountUnfiltered } = renderDashboard();
+  it('notes that a source filter excludes rows logged before those fields existed, only while one is applied', async () => {
+    const note = 'Filtering excludes requests logged before source was recorded.';
+    renderDashboard();
     expect(screen.getByTestId('platform-usage-endpoint-section')).not.toHaveTextContent(note);
-    unmountUnfiltered();
 
-    setData({ source: undefined, ownerType: CreditHolderType.Organization });
-    renderDashboard();
+    await pickOption('platform-usage-endpoint-source-select', 'api');
     expect(screen.getByTestId('platform-usage-endpoint-section')).toHaveTextContent(note);
+
+    await pickOption('platform-usage-endpoint-source-select', 'All sources');
+    expect(screen.getByTestId('platform-usage-endpoint-section')).not.toHaveTextContent(note);
+  });
+
+  it('renders outside the credit loading and error states', () => {
+    mockUsePlatformUsage.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isFetching: true,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+    expect(screen.getByTestId('platform-usage-loading')).toBeInTheDocument();
+    expect(screen.getByTestId('platform-usage-endpoint-table')).toBeInTheDocument();
+  });
+
+  it('shows its own spinner while loading, with no table', () => {
+    setEndpointData({}, { isLoading: true });
+    renderDashboard();
+
+    expect(screen.getByTestId('platform-usage-endpoint-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('platform-usage-endpoint-table')).not.toBeInTheDocument();
+  });
+
+  it('shows its own error without affecting the credit sections', () => {
+    setEndpointData({}, { error: new Error('Admin access required') });
+    renderDashboard();
+
+    expect(screen.getByTestId('platform-usage-endpoint-error')).toHaveTextContent('Admin access required');
+    expect(screen.queryByTestId('platform-usage-endpoint-table')).not.toBeInTheDocument();
+    expect(screen.getByTestId('platform-usage-consumer-table')).toBeInTheDocument();
   });
 });
 
@@ -298,8 +355,9 @@ describe('PlatformUsageDashboard loading and refresh', () => {
     expect(screen.queryByTestId('platform-usage-consumer-table')).not.toBeInTheDocument();
   });
 
-  it('refetches when the refresh button is clicked', () => {
+  it('refetches both the credit and endpoint queries when the refresh button is clicked', () => {
     const refetch = vi.fn();
+    const refetchEndpoints = vi.fn();
     mockUsePlatformUsage.mockReturnValue({
       data: responseWith({}),
       isLoading: false,
@@ -307,10 +365,12 @@ describe('PlatformUsageDashboard loading and refresh', () => {
       error: null,
       refetch,
     });
+    setEndpointData({}, { refetch: refetchEndpoints });
     renderDashboard();
 
     fireEvent.click(screen.getByTestId('platform-usage-refresh-btn'));
     expect(refetch).toHaveBeenCalledTimes(1);
+    expect(refetchEndpoints).toHaveBeenCalledTimes(1);
   });
 
   it('disables the refresh button while fetching', () => {
@@ -321,6 +381,14 @@ describe('PlatformUsageDashboard loading and refresh', () => {
       error: null,
       refetch: vi.fn(),
     });
+    renderDashboard();
+
+    expect(screen.getByTestId('platform-usage-refresh-btn')).toBeDisabled();
+  });
+
+  it('disables the refresh button while only the endpoint query is fetching', () => {
+    setData();
+    setEndpointData({}, { isFetching: true });
     renderDashboard();
 
     expect(screen.getByTestId('platform-usage-refresh-btn')).toBeDisabled();

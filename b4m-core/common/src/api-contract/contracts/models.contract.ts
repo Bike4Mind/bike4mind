@@ -62,7 +62,7 @@ export const listModelsContract = defineEndpoint({
                 seed: false,
                 qualities: ['low', 'medium', 'high', 'auto'],
                 max_images: 10,
-                max_reference_images: 4,
+                max_reference_images: 15,
                 edit: true,
                 requires_input_image: false,
               },
