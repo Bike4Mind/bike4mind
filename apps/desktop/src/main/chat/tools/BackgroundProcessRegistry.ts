@@ -297,6 +297,14 @@ export class BackgroundProcessRegistry {
     return running;
   }
 
+  sessionsWithRunning(): Set<string> {
+    const sessions = new Set<string>();
+    for (const tracked of this.processes.values()) {
+      if (tracked.info.status === 'running') sessions.add(tracked.info.sessionId);
+    }
+    return sessions;
+  }
+
   list(sessionId: string): BackgroundProcessInfo[] {
     return [...this.processes.values()]
       .filter(tracked => tracked.info.sessionId === sessionId)

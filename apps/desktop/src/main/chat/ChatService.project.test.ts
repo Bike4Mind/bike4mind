@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
-import { git, listWorktrees } from './project/git';
+import { branchExists, currentBranch, git, listWorktrees } from './project/git';
 import { appWorktreeRoot, worktreeFolderName } from './project/workspace';
 import type { AccessStore } from './tools/AccessStore';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
@@ -99,7 +99,12 @@ describe('ChatService.updateProject', () => {
     service = new ChatService({
       store,
       access: { list: async () => [] } as unknown as AccessStore,
-      background: { list: () => running } as unknown as BackgroundProcessRegistry,
+      // A process with no sessionId stands for one in whichever session is asked about.
+      background: {
+        list: (sessionId: string) => running.filter(entry => !entry.sessionId || entry.sessionId === sessionId),
+        sessionsWithRunning: () =>
+          new Set(running.filter(entry => entry.status === 'running' && entry.sessionId).map(entry => entry.sessionId)),
+      } as unknown as BackgroundProcessRegistry,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () => null,
       getEnvironmentUrl: () => 'http://localhost:3000',
@@ -147,10 +152,7 @@ describe('ChatService.updateProject', () => {
     expect(await listWorktrees(main)).toEqual(before);
   });
 
-  /**
-   * With the toggle off nothing is checked out and nothing is created, which is the path
-   * chipState calls out: the recorded branch names where the session runs only by coincidence.
-   */
+  /** Re-picking the branch already checked out runs no switch and creates no worktree. */
   it('creates nothing at all with the worktree toggle off', async () => {
     const { main } = await repository('alpha-off');
     const id = await codeSession(main);
@@ -164,6 +166,128 @@ describe('ChatService.updateProject', () => {
       workingDirectory: main,
     });
     expect(await listWorktrees(main)).toEqual(before);
+  });
+
+  it('checks the picked branch out in place with the toggle off, so HEAD follows the pick', async () => {
+    const { main } = await repository('off-switch');
+    await git(main, ['branch', 'feat/chips']);
+    const id = await codeSession(main);
+    const before = await listWorktrees(main);
+
+    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' })).toMatchObject({ ok: true });
+
+    expect(await currentBranch(main)).toBe('feat/chips');
+    expect((await service.getSession(id))?.project).toMatchObject({ branch: 'feat/chips', workingDirectory: main });
+    expect(await listWorktrees(main)).toHaveLength(before.length);
+  });
+
+  it('creates and checks out a new branch from the filter with the toggle off', async () => {
+    const { main } = await repository('off-create');
+    const id = await codeSession(main);
+    const head = (await git(main, ['rev-parse', 'HEAD'])).trim();
+
+    expect(await service.updateProject({ sessionId: id, branch: 'feat/brand-new' })).toMatchObject({ ok: true });
+
+    expect(await currentBranch(main)).toBe('feat/brand-new');
+    expect((await git(main, ['rev-parse', 'HEAD'])).trim()).toBe(head);
+    expect((await service.getSession(id))?.project?.branch).toBe('feat/brand-new');
+  });
+
+  it('refuses a toggle-off switch over uncommitted changes, and leaves both sides as they were', async () => {
+    const { main } = await repository('off-dirty');
+    await git(main, ['branch', 'feat/chips']);
+    const id = await codeSession(main);
+    await writeFile(join(main, 'README.md'), 'edited\n', 'utf8');
+
+    const result = await service.updateProject({ sessionId: id, branch: 'feat/chips' });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toMatch(/uncommitted changes \(README\.md\)/);
+    expect(await currentBranch(main)).toBe('main');
+    expect(await readFile(join(main, 'README.md'), 'utf8')).toBe('edited\n');
+    expect((await service.getSession(id))?.project?.branch).toBe('main');
+  });
+
+  it('refuses a new branch over uncommitted changes too, creating nothing', async () => {
+    const { main } = await repository('off-dirty-create');
+    const id = await codeSession(main);
+    await writeFile(join(main, 'README.md'), 'edited\n', 'utf8');
+
+    expect(await service.updateProject({ sessionId: id, branch: 'feat/brand-new' })).toMatchObject({ ok: false });
+    expect(await branchExists(main, 'feat/brand-new')).toBe(false);
+  });
+
+  it('is not stopped by an untracked file the switch would carry untouched', async () => {
+    const { main } = await repository('off-untracked');
+    await git(main, ['branch', 'feat/chips']);
+    const id = await codeSession(main);
+    await writeFile(join(main, 'scratch.log'), 'noise\n', 'utf8');
+
+    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' })).toMatchObject({ ok: true });
+    expect(await currentBranch(main)).toBe('feat/chips');
+  });
+
+  it('refuses while another session has a turn running in the same folder', async () => {
+    const { main } = await repository('off-shared-turn');
+    await git(main, ['branch', 'feat/chips']);
+    const id = await codeSession(main);
+    const other = await codeSession(main);
+    (service as unknown as { active: Map<string, AbortController> }).active.set(other, new AbortController());
+
+    const result = await service.updateProject({ sessionId: id, branch: 'feat/chips' });
+
+    expect(result).toMatchObject({ ok: false, busy: true });
+    expect(await currentBranch(main)).toBe('main');
+    expect((await service.getSession(id))?.project?.branch).toBe('main');
+  });
+
+  it('refuses while another session has a background process alive in the same folder', async () => {
+    const { main } = await repository('off-shared-process');
+    await git(main, ['branch', 'feat/chips']);
+    const id = await codeSession(main);
+    const other = await codeSession(main);
+    running = [{ sessionId: other, command: 'pnpm dev', status: 'running' } as BackgroundProcessInfo];
+
+    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' })).toMatchObject({
+      ok: false,
+      busy: true,
+    });
+    expect(await currentBranch(main)).toBe('main');
+  });
+
+  it('is not stopped by a busy session in a different folder', async () => {
+    const { main } = await repository('off-elsewhere');
+    const elsewhere = await repository('off-elsewhere-b');
+    await git(main, ['branch', 'feat/chips']);
+    const id = await codeSession(main);
+    const other = await codeSession(elsewhere.main);
+    (service as unknown as { active: Map<string, AbortController> }).active.set(other, new AbortController());
+
+    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' })).toMatchObject({ ok: true });
+  });
+
+  it('refuses a toggle-off switch once the conversation has run', async () => {
+    const { main } = await repository('off-in-use');
+    await git(main, ['branch', 'feat/chips']);
+    const id = await codeSession(main);
+    await store.appendMessage(id, { id: 'm1', role: 'user', content: 'hi', createdAt: new Date().toISOString() });
+
+    const result = await service.updateProject({ sessionId: id, branch: 'feat/chips' });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toMatch(/already run here/i);
+    expect(await currentBranch(main)).toBe('main');
+  });
+
+  it('checks nothing out when the toggle is on: the pick is the base of a later cut', async () => {
+    const { main } = await repository('on-no-switch');
+    await git(main, ['branch', 'feat/chips']);
+    const id = await codeSession(main);
+
+    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips', workspace: true })).toMatchObject({
+      ok: true,
+    });
+    expect(await currentBranch(main)).toBe('main');
   });
 
   it('turning it back off returns the session to the project directory', async () => {

@@ -149,6 +149,8 @@ function ProjectChip({ binding }: { binding: ChipBinding }) {
  *
  * With no folder chosen the pill stays clickable and its menu carries the reason. A branch list
  * needs a repository, and "nothing to list" is a thing to say rather than a control to grey out.
+ * Once the session has run here the opposite holds - nothing in the menu could be picked - so
+ * the branch button is disabled and its tooltip says why.
  */
 function BranchChip({
   project,
@@ -177,19 +179,25 @@ function BranchChip({
   return (
     <Box sx={pillSx} data-testid="session-chip-branch">
       <Dropdown onOpenChange={(_event, open) => open && setFilter('')}>
-        <MenuButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          disabled={binding.busy}
-          startDecorator={<BranchIcon />}
-          sx={pillButtonSx}
-          slotProps={{ root: { 'data-testid': 'session-chip-branch-btn' } }}
-        >
-          <Typography level="body-xs" textColor="inherit" noWrap>
-            {branchChip.label}
-          </Typography>
-        </MenuButton>
+        <Tooltip title={branchChip.tooltip} size="sm" variant="soft" placement="top-start">
+          {/* Wrapped for the same reason as the worktree toggle: once locked the button is
+              disabled, and the tooltip is then the only place its branch and reason are read. */}
+          <Box sx={{ display: 'flex' }}>
+            <MenuButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={binding.busy || !branchChip.enabled}
+              startDecorator={<BranchIcon />}
+              sx={pillButtonSx}
+              slotProps={{ root: { 'data-testid': 'session-chip-branch-btn' } }}
+            >
+              <Typography level="body-xs" textColor="inherit" noWrap>
+                {branchChip.label}
+              </Typography>
+            </MenuButton>
+          </Box>
+        </Tooltip>
 
         <Menu size="sm" placement="top-start" sx={{ maxHeight: 360, overflow: 'auto', minWidth: 280 }}>
           {branches.length > FILTER_THRESHOLD && (
@@ -322,6 +330,11 @@ interface BranchReading {
   checkedOut: string | null | undefined;
 }
 
+interface BranchReader extends BranchReading {
+  /** Ask git again now; see the pick in SessionChips. */
+  refresh: () => void;
+}
+
 /** A reading plus the folders it describes, so one taken before a move can be told apart. */
 interface KeyedReading extends BranchReading {
   of: string | null;
@@ -346,18 +359,18 @@ const PENDING: BranchReading = { branches: [], isRepository: true, checkedOut: u
  * the branch of a checkout this session never touches; asking the worktree for both would leave
  * the user no branch menu to escape with on a worktree that has since been deleted.
  */
-function useBranches(directory: string | null, workingDirectory: string | null, settledTurns: number): BranchReading {
+function useBranches(directory: string | null, workingDirectory: string | null, settledTurns: number): BranchReader {
   const [state, setState] = useState<KeyedReading>({ ...PENDING, of: null });
   const [reread, setReread] = useState(0);
+  const refresh = useCallback(() => setReread(count => count + 1), []);
 
   // HEAD moves without this app's help - a `git checkout` in a terminal, another session
   // taking the worktree - and a reading taken once at mount would keep naming the branch that
   // has gone. Focus is when the user has come back to look at the chip, so it is when to ask.
   useEffect(() => {
-    const refresh = (): void => setReread(count => count + 1);
     window.addEventListener('focus', refresh);
     return () => window.removeEventListener('focus', refresh);
-  }, []);
+  }, [refresh]);
 
   const key = keyOf(directory, workingDirectory);
 
@@ -390,7 +403,7 @@ function useBranches(directory: string | null, workingDirectory: string | null, 
     // focus listener above is blind to exactly the branch changes this app caused itself.
   }, [directory, workingDirectory, key, reread, settledTurns]);
 
-  return state.of === key ? state : PENDING;
+  return { ...(state.of === key ? state : PENDING), refresh };
 }
 
 function keyOf(directory: string | null, workingDirectory: string | null): string | null {
@@ -421,16 +434,31 @@ export function SessionChips({
    */
   inUse?: boolean;
 }) {
-  const { branches, isRepository, checkedOut } = useBranches(
+  const { branches, isRepository, checkedOut, refresh } = useBranches(
     project?.directory ?? null,
     project?.workingDirectory ?? null,
     settledTurns
   );
+  const picked = project?.branch ?? '';
+  const pickedExists = !picked || branches.includes(picked);
   const chips = useMemo(
-    () => describeChipRow(project, { isRepository, count: branches.length, checkedOut }, inUse),
-    [project, isRepository, branches.length, checkedOut, inUse]
+    () => describeChipRow(project, { isRepository, count: branches.length, checkedOut, pickedExists }, inUse),
+    [project, isRepository, branches.length, checkedOut, pickedExists, inUse]
   );
-  const bound = useMemo(() => ({ ...binding, chips }), [binding, chips]);
+  // A toggle-off pick switches HEAD without changing either folder useBranches is keyed on, so
+  // nothing else would re-read it before the next focus; a created branch also joins the list.
+  const { setBranch } = binding;
+  const pickBranch = useCallback(
+    async (branch: string) => {
+      try {
+        await setBranch(branch);
+      } finally {
+        refresh();
+      }
+    },
+    [setBranch, refresh]
+  );
+  const bound = useMemo(() => ({ ...binding, setBranch: pickBranch, chips }), [binding, pickBranch, chips]);
 
   const dismiss = useCallback(() => binding.dismissError(), [binding]);
 

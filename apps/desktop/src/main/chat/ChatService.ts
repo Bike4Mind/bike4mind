@@ -44,7 +44,16 @@ import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName } from './project/branchName';
-import { branchExists, isGitDirectory, listWorktrees, projectDisplayName, unusableProjectReason } from './project/git';
+import {
+  branchExists,
+  checkoutBranch,
+  currentBranch,
+  isGitDirectory,
+  listWorktrees,
+  projectDisplayName,
+  uncommittedChanges,
+  unusableProjectReason,
+} from './project/git';
 import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
@@ -654,8 +663,8 @@ export class ChatService {
    * handle left in the UI that names where it actually is. Both clear on their own, so this is
    * a wait rather than a dead end.
    *
-   * The workspace is resolved BEFORE anything is written, for the same reason createCodeSession
-   * does it: a worktree that cannot be made must leave the session exactly as it was.
+   * With the worktree toggle off a branch pick is checked out BEFORE anything is written, so a
+   * switch git refuses leaves the session exactly as it was; see checkoutInPlace.
    */
   async updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult> {
     const session = await this.deps.store.get(request.sessionId);
@@ -707,11 +716,18 @@ export class ChatService {
       : undefined;
 
     if (workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
-    // Nothing is created here and nothing is shelled out to: a session that already has its
-    // worktree keeps it, and one that does not gets it on its first turn - see `ensureWorkspace`.
+    // No worktree is created here: a session that already has its worktree keeps it, and one
+    // that does not gets it on its first turn - see `ensureWorkspace`.
     // A worktree the session stops claiming is left registered and unharmed where it is.
     const keepsWorktree = workspace && !!workspaceBranch && !!current;
     const workingDirectory = keepsWorktree ? current.workingDirectory : directory;
+
+    // With the toggle off a pick IS a checkout, so the chip - which reads HEAD and nothing else -
+    // follows it. A move is excluded: it records the new folder's own HEAD, which is no switch.
+    if (!workspace && !movedProject && request.branch !== undefined && branch) {
+      const refused = await this.checkoutInPlace(session, workingDirectory, branch);
+      if (refused) return refused;
+    }
 
     const updated = await this.deps.store.setProject(request.sessionId, {
       directory,
@@ -727,6 +743,82 @@ export class ChatService {
     });
     if (!updated) return { ok: false, error: 'This conversation is no longer available.' };
     return { ok: true, session: updated };
+  }
+
+  /**
+   * Switch the folder a toggle-off session runs in onto `branch`, or say why not.
+   *
+   * Every refusal leaves both the checkout and `project.branch` as they were, which is why this
+   * runs before the store write. The folder is shared - with other sessions bound to it and with
+   * the user's own terminal - so nothing is stashed and nothing is forced: uncommitted work and
+   * anything running there are reasons to stop, not obstacles to clear.
+   */
+  private async checkoutInPlace(
+    session: ChatSession,
+    directory: string,
+    branch: string
+  ): Promise<{ ok: false; error: string; busy?: boolean } | null> {
+    if ((await currentBranch(directory)) === branch) return null;
+    // Main's half of the chip lock, now that a pick has an effect on disk; see describeChipRow.
+    if (session.messages.length > 0) {
+      return { ok: false, error: 'This conversation has already run here. Start a new session to switch branches.' };
+    }
+    const sharer = await this.activeSessionIn(directory, session.id);
+    if (sharer) {
+      return {
+        ok: false,
+        busy: true,
+        error: `"${sharer.title}" is running in ${directory}. Switching it to ${branch} now would move that session's checkout under it.`,
+      };
+    }
+    let dirty: string[];
+    try {
+      dirty = await uncommittedChanges(directory);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : `Could not read the state of ${directory}.` };
+    }
+    if (dirty.length > 0) {
+      const named = dirty.slice(0, 3).join(', ') + (dirty.length > 3 ? `, and ${dirty.length - 3} more` : '');
+      return {
+        ok: false,
+        error:
+          `${directory} has uncommitted changes (${named}). Commit them before switching to ${branch}, ` +
+          'or turn on worktree to leave this checkout as it is.',
+      };
+    }
+    const create = !(await branchExists(directory, branch));
+    if (create && !isValidBranchName(branch)) return { ok: false, error: `${branch} is not a valid branch name.` };
+    try {
+      await checkoutBranch(directory, branch, create);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'git refused the switch.';
+      return { ok: false, error: `Could not switch ${directory} to ${branch}: ${reason}` };
+    }
+    return null;
+  }
+
+  /**
+   * Another session with something running in `directory` right now, if there is one.
+   *
+   * Walks only the sessions that are busy, never the store: an idle one cannot be hurt by the
+   * switch (its chip re-reads HEAD), and listing every session on disk would put the cost of a
+   * pick on the number of conversations the user has ever had.
+   */
+  private async activeSessionIn(directory: string, except: string): Promise<ChatSession | null> {
+    const ids = new Set([
+      ...this.active.keys(),
+      ...this.compacting,
+      ...this.preparing,
+      ...this.sending.keys(),
+      ...(this.deps.background?.sessionsWithRunning() ?? []),
+    ]);
+    ids.delete(except);
+    const target = resolve(directory);
+    for (const id of ids) {
+      const other = await this.deps.store.get(id);
+      if (other?.project && resolve(other.project.workingDirectory) === target) return other;
+    }
+    return null;
   }
 
   /**

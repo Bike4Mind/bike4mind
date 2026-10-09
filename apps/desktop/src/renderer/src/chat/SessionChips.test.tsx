@@ -122,7 +122,7 @@ describe('the branch chip against what git answers', () => {
     expect(label()).toBe('no branch');
   });
 
-  it('says in the menu that picking a branch checks nothing out while the toggle is off', async () => {
+  it('says in the menu that picking a branch checks it out while the toggle is off', async () => {
     inspectProject.mockResolvedValue(inspection({ currentBranch: 'fix/elsewhere' }));
     await show(project());
 
@@ -130,8 +130,43 @@ describe('the branch chip against what git answers', () => {
       (host.querySelector('[data-testid="session-chip-branch-btn"]') as HTMLElement).click();
     });
     const notice = document.body.querySelector('[data-testid="session-chip-branch-notice"]')?.textContent ?? '';
-    expect(notice).toMatch(/nothing is checked out/i);
-    expect(notice).toContain('fix/elsewhere');
+    expect(notice).toMatch(/checks it out in/i);
+    expect(notice).not.toMatch(/nothing is checked out/i);
+  });
+
+  /**
+   * The reported bug, on a new session: with the toggle off the pick is a checkout, and the
+   * chip has to name the new branch as soon as the pick resolves - not on the next focus.
+   */
+  it('names the picked branch right after a toggle-off pick checks it out', async () => {
+    inspectProject.mockResolvedValue(inspection({ currentBranch: 'main' }));
+    const setBranch = vi.fn(async () => {
+      inspectProject.mockResolvedValue(inspection({ currentBranch: 'feat/chips' }));
+    });
+    await act(async () =>
+      root.render(<SessionChips project={project()} binding={{ ...binding, setBranch }} settledTurns={0} />)
+    );
+    await act(async () => undefined);
+    expect(label()).toBe('main');
+
+    await act(async () => {
+      (host.querySelector('[data-testid="session-chip-branch-btn"]') as HTMLElement).click();
+    });
+    const option = [...document.body.querySelectorAll('[data-testid="session-chip-branch-option"]')].find(
+      node => node.textContent === 'feat/chips'
+    ) as HTMLElement;
+    await act(async () => option.click());
+    await act(async () => undefined);
+
+    expect(setBranch).toHaveBeenCalledWith('feat/chips');
+    expect(label()).toBe('feat/chips');
+  });
+
+  it('shows the picked base before the first message when the worktree toggle is on', async () => {
+    inspectProject.mockResolvedValue(inspection({ currentBranch: 'main' }));
+    await show(project({ branch: 'feat/chips', workspace: true }));
+
+    expect(label()).toBe('feat/chips');
   });
 
   /** HEAD moves from a terminal, and the chip is read after the user comes back to the window. */
@@ -177,8 +212,8 @@ describe('the branch chip against what git answers', () => {
   });
 
   /**
-   * Picking a branch with the toggle off checks nothing out, so a re-read must answer with the
-   * branch the folder is still on - never with the one the session has just recorded.
+   * A recorded branch is not evidence of a checkout: when HEAD did not move, a re-read must
+   * answer with the branch the folder is still on - never with the one the session recorded.
    */
   it('keeps naming the checked-out branch when a re-read follows a recorded-only pick', async () => {
     inspectProject.mockResolvedValue(inspection({ currentBranch: 'main' }));
@@ -275,12 +310,22 @@ describe('the chip row once the session has run here', () => {
     expect(disabled('session-chip-add-context')).toBe(true);
   });
 
-  /** A lock, not a blank: the row still says which branch the session is on. */
-  it('keeps the branch readable and its menu open so the reason can be read', async () => {
+  it('leaves the branch chip openable while nothing has run yet', async () => {
+    await show(false);
+
+    expect(disabled('session-chip-branch-btn')).toBe(false);
+  });
+
+  /** A lock, not a blank: the label still says which branch, and the menu no longer opens. */
+  it('disables the branch chip after the first message so its menu cannot be opened', async () => {
     await show(true);
 
-    const button = host.querySelector('[data-testid="session-chip-branch-btn"]');
-    expect(button?.textContent).toBe('main');
-    expect(button?.hasAttribute('disabled')).toBe(false);
+    const button = host.querySelector('[data-testid="session-chip-branch-btn"]') as HTMLElement;
+    expect(button.textContent).toBe('main');
+    expect(disabled('session-chip-branch-btn')).toBe(true);
+
+    await act(async () => button.click());
+    expect(document.body.querySelector('[data-testid="session-chip-branch-option"]')).toBeNull();
+    expect(document.body.querySelector('[data-testid="session-chip-branch-notice"]')).toBeNull();
   });
 });

@@ -1258,6 +1258,7 @@ export interface UpdateProjectRequest {
   sessionId: string;
   /** A different project root. Changing it invalidates the branch, which the caller re-reads. */
   directory?: string;
+  /** With the worktree toggle off this is also checked out in place; see ChatService.checkoutInPlace. */
   branch?: string;
   workspace?: boolean;
 }

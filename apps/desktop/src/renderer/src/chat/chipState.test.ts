@@ -142,16 +142,24 @@ describe('describeChipRow when the live branch is not known', () => {
 });
 
 /**
- * Selecting a branch with the worktree toggle off writes `project.branch` and nothing else -
- * no checkout happens anywhere - so the chip goes on naming the branch already in place. The
- * menu is where that has to be admitted, or a click that changes nothing reads as a fault.
+ * With the worktree toggle off a pick is checked out in the session's folder, so the chip
+ * follows it through HEAD. The menu says so up front, because that folder may be shared.
  */
 describe('describeChipRow on what picking a branch will do', () => {
-  it('says a pick is only recorded while the session runs outside a worktree', () => {
-    const row = describeChipRow(project, { isRepository: true, count: 3, checkedOut: 'fix/elsewhere' });
-    expect(row.branchNotice).toMatch(/nothing is checked out/i);
-    expect(row.branchNotice).toContain('fix/elsewhere');
-    expect(row.branchNotice).toMatch(/turn on worktree/i);
+  it('says a pick checks the branch out in the folder while the toggle is off', () => {
+    const row = describeChipRow(project, { isRepository: true, count: 3, checkedOut: 'main' });
+    expect(row.branchNotice).toMatch(/checks it out in/i);
+    expect(row.branchNotice).toContain(project.workingDirectory);
+    expect(row.branchNotice).toMatch(/uncommitted changes/i);
+    expect(row.branchNotice).not.toMatch(/nothing is checked out/i);
+  });
+
+  it('labels the chip with the branch the checkout switched to, not the one recorded before', () => {
+    const switched = describeChipRow(
+      { ...project, branch: 'feat/chips' },
+      { isRepository: true, count: 3, checkedOut: 'feat/chips' }
+    );
+    expect(switched.branch.label).toBe('feat/chips');
   });
 
   /**
@@ -198,7 +206,7 @@ describe('describeChipRow once the session has run here', () => {
     const row = describeChipRow(project, lookup, true);
 
     expect(row.locked).toBe(true);
-    for (const chip of [row.folder, row.worktree, row.addContext]) {
+    for (const chip of [row.folder, row.branch, row.worktree, row.addContext]) {
       expect(chip.enabled).toBe(false);
       expect(chip.tooltip).toMatch(/already run here/i);
     }
@@ -218,7 +226,23 @@ describe('describeChipRow once the session has run here', () => {
     expect(row.folder.label).toBe('thing');
     expect(row.folder.tooltip).toContain(project.directory);
     expect(row.branch.label).toBe('main');
-    expect(row.branch.enabled).toBe(true);
+  });
+
+  /** Disabled rather than a menu of disabled entries; the tooltip carries what the menu said. */
+  it('disables the branch chip and names its branch and the reason in the tooltip', () => {
+    const row = describeChipRow(project, lookup, true);
+
+    expect(row.branch.enabled).toBe(false);
+    expect(row.branch.tooltip).toContain('On main');
+    expect(row.branch.tooltip).toContain(project.workingDirectory);
+    expect(row.branch.tooltip).toMatch(/already run here/i);
+  });
+
+  it('keeps a mismatch between the folder and the recorded branch in the locked tooltip', () => {
+    const row = describeChipRow({ ...project, branch: 'develop' }, lookup, true);
+
+    expect(row.branch.tooltip).toContain('On main');
+    expect(row.branch.tooltip).toContain('recorded develop');
   });
 
   it('leaves everything editable while nothing has run yet', () => {
@@ -226,6 +250,7 @@ describe('describeChipRow once the session has run here', () => {
 
     expect(row.locked).toBe(false);
     expect(row.folder.enabled).toBe(true);
+    expect(row.branch.enabled).toBe(true);
     expect(row.worktree.enabled).toBe(true);
     expect(row.addContext.enabled).toBe(true);
   });
@@ -265,10 +290,50 @@ describe('the branch menu notice with the worktree toggle on', () => {
     expect(row.worktree.tooltip).toContain('b4m/thing-a1b2c3');
   });
 
-  it('still says nothing is checked out with the toggle off', () => {
+  it('says the folder itself is switched with the toggle off', () => {
     const row = describeChipRow(project, { isRepository: true, count: 3, checkedOut: 'main' });
 
-    expect(row.branchNotice).toMatch(/nothing is checked out/i);
+    expect(row.branchNotice).toMatch(/checks it out/i);
+  });
+});
+
+/**
+ * The bug a new session hit: worktree on, a branch picked, and the chip still read `main` -
+ * the main checkout's HEAD, a branch this session will never run on. Until the first turn cuts
+ * the worktree, the pick is exactly what it is cut from, so the pick is the label.
+ */
+describe('the branch chip with the worktree toggle on, before and after the cut', () => {
+  const pending: ChatProject = { ...project, branch: 'develop', workspace: true };
+
+  it('shows the picked branch before the first message, whatever the main checkout is on', () => {
+    const row = describeChipRow(pending, { isRepository: true, count: 3, checkedOut: 'main' });
+    expect(row.branch.label).toBe('develop');
+  });
+
+  it('shows the pick without waiting on git, since nothing is read from it', () => {
+    expect(describeChipRow(pending, { isRepository: true, count: 3 }).branch.label).toBe('develop');
+  });
+
+  it('says a new branch and worktree will be cut from the pick on the first message', () => {
+    const row = describeChipRow(pending, { isRepository: true, count: 3, checkedOut: 'main' });
+    expect(row.branch.tooltip).toMatch(/new branch and worktree will be cut from develop/i);
+    expect(row.branch.tooltip).toMatch(/first message/i);
+  });
+
+  it('says the typed name becomes the new branch when it is not an existing one', () => {
+    const row = describeChipRow(
+      { ...pending, branch: 'feat/new-thing' },
+      { isRepository: true, count: 3, checkedOut: 'main', pickedExists: false }
+    );
+    expect(row.branch.label).toBe('feat/new-thing');
+    expect(row.branch.tooltip).toMatch(/new branch, feat\/new-thing, and its worktree will be created/i);
+  });
+
+  it('reads the worktree checkout once the cut has happened', () => {
+    const cut = { ...pending, workspaceBranch: 'b4m/thing-a1b2c3', workingDirectory: '/w/b4m+thing-a1b2c3' };
+    const row = describeChipRow(cut, { isRepository: true, count: 3, checkedOut: 'b4m/thing-a1b2c3' });
+    expect(row.branch.label).toBe('b4m/thing-a1b2c3');
+    expect(row.branch.tooltip).not.toMatch(/first message/i);
   });
 });
 

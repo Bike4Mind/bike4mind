@@ -1,4 +1,4 @@
-import type { ChatProject } from '@shared/chat';
+import { awaitsWorktree, type ChatProject } from '@shared/chat';
 
 /**
  * What one chip in the row says and whether it can act yet.
@@ -30,7 +30,8 @@ export interface ChipRowState {
   addContext: ChipDescription;
   /**
    * Line inside the branch menu: what the list cannot offer, or - when branches ARE listed -
-   * what picking one of them will and will not do. Null only when there is nothing to add.
+   * what picking one of them will and will not do. Null only when there is nothing to add. Once
+   * the row is locked the menu cannot open, so this is unseen there; the tooltip carries it.
    */
   branchNotice: string | null;
 }
@@ -59,21 +60,30 @@ export interface BranchLookup {
    * be asked. Undefined means not looked up; null means detached, or not a repository.
    */
   checkedOut?: string | null;
+  /**
+   * False when `project.branch` is not in the list, which with the worktree toggle on means the
+   * worktree is cut ONTO that new name rather than from it; see resolveWorkspace. Undefined is
+   * read as true.
+   */
+  pickedExists?: boolean;
 }
 
 /** Shown while git is still being asked, so no name is put up before one has been read. */
 const READING_BRANCH = '...';
 
 /**
- * The chip row reads the branch from `checkedOut` and from nowhere else.
+ * The chip row reads the branch from `checkedOut`, with one exception.
  *
- * `project.branch` is the branch this session RECORDED, which is a different thing: with the
- * worktree toggle off nothing ever checks it out, so it names where the session runs only by
- * coincidence, and it goes on naming a checkout that is gone the moment anything switches the
- * working directory - another session, or a `git checkout` in a terminal. It used to be the
- * label whenever git had not answered, which is how the chip came to state a branch the
- * session was not on. It is still the user's choice and still what a spawned child inherits;
- * it is just not evidence of anything, so it labels nothing.
+ * `project.branch` is the branch this session RECORDED, and it goes on naming a checkout that is
+ * gone the moment anything switches the working directory - another session, or a `git
+ * checkout` in a terminal. It used to be the label whenever git had not answered, which is how
+ * the chip came to state a branch the session was not on, so it is not evidence of where the
+ * session runs. With the toggle off a pick is checked out in place (ChatService.checkoutInPlace),
+ * which is how the chip follows it: through HEAD, like any other switch.
+ *
+ * The exception is a worktree that is asked for and not yet cut. There is no checkout of the
+ * session's own to read, and the main checkout's HEAD is a branch the session will never run
+ * on; the pick is exactly what the first turn cuts from, so it is the honest label until then.
  */
 export function describeChipRow(
   project: ChatProject | null,
@@ -121,11 +131,11 @@ export function describeChipRow(
       enabled: !inUse,
     },
     branch: {
-      label: branchLabel(branches),
-      // Still clickable when locked: the menu is where the branch this session is on, and the
-      // reason it cannot change, are both readable.
-      tooltip: inUse ? `${branchTooltip(project, branches)}\n\n${IN_USE}` : branchTooltip(project, branches),
-      enabled: true,
+      label: branchLabel(project, branches),
+      // Locked like the folder: a menu whose every entry is disabled is a dead end to click into.
+      // What it used to say - the branch, and why it cannot change - moves into the tooltip.
+      tooltip: inUse ? lockedBranchTooltip(project, branches) : branchTooltip(project, branches),
+      enabled: !inUse,
     },
     worktree: {
       label: 'worktree',
@@ -159,8 +169,9 @@ function worktreeTooltip(project: ChatProject, relocated: boolean): string {
   return 'Run this session on its own branch, cut from the one picked, in its own git worktree';
 }
 
-/** The branch the session is on, or an admission that there is not one to show. */
-function branchLabel({ checkedOut }: BranchLookup): string {
+/** The branch the session is on, or will be cut from, or an admission that there is neither. */
+function branchLabel(project: ChatProject, { checkedOut }: BranchLookup): string {
+  if (awaitsWorktree(project) && project.branch) return project.branch;
   if (checkedOut === undefined) return READING_BRANCH;
   return checkedOut ?? 'no branch';
 }
@@ -173,7 +184,12 @@ function branchLabel({ checkedOut }: BranchLookup): string {
  * on ." - and that is the normal state of every session started from the group header's "+",
  * which carries the folder and leaves the branch to the user. See newSessionInProject.
  */
-function branchTooltip(project: ChatProject, { checkedOut, isRepository }: BranchLookup): string {
+function branchTooltip(project: ChatProject, { checkedOut, isRepository, pickedExists }: BranchLookup): string {
+  if (awaitsWorktree(project) && project.branch) {
+    return pickedExists === false
+      ? `A new branch, ${project.branch}, and its worktree will be created when you send your first message.`
+      : `A new branch and worktree will be cut from ${project.branch} when you send your first message.`;
+  }
   if (checkedOut === undefined) return `Reading the branch in ${project.workingDirectory}...`;
   if (checkedOut === null) {
     if (!isRepository) return `${project.directory} is not a git repository, so it has no branch.`;
@@ -184,13 +200,20 @@ function branchTooltip(project: ChatProject, { checkedOut, isRepository }: Branc
   return `${project.workingDirectory} is on ${checkedOut}; this session recorded ${project.branch}.`;
 }
 
+/** The locked pill's one place to read from, so it has to name the branch itself. */
+function lockedBranchTooltip(project: ChatProject, branches: BranchLookup): string {
+  const label = branchLabel(project, branches);
+  const detail = branchTooltip(project, branches);
+  const on = branches.checkedOut ? `On ${label} in ${project.workingDirectory}.` : detail;
+  const extra = branches.checkedOut && detail !== project.directory ? `\n\n${detail}` : '';
+  return `${on}${extra}\n\n${IN_USE}`;
+}
+
 /**
- * With the toggle off, picking a branch writes `project.branch` and NOTHING else: no checkout
- * happens, in this directory or anywhere, so the chip goes on naming the branch that was
- * already there. Saying so in the menu is the honest half of that - the alternative readings
- * of a click that changes nothing are that the app is broken or that the user misclicked.
+ * What a pick will do, which differs by an entire branch between the two toggle states: with it
+ * off the folder itself is switched, with it on the folder is left alone and the pick is a base.
  */
-function branchNotice(project: ChatProject, { isRepository, count, checkedOut }: BranchLookup): string | null {
+function branchNotice(project: ChatProject, { isRepository, count }: BranchLookup): string | null {
   if (count === 0) return isRepository ? 'This repository has no branches yet.' : 'Not a git repository.';
   if (project.workspace) {
     // Two things the user cannot see and would otherwise get wrong. That picking `main` means
@@ -204,9 +227,9 @@ function branchNotice(project: ChatProject, { isRepository, count, checkedOut }:
       `from it, in a worktree of its own. The branch you pick is never checked out here.${pending}`
     );
   }
-  const stays = checkedOut ? ` ${project.workingDirectory} stays on ${checkedOut}.` : '';
+  // Said up front because the folder may be shared - with another session, or a terminal.
   return (
-    `Picking a branch records it for this session; nothing is checked out.${stays} ` +
-    'Turn on worktree to run on the branch you pick.'
+    `Picking a branch checks it out in ${project.workingDirectory}. Uncommitted changes there, or ` +
+    'another session running there, stop the switch. Turn on worktree to leave this folder as it is.'
   );
 }

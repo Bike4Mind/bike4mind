@@ -264,3 +264,29 @@ export async function fetchRemoteFor(directory: string, baseRef: string): Promis
     // Offline, or no such remote. Branching from the stale ref beats refusing to start.
   }
 }
+
+/**
+ * Tracked files with uncommitted changes in `directory`, staged or not, as git names them.
+ *
+ * Untracked files are left out: a switch carries them untouched, and git itself refuses one that
+ * would overwrite an untracked file, so they cannot be lost by `checkoutBranch`. Counting them
+ * would refuse every checkout that has a stray build log or a local env backup lying around.
+ */
+export async function uncommittedChanges(directory: string): Promise<string[]> {
+  const stdout = await git(directory, ['status', '--porcelain', '--untracked-files=no']);
+  return stdout
+    .split('\n')
+    .map(line => line.slice(3).trim())
+    .filter(Boolean);
+}
+
+/**
+ * Switch `directory` onto `branch`, creating it from HEAD when `create` is set.
+ *
+ * Never forced and never stashed: a refusal from git (a conflicting untracked file, a branch
+ * another worktree holds) comes back as its own GitError for the user to read. `--no-guess`
+ * keeps a name that is only on a remote from being quietly turned into a new tracking branch.
+ */
+export async function checkoutBranch(directory: string, branch: string, create: boolean): Promise<void> {
+  await git(directory, create ? ['switch', '--quiet', '-c', branch] : ['switch', '--quiet', '--no-guess', branch]);
+}
