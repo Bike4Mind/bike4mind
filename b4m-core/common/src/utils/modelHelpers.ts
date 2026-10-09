@@ -240,8 +240,8 @@ export const IMAGES_PER_EDIT_REQUEST = 1;
 
 /**
  * Reference ("style anchor") images a single gpt-image request may carry, on top of the
- * primary input image: OpenAI's documented images.edit limit for the gpt-image family. Each
- * one is billed as input tokens, which the credit hold prices through
- * OpenAIImageCostCalculator.getInputImageCost - keep the two together.
+ * primary input image: 15 references + the primary = OpenAI's documented 16-image images.edit
+ * limit for the gpt-image family. Each one is billed as input tokens, which the credit hold
+ * prices through OpenAIImageCostCalculator.getInputImageCost - keep the two together.
  */
-export const MAX_REFERENCE_IMAGES = 16;
+export const MAX_REFERENCE_IMAGES = 15;

@@ -10,15 +10,15 @@ describe('referenceImageFabFileIds cap', () => {
       issue => issue.path[0] === 'referenceImageFabFileIds'
     );
 
-  it("is OpenAI's documented limit of 16", () => {
-    expect(MAX_REFERENCE_IMAGES).toBe(16);
+  it("leaves room for the primary image within OpenAI's documented limit of 16", () => {
+    expect(MAX_REFERENCE_IMAGES).toBe(15);
   });
 
   it.each([
     ['generate', GenerateImageIvokeParamsSchema],
     ['edit', EditImageRequestBodySchema],
-  ] as const)('%s accepts 16 references and rejects 17', (_, schema) => {
-    expect(refIssues(schema, 16)).toEqual([]);
-    expect(refIssues(schema, 17)).toHaveLength(1);
+  ] as const)('%s accepts 15 references and rejects 16', (_, schema) => {
+    expect(refIssues(schema, 15)).toEqual([]);
+    expect(refIssues(schema, 16)).toHaveLength(1);
   });
 });
