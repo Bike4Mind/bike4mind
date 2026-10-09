@@ -2,7 +2,7 @@ import { RequestHandler } from 'express';
 import { ApiKeyAlertService, AnomalyDetectionRequest } from '@server/managers/apiKeyAlertService';
 import { isApiKeyAuth } from './apiKeyAuth';
 import { ApiKeyScope } from '@bike4mind/common';
-import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { resolveRequestPathname, resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
 /**
  * Middleware to detect anomalies in API key usage
@@ -41,7 +41,7 @@ export const apiKeyAnomalyDetection = (): RequestHandler => {
     // Use IP address and endpoint already extracted by apiKeyAuth
     const ipAddress = usageInfo?.ipAddress || 'unknown';
     const endpoint = usageInfo?.endpoint || resolveRouteTemplate(req);
-    const pathname = (req.originalUrl || req.url || '').split(/[?#]/, 1)[0];
+    const pathname = resolveRequestPathname(req);
 
     // Run after response finishes so detection never blocks or slows the request.
     res.once('finish', () => {
