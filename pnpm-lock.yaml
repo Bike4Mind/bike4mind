@@ -1126,12 +1126,6 @@ importers:
       '@asteasolutions/zod-to-openapi':
         specifier: ^9.1.0
         version: 9.1.0(zod@4.4.3)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)

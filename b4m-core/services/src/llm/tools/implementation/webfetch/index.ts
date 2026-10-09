@@ -7,9 +7,9 @@ import { createFirecrawlApp } from './firecrawlApp';
 import { plainFetchScrape } from './plainFetch';
 import { unsafeFetchUrlReason } from './ssrfGuard';
 
-// Re-exported so external construction sites (e.g. apps/client researchEngineQueue)
+// Re-exported so external construction sites (e.g. apps/workers researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
-export { FirecrawlApp, createFirecrawlApp, resolveFirecrawlApp } from './firecrawlApp';
+export { createFirecrawlApp } from './firecrawlApp';
 
 interface WebFetchParams {
   url: string;

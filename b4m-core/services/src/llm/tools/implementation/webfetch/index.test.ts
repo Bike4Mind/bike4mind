@@ -8,10 +8,6 @@ const scrapeUrl = vi.fn(async () => ({
 }));
 
 vi.mock('./firecrawlApp', () => ({
-  FirecrawlApp: class {
-    scrapeUrl = scrapeUrl;
-  },
-  resolveFirecrawlApp: (x: unknown) => x,
   // Default: Firecrawl is configured -> return an app whose scrapeUrl is the mock above.
   // The keyless-fallback tests override this to return null.
   createFirecrawlApp: vi.fn(() => ({ scrapeUrl })),

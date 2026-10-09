@@ -7,8 +7,10 @@ description: >-
   queue group's base..head range on merge_group. Returns deployable=false only
   when every changed file matches the non-deployable pathspec list; returns
   docs-changed=true when any changed file matches the docs pathspec list - the
-  docs-site/ corpus plus the help tooling in packages/scripts/help/. Fails open
-  (deployable=true) when the diff range can't be resolved.
+  docs-site/ corpus plus the help tooling in packages/scripts/help/; returns
+  published-changed=true when any changed file matches the published pathspec
+  list - b4m-core, the lockfile, the check, its fixture and the CI wiring.
+  Fails open (deployable=true) when the diff range can't be resolved.
 
   PR events use the merge-base (not the per-push before..after range) so a
   docs-only PR stays non-deployable even on a push that also merges/rebases
@@ -73,6 +75,18 @@ inputs:
     default: |
       docs-site/**
       packages/scripts/help/**
+  published-paths:
+    description: >-
+      Newline-separated git pathspecs (INCLUDE form) the published declaration check covers,
+      including the check's own script, fixture and CI wiring; published-changed=true on any match.
+    required: false
+    default: |
+      b4m-core/**
+      pnpm-lock.yaml
+      scripts/check-published-dts.mjs
+      scripts/fixtures/dangling-dts/**
+      .github/workflows/ci.yml
+      .github/actions/changes-filter/**
 
 outputs:
   deployable:
@@ -81,6 +95,9 @@ outputs:
   docs-changed:
     description: "'true' if the run touched the docs corpus (docs-site/) or the help tooling (packages/scripts/help/), or the range was unresolved; 'false' otherwise. Gates the help-docs job in ci.yml, which runs the help guards a non-deployable docs-only run would otherwise skip."
     value: ${{ steps.filter.outputs.docs-changed }}
+  published-changed:
+    description: "'true' if the run touched b4m-core, the lockfile, the check, its fixture or the CI wiring, or the range was unresolved; 'false' otherwise. Gates the published-dts job in ci.yml."
+    value: ${{ steps.filter.outputs.published-changed }}
 
 runs:
   using: composite
@@ -101,6 +118,7 @@ runs:
         MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         DOCS_PATHS: ${{ inputs.docs-paths }}
+        PUBLISHED_PATHS: ${{ inputs.published-paths }}
       run: |
         set -euo pipefail
 
@@ -118,6 +136,9 @@ runs:
 
         DOCS=()
         while IFS= read -r line; do DOCS+=("$line"); done < <(parse_specs "$DOCS_PATHS")
+
+        PUBLISHED=()
+        while IFS= read -r line; do PUBLISHED+=("$line"); done < <(parse_specs "$PUBLISHED_PATHS")
 
         # Pick the diff range from the trigger that fired THIS run.
         case "$EVENT_NAME" in
@@ -153,9 +174,10 @@ runs:
            || echo "$BASE" | grep -qE '^0+$' \
            || ! git cat-file -e "$BASE" 2>/dev/null \
            || ! git cat-file -e "$HEAD" 2>/dev/null; then
-          echo "Could not resolve a clean diff range ($BASE..$HEAD); deploying + building docs."
+          echo "Could not resolve a clean diff range ($BASE..$HEAD); deploying, building docs and checking published declarations."
           echo "deployable=true" >> "$GITHUB_OUTPUT"
           echo "docs-changed=true" >> "$GITHUB_OUTPUT"
+          echo "published-changed=true" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
@@ -173,6 +195,7 @@ runs:
           echo "git diff (deployable) failed unexpectedly after range validation; failing open."
           echo "deployable=true" >> "$GITHUB_OUTPUT"
           echo "docs-changed=true" >> "$GITHUB_OUTPUT"
+          echo "published-changed=true" >> "$GITHUB_OUTPUT"
           exit 0
         }
         if [ -z "$NON_DOC" ]; then
@@ -186,8 +209,9 @@ runs:
 
         # Independent docs-site signal (same range). Fail open to true on error.
         DOCS_HIT=$(git diff --name-only "$BASE" "$HEAD" -- "${DOCS[@]}") || {
-          echo "git diff (docs) failed unexpectedly; failing open (docs-changed=true)."
+          echo "git diff (docs) failed unexpectedly; failing open (docs-changed=true, published-changed=true)."
           echo "docs-changed=true" >> "$GITHUB_OUTPUT"
+          echo "published-changed=true" >> "$GITHUB_OUTPUT"
           exit 0
         }
         if [ -n "$DOCS_HIT" ]; then
@@ -197,4 +221,19 @@ runs:
         else
           echo "No docs-site changes."
           echo "docs-changed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        # Independent published-declaration signal (same range).
+        PUBLISHED_HIT=$(git diff --name-only "$BASE" "$HEAD" -- "${PUBLISHED[@]}") || {
+          echo "git diff (published) failed unexpectedly; failing open (published-changed=true)."
+          echo "published-changed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+        if [ -n "$PUBLISHED_HIT" ]; then
+          echo "Published-declaration changes detected:"
+          echo "$PUBLISHED_HIT"
+          echo "published-changed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "No published-declaration changes."
+          echo "published-changed=false" >> "$GITHUB_OUTPUT"
         fi
