@@ -7,9 +7,18 @@ import { join } from 'path';
 
 import openNextConfig from '../../apps/client/open-next.config';
 
-const readJson = (rel: string) => JSON.parse(readFileSync(join(__dirname, '..', '..', rel), 'utf8'));
-const clientPkg = readJson('apps/client/package.json');
-const rootPkg = readJson('package.json');
+const readRepoFile = (rel: string) => readFileSync(join(__dirname, '..', '..', rel), 'utf8');
+const rootPkg = JSON.parse(readRepoFile('package.json'));
+
+// The `sharp` entry of the apps/client importer block in pnpm-lock.yaml, i.e. what the app actually resolves.
+const resolvedClientSharp = () => {
+  const lock = readRepoFile('pnpm-lock.yaml');
+  const start = lock.indexOf('\n  apps/client:\n');
+  if (start < 0) return undefined;
+  const next = lock.slice(start + 1).search(/\n {2}\S/);
+  const block = next < 0 ? lock.slice(start) : lock.slice(start, start + 1 + next);
+  return block.match(/\n {6}sharp:\n {8}specifier: \S+\n {8}version: (\d+\.\d+\.\d+)/)?.[1];
+};
 
 const install = openNextConfig.imageOptimization.install;
 const sharpSpec = install.packages.find(p => p.startsWith('sharp@'));
@@ -27,8 +36,6 @@ const compare = (a: string, b: string) => {
 };
 
 describe('OpenNext image optimizer sharp install', () => {
-  // npm selects sharp's native @img/sharp-<os>-<cpu> package by --cpu, not --arch; without it an
-  // x64 deploy runner ships an x64 binary to the arm64 image Lambda and every transform fails.
   it('installs the linux arm64 glibc binary', () => {
     expect(install.additionalArgs.split(/\s+/)).toContain('--cpu=arm64');
     expect(install.arch).toBe('arm64');
@@ -36,17 +43,14 @@ describe('OpenNext image optimizer sharp install', () => {
     expect(install.libc).toBe('glibc');
   });
 
-  it('pins an exact sharp version within apps/client range', () => {
+  it('pins the sharp version apps/client resolves in pnpm-lock.yaml', () => {
     expect(sharpVersion).toMatch(/^\d+\.\d+\.\d+$/);
-    const range: string = clientPkg.dependencies.sharp;
-    expect(range.startsWith('^0.')).toBe(true);
-    expect(parse(sharpVersion).slice(0, 2)).toEqual(parse(range).slice(0, 2));
-    expect(compare(sharpVersion, range)).toBeGreaterThanOrEqual(0);
+    expect(resolvedClientSharp()).toBe(sharpVersion);
   });
 
   it('stays at or above the root pnpm override floor for sharp', () => {
     const floorKey = Object.keys(rootPkg.pnpm.overrides).find(k => k.startsWith('sharp@<'));
-    if (!floorKey) return;
-    expect(compare(sharpVersion, floorKey.slice('sharp@<'.length))).toBeGreaterThanOrEqual(0);
+    expect(floorKey).toBeDefined();
+    expect(compare(sharpVersion, (floorKey ?? '').slice('sharp@<'.length))).toBeGreaterThanOrEqual(0);
   });
 });
