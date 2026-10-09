@@ -103,6 +103,13 @@ describe('call', () => {
     expect(request().init.redirect).toBe('manual');
   });
 
+  it('throws on a non-JSON 2xx body', async () => {
+    const { client } = setup(new Response('ID3', { headers: { 'content-type': 'audio/mpeg' } }));
+    await expect(client.call('synthesizeSpeech', { body: {} as never })).rejects.toThrow(
+      'synthesizeSpeech returned audio/mpeg; use raw() or the tts/music/soundEffects helpers'
+    );
+  });
+
   it('returns undefined for a 204', async () => {
     const { client } = setup(new Response(null, { status: 204 }));
     expect(await client.call('deleteProject', { params: { id: 'p1' } })).toBeUndefined();
@@ -179,6 +186,23 @@ describe('completions', () => {
     const { client, request } = setup(new Response('data: [DONE]\n\n'));
     for await (const event of client.completions({} as never, { url: 'https://stream.example.com/sse' })) void event;
     expect(request().url).toBe('https://stream.example.com/sse');
+  });
+
+  it('throws after yielding when the stream ends without [DONE]', async () => {
+    const { client } = setup(new Response('data: {"type":"content","text":"hi"}\n\n'));
+    const events: unknown[] = [];
+    const iterate = async () => {
+      for await (const event of client.completions({} as never)) events.push(event);
+    };
+    await expect(iterate()).rejects.toThrow('completion stream ended before [DONE]');
+    expect(events).toEqual([{ type: 'content', text: 'hi' }]);
+  });
+
+  it('yields an error frame then EOF without throwing', async () => {
+    const { client } = setup(new Response('data: {"type":"error","message":"boom"}\n\n'));
+    const events: unknown[] = [];
+    for await (const event of client.completions({} as never)) events.push(event);
+    expect(events).toEqual([{ type: 'error', message: 'boom' }]);
   });
 
   it('throws B4mApiError for a pre-stream failure', async () => {

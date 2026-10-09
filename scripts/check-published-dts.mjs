@@ -133,7 +133,7 @@ export function discoverPackages(root = repoRoot) {
     const standalone = STANDALONE_PACKAGE_DIRS.includes(name);
     packages.push({ dir, name, packageName: manifest.name, version: manifest.version, standalone });
   }
-  if (packages.length === 0) throw new Error('no published packages found under b4m-core');
+  if (packages.length === 0) throw new Error('no published packages found under b4m-core or packages/sdk');
   const unbuilt = packages.filter(pkg => !fs.existsSync(path.join(pkg.dir, 'dist')));
   if (unbuilt.length > 0) {
     throw new Error(
