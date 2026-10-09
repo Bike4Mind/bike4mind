@@ -46,7 +46,8 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { KnowledgeType, Permission } from '@bike4mind/common';
-import { runDriveDisconnectPurge, type DriveDisconnectPurgePayload } from './driveDisconnectPurge';
+import type { DriveDisconnectPurgePayload } from '@server/dataLakes/driveDisconnectPurgePayload';
+import { runDriveDisconnectPurge } from './driveDisconnectPurge';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

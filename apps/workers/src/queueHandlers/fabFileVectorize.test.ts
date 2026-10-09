@@ -117,7 +117,7 @@ vi.mock('@bike4mind/services', () => ({
   },
   scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
 }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
@@ -184,7 +184,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
 import { dispatch } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;

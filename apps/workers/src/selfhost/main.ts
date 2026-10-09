@@ -47,7 +47,7 @@ import {
   GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
   GENERATION_JOB_MAX_RECEIVE_COUNT,
   GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
-} from '@server/queueHandlers/sqsDelivery';
+} from '@server/utils/sqsDelivery';
 
 /**
  * Self-host background worker entrypoint.

@@ -149,7 +149,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
   completedBatchStatus: (...a: unknown[]) => h.completedBatchStatus(...a),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
@@ -197,7 +197,7 @@ vi.mock('sst', () => ({
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
 import { dispatch } from './fabFileChunk';
 import { ChunkClaimLostError } from '@bike4mind/common';
 

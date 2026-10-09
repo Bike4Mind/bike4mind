@@ -21,7 +21,7 @@ import {
   LAKE_MEMORY_RATE_LIMIT_WINDOW_MS,
   lakeMemoryRateLimitKey,
 } from '@server/dataLakes/lakeMemoryRateLimit';
-import { isFinalDeliveryAttempt, getDeliveryAttempt } from '@server/queueHandlers/sqsDelivery';
+import { isFinalDeliveryAttempt, getDeliveryAttempt } from '@server/utils/sqsDelivery';
 import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';

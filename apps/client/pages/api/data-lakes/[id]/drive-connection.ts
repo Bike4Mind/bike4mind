@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/database';
 import { driveConnectionOwnerOf, isDriveDisconnectStalled, isSameDriveConnectionOwner } from '@bike4mind/common';
 import type { DriveConnectionOwner, IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
-import type { DriveDisconnectPurgePayload } from '@server/queueHandlers/driveDisconnectPurge';
+import type { DriveDisconnectPurgePayload } from '@server/dataLakes/driveDisconnectPurgePayload';
 import { listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
 import {
   DRIVE_LAKE_POLL_INTERVAL_MS,
