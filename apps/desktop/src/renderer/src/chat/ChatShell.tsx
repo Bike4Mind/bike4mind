@@ -26,6 +26,7 @@ import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { PrStatusBar } from './PrStatusBar';
+import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { SettingsScreen } from './SettingsPanel';
@@ -202,6 +203,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       return !current;
     });
   }, []);
+
+  const showBrowserPane = useCallback(() => {
+    setBrowserOpen(true);
+    writeBrowserPaneOpen(true);
+  }, []);
+  const openInBrowserPane = useCallback(
+    (url: string) => openInSessionBrowser(url, activeId, showBrowserPane),
+    [activeId, showBrowserPane]
+  );
 
   const onFilesDropped = useCallback(
     (files: File[]) => {
@@ -656,6 +666,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                 ? window.b4m.pullRequests.setOption(activeId, option, enabled)
                 : Promise.resolve({ ok: false as const, error: 'No conversation is open.' })
             }
+            onOpenLink={openInBrowserPane}
           />
 
           {/* Every Code session, bound or not. The chips are how a project is chosen, so gating

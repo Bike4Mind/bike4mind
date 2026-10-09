@@ -110,6 +110,10 @@ describe('PrStatusBar', () => {
     expect(has(html, 'pr-bar-closed-icon')).toBe(false);
   });
 
+  it('labels the open button for the built-in browser', () => {
+    expect(markup()).toMatch(/aria-label="Open pull request in built-in browser"[^>]*data-testid="pr-bar-open-btn"/);
+  });
+
   it('spins the refresh button only while a read runs', () => {
     expect(markup({ state: 'CLOSED' }, true)).toContain('role="progressbar"');
     expect(markup({ state: 'CLOSED' }, false)).not.toContain('role="progressbar"');

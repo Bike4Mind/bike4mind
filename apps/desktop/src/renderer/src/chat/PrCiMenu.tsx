@@ -7,14 +7,11 @@ import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import type { PrBarState } from '@shared/pullRequest';
 import { CaretDownIcon, ChevronIcon, ExternalLinkIcon } from './icons';
+import { SYSTEM_BROWSER_HINT, routePrLink, type BuiltInBrowserOpener } from './prLinks';
 import { BUCKET_DOT, CI_DOT_COLOR, checkRows, ciDot, mergeLabel, reviewLabel, sortedChecks } from './prBarModel';
-
-function openExternally(url: string): void {
-  void window.b4m.shell.openExternal(url);
-}
 
 function Dot({ color }: { color: string }) {
   return <Box aria-hidden sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />;
@@ -43,7 +40,15 @@ const TONE_COLOR = {
  * expandable list of checks, each linking out. `children` is the automation section below the
  * divider.
  */
-export function PrCiMenu({ state, children }: { state: PrBarState; children?: ReactNode }) {
+export function PrCiMenu({
+  state,
+  children,
+  onOpenLink,
+}: {
+  state: PrBarState;
+  children?: ReactNode;
+  onOpenLink?: BuiltInBrowserOpener;
+}) {
   const [expanded, setExpanded] = useState(false);
   const snapshot = state.snapshot;
   if (!snapshot) return null;
@@ -74,8 +79,9 @@ export function PrCiMenu({ state, children }: { state: PrBarState; children?: Re
             size="sm"
             variant="plain"
             color="neutral"
-            aria-label="Open checks in browser"
-            onClick={() => openExternally(`${snapshot.url}/checks`)}
+            aria-label="Open checks in built-in browser"
+            title={`Open checks in built-in browser. ${SYSTEM_BROWSER_HINT}.`}
+            onClick={event => routePrLink(`${snapshot.url}/checks`, event, onOpenLink)}
             data-testid="pr-ci-open-btn"
           >
             <ExternalLinkIcon />
@@ -145,7 +151,9 @@ export function PrCiMenu({ state, children }: { state: PrBarState; children?: Re
                       level="body-xs"
                       noWrap
                       component={check.url ? 'button' : 'span'}
-                      onClick={check.url ? () => openExternally(check.url!) : undefined}
+                      onClick={
+                        check.url ? (event: MouseEvent) => routePrLink(check.url!, event, onOpenLink) : undefined
+                      }
                       sx={{
                         all: check.url ? 'unset' : undefined,
                         cursor: check.url ? 'pointer' : 'default',

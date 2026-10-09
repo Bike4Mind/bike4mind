@@ -13,12 +13,9 @@ import { ghFixLine, lifecycleLabel, middleTruncate, timeAgo } from './prBarModel
 import { PrAutomations, autoFixDescription, autoMergeDescription } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
 import { PrStateIcon, prStateColor } from './prStateStyle';
+import { SYSTEM_BROWSER_HINT, routePrLink, type BuiltInBrowserOpener } from './prLinks';
 
 const BRANCH_MAX_CHARS = 44;
-
-function openExternally(url: string): void {
-  void window.b4m.shell.openExternal(url);
-}
 
 /** The +adds -dels pair, green and red like a diff gutter; grey once the PR is finished. */
 function DiffChip({ additions, deletions, muted }: { additions: number; deletions: number; muted: boolean }) {
@@ -41,11 +38,14 @@ export function PrStatusBar({
   onDismiss,
   onRefresh,
   onSetOption,
+  onOpenLink,
 }: {
   state: PrBarState | null;
   onDismiss: () => Promise<PrActionResult>;
   onRefresh: () => void;
   onSetOption: (option: PrOption, enabled: boolean) => Promise<PrActionResult>;
+  /** Opens a link in this conversation's built-in browser; without it, links go to the system browser. */
+  onOpenLink?: BuiltInBrowserOpener;
 }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const theme = useTheme();
@@ -94,7 +94,7 @@ export function PrStatusBar({
             level="body-sm"
             component="button"
             type="button"
-            onClick={() => openExternally(binding.url)}
+            onClick={event => routePrLink(binding.url, event, onOpenLink)}
             sx={{
               all: 'unset',
               cursor: 'pointer',
@@ -211,7 +211,7 @@ export function PrStatusBar({
         )}
 
         {snapshot && !fix && snapshot.state === 'OPEN' && (
-          <PrCiMenu state={state}>
+          <PrCiMenu state={state} onOpenLink={onOpenLink}>
             <PrAutomations state={state} onSetOption={onSetOption} />
           </PrCiMenu>
         )}
@@ -234,13 +234,13 @@ export function PrStatusBar({
           </Tooltip>
         )}
 
-        <Tooltip title="Open in browser" size="sm" variant="soft">
+        <Tooltip title={`Open in built-in browser. ${SYSTEM_BROWSER_HINT}.`} size="sm" variant="soft">
           <IconButton
             size="sm"
             variant="plain"
             color="neutral"
-            onClick={() => openExternally(binding.url)}
-            aria-label="Open pull request in browser"
+            onClick={event => routePrLink(binding.url, event, onOpenLink)}
+            aria-label="Open pull request in built-in browser"
             data-testid="pr-bar-open-btn"
           >
             <ExternalLinkIcon />
