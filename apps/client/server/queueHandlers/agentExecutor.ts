@@ -170,7 +170,11 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
-import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
+import {
+  attachVideoJobsToRunQuest,
+  buildAgentVideoToolConfig,
+  getAgentVideoToolConfigDeps,
+} from './agentExecutor.videoToolConfig';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -1756,15 +1760,8 @@ async function processExecution(
             if (!generatedImages.includes(img)) generatedImages.push(img);
           }
         }
-        // Written as each job is created, like chat, so the clip card survives a checkpoint
-        // continuation (whose in-memory run state starts empty) and in-process subagents' clips land too.
-        if (changes?.videoJobIds?.length && runQuestId) {
-          await questRepository.addVideoJobIds(runQuestId, changes.videoJobIds).catch(err =>
-            logger.warn('[AgentExecutor] failed to attach video jobs to the run quest', {
-              error: err instanceof Error ? err.message : String(err),
-            })
-          );
-        }
+        // In-process subagents share these callbacks, so their clips land here too.
+        await attachVideoJobsToRunQuest(changes?.videoJobIds, runQuestId, questRepository, logger);
         if (changes?.promptMeta?.retrieval) {
           retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }
@@ -1880,6 +1877,7 @@ async function processExecution(
           organizationId: execution.organizationId,
           apiKeyId: execution.apiKeyId,
           questId: runQuestId,
+          toolEnabled: profileEnabledTools.includes('video_generation'),
         },
         getAgentVideoToolConfigDeps(logger)
       ),
@@ -3598,14 +3596,6 @@ async function processSubagentDispatch(
             })
           );
         }
-        // Unlike images, keyed by the run's shared Quest id, so a nested subagent's clips land too.
-        if (changes?.videoJobIds?.length && child.linkedQuestId) {
-          await questRepository.addVideoJobIds(child.linkedQuestId, changes.videoJobIds).catch(err =>
-            logger.warn('[SubagentDispatch] failed to attach video jobs to the run quest', {
-              error: err instanceof Error ? err.message : String(err),
-            })
-          );
-        }
       },
       // Same phase routing as the top-level run's callbacks; settled once the run ends (see
       // `settleMediaCost`).
@@ -3623,15 +3613,8 @@ async function processSubagentDispatch(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
-      videoConfig: await buildAgentVideoToolConfig(
-        {
-          userId: child.userId,
-          organizationId: child.organizationId,
-          apiKeyId: child.apiKeyId,
-          questId: child.linkedQuestId,
-        },
-        getAgentVideoToolConfigDeps(logger)
-      ),
+      // No videoConfig: this path offers no native tools (see the buildSharedTools call below), and
+      // the per-run cap lives in agentExecutor.videoToolConfig.ts for when it does.
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
