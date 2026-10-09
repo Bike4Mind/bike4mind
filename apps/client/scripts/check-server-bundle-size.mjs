@@ -13,8 +13,8 @@
  *
  * Every directory under `.open-next/server-functions/` is measured, not just `default`: OpenNext
  * can split the server into several functions and each one is its own deployment package with its
- * own copy of this limit. The layout is OpenNext v3's - it is coupled to `openNextVersion` in
- * infra/web.ts, so a major bump there wants a look at this path.
+ * own copy of this limit. The layout (unchanged from OpenNext v3 to v4) is coupled to
+ * `openNextVersion` in infra/web.ts, so a major bump there wants a look at this path.
  *
  * Modes:
  *   --enforce      exit non-zero when any bundle is over budget

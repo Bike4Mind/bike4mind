@@ -1,9 +1,9 @@
 import { useUser } from '@client/app/contexts/UserContext';
-import { useGetModals } from '@client/app/hooks/data/modals';
+import { useModalsWithReleaseNotes } from '@client/app/hooks/data/modalsWithReleaseNotes';
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { IModalDocument, ModalEvents, IUserActivityCounterDocument } from '@bike4mind/common';
-import { filterModals, modalStorage } from './modalHelpers';
+import { filterWhatsNewSlides, modalStorage } from './modalHelpers';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import Modal from '@mui/joy/Modal';
@@ -54,11 +54,12 @@ const navButtonSx = {
 
 interface WhatsNewSliderModalProps {
   tagToTrigger: string;
+  autoTriggered?: boolean;
 }
 
-const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger }) => {
+const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger, autoTriggered = false }) => {
   const { currentUser } = useUser();
-  const modals = useGetModals();
+  const modals = useModalsWithReleaseNotes();
   const counters = useGetUserActivityCounters(currentUser?.id);
   const logEvent = useLogEvent();
   const queryClient = useQueryClient();
@@ -213,7 +214,13 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger 
     if (!modals.data || !currentUser || counters.isPending || !counters.data) return [];
 
     // Pass actual counter data to filterModals for proper threshold checking
-    const whatsNewModal = filterModals(modals.data, currentUser, counters.data ?? [], [tagToTrigger]);
+    const whatsNewModal = filterWhatsNewSlides(
+      modals.data,
+      currentUser,
+      counters.data ?? [],
+      tagToTrigger,
+      autoTriggered
+    );
     // Type assertion is safe: filterModals() returns IModal[] but runtime data
     // from MongoDB includes createdAt/updatedAt fields (IModalDocument).
     // This allows us to sort by createdAt which exists on all persisted modals.
@@ -242,7 +249,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger 
         // Tertiary sort: _id for stable ordering (prevents random reordering on re-renders)
         return (b._id || '').localeCompare(a._id || '');
       });
-  }, [modals.data, currentUser, counters.data, counters.isPending, tagToTrigger]);
+  }, [modals.data, currentUser, counters.data, counters.isPending, tagToTrigger, autoTriggered]);
 
   useEffect(() => {
     // Only proceed if all data is fully loaded (prevent opening before filtering completes)
@@ -250,12 +257,13 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger 
 
     if (activeModals.length > 0) {
       setActiveModalList(activeModals);
+      setShowNoNewsModal(false);
       setIsOpen(true);
-    } else {
-      // Only show "no news" modal after confirming data is fully loaded
+    } else if (!modals.slidesPending) {
+      // Release-note slides can land after the modals, so "no news" waits for them rather than hiding them
       setShowNoNewsModal(true);
     }
-  }, [activeModals, counters.isPending, counters.data, modals.data, currentUser]);
+  }, [activeModals, counters.isPending, counters.data, modals.data, modals.slidesPending, currentUser]);
 
   // Telemetry: Track modal opening
   useEffect(() => {
@@ -267,7 +275,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger 
       const renderDuration = Date.now() - renderStartTime.current;
 
       // Determine source (auto-trigger vs manual)
-      const source = tagToTrigger === 'whats-new' ? 'manual' : 'auto';
+      const source = autoTriggered ? 'auto' : 'manual';
 
       logEvent.mutate(
         {
@@ -287,7 +295,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger 
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, tagToTrigger, activeModalList.length]);
+  }, [isOpen, tagToTrigger, autoTriggered, activeModalList.length]);
   // logEvent excluded from deps - useMutation returns a new ref on every render;
   // including it causes this effect to re-fire after each mutation, creating an infinite request loop.
 

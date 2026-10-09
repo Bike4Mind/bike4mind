@@ -5,8 +5,8 @@
  * Run once per product to get a client_id + client_secret.
  *
  * Usage (from repo root):
- *   MONGODB_URI=<uri> CLIENT_NAME=VibesWire REDIRECT_URIS="https://..." \
- *     npx tsx packages/scripts/src/seed-oauth-client.ts
+ *   MONGODB_URI=<uri> CLIENT_NAME="My App" REDIRECT_URIS="https://..." \
+ *     pnpm --filter @bike4mind/scripts exec tsx src/seed-oauth-client.ts
  *
  * To register a Pattern-A *federated* client (one allowed to mint per-user
  * `ai:generate` keys via POST /api/oauth/ai-token), also set the trust config.
@@ -22,10 +22,11 @@
  * Shape 2 - the app signs users in against B4M's OIDC provider directly, so the
  * B4M user id is the token's `sub`. FEDERATED_PROVIDER_NAME is meaningless here
  * and FEDERATED_JWKS_URI is REQUIRED: B4M publishes its JWKS at /api/oauth/jwks,
- * which the derived default would never find.
+ * which the derived default would never find. FEDERATED_AUDIENCE is optional and
+ * defaults to the generated client_id.
  *   FEDERATED_SUBJECT_SOURCE=sub \
  *   FEDERATED_ISSUER="https://<b4m-app-url>" \
- *   FEDERATED_AUDIENCE="<this client_id>" \
+ *   [FEDERATED_AUDIENCE="<this client_id>"] \
  *   FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks"
  */
 
@@ -158,7 +159,7 @@ async function main() {
   if (!mongoUri) throw new Error('MONGODB_URI env var required');
 
   const clientName = process.env.CLIENT_NAME;
-  if (!clientName) throw new Error('CLIENT_NAME env var required (e.g. "VibesWire")');
+  if (!clientName) throw new Error('CLIENT_NAME env var required (e.g. "My App")');
 
   const redirectUrisRaw = process.env.REDIRECT_URIS;
   if (!redirectUrisRaw) throw new Error('REDIRECT_URIS env var required (comma-separated)');

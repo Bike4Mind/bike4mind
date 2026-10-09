@@ -6,6 +6,7 @@ import {
   MAX_INLINE_PROVIDER_OUTPUT_BYTES,
   validateAgainstCapabilities,
   videoFileExtension,
+  videoInputImageRef,
   type GenerationJobErrorCode,
   type IGenerationJobDocument,
   type ValidatedVideoRequest,
@@ -145,8 +146,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     const validation = validateAgainstCapabilities(request, getVideoModelCapabilities(request.model));
     if (!validation.ok) return fail('provider_error', `stored request is no longer valid: ${validation.message}`);
     const inputs: ResolvedInputs = {};
-    if (request.mode === 'image_to_video' && request.inputImageFileId) {
-      const image = await deps.loadInputImage(job.requestedBy, request.inputImageFileId);
+    const inputImage = request.mode === 'image_to_video' ? videoInputImageRef(request) : null;
+    if (inputImage) {
+      const image = await deps.loadInputImage(job.requestedBy, inputImage);
       if (!image) return fail('input_image_not_found', 'Input image not found');
       inputs.inputImage = image;
     }

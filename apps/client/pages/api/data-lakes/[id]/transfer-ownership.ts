@@ -85,7 +85,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
     // transfer (or a departure) has already superseded. The service then records the offer and stops
     // - no grant is touched here.
     const offer = await withTransaction(async () => {
-      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrantsById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
 
@@ -118,7 +118,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
     // Gated like the GET: cancelling is open to the offerer and to anyone who currently holds
     // transfer authority, which is a fact about this lake and its grants.
     const offer = await withTransaction(async () => {
-      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrantsById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
 

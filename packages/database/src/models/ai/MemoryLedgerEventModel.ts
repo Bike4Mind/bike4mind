@@ -138,6 +138,20 @@ const MemoryLedgerEventSchema = new Schema<IMemoryLedgerEvent>(
 MemoryLedgerEventSchema.index({ principalKind: 1, principalId: 1, seq: 1 }, { unique: true });
 // Owner-scoped ordered read: a caller lists only chains they own (scope isolation, no existence leak).
 MemoryLedgerEventSchema.index({ ownerUserId: 1, principalKind: 1, principalId: 1, seq: 1 });
+MemoryLedgerEventSchema.index(
+  { embeddingIv: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+  {
+    name: 'memory_ledger_vectorless_candidates',
+    partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } },
+  }
+);
+MemoryLedgerEventSchema.index(
+  { embeddingModel: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+  {
+    name: 'memory_ledger_stale_vector_candidates',
+    partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } },
+  }
+);
 
 // --- Repository ---
 
@@ -262,20 +276,19 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
    * Distinct chains holding at least one surviving, non-retract event with a fact whose vector is
    * missing or not stamped `currentSpaceId`, sorted by (kind, id, owner) and paged by keyset `after`.
    * Found from the data rather than a fixed list of kinds, so a principal kind gains coverage the
-   * moment it gains a writer. A collection scan (no index covers it): operator use only.
+   * moment it gains a writer.
    */
   async listPrincipalsNeedingVectors(
     currentSpaceId: string,
     opts: { after?: PrincipalCursor; limit: number }
   ): Promise<PrincipalCursor[]> {
     const { after } = opts;
-    const match: Record<string, unknown>[] = [
-      { shredded: { $ne: true }, kind: { $ne: 'retract' } },
+    const commonMatch: Record<string, unknown>[] = [
+      { shredded: { $ne: true }, kind: { $in: ['assert', 'affirm'] } },
       { $or: [{ factCipher: { $nin: [null, ''] } }, { fact: { $nin: [null, ''] } }] },
-      { $or: [{ embeddingCipher: { $in: [null, ''] } }, { embeddingModel: { $ne: currentSpaceId } }] },
     ];
     if (after) {
-      match.push({
+      commonMatch.push({
         $or: [
           { principalKind: { $gt: after.principalKind } },
           { principalKind: after.principalKind, principalId: { $gt: after.principalId } },
@@ -287,17 +300,36 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
         ],
       });
     }
-    const rows = await this.model.aggregate<{ _id: PrincipalCursor }>([
-      { $match: { $and: match } },
-      // Ciphertext out before the group - see aggregateLakeMemoryCoverage for the measured cost.
-      { $project: { _id: 0, principalKind: 1, principalId: 1, ownerUserId: 1 } },
-      {
-        $group: { _id: { principalKind: '$principalKind', principalId: '$principalId', ownerUserId: '$ownerUserId' } },
-      },
-      { $sort: { '_id.principalKind': 1, '_id.principalId': 1, '_id.ownerUserId': 1 } },
-      { $limit: opts.limit },
+    const page = (vectorMatch: Record<string, unknown>) =>
+      this.model.aggregate<{ _id: PrincipalCursor }>([
+        { $match: { $and: [...commonMatch, vectorMatch] } },
+        // Ciphertext out before the group - see aggregateLakeMemoryCoverage for the measured cost.
+        { $project: { _id: 0, principalKind: 1, principalId: 1, ownerUserId: 1 } },
+        {
+          $group: {
+            _id: { principalKind: '$principalKind', principalId: '$principalId', ownerUserId: '$ownerUserId' },
+          },
+        },
+        { $sort: { '_id.principalKind': 1, '_id.principalId': 1, '_id.ownerUserId': 1 } },
+        { $limit: opts.limit },
+      ]);
+
+    // DocumentDB has no $unionWith, so keep the two selective index scans separate and merge their
+    // bounded pages. A row may occur in both arms and is deduplicated by the full principal key.
+    const [vectorless, stale] = await Promise.all([
+      page({ embeddingIv: { $in: [null, ''] }, embeddingCipher: { $in: [null, ''] } }),
+      page({ embeddingModel: { $ne: currentSpaceId } }),
     ]);
-    return rows.map(r => r._id);
+    const principals = new Map<string, PrincipalCursor>();
+    for (const row of [...vectorless, ...stale]) principals.set(JSON.stringify(row._id), row._id);
+    const compare = (left: PrincipalCursor, right: PrincipalCursor) => {
+      for (const key of ['principalKind', 'principalId', 'ownerUserId'] as const) {
+        const order = Buffer.compare(Buffer.from(left[key]), Buffer.from(right[key]));
+        if (order !== 0) return order;
+      }
+      return 0;
+    };
+    return [...principals.values()].sort(compare).slice(0, opts.limit);
   }
 
   /**

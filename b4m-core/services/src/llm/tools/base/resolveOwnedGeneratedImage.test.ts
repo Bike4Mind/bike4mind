@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { NotFoundError } from '@bike4mind/utils';
-import { resolveOwnedGeneratedImageUrl, type OwnedGeneratedImageContext } from './resolveOwnedGeneratedImage';
+import {
+  callerOwnsGeneratedImage,
+  resolveOwnedGeneratedImageUrl,
+  type OwnedGeneratedImageContext,
+} from './resolveOwnedGeneratedImage';
 
 const OWNED_KEY = '86cdc650-43d2-416e-aca6-23ff4fe23081.jpg';
 const SIGNED_URL = 'https://signed.example/generated.jpg';
@@ -137,5 +141,26 @@ describe('resolveOwnedGeneratedImageUrl', () => {
     await expect(resolveOwnedGeneratedImageUrl(OWNED_KEY, context)).rejects.toThrow(NotFoundError);
     expect(findSessionIdsByImage).not.toHaveBeenCalled();
     expect(getSignedUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe('callerOwnsGeneratedImage', () => {
+  const lookup = (sessions: SessionStub[], wired = true) => ({
+    userId: 'u1',
+    logger: { warn: vi.fn() },
+    ...(wired && {
+      quests: { findSessionIdsByImage: vi.fn().mockResolvedValue(['s1']) },
+      sessions: { findAllByIds: vi.fn().mockResolvedValue(sessions) },
+    }),
+  });
+
+  it('is true only for a key the caller owns', async () => {
+    await expect(callerOwnsGeneratedImage(OWNED_KEY, lookup([{ userId: 'u1' }]))).resolves.toBe(true);
+    await expect(callerOwnsGeneratedImage(OWNED_KEY, lookup([{ userId: 'someone-else' }]))).resolves.toBe(false);
+  });
+
+  it('is false for a malformed key and for an unwired lookup', async () => {
+    await expect(callerOwnsGeneratedImage('../x.png', lookup([{ userId: 'u1' }]))).resolves.toBe(false);
+    await expect(callerOwnsGeneratedImage(OWNED_KEY, lookup([{ userId: 'u1' }], false))).resolves.toBe(false);
   });
 });

@@ -198,6 +198,7 @@
     "@bike4mind/observability": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
+    "@types/aws-lambda": "^8.10.162",
     "axios": "1.20.0",
     "cheerio": "1.2.0",
     "csv-parse": "^7.0.2",
@@ -218,7 +219,6 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.162",
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
     "esbuild": "0.28.1",

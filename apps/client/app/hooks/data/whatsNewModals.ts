@@ -323,7 +323,7 @@ export interface HighlightsConfigResponse {
   promptTemplate: string | null;
   attachMarkdownFile: boolean | null;
   lastRunAt: string | null;
-  lastStatus: 'success' | 'failed' | 'no_modals' | null;
+  lastStatus: 'success' | 'failed' | 'no_modals' | 'skipped' | null;
   lastHighlights: string | null;
   lastCorrelationId: string | null;
   lastCompletedAt: string | null;
@@ -387,6 +387,7 @@ export function useGenerateHighlights() {
         message: string;
         correlationId?: string;
         dryRun?: boolean;
+        skipped?: boolean;
         dateRange?: { startDate: string; endDate: string };
         modalCount?: number;
         modals?: Array<{ title: string; subtitle: string; descriptionPreview: string; createdAt: string }>;

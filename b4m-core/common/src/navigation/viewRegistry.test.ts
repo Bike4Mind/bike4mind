@@ -3,6 +3,8 @@ import {
   FEATURE_PATH_PREFIXES,
   getCurrentPathFromContext,
   isNavigableFeaturePath,
+  resolveNavigationIntents,
+  getViewById,
   VIEW_REGISTRY,
 } from './viewRegistry';
 
@@ -32,6 +34,44 @@ describe('VIEW_REGISTRY descriptions', () => {
   it('quantify no catalogue this package cannot count', () => {
     const offenders = VIEW_REGISTRY.filter(v => INVENTORY_COUNT.test(v.description)).map(v => v.id);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('VIEW_REGISTRY opti family consoles', () => {
+  const optiActions = VIEW_REGISTRY.filter(v => v.section === 'opti' && v.navigationType === 'action');
+  // Derived from the registry so a new family console cannot be added without its sub-tabs.
+  const families = optiActions.filter(v => v.id.split('.').length === 2).map(v => v.id.slice('opti.'.length));
+
+  it('has unique view ids', () => {
+    const ids = VIEW_REGISTRY.map(v => v.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('registers Problem and Solvers sub-tabs for every family console', () => {
+    expect(families.length).toBeGreaterThan(1);
+    const missing = families.flatMap(f =>
+      ['problem', 'solvers'].map(tab => `opti.${f}.${tab}`).filter(id => !getViewById(id))
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it('registers gantt and qwork sub-tabs only for scheduling', () => {
+    const offenders = optiActions
+      .filter(v => /\.(gantt|qwork)$/.test(v.id) && !v.id.startsWith('opti.scheduling.'))
+      .map(v => v.id);
+    expect(offenders).toEqual([]);
+  });
+
+  // useNavigationExecutor splits an action target on its first '.' into family and sub-tab.
+  it('targets each action by its id minus the opti. prefix', () => {
+    const offenders = optiActions.filter(v => v.target !== v.id.slice('opti.'.length)).map(v => v.id);
+    expect(offenders).toEqual([]);
+  });
+
+  it('resolves a non-scheduling family sub-tab to an action intent', () => {
+    expect(resolveNavigationIntents([{ viewId: 'opti.routing.problem', reason: 'edit the routes' }])).toEqual([
+      expect.objectContaining({ viewId: 'opti.routing.problem', navigationType: 'action', target: 'routing.problem' }),
+    ]);
   });
 });
 

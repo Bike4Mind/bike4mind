@@ -1,4 +1,4 @@
-import { dispatch } from '@server/queueHandlers/questExport';
+import { dispatch } from '@workers/queueHandlers/questExport';
 import { registerRedrivenQueue } from './registerRedrivenQueue';
 import type { SelfHostWorker } from './selfHostWorker';
 

@@ -29,6 +29,30 @@ describe('video_generation tool', () => {
     expect(createJob.mock.calls[0][0].request).toMatchObject({ mode: 'image_to_video', inputImageFileId: 'f1' });
   });
 
+  it('sends image-to-video with the generated key when one is given', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    const key = '86cdc650-43d2-416e-aca6-23ff4fe23081.png';
+    await tool.toolFn({ model: 'test-video', prompt: 'x', inputGeneratedImageKey: key });
+    const { request } = createJob.mock.calls[0][0];
+    expect(request).toMatchObject({ mode: 'image_to_video', inputGeneratedImageKey: key });
+    expect(request).not.toHaveProperty('inputImageFileId');
+  });
+
+  it('refuses a file id and a generated key together without starting a job', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool, statusUpdate } = build(createJob);
+    const text = await tool.toolFn({
+      model: 'test-video',
+      prompt: 'x',
+      inputImageFileId: 'f1',
+      inputGeneratedImageKey: 'k.png',
+    });
+    expect(text).toContain('not both');
+    expect(createJob).not.toHaveBeenCalled();
+    expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
   it('returns a readable error and records no job', async () => {
     const createJob = vi
       .fn()

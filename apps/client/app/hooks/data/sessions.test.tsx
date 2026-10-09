@@ -10,6 +10,8 @@ import {
   useUpdateSessionTags,
   sessionMatchesListFilters,
   updateSessionsQueryData,
+  useCloneSession,
+  useForkSession,
   useSnipSession,
 } from './sessions';
 import { api } from '@client/app/contexts/ApiContext';
@@ -24,6 +26,7 @@ vi.mock('@client/app/utils/sessionsAPICalls', async () => {
   const actual = await vi.importActual<object>('@client/app/utils/sessionsAPICalls');
   return {
     ...actual,
+    cloneSession: vi.fn(),
     getChatMessages: vi.fn(),
     getSessionsFromServer: vi.fn(),
     getSessionByIdFromServer: vi.fn(),
@@ -49,6 +52,7 @@ vi.mock('@client/app/hooks/useJobStatus', () => ({
 }));
 
 import {
+  cloneSession,
   getChatMessages,
   getSessionsFromServer,
   getSessionByIdFromServer,
@@ -514,5 +518,70 @@ describe('useSnipSession', () => {
   it('does not refetch the own-session lists for a main-list snip', async () => {
     const invalidate = await snip({});
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
+  });
+});
+
+// The copy-path write (writeCopiedSession) is shared by clone, fork and snip and delegates to
+// updateSessionsQueryData, so a copy failing a cached list's Content/Origin filter must not be
+// spliced into it - the same "Hide API" regression the gate exists for.
+describe('copy-path cache writes', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  const unfilteredKey = ['sessions', 'own', '', ''];
+  const hideApiKey = ['sessions', 'own', '', '', { excludeOrigin: 'api' }];
+  const apiCopy = { id: 'copy-1', name: 'Copy', origin: { channel: 'api' } } as ISessionDocument;
+
+  const dataOf = (queryClient: QueryClient, key: unknown[]) =>
+    queryClient.getQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[])?.pages[0]?.data ?? [];
+
+  const seedLists = (queryClient: QueryClient) => {
+    for (const key of [unfilteredKey, hideApiKey]) {
+      queryClient.setQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[], {
+        pages: [{ data: [], hasMore: false }],
+        pageParams: [{ page: 1 }],
+      });
+    }
+  };
+
+  const wrapperFor = (queryClient: QueryClient) => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    return wrapper;
+  };
+
+  const expectGatedCopy = (queryClient: QueryClient) => {
+    expect(dataOf(queryClient, unfilteredKey)).toContainEqual(expect.objectContaining({ id: 'copy-1' }));
+    expect(dataOf(queryClient, hideApiKey)).toHaveLength(0);
+  };
+
+  it('clone writes the copy through the filter gate', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    vi.mocked(cloneSession).mockResolvedValueOnce(apiCopy);
+    const { result } = renderHook(() => useCloneSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate(SESSION_ID);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expectGatedCopy(queryClient);
+  });
+
+  it('fork writes the copy through the filter gate', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: apiCopy });
+    const { result } = renderHook(() => useForkSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expectGatedCopy(queryClient);
+  });
+
+  it('snip writes the copy through the filter gate', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: apiCopy });
+    const { result } = renderHook(() => useSnipSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expectGatedCopy(queryClient);
   });
 });

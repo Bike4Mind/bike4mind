@@ -1510,6 +1510,10 @@ export const ReconnectResultAction = z.object({
   action: z.literal('reconnect_result'),
   found: z.boolean(),
   executionId: z.string().optional(),
+  // The session the found run belongs to, so the client stamps it from the
+  // response rather than correlating responses with requests. Absent on
+  // `found: false`, and on frames from servers that predate the echo.
+  sessionId: z.string().optional(),
   // Same enum reasoning as `ChildExecutionSnapshotSchema.status` - a free
   // string forced the client to re-narrow on every read. `.optional()` because
   // a `found: false` frame omits it.

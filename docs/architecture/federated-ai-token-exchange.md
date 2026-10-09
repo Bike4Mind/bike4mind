@@ -2,12 +2,15 @@
 
 `POST /api/oauth/ai-token` lets a registered OAuth client trade an ID token for its
 logged-in user against a short-lived, revocable API key scoped to that user.
-The default scope is `ai:generate`. The app then calls `/api/ai/v1/completions` with the key as `X-API-Key`, so
+The default scope is `ai:generate`. The app then calls `/api/ai/v1/completions` with the key as `Authorization: Bearer <key>` (`X-API-Key` is accepted as legacy), so
 completions bill the user's own B4M credits ("user-pays") with no manual key paste.
 
 Only a client whose registration carries a `federatedIdp` trust config may use the
 exchange. Everything else about the endpoint (consent gate, per-client rate limit,
 reuse-or-replace of the prior key, mint audit entry) is common to every client.
+
+For the integrator-facing walkthrough (sign-in, registration, billing, worked example), see
+[Building an app on Bike4Mind](../../docs-site/docs/developers/building-on-b4m.md).
 
 ## Requesting scopes
 
@@ -106,16 +109,17 @@ CLIENT_NAME=<name> \
 REDIRECT_URIS="https://..." \
 FEDERATED_SUBJECT_SOURCE=sub \
 FEDERATED_ISSUER="https://<b4m-app-url>" \
-FEDERATED_AUDIENCE="<the client_id the script prints>" \
 FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks" \
-  npx tsx packages/scripts/src/seed-oauth-client.ts
+  pnpm --filter @bike4mind/scripts exec tsx src/seed-oauth-client.ts
 ```
 
-`FEDERATED_AUDIENCE` is the `client_id` B4M mints for the app, so this is a two-pass
-registration: seed without the federated env vars to obtain the id, then update the
-document with the trust config. For an external Cognito pool, omit
-`FEDERATED_SUBJECT_SOURCE` (defaults to `'identities'`), set `FEDERATED_PROVIDER_NAME`
-instead, and leave `FEDERATED_JWKS_URI` unset.
+This is a single pass: with `FEDERATED_SUBJECT_SOURCE=sub`, `FEDERATED_AUDIENCE` defaults
+to the `client_id` the script generates. Register the trust config in the same run; adding
+`federatedIdp` to an existing client by hand leaves `allowedScopes` without `ai:generate` /
+`me:read`, and the exchange then returns 403 `invalid_scope`. For an external Cognito pool, omit
+`FEDERATED_SUBJECT_SOURCE` (defaults to `'identities'`), and set
+`FEDERATED_PROVIDER_NAME`, `FEDERATED_AUDIENCE` (the Cognito app client id) and the pool's
+`FEDERATED_ISSUER` instead; leave `FEDERATED_JWKS_URI` unset.
 
 ## Failure modes
 

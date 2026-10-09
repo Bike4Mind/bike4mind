@@ -32,7 +32,8 @@ export interface AdminReleaseNote {
   deniedTerm: string | null;
 }
 
-type ReleaseNoteCopy = Pick<IReleaseNoteDocument, 'headline' | 'summary' | 'items'>;
+// Structural so the public wire shape (no sourcePrs) checks the same way as a stored note.
+type ReleaseNoteCopy = Pick<IReleaseNoteDocument, 'headline' | 'summary'> & { items: Array<{ text: string }> };
 
 /** The first denylist term anywhere in a note's customer-facing copy. */
 export const findDeniedInNote = (note: ReleaseNoteCopy, denylist: string[]): string | undefined =>

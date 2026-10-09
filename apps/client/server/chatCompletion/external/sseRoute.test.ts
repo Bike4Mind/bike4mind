@@ -172,6 +172,26 @@ function errorFrame(body: string) {
 }
 
 describe('POST /api/ai/v1/completions', () => {
+  it('never streams reasoning text to the caller', async () => {
+    mockExecuteCompletion.mockImplementationOnce(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['<think>'], { channel: 'reasoning' });
+        await params.onChunk(['private reasoning'], {
+          channel: 'reasoning',
+          toolsUsed: [{ name: 'search', arguments: '{}' }],
+        });
+        await params.onChunk(['</think>'], { channel: 'reasoning' });
+        await params.onChunk(['', 'hello'], { outputTokens: 5 });
+      }
+    );
+    const body = await (await post()).text();
+    // Join every frame, not just content: a reasoning frame in a tool loop goes out as tool_use.
+    const text = frames(body)
+      .map(f => f.text)
+      .join('');
+    expect(text).toBe('hello');
+  });
+
   it('streams content and terminates with [DONE]', async () => {
     const res = await post();
     expect(res.status).toBe(200);
