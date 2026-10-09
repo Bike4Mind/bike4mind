@@ -13,7 +13,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/generationJobs/wiring', () => ({ getVideoJobDeps: vi.fn(), getCreateVideoJobDeps: vi.fn() }));
 vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({ buildVideoToolConfig: vi.fn() }));
 
-const { buildAgentVideoToolConfig, limitVideoClipsPerRun } = await import('./agentExecutor.videoToolConfig');
+const { attachVideoJobsToRunQuest, buildAgentVideoToolConfig, limitVideoClipsPerRun } =
+  await import('./agentExecutor.videoToolConfig');
 
 const QUEST_ID = 'quest-1';
 const input: CreateVideoJobInput = { user: { id: 'user-1', organizationId: null }, request: {}, source: 'agent' };
@@ -96,7 +97,8 @@ describe('limitVideoClipsPerRun', () => {
     expect(slots.claimed).toBe(0);
   });
 
-  it('gives the slot back and rethrows when createJob throws', async () => {
+  // createJob can throw after persisting the job, so a released slot could overshoot the cap.
+  it('keeps the slot and rethrows when createJob throws', async () => {
     const config = limitVideoClipsPerRun(
       makeBaseConfig(async () => {
         throw new Error('enqueue failed');
@@ -105,7 +107,8 @@ describe('limitVideoClipsPerRun', () => {
     );
 
     await expect(config.createJob(input)).rejects.toThrow('enqueue failed');
-    expect(slots.claimed).toBe(0);
+    expect(slots.claimed).toBe(1);
+    expect(slots.release).not.toHaveBeenCalled();
   });
 
   it('warns rather than masking the result when the release fails', async () => {
@@ -130,7 +133,7 @@ describe('limitVideoClipsPerRun', () => {
 });
 
 describe('buildAgentVideoToolConfig', () => {
-  const caller = { userId: 'user-1', organizationId: 'org-1', questId: QUEST_ID };
+  const caller = { userId: 'user-1', organizationId: 'org-1', questId: QUEST_ID, toolEnabled: true };
 
   const makeDeps = (overrides: { limit?: number; base?: VideoToolConfig | null } = {}) => ({
     buildBaseConfig: vi.fn(async () =>
@@ -159,6 +162,13 @@ describe('buildAgentVideoToolConfig', () => {
     expect(deps.buildBaseConfig).not.toHaveBeenCalled();
   });
 
+  it('skips every read when the toolbelt does not name video_generation', async () => {
+    const deps = makeDeps();
+    await expect(buildAgentVideoToolConfig({ ...caller, toolEnabled: false }, deps)).resolves.toBeNull();
+    expect(deps.resolveClipLimit).not.toHaveBeenCalled();
+    expect(deps.buildBaseConfig).not.toHaveBeenCalled();
+  });
+
   it('does not offer the tool without a Quest to count on', async () => {
     const deps = makeDeps();
     await expect(buildAgentVideoToolConfig({ ...caller, questId: undefined }, deps)).resolves.toBeNull();
@@ -179,5 +189,33 @@ describe('buildAgentVideoToolConfig', () => {
     deps.resolveClipLimit.mockRejectedValueOnce(new Error('settings read failed'));
     await expect(buildAgentVideoToolConfig(caller, deps)).resolves.toBeNull();
     expect(deps.logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('attachVideoJobsToRunQuest', () => {
+  const makeQuests = () => ({ addVideoJobIds: vi.fn(async () => undefined) });
+
+  it('writes the new job ids onto the run quest', async () => {
+    const quests = makeQuests();
+    await attachVideoJobsToRunQuest(['job-1'], QUEST_ID, quests, makeLogger());
+    expect(quests.addVideoJobIds).toHaveBeenCalledWith(QUEST_ID, ['job-1']);
+  });
+
+  it('writes nothing without job ids or without a run quest', async () => {
+    const quests = makeQuests();
+    await attachVideoJobsToRunQuest(undefined, QUEST_ID, quests, makeLogger());
+    await attachVideoJobsToRunQuest([], QUEST_ID, quests, makeLogger());
+    await attachVideoJobsToRunQuest(['job-1'], undefined, quests, makeLogger());
+    expect(quests.addVideoJobIds).not.toHaveBeenCalled();
+  });
+
+  it('warns instead of failing the tool call when the write fails', async () => {
+    const quests = { addVideoJobIds: vi.fn(async () => Promise.reject(new Error('db down'))) };
+    const logger = makeLogger();
+    await expect(attachVideoJobsToRunQuest(['job-1'], QUEST_ID, quests, logger)).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('attach'),
+      expect.objectContaining({ questId: QUEST_ID })
+    );
   });
 });

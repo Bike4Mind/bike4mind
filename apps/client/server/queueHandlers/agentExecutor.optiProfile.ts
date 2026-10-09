@@ -57,8 +57,8 @@ export function resolveOptiAgentTools(premiumToolNames: readonly string[]): stri
 
 /**
  * Explicitly denied even if a payload override tries to re-add them: image generation has a
- * history of hijacking optimizer runs (video is denied with it), and delegation/DAG would fan the single-agent loop out
- * into subagents. `pickEffectiveEnabledTools` subtracts `deniedTools` last, so this can't be
+ * history of hijacking optimizer runs (video is denied with it), and delegation/DAG would fan
+ * the single-agent loop out into subagents. `pickEffectiveEnabledTools` subtracts `deniedTools` last, so this can't be
  * bypassed by shipping `enabledTools` in the start payload.
  */
 const OPTI_DENIED_TOOLS: string[] = [
