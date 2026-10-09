@@ -56,10 +56,7 @@ describe('AdminSettingsSchema toJSON/toObject chokepoint', () => {
     configureSecretsAtRest(KEY);
   });
 
-  // Acceptance criterion for #1606: a hydrated document serialised via toJSON()
-  // must return a masked value, not plaintext and not raw ciphertext. This pins the
-  // chokepoint without per-caller co-operation -- any code path that does
-  // AdminSettings.find() + res.json() or JSON.stringify() is automatically safe.
+  // A hydrated document serialised via toJSON() must return the mask, not plaintext or ciphertext.
   it('toJSON() masks a sensitive settingValue without requiring per-caller redaction', async () => {
     const plaintext = 'sk-chokepoint-test-key-12345';
     const ciphertext = encryptSecret(plaintext, KEY);

@@ -65,6 +65,8 @@ export const AdminSettings =
   (mongoose.models.AdminSettings as IAdminSettingsModel) ??
   mongoose.model<IAdminSettings, IAdminSettingsModel>('AdminSettings', AdminSettingsSchema);
 
+// Only the readers overridden below return plaintext. Inherited find/findById/create/update/updateGuarded serialise through the masking transform
+// (sensitive, unmapped and sreAgentConfig secret values), so never write their result back.
 class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements IAdminSettingsRepository {
   constructor(model: IAdminSettingsModel) {
     super(model);
