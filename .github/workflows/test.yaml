@@ -71,7 +71,7 @@ jobs:
         run: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
 
       - name: Install Dependencies
-        run: pnpm i --frozen-lockfile --filter "./b4m-core/*" --filter "@bike4mind/cli"
+        run: pnpm i --frozen-lockfile --filter "./b4m-core/*" --filter "./packages/sdk" --filter "@bike4mind/cli"
 
       - name: Download ripgrep binary (for grep_search tests)
         run: |
