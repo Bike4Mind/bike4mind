@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRouteTemplate } from './resolveRouteTemplate';
+import { resolveRequestPathname, resolveRouteTemplate } from './resolveRouteTemplate';
 
 const req = (originalUrl: string, query: Record<string, string | string[]> = {}) =>
   ({ originalUrl, url: originalUrl, query }) as Parameters<typeof resolveRouteTemplate>[0];
@@ -59,5 +59,23 @@ describe('resolveRouteTemplate', () => {
 
   it('strips fragments and tolerates a missing query object', () => {
     expect(resolveRouteTemplate({ originalUrl: '/api/chat#x', url: '/api/chat' } as never)).toBe('/api/chat');
+  });
+});
+
+describe('resolveRequestPathname', () => {
+  const at = (originalUrl: string) => resolveRequestPathname({ originalUrl, url: originalUrl });
+
+  it('drops the query string and fragment', () => {
+    expect(at('/api/admin/x?a=1#f')).toBe('/api/admin/x');
+  });
+
+  it('decodes percent-encoded and double-encoded segments so a prefix check sees the routed path', () => {
+    expect(at('/api/%61dmin/x')).toBe('/api/admin/x');
+    expect(at('/api/%2561dmin/x')).toBe('/api/admin/x');
+  });
+
+  it('collapses repeated slashes and tolerates malformed escapes', () => {
+    expect(at('//api//admin/x')).toBe('/api/admin/x');
+    expect(at('/api/%zz')).toBe('/api/%zz');
   });
 });
