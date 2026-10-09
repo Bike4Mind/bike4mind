@@ -202,10 +202,24 @@ export function PrStatusBar({
           </Tooltip>
         )}
 
-        {binding.autoMerge && snapshot?.state === 'OPEN' && (
+        {(binding.autoMerge || state.autoMerge.queued) && snapshot?.state === 'OPEN' && (
           <Tooltip title={autoMergeDescription(state)} size="sm" variant="soft" placement="top">
-            <Chip size="sm" variant="soft" color="primary" data-testid="pr-bar-automerge-armed">
-              Auto-merge
+            <Chip
+              size="sm"
+              variant="soft"
+              color={state.autoMerge.queued ? 'success' : 'primary'}
+              data-testid="pr-bar-automerge-armed"
+              data-queued={state.autoMerge.queued ? 'true' : undefined}
+            >
+              {state.autoMerge.queued ? 'Queued to merge' : 'Auto-merge'}
+            </Chip>
+          </Tooltip>
+        )}
+
+        {!binding.autoMerge && state.autoMerge.error && snapshot?.state === 'OPEN' && (
+          <Tooltip title={state.autoMerge.error} size="sm" variant="soft" placement="top">
+            <Chip size="sm" variant="soft" color="danger" data-testid="pr-bar-automerge-stopped">
+              Auto-merge stopped
             </Chip>
           </Tooltip>
         )}

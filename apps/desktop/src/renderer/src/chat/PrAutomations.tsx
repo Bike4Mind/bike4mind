@@ -6,9 +6,10 @@ import type { PrActionResult, PrBarState, PrOption } from '@shared/pullRequest';
 
 /** One line under the auto-merge box saying who merges and what it is waiting for. */
 export function autoMergeDescription(state: PrBarState): string {
+  const queue = state.snapshot?.mergeQueue?.enabled === true;
   const who =
     state.autoMerge.mode === 'desktop'
-      ? 'This app merges once it is approved, every check has passed and there are no conflicts, while the app is running.'
+      ? `This app ${queue ? 'adds it to the merge queue' : 'merges'} once it is approved, every check has passed and there are no conflicts, while the app is running.`
       : 'Armed on GitHub, which merges once branch protection is satisfied.';
   return state.autoMerge.note ? `${who} ${state.autoMerge.note}` : who;
 }
@@ -79,6 +80,12 @@ export function PrAutomations({
       {binding.autoMerge && (
         <Typography level="body-xs" textColor="text.tertiary" sx={{ pl: 3.5 }} data-testid="pr-ci-automerge-note">
           {autoMergeDescription(state)}
+        </Typography>
+      )}
+      {/* Shown after the box has unchecked itself: the refusal is the reason it did. */}
+      {state.autoMerge.error && (
+        <Typography level="body-xs" textColor="danger.plainColor" sx={{ pl: 3.5 }} data-testid="pr-ci-automerge-error">
+          {state.autoMerge.error}
         </Typography>
       )}
       <Checkbox

@@ -1,7 +1,11 @@
 import type { PrMergeMethod, PrSnapshot } from '@shared/pullRequest';
 import { mergeMethodFor } from './github';
 
-export type MergeReadiness = { ready: true; method: PrMergeMethod } | { ready: false; reason: string };
+/** Ready to go `via` the base branch's merge queue, or by a direct merge with `method`. */
+export type MergeReadiness =
+  | { ready: true; via: 'queue' }
+  | { ready: true; via: 'merge'; method: PrMergeMethod }
+  | { ready: false; reason: string };
 
 /** mergeStateStatus values under which GitHub itself says branch protection is satisfied. */
 const MERGEABLE_STATES = new Set(['CLEAN', 'HAS_HOOKS']);
@@ -12,8 +16,13 @@ const MERGEABLE_STATES = new Set(['CLEAN', 'HAS_HOOKS']);
  * Deliberately stricter than GitHub's minimum, because this path has no GitHub-side gate of
  * its own: the PR must be approved, have no conflicts, every required check must have passed,
  * and nothing may be failing or still running at all - GitHub's UNSTABLE (mergeable, but a
- * non-required check failing) is a no. Branch protection is still GitHub's to enforce at merge
- * time; this only decides when to ask, and the merge itself never passes --admin.
+ * non-required check failing) is a no. "Every check" is the latest run of each, as GitHub counts
+ * them (see latestCheckRuns). Approval is GitHub's reviewDecision, so a reviewer still requested
+ * after the required approvals are in does not hold it up. Branch protection is still GitHub's
+ * to enforce at merge time; this only decides when to ask, and the merge never passes --admin.
+ *
+ * A base branch with a merge queue takes no direct merge, so readiness there means "enqueue";
+ * the queue merges with its own method, so the repo's allowed methods do not matter.
  */
 export function desktopMergeReadiness(snapshot: PrSnapshot): MergeReadiness {
   if (snapshot.state !== 'OPEN') return { ready: false, reason: 'The pull request is not open.' };
@@ -34,7 +43,8 @@ export function desktopMergeReadiness(snapshot: PrSnapshot): MergeReadiness {
     return { ready: false, reason: `Waiting: GitHub reports ${snapshot.mergeStateStatus.toLowerCase()}.` };
   }
 
+  if (snapshot.mergeQueue?.enabled) return { ready: true, via: 'queue' };
   const method = mergeMethodFor(snapshot);
   if (!method) return { ready: false, reason: 'This repository allows no merge method.' };
-  return { ready: true, method };
+  return { ready: true, via: 'merge', method };
 }

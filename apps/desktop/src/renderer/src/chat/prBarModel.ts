@@ -95,6 +95,13 @@ export function reviewLabel(snapshot: Snapshot): string {
 
 /** Mergeability in words. GitHub computes it lazily, so UNKNOWN is "still working it out". */
 export function mergeLabel(snapshot: Snapshot): { text: string; tone: 'neutral' | 'success' | 'warning' | 'danger' } {
+  const entry = snapshot.state === 'OPEN' ? snapshot.mergeQueue?.entry : undefined;
+  if (entry) {
+    return {
+      text: entry.position > 0 ? `Queued to merge (position ${entry.position})` : 'Queued to merge',
+      tone: 'success',
+    };
+  }
   if (snapshot.mergeable === 'CONFLICTING') return { text: 'Has conflicts with the base branch', tone: 'danger' };
   if (snapshot.mergeable === 'UNKNOWN') return { text: 'Checking mergeability...', tone: 'neutral' };
   switch (snapshot.mergeStateStatus) {

@@ -4,6 +4,7 @@ import type {
   PrCheckBucket,
   PrMergeable,
   PrMergeMethod,
+  PrMergeQueue,
   PrRef,
   PrReviewDecision,
   PrReviewThread,
@@ -18,16 +19,23 @@ export const MAX_BATCH = 20;
 const REPO_FIELDS =
   'autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed viewerDefaultMergeMethod';
 
-function pullRequestFields(number: string, threads: string): string {
-  return `number title url state isDraft mergedAt
+const ENQUEUE_MUTATION = `mutation($id: ID!, $sha: GitObjectID!) {
+  enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $sha }) { mergeQueueEntry { position } }
+}`;
+
+function pullRequestFields(number: string, threads: string, queue: string): string {
+  return `id number title url state isDraft mergedAt
       author { login }
       headRefName headRefOid baseRefName additions deletions
       mergeable mergeStateStatus reviewDecision
       autoMergeRequest { enabledAt }
+      isMergeQueueEnabled mergeQueueEntry { state position }
+      timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) @include(if: ${queue}) { nodes {
+        ... on RemovedFromMergeQueueEvent { createdAt reason } } }
       commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
         __typename
-        ... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: ${number})
-          checkSuite { workflowRun { workflow { name } } } }
+        ... on CheckRun { databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: ${number})
+          checkSuite { app { slug } workflowRun { event workflow { name } } } }
         ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: ${number}) }
       } } } } } }
       reviewThreads(first: 50) @include(if: ${threads}) { nodes { id isResolved isOutdated path line
@@ -40,16 +48,19 @@ function pullRequestFields(number: string, threads: string): string {
  * One query for several PRs, each under its own alias (`p0`, `p1`, ...): its repo's merge
  * settings, the PR, its head commit's checks with whether each is required, and the viewer once.
  * Review threads and change requests ride along per PR only while its auto-fix is on, because
- * they are the expensive part and nothing else reads them.
+ * they are the expensive part and nothing else reads them; the last merge-queue removal rides
+ * along only while the app has the PR queued.
  */
 export function batchQuery(count: number): string {
   const indexes = Array.from({ length: count }, (_, index) => index);
-  const variables = indexes.map(i => `$o${i}: String!, $n${i}: String!, $p${i}: Int!, $t${i}: Boolean!`).join(', ');
+  const variables = indexes
+    .map(i => `$o${i}: String!, $n${i}: String!, $p${i}: Int!, $t${i}: Boolean!, $q${i}: Boolean!`)
+    .join(', ');
   const parts = indexes.map(
     i => `  p${i}: repository(owner: $o${i}, name: $n${i}) {
     ${REPO_FIELDS}
     pullRequest(number: $p${i}) {
-      ${pullRequestFields(`$p${i}`, `$t${i}`)}
+      ${pullRequestFields(`$p${i}`, `$t${i}`, `$q${i}`)}
     }
   }`
   );
@@ -59,6 +70,8 @@ export function batchQuery(count: number): string {
 export interface SnapshotRequest {
   ref: PrRef;
   threads: boolean;
+  /** Read why the merge queue last removed the PR. */
+  queue?: boolean;
 }
 
 type Json = Record<string, unknown>;
@@ -105,6 +118,30 @@ export function checkBucket(node: Json): PrCheckBucket {
   if (FAILING_CONCLUSIONS.has(conclusion)) return 'fail';
   if (SKIPPED_CONCLUSIONS.has(conclusion)) return 'skipped';
   return 'pending';
+}
+
+/**
+ * The latest run of each check, which is what GitHub's checks list and its "All checks have
+ * passed" count show. The rollup itself returns every run on the head commit: a workflow that
+ * fires again on the same commit (a label added, a review submitted, a re-run) leaves its older
+ * runs in it, so one real PR read 47 nodes with 6 stale failures where GitHub showed 35 and none.
+ *
+ * A check is the same check when its app, workflow, triggering event and name all match - a
+ * `push` run and a `pull_request` run of one job are two checks on GitHub too - and the newest
+ * is the one with the highest id. Commit statuses come back already reduced to one per context.
+ */
+export function latestCheckRuns(contexts: readonly Json[]): Json[] {
+  const newest = new Map<string, Json>();
+  const keys = contexts.map((node, index) => {
+    if (node.__typename !== 'CheckRun') return `#${index}`;
+    const suite = obj(node.checkSuite);
+    const run = obj(suite.workflowRun);
+    const key = [str(obj(suite.app).slug), str(obj(run.workflow).name), str(run.event), str(node.name)].join('\0');
+    const held = newest.get(key);
+    if (!held || num(node.databaseId) >= num(held.databaseId)) newest.set(key, node);
+    return key;
+  });
+  return contexts.filter((node, index) => newest.get(keys[index]) === node || keys[index].startsWith('#'));
 }
 
 function toCheck(node: Json): PrCheck {
@@ -161,6 +198,16 @@ function parseMergeable(value: unknown): PrMergeable {
   return value === 'MERGEABLE' || value === 'CONFLICTING' ? value : 'UNKNOWN';
 }
 
+function parseMergeQueue(pr: Json): PrMergeQueue {
+  const entry = obj(pr.mergeQueueEntry);
+  const removed = nodes(pr.timelineItems).find(node => str(node.createdAt));
+  return {
+    enabled: pr.isMergeQueueEnabled === true,
+    ...(str(entry.state) ? { entry: { state: str(entry.state), position: num(entry.position) } } : {}),
+    ...(removed ? { removed: { at: str(removed.createdAt), reason: str(removed.reason) } } : {}),
+  };
+}
+
 function parseReviewDecision(value: unknown): PrReviewDecision {
   return value === 'APPROVED' || value === 'CHANGES_REQUESTED' || value === 'REVIEW_REQUIRED' ? value : null;
 }
@@ -206,7 +253,9 @@ function parseRepository(
     mergeStateStatus: str(pr.mergeStateStatus) || 'UNKNOWN',
     reviewDecision: parseReviewDecision(pr.reviewDecision),
     autoMergeArmed: pr.autoMergeRequest !== null && typeof pr.autoMergeRequest === 'object',
-    checks: nodes(rollup.contexts).map(toCheck),
+    ...(str(pr.id) ? { nodeId: str(pr.id) } : {}),
+    mergeQueue: parseMergeQueue(pr),
+    checks: latestCheckRuns(nodes(rollup.contexts)).map(toCheck),
     repoSettings: {
       autoMergeAllowed: repository.autoMergeAllowed === true,
       allowedMethods,
@@ -247,8 +296,8 @@ export class PrGithub {
     private readonly now: () => number = Date.now
   ) {}
 
-  async snapshot(ref: PrRef, options: { threads: boolean }): Promise<PrSnapshot> {
-    const [result] = await this.snapshots([{ ref, threads: options.threads }]);
+  async snapshot(ref: PrRef, options: { threads: boolean; queue?: boolean }): Promise<PrSnapshot> {
+    const [result] = await this.snapshots([{ ref, threads: options.threads, queue: options.queue }]);
     if (result instanceof GhError) throw result;
     return result;
   }
@@ -262,7 +311,7 @@ export class PrGithub {
     if (requests.length === 0) return [];
     if (requests.length > MAX_BATCH) throw new Error(`At most ${MAX_BATCH} pull requests per query`);
     const args = ['api', 'graphql', '-f', `query=${batchQuery(requests.length)}`];
-    requests.forEach(({ ref, threads }, i) => {
+    requests.forEach(({ ref, threads, queue }, i) => {
       // -f, not -F, for the names: -F would turn a repo called "123" into a number.
       args.push(
         '-f',
@@ -272,7 +321,9 @@ export class PrGithub {
         '-F',
         `p${i}=${ref.number}`,
         '-F',
-        `t${i}=${threads}`
+        `t${i}=${threads}`,
+        '-F',
+        `q${i}=${queue === true}`
       );
     });
 
@@ -339,5 +390,33 @@ export class PrGithub {
    */
   async merge(ref: PrRef, method: PrMergeMethod, headSha: string): Promise<void> {
     await this.gh(['pr', 'merge', ref.url, `--${method}`, '--match-head-commit', headSha]);
+  }
+
+  /**
+   * Add the PR to its base branch's merge queue, the only way into a branch that has one.
+   * `expectedHeadOid` does what `--match-head-commit` does for a merge: a push after the
+   * readiness read makes GitHub refuse rather than queue code nobody evaluated. The queue merges
+   * with its own configured method. Returns the position GitHub gave it, or 0 if it gave none.
+   */
+  async enqueue(nodeId: string, headSha: string): Promise<number> {
+    const stdout = await this.gh([
+      'api',
+      'graphql',
+      '-f',
+      `query=${ENQUEUE_MUTATION}`,
+      '-f',
+      `id=${nodeId}`,
+      '-f',
+      `sha=${headSha}`,
+    ]);
+    let raw: Json;
+    try {
+      raw = obj(JSON.parse(stdout));
+    } catch {
+      return 0;
+    }
+    const error = graphqlError(raw);
+    if (error) throw new GhError('failed', error.message);
+    return num(obj(obj(obj(raw.data).enqueuePullRequest).mergeQueueEntry).position);
   }
 }

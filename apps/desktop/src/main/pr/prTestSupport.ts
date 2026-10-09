@@ -53,9 +53,11 @@ export function fakeGithub(initial: PrSnapshot = snapshot()) {
       if (next instanceof Error) throw next;
       return next;
     },
-    snapshots: async (requests: readonly { ref: PrRef; threads: boolean }[]) => {
+    snapshots: async (requests: readonly { ref: PrRef; threads: boolean; queue?: boolean }[]) => {
       batches.push(requests.length);
-      for (const request of requests) calls.push(`snapshot${request.threads ? '+threads' : ''}`);
+      for (const request of requests) {
+        calls.push(`snapshot${request.threads ? '+threads' : ''}${request.queue ? '+queue' : ''}`);
+      }
       if (next instanceof Error) throw next;
       const answer = next;
       return requests.map(request => ({ ...answer, ...request.ref }));
@@ -72,6 +74,10 @@ export function fakeGithub(initial: PrSnapshot = snapshot()) {
     },
     merge: async (_ref: PrRef, method: PrMergeMethod, sha: string) => {
       calls.push(`merge:${method}:${sha}`);
+    },
+    enqueue: async (nodeId: string, sha: string) => {
+      calls.push(`enqueue:${nodeId}:${sha}`);
+      return 1;
     },
   };
   return {

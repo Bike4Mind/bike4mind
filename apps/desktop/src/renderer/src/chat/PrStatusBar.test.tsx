@@ -44,14 +44,20 @@ function snapshot(overrides: Partial<PrSnapshot> = {}): PrBarState['snapshot'] {
   };
 }
 
-function markup(overrides: Partial<PrSnapshot> = {}, refreshing = false, gh: PrBarState['gh'] = 'ok'): string {
+function markup(
+  overrides: Partial<PrSnapshot> = {},
+  refreshing = false,
+  gh: PrBarState['gh'] = 'ok',
+  autoMerge: PrBarState['autoMerge'] = { mode: 'desktop' },
+  binding: PrBinding = BINDING
+): string {
   const state: PrBarState = {
     sessionId: 'session-1',
-    binding: BINDING,
+    binding,
     snapshot: snapshot(overrides),
     gh,
     refreshing,
-    autoMerge: { mode: 'desktop' },
+    autoMerge,
     autoFix: { status: 'watching', attempts: 0, max: 3 },
   };
   return renderToStaticMarkup(
@@ -112,6 +118,19 @@ describe('PrStatusBar', () => {
 
   it('labels the open button for the built-in browser', () => {
     expect(markup()).toMatch(/aria-label="Open pull request in built-in browser"[^>]*data-testid="pr-bar-open-btn"/);
+  });
+
+  it('says a PR in the merge queue is queued to merge', () => {
+    const html = markup({}, false, 'ok', { mode: 'desktop', queued: { position: 2 } });
+    expect(html).toContain('data-testid="pr-bar-automerge-armed" data-queued="true"');
+    expect(html).toContain('>Queued to merge</span>');
+  });
+
+  it('keeps a stopped auto-merge visible after the box unchecked itself', () => {
+    const error = 'Auto-merge stopped: GitHub would not queue it: Pull request is not mergeable';
+    const html = markup({}, false, 'ok', { mode: null, error }, { ...BINDING, autoMerge: false });
+    expect(has(html, 'pr-bar-automerge-stopped')).toBe(true);
+    expect(has(html, 'pr-bar-automerge-armed')).toBe(false);
   });
 
   it('spins the refresh button only while a read runs', () => {

@@ -40,6 +40,11 @@ export interface PrBinding extends PrRef {
    * that does not allow it. See desktopMergeReadiness for the rules the second one follows.
    */
   autoMergeMode?: 'github' | 'desktop';
+  /**
+   * When this app last saw the PR in its base branch's merge queue (ISO). Persisted so a PR the
+   * queue ejected is not queued again after a relaunch; cleared when auto-merge is turned off.
+   */
+  mergeQueuedAt?: string;
   autoArchive?: boolean;
   /** Auto-fix turns started for this PR, persisted so a relaunch does not refill the budget. */
   autoFixAttempts?: number;
@@ -71,6 +76,18 @@ export interface PrCheck {
 export type PrMergeable = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
 export type PrReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
 export type PrMergeMethod = 'squash' | 'merge' | 'rebase';
+
+/**
+ * The base branch's merge queue, from the PR's own fields. A base with one takes merges only
+ * through it: a direct merge is refused, so the app enqueues instead.
+ */
+export interface PrMergeQueue {
+  enabled: boolean;
+  /** Present while the PR is in the queue. `state` is GitHub's MergeQueueEntryState. */
+  entry?: { state: string; position: number };
+  /** The latest time GitHub took the PR out of the queue unmerged, read only while the app has it queued. */
+  removed?: { at: string; reason: string };
+}
 
 export interface PrRepoSettings {
   autoMergeAllowed: boolean;
@@ -121,6 +138,10 @@ export interface PrSnapshot extends PrRef {
   mergeStateStatus: string;
   reviewDecision: PrReviewDecision;
   autoMergeArmed: boolean;
+  /** GitHub's node id for the PR, which the enqueue mutation takes. */
+  nodeId?: string;
+  mergeQueue?: PrMergeQueue;
+  /** The latest run of each check, as GitHub's own checks list shows them; see latestCheckRuns. */
   checks: PrCheck[];
   repoSettings: PrRepoSettings;
   viewer: string;
@@ -186,7 +207,14 @@ export interface PrBarState {
   error?: string;
   refreshing: boolean;
   /** How the bar says what auto-merge is doing: armed on GitHub, or held by this app. */
-  autoMerge: { mode: 'github' | 'desktop' | null; note?: string };
+  autoMerge: {
+    mode: 'github' | 'desktop' | null;
+    note?: string;
+    /** Why auto-merge stopped: a refused merge or enqueue, or the queue ejecting the PR. Outlives the box. */
+    error?: string;
+    /** Set while the PR sits in its base branch's merge queue. */
+    queued?: { position: number };
+  };
   autoFix: { status: PrAutoFixStatus; attempts: number; max: number; note?: string };
 }
 

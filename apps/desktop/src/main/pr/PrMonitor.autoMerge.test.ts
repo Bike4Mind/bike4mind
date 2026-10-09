@@ -41,7 +41,15 @@ function setup(initial: PrSnapshot) {
 
 describe('desktopMergeReadiness', () => {
   it('is ready only when approved, mergeable, clean and every check passed or skipped', () => {
-    expect(desktopMergeReadiness(ready())).toEqual({ ready: true, method: 'squash' });
+    expect(desktopMergeReadiness(ready())).toEqual({ ready: true, via: 'merge', method: 'squash' });
+  });
+
+  it('enqueues instead on a base branch with a merge queue, whatever methods the repo allows', () => {
+    const queue = { mergeQueue: { enabled: true } };
+    expect(desktopMergeReadiness(ready(queue))).toEqual({ ready: true, via: 'queue' });
+    expect(
+      desktopMergeReadiness(ready({ ...queue, repoSettings: { autoMergeAllowed: false, allowedMethods: [] } }))
+    ).toEqual({ ready: true, via: 'queue' });
   });
 
   it.each([
@@ -145,7 +153,11 @@ describe('PrMonitor auto-merge on a repo without it (desktop merges)', () => {
     };
     await monitor.refresh(SESSION);
     expect((await store.get(SESSION))?.autoMerge).toBe(false);
-    expect(out.last()?.autoMerge.note).toMatch(/Auto-merge stopped/);
+    expect(out.last()?.autoMerge).toMatchObject({
+      mode: null,
+      error: 'Auto-merge stopped: GitHub refused the merge: Head branch was modified',
+    });
+    expect(out.last()?.autoMerge.note).toBeUndefined();
   });
 
   it('cancels by unchecking before it is ready, and then never merges', async () => {
@@ -166,6 +178,106 @@ describe('PrMonitor auto-merge on a repo without it (desktop merges)', () => {
     const next = await store.get(SESSION);
     expect(next?.number).toBe(700);
     expect(next?.autoMerge).toBeUndefined();
+    monitor.dispose();
+  });
+});
+
+describe('PrMonitor auto-merge on a merge-queue base (desktop enqueues)', () => {
+  const queued = (overrides: Partial<PrSnapshot> = {}) =>
+    ready({ nodeId: 'PR_node', mergeQueue: { enabled: true }, ...overrides });
+  const armed: PrBinding = { ...bound, autoMerge: true, autoMergeMode: 'desktop' };
+
+  it('enqueues on refresh, straight from that read, and never merges directly', async () => {
+    const { store, fake, out, monitor } = setup(queued());
+    await store.set(SESSION, armed);
+    await monitor.refresh(SESSION);
+    expect(fake.calls.filter(call => call.startsWith('enqueue:') || call.startsWith('merge:'))).toEqual([
+      'enqueue:PR_node:sha-ready',
+    ]);
+    expect((await store.get(SESSION))?.mergeQueuedAt).toEqual(expect.any(String));
+    expect(out.last()?.autoMerge).toMatchObject({
+      mode: 'desktop',
+      queued: { position: 1 },
+      note: expect.stringMatching(/Queued to merge \(position 1\)/),
+    });
+    monitor.dispose();
+  });
+
+  it('still merges directly on a base without a queue', async () => {
+    const { store, fake, monitor } = setup(ready({ mergeQueue: { enabled: false } }));
+    await store.set(SESSION, armed);
+    await monitor.refresh(SESSION);
+    expect(fake.calls.filter(call => call.startsWith('enqueue:') || call.startsWith('merge:'))).toEqual([
+      'merge:squash:sha-ready',
+    ]);
+    monitor.dispose();
+  });
+
+  it('shows a refused enqueue in place of a waiting note, and stops', async () => {
+    const { store, fake, out, monitor } = setup(queued());
+    await store.set(SESSION, armed);
+    fake.github.enqueue = async () => {
+      throw new GhError('failed', 'Pull request is not mergeable');
+    };
+    await monitor.refresh(SESSION);
+    const binding = await store.get(SESSION);
+    expect(binding?.autoMerge).toBe(false);
+    expect(binding?.mergeQueuedAt).toBeUndefined();
+    expect(out.last()?.autoMerge).toEqual({
+      mode: null,
+      error: 'Auto-merge stopped: GitHub would not queue it: Pull request is not mergeable',
+    });
+    monitor.dispose();
+  });
+
+  it('treats a queued PR as merging, reads why it left, and does not queue it again', async () => {
+    const { store, fake, out, monitor } = setup(
+      queued({ mergeQueue: { enabled: true, entry: { state: 'AWAITING_CHECKS', position: 2 } } })
+    );
+    await store.set(SESSION, { ...armed, mergeQueuedAt: new Date(Date.now() - 5 * 60_000).toISOString() });
+    await monitor.refresh(SESSION);
+    expect(out.last()?.autoMerge).toMatchObject({ queued: { position: 2 }, note: 'Queued to merge (position 2).' });
+    expect(fake.calls).toContain('snapshot+queue');
+    expect(await monitor.setOption(SESSION, 'autoMerge', false)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/merge queue/),
+    });
+
+    fake.answer(
+      queued({
+        mergeQueue: {
+          enabled: true,
+          removed: { at: new Date().toISOString(), reason: 'Required status check failed' },
+        },
+      })
+    );
+    await monitor.refresh(SESSION);
+    expect(fake.calls.some(call => call.startsWith('enqueue:'))).toBe(false);
+    expect((await store.get(SESSION))?.autoMerge).toBe(false);
+    expect(out.last()?.autoMerge).toEqual({
+      mode: null,
+      error: 'Auto-merge stopped: the merge queue removed this PR: Required status check failed',
+    });
+    monitor.dispose();
+  });
+
+  it('waits out GitHub catching up right after the enqueue', async () => {
+    const { store, fake, out, monitor } = setup(queued());
+    await store.set(SESSION, { ...armed, mergeQueuedAt: new Date().toISOString() });
+    await monitor.refresh(SESSION);
+    expect((await store.get(SESSION))?.autoMerge).toBe(true);
+    expect(out.last()?.autoMerge.note).toBe('Queued to merge.');
+    expect(fake.calls.some(call => call.startsWith('enqueue:'))).toBe(false);
+    monitor.dispose();
+  });
+
+  it('clears the queue mark once the PR has merged', async () => {
+    const { store, monitor } = setup(queued({ state: 'MERGED' }));
+    await store.set(SESSION, { ...armed, mergeQueuedAt: new Date().toISOString() });
+    await monitor.refresh(SESSION);
+    const binding = await store.get(SESSION);
+    expect(binding?.autoMerge).toBe(false);
+    expect(binding?.mergeQueuedAt).toBeUndefined();
     monitor.dispose();
   });
 });

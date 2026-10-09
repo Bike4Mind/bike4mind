@@ -44,6 +44,12 @@ const AFTER_PUSH_MS = 15_000;
 /** A missing or signed-out gh is re-tried on opening a conversation at most this often. */
 const GH_RETRY_MS = 60_000;
 
+/**
+ * How long after enqueueing a PR missing from the queue with no removal recorded is still
+ * taken for GitHub catching up, rather than the queue having let it go.
+ */
+const ENQUEUE_SETTLE_MS = 60_000;
+
 /** The first read of an armed PR nobody has opened is spread over this window, so a launch does not read them all at once. */
 const UNOPENED_JITTER_MS = 60_000;
 
@@ -102,6 +108,7 @@ const BATCH_WINDOW_MS = 10;
 interface QueuedRead {
   ref: PrRef;
   threads: boolean;
+  queue: boolean;
   resolve(snapshot: PrSnapshot): void;
   reject(err: unknown): void;
 }
@@ -113,8 +120,12 @@ interface Live {
   inflight: Promise<void> | null;
   failures: number;
   timer?: unknown;
-  /** What the bar says about auto-merge: why it is waiting, or why it stopped. */
+  /** What the bar says about auto-merge while it is on: what it is waiting for, or that it is queued. */
   mergeNote?: string;
+  /** Why auto-merge stopped. Kept after the box unchecks itself, so the popover can still say why. */
+  mergeError?: string;
+  /** Where the PR sits in its base branch's merge queue, while it does. */
+  queued?: { position: number };
   /** An option change in progress; a read landing meanwhile leaves the automations alone. */
   changing?: boolean;
   /** A merge this app started and has not heard back on. */
@@ -356,9 +367,10 @@ export class PrMonitor {
     if (!binding || !snapshot) return { ok: false, error: live.error ?? 'Could not read the pull request.' };
     if (snapshot.state !== 'OPEN') return { ok: false, error: 'The pull request is not open.' };
     const method = mergeMethodFor(snapshot);
-    if (!method) return { ok: false, error: 'This repository allows no merge method.' };
+    if (!method && !snapshot.mergeQueue?.enabled)
+      return { ok: false, error: 'This repository allows no merge method.' };
 
-    if (snapshot.repoSettings.autoMergeAllowed) {
+    if (snapshot.repoSettings.autoMergeAllowed && method) {
       try {
         await this.withGh(() => this.deps.github.enableAutoMerge(binding, method));
       } catch (err) {
@@ -366,6 +378,7 @@ export class PrMonitor {
       }
       await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: true, autoMergeMode: 'github' }));
       delete live.mergeNote;
+      delete live.mergeError;
       // Not `changing` any more: this read should reconcile, which covers GitHub having merged
       // straight away because the PR was already clean.
       live.changing = false;
@@ -374,6 +387,7 @@ export class PrMonitor {
     }
 
     await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: true, autoMergeMode: 'desktop' }));
+    delete live.mergeError;
     live.changing = false;
     await this.reconcileAutoMerge(sessionId, snapshot);
     return { ok: true };
@@ -384,6 +398,9 @@ export class PrMonitor {
     const binding = await this.deps.store.get(sessionId);
     if (!binding?.autoMerge) return { ok: true };
     if (live.merging) return { ok: false, error: 'A merge is already under way and cannot be called back.' };
+    if (binding.autoMergeMode !== 'github' && live.queued) {
+      return { ok: false, error: 'It is in the merge queue. Remove it from the queue on GitHub to stop the merge.' };
+    }
     if (binding.autoMergeMode === 'github') {
       try {
         await this.withGh(() => this.deps.github.disableAutoMerge(binding));
@@ -395,24 +412,36 @@ export class PrMonitor {
         }
       }
     }
-    await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: false }));
+    await this.deps.store.update(sessionId, current => withoutQueueMark({ ...current, autoMerge: false }));
     delete live.mergeNote;
+    delete live.mergeError;
     return { ok: true };
   }
 
   /**
-   * After a read: keep the stored auto-merge flag honest, and in desktop mode merge once the PR
-   * is ready. Skipped while the user is mid-change, whose own path does this afterwards.
+   * After a read: keep the stored auto-merge flag honest, and in desktop mode merge - or, on a
+   * base branch with a merge queue, enqueue - once the PR is ready. Skipped while the user is
+   * mid-change, whose own path does this afterwards.
    */
   private async reconcileAutoMerge(sessionId: string, snapshot: PrSnapshot): Promise<void> {
     const live = this.entry(sessionId);
     if (live.changing || live.merging) return;
+    const entry = snapshot.state === 'OPEN' ? snapshot.mergeQueue?.entry : undefined;
+    live.queued = entry ? { position: entry.position } : undefined;
     const binding = await this.deps.store.get(sessionId);
     if (!binding?.autoMerge) return;
 
     if (snapshot.state !== 'OPEN') {
-      await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: false }));
+      await this.deps.store.update(sessionId, current => withoutQueueMark({ ...current, autoMerge: false }));
       delete live.mergeNote;
+      return;
+    }
+
+    if (entry) {
+      live.mergeNote = queuedNote(entry.position);
+      if (binding.autoMergeMode !== 'github' && !binding.mergeQueuedAt) {
+        await this.deps.store.update(sessionId, current => ({ ...current, mergeQueuedAt: this.isoNow() }));
+      }
       return;
     }
 
@@ -427,27 +456,57 @@ export class PrMonitor {
       return;
     }
 
+    if (binding.mergeQueuedAt) {
+      const ejection = queueEjection(binding.mergeQueuedAt, snapshot, this.now());
+      if (ejection === 'settling') {
+        live.mergeNote = queuedNote(0);
+        return;
+      }
+      // Not queued again: the queue ejecting it is GitHub saying the merged result failed, and
+      // this PR's own checks, which are what readiness reads, may well still be green.
+      await this.deps.store.update(sessionId, current => withoutQueueMark({ ...current, autoMerge: false }));
+      delete live.mergeNote;
+      live.mergeError = `Auto-merge stopped: the merge queue removed this PR${ejection.reason ? `: ${ejection.reason}` : '.'}`;
+      return;
+    }
+
     const readiness = desktopMergeReadiness(snapshot);
     if (!readiness.ready) {
       live.mergeNote = readiness.reason;
       return;
     }
     live.merging = true;
-    live.mergeNote = 'Merging...';
+    live.mergeNote = readiness.via === 'queue' ? 'Adding to the merge queue...' : 'Merging...';
     void this.publish(sessionId);
     try {
-      await this.withGh(() => this.deps.github.merge(binding, readiness.method, snapshot.headSha));
-      this.deps.logger.debug(`PR: merged #${snapshot.number} (${readiness.method}) for ${sessionId}`);
-      delete live.mergeNote;
+      if (readiness.via === 'queue') {
+        const nodeId = snapshot.nodeId;
+        if (!nodeId) throw new Error('GitHub did not say which pull request to queue.');
+        const position = await this.withGh(() => this.deps.github.enqueue(nodeId, snapshot.headSha));
+        await this.deps.store.update(sessionId, current => ({ ...current, mergeQueuedAt: this.isoNow() }));
+        live.queued = { position };
+        live.mergeNote = queuedNote(position);
+        this.deps.logger.debug(`PR: queued #${snapshot.number} at ${position} for ${sessionId}`);
+      } else {
+        await this.withGh(() => this.deps.github.merge(binding, readiness.method, snapshot.headSha));
+        this.deps.logger.debug(`PR: merged #${snapshot.number} (${readiness.method}) for ${sessionId}`);
+        delete live.mergeNote;
+      }
     } catch (err) {
       // Disarmed rather than retried: a refused merge is GitHub saying something changed, and
       // trying again on every poll would be this app pushing at a door the user did not open.
       await this.deps.store.update(sessionId, current => ({ ...current, autoMerge: false }));
-      live.mergeNote = `Auto-merge stopped: ${this.noteGhFailure(err)}`;
+      delete live.mergeNote;
+      const refused = readiness.via === 'queue' ? 'GitHub would not queue it' : 'GitHub refused the merge';
+      live.mergeError = `Auto-merge stopped: ${refused}: ${this.noteGhFailure(err)}`;
     } finally {
       live.merging = false;
     }
     live.nudge = 2_000;
+  }
+
+  private isoNow(): string {
+    return new Date(this.now()).toISOString();
   }
 
   async refresh(sessionId: string): Promise<void> {
@@ -535,7 +594,10 @@ export class PrMonitor {
       opened: this.opened.has(sessionId),
       armed: this.armed(binding),
       active:
-        !snapshot || snapshot.mergeable === 'UNKNOWN' || snapshot.checks.some(check => check.bucket === 'pending'),
+        !snapshot ||
+        snapshot.mergeable === 'UNKNOWN' ||
+        !!live?.queued ||
+        snapshot.checks.some(check => check.bucket === 'pending'),
       failures: live?.failures ?? 0,
     });
     const nudge = live?.nudge;
@@ -585,9 +647,9 @@ export class PrMonitor {
    * window: with ten bound PRs whose timers share the grid, that is one gh process and one
    * GraphQL call per tick instead of ten.
    */
-  protected readTogether(ref: PrRef, threads: boolean): Promise<PrSnapshot> {
+  protected readTogether(ref: PrRef, threads: boolean, queue = false): Promise<PrSnapshot> {
     return new Promise<PrSnapshot>((resolve, reject) => {
-      this.queuedReads.push({ ref, threads, resolve, reject });
+      this.queuedReads.push({ ref, threads, queue, resolve, reject });
       this.batchTimer ??= setTimeout(() => this.sendQueuedReads(), this.deps.batchWindowMs ?? BATCH_WINDOW_MS);
     });
   }
@@ -597,7 +659,9 @@ export class PrMonitor {
     const queued = this.queuedReads.splice(0);
     for (let start = 0; start < queued.length; start += MAX_BATCH) {
       const chunk = queued.slice(start, start + MAX_BATCH);
-      this.withGh(() => this.deps.github.snapshots(chunk.map(({ ref, threads }) => ({ ref, threads })))).then(
+      this.withGh(() =>
+        this.deps.github.snapshots(chunk.map(({ ref, threads, queue }) => ({ ref, threads, queue })))
+      ).then(
         results =>
           chunk.forEach((read, index) => {
             const result = results[index];
@@ -633,7 +697,7 @@ export class PrMonitor {
     }
     try {
       const ref: PrRef = { owner: binding.owner, repo: binding.repo, number: binding.number, url: binding.url };
-      const snapshot = await this.readTogether(ref, this.wantsThreads(binding));
+      const snapshot = await this.readTogether(ref, this.wantsThreads(binding), binding.mergeQueuedAt !== undefined);
       this.gh = 'ok';
       // Re-bound to another PR while gh ran: this answer is about a PR the conversation left.
       if (!samePullRequest(await this.deps.store.get(sessionId), binding)) return;
@@ -792,6 +856,8 @@ export class PrMonitor {
       autoMerge: {
         mode: binding?.autoMerge ? (binding.autoMergeMode ?? 'github') : null,
         ...(live?.mergeNote ? { note: live.mergeNote } : {}),
+        ...(live?.mergeError ? { error: live.mergeError } : {}),
+        ...(live?.queued ? { queued: live.queued } : {}),
       },
       autoFix: {
         status: binding?.autoFix ? (live?.autoFix?.status ?? 'watching') : 'off',
@@ -862,4 +928,31 @@ function forTheBar(snapshot: PrSnapshot): PrBarSnapshot {
 function withoutFinal(binding: PrBinding): PrBinding {
   const { finalSnapshot: _finalSnapshot, ...rest } = binding;
   return rest;
+}
+
+function queuedNote(position: number): string {
+  return position > 0 ? `Queued to merge (position ${position}).` : 'Queued to merge.';
+}
+
+function withoutQueueMark(binding: PrBinding): PrBinding {
+  const { mergeQueuedAt: _mergeQueuedAt, ...rest } = binding;
+  return rest;
+}
+
+/**
+ * A PR this app queued is no longer in the queue and still open: the queue let it go, with the
+ * reason GitHub recorded when there is one. Right after the enqueue GitHub may not list it yet,
+ * which only a removal recorded since then, or the settling window running out, overrules.
+ */
+export function queueEjection(
+  queuedAt: string,
+  snapshot: PrSnapshot,
+  now: number
+): 'settling' | { reason: string | null } {
+  const since = Date.parse(queuedAt);
+  const removed = snapshot.mergeQueue?.removed;
+  // A minute of slack for the local clock running ahead of GitHub's.
+  if (removed && Date.parse(removed.at) >= since - 60_000) return { reason: removed.reason || null };
+  if (!Number.isNaN(since) && now - since < ENQUEUE_SETTLE_MS) return 'settling';
+  return { reason: null };
 }
