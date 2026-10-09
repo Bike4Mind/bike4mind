@@ -1,5 +1,4 @@
 export {
-  buildUrl,
   createClient,
   type AudioResult,
   type B4mClient,
@@ -21,4 +20,3 @@ export {
 export { B4mApiError, B4mQuestError, parseRetryAfterSeconds } from './errors';
 export type { components, operations as Operations, paths } from './generated/openapi';
 export { operations } from './generated/operations';
-export { parseSse } from './sse';
