@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { updateShareableFiles } from '../projectService';
-import { usableSessionIds } from '../utils/objectIds';
+import { canonicalId, mergeIds, usableSessionIds } from '../utils/objectIds';
 import {
   ICacheRepository,
   IFabFileRepository,
@@ -27,10 +27,11 @@ import { z } from 'zod';
 // (it comes from the URL path there) - extend rather than fold it into the shared schema.
 const updateSessionParamtersSchema = SessionUpdateRequestSchema.extend({
   id: z.string(),
-  // Service-internal too. 'add' treats `knowledgeIds` as ids to attach: only the accessible additions
-  // are written, atomically ($addToSet), and no stored id is ever removed. For automatic attach paths
-  // whose copy of the list may be stale - a full-list write would undo a concurrent detach.
-  knowledgeIdsMode: z.enum(['replace', 'add']).optional(),
+  // Service-internal too. `add` treats `knowledgeIds` as ids to attach: only the accessible
+  // additions are written, atomically ($addToSet), and no stored id is ever removed. For automatic
+  // attach paths whose copy of the list may be stale - a full-list write would undo a concurrent
+  // detach. Absent means the ordinary replace semantics.
+  knowledgeIdsMode: z.literal('add').optional(),
 });
 
 type UpdateSessionParameters = z.infer<typeof updateSessionParamtersSchema>;
@@ -111,15 +112,16 @@ export const updateSession = async (
   // Keyed on the ADDED set rather than "the list changed" for a second reason too: a rename PUTs
   // the whole stored list back, and dropping an unusable id from it makes the incoming list differ
   // from the stored one on EVERY such write. A changed-list test would then fire on a rename.
-  const alreadyKnown = new Set(session.knowledgeIds ?? []);
-  const requestedAdded = usableIds?.filter(id => !alreadyKnown.has(id)) ?? [];
+  const alreadyKnown = new Set((session.knowledgeIds ?? []).map(canonicalId));
+  const requestedAdded = usableIds?.filter(id => !alreadyKnown.has(canonicalId(id))) ?? [];
   // Only the added ids are access-checked, so a rename can never drop a stored file.
   const addedFileIds = await filterAccessibleKnowledgeIds(user, requestedAdded, adapters);
   const refused = new Set(requestedAdded.filter(id => !addedFileIds.includes(id)));
   const addOnly = knowledgeIdsMode === 'add';
   const knowledgeIds = addOnly
-    ? // The stored list is filtered too: the lake derivation casts these to ObjectIds.
-      usableIds && uniq([...usableSessionIds(session.knowledgeIds ?? [], 'knowledge', logger), ...addedFileIds])
+    ? // The stored list is filtered too: the lake derivation casts these to ObjectIds. mergeIds skips
+      // an addition already present ignoring hex case, so a stale read cannot append a second spelling.
+      usableIds && mergeIds(usableSessionIds(session.knowledgeIds ?? [], 'knowledge', logger), addedFileIds)
     : usableIds?.filter(id => !refused.has(id));
 
   // Persist ONLY the fields this request changed, as a plain partial keyed by id.

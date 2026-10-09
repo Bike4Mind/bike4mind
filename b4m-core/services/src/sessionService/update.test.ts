@@ -803,6 +803,14 @@ describe("updateSession - knowledgeIdsMode 'add'", () => {
     ]);
   });
 
+  it('does not re-add a stored id that differs only in hex case', async () => {
+    const { adapters } = makeAdapters([LAKE_FILE_ID.toUpperCase()]);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], knowledgeIdsMode: 'add' }, adapters);
+
+    const [, , added] = adapters.db.sessions.addKnowledgeIdsWithUpdateAccess.mock.calls[0];
+    expect(added).toEqual([]);
+  });
+
   it('404s when the gated add-only write is refused', async () => {
     const { adapters } = makeAdapters([]);
     adapters.db.sessions.addKnowledgeIdsWithUpdateAccess.mockResolvedValue(null);
