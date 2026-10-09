@@ -46,6 +46,15 @@ export function getSendBlockedLabel(reason: SendBlockedReason, t: TFunction): st
   }
 }
 
+/**
+ * Text for the blocked-send toast. Same as the Send tooltip except 'sending': a bare "Sending..."
+ * toasted after a refused reply-choice click would read as if that click went out.
+ */
+export function getBlockedSendToastLabel(reason: SendBlockedReason, t: TFunction): string {
+  if (reason === 'sending') return t('session.sendBlocked.sendingToast', 'Another message is still sending');
+  return getSendBlockedLabel(reason, t);
+}
+
 // 'generating' and 'sending' are already obvious from the Stop button / spinner beside the composer.
 const COMPOSER_TOASTED_REASONS: ReadonlySet<SendBlockedReason> = new Set([
   'loadingModels',

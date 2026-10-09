@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { TFunction } from 'i18next';
-import { createBlockedSendToastGate, getSendBlockedLabel, getSendBlockedReason } from './sendBlockedReason';
+import {
+  createBlockedSendToastGate,
+  getBlockedSendToastLabel,
+  getSendBlockedLabel,
+  getSendBlockedReason,
+} from './sendBlockedReason';
 
 const ready = {
   isGenerating: false,
@@ -48,6 +53,19 @@ describe('getSendBlockedLabel', () => {
   it('tells a failed model load apart from a missing permission', () => {
     expect(getSendBlockedLabel('modelsError', t)).toBe("Couldn't load AI models");
     expect(getSendBlockedLabel('noModels', t)).toBe('No models available');
+  });
+});
+
+describe('getBlockedSendToastLabel', () => {
+  const t = ((_key: string, fallback: string) => fallback) as unknown as TFunction;
+
+  it('says a refused send is waiting on another message, not that it is sending', () => {
+    expect(getBlockedSendToastLabel('sending', t)).toBe('Another message is still sending');
+  });
+
+  it('matches the Send tooltip for every other reason', () => {
+    expect(getBlockedSendToastLabel('generating', t)).toBe(getSendBlockedLabel('generating', t));
+    expect(getBlockedSendToastLabel('reconnecting', t)).toBe(getSendBlockedLabel('reconnecting', t));
   });
 });
 
