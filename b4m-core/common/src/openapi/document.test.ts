@@ -239,6 +239,12 @@ describe('buildOpenApiDocument', () => {
     expect(new Set(publishedHeaders)).toEqual(new Set(expectedHeaders));
     const describedHeaders = [...doc.info.description.matchAll(/`(X-RateLimit-[A-Za-z-]+)`/g)].map(m => m[1]);
     expect(new Set(describedHeaders)).toEqual(new Set(expectedHeaders));
+    // 401/403 and the streaming completions endpoint carry no rate-limit headers.
+    const rateLimitsStart = doc.info.description.indexOf('## Rate limits');
+    const rateLimitsEnd = doc.info.description.indexOf('## Credits');
+    expect(rateLimitsStart).toBeGreaterThanOrEqual(0);
+    expect(rateLimitsEnd).toBeGreaterThan(rateLimitsStart);
+    expect(doc.info.description.slice(rateLimitsStart, rateLimitsEnd)).not.toMatch(/every response/i);
   });
 
   it('names the poll target of every operation that answers 202 in the Async jobs section', () => {

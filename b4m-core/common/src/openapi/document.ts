@@ -73,7 +73,7 @@ function infoDescription(): string {
     `Each API key has a per-minute and a per-day request ceiling, by default ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerMinute} requests/minute and ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay} requests/day (a key can be minted with its own ceilings). ` +
-      'Rate-limited operations return the current window state on every response:',
+      'Responses from rate-limited operations carry the current state of both windows:',
     ...API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\``),
     '',
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
