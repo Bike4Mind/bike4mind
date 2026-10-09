@@ -38,7 +38,7 @@ import { userCanUpdateDoc } from '@client/app/utils/userPermission';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
-import { useParams } from '@tanstack/react-router';
+import { useLocation, useParams } from '@tanstack/react-router';
 import rehypeSanitize from 'rehype-sanitize';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
 import { whiteAlpha } from '@client/app/utils/themes/colors';
@@ -127,6 +127,10 @@ const KnowledgeModal: React.FC = () => {
   const { setFilesMetaDataVersion, currentSessionId } = useSessions();
   const { setWorkBenchFiles } = useWorkBenchActions();
   const { addToNotebookContext } = useNotebookContextFiles();
+  // currentSessionId outlives the notebook page (it is app-level state) and this modal is also
+  // opened from the file browser, profile and admin pages: a create there must not land in a
+  // notebook the user is not looking at.
+  const isNotebookOnScreen = useLocation({ select: location => location.pathname.startsWith('/notebooks/') });
 
   const { currentUser } = useUser();
 
@@ -330,11 +334,13 @@ const KnowledgeModal: React.FC = () => {
       } else {
         const newFabFile = await createFabFileOnServerWithUpload(fileData, new File([editedContent], 'temp'));
         setFabFile(newFabFile as IFabFileDocument);
-        try {
-          await addToNotebookContext(currentSessionId, newFabFile as IFabFileDocument);
-        } catch (error) {
-          // The file itself is saved; the hook already rolled back the attach and told the user.
-          console.error('Failed to attach new file to notebook', error);
+        if (isNotebookOnScreen) {
+          try {
+            await addToNotebookContext(currentSessionId, newFabFile as IFabFileDocument);
+          } catch (error) {
+            // The file itself is saved; the hook already rolled back the attach and told the user.
+            console.error('Failed to attach new file to notebook', error);
+          }
         }
 
         // If system is enabled for new file, add it to user's systemFiles
