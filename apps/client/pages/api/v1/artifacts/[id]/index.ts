@@ -9,30 +9,27 @@
  */
 
 import { deleteArtifactContract, getArtifactContract, updateArtifactContract } from '@bike4mind/common';
+import { artifactContentRepository } from '@bike4mind/database';
 import { artifactService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toPublicArtifact } from '@server/artifacts/toPublicArtifact';
 import { ARTIFACT_DB, hideArtifactDenial } from '@server/artifacts/artifactAccess';
 
-const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
-
-async function readWithContent(userId: string, id: string) {
-  const { artifact, content } = await hideArtifactDenial(
-    artifactService.get(userId, { id, includeContent: true, includeVersions: false }, { db: ARTIFACT_DB })
-  );
-  return toPublicArtifact(artifact, content?.content ?? null);
-}
-
 const getRoute = nextRouteForContract(getArtifactContract, {
+  exemptReadsFromDailyRateLimit: true,
   rateLimit: perUserRateLimit('GET /api/v1/artifacts/[id]'),
 }).get(async (req, res) => {
-  const body = await readWithContent(req.user.id, req.validatedParams.id);
+  const { artifact, content } = await hideArtifactDenial(
+    artifactService.get(
+      req.user.id,
+      { id: req.validatedParams.id, includeContent: true, includeVersions: false },
+      { db: ARTIFACT_DB }
+    )
+  );
   res.setHeader('Cache-Control', 'private, no-store');
-  return res.json(body);
+  return res.json(toPublicArtifact(artifact, content?.content ?? null));
 });
 
 const updateRoute = nextRouteForContract(updateArtifactContract, {
@@ -41,7 +38,7 @@ const updateRoute = nextRouteForContract(updateArtifactContract, {
   const { id } = req.validatedParams;
   const { title, description, content, tags } = req.validated;
 
-  await hideArtifactDenial(
+  const { artifact } = await hideArtifactDenial(
     artifactService.update(
       req.user.id,
       {
@@ -56,10 +53,12 @@ const updateRoute = nextRouteForContract(updateArtifactContract, {
     )
   );
 
-  // Re-read for the current content: update returns the new content row only when it changed.
-  const body = await readWithContent(req.user.id, id);
+  // Answer from the update, not a read-gated re-read: a write-only sharee may PATCH but not GET, and
+  // must not get a 404 for a write that committed. Sent content is the current content whether or
+  // not it changed (an unchanged hash writes no new row); otherwise load the latest row directly.
+  const current = content ?? (await artifactContentRepository.findLatestContent(artifact.id))?.content ?? null;
   res.setHeader('Cache-Control', 'private, no-store');
-  return res.json(body);
+  return res.json(toPublicArtifact(artifact, current));
 });
 
 const deleteRoute = nextRouteForContract(deleteArtifactContract, {

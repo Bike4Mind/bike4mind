@@ -7,41 +7,33 @@
  */
 
 import { createArtifactContract, listArtifactsContract } from '@bike4mind/common';
-import {
-  artifactRepository,
-  projectRepository,
-  questRepository,
-  sessionRepository,
-  userRepository,
-} from '@bike4mind/database';
+import { artifactRepository, projectRepository, userRepository } from '@bike4mind/database';
 import { artifactService, projectService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isValidObjectId } from '@server/utils/objectId';
 import { ForbiddenError, NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
 import { assertArtifactSourceRefsAccessible } from '@server/utils/assertArtifactSourceRefsAccessible';
 import { toPublicArtifact } from '@server/artifacts/toPublicArtifact';
-import { ARTIFACT_DB } from '@server/artifacts/artifactAccess';
+import { ARTIFACT_DB, artifactSourceRefDeps } from '@server/artifacts/artifactAccess';
 
 const CURSOR_SCOPE = 'v1.artifacts';
 
-const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
-
 const listRoute = nextRouteForContract(listArtifactsContract, {
+  // Like every sibling v1 read: a page costs no daily slot; the per-minute limit still applies.
+  exemptReadsFromDailyRateLimit: true,
   rateLimit: perUserRateLimit('GET /api/v1/artifacts'),
 }).get(async (req, res) => {
   const { limit, cursor } = req.validatedQuery;
-  const afterId = cursor === undefined ? undefined : decodeCursor(cursor, CURSOR_SCOPE);
+  const beforeId = cursor === undefined ? undefined : decodeCursor(cursor, CURSOR_SCOPE);
   // A cursor carries the last _id this endpoint served, so anything else was not minted here.
-  if (afterId !== undefined && !isValidObjectId(afterId)) {
+  if (beforeId !== undefined && !isValidObjectId(beforeId)) {
     throw new UnprocessableEntityError('Invalid cursor');
   }
 
-  const page = await artifactRepository.listOwnedAfterId(req.user.id, { afterId, limit });
+  const page = await artifactRepository.listOwnedBeforeId(req.user.id, { beforeId, limit });
   const lastId = page.data.at(-1)?._id;
 
   res.setHeader('Cache-Control', 'private, no-store');
@@ -70,16 +62,7 @@ const createRoute = nextRouteForContract(createArtifactContract, {
   // Same guard and session predicate as POST /api/artifacts. Its 403 becomes a 404 here: 403 is
   // reserved for scope (CONVENTIONS.md), and a session you cannot edit reads as one that does not exist.
   try {
-    await assertArtifactSourceRefsAccessible(
-      userId,
-      { sessionId: session_id },
-      {
-        canUpdateSession: async id =>
-          !!(await sessionRepository.shareable.findUpdateAccessById(req.user, id, { includeGlobalWrite: true })),
-        getQuestSessionId: async id => (await questRepository.findById(id))?.sessionId ?? null,
-        getArtifactOwner: async id => (await artifactRepository.findOne({ id }))?.userId ?? null,
-      }
-    );
+    await assertArtifactSourceRefsAccessible(userId, { sessionId: session_id }, artifactSourceRefDeps(req.user));
   } catch (err) {
     if (err instanceof ForbiddenError) throw new NotFoundError('Session not found');
     throw err;

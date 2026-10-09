@@ -5,17 +5,12 @@
 
 import { createTranscriptionUploadContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { createTranscribeUpload, PRESIGNED_POST_EXPIRY_SECONDS } from '@server/transcribe/transcribe';
 import { toPublicTranscribeError } from '@server/transcribe/toPublicTranscribeError';
 
 const handler = nextRouteForContract(createTranscriptionUploadContract, {
-  rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
-    windowMs: 60 * 1000,
-    bucket: 'POST /api/v1/transcriptions/uploads',
-  }),
+  rateLimit: perUserRateLimit('POST /api/v1/transcriptions/uploads'),
 }).post(async (req, res) => {
   const { mime_type, file_size } = req.validated;
   const { url, fields, fileKey } = await createTranscribeUpload({

@@ -7,8 +7,7 @@ import { listArtifactVersionsContract } from '@bike4mind/common';
 import { artifactVersionRepository } from '@bike4mind/database';
 import { artifactService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { UnprocessableEntityError } from '@server/utils/errors';
 import { toPublicArtifactVersion } from '@server/artifacts/toPublicArtifact';
@@ -17,11 +16,8 @@ import { ARTIFACT_DB, hideArtifactDenial } from '@server/artifacts/artifactAcces
 const CURSOR_SCOPE = 'v1.artifacts.versions';
 
 const handler = nextRouteForContract(listArtifactVersionsContract, {
-  rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
-    windowMs: 60 * 1000,
-    bucket: 'GET /api/v1/artifacts/[id]/versions',
-  }),
+  exemptReadsFromDailyRateLimit: true,
+  rateLimit: perUserRateLimit('GET /api/v1/artifacts/[id]/versions'),
 }).get(async (req, res) => {
   const { limit, cursor } = req.validatedQuery;
   // The cursor carries the last version number served, so anything else was not minted here.

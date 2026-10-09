@@ -8,18 +8,14 @@ import { getArtifactVersionContract } from '@bike4mind/common';
 import { artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
 import { artifactService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { NotFoundError } from '@server/utils/errors';
 import { toPublicArtifactVersion } from '@server/artifacts/toPublicArtifact';
 import { ARTIFACT_DB, hideArtifactDenial } from '@server/artifacts/artifactAccess';
 
 const handler = nextRouteForContract(getArtifactVersionContract, {
-  rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
-    windowMs: 60 * 1000,
-    bucket: 'GET /api/v1/artifacts/[id]/versions/[version]',
-  }),
+  exemptReadsFromDailyRateLimit: true,
+  rateLimit: perUserRateLimit('GET /api/v1/artifacts/[id]/versions/[version]'),
 }).get(async (req, res) => {
   const { id, version } = req.validatedParams;
   // A malformed version is a 404 like a missing one (CONVENTIONS.md status table).

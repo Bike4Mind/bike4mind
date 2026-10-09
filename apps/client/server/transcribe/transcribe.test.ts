@@ -1,13 +1,16 @@
 /**
- * The `mapProviderError` hook of transcribeUpload, which only the public route passes. Everything
- * else in the helper is pinned through the SPA routes in pages/api/ai/transcribe/__tests__.
+ * The rejection `kind` each gate throws (the v1 routes map it onto a status in
+ * toPublicTranscribeError) and the `mapProviderError` hook, which only the public route passes. The
+ * legacy 400 answers are pinned through the SPA routes in pages/api/ai/transcribe/__tests__.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockSend, mockGetOperationsModel, mockOpenAI } = vi.hoisted(() => ({
+const { mockSend, mockGetOperationsModel, mockOpenAI, mockGetApiKey, mockAssertCredits } = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockGetOperationsModel: vi.fn(),
   mockOpenAI: vi.fn(),
+  mockGetApiKey: vi.fn(),
+  mockAssertCredits: vi.fn(),
 }));
 
 vi.mock('@aws-sdk/client-s3', () => ({
@@ -24,11 +27,11 @@ vi.mock('@aws-sdk/client-s3', () => ({
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'test-bucket' } } }));
 vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
-  getEffectiveApiKeyByBackend: async () => 'sk-test',
+  getEffectiveApiKeyByBackend: mockGetApiKey,
 }));
-vi.mock('@server/utils/creditPreflight', () => ({
-  assertPreflightCredits: async () => undefined,
-  InsufficientCreditsPreflightError: class extends Error {},
+vi.mock('@server/utils/transcriptionCost', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  assertTranscriptionCredits: mockAssertCredits,
 }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
@@ -49,7 +52,8 @@ vi.mock('@bike4mind/services', async orig => {
   };
 });
 
-const { transcribeUpload, TranscribeRequestError } = await import('./transcribe');
+const { createTranscribeUpload, transcribeUpload, TranscribeRequestError } = await import('./transcribe');
+const { BadRequestError } = await import('@server/utils/errors');
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 const mapped = new Error('mapped');
@@ -63,6 +67,63 @@ beforeEach(() => {
     cmd.kind === 'head' ? { ContentType: 'audio/mpeg', ContentLength: 1000 } : {}
   );
   mockGetOperationsModel.mockResolvedValue({ speechModelInfo: { backend: 'openai' } });
+  mockGetApiKey.mockResolvedValue('sk-test');
+  mockAssertCredits.mockResolvedValue(undefined);
+});
+
+const head = (ContentType: string, ContentLength: number) =>
+  mockSend.mockImplementation(async (cmd: { kind: string }) =>
+    cmd.kind === 'head' ? { ContentType, ContentLength } : {}
+  );
+
+describe('transcribeUpload rejection kinds', () => {
+  it.each([
+    [
+      'a HEAD miss',
+      'not_found',
+      () =>
+        mockSend.mockImplementation(async (cmd: { kind: string }) => {
+          if (cmd.kind === 'head') throw new Error('NotFound');
+          return {};
+        }),
+    ],
+    ['a video upload', 'unsupported_type', () => head('video/mp4', 1000)],
+    ['an empty upload', 'size_out_of_range', () => head('audio/mpeg', 0)],
+    ['no speech model', 'not_configured', () => mockGetOperationsModel.mockResolvedValue({})],
+    ['no provider key', 'not_configured', () => mockGetApiKey.mockResolvedValue(undefined)],
+    [
+      'a balance that cannot pay',
+      'insufficient_credits',
+      () => mockAssertCredits.mockRejectedValue(new BadRequestError('Insufficient credits')),
+    ],
+  ])('tags %s as %s', async (_label, kind, arrange) => {
+    arrange();
+    await expect(run()).rejects.toMatchObject({ kind });
+    expect(mockOpenAI).not.toHaveBeenCalled();
+  });
+
+  it('tags a key outside the caller prefix as invalid_key', async () => {
+    await expect(
+      transcribeUpload({ userId: 'u1', fileKey: 'transcribe-uploads/u2/a.mp3', logger })
+    ).rejects.toMatchObject({ kind: 'invalid_key' });
+  });
+
+  it('rethrows a credit pre-flight fault that is not a BadRequestError unchanged', async () => {
+    const fault = new Error('db down');
+    mockAssertCredits.mockRejectedValue(fault);
+
+    await expect(run()).rejects.toBe(fault);
+  });
+});
+
+describe('createTranscribeUpload', () => {
+  it('tags a balance that cannot pay as insufficient_credits before minting', async () => {
+    mockAssertCredits.mockRejectedValue(new BadRequestError('Insufficient credits'));
+
+    await expect(
+      createTranscribeUpload({ userId: 'u1', mimeType: 'audio/mpeg', fileSize: 1000 })
+    ).rejects.toMatchObject({ kind: 'insufficient_credits' });
+  });
 });
 
 describe('transcribeUpload mapProviderError', () => {

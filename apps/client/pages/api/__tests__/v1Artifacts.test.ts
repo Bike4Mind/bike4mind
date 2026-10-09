@@ -37,7 +37,9 @@ const {
   mockListVersions,
   mockFindByVersion,
   mockFindContent,
+  mockLatestContent,
   mockCanUpdateSession,
+  baseApiOptions,
 } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockCreate: vi.fn(),
@@ -48,7 +50,9 @@ const {
   mockListVersions: vi.fn(),
   mockFindByVersion: vi.fn(),
   mockFindContent: vi.fn(),
+  mockLatestContent: vi.fn(),
   mockCanUpdateSession: vi.fn(),
+  baseApiOptions: [] as { allowedMethods?: string[]; exemptReadsFromDailyRateLimit?: boolean }[],
 }));
 
 // Strip the middleware chain but keep next-connect's registrar shape, so
@@ -56,7 +60,8 @@ const {
 vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
     res.status(405).end(),
-  baseApi: () => {
+  baseApi: (options: (typeof baseApiOptions)[number]) => {
+    baseApiOptions.push(options);
     const compose =
       (...handlers: ((req: unknown, res: unknown, next: () => void) => unknown)[]) =>
       async (req: unknown, res: unknown) => {
@@ -86,8 +91,8 @@ vi.mock('@bike4mind/services', () => ({
   projectService: { get: mockProjectGet },
 }));
 vi.mock('@bike4mind/database', () => ({
-  artifactRepository: { listOwnedAfterId: mockListOwned, findOne: vi.fn() },
-  artifactContentRepository: { findById: mockFindContent },
+  artifactRepository: { listOwnedBeforeId: mockListOwned, findOne: vi.fn() },
+  artifactContentRepository: { findById: mockFindContent, findLatestContent: mockLatestContent },
   artifactVersionRepository: { listByArtifactAfterVersion: mockListVersions, findByVersion: mockFindByVersion },
   projectRepository: {},
   questRepository: {},
@@ -155,6 +160,7 @@ beforeEach(() => {
   mockListVersions.mockResolvedValue({ data: [], hasMore: false });
   mockFindByVersion.mockResolvedValue({ version: 1, contentId: 'c1', createdAt: new Date('2026-10-01T12:00:00Z') });
   mockFindContent.mockResolvedValue({ content: 'graph TD; A-->B' });
+  mockLatestContent.mockResolvedValue({ content: 'graph TD; A-->B' });
   mockCanUpdateSession.mockResolvedValue({ id: 's1' });
   mockProjectGet.mockResolvedValue({ id: 'p1' });
 });
@@ -173,6 +179,16 @@ describe('artifact contracts', () => {
       expect(contract.scopes).toEqual([ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS]);
     }
   });
+
+  it('exempt every GET route, and only those, from the daily rate limit', () => {
+    const gets = baseApiOptions.filter(o => o.allowedMethods?.[0] === 'get');
+    const writes = baseApiOptions.filter(o => o.allowedMethods?.[0] !== 'get');
+
+    expect(gets).toHaveLength(4);
+    for (const options of gets) expect(options.exemptReadsFromDailyRateLimit).toBe(true);
+    expect(writes).toHaveLength(3);
+    for (const options of writes) expect(options.exemptReadsFromDailyRateLimit).toBeUndefined();
+  });
 });
 
 describe('GET /api/v1/artifacts', () => {
@@ -188,15 +204,25 @@ describe('GET /api/v1/artifacts', () => {
     expect(body.data[0]).toMatchObject({ id: ARTIFACT_ID, content: null });
     expect(body.data[0]).not.toHaveProperty('permissions');
     expect(body.next_cursor).toBe(encodeCursor('v1.artifacts', MONGO_ID));
-    expect(mockListOwned).toHaveBeenCalledWith('u1', { afterId: undefined, limit: 1 });
+    expect(mockListOwned).toHaveBeenCalledWith('u1', { beforeId: undefined, limit: 1 });
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
-  it('resumes after the id a cursor carries', async () => {
+  it('answers next_cursor null for an empty page even if hasMore is set', async () => {
+    mockListOwned.mockResolvedValue({ data: [], hasMore: true });
+    const { req, res } = fire('GET');
+
+    await call(listOrCreate, req, res);
+
+    expect(res._getJSONData()).toEqual({ data: [], next_cursor: null });
+  });
+
+  it('resumes before the id a cursor carries', async () => {
     const { req, res } = fire('GET', { query: { cursor: encodeCursor('v1.artifacts', MONGO_ID) } });
 
     await call(listOrCreate, req, res);
 
-    expect(mockListOwned).toHaveBeenCalledWith('u1', { afterId: MONGO_ID, limit: 25 });
+    expect(mockListOwned).toHaveBeenCalledWith('u1', { beforeId: MONGO_ID, limit: 25 });
     expect(res._getJSONData().next_cursor).toBeNull();
   });
 
@@ -257,6 +283,16 @@ describe('POST /api/v1/artifacts', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
+  it('files the artifact under a project the caller can read', async () => {
+    const { req, res } = fire('POST', { body: { ...BODY, project_id: 'p1' } });
+
+    await call(listOrCreate, req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockProjectGet).toHaveBeenCalledWith('u1', { id: 'p1' }, expect.anything());
+    expect(mockCreate).toHaveBeenCalledWith('u1', expect.objectContaining({ projectId: 'p1' }), expect.anything());
+  });
+
   it('answers 404 for a project the caller cannot read', async () => {
     mockProjectGet.mockRejectedValue(new NotFoundError('Project not found'));
     const { req, res } = fire('POST', { body: { ...BODY, project_id: 'someone-elses' } });
@@ -281,6 +317,15 @@ describe('GET /api/v1/artifacts/{id}', () => {
       { id: ARTIFACT_ID, includeContent: true, includeVersions: false },
       expect.anything()
     );
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('rethrows a fault that is not an access denial unchanged instead of hiding it as 404', async () => {
+    const fault = new Error('db down');
+    mockGet.mockRejectedValue(fault);
+    const { req, res } = fire('GET', { query: { id: ARTIFACT_ID } });
+
+    await expect(call(byId, req, res)).rejects.toBe(fault);
   });
 
   it.each([
@@ -295,15 +340,32 @@ describe('GET /api/v1/artifacts/{id}', () => {
 });
 
 describe('PATCH /api/v1/artifacts/{id}', () => {
-  it('passes only the present fields and re-reads the result', async () => {
+  it('passes only the present fields and answers with the sent content', async () => {
     const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { content: 'new' } });
 
     await call(byId, req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(ArtifactResourceSchema.safeParse(res._getJSONData()).success).toBe(true);
+    const body = res._getJSONData();
+    expect(ArtifactResourceSchema.safeParse(body).success).toBe(true);
+    expect(body.content).toBe('new');
     expect(mockUpdate).toHaveBeenCalledWith('u1', { id: ARTIFACT_ID, content: 'new' }, expect.anything());
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(mockLatestContent).not.toHaveBeenCalled();
+  });
+
+  // update admits permissions.canWrite but get only canRead, so a read-gated re-read would 404 a
+  // write that already committed.
+  it('answers 200 with the updated artifact for a write-only sharee, without a read-gated re-read', async () => {
+    mockGet.mockRejectedValue(new UnauthorizedError('Access denied'));
+    mockUpdate.mockResolvedValue({ artifact: artifactDoc({ title: 'Renamed', userId: 'owner' }) });
+    const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { title: 'Renamed' } });
+
+    await call(byId, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ title: 'Renamed', content: 'graph TD; A-->B' });
+    expect(mockLatestContent).toHaveBeenCalledWith(ARTIFACT_ID);
+    expect(mockGet).not.toHaveBeenCalled();
   });
 
   it('answers 404 for a read-only sharee', async () => {
@@ -357,6 +419,16 @@ describe('GET /api/v1/artifacts/{id}/versions', () => {
     expect(body.data[0]).toMatchObject({ version: 1, content: null });
     expect(body.next_cursor).toBe(encodeCursor('v1.artifacts.versions', '1'));
     expect(mockListVersions).toHaveBeenCalledWith(ARTIFACT_ID, { afterVersion: undefined, limit: 1 });
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('rethrows a fault that is not an access denial unchanged instead of hiding it as 404', async () => {
+    const fault = new Error('db down');
+    mockGet.mockRejectedValue(fault);
+    const { req, res } = fire('GET', { query: { id: ARTIFACT_ID } });
+
+    await expect(call(listVersions, req, res)).rejects.toBe(fault);
+    expect(mockListVersions).not.toHaveBeenCalled();
   });
 
   it('resumes after the version a cursor carries', async () => {
@@ -397,6 +469,14 @@ describe('GET /api/v1/artifacts/{id}/versions/{version}', () => {
     expect(ArtifactVersionSchema.safeParse(body).success).toBe(true);
     expect(body).toMatchObject({ version: 1, content: 'graph TD; A-->B' });
     expect(mockFindByVersion).toHaveBeenCalledWith(ARTIFACT_ID, 1);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('answers 404 for a version row whose content row is missing', async () => {
+    mockFindContent.mockResolvedValue(null);
+    const { req, res } = fire('GET', { query: { id: ARTIFACT_ID, version: '1' } });
+
+    expect(await statusOf(call(getVersion, req, res))).toBe(404);
   });
 
   it.each(['0', '-1', '1.5', 'latest'])('answers 404 for version %s without a lookup', async version => {

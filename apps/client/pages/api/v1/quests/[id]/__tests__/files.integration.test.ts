@@ -135,6 +135,9 @@ describe('GET /api/v1/quests/{id}/files', () => {
         ].sort()
       );
       expect(body.files[0].download_url).toBe(FILE.fileUrl);
+      expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+      // Part of the chat-reply poll: a read costs no daily slot.
+      expect(mockRateLimit.mock.calls[0][3]).toMatchObject({ meterDailyLimit: false });
       expect(mockListByQuest).toHaveBeenCalledWith('user-1', { questId: QUEST_ID }, expect.anything());
     }
   );

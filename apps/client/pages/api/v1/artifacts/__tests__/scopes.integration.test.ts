@@ -59,7 +59,8 @@ vi.mock('@bike4mind/database', async orig => {
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindUser(...a) }),
     userRepository: { findById: (...a: unknown[]) => mockFindUser(...a) },
-    artifactRepository: { listOwnedAfterId: (...a: unknown[]) => mockList(...a), findOne: vi.fn() },
+    artifactRepository: { listOwnedBeforeId: (...a: unknown[]) => mockList(...a), findOne: vi.fn() },
+    artifactContentRepository: { findLatestContent: vi.fn().mockResolvedValue(null) },
   };
 });
 
@@ -135,6 +136,15 @@ describe('/api/v1/artifacts scope enforcement (real middleware chain)', () => {
     withScopes([scope]);
     expect((await list())._getStatusCode()).toBe(200);
     expect((await getOne())._getStatusCode()).toBe(200);
+  });
+
+  it('meters reads against the per-minute limit only, and writes against the daily one too', async () => {
+    withScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
+    await list();
+    await getOne();
+    await patchOne();
+    const meterDaily = mockRateLimit.mock.calls.map(call => call[3].meterDailyLimit);
+    expect(meterDaily).toEqual([false, false, true]);
   });
 
   it('a key without a notebooks scope can neither list nor get (403)', async () => {

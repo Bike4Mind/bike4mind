@@ -108,7 +108,8 @@ describe('transcription contracts', () => {
 
   it('document the request timeout limit', () => {
     expect(createTranscriptionContract.description).toMatch(/60 seconds/);
-    expect(createTranscriptionContract.description).toMatch(/deleted either way/);
+    // A timeout kills the cleanup in transcribeUpload's finally; only the bucket lifecycle rule removes it.
+    expect(createTranscriptionContract.description).toMatch(/may not be deleted right away/);
   });
 });
 

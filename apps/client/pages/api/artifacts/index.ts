@@ -5,13 +5,12 @@ import {
   artifactRepository,
   artifactContentRepository,
   artifactVersionRepository,
-  sessionRepository,
-  questRepository,
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveUserArtifactGate } from '@server/utils/artifactGate';
 import { assertArtifactSourceRefsAccessible } from '@server/utils/assertArtifactSourceRefsAccessible';
+import { artifactSourceRefDeps } from '@server/artifacts/artifactAccess';
 import { z } from 'zod';
 import qs from 'qs';
 
@@ -145,15 +144,7 @@ const handler = baseApi()
           sourceQuestId: validatedData.sourceQuestId,
           parentArtifactId: validatedData.parentArtifactId,
         },
-        {
-          // Include the global-write share arm: a global-write sharee may write into the session
-          // graph (stamp an artifact with its id), matching the CASL update ability. Owner and
-          // update/group-update shares still pass; read-only sharees and strangers still 403.
-          canUpdateSession: async id =>
-            !!(await sessionRepository.shareable.findUpdateAccessById(req.user!, id, { includeGlobalWrite: true })),
-          getQuestSessionId: async id => (await questRepository.findById(id))?.sessionId ?? null,
-          getArtifactOwner: async id => (await artifactRepository.findOne({ id }))?.userId ?? null,
-        }
+        artifactSourceRefDeps(req.user!)
       );
 
       const result = await artifactService.create(userId, validatedData, {
