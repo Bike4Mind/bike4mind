@@ -100,17 +100,42 @@ export interface PremiumNavDescriptor {
 
 /**
  * A premium package's full-surface notebook sidenav - a component that REPLACES
- * the default notebook sidenav body on the package's own appShell route (e.g.
- * OptiHashi's `/opti` surface). Contributed via `b4mContributions.notebookSidenavExport`
- * (a module default-exporting the component) and consumed by the Notebook layout's
- * `Sidenav` through the generated `premiumNotebookSidenav.generated.ts`.
+ * the default notebook sidenav body on ONE of the package's own appShell routes
+ * (e.g. the `/opti` surface). Contributed via
+ * `b4mContributions.notebookSidenavExport` and consumed by the Notebook layout's
+ * `Sidenav` through the generated `premiumNotebookSidenavs.generated.ts`.
  *
- * `null` is the absent (open-core fork) form: the same annotate-both-forms rule as
- * routes/nav keeps the consumer's type stable whether or not an overlay is installed,
- * and - critically - the generated glue is the ONLY place the premium package specifier
- * appears, so core never statically imports an absent package (the fork build stays green).
+ * PER ROUTE, NOT PER APP. The slot used to be a single component and core matched
+ * it against a hardcoded `/opti`, so a second overlay contributing a sidenav got a
+ * codegen warning and was dropped. The route each sidenav belongs to is the
+ * overlay's own knowledge - core must not name an overlay's surface - so it rides
+ * in the contribution:
+ *
+ *     "notebookSidenavExport": { "path": "/<surface>", "exportFrom": "<pkg>/client/sidenav" }
+ *
+ * `path` is matched against `location.pathname` EXACTLY; the first entry that
+ * matches wins, and no match means the default sidenav. An overlay contributes at
+ * most one entry, so the list is as long as the number of overlays that want one.
+ *
+ * Exact, not prefix, and that is a deliberate hold rather than an oversight: an
+ * overlay whose surface has sub-routes gets the DEFAULT sidenav on them, which is
+ * what the hardcoded equality this replaced already did. Prefix-matching would be a
+ * visible change to an overlay's own UX, so it is that overlay's call to ask for,
+ * not a side effect of making the slot per-route. Whoever takes it: match on segment
+ * boundaries (`/x` must not claim `/xyz`), prefer the longest match, and say so here.
+ *
+ * The empty array is the absent (open-core fork) form: the same annotate-both-forms
+ * rule as routes/nav keeps the consumer's type stable whether or not an overlay is
+ * installed, and - critically - the generated glue is the ONLY place the premium
+ * package specifier appears, so core never statically imports an absent package
+ * (the fork build stays green).
  */
-export type PremiumNotebookSidenav = ComponentType | null;
+export interface PremiumNotebookSidenavEntry {
+  /** The appShell route this sidenav owns, matched against `pathname` exactly. */
+  path: string;
+  /** The sidenav body, rendered in place of the default notebook list. */
+  component: ComponentType;
+}
 
 /**
  * A premium overlay's crawler policy for the routes it contributes, consumed by
