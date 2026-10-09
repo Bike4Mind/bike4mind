@@ -51,7 +51,11 @@ async function classifyEntry(fullPath: string, entry: DirentLike): Promise<Entry
  * the checkout. Global dirs omit it - that is where dotfile managers legitimately
  * symlink into an out-of-tree immutable store.
  */
-export async function findMarkdownFiles(directory: string, containmentRoot?: string): Promise<string[]> {
+export async function findMarkdownFiles(
+  directory: string,
+  containmentRoot?: string,
+  options: { skipHiddenDirectories?: boolean } = {}
+): Promise<string[]> {
   // Resolve the containment boundary once, then walk with a private visited-set
   // accumulator (kept out of the public signature so callers can't pass it).
   let realRoot: string | undefined;
@@ -62,13 +66,14 @@ export async function findMarkdownFiles(directory: string, containmentRoot?: str
       return []; // Containment requested but root is unresolvable - refuse all.
     }
   }
-  return walkMarkdown(directory, new Set<string>(), realRoot);
+  return walkMarkdown(directory, new Set<string>(), realRoot, options.skipHiddenDirectories ?? false);
 }
 
 async function walkMarkdown(
   directory: string,
   visitedRealPaths: Set<string>,
-  realRoot: string | undefined
+  realRoot: string | undefined,
+  skipHiddenDirectories: boolean
 ): Promise<string[]> {
   const files: string[] = [];
 
@@ -109,7 +114,8 @@ async function walkMarkdown(
     }
 
     if (kind === 'directory') {
-      files.push(...(await walkMarkdown(fullPath, visitedRealPaths, realRoot)));
+      if (skipHiddenDirectories && entry.name.startsWith('.')) continue;
+      files.push(...(await walkMarkdown(fullPath, visitedRealPaths, realRoot, skipHiddenDirectories)));
     } else if (kind === 'file' && entry.name.endsWith('.md')) {
       files.push(fullPath);
     }

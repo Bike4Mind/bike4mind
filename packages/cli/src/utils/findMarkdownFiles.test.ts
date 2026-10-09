@@ -29,6 +29,21 @@ describe('findMarkdownFiles', () => {
     expect(found.sort()).toEqual([path.join(root, 'nested', 'deep.md'), path.join(root, 'top.md')].sort());
   });
 
+  it('optionally skips hidden directories without hiding dotfiles in visible directories', async () => {
+    await fs.mkdir(path.join(root, '.trash'));
+    await fs.mkdir(path.join(root, 'visible'));
+    await fs.writeFile(path.join(root, '.trash', 'deleted.md'), 'deleted');
+    await fs.writeFile(path.join(root, 'visible', '.notes.md'), 'notes');
+
+    const all = await findMarkdownFiles(root);
+    const withoutHiddenDirectories = await findMarkdownFiles(root, undefined, { skipHiddenDirectories: true });
+
+    expect(all.sort()).toEqual(
+      [path.join(root, '.trash', 'deleted.md'), path.join(root, 'visible', '.notes.md')].sort()
+    );
+    expect(withoutHiddenDirectories).toEqual([path.join(root, 'visible', '.notes.md')]);
+  });
+
   // The real-world case: nix home-manager / chezmoi symlink SKILL.md into an
   // immutable store, and a Dirent for a symlink is neither file nor directory.
   it('follows a symlinked .md file', async () => {
