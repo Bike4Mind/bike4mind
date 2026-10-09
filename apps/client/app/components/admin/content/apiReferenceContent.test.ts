@@ -77,6 +77,9 @@ const section = (heading: string): string => {
   const start = API_REFERENCE_CONTENT.indexOf(heading);
   expect(start).toBeGreaterThanOrEqual(0);
   const end = API_REFERENCE_CONTENT.indexOf('\n---', start);
+  // A renamed heading would make indexOf return -1 and slice() silently return a
+  // truncated tail; the scoped assertions below would then check the wrong text.
+  expect(end).toBeGreaterThan(start);
   return API_REFERENCE_CONTENT.slice(start, end);
 };
 
