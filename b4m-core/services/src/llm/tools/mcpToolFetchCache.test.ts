@@ -18,6 +18,12 @@ describe('shouldLiveFetchTools', () => {
       true
     );
   });
+
+  it('fetches at exactly the TTL boundary (a marker as old as the TTL is no longer trusted)', () => {
+    expect(shouldLiveFetchTools({ toolSchemasFetchedAt: new Date(now - MCP_EMPTY_TOOL_FETCH_TTL_MS) }, now)).toBe(
+      true
+    );
+  });
 });
 
 describe('buildMcpToolCacheUpdate', () => {
@@ -37,5 +43,22 @@ describe('buildMcpToolCacheUpdate', () => {
       toolSchemas: tools,
       toolSchemasFetchedAt: fetchedAt,
     });
+  });
+
+  it('defaults the marker to now, not a stale date', () => {
+    const before = Date.now();
+    const update = buildMcpToolCacheUpdate('s1', []);
+    const after = Date.now();
+
+    // A stale default (e.g. new Date(0)) would leave the marker always expired and refetch every
+    // turn - the exact regression this cache exists to prevent.
+    expect(update.toolSchemasFetchedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(update.toolSchemasFetchedAt.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it('round-trips: a default-stamped empty result is trusted by shouldLiveFetchTools', () => {
+    const update = buildMcpToolCacheUpdate('s1', []);
+
+    expect(shouldLiveFetchTools({ toolSchemasFetchedAt: update.toolSchemasFetchedAt })).toBe(false);
   });
 });

@@ -2,10 +2,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFind, mockUpdate, mockInvoke } = vi.hoisted(() => ({
+const { mockFind, mockFindOne, mockUpdate, mockInvoke, mockCreateBodyParse } = vi.hoisted(() => ({
   mockFind: vi.fn(),
+  mockFindOne: vi.fn(),
   mockUpdate: vi.fn(),
   mockInvoke: vi.fn(),
+  mockCreateBodyParse: vi.fn(() => ({ success: true })),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -24,7 +26,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  mcpServerRepository: { find: (...a: unknown[]) => mockFind(...a), update: (...a: unknown[]) => mockUpdate(...a) },
+  mcpServerRepository: {
+    find: (...a: unknown[]) => mockFind(...a),
+    findOne: (...a: unknown[]) => mockFindOne(...a),
+    update: (...a: unknown[]) => mockUpdate(...a),
+  },
   adminSettingsRepository: {},
 }));
 
@@ -40,7 +46,7 @@ vi.mock('@server/security/tokenEncryption', () => ({
   decryptEnvVariables: (v: unknown) => v,
 }));
 vi.mock('@server/validators/mcpServerValidators', () => ({
-  mcpServerCreateBodySchema: { safeParse: () => ({ success: true }) },
+  mcpServerCreateBodySchema: { safeParse: (...a: unknown[]) => mockCreateBodyParse(...a) },
 }));
 vi.mock('@server/utils/mcpEnvValidation', () => ({ assertNoForbiddenMcpEnvKeys: vi.fn() }));
 
@@ -97,5 +103,45 @@ describe('GET /api/mcp-servers', () => {
     await run();
 
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes a populated server only once its schema cache passes the refresh TTL', async () => {
+    mockFind.mockResolvedValue([
+      server({ toolSchemas: [{ name: 'notion_search' }], updatedAt: new Date(Date.now() - 10 * 60 * 1000) }),
+    ]);
+
+    await run();
+
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves a populated server with a fresh schema cache without a live fetch', async () => {
+    mockFind.mockResolvedValue([server({ toolSchemas: [{ name: 'notion_search' }], updatedAt: new Date() })]);
+
+    await run();
+
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/mcp-servers', () => {
+  const runPost = async () => {
+    const { req, res } = createMocks({ method: 'POST' });
+    (req as unknown as { user: { id: string } }).user = { id: 'u1' };
+    await (handler as unknown as (r: unknown, s: unknown) => Promise<unknown>)(req, res);
+    return res;
+  };
+
+  it('clears the confirmed-empty marker when reconnecting an existing server', async () => {
+    mockFindOne.mockResolvedValue(server());
+    mockCreateBodyParse.mockReturnValue({ success: true, data: { name: 'notion', envVariables: [], enabled: true } });
+
+    await runPost();
+
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ id: 's1', enabled: true }),
+      { unset: ['toolSchemasFetchedAt'] }
+    );
   });
 });

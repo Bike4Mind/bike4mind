@@ -334,6 +334,8 @@ describe('NotionTokenManager', () => {
             expect.objectContaining({ name: 'notion_create_page' }),
             expect.objectContaining({ name: 'notion_read_page' }),
           ]),
+          // The confirmed-empty marker is stamped on a successful fetch, empty or not.
+          toolSchemasFetchedAt: expect.any(Date),
         })
       );
     });

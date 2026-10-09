@@ -61,12 +61,17 @@ describe('ToolBuilder buildMcpTools - confirmed-empty fetch cache', () => {
     const update = vi.fn();
     const builder = makeBuilder({ find: vi.fn(async () => [emptyServer()]), update }, getMcpClient);
 
+    const before = Date.now();
     await run(builder);
+    const after = Date.now();
 
     expect(getTools).toHaveBeenCalledTimes(1);
-    expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 's1', tools: [], toolSchemas: [], toolSchemasFetchedAt: expect.any(Date) })
-    );
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 's1', tools: [], toolSchemas: [] }));
+    // The stamp must be the fetch time, not a fixed/stale date: a stale marker would make every
+    // confirmed-empty server refetch on every turn.
+    const stamped = update.mock.calls[0][0].toolSchemasFetchedAt as Date;
+    expect(stamped.getTime()).toBeGreaterThanOrEqual(before);
+    expect(stamped.getTime()).toBeLessThanOrEqual(after);
   });
 
   it('refetches once the marker ages past the TTL', async () => {
