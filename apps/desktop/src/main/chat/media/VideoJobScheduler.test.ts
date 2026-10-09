@@ -275,6 +275,33 @@ describe('VideoJobScheduler', () => {
     expect(r.client.getVideoGeneration.mock.calls.length).toBeGreaterThan(calls);
   });
 
+  it('asks the server before calling a job resumed long after it started stalled', async () => {
+    const r = rig();
+    await track(r);
+    r.scheduler.dispose();
+    vi.setSystemTime(new Date('2026-10-10T00:00:00.000Z'));
+
+    const relaunched = rig(r.store);
+    relaunched.client.getVideoGeneration.mockResolvedValue(ready());
+    await relaunched.scheduler.list(SESSION);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(relaunched.client.getVideoGeneration).toHaveBeenCalledTimes(1);
+    expect(relaunched.saveStream).toHaveBeenCalled();
+    expect(relaunched.emitted.at(-1)).toMatchObject({ state: 'succeeded', media: expect.anything() });
+    expect(relaunched.emitted.some(job => job.stalled)).toBe(false);
+  });
+
+  it('stops asking a job past its deadline while the server cannot be reached', async () => {
+    const r = rig();
+    r.client.getVideoGeneration.mockRejectedValue(new MediaToolError('offline'));
+    await track(r);
+
+    await vi.advanceTimersByTimeAsync(70 * 60_000);
+    expect(r.emitted.at(-1)).toMatchObject({ stalled: true });
+    expect(r.scheduler.following()).toEqual([]);
+  });
+
   it('does not poll a job from another account or backend', async () => {
     const r = rig();
     await track(r);

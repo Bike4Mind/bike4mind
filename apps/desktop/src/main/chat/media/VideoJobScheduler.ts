@@ -319,11 +319,6 @@ export class VideoJobScheduler {
       this.tracked.delete(entry.jobId);
       return;
     }
-    if (Date.now() - Date.parse(stored.followedSince ?? stored.createdAt) > DEADLINE_MS) {
-      this.tracked.delete(entry.jobId);
-      await this.save(entry.sessionId, { ...stored, stalled: true, updatedAt: new Date().toISOString() });
-      return;
-    }
 
     const controller = new AbortController();
     this.reads.add(controller);
@@ -332,7 +327,7 @@ export class VideoJobScheduler {
       remote = await connection.client.getVideoGeneration(entry.jobId, controller.signal);
     } catch (error) {
       if (this.tracked.get(entry.jobId) !== entry) return;
-      this.onReadFailure(entry, stored, error);
+      await this.onReadFailure(entry, stored, error);
       return;
     } finally {
       this.reads.delete(controller);
@@ -340,12 +335,16 @@ export class VideoJobScheduler {
     // Cancelled, forgotten or superseded while the read was out: its answer is stale.
     if (this.tracked.get(entry.jobId) !== entry) return;
 
-    const next = applyRemote(stored, remote, new Date());
+    const output = remote.state === 'succeeded' ? remote.output : null;
+    const ready = output?.availability === 'ready' && !!output.url;
+    let next = applyRemote(stored, remote, new Date());
+    // Judged on the server's answer, not the stored state: a job resumed after a long restart
+    // has usually finished, and must not be called stalled before anyone asked.
+    if (!ready && needsWork(next) && this.overdue(stored)) next = { ...next, stalled: true };
     await this.save(entry.sessionId, next);
     if (this.tracked.get(entry.jobId) !== entry) return;
 
-    const output = remote.state === 'succeeded' ? remote.output : null;
-    if (output?.availability === 'ready' && output.url) {
+    if (ready && output?.url) {
       this.tracked.delete(entry.jobId);
       this.download(entry.sessionId, next, output.url, output.content_type);
       return;
@@ -359,15 +358,25 @@ export class VideoJobScheduler {
     this.tracked.set(entry.jobId, { ...entry, nextAt: Date.now() + interval, interval });
   }
 
-  private onReadFailure(entry: Tracked, stored: StoredVideoJob, error: unknown): void {
+  private overdue(stored: StoredVideoJob): boolean {
+    return Date.now() - Date.parse(stored.followedSince ?? stored.createdAt) > DEADLINE_MS;
+  }
+
+  private async onReadFailure(entry: Tracked, stored: StoredVideoJob, error: unknown): Promise<void> {
     const status = (error as { status?: number }).status;
     if (status === 404) {
       this.tracked.delete(entry.jobId);
-      void this.save(entry.sessionId, { ...stored, error: 'The server no longer has this video job.' });
+      await this.save(entry.sessionId, { ...stored, error: 'The server no longer has this video job.' });
       return;
     }
     if (status === 401 || status === 403) {
       this.tracked.delete(entry.jobId);
+      return;
+    }
+    // Bounds an offline spell too: past the deadline, stop and let the user check again.
+    if (this.overdue(stored)) {
+      this.tracked.delete(entry.jobId);
+      await this.save(entry.sessionId, { ...stored, stalled: true, updatedAt: new Date().toISOString() });
       return;
     }
     if (status === 429) {
@@ -423,7 +432,11 @@ export class VideoJobScheduler {
       } finally {
         if (this.downloads.get(job.id)?.controller === controller) this.downloads.delete(job.id);
       }
-    })();
+    })().catch(error =>
+      this.deps.logger.warn(
+        `VIDEO: recording download of ${job.id} failed: ${error instanceof Error ? error.message : 'unknown'}`
+      )
+    );
   }
 
   private async save(sessionId: string, job: StoredVideoJob): Promise<void> {
