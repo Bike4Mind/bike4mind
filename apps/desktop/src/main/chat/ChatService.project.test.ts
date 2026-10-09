@@ -365,6 +365,16 @@ describe('ChatService.updateProject', () => {
       expect(await service.updateProject({ sessionId: id, branch: 'feat/held' })).toMatchObject({ ok: true });
     });
 
+    /** A plain-object lookup found Object.prototype.constructor and refused the switch. */
+    it('still checks out a branch named like an Object member that nothing else holds', async () => {
+      const { main } = await heldElsewhere('held-proto');
+      await git(main, ['branch', 'constructor']);
+      const id = await codeSession(main);
+
+      expect(await service.updateProject({ sessionId: id, branch: 'constructor' })).toMatchObject({ ok: true });
+      expect(await currentBranch(main)).toBe('constructor');
+    });
+
     it('marks a holder whose folder is gone as prunable', async () => {
       const { main, other } = await heldElsewhere('held-gone');
       await rm(other, { recursive: true, force: true });

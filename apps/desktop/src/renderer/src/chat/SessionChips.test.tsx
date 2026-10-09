@@ -413,6 +413,17 @@ describe('a branch another worktree has checked out', () => {
     expect(await hoverMark('feat/held')).toContain(HELD);
   });
 
+  it('lists a branch named like an Object member without marking it', async () => {
+    inspectProject.mockResolvedValue(
+      inspection({ branches: ['main', 'constructor'], checkedOutElsewhere: { 'feat/held': { path: HELD } } })
+    );
+    await show(project());
+    await openMenu();
+
+    expect(option('constructor')).toBeDefined();
+    expect(mark('constructor')).toBeUndefined();
+  });
+
   it('does not make the mark read as a problem with the toggle on', async () => {
     await show(project({ workspace: true }));
     await openMenu();

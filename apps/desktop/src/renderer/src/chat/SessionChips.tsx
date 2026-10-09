@@ -14,7 +14,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { SxProps } from '@mui/joy/styles/types';
-import type { BranchCheckout, BranchElsewhere, ChatProject } from '@shared/chat';
+import { branchHolder, type BranchCheckout, type BranchElsewhere, type ChatProject } from '@shared/chat';
 import { describeChipRow, type ChipRowState } from './chipState';
 import { BranchIcon, CloseIcon, FolderIcon, FolderPlusIcon } from './icons';
 import { contentColumnSx } from './layout';
@@ -232,7 +232,7 @@ function BranchChip({
           )}
 
           {matches.map(entry => {
-            const held = elsewhere[entry];
+            const held = branchHolder(elsewhere, entry);
             return (
               <MenuItem
                 key={entry}

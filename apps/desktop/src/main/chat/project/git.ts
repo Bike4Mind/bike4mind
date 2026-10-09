@@ -227,13 +227,14 @@ export async function listWorktrees(directory: string): Promise<WorktreeEntry[]>
 export async function branchCheckouts(directory: string): Promise<Record<string, BranchCheckout>> {
   const entries = parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain']));
   const own = await samePathAs(directory);
-  const checkouts: Record<string, BranchCheckout> = {};
+  const checkouts: [string, BranchCheckout][] = [];
   for (const [index, entry] of entries.entries()) {
     if (!entry.branch || entry.bare || own(entry.path)) continue;
     if (index === 0 && (await isGitDirectory(entry.path))) continue;
-    checkouts[entry.branch] = entry.prunable ? { path: entry.path, prunable: true } : { path: entry.path };
+    checkouts.push([entry.branch, entry.prunable ? { path: entry.path, prunable: true } : { path: entry.path }]);
   }
-  return checkouts;
+  // fromEntries defines own keys, so a branch named `__proto__` is kept rather than swallowed.
+  return Object.fromEntries(checkouts);
 }
 
 /**

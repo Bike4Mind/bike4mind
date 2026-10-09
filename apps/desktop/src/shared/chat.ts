@@ -1310,6 +1310,17 @@ export interface BranchElsewhere extends BranchCheckout {
 }
 
 /**
+ * The checkout holding `branch`, if any. An own-key lookup because branch names come from the
+ * user's repository, and `constructor` or `__proto__` are names git accepts.
+ */
+export function branchHolder(
+  checkouts: Readonly<Record<string, BranchCheckout>>,
+  branch: string
+): BranchCheckout | undefined {
+  return Object.prototype.hasOwnProperty.call(checkouts, branch) ? checkouts[branch] : undefined;
+}
+
+/**
  * Why a spawn was refused, for the message handed back to the MODEL.
  *
  * Distinguished rather than collapsed into one string because the model can act on two of them

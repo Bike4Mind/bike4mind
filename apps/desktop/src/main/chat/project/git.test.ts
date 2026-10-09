@@ -141,6 +141,17 @@ describe('branchCheckouts', () => {
     expect(await branchCheckouts(held)).toEqual({ main: { path: directory } });
   });
 
+  it('keeps branches named like Object members as ordinary entries', async () => {
+    const directory = await repository();
+    const proto = join(directory, '.wt', 'proto');
+    await git(directory, ['worktree', 'add', '--quiet', '-b', '__proto__', proto]);
+
+    const checkouts = await branchCheckouts(directory);
+
+    expect(Object.keys(checkouts)).toEqual(['__proto__']);
+    expect(Object.getPrototypeOf(checkouts)).toBe(Object.prototype);
+  });
+
   it('keeps a worktree whose folder is gone, flagged, since git still holds its branch', async () => {
     const directory = await repository();
     const gone = join(directory, '.wt', 'gone');

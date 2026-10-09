@@ -35,7 +35,7 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
 } from '@shared/chat';
-import { awaitsWorktree, isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
+import { awaitsWorktree, branchHolder, isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
 import { shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
@@ -771,7 +771,7 @@ export class ChatService {
     // Asked before the sharer and dirty-tree checks: neither offer below touches this folder, so
     // neither reason to stop applies to them. Read here as well as in the chip's branch list,
     // which can be a focus out of date.
-    const holder = (await branchCheckouts(directory).catch((): Record<string, BranchCheckout> => ({})))[branch];
+    const holder = branchHolder(await branchCheckouts(directory).catch(() => ({})), branch);
     if (holder) return { ok: false, error: heldElsewhereMessage(branch, holder), elsewhere: { branch, ...holder } };
     const sharer = await this.activeSessionIn(directory, session.id);
     if (sharer) {
