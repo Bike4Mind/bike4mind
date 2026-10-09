@@ -19,16 +19,17 @@ vi.mock('@server/security/tokenEncryption', () => ({
   },
 }));
 const h = vi.hoisted(() => ({ revokeToken: vi.fn(), storageDelete: vi.fn(async () => undefined) }));
-vi.mock('googleapis', () => ({
-  google: {
-    auth: {
-      OAuth2: class {
-        revokeToken = h.revokeToken;
-        generateAuthUrl = () => 'https://auth';
-        getToken = vi.fn();
-        setCredentials = vi.fn();
-        refreshAccessToken = vi.fn();
-      },
+// The Drive integration's own client package; a bare 'googleapis' mock matches nothing in the graph
+// and lets the revoke reach Google for real.
+vi.mock('@googleapis/drive', async importOriginal => ({
+  ...(await importOriginal<typeof import('@googleapis/drive')>()),
+  auth: {
+    OAuth2: class {
+      revokeToken = h.revokeToken;
+      generateAuthUrl = () => 'https://auth';
+      getToken = vi.fn();
+      setCredentials = vi.fn();
+      refreshAccessToken = vi.fn();
     },
   },
 }));
@@ -142,6 +143,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
     expect(await FabFile.countDocuments({ _id: manual.id })).toBe(1);
     expect(await OrgGoogleDriveConnection.findById(conn.id)).toBeNull();
     expect((await DataLakeModel.findById(lake.id))?.fileCount).toBe(1);
+    expect(h.revokeToken).toHaveBeenCalledWith('org-refresh');
 
     // A late redelivery after release is a no-op.
     expect(await runDriveDisconnectPurge(payload, { logger, sliceSize: 2, enqueue: async () => {} })).toBe('dropped');
