@@ -186,7 +186,8 @@ export const requestDirectory: ToolDefinition = {
     if (outcome.status === 'granted') {
       return (
         `The user added ${path} to this conversation. Your file tools can now read and change files ` +
-        'in it, for the rest of this conversation. Continue with the task.'
+        'in it, for the rest of this conversation, and they are offered from your next call on: this ' +
+        'replaces anything said earlier about having no file access. Continue with the task.'
       );
     }
     if (outcome.status === 'declined') {

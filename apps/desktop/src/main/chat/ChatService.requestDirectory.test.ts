@@ -141,6 +141,11 @@ describe('ChatService request_directory', () => {
     const card = await awaitStatus('awaiting-approval');
     approvals.resolve(card.approvalId as string, { decision: 'once' });
     await awaitStatus('done');
+    // Finish the turn first: the reply's own writes at the end must not put a stale copy back.
+    await awaitRound(2);
+    streams[1].write(frame({ type: 'content', text: 'Done.' }));
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 5000, interval: 10 });
 
     const reloaded = new SessionStore(sessionsDir, 'test-model', 'another-launch');
     expect((await reloaded.get(session.id))?.grantedDirectories).toEqual([outside]);
@@ -243,6 +248,10 @@ describe('ChatService request_directory', () => {
     const card = await awaitStatus('awaiting-approval');
     approvals.resolve(card.approvalId as string, { decision: 'once' });
     await awaitStatus('done');
+    await awaitRound(2);
+    streams[1].write(frame({ type: 'content', text: 'Done.' }));
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 5000, interval: 10 });
 
     const stored = await store.get(created.session.id);
     expect(stored?.project?.contextDirectories).toEqual([outside]);

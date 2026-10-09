@@ -799,12 +799,12 @@ export class ChatService {
    * pure ceremony. The global grants stay because tools are not Code-only - a Code session can
    * still be pointed at a reference checkout the user shared earlier.
    *
-   * A Code session with NO project is the one case that gets nothing, not even the global
-   * grants. It has no working directory, and every path tool falls back to `roots[0]` when it
-   * has none - so handing it the grants would root an agent's shell commands in whichever
-   * folder the user happened to share first. An empty root set makes each tool refuse instead
-   * (paths.resolveWithinRoots and shellTools.resolveCwd both reject one). `send` already
-   * refuses the turn outright; this is the second lock on the same door.
+   * A Code session with NO project never gets the global grants. It has no working directory,
+   * and every path tool falls back to `roots[0]` when it has none - so handing it the grants
+   * would root an agent's shell commands in whichever folder the user happened to share first.
+   * It gets only the folders granted to it alone (`grantedDirectories`), normally none, and an
+   * empty root set makes each tool refuse (paths.resolveWithinRoots and shellTools.resolveCwd
+   * both reject one). `send` already refuses its turn outright; this is the second lock.
    */
   private async resolveToolScope(
     session: ChatSession
