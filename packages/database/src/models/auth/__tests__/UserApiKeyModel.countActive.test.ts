@@ -222,16 +222,18 @@ describe('UserApiKeyRepository.createIfUnderCap', () => {
       'standard'
     );
     expect(resultB).not.toBe('at_cap');
+    // createdAt is absent from the create param type but has to be stamped before the
+    // insert, so the cast is narrowed to the spread and the literal stays type-checked.
+    const docA: Parameters<typeof userApiKeyRepository.createIfUnderCap>[0] = {
+      userId,
+      name: 'a',
+      keyHash: 'ha',
+      keyPrefix: 'b4m_live_cicuA002',
+      scopes: [ApiKeyScope.AI_GENERATE],
+      metadata: { createdFrom: 'dashboard' as const },
+    };
     const resultA = await userApiKeyRepository.createIfUnderCap(
-      {
-        userId,
-        name: 'a',
-        keyHash: 'ha',
-        keyPrefix: 'b4m_live_cicuA002',
-        scopes: [ApiKeyScope.AI_GENERATE],
-        metadata: { createdFrom: 'dashboard' as const },
-        createdAt: stampedA,
-      } as Parameters<typeof userApiKeyRepository.createIfUnderCap>[0],
+      { ...docA, createdAt: stampedA } as typeof docA,
       cap,
       'standard'
     );
