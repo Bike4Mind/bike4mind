@@ -140,8 +140,8 @@ vi.mock('@bike4mind/common', async () => {
     // Real enum, not a stub: the sourceType gate around the Slack notification claim compares
     // against this directly, so a fake value here would make every test pass for the wrong reason.
     FabFileSourceType: actual.FabFileSourceType,
-    // Pulled from the real module rather than retyped, for the provenance vocabulary
-    // convergenceProvenance.ts re-exports from common:
+    // Pulled from the real module rather than retyped, for the provenance vocabulary the handler
+    // imports straight from common:
     // the payload schema's fail-soft `origin` and the halt rule are exactly what the kill-switch
     // tests below exercise, so a stub here would make them assert against themselves.
     WORK_ORIGINS: actual.WORK_ORIGINS,

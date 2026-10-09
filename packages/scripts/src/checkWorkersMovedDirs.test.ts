@@ -76,8 +76,10 @@ const MOVED_MODULES = [
   {
     from: 'apps/client/server/queueHandlers',
     to: 'apps/client/server/dataLakes',
-    stems: ['convergenceKillSwitch', 'convergenceProvenance', 'dataLakeBatchProgress'],
+    stems: ['convergenceKillSwitch', 'dataLakeBatchProgress'],
   },
+  // A deleted re-export shim, not a move: its vocabulary lives in common.
+  { from: 'apps/client/server/queueHandlers', to: '@bike4mind/common', stems: ['convergenceProvenance'] },
   { from: 'apps/client/server/queueHandlers', to: 'apps/client/server/utils', stems: ['sqsDelivery'] },
 ] as const;
 
