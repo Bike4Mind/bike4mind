@@ -111,9 +111,13 @@ const DO_IT_HERE = [
   'explaining that a session was not started, and do not close by offering to start one after all.',
 ].join('\n');
 
-const WORKTREE_NOTE =
-  'The new session gets its own git worktree on the branch below, beside the project. It cannot ' +
-  'disturb this conversation, and both can work at once.';
+function worktreeNote(base: string): string {
+  return (
+    `The new session gets its own git worktree on the branch below, cut from ${base} and beside ` +
+    'the project. Changes not yet committed here do not go with it. It cannot disturb this ' +
+    'conversation, and both can work at once.'
+  );
+}
 
 const LOCAL_NOTE =
   'The new session shares this conversation working directory. Nothing new is checked out, and ' +
@@ -130,8 +134,9 @@ export const sessionSpawn: ToolDefinition = {
       'said here. It costs credits and the user approves each one, so do not start one ' +
       'speculatively, and never start several to try variations of the same task. ' +
       'When they approve it, the USER chooses where it runs: in this working directory, or in a ' +
-      'git worktree of its own on a new branch. You cannot choose and must not assume - so write ' +
-      'the prompt so it stands on its own in either, naming files by their path within the ' +
+      'git worktree of its own on a new branch, cut from the branch this conversation is on. You ' +
+      'cannot choose and must not assume - so write the prompt so it stands on its own in ' +
+      'either, naming files by their path within the ' +
       'repository rather than telling it to carry on with something uncommitted here. They may ' +
       'also answer that they want the work done in this conversation, in which case nothing is ' +
       'started and you do it yourself.',
@@ -148,7 +153,10 @@ export const sessionSpawn: ToolDefinition = {
       additionalProperties: false,
     },
   },
-  approval(input) {
+  async approval(input, context) {
+    // Resolved here, once, and carried to `run` in the option's input: the base the card names
+    // is then the base the child is cut from, with no second resolution to disagree with it.
+    const base = (await context.host?.spawnBase()) ?? '';
     const prompt = typeof input.prompt === 'string' ? input.prompt : '';
     const title = typeof input.title === 'string' && input.title ? input.title : null;
     return {
@@ -163,12 +171,17 @@ export const sessionSpawn: ToolDefinition = {
           {
             id: 'worktree',
             label: 'Start with worktree',
-            description: WORKTREE_NOTE,
-            input: { placement: 'worktree' },
+            description: worktreeNote(base),
+            input: { placement: 'worktree', base },
             // Prefilled and editable rather than derived behind the user's back. A worktree is
             // keyed on its branch, so this name is what decides whether the child is isolated at
             // all - a bad guess has to be visible before anything is created, not after.
-            field: { name: 'branch', label: 'Branch', value: suggestBranchName(title ?? undefined, prompt) },
+            field: {
+              name: 'branch',
+              label: 'Branch',
+              value: suggestBranchName(title ?? undefined, prompt),
+              hint: `Based on ${base}`,
+            },
           },
           {
             id: 'local',
@@ -192,13 +205,16 @@ export const sessionSpawn: ToolDefinition = {
     const prompt = requireString(input, 'prompt');
     const title = typeof input.title === 'string' && input.title.trim() ? input.title.trim() : undefined;
 
-    // Set by the approval card and by nothing else - neither property is in the schema above, so
-    // a model cannot send one. Absent means no gate was configured at all, and the answer there
+    // Set by the approval card and by nothing else - none of these properties is in the schema
+    // above, so a model cannot send one. Absent means no gate was configured at all, and the answer there
     // is the placement that touches nothing: creating a checkout nobody asked for is the worse
     // of the two ways to be wrong.
     const branch = typeof input.branch === 'string' ? input.branch.trim() : '';
-    const placement: SpawnPlacement =
-      input.placement === 'worktree' && branch ? { kind: 'worktree', branch } : { kind: 'local' };
+    const worktree = input.placement === 'worktree' && branch !== '';
+    // Only empty when no card ran to resolve it, and then resolved the same way the card would.
+    const carried = typeof input.base === 'string' ? input.base.trim() : '';
+    const base = worktree ? carried || (await host.spawnBase()) : '';
+    const placement: SpawnPlacement = worktree ? { kind: 'worktree', branch, base } : { kind: 'local' };
 
     context.beginWrite?.();
     if (placement.kind === 'worktree') context.report?.progress(`Creating branch ${placement.branch} and worktree...`);
@@ -207,7 +223,7 @@ export const sessionSpawn: ToolDefinition = {
     return [
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
       placement.kind === 'worktree'
-        ? `The user gave it its own worktree on ${placement.branch}, so it is NOT editing the files here and its dependencies are installing there now.`
+        ? `The user gave it its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
         : 'The user had it share this working directory, so it is editing the same files you are.',
       'It is running now. You will be told in this conversation WHEN it finishes, but not what',
       'it said - read it with session_read then if you need that. Do not wait for it in this',

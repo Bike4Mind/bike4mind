@@ -262,9 +262,10 @@ export type SpawnOutcome = { ok: true; session: ChatSessionSummary } | SpawnReje
  *
  * 'worktree' carries a branch of its own rather than inheriting one, and it has to: a worktree
  * is keyed on its branch, so a child handed the parent's branch would be given the parent's
- * checkout back and be isolated in name only.
+ * checkout back and be isolated in name only. `base` is what that branch is cut from - the
+ * parent's own branch, never the parent's checkout - see HostContext.spawnBase.
  */
-export type SpawnPlacement = { kind: 'local' } | { kind: 'worktree'; branch: string };
+export type SpawnPlacement = { kind: 'local' } | { kind: 'worktree'; branch: string; base: string };
 
 /**
  * A delivered message, and whether the target took it up straight away.
@@ -313,6 +314,12 @@ export interface HostContext {
    * model is told them apart.
    */
   spawn(prompt: string, title: string | undefined, placement: SpawnPlacement): Promise<SpawnOutcome>;
+  /**
+   * What a worktree child's new branch is cut from: the branch this session is on. Resolved once,
+   * for the approval card, and carried from there in the placement, so the base the card names
+   * is the base the child gets.
+   */
+  spawnBase(): Promise<string>;
   /** Sessions in this one's project, newest first. Includes archived ones, flagged as such. */
   listSessions(options: { includeArchived: boolean }): Promise<HostSessionView[]>;
   /** One session's transcript as plain text, or null when it is gone or not in this project. */

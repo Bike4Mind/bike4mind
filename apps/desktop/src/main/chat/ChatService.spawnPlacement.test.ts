@@ -153,12 +153,33 @@ describe('ChatService spawn placement', () => {
     const parent = await parentSession();
     await service.send(parent.id, 'go');
     await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
-    requestSpawn(streams[0], 'call-1', task.prompt, task.title);
+    await answerSpawn(answer, task);
+    return parent;
+  }
 
+  /** The rest of spawnWith, for a parent a test has already set up and started a turn on. */
+  async function answerSpawn(
+    answer: ChatApprovalAnswer,
+    task: { prompt: string; title: string } = { prompt: 'do the thing', title: 'The thing' }
+  ) {
+    requestSpawn(streams[0], 'call-1', task.prompt, task.title);
     const card = await awaitCard();
     approvals.resolve(card.approvalId as string, answer);
     await awaitSettled(1);
-    return parent;
+    return card;
+  }
+
+  async function commit(directory: string, file: string): Promise<string> {
+    await git(directory, ['config', 'user.email', 'test@example.com']);
+    await git(directory, ['config', 'user.name', 'Test']);
+    await writeFile(join(directory, file), `${file}\n`, 'utf8');
+    await git(directory, ['add', file]);
+    await git(directory, ['commit', '--quiet', '-m', file]);
+    return (await git(directory, ['rev-parse', 'HEAD'])).trim();
+  }
+
+  async function head(directory: string): Promise<string> {
+    return (await git(directory, ['rev-parse', 'HEAD'])).trim();
   }
 
   async function child(): Promise<ChatSessionSummary | undefined> {
@@ -206,7 +227,7 @@ describe('ChatService spawn placement', () => {
       { timeout: 5000, interval: 5 }
     );
     expect(body).toContain(worktree);
-    expect(body).toContain('agent/told-where');
+    expect(body).toContain('agent/told-where cut from main');
     expect(body).toContain(main);
     expect(body).toMatch(/Do not read or\nwrite under it/);
     // The task itself is passed through untouched: rewriting it would be guessing which mentions
@@ -336,6 +357,60 @@ describe('ChatService spawn placement', () => {
     const spawned = await child();
     expect(spawned?.approvalMode).toBe('auto');
     expect(spawned?.origin).toMatchObject({ parentSessionId: parent.id, depth: 1 });
+  });
+
+  it('cuts the child from the branch a plain-checkout parent has checked out, and says so', async () => {
+    const parent = await parentSession();
+    // Switched after the session recorded 'main', so the base can only have come from git.
+    await git(main, ['switch', '--quiet', '-c', 'feat/parent']);
+    const tip = await commit(main, 'parent.txt');
+    await service.send(parent.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+
+    const card = await answerSpawn({ decision: 'once', optionId: 'worktree', value: 'agent/from-parent' });
+
+    expect(card.approvalChoice?.options[0].field?.hint).toBe('Based on feat/parent');
+    expect(card.approvalChoice?.options[0].description).toMatch(/cut from feat\/parent/);
+    const worktree = join(appWorktreeRoot(container), 'agent+from-parent');
+    expect(await head(worktree)).toBe(tip);
+    expect(settled()[0]?.preview).toMatch(/on agent\/from-parent, cut from feat\/parent/);
+  });
+
+  it("cuts the child from a worktree parent's own branch, with the commits it has not pushed", async () => {
+    const created = await service.createCodeSession({ directory: main, branch: 'main', workspace: true });
+    if (!created.ok) throw new Error(created.error);
+    await service.send(created.session.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+    const project = (await store.get(created.session.id))?.project;
+    const parentBranch = project?.workspaceBranch as string;
+    expect(parentBranch).toMatch(/^b4m\//);
+    const tip = await commit(project?.workingDirectory as string, 'unpushed.txt');
+
+    const card = await answerSpawn({ decision: 'once', optionId: 'worktree', value: 'agent/from-worktree' });
+
+    expect(card.approvalChoice?.options[0].field?.hint).toBe(`Based on ${parentBranch}`);
+    expect(await head(join(appWorktreeRoot(container), 'agent+from-worktree'))).toBe(tip);
+    expect(await head(main)).not.toBe(tip);
+  });
+
+  it('falls back to origin/main for a parent on a detached HEAD, and the card names it', async () => {
+    const bare = join(container, '.bare');
+    // A real remote-tracking ref, which `clone --bare` does not write, ahead of the checkout.
+    await git(bare, ['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*']);
+    const source = join(container, '..', 'source');
+    const remoteTip = await commit(source, 'remote.txt');
+    await git(bare, ['fetch', '--quiet', 'origin']);
+    await git(main, ['checkout', '--quiet', '--detach', 'HEAD']);
+
+    const created = await service.createCodeSession({ directory: main, workspace: false });
+    if (!created.ok) throw new Error(created.error);
+    await service.send(created.session.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+
+    const card = await answerSpawn({ decision: 'once', optionId: 'worktree', value: 'agent/detached' });
+
+    expect(card.approvalChoice?.options[0].field?.hint).toBe('Based on origin/main');
+    expect(await head(join(appWorktreeRoot(container), 'agent+detached'))).toBe(remoteTip);
   });
 
   it('offers the three options, worktree first, with only that one carrying a branch', async () => {

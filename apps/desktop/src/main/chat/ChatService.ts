@@ -55,6 +55,7 @@ import {
   isGitDirectory,
   listWorktrees,
   projectDisplayName,
+  resolveBaseRef,
   uncommittedChanges,
   unusableProjectReason,
 } from './project/git';
@@ -2566,6 +2567,8 @@ export class ChatService {
     return {
       spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),
 
+      spawnBase: () => spawnBaseFor(project),
+
       listSessions: async ({ includeArchived }) => {
         const all = await this.deps.store.list();
         return all
@@ -2780,9 +2783,9 @@ export class ChatService {
       // Resolved BEFORE the session is written, for the reason createCodeSession gives: a
       // worktree that cannot be made must leave nothing behind, rather than a session whose
       // tools then quietly run in the parent's checkout after the user asked for isolation.
-      let workspace: { branch: string; workingDirectory: string } | null = null;
+      let workspace: { branch: string; base: string; workingDirectory: string } | null = null;
       if (placement.kind === 'worktree') {
-        const prepared = await this.prepareSpawnWorkspace(project, placement.branch);
+        const prepared = await this.prepareSpawnWorkspace(project, placement.branch, placement.base);
         if (!prepared.ok) return prepared;
         workspace = prepared;
       }
@@ -2857,11 +2860,15 @@ export class ChatService {
    * at any branch already checked out - would be given that checkout and share it, while the row
    * and the chip both claimed isolation. Refusing puts the collision in front of the user, who
    * can answer again with a different name; adopting would hide it.
+   *
+   * The new branch is cut from `base`, the parent's branch as the card showed it (see
+   * spawnBaseFor), so the child starts on the parent's commits rather than on main.
    */
   private async prepareSpawnWorkspace(
     project: ChatProject,
-    branch: string
-  ): Promise<({ ok: true } & { branch: string; workingDirectory: string }) | SpawnRejected> {
+    branch: string,
+    base: string
+  ): Promise<({ ok: true } & { branch: string; base: string; workingDirectory: string }) | SpawnRejected> {
     const wanted = branch.trim();
     if (!isValidBranchName(wanted)) {
       return {
@@ -2898,8 +2905,8 @@ export class ChatService {
 
       // Named exactly, not derived: the approval card showed this name to the user and the row
       // reports it back, so the branch the child lands on has to be the one they approved.
-      const resolved = await resolveWorkspace(project.directory, { branch: wanted });
-      return { ok: true, branch: resolved.branch, workingDirectory: resolved.workingDirectory };
+      const resolved = await resolveWorkspace(project.directory, { branch: wanted, base });
+      return { ok: true, branch: resolved.branch, base, workingDirectory: resolved.workingDirectory };
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'unknown error';
       return { ok: false, reason: 'branch', message: `The worktree could not be created: ${detail}` };
@@ -4131,17 +4138,37 @@ function replaceToolResults(wire: CompletionMessage[], content: ReadonlyMap<stri
  * guessing at which mentions of a path meant "this repository" and which meant that exact
  * directory; saying where the child is lets it decide.
  */
-function worktreePreamble(projectDirectory: string, workspace: { branch: string; workingDirectory: string }): string {
+function worktreePreamble(
+  projectDirectory: string,
+  workspace: { branch: string; base: string; workingDirectory: string }
+): string {
   return [
     `[You are running in a git worktree made for this task: ${workspace.workingDirectory}, on a new`,
-    `branch ${workspace.branch}. It is a checkout of the same repository as ${projectDirectory},`,
-    'which is where the conversation that started you is working.',
+    `branch ${workspace.branch} cut from ${workspace.base}. It is a checkout of the same repository`,
+    `as ${projectDirectory}, which is where the conversation that started you is working.`,
     '',
     `Any path in the task below that points into ${projectDirectory} names a file of THAT`,
     'checkout. Use the one at the matching path inside your own worktree instead. Do not read or',
     'write under it: it is another session working tree, you have no access to it, and changing it',
     'is the one thing your own worktree exists to prevent.]',
   ].join('\n');
+}
+
+/**
+ * The branch a spawned session's worktree is cut from: the one its parent is working on.
+ *
+ * In this order: the parent's own worktree branch, which needs no git call; the branch checked
+ * out where its tools run, read as the branch chip reads it; the branch it recorded; and only
+ * when it is on none of these (a detached HEAD, a folder that is not a repository) the default
+ * base a user's own new session gets. At most one git read on the common paths, and only ever
+ * on a spawn approval.
+ */
+async function spawnBaseFor(project: ChatProject): Promise<string> {
+  if (project.workspaceBranch) return project.workspaceBranch;
+  const checkedOut = await currentBranch(project.workingDirectory);
+  if (checkedOut) return checkedOut;
+  if (project.branch.trim()) return project.branch.trim();
+  return resolveBaseRef(project.directory);
 }
 
 /**

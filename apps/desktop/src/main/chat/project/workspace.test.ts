@@ -378,6 +378,63 @@ describe('resolveWorkspace choosing what to fork from', () => {
       (await git(repo, ['rev-parse', 'main'])).trim()
     );
   });
+
+  async function commitOn(repo: string, file: string): Promise<string> {
+    await writeFile(join(repo, file), `${file}\n`, 'utf8');
+    await git(repo, ['add', file]);
+    await git(repo, ['commit', '--quiet', '-m', file]);
+    return (await git(repo, ['rev-parse', 'HEAD'])).trim();
+  }
+
+  const headOf = async (directory: string) => (await git(directory, ['rev-parse', 'HEAD'])).trim();
+
+  // A spawned session names its branch AND its base: the branch the user approved, cut from the
+  // branch its parent is on.
+  it('cuts a named branch from a local-only base, using the local ref', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['switch', '--quiet', '-c', 'feat/local']);
+    const tip = await commitOn(repo, 'local.txt');
+
+    const resolved = await resolveWorkspace(repo, { branch: 'agent/child', base: 'feat/local' });
+
+    expect(resolved.branch).toBe('agent/child');
+    expect(await headOf(resolved.workingDirectory)).toBe(tip);
+  });
+
+  it('cuts a named branch from the local base when its remote has not seen the latest commits', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['switch', '--quiet', '-c', 'feat/pushed']);
+    await commitOn(repo, 'pushed.txt');
+    await git(repo, ['push', '--quiet', 'origin', 'feat/pushed']);
+    const tip = await commitOn(repo, 'unpushed.txt');
+
+    const resolved = await resolveWorkspace(repo, { branch: 'agent/child', base: 'feat/pushed' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(tip);
+  });
+
+  it('cuts a named branch from a fallback ref as it is', async () => {
+    const { repo } = await clonedRepository();
+    const remoteTip = await headOf(repo);
+    await commitOn(repo, 'ahead.txt');
+
+    const remote = await resolveWorkspace(repo, { branch: 'agent/remote', base: 'origin/main' });
+    const local = await resolveWorkspace(repo, { branch: 'agent/head', base: 'HEAD' });
+
+    expect(await headOf(remote.workingDirectory)).toBe(remoteTip);
+    expect(await headOf(local.workingDirectory)).toBe(await headOf(repo));
+  });
+
+  it("still cuts a user's session with no branch picked from origin/main, whatever is checked out", async () => {
+    const { repo } = await clonedRepository();
+    const remoteTip = await headOf(repo);
+    await git(repo, ['switch', '--quiet', '-c', 'feat/elsewhere']);
+    await commitOn(repo, 'elsewhere.txt');
+
+    const resolved = await resolveWorkspace(repo, { name: 'My session' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(remoteTip);
+  });
 });
 
 /**

@@ -42,7 +42,11 @@ export type WorkspaceOutcome = 'created' | 'reused';
 export interface WorkspaceRequest {
   /** The branch the user picked. Empty when they picked none. */
   base?: string;
-  /** This session's own branch, when it has one. Set, nothing is derived and nothing is cut. */
+  /**
+   * This session's own branch, when it has one. Set, nothing is derived. It is cut only when it
+   * does not exist yet - from `base` when one is given, which a spawned session's worktree uses
+   * to start from its parent's branch, and otherwise from the default base.
+   */
   branch?: string;
   /** Seed for a derived branch name - the session's title. */
   name?: string;
@@ -146,11 +150,13 @@ export function sessionBranchName(name?: string): string {
  * noticing, and a branch cut from it starts life needing a merge nobody asked for; the ancestor
  * check is what keeps that from costing unpushed work on a branch the user has been committing
  * to. With no base picked this falls back to resolveBaseRef, matching the default in the user's
- * `worktree` command.
+ * `worktree` command. A base that is itself one of that fallback's answers (`origin/main`,
+ * `HEAD`), as a spawned session carries when its parent is on no branch, comes out unchanged:
+ * `origin/origin/main` never resolves, and `HEAD` is checked here because `origin/HEAD` might.
  */
 async function baseRefFor(directory: string, base: string): Promise<string> {
-  if (!base) {
-    const fallback = await resolveBaseRef(directory);
+  if (!base || base === 'HEAD') {
+    const fallback = base || (await resolveBaseRef(directory));
     await fetchRemoteFor(directory, fallback);
     return fallback;
   }
@@ -179,6 +185,8 @@ async function baseRefFor(directory: string, base: string): Promise<string> {
  * One rule covers both halves of what the chip menu can send. A name that IS a branch is a base
  * and the session's branch is derived; a name that is NOT names the session's branch, which is
  * then cut from the default base. Either way the session ends up alone on a branch of its own.
+ * A caller naming both - a spawned session, whose branch the user approved by name - has it cut
+ * from `base`.
  *
  * Idempotence is the caller's half: `branch` comes back in the resolution and goes onto the
  * session, and handing it in again short-circuits both the derivation and the cut. Without it
@@ -205,6 +213,8 @@ export async function resolveWorkspace(
     } else {
       branch = base || sessionBranchName(request.name);
     }
+  } else {
+    cutFrom = base;
   }
 
   request.onBranch?.(branch);

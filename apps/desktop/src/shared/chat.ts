@@ -260,6 +260,8 @@ export interface ChatApprovalField {
   label: string;
   /** The suggestion, which the user may replace before answering. */
   value: string;
+  /** Read-only context shown beside the field, such as the base a new branch is cut from. */
+  hint?: string;
 }
 
 /** The alternatives an approval card offers. The first option is its primary action. */

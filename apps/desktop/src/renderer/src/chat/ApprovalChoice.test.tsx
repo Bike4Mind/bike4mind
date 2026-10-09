@@ -18,7 +18,7 @@ const CHOICE: ChatApprovalChoice = {
       id: 'worktree',
       label: 'Start with worktree',
       description: 'Its own checkout, beside the project.',
-      field: { name: 'branch', label: 'Branch', value: 'agent/tidy-imports' },
+      field: { name: 'branch', label: 'Branch', value: 'agent/tidy-imports', hint: 'Based on feat/parent' },
     },
     { id: 'local', label: 'Start locally', description: 'Shares this working directory.' },
     { id: 'here', label: 'Do it here', description: 'No new session.', redirect: true },
@@ -58,6 +58,20 @@ describe('ApprovalChoiceButtons', () => {
     const html = markup();
     expect(html).toContain('data-testid="chat-tool-approval-field-branch"');
     expect(html).toContain('value="agent/tidy-imports"');
+  });
+
+  it('names the base the branch is cut from beside the field, as text rather than a second input', () => {
+    const html = markup();
+    expect(html).toMatch(/data-testid="chat-tool-approval-hint-branch"[^>]*>Based on feat\/parent</);
+    expect(html.match(/<input/g)).toHaveLength(2);
+  });
+
+  it('draws no hint for a field that has none', () => {
+    const [worktree, ...rest] = CHOICE.options;
+    const html = markup({
+      options: [{ ...worktree, field: { name: 'branch', label: 'Branch', value: 'x' } }, ...rest],
+    });
+    expect(html).not.toContain('chat-tool-approval-hint-');
   });
 
   it('offers exactly one field, for the one option that needs one', () => {

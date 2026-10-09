@@ -4,6 +4,7 @@ import Button from '@mui/joy/Button';
 import ButtonGroup from '@mui/joy/ButtonGroup';
 import Checkbox from '@mui/joy/Checkbox';
 import FormControl from '@mui/joy/FormControl';
+import FormHelperText from '@mui/joy/FormHelperText';
 import FormLabel from '@mui/joy/FormLabel';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
@@ -80,6 +81,11 @@ export function ApprovalChoiceButtons({
               onChange={event => setValues(current => ({ ...current, [option.id]: event.target.value }))}
               slotProps={{ input: { 'data-testid': `${testPrefix}-field-${option.field.name}` } }}
             />
+            {option.field.hint && (
+              <FormHelperText sx={{ fontSize: 'xs' }} data-testid={`${testPrefix}-hint-${option.field.name}`}>
+                {option.field.hint}
+              </FormHelperText>
+            )}
           </FormControl>
         ) : null
       )}
