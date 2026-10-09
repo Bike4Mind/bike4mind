@@ -325,7 +325,7 @@ export interface IPlatformUsageDashboardResponse {
 export interface IPlatformEndpointUsageResponse {
   /** Echo of the source filter, if any (default: all API-key sources). */
   source?: ApiKeyCompletionSource;
-  /** Always the log's full 90-day TTL. */
+  /** Always the log's full TTL; mirrors ENDPOINT_TTL_DAYS in pages/api/admin/platform-usage/endpoints.ts. */
   windowDays: number;
   endpoints: IPlatformEndpointUsage;
 }
