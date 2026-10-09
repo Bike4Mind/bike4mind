@@ -44,12 +44,12 @@ function snapshot(overrides: Partial<PrSnapshot> = {}): PrBarState['snapshot'] {
   };
 }
 
-function markup(overrides: Partial<PrSnapshot> = {}, refreshing = false): string {
+function markup(overrides: Partial<PrSnapshot> = {}, refreshing = false, gh: PrBarState['gh'] = 'ok'): string {
   const state: PrBarState = {
     sessionId: 'session-1',
     binding: BINDING,
     snapshot: snapshot(overrides),
-    gh: 'ok',
+    gh,
     refreshing,
     autoMerge: { mode: 'desktop' },
     autoFix: { status: 'watching', attempts: 0, max: 3 },
@@ -79,6 +79,12 @@ describe('PrStatusBar', () => {
     for (const testId of ['pr-bar-open-btn', 'pr-bar-dismiss-btn', 'pr-bar-number-btn', 'pr-bar-diff']) {
       expect(has(html, testId)).toBe(true);
     }
+  });
+
+  it('keeps refresh on a merged bar while gh needs fixing, since the fix line says to refresh', () => {
+    const html = markup({ state: 'MERGED' }, false, 'missing');
+    expect(has(html, 'pr-bar-gh-fix')).toBe(true);
+    expect(has(html, 'pr-bar-refresh-btn')).toBe(true);
   });
 
   it('leaves out the merged time when the read did not carry one', () => {

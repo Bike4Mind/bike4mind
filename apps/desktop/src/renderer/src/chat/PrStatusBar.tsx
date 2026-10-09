@@ -223,8 +223,9 @@ export function PrStatusBar({
           </PrCiMenu>
         )}
 
-        {/* A merged PR cannot change again. A closed one can be reopened, but only a manual refresh will notice. */}
-        {!merged && (
+        {/* A merged PR cannot change again; a closed one can be reopened, and only this notices. The
+          fix line's "then refresh" needs the button whatever the PR's state. */}
+        {(!merged || fix) && (
           <Tooltip title="Refresh" size="sm" variant="soft">
             <IconButton
               size="sm"
