@@ -119,6 +119,27 @@ describe('SessionRepository.addKnowledgeIdsWithUpdateAccess', () => {
     expect(await knowledgeOf(id)).toEqual(['a', 'c']);
   });
 
+  it('treats an empty addition as a no-op that still writes the other fields', async () => {
+    const id = await seed({ knowledgeIds: ['a'] });
+
+    const updated = await sessionRepository.addKnowledgeIdsWithUpdateAccess(OWNER, { id, name: 'Renamed' }, []);
+
+    expect(updated?.name).toBe('Renamed');
+    expect(await knowledgeOf(id)).toEqual(['a']);
+  });
+
+  it('ignores a knowledgeIds list smuggled into the field set instead of replacing the stored one', async () => {
+    const id = await seed({ knowledgeIds: ['a', 'b'] });
+
+    await sessionRepository.addKnowledgeIdsWithUpdateAccess(
+      OWNER,
+      { id, knowledgeIds: ['stale'] } as Parameters<typeof sessionRepository.addKnowledgeIdsWithUpdateAccess>[1],
+      ['c']
+    );
+
+    expect(await knowledgeOf(id)).toEqual(['a', 'b', 'c']);
+  });
+
   it('returns null and adds nothing once the sharee entry is removed', async () => {
     const id = await seed({ knowledgeIds: ['a'] });
     await Session.updateOne({ _id: id }, { $set: { users: [] } });

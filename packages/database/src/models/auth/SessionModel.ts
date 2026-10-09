@@ -398,7 +398,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     knowledgeIds: string[],
     opts?: { includeGlobalWrite?: boolean }
   ): Promise<ISessionDocument | null> {
-    const { id, ...setData } = data;
+    // Stripped at runtime, not only by type: a hydrated doc passes structurally, and `knowledgeIds`
+    // would conflict with the $addToSet while `__v` would rewind the version (see _plainUpdate).
+    const {
+      id,
+      knowledgeIds: _replacedList,
+      __v: _ignoredVersion,
+      ...setData
+    } = data as typeof data & { knowledgeIds?: unknown; __v?: unknown };
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const query = this.sessionModel.findOneAndUpdate(
       { _id: convertId(id), deletedAt: null, $or: updateAccessArms(user, opts) },

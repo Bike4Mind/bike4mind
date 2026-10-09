@@ -91,8 +91,8 @@ export const updateSession = async (
   const lakeScopeRequested = lakeScope !== undefined;
 
   // Dropped, not rejected - a rename PUTs the whole session, so see usableSessionIds.
-  const usableIds =
-    requestedIds && usableSessionIds(requestedIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
+  const logger = adapters.logger ?? Logger.globalInstance;
+  const usableIds = requestedIds && usableSessionIds(requestedIds, 'knowledge', logger);
 
   const session = await db.sessions.shareable.findUpdateAccessById(user, id);
 
@@ -118,7 +118,8 @@ export const updateSession = async (
   const refused = new Set(requestedAdded.filter(id => !addedFileIds.includes(id)));
   const addOnly = knowledgeIdsMode === 'add';
   const knowledgeIds = addOnly
-    ? usableIds && uniq([...(session.knowledgeIds ?? []), ...addedFileIds])
+    ? // The stored list is filtered too: the lake derivation casts these to ObjectIds.
+      usableIds && uniq([...usableSessionIds(session.knowledgeIds ?? [], 'knowledge', logger), ...addedFileIds])
     : usableIds?.filter(id => !refused.has(id));
 
   // Persist ONLY the fields this request changed, as a plain partial keyed by id.

@@ -790,6 +790,19 @@ describe("updateSession - knowledgeIdsMode 'add'", () => {
     });
   });
 
+  it('drops an unusable stored id before the lake derivation casts the list', async () => {
+    const { adapters } = makeAdapters(
+      ['Legacy-UUID-2019', KEPT_PRIVATE],
+      [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]
+    );
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], knowledgeIdsMode: 'add' }, adapters);
+
+    expect(adapters.db.fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(user, [
+      KEPT_PRIVATE,
+      LAKE_FILE_ID,
+    ]);
+  });
+
   it('404s when the gated add-only write is refused', async () => {
     const { adapters } = makeAdapters([]);
     adapters.db.sessions.addKnowledgeIdsWithUpdateAccess.mockResolvedValue(null);
