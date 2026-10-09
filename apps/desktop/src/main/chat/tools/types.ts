@@ -17,6 +17,7 @@ import type { CompletionStreamEvent } from '../streamEvents';
 import type { MemoryStore } from '../project/memory';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
+import type { VideoModel } from '@bike4mind/common';
 import type { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 
@@ -38,6 +39,8 @@ export interface MediaContext {
   notebookName: string;
   /** Image models this deployment offers. Lazy: a turn with no image generation never asks. */
   listImageModels(): Promise<string[]>;
+  /** Video models this deployment offers. Lazy so ordinary turns make no request. */
+  listVideoModels(): Promise<VideoModel[]>;
   getRemoteSessionId(): string | undefined;
   setRemoteSessionId(remoteSessionId: string): Promise<void>;
 }
@@ -80,7 +83,7 @@ export interface ExploreContext extends ExploreTarget {
 export interface ToolReporter {
   /** Replaces the previous line. For work measured in tens of seconds. */
   progress(text: string): void;
-  /** Attach a generated image or audio clip to this call, for the UI only - not sent to the model. */
+  /** Attach generated media to this call, for the UI only - not sent to the model. */
   media(item: ChatMedia): void;
   /** Raise a cost or provider outcome to its own state; see ChatToolNotice. */
   notice(notice: ChatToolNotice): void;

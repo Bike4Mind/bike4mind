@@ -36,6 +36,7 @@ describe('toolRowLabel', () => {
 
   it('leaves a generation prompt out of the label rather than reciting it', () => {
     expect(toolRowLabel(call('1', 'generate_image', { prompt: 'a red bicycle at dusk' }))).toBe('Generated an image');
+    expect(toolRowLabel(call('2', 'generate_video', { prompt: 'a red bicycle at dusk' }))).toBe('Generated a video');
   });
 
   // session_send is the case this exists for: its only nameable argument is a uuid, so the row

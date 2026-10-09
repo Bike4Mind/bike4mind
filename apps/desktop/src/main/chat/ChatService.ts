@@ -2998,6 +2998,7 @@ export class ChatService {
       cdnUrl,
       notebookName: session.title,
       listImageModels: () => models?.listImageModels() ?? Promise.resolve([]),
+      listVideoModels: () => new MediaApiClient(api).listVideoModels(),
       getRemoteSessionId: () => remoteSessionId,
       setRemoteSessionId: async value => {
         remoteSessionId = value;
@@ -3827,13 +3828,14 @@ const BROWSER_GUIDANCE: readonly string[] = [
 ];
 
 const MEDIA_GUIDANCE: readonly string[] = [
-  'You can also generate images and audio on the Bike4Mind server with generate_image,',
-  'generate_speech, generate_sound_effect and generate_music.',
+  'You can also generate images, audio and video on the Bike4Mind server with generate_image,',
+  'generate_speech, generate_sound_effect, generate_music and generate_video.',
   'Each of these SPENDS THE USER CREDITS and each asks them to approve it first, so use one only',
   'when the user has asked for that thing - never to check whether it works, and never as a',
   'flourish alongside a text answer. If they decline, do not try a variation; ask what they want.',
   'The result is shown or played to the USER and is never returned to you: you cannot see the',
-  'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
+  'image or video, or hear the audio. Never describe what a generated image depicts, what a',
+  'generated video depicts, or how generated audio sounds.',
 ];
 
 /**

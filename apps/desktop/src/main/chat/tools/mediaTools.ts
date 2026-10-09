@@ -1,9 +1,11 @@
 import {
   DEFAULT_MUSIC_LENGTH_MS,
   DEFAULT_MUSIC_MODEL_ID,
+  CreateVideoGenerationBodySchema,
   ImageModels,
   TTS_MAX_INPUT_CHARS,
   type VoiceGenerationVendor,
+  type VideoModel,
 } from '@bike4mind/common';
 import {
   generateMusic,
@@ -13,6 +15,7 @@ import {
   type AudioOutcome,
 } from '../media/audioGeneration';
 import { generateImage } from '../media/imageGeneration';
+import { generateVideo } from '../media/videoGeneration';
 import { MediaToolError } from '../media/MediaApiClient';
 import {
   optionalNumber,
@@ -178,6 +181,87 @@ export const generateImageTool: ToolDefinition = {
       return (
         `Generated ${outcome.media.length} image(s) with ${model} (${sizes}) and displayed them to the user. ` +
         'You cannot see the result, so do not describe what it depicts - ask the user if you need to know.'
+      );
+    });
+  },
+};
+
+async function resolveVideoModel(media: MediaContext, requested: string | undefined): Promise<VideoModel> {
+  const offered = await media.listVideoModels();
+  if (offered.length === 0) throw new Error('This server offers no video-generation models.');
+  if (!requested) return offered[0];
+  const model = offered.find(candidate => candidate.id === requested);
+  if (!model)
+    throw new Error(
+      `This server does not offer the video model "${requested}". It offers: ${offered.map(candidate => candidate.id).join(', ')}.`
+    );
+  return model;
+}
+
+export const generateVideoTool: ToolDefinition = {
+  schema: {
+    name: 'generate_video',
+    description:
+      'Generate a short video on the Bike4Mind server and show it to the user. Costs credits and can take minutes. ' +
+      'The video is displayed to the USER; you do not receive it and cannot see what it depicts.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'What the video should show.' },
+        model: { type: 'string', description: 'Video model id. Omit to use the first model this server offers.' },
+        durationSeconds: { type: 'number', description: 'Clip length in seconds. Omit for the model default.' },
+        aspectRatio: { type: 'string', description: 'Aspect ratio supported by the selected model.' },
+        resolution: { type: 'string', description: 'Resolution supported by the selected model.' },
+        inputImageFileId: { type: 'string', description: 'Uploaded image file id to animate.' },
+        audio: { type: 'boolean', description: 'Request audio when the selected model supports it.' },
+      },
+      required: ['prompt'],
+    },
+  },
+
+  async approval(input, context) {
+    const prompt = requireString(input, 'prompt');
+    const model = await resolveVideoModel(requireMedia(context), optionalString(input, 'model'));
+    const duration = optionalNumber(input, 'durationSeconds') ?? model.defaults.duration_seconds;
+    return {
+      detail:
+        `Generate a ${duration}s video with ${model.id}.\n` +
+        'This spends credits on your Bike4Mind account.\n\n' +
+        excerpt(prompt),
+      key: `generate_video:${model.id}:${duration}:${optionalString(input, 'aspectRatio') ?? ''}:${optionalString(input, 'resolution') ?? ''}:${optionalString(input, 'inputImageFileId') ?? ''}:${String(input.audio ?? '')}:${prompt}`,
+    } satisfies ApprovalPrompt;
+  },
+
+  async run(input, context) {
+    const media = requireMedia(context);
+    const prompt = requireString(input, 'prompt');
+    const model = await resolveVideoModel(media, optionalString(input, 'model'));
+    return reporting(context, async () => {
+      const request = CreateVideoGenerationBodySchema.parse({
+        model: model.id,
+        prompt,
+        ...(optionalNumber(input, 'durationSeconds') !== undefined
+          ? { duration_seconds: optionalNumber(input, 'durationSeconds') }
+          : {}),
+        ...(optionalString(input, 'aspectRatio') ? { aspect_ratio: optionalString(input, 'aspectRatio') } : {}),
+        ...(optionalString(input, 'resolution') ? { resolution: optionalString(input, 'resolution') } : {}),
+        ...(optionalString(input, 'inputImageFileId')
+          ? { input_image_file_id: optionalString(input, 'inputImageFileId') }
+          : {}),
+        ...(typeof input.audio === 'boolean' ? { audio: input.audio } : {}),
+      });
+      const outcome = await generateVideo(request, {
+        client: media.client,
+        store: media.store,
+        sessionId: context.sessionId ?? '',
+        signal: context.signal,
+        progress: text => context.report?.progress(text),
+      });
+      context.report?.media(outcome.media);
+      return (
+        `Generated a video with ${model.id} (${outcome.media.mimeType}, ${formatBytes(outcome.media.byteLength)}) ` +
+        `and displayed it to the user${outcome.media.fabFileId ? `; saved file ${outcome.media.fabFileId}` : ''}. ` +
+        'You cannot see the result, so do not describe what it depicts.'
       );
     });
   },

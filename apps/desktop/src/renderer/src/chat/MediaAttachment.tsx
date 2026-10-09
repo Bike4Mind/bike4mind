@@ -31,7 +31,7 @@ function Caption({ item }: { item: ChatMedia }) {
 }
 
 /**
- * A generated image or audio clip, rendered from a `b4m-media://` URL.
+ * Generated media rendered from a `b4m-media://` URL.
  *
  * The element loads the URL directly; there is no fetch and no base64 anywhere in the renderer.
  * Main serves the bytes over that scheme out of its own media folder, which is the only origin
@@ -79,6 +79,22 @@ function MediaItem({ item }: { item: ChatMedia }) {
         </Box>
         <Caption item={item} />
         <ImageViewer src={item.url} alt={item.caption} open={viewing} onClose={() => setViewing(false)} />
+      </Box>
+    );
+  }
+
+  if (item.kind === 'video') {
+    return (
+      <Box data-testid="chat-media-video">
+        <Box
+          component="video"
+          controls
+          preload="metadata"
+          src={item.url}
+          onError={() => setFailed(true)}
+          sx={{ width: '100%', maxWidth: 720, maxHeight: 420, display: 'block', borderRadius: 'sm' }}
+        />
+        <Caption item={item} />
       </Box>
     );
   }

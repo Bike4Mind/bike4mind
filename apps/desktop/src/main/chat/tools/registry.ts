@@ -5,7 +5,13 @@ import { BROWSER_TOOLS } from './browserTools';
 import { exploreTool } from './exploreTool';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, sessionSpawn } from './hostTools';
-import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
+import {
+  generateImageTool,
+  generateMusicTool,
+  generateSoundEffectTool,
+  generateSpeechTool,
+  generateVideoTool,
+} from './mediaTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { requestDirectory } from './requestDirectoryTool';
 import { bashExecute } from './shellTools';
@@ -65,6 +71,7 @@ const MEDIA_TOOLS: readonly ToolDefinition[] = [
   generateSpeechTool,
   generateSoundEffectTool,
   generateMusicTool,
+  generateVideoTool,
 ];
 
 /**

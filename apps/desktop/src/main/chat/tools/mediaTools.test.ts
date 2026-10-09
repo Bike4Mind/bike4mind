@@ -6,7 +6,7 @@ import type { ChatMedia, ChatToolNotice } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import { MediaStore } from '../media/MediaStore';
-import { generateImageTool, generateSpeechTool } from './mediaTools';
+import { generateImageTool, generateSpeechTool, generateVideoTool } from './mediaTools';
 import type { MediaContext, ToolContext } from './types';
 
 const SESSION = 'f1a2b3c4-0000-4000-8000-000000000001';
@@ -37,6 +37,24 @@ async function harness(options: { imageModels?: string[]; remoteSessionId?: stri
       saved: true,
       fabFileId: 'fab1',
     }),
+    listVideoModels: vi.fn().mockResolvedValue([
+      {
+        id: 'video-model-1',
+        object: 'video_model',
+        display_name: 'Video Model',
+        provider: 'test',
+        modes: ['text_to_video'],
+        duration: { kind: 'discrete', values: [6] },
+        aspect_ratios: ['16:9'],
+        resolutions: ['720p'],
+        defaults: { duration_seconds: 6, aspect_ratio: '16:9', resolution: '720p' },
+        audio: 'none',
+        credits_per_second: { '720p': 1 },
+        deprecation_date: null,
+      },
+    ]),
+    generateVideo: vi.fn(),
+    getVideoGeneration: vi.fn(),
   };
 
   const media: ChatMedia[] = [];
@@ -50,6 +68,7 @@ async function harness(options: { imageModels?: string[]; remoteSessionId?: stri
     cdnUrl: '',
     notebookName: 'New chat',
     listImageModels: async () => options.imageModels ?? ['gpt-image-2', 'gpt-image-1-mini'],
+    listVideoModels: () => client.listVideoModels(),
     getRemoteSessionId: () => options.remoteSessionId,
     setRemoteSessionId: setRemote,
   };
@@ -153,6 +172,67 @@ describe('generate_image', () => {
   it('refuses without a signed-in session rather than failing at the network', async () => {
     const context: ToolContext = { roots: [], signal: new AbortController().signal };
     await expect(generateImageTool.run({ prompt: 'x' }, context)).rejects.toThrow(/not signed in/);
+  });
+});
+
+describe('generate_video', () => {
+  const job = (state: 'pending' | 'failed' | 'succeeded') => ({
+    id: 'job-1',
+    object: 'video_generation',
+    state,
+    model: 'video-model-1',
+    mode: 'text_to_video',
+    prompt: 'a bicycle',
+    duration_seconds: 6,
+    aspect_ratio: '16:9',
+    resolution: '720p',
+    source: 'studio',
+    progress: state === 'pending' ? 0 : 1,
+    error: state === 'failed' ? { code: 'provider_error', message: 'The provider failed.' } : null,
+    output:
+      state === 'succeeded'
+        ? {
+            availability: 'ready',
+            url: 'https://signed.example/video.mp4',
+            expires_at: '2026-10-09T00:15:00.000Z',
+            content_type: 'video/mp4',
+            duration_seconds: 6,
+            file_id: 'file-1',
+          }
+        : null,
+    credits: { reserved: 6, settled: state === 'succeeded' ? 6 : null },
+    created_at: '2026-10-09T00:00:00.000Z',
+    updated_at: '2026-10-09T00:00:01.000Z',
+  });
+
+  it('registers the shared server options in its schema and asks before spending', async () => {
+    const h = await harness();
+    const approval = await generateVideoTool.approval!({ prompt: 'a bicycle' }, h.context);
+    expect(generateVideoTool.schema.parameters.properties).toHaveProperty('inputImageFileId');
+    expect(approval.detail).toMatch(/6s video.*video-model-1/s);
+    expect(approval.detail).toMatch(/spends credits/);
+  });
+
+  it('polls, persists and reports a generated video', async () => {
+    vi.useFakeTimers();
+    const h = await harness();
+    h.client.generateVideo.mockResolvedValue(job('pending'));
+    h.client.getVideoGeneration.mockResolvedValue(job('succeeded'));
+    h.client.fetchGenerated.mockResolvedValue({ bytes: Buffer.from('video'), contentType: 'video/mp4' });
+    const promise = generateVideoTool.run({ prompt: 'a bicycle' }, h.context);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await promise;
+    expect(h.media[0]).toMatchObject({ kind: 'video', mimeType: 'video/mp4', fabFileId: 'file-1' });
+    expect(h.client.generateVideo.mock.calls[0][1]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(result).toMatch(/cannot see the result/);
+    vi.useRealTimers();
+  });
+
+  it('surfaces a terminal server failure without downloading', async () => {
+    const h = await harness();
+    h.client.generateVideo.mockResolvedValue(job('failed'));
+    await expect(generateVideoTool.run({ prompt: 'a bicycle' }, h.context)).rejects.toThrow(/provider failed/);
+    expect(h.client.fetchGenerated).not.toHaveBeenCalled();
   });
 });
 

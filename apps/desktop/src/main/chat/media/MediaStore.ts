@@ -36,6 +36,9 @@ const EXTENSION_BY_MIME: Record<string, string> = {
   'audio/aac': 'aac',
   'audio/flac': 'flac',
   'audio/x-flac': 'flac',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+  'video/quicktime': 'mov',
 };
 
 /** First mime listed for an extension wins, so a stored file reads back as one canonical type. */
@@ -59,6 +62,7 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
  * is a bug in the request, not a picture anyone wants inline.
  */
 export const MAX_MEDIA_BYTES = 24 * 1024 * 1024;
+export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
 export interface StoredMedia {
   /** File name inside the session's media folder, and the last segment of `url`. */
@@ -83,7 +87,7 @@ function normalizeMime(mimeType: string): string {
 }
 
 /**
- * Generated images and audio on disk, one folder per conversation.
+ * Generated images, audio and video on disk, one folder per conversation.
  *
  * Lives beside the session files in userData rather than anywhere the user chose: these bytes
  * are the app's own, they are addressed only through {@link MEDIA_SCHEME}, and a conversation
@@ -98,7 +102,8 @@ export class MediaStore {
     const extension = EXTENSION_BY_MIME[normalized];
     if (!extension) throw new Error(`Cannot display ${mimeType || 'an unknown media type'}.`);
     if (bytes.length === 0) throw new Error('The server returned an empty file.');
-    if (bytes.length > MAX_MEDIA_BYTES) {
+    const maxBytes = normalized.startsWith('video/') ? MAX_VIDEO_BYTES : MAX_MEDIA_BYTES;
+    if (bytes.length > maxBytes) {
       throw new Error(`The file is ${Math.round(bytes.length / 1024 / 1024)}MB, which is too large to display.`);
     }
 

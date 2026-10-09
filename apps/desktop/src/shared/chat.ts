@@ -67,7 +67,7 @@ export interface ChatDiff {
 }
 
 /**
- * A generated image or audio clip, ready for the renderer to load.
+ * Generated media ready for the renderer to load.
  *
  * `url` is always a `b4m-media://` URL served by the main process out of this app's own media
  * folder - never a data URL, and never the backend's URL. The bytes are fetched once in main
@@ -76,7 +76,7 @@ export interface ChatDiff {
  * conversation would mean re-reading them on every session switch.
  */
 export interface ChatMedia {
-  kind: 'image' | 'audio';
+  kind: 'image' | 'audio' | 'video';
   url: string;
   mimeType: string;
   byteLength: number;

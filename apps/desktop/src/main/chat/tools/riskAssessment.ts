@@ -18,6 +18,7 @@ const SPENDS_CREDITS: ReadonlySet<string> = new Set([
   'generate_speech',
   'generate_sound_effect',
   'generate_music',
+  'generate_video',
   'session_spawn',
 ]);
 

@@ -26,6 +26,7 @@ describe('toolsForRequest', () => {
     const declared = names({ roots: ['/tmp'], media: true, host: true, mcp: [mcpSchema] });
     expect(declared).toContain('bash_execute');
     expect(declared).toContain('generate_image');
+    expect(declared).toContain('generate_video');
     expect(declared).toContain('session_spawn');
     expect(declared).toContain('mcp__notion_search');
   });
@@ -69,6 +70,7 @@ describe('toolsForRequest', () => {
     expect(findTool('bash_execute')).toBeDefined();
     expect(findTool('session_spawn')).toBeDefined();
     expect(findTool('generate_image')).toBeDefined();
+    expect(findTool('generate_video')).toBeDefined();
     // The MCP registry is the manager's; a declared MCP schema must not become findable here,
     // or the built-ins-first lookup in ChatService would be resolving MCP tools by accident.
     expect(findTool('mcp__notion_search')).toBeUndefined();

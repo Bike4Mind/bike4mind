@@ -1,11 +1,16 @@
 import axios, { isAxiosError } from 'axios';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
+  ListVideoModelsResponseSchema,
+  VideoGenerationSchema,
   ttsBase64ResponseSchema,
+  type CreateVideoGenerationBody,
   type MusicRequest,
   type SoundEffectsRequest,
   type TTSRequest,
   type TtsBase64Response,
+  type VideoGeneration,
+  type VideoModel,
 } from '@bike4mind/common';
 import type { ChatToolNotice } from '@shared/chat';
 
@@ -144,7 +149,37 @@ export class MediaApiClient {
         contentType: typeof header === 'string' ? header : '',
       };
     } catch (error) {
-      throw toMediaError(error, 'Downloading the generated image');
+      throw toMediaError(error, 'Downloading the generated media');
+    }
+  }
+
+  async listVideoModels(): Promise<VideoModel[]> {
+    try {
+      const body = await this.api.get<unknown>('/api/v1/video-models');
+      return ListVideoModelsResponseSchema.parse(body).models;
+    } catch (error) {
+      throw toMediaError(error, 'Listing video models');
+    }
+  }
+
+  async generateVideo(request: CreateVideoGenerationBody, idempotencyKey: string): Promise<VideoGeneration> {
+    try {
+      const body = await this.api.post<unknown>('/api/v1/video-generations', request, {
+        timeout: TIMEOUT_MS.submit,
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+      return VideoGenerationSchema.parse(body);
+    } catch (error) {
+      throw toMediaError(error, 'Video generation');
+    }
+  }
+
+  async getVideoGeneration(jobId: string): Promise<VideoGeneration> {
+    try {
+      const body = await this.api.get<unknown>(`/api/v1/video-generations/${encodeURIComponent(jobId)}`);
+      return VideoGenerationSchema.parse(body);
+    } catch (error) {
+      throw toMediaError(error, 'Video generation');
     }
   }
 

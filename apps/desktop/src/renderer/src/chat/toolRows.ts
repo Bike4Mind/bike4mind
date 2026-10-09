@@ -225,6 +225,12 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Generated ${n} tracks`,
     active: 'Generating music...',
   },
+  generate_video: {
+    didAlone: 'Generated a video',
+    toAlone: 'generate a video',
+    many: n => `Generated ${n} videos`,
+    active: 'Generating a video...',
+  },
 };
 
 /**

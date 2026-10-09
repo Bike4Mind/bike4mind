@@ -85,6 +85,7 @@ describe('ChatService generation tools', () => {
       'generate_speech',
       'generate_sound_effect',
       'generate_music',
+      'generate_video',
       'ask_user',
       'request_directory',
     ]);

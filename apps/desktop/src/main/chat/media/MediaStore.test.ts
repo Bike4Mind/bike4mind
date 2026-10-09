@@ -2,7 +2,7 @@ import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MAX_MEDIA_BYTES, MediaStore, parseMediaUrl } from './MediaStore';
+import { MAX_MEDIA_BYTES, MAX_VIDEO_BYTES, MediaStore, parseMediaUrl } from './MediaStore';
 
 async function store(): Promise<{ store: MediaStore; base: string }> {
   const base = await mkdtemp(join(tmpdir(), 'b4m-media-'));
@@ -40,6 +40,15 @@ describe('MediaStore', () => {
     await expect(media.save(SESSION, Buffer.from('MZ'), 'application/octet-stream')).rejects.toThrow(/Cannot display/);
     await expect(media.save(SESSION, Buffer.alloc(0), 'image/png')).rejects.toThrow(/empty/);
     await expect(media.save(SESSION, Buffer.alloc(MAX_MEDIA_BYTES + 1), 'image/png')).rejects.toThrow(/too large/);
+  });
+
+  it('keeps the existing image limit while allowing larger video files', async () => {
+    const { store: media } = await store();
+    await expect(media.save(SESSION, Buffer.alloc(MAX_MEDIA_BYTES + 1), 'image/png')).rejects.toThrow(/too large/);
+    await expect(media.save(SESSION, Buffer.alloc(MAX_MEDIA_BYTES + 1), 'video/mp4')).resolves.toMatchObject({
+      mimeType: 'video/mp4',
+    });
+    await expect(media.save(SESSION, Buffer.alloc(MAX_VIDEO_BYTES + 1), 'video/mp4')).rejects.toThrow(/too large/);
   });
 
   // The protocol handler hands these straight through from a URL, so the store is the boundary
