@@ -6,6 +6,7 @@ import { Quest, Session } from '@bike4mind/database';
 import { isImageServeable, MCP_ACTION_REPLACED_ERROR_CODE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@server/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
@@ -116,6 +117,9 @@ const handler = baseApi().post(async (req, res) => {
     logger.info('[Web MCP Confirm] User cancelled action', { questId, tool: pendingAction.tool });
     return res.status(200).json({ success: true, message: 'Action cancelled' });
   }
+
+  // After the cancel branch: cancelling executes nothing, so it stays available with the flag off.
+  await assertMcpServerEnabled();
 
   // Keep in sync with executePendingAction (server/utils/pendingActionExecutor.ts), the Slack
   // executor: same server routing, repo checks, expiry and claim-before-invoke ordering.
@@ -263,6 +267,7 @@ const handler = baseApi().post(async (req, res) => {
     });
 
     let resultData: any = result;
+    const mcpIsError = resultData?.isError === true;
     if (typeof result === 'string') {
       try {
         resultData = JSON.parse(result);
@@ -282,12 +287,16 @@ const handler = baseApi().post(async (req, res) => {
 
     // GitHub returns url/html_url, Jira returns link
     const url = resultData?.url || resultData?.html_url || resultData?.link;
-    const success = !resultData?.error && (url || resultData?.success !== false);
+    const hasError =
+      mcpIsError ||
+      resultData?.error ||
+      (typeof resultData?.message === 'string' && resultData.message.startsWith('Error:'));
+    const success = !hasError && (url || resultData?.success !== false);
 
     logger.info('[Web MCP Confirm] MCP execution result', {
       success,
       url,
-      hasError: !!resultData?.error,
+      hasError: !!hasError,
     });
 
     if (success) {

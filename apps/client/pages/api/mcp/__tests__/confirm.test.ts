@@ -11,6 +11,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   Session: { findById: vi.fn() },
@@ -33,6 +34,8 @@ import { Quest, Session } from '@bike4mind/database';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
+import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
+import { ForbiddenError } from '@server/utils/errors';
 import handler from '../confirm';
 
 const SESSION_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -77,6 +80,16 @@ describe('POST /api/mcp/confirm', () => {
     expect(vi.mocked(claimPendingAction).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
     );
+  });
+
+  it('refuses before claiming or invoking anything while the MCP admin flag is off', async () => {
+    vi.mocked(assertMcpServerEnabled).mockRejectedValueOnce(new ForbiddenError('MCP servers are disabled'));
+
+    await expect(
+      post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
   it('returns 409 and does not invoke the tool when the claim is lost', async () => {

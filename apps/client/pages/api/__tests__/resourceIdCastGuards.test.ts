@@ -131,6 +131,7 @@ vi.mock('@server/security/tokenEncryption', () => ({
   decryptEnvVariables: (v: unknown) => v,
 }));
 vi.mock('@server/utils/mcpEnvValidation', () => ({ assertNoForbiddenMcpEnvKeys: () => undefined }));
+vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: () => Promise.resolve() }));
 vi.mock('@server/utils/telemetryAnalysis', () => ({ DEFAULT_SLOS: {} }));
 vi.mock('@bike4mind/services', () => ({ MODAL_SAFE_DEFAULT_KEY: 'customer' }));
 vi.mock('@server/middlewares/optionalAuth', () => ({ optionalAuth: () => undefined }));

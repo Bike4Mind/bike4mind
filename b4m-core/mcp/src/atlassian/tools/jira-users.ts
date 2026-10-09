@@ -10,6 +10,8 @@ import { getErrorMessage } from '@bike4mind/common';
 import { getJiraApi } from '../client.js';
 import { createJsonResponse, createErrorResponse } from '../helpers/responses.js';
 import { issueKeySchema, userIdentifierSchema } from '../helpers/schemas.js';
+import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
+import { confirmationParams } from '../../shared/schemas.js';
 import {
   JIRA_GET_CURRENT_USER,
   JIRA_SEARCH_USERS,
@@ -17,6 +19,26 @@ import {
   JIRA_ADD_WATCHER,
   JIRA_REMOVE_WATCHER,
 } from '../constants.js';
+
+/** An identifier the write paths send verbatim; anything else (email, name, short id) is searched. */
+function isAccountIdLike(userIdentifier: string): boolean {
+  return !(userIdentifier.includes('@') || userIdentifier.includes(' ') || userIdentifier.length < 16);
+}
+
+/**
+ * Read-only lookup for previews, under the same rule as the write. The resolved accountId is what the
+ * confirm token replays, so Confirm acts on the user the preview showed. A failed lookup yields a bare
+ * preview and the write searches again.
+ */
+async function resolveUserForPreview(userIdentifier: string): Promise<{ accountId?: string; displayName?: string }> {
+  if (isAccountIdLike(userIdentifier)) return { accountId: userIdentifier };
+  try {
+    const [user] = await getJiraApi().searchUsers({ query: userIdentifier, maxResults: 1 });
+    return user ? { accountId: user.accountId, displayName: user.displayName } : {};
+  } catch {
+    return {};
+  }
+}
 
 export function registerJiraUserTools(server: McpServer) {
   // GET CURRENT USER
@@ -83,12 +105,26 @@ export function registerJiraUserTools(server: McpServer) {
     {
       issueKey: issueKeySchema,
       userIdentifier: userIdentifierSchema,
+      ...confirmationParams,
     },
-    async ({ issueKey, userIdentifier }) => {
+    async ({ issueKey, userIdentifier, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        const resolved = await resolveUserForPreview(userIdentifier);
+        return createPreviewResponse(
+          'Preview: Jira Add Watcher',
+          { issueKey, userIdentifier, ...resolved },
+          'watcher',
+          {
+            tool: JIRA_ADD_WATCHER,
+            params: { issueKey, userIdentifier: resolved.accountId ?? userIdentifier },
+          }
+        );
+      }
+
       try {
         let accountId = userIdentifier;
 
-        if (userIdentifier.includes('@') || userIdentifier.includes(' ') || userIdentifier.length < 16) {
+        if (!isAccountIdLike(userIdentifier)) {
           const users = await getJiraApi().searchUsers({ query: userIdentifier, maxResults: 1 });
           if (users.length === 0) {
             return {
@@ -136,12 +172,26 @@ export function registerJiraUserTools(server: McpServer) {
     {
       issueKey: issueKeySchema,
       userIdentifier: userIdentifierSchema,
+      ...confirmationParams,
     },
-    async ({ issueKey, userIdentifier }) => {
+    async ({ issueKey, userIdentifier, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        const resolved = await resolveUserForPreview(userIdentifier);
+        return createPreviewResponse(
+          'Preview: Jira Remove Watcher',
+          { issueKey, userIdentifier, ...resolved },
+          'watcher',
+          {
+            tool: JIRA_REMOVE_WATCHER,
+            params: { issueKey, userIdentifier: resolved.accountId ?? userIdentifier },
+          }
+        );
+      }
+
       try {
         let accountId = userIdentifier;
 
-        if (userIdentifier.includes('@') || userIdentifier.includes(' ') || userIdentifier.length < 16) {
+        if (!isAccountIdLike(userIdentifier)) {
           const users = await getJiraApi().searchUsers({ query: userIdentifier, maxResults: 1 });
           if (users.length === 0) {
             return {
