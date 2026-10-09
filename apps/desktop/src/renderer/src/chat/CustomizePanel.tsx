@@ -92,8 +92,8 @@ function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSumm
 
 function SkillsSettings({ sessionId }: { sessionId: string | null }) {
   const { skills, untrustedProject } = useSkills(sessionId);
-  const customSkills = skills.filter(skill => skill.name.startsWith('my-'));
-  const bike4MindSkills = skills.filter(skill => !skill.name.startsWith('my-'));
+  const userSkills = skills.filter(skill => skill.source === 'global');
+  const projectSkills = skills.filter(skill => skill.source === 'project');
 
   return (
     <Stack spacing={2.5} data-testid="skills-settings">
@@ -102,8 +102,9 @@ function SkillsSettings({ sessionId }: { sessionId: string | null }) {
           Project skills are hidden until this project is trusted.
         </Typography>
       )}
-      <SkillGroup title="Your custom skills" skills={customSkills} empty="No custom skills found for this project." />
-      <SkillGroup title="Bike4Mind skills" skills={bike4MindSkills} empty="No Bike4Mind skills found." />
+      <SkillGroup title="Your skills" skills={userSkills} empty="No skills found in ~/.claude/skills." />
+      <SkillGroup title="Project skills" skills={projectSkills} empty="No trusted project skills found." />
+      <SkillGroup title="Bike4Mind skills" skills={[]} empty="No Bike4Mind account skills loaded." />
     </Stack>
   );
 }
