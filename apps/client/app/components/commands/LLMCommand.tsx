@@ -54,6 +54,11 @@ export type LLMCommandArgs = {
   researchMode?: LLMApiRequestBody['researchMode'];
   /** Suppresses the server's own tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
   skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
+  /**
+   * Suppresses the instant ack for this turn. Set for tool-directed launches: the ack model
+   * runs with no tools, so given a prompt that orders a tool call it fakes one as text.
+   */
+  skipRapidReply?: boolean;
   imageConfig?: GenerateImageToolCall;
   audioConfig?: AudioGenerationToolCall;
   deepResearchConfig?: {
@@ -131,6 +136,7 @@ export async function handleLLMCommand(
       questMaster,
       researchMode,
       skipAutoOffers,
+      skipRapidReply,
       imageConfig,
       audioConfig,
       deepResearchConfig,
@@ -185,6 +191,7 @@ export async function handleLLMCommand(
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
       skipAutoOffers: _omitSkipAutoOffers,
+      skipRapidReply: _omitSkipRapidReply,
       imageConfig: _omitImageConfig,
       audioConfig: _omitAudioConfig,
       agentMode: _omitAgentMode,
@@ -292,7 +299,7 @@ export async function handleLLMCommand(
 
       // Fire rapid reply if it's an opti-surface session, complex, or has files. `fabFileIds`
       // is built from `workBenchFiles`, so the workbench check covers the file case.
-      if (isOptiSession || queryComplexity === 'complex' || workBenchFiles.length > 0) {
+      if (!skipRapidReply && (isOptiSession || queryComplexity === 'complex' || workBenchFiles.length > 0)) {
         perfLogger.log(
           `🚀 [RapidReply] Firing rapid reply request (complexity: ${queryComplexity}, opti: ${isOptiSession}, questId: ${questId || 'none'})`
         );
@@ -321,7 +328,9 @@ export async function handleLLMCommand(
           })
           .finally(() => releaseBlank?.());
       } else {
-        perfLogger.log(`🚀 [RapidReply] Skipped (complexity: ${queryComplexity}, no files)`);
+        perfLogger.log(
+          `\u{1F680} [RapidReply] Skipped (complexity: ${queryComplexity}, opti: ${isOptiSession}, files: ${workBenchFiles.length}, skipRapidReply: ${!!skipRapidReply})`
+        );
       }
 
       const { data } = await api.post<
