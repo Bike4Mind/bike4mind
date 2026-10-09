@@ -329,7 +329,7 @@ export async function handleLLMCommand(
           .finally(() => releaseBlank?.());
       } else {
         perfLogger.log(
-          `🚀 [RapidReply] Skipped (complexity: ${queryComplexity}, files: ${workBenchFiles.length}, skipRapidReply: ${!!skipRapidReply})`
+          `\u{1F680} [RapidReply] Skipped (complexity: ${queryComplexity}, opti: ${isOptiSession}, files: ${workBenchFiles.length}, skipRapidReply: ${!!skipRapidReply})`
         );
       }
 
