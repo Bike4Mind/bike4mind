@@ -78,6 +78,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
 
     try {
       const startTime = Date.now();
+      const endpointPath = resolveRouteTemplate(req);
 
       const validation = await userApiKeyService.validateUserApiKey(apiKey, {
         db: {
@@ -133,7 +134,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
           heldScopes: validation.scopes,
           requiredScopes,
           alsoRequiredScopes,
-          endpoint: resolveRouteTemplate(req),
+          endpoint: endpointPath,
         };
         if (gate.outcome === 'stagedAllow') {
           req.logger?.warn('API key scope check missed but staged - allowing', context);
@@ -153,7 +154,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
           keyHash: hashApiKeyForLogging(apiKey),
           keyId: validation.keyId,
           userId: validation.userId,
-          endpoint: resolveRouteTemplate(req),
+          endpoint: endpointPath,
           blockReasons,
         });
       }
@@ -197,7 +198,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
           metadata: {
             keyId: validation.keyId!,
             keyPrefix: hashApiKeyForLogging(apiKey), // Hash instead of prefix for security
-            endpoint: resolveRouteTemplate(req),
+            endpoint: endpointPath,
             method: req.method,
             responseTime,
             statusCode: 200, // Will be updated by response middleware if needed
@@ -209,8 +210,6 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
       });
 
       // Store API key info for detailed logging after response
-      const endpointPath = resolveRouteTemplate(req);
-
       const userId = validation.userId ?? user?.id;
       if (!userId) {
         throw new UnauthorizedError('API key validation missing user id');
