@@ -46,6 +46,16 @@ export interface PremiumRouteDescriptor {
    */
   edgeToEdge?: boolean;
   /**
+   * STRUCTURAL field, meaningful only with `appShell: true`. A registered workspace id (see
+   * `WORKSPACE_SURFACES` in @bike4mind/common): the notebook sidebar on this route draws that
+   * workspace's conversation list - the `notebookSidenavExport` component - in place of the default
+   * notebook list, as it does on the workspace's own route. Omitted -> the default list. An id this
+   * repo does not register is inert. Matched against the route's `path`, where a `$param` segment
+   * stands for any one segment. `partitionPremiumRoutes` throws when it is set without `appShell`,
+   * since only the notebook layout has a sidebar to draw the list in.
+   */
+  hostsWorkspace?: string;
+  /**
    * STRUCTURAL field, like `appShell`. `true` -> the route renders for signed-out
    * visitors: parented under the root route with no `RestrictedPage`, no
    * `ProviderBundle` and no consent guard, the way `/login` and `/verify-email`
@@ -105,10 +115,11 @@ export interface PremiumNavDescriptor {
 
 /**
  * A premium package's full-surface notebook sidenav - a component that REPLACES
- * the default notebook sidenav body on the package's own appShell route (e.g.
- * OptiHashi's `/opti` surface). Contributed via `b4mContributions.notebookSidenavExport`
- * (a module default-exporting the component) and consumed by the Notebook layout's
- * `Sidenav` through the generated `premiumNotebookSidenav.generated.ts`.
+ * the default notebook sidenav body on its workspace's own route, and on any app-shell
+ * route that declares `hostsWorkspace` (see `hostedWorkspaceAt`). Contributed via
+ * `b4mContributions.notebookSidenavExport` (a module default-exporting the component)
+ * and consumed by the Notebook layout's `Sidenav` through the generated
+ * `premiumNotebookSidenav.generated.ts`.
  *
  * `null` is the absent (open-core fork) form: the same annotate-both-forms rule as
  * routes/nav keeps the consumer's type stable whether or not an overlay is installed,
