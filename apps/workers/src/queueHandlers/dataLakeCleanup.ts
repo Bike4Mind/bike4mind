@@ -72,7 +72,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             searchIndex: FabFileChunkSearchIndex,
           })
         : undefined,
-      // Crypto-shred the lake's memory profile as part of the purge (#1440) - destroy the DEK and mark
+      // Crypto-shred the lake's memory profile as part of the purge - destroy the DEK and mark
       // the ledger shredded, so a deleted lake leaves no readable belief ledger behind.
       //
       // LOG IT. This is a data-retention operation, and until it logged, a successful shred and a
