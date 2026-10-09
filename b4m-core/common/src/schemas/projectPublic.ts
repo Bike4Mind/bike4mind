@@ -61,3 +61,12 @@ export const CreateProjectRequestSchema = z
   })
   .strict();
 export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
+
+/** Strict for the same reason as the create body. Omitted fields are left unchanged. */
+export const UpdateProjectRequestSchema = z
+  .object({
+    name: z.string().min(1).optional().describe('Unique among your live projects.'),
+    description: z.string().min(1).optional(),
+  })
+  .strict();
+export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;

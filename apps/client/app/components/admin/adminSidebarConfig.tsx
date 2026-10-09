@@ -36,6 +36,7 @@ import MenuBookIcon from '@mui/icons-material/MenuBook';
 import HandshakeIcon from '@mui/icons-material/Handshake';
 import EventBusyIcon from '@mui/icons-material/EventBusy';
 import SummarizeIcon from '@mui/icons-material/Summarize';
+import VpnKeyIcon from '@mui/icons-material/VpnKey';
 
 export enum AdminTab {
   Users = 0,
@@ -99,6 +100,7 @@ export enum AdminTab {
   RetrievalRate = 60,
   ApiKeyScopePreflight = 61,
   ReleaseNotes = 62,
+  OAuthClients = 63,
 }
 
 /**
@@ -180,6 +182,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: SecurityIcon, tab: AdminTab.SecretsRotation, label: 'Secrets Rotation' },
       { Icon: SecurityIcon, tab: AdminTab.SystemSecrets, label: 'System Secrets' },
       { Icon: AccountBoxIcon, tab: AdminTab.IdentityProviders, label: 'Identity Providers' },
+      { Icon: VpnKeyIcon, tab: AdminTab.OAuthClients, label: 'OAuth Clients', testid: 'admin-oauth-clients-btn' },
     ],
   },
   {

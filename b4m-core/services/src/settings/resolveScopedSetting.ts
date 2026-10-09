@@ -3,6 +3,7 @@ import {
   IAdminSettingsRepository,
   IScopedSetting,
   IScopedSettingsRepository,
+  isBlankSettingValue,
   ScopeRef,
   SettingKey,
   SettingScope,
@@ -48,6 +49,15 @@ export interface ResolvedSetting<T> {
    * exists to prevent.
    */
   ignoredOverrides?: IgnoredOverride[];
+}
+
+/**
+ * A {@link ResolvedSetting} plus whether any rung actually stored a value for it. `stored: false` means
+ * `value` is the coded default - the only way to tell "never set" from "set to exactly the default",
+ * which both read paths otherwise return identically.
+ */
+export interface ScopedSettingEntry<T> extends ResolvedSetting<T> {
+  stored: boolean;
 }
 
 /** The repositories the resolver reads. `scopedSettings` is optional: absent means platform-only. */
@@ -199,8 +209,8 @@ async function resolveAll<K extends SettingKey>(
   scope: SettingScope,
   db: ScopedSettingsDb,
   logger?: Logger
-): Promise<Map<K, ResolvedSetting<SettingValue<K>>>> {
-  const result = new Map<K, ResolvedSetting<SettingValue<K>>>();
+): Promise<Map<K, ScopedSettingEntry<SettingValue<K>>>> {
+  const result = new Map<K, ScopedSettingEntry<SettingValue<K>>>();
   if (keys.length === 0) return result;
 
   // 1. Platform base for every key (existing cached accessor - a warm cache costs no round-trip).
@@ -272,10 +282,15 @@ async function resolveAll<K extends SettingKey>(
     if (source !== SettingScopeLevel.Platform) {
       logger?.debug?.(`[scopedSettings] '${key}' resolved from ${source} scope`);
     }
+    // An unparseable platform row resolves to the coded default above, so it counts as not stored. So
+    // does a blank one: a number schema's preprocess turns '' into the prefaulted default, not a choice.
+    const raw = platformRecord[key];
+    const stored = !!won || (!isBlankSettingValue(raw) && def.schema.safeParse(raw).success);
     result.set(key, {
       value: value as SettingValue<K>,
       source,
       ...(ignored.length > 0 ? { ignoredOverrides: ignored } : {}),
+      stored,
     });
   }
 
@@ -292,9 +307,25 @@ export async function resolveScopedSettingValues<K extends SettingKey>(
   db: ScopedSettingsDb,
   opts?: { logger?: Logger }
 ): Promise<{ [P in K]: SettingValue<P> }> {
-  const resolved = await resolveAll(keys, scope, db, opts?.logger);
+  const entries = await resolveScopedSettingEntries(keys, scope, db, opts);
   const out = {} as { [P in K]: SettingValue<P> };
-  for (const key of keys) out[key] = resolved.get(key)!.value;
+  for (const key of keys) out[key] = entries[key].value;
+  return out;
+}
+
+/**
+ * {@link resolveScopedSettingValues} with each key's full resolution, including `stored` - for a
+ * consumer that must treat an unset setting differently from one explicitly set to its default.
+ */
+export async function resolveScopedSettingEntries<K extends SettingKey>(
+  keys: readonly K[],
+  scope: SettingScope,
+  db: ScopedSettingsDb,
+  opts?: { logger?: Logger }
+): Promise<{ [P in K]: ScopedSettingEntry<SettingValue<P>> }> {
+  const resolved = await resolveAll(keys, scope, db, opts?.logger);
+  const out = {} as { [P in K]: ScopedSettingEntry<SettingValue<P>> };
+  for (const key of keys) out[key] = resolved.get(key)! as ScopedSettingEntry<SettingValue<typeof key>>;
   return out;
 }
 
@@ -306,7 +337,8 @@ export async function resolveScopedSetting<K extends SettingKey>(
   opts?: { logger?: Logger }
 ): Promise<ResolvedSetting<SettingValue<K>>> {
   const resolved = await resolveAll([key], scope, db, opts?.logger);
-  return resolved.get(key)!;
+  const { stored, ...setting } = resolved.get(key)!;
+  return setting;
 }
 
 /**

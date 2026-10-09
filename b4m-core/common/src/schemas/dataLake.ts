@@ -156,7 +156,7 @@ export const UpdateDataLakeRequestInput = z.object({
   // Who fills this lake (see IDataLake.origin). Flipping to 'curated' makes unattended ingest
   // refuse; flipping to 'connector-fed' is the consent a Drive connect door requires. Omitting it
   // leaves it unchanged (Mongo $set strips undefined). Also on the CREATE schema above, where the
-  // wizard declares connector-fed when the user already picked a Drive folder.
+  // wizard declares connector-fed from the selected connector source.
   origin: z.enum(DATA_LAKE_ORIGINS).optional(),
   // NOTE: status is intentionally NOT updatable here. Lifecycle transitions
   // (archive/unarchive/delete/cleanup) go through their dedicated endpoints so the

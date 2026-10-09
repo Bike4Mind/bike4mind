@@ -51,6 +51,8 @@ export type CommandArgExtra = {
   researchMode?: LLMApiRequestBody['researchMode'];
   /** Suppresses the server-side tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
   skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
+  /** Suppresses the instant ack for this turn. See LLMCommandArgs.skipRapidReply. */
+  skipRapidReply?: boolean;
   /** Agent-mode routing provenance, forwarded to the `/llm` handler's payload. See LLMCommandArgs.agentMode. */
   agentMode?: LLMApiRequestBody['agentMode'];
   deepResearchConfig?: {

@@ -1,5 +1,6 @@
 import {
   SettingKeySchema,
+  isBlankSettingValue,
   SreAgentConfig,
   SRE_SECRET_PLACEHOLDER,
   isMaskedSensitiveSettingValue,
@@ -31,6 +32,16 @@ const handler = baseApi().put(
     if (!req.ability.can('update', AdminSettings)) throw new NotFoundError('Permission denied');
 
     const key = SettingKeySchema.parse(req.body.key);
+
+    // Delete, not store the default, so the setting reads as unset again. hardDelete: the upsert below
+    // would match a soft-deleted tombstone without reviving it (softDeletePlugin, db-core/src/utils/mongo.ts).
+    if (settingsMap[key].clearDeletesRow && isBlankSettingValue(req.body.value)) {
+      await AdminSettings.deleteOne({ settingName: key }, { hardDelete: true });
+      invalidateSettingsCache(key);
+      // null, not the declared default: the client renders that as "per embedding space", so an
+      // admin can tell a cleared setting apart from one pinned to the default's own number.
+      return res.json({ settingName: key, settingValue: null });
+    }
 
     let value = settingsMap[key].schema.parse(req.body.value);
 

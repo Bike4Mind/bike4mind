@@ -384,12 +384,15 @@ const AttachFileButton = ({
             >
               {ATTACH_SCOPE_MODES.map(mode => {
                 const selected = attachScopeMode === mode;
+                // 44px is the minimum touch target; coarse pointers only, so the desktop pill
+                // keeps its compact height (WCAG 2.5.5).
                 return (
                   <Chip
                     key={mode}
                     variant={selected ? 'solid' : 'outlined'}
                     color={selected ? 'primary' : 'neutral'}
                     size="sm"
+                    sx={{ '@media (pointer: coarse)': { minHeight: 44 } }}
                   >
                     {/* disableIcon drops the dot so the pill fill IS the selection cue; overlay
                         makes the focus ring follow the pill instead of boxing the whole row. It is

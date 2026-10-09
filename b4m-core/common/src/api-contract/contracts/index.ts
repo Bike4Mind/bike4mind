@@ -37,7 +37,13 @@ import {
   listVideoModelsContract,
 } from './videoGeneration.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
-import { listProjectsContract, getProjectContract, createProjectContract } from './projects.contract';
+import {
+  listProjectsContract,
+  getProjectContract,
+  createProjectContract,
+  updateProjectContract,
+  deleteProjectContract,
+} from './projects.contract';
 import {
   listAgentsContract,
   getAgentContract,
@@ -94,6 +100,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listProjectsContract,
   getProjectContract,
   createProjectContract,
+  updateProjectContract,
+  deleteProjectContract,
   listAgentsContract,
   getAgentContract,
   createAgentContract,

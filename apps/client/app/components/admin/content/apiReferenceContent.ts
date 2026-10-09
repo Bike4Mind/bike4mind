@@ -115,6 +115,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions[/{id}]\`
 - Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`
 - Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
+- Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`
 - Files and data lakes: \`/api/v1/files\`, \`/api/v1/files/{id}\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
@@ -231,58 +232,13 @@ still hand-written.
 
 ### Projects
 
-Projects organize files, sessions, and team members into workspaces.
+Project create, list, get, update and delete are covered by the generated docs (see above). The routes below are
+still hand-written.
 
-**Required API-key scope:** \`projects:read\` (or \`projects:write\`) to list and read,
-\`projects:write\` to create.
-
-#### List, Get, and Create Projects
-
-\`\`\`
-GET  /api/v1/projects
-GET  /api/v1/projects/[id]
-POST /api/v1/projects
-\`\`\`
-
-> **These endpoints are generated from their contracts.** The full request/response
-> reference - every field, its type, and validation rules - lives in the
-> [generated API docs](/api/v1/docs) under \`listProjects\`, \`getProject\`, and
-> \`createProject\`, derived from the same objects the handlers validate with.
->
-> The list is cursor-paginated: pass \`next_cursor\` back as \`cursor\` until it is
-> \`null\`. A project's \`file_ids\` and \`session_ids\` are shared with it, so anyone the
-> project is shared with can read them.
-
-#### List Projects (existing app route)
-
-\`\`\`
-GET /api/projects
-\`\`\`
-
-**Query Parameters:**
-
-| Param | Type | Description |
-|-------|------|-------------|
-| search | string | Match against project name and description |
-| pagination[page] | number | Page number (default 1) |
-| pagination[limit] | number | Items per page (default 10) |
-| orderBy[by] | string | \`createdAt\` or \`updatedAt\` (default \`createdAt\`) |
-| orderBy[direction] | string | \`asc\` or \`desc\` (default \`desc\`) |
-
-The response is \`{ data, hasMore, total }\`, where \`data\` is the page of projects.
-
-#### Project Endpoints Summary
+**Required API-key scope:** \`projects:read\` (or \`projects:write\`) for the GET routes, \`projects:write\` for the rest.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | /api/v1/projects | List projects (cursor-paginated) |
-| POST | /api/v1/projects | Create a project |
-| GET | /api/v1/projects/[id] | Get project details |
-| GET | /api/projects | List projects (page-based pagination) |
-| POST | /api/projects | Create a project |
-| GET | /api/projects/[id] | Get project details |
-| PUT | /api/projects/[id] | Update project |
-| DELETE | /api/projects/[id] | Delete project |
 | GET | /api/projects/[id]/files | List project files |
 | GET | /api/projects/[id]/sessions | List project sessions |
 | DELETE | /api/projects/[id]/members | Remove a project member (send \`userId\` in the body), or leave the project when omitted |

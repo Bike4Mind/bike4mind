@@ -32,6 +32,7 @@ import {
   ISessionFavoriteItem,
   FavoriteDocumentType,
   SessionListFilters,
+  normalizeSurfaceId,
 } from '@bike4mind/common';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
@@ -107,17 +108,29 @@ const filtersFromQueryKey = (queryKey: readonly unknown[]): SessionListFilters |
   queryKey.find((part): part is SessionListFilters => typeof part === 'object' && part !== null);
 
 /**
- * updateAllQueryData scoped to the 'sessions' collection, with sessionMatchesListFilters checked
- * before the create-path insert. Every create-capable 'sessions' cache write (create, rename, the
- * `session.created` realtime fan-out, ...) should go through this instead of calling
- * updateAllQueryData directly: without the filter check, a session that doesn't match a given
- * cached list's Content/Origin filter (sidenavFilters.ts) would still get spliced into that list's
- * first page the moment any write touches it - silently undoing the filter the user chose (e.g. an
- * API-created session appearing while viewing "Hide API"). Routing every create-capable write
- * through this one gate means a future call site can't reintroduce that gap by omission; a caller
- * that only updates already-cached entries passes no keysAllowedToCreate and may use
- * updateAllQueryData directly. writeCopiedSession (clone/fork/snip) is a thin wrapper over it that
- * only adds the surface refetch.
+ * True unless `queryKey` is a `['sessions', 'own', search, surface, ...]` list scoped to a different
+ * surface than the session's ('' = the main list). Mirrors the surface scoping in the server's
+ * ownSessionListQuery (packages/database/src/models/auth/SessionModel.ts). Other key shapes carry
+ * no surface slot.
+ */
+const sessionMatchesKeySurface = (queryKey: readonly unknown[], session: Pick<ISessionDocument, 'surface'>) => {
+  if (queryKey[1] !== 'own') return true;
+  const slot = typeof queryKey[3] === 'string' ? queryKey[3] : undefined;
+  return normalizeSurfaceId(slot) === normalizeSurfaceId(session.surface);
+};
+
+/**
+ * updateAllQueryData scoped to the 'sessions' collection, with sessionMatchesListFilters and
+ * sessionMatchesKeySurface checked before the create-path insert. Every create-capable 'sessions'
+ * cache write (create, rename, the `session.created` realtime fan-out, clone/fork/snip, ...) should
+ * go through this instead of calling updateAllQueryData directly: without the filter check, a
+ * session that doesn't match a given cached list's Content/Origin filter (sidenavFilters.ts) would
+ * still get spliced into that list's first page the moment any write touches it - silently undoing
+ * the filter the user chose (e.g. an API-created session appearing while viewing "Hide API").
+ * Likewise a product-surface session must not land in the main list, nor a main-list session in a
+ * surface list. Routing every create-capable write through this one gate means a future call site
+ * can't reintroduce that gap by omission; a caller that only updates already-cached entries passes
+ * no keysAllowedToCreate and may use updateAllQueryData directly.
  */
 export function updateSessionsQueryData(
   queryClient: QueryClient,
@@ -127,7 +140,8 @@ export function updateSessionsQueryData(
 ) {
   updateAllQueryData(queryClient, 'sessions', type, session, {
     keysAllowedToCreate,
-    canCreateAt: (queryKey, data) => sessionMatchesListFilters(data, filtersFromQueryKey(queryKey)),
+    canCreateAt: (queryKey, data) =>
+      sessionMatchesKeySurface(queryKey, data) && sessionMatchesListFilters(data, filtersFromQueryKey(queryKey)),
   });
 }
 
@@ -507,17 +521,6 @@ export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocu
   });
 }
 
-/**
- * Writes a freshly copied session into the cached lists via updateSessionsQueryData. That gate
- * checks list filters but not surface, so it inserts into `['sessions', 'own', ...]` lists of
- * every surface; a copy that lives in a product surface also refetches the lists to let the
- * server's surface filter place it.
- */
-const writeCopiedSession = (queryClient: QueryClient, session: ISessionDocument) => {
-  updateSessionsQueryData(queryClient, 'write', session);
-  if (session.surface) queryClient.invalidateQueries({ queryKey: ['sessions', 'own'] });
-};
-
 /** A session id clones in place; `targetSurface` (null = the main list) clones into another workspace. */
 export type CloneSessionInput = string | { sessionId: string; targetSurface?: string | null };
 
@@ -528,7 +531,7 @@ export const useCloneSession = () => {
     mutationFn: async (input: CloneSessionInput) => {
       const { sessionId, targetSurface } = typeof input === 'string' ? { sessionId: input } : input;
       const result = await cloneSession(sessionId, targetSurface);
-      writeCopiedSession(queryClient, result);
+      updateSessionsQueryData(queryClient, 'write', result);
       return result;
     },
     onSuccess: result => {
@@ -844,7 +847,7 @@ export const useForkSession = () => {
       return result;
     },
     onSuccess: result => {
-      writeCopiedSession(queryClient, result);
+      updateSessionsQueryData(queryClient, 'write', result);
       toast.success('Session forked successfully');
     },
     onError: () => {
@@ -888,7 +891,7 @@ export const useSnipSession = () => {
       return result;
     },
     onSuccess: result => {
-      writeCopiedSession(queryClient, result);
+      updateSessionsQueryData(queryClient, 'write', result);
       toast.success('Session snipped successfully');
     },
     onError: () => {

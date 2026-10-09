@@ -1423,6 +1423,76 @@ describe('useCreateLakeFromDrive (#1916)', () => {
 });
 
 /**
+ * The source card picked on the first screen IS the lake's `origin` declaration (#3817). It used to
+ * be inferred from a parked Drive folder, which made a Drive lake created before the folder was
+ * picked curated - and a curated lake is refused by the very bind door that lake exists for
+ * (acceptsConnectorContent).
+ */
+describe('createWizardLake - origin declared by the chosen source', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPut.mockReset().mockResolvedValue({ data: { success: true } });
+    apiDelete.mockReset().mockResolvedValue({ data: { success: true } });
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    toastMock.error.mockClear();
+    toastMock.success.mockClear();
+    toastMock.warning.mockClear();
+    installApiPostRouter();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  const createdLakeBody = () => postCall('/api/data-lakes')?.[1] as Record<string, unknown>;
+
+  const runCreate = async () => {
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  };
+
+  it('declares an upload lake curated', async () => {
+    seedWizard({ names: ['a.txt'] });
+    useDataLakeWizardStore.setState({ createSource: 'upload' });
+
+    await runCreate();
+
+    expect(createdLakeBody()).toMatchObject({ origin: 'curated' });
+  });
+
+  it('declares a Drive lake connector-fed even before a folder is picked', async () => {
+    seedWizard({ names: ['a.txt'] });
+    useDataLakeWizardStore.setState({ createSource: 'googleDrive', pendingDriveFolder: null });
+
+    await runCreate();
+
+    expect(createdLakeBody()).toMatchObject({ origin: 'connector-fed' });
+  });
+
+  it('still declares connector-fed on the fileless Drive commit', async () => {
+    seedWizard({ names: [] });
+    useDataLakeWizardStore.setState({
+      createSource: 'googleDrive',
+      allFiles: [],
+      pendingDriveFolder: { driveFolderId: 'FOLDER1', folderName: 'Contracts' },
+    });
+
+    const { result } = mountHook(useCreateLakeFromDrive);
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(createdLakeBody()).toMatchObject({ origin: 'connector-fed' });
+  });
+
+  it('sends no origin in append mode, where the existing lake already declares its own', async () => {
+    seedWizard({ names: ['a.txt'], targetLake: { id: 'existing', slug: 'existing' } });
+
+    await runCreate();
+
+    // Append creates no lake at all, so there is nothing to declare.
+    expect(postCall('/api/data-lakes')).toBeUndefined();
+  });
+});
+
+/**
  * Files AND a Drive folder picked in the same create: the batch owns the lake's creation, and the
  * Drive folder is bound afterwards - late enough that the total-failure rollback can't strand it.
  */

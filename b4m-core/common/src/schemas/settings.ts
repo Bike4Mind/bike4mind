@@ -852,6 +852,23 @@ interface BaseSetting {
    * adding this field changes no existing consumer.
    */
   scope?: SettingScopeConfig;
+  /**
+   * A blank save DELETES the platform row instead of storing the declared default, so the setting
+   * reads as unset again (see `isBlankSettingValue` and apps/client/pages/api/settings/update.ts).
+   * Only for a setting whose consumer treats unset differently from its default's own number.
+   */
+  clearDeletesRow?: boolean;
+  /** What a `clearDeletesRow` setting resolves to while unset, shown by the admin UI in place of a value. */
+  unsetLabel?: string;
+}
+
+/**
+ * "No stored choice", for a setting of ANY type (the scoped resolver applies this to every key, not
+ * just numbers): a missing, null or whitespace-only stored value. A number setting's schema rewrites
+ * one into the declared default, which is exactly why a stored default must not read as a choice of it.
+ */
+export function isBlankSettingValue(raw: unknown): boolean {
+  return raw == null || (typeof raw === 'string' && raw.trim() === '');
 }
 
 function makeStringSetting(
@@ -988,7 +1005,7 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
     // substitutes only on the raw value it receives, so chaining it outside would feed the
     // rewritten undefined into z.coerce.number() and fail with a NaN instead of defaulting.
     schema: z.preprocess(
-      val => (val === null || (typeof val === 'string' && val.trim() === '') ? undefined : val),
+      val => (isBlankSettingValue(val) ? undefined : val),
       numberSchema.prefault(config.defaultValue ?? 0)
     ),
   };
@@ -3828,22 +3845,26 @@ export const settingsMap = {
     description:
       'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
       'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
-      `gate - the relative floor above does the ranking. LEAVE IT AT ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} UNLESS YOU HAVE MEASURED ` +
-      'YOUR OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so ' +
-      `while this reads ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} the server ignores it and applies the floor measured for whichever model ` +
-      `your documents are actually embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
+      'gate - the relative floor above does the ranking. LEAVE IT UNSET UNLESS YOU HAVE MEASURED YOUR ' +
+      'OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so while ' +
+      'unset the server applies the floor measured for whichever model your documents are actually ' +
+      `embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
       'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
-      'applies). Set any other value and the server uses exactly that, in every space, which is ' +
-      'yours to get right: 75 against text-embedding-3-small sits above that band entirely and ' +
-      'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
-      'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
-      'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
-      'embedding model.',
+      `applies). While unset the field is blank; ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} is the ada-002 value. Any value you save, ` +
+      `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} included, is used exactly, in every space, which is yours to get right: 75 ` +
+      'against text-embedding-3-small sits above that band entirely and returns nothing on every ' +
+      'query. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
+      'inside your band decides a lot - on one measured corpus 74 / 75 / 76 swung recall 91% / 65% / ' +
+      '40% - and the same 75 that is a cliff on one lake rejects nothing at all on another. ' +
+      'Re-measure after changing the embedding model.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,
     // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+    // Unset resolves per embedding space; a stored value, 75 included, is honored in every space.
+    clearDeletesRow: true,
+    unsetLabel: 'per embedding space',
   }),
   forcedRetrievalSpreadFloorPct: makeNumberSetting({
     key: 'forcedRetrievalSpreadFloorPct',
@@ -4984,7 +5005,7 @@ export const SEARCH_BUDGET_SETTING_KEYS = [
  * Every setting the forced-retrieval merge resolves, in one list - the sibling of
  * {@link SEARCH_BUDGET_SETTING_KEYS} for the other read that resolves settings for one retrieval
  * turn. `readForcedRetrievalSettings` (ChatCompletionFeatures.ts, b4m-core/services) resolves these
- * through `resolveScopedSettingValues`, and the guard in settings.test.ts loops this list to assert
+ * through `resolveScopedSettingEntries`, and the guard in settings.test.ts loops this list to assert
  * none of them declares a Lake rung: one turn scans an uncapped SET of lakes into a single pool, so
  * no single lake can key a narrower rung (#2572).
  *
