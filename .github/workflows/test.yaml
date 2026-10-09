@@ -10,6 +10,7 @@ on:
       - 'b4m-core/**'
       - 'packages/cli/**'
       - 'packages/sdk/**'
+      - '.github/workflows/test.yaml'
       # Bucket-route / SPA-route collision guard lives in b4m-core/infra but parses
       # these files, so changes to them must re-run the suite (see issue #9133).
       - 'infra/**'
