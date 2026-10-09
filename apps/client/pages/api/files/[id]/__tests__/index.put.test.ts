@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { FileEvents } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
+import { logEventSafe } from '@server/utils/analyticsLog';
 
 const h = vi.hoisted(() => ({
   findUpdateAccessById: vi.fn(),
@@ -40,7 +42,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(), getMetadata: vi.fn() }),
 }));
@@ -259,10 +261,16 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
 
   it('does not change tags and never looks a lake up when tags is omitted (a rename)', async () => {
     const previousTags = [{ name: 'notes', strength: 1 }];
-    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags }));
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags, filePath: 'key.txt' }));
     const { res } = makeRes();
 
     await run({ fileName: 'renamed.txt' }, res);
+
+    expect(logEventSafe).toHaveBeenCalledWith(
+      expect.objectContaining({ type: FileEvents.UPDATE_FILE, metadata: { fileId: FILE_ID, fileContent: 'key.txt' } }),
+      expect.anything(),
+      expect.anything()
+    );
 
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
     // The route always sends the `tags` key (see update.ts's `!== undefined` guard comment), so
@@ -284,8 +292,20 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     // look the lake up, asserted below) but never the reconciler, so no stamp is minted and
     // `tags` stays untouched (explicit undefined, same as the omitted-tags rename case above).
     expect(h.findByDatalakeTag).toHaveBeenCalled();
-    const persisted = h.update.mock.calls[0][0] as { tags?: { name: string }[] };
+    const persisted = h.update.mock.calls[0][0] as { tags?: { name: string }[]; primaryTag?: string | null };
     expect(persisted.tags).toBeUndefined();
+    expect(persisted.primaryTag).toBe(META);
+  });
+
+  // null is "unset the primary tag"; coalescing it to undefined would drop it from the $set.
+  it('persists primaryTag: null as null, not undefined', async () => {
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: [], primaryTag: META }));
+    const { res } = makeRes();
+
+    await run({ primaryTag: null }, res);
+
+    const persisted = h.update.mock.calls[0][0] as { primaryTag?: string | null };
+    expect(persisted).toHaveProperty('primaryTag', null);
   });
 
   it('404s a malformed id before the lake write gate or any persistence runs', async () => {
