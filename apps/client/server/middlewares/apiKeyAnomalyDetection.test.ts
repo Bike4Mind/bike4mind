@@ -41,4 +41,19 @@ describe('apiKeyAnomalyDetection', () => {
       undefined
     );
   });
+  it('passes a percent-decoded raw path so an encoded prefix still reads as sensitive', async () => {
+    const res = { once: vi.fn() };
+    const req = {
+      apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] },
+      _apiKeyUsageInfo: { userId: 'u1', ipAddress: '1.2.3.4', endpoint: '/api/%61dmin/foo' },
+      originalUrl: '/api/%61dmin/foo',
+    };
+    vi.mocked(ApiKeyAlertService.detectAnomalies).mockClear();
+    await apiKeyAnomalyDetection()(req as never, res as never, vi.fn());
+    res.once.mock.calls[0][1]();
+    expect(ApiKeyAlertService.detectAnomalies).toHaveBeenCalledWith(
+      expect.objectContaining({ pathname: '/api/admin/foo' }),
+      undefined
+    );
+  });
 });
