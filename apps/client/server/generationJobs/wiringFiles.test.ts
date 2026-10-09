@@ -6,12 +6,15 @@ const mocks = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   download: vi.fn(),
   upload: vi.fn(),
+  generatedDownload: vi.fn(),
+  findSessionIdsByImage: vi.fn(),
+  findAllByIds: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'https://ws.example.test' } } }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ download: mocks.download, upload: mocks.upload, getSignedUrl: vi.fn() }),
-  getGeneratedImageStorage: vi.fn(),
+  getGeneratedImageStorage: () => ({ download: mocks.generatedDownload }),
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: vi.fn() }));
 vi.mock('@bike4mind/database', async importOriginal => {
@@ -19,6 +22,8 @@ vi.mock('@bike4mind/database', async importOriginal => {
   return {
     ...actual,
     fabFileRepository: { findByIdAndUserId: mocks.findByIdAndUserId, findOne: mocks.findOne },
+    questRepository: { findSessionIdsByImage: mocks.findSessionIdsByImage },
+    sessionRepository: { findAllByIds: mocks.findAllByIds },
   };
 });
 vi.mock('@bike4mind/services', async importOriginal => {
@@ -37,7 +42,7 @@ describe('loadInputImage', () => {
   it('returns the bytes and mime type of the owner image', async () => {
     mocks.findByIdAndUserId.mockResolvedValue(image);
     mocks.download.mockResolvedValue(Buffer.from('png'));
-    await expect(loadInputImage('user1', FILE_ID)).resolves.toEqual({
+    await expect(loadInputImage('user1', { kind: 'file', id: FILE_ID })).resolves.toEqual({
       bytes: Buffer.from('png'),
       mimeType: 'image/png',
     });
@@ -45,7 +50,7 @@ describe('loadInputImage', () => {
   });
 
   it('returns null for a malformed id without querying', async () => {
-    await expect(loadInputImage('user1', 'not-an-id')).resolves.toBeNull();
+    await expect(loadInputImage('user1', { kind: 'file', id: 'not-an-id' })).resolves.toBeNull();
     expect(mocks.findByIdAndUserId).not.toHaveBeenCalled();
   });
 
@@ -57,9 +62,49 @@ describe('loadInputImage', () => {
     ['a soft-deleted file', { ...image, deletedAt: new Date() }],
   ])('returns null for %s', async (_label, fabFile) => {
     mocks.findByIdAndUserId.mockResolvedValue(fabFile);
-    await expect(loadInputImage('user1', FILE_ID)).resolves.toBeNull();
+    await expect(loadInputImage('user1', { kind: 'file', id: FILE_ID })).resolves.toBeNull();
     expect(mocks.download).not.toHaveBeenCalled();
   });
+});
+
+describe('loadInputImage for a generated image', () => {
+  const KEY = '86cdc650-43d2-416e-aca6-23ff4fe23081.webp';
+  beforeEach(() => vi.resetAllMocks());
+
+  it('returns the bytes of an owned key with the mime type of its extension', async () => {
+    mocks.findSessionIdsByImage.mockResolvedValue(['s1']);
+    mocks.findAllByIds.mockResolvedValue([{ userId: 'user1' }]);
+    mocks.generatedDownload.mockResolvedValue(Buffer.from('webp'));
+    await expect(loadInputImage('user1', { kind: 'generated', key: KEY })).resolves.toEqual({
+      bytes: Buffer.from('webp'),
+      mimeType: 'image/webp',
+    });
+    expect(mocks.findSessionIdsByImage).toHaveBeenCalledWith(KEY);
+    expect(mocks.generatedDownload).toHaveBeenCalledWith(KEY);
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it("returns null for a key in another user's session", async () => {
+    mocks.findSessionIdsByImage.mockResolvedValue(['s1']);
+    mocks.findAllByIds.mockResolvedValue([{ userId: 'someone-else' }]);
+    await expect(loadInputImage('user1', { kind: 'generated', key: KEY })).resolves.toBeNull();
+    expect(mocks.generatedDownload).not.toHaveBeenCalled();
+  });
+
+  it('returns null for a key no quest references', async () => {
+    mocks.findSessionIdsByImage.mockResolvedValue([]);
+    await expect(loadInputImage('user1', { kind: 'generated', key: KEY })).resolves.toBeNull();
+    expect(mocks.generatedDownload).not.toHaveBeenCalled();
+  });
+
+  it.each(['../x.png', `generated/${KEY}`, '86cdc650-43d2-416e-aca6-23ff4fe23081.mp4', 'f1'])(
+    'returns null for the malformed key %s without querying',
+    async key => {
+      await expect(loadInputImage('user1', { kind: 'generated', key })).resolves.toBeNull();
+      expect(mocks.findSessionIdsByImage).not.toHaveBeenCalled();
+      expect(mocks.generatedDownload).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('saveToFiles', () => {

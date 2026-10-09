@@ -4,12 +4,13 @@
  * The flow:
  * 1. MCP tool returns _confirmToken
  * 2. ChatCompletionProcess saves it to Quest.pendingAction
- * 3. events.ts looks up Quest, passes questId to buildConfirmationButtons
+ * 3. events.ts looks up Quest, passes questId + pendingAction.ts to buildConfirmationButtons
  * 4. Button click triggers interactive.ts which looks up Quest by ID
  */
 
 export {
   buildConfirmationButtons,
+  parseConfirmationButtonValue,
   buildAttachmentDownloadButtons,
   formatPreviewFromParams,
   type SlackBlockKitButton,

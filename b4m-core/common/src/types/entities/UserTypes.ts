@@ -648,6 +648,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * cannot mistake it for a single-user operation.
    */
   removeGroupsFromAllUsers: (groupIds: string[]) => Promise<void>;
+  /** Null `organizationId` on EVERY user pointing at the org (used when the org is deleted). */
+  clearOrganizationPointer: (organizationId: string) => Promise<void>;
   /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */

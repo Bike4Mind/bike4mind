@@ -184,3 +184,6 @@ packages/scripts/out/
 datalake-prefix-only-census-*.json
 
 .eslintcache
+# Same belt for the stale-organization-pointers repair report (production user ids, os.tmpdir() by
+# default but --report can point anywhere).
+stale-organization-pointers-*.json

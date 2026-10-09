@@ -1,4 +1,5 @@
 import { IModal, IUser, IUserActivityCounterDocument } from '@bike4mind/common';
+import { RELEASE_NOTE_SLIDE_PREFIX } from './releaseNoteSlides';
 
 /**
  * Local storage utilities for modal display tracking
@@ -162,4 +163,22 @@ export const filterModals = (
 
       return checkModalThresholds(modal, counters);
     });
+};
+
+/**
+ * The What's New slider's slides for a trigger. Release notes never expire, so the forced tag alone would
+ * re-show every seen note whenever one new note auto-triggers the slider; on auto-trigger they must also
+ * pass their own view thresholds. A manual open still shows them all.
+ */
+export const filterWhatsNewSlides = (
+  modals: IModal[],
+  currentUser: IUser,
+  counters: IUserActivityCounterDocument[],
+  tagToTrigger: string,
+  autoTriggered: boolean
+): IModal[] => {
+  const forced = filterModals(modals, currentUser, counters, [tagToTrigger]);
+  if (!autoTriggered) return forced;
+  const unseenIds = new Set(filterModals(modals, currentUser, counters).map(modal => modal._id));
+  return forced.filter(modal => !modal._id?.startsWith(RELEASE_NOTE_SLIDE_PREFIX) || unseenIds.has(modal._id));
 };

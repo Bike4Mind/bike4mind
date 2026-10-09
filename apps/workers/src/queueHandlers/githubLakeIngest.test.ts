@@ -52,8 +52,8 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOrigin
   getRepository: h.getRepository,
   getBranchHeadSha: h.getBranchHeadSha,
 }));
-vi.mock('@server/queueHandlers/githubLakeSlice', () => ({ runGitHubLakeSlice: h.runGitHubLakeSlice }));
-vi.mock('@server/queueHandlers/lakeIngestShared', () => ({ settleLakeIngestBatch: h.settle }));
+vi.mock('@workers/queueHandlers/githubLakeSlice', () => ({ runGitHubLakeSlice: h.runGitHubLakeSlice }));
+vi.mock('@workers/queueHandlers/lakeIngestShared', () => ({ settleLakeIngestBatch: h.settle }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 
 import {

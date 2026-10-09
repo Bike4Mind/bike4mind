@@ -175,6 +175,9 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     // Twice: the early gate keeps strangers from triggering detection, the in-transaction one serializes.
     expect(h.assertLakeWriteAccess).toHaveBeenCalledTimes(2);
     expect(h.assertLakeWriteAccess.mock.calls[0][0]).toBe('lake1');
+    // By id only: a slug skips a deleted lake and would resolve the next lake sharing it.
+    expect(h.assertLakeWriteAccess.mock.calls[0][3]).toEqual({ idOnly: true });
+    expect(h.assertLakeWriteAccess.mock.calls[1][3]).toEqual({ idOnly: true });
   });
 
   it('re-gates and records findings plus the summary inside the transaction, with no separate touch', async () => {
@@ -539,6 +542,14 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
     const options = h.rateLimitOptionsByBucket['data-lakes/inconsistencies/model'];
     const limit = options?.limit as () => number;
     expect(limit()).toBe(3);
+  });
+
+  it('gates the model run by lake id only, never by slug', async () => {
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.assertLakeWriteAccess).toHaveBeenCalledTimes(1);
+    expect(h.assertLakeWriteAccess.mock.calls[0][3]).toEqual({ idOnly: true });
   });
 
   it('also bounds spend per LAKE, which the per-caller cap cannot do', async () => {

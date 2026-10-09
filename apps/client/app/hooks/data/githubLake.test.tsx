@@ -236,15 +236,47 @@ describe('useStartLakeGitHubConnect', () => {
     const urls = { authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=c&state=s1' };
     post.mockResolvedValue({ data: urls });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     const { result } = renderHook(() => useStartLakeGitHubConnect(), { wrapper: wrapperFor(queryClient) });
 
     let response: unknown;
     await act(async () => {
-      response = await result.current.mutateAsync('lake1');
+      response = await result.current.mutateAsync({ dataLakeId: 'lake1' });
     });
 
-    expect(post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection');
+    expect(post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection', undefined);
     expect(response).toEqual(urls);
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('refetches the lake list even when the switching start fails, since the server may have committed', async () => {
+    post.mockRejectedValue(new Error('network lost'));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useStartLakeGitHubConnect(), { wrapper: wrapperFor(queryClient) });
+
+    await act(async () => {
+      await expect(result.current.mutateAsync({ dataLakeId: 'lake1', ensureConnectorFed: true })).rejects.toThrow(
+        'network lost'
+      );
+    });
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: dataLakeKeys.list });
+  });
+
+  it('asks the server to switch the origin, then refetches the lake list and its config history', async () => {
+    post.mockResolvedValue({ data: { authorizeUrl: 'https://github.com/login/oauth/authorize?state=s1' } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useStartLakeGitHubConnect(), { wrapper: wrapperFor(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', ensureConnectorFed: true });
+    });
+
+    expect(post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection', { ensureConnectorFed: true });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: dataLakeKeys.list });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: dataLakeKeys.configHistoryOf('lake1') });
   });
 });
 

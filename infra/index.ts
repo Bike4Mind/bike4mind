@@ -15,7 +15,6 @@ export * from './secrets';
 export * from './securityAlerts';
 export * from './subscriberFanout';
 export * from './vpc';
-export * from './warmer';
 export * from './websocket';
 export * from './searxng';
 export * from './chatCompletion';

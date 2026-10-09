@@ -27,6 +27,9 @@ import type { Request } from 'express';
  * arm) and is deliberately WIDER than the read-side membership set (findMembershipOrgIds, owner +
  * users[] only, #1674) - a write-target validator and a read-membership resolver must not
  * silently drift; see the design doc docs/superpowers/specs/2026-08-13-accesscontext-org-set-design.md.
+ *
+ * Keep-predicate mirrored in packages/scripts/src/clearStaleOrganizationPointers.ts (gradeOrg);
+ * change both together.
  */
 export async function resolveActiveOrg(
   req: Request,
