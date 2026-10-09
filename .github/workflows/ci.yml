@@ -174,7 +174,7 @@ jobs:
       - name: Calculate core packages content hash
         id: core-hash
         run: |
-          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database | awk '{print $3}' | sort | md5sum | awk '{print $1}')
+          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database packages/sdk | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONFIG_HASH=$(git ls-tree HEAD package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json 2>/dev/null | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONTENT_HASH=$(echo "${TREE_HASH_B4M}${CONFIG_HASH}" | md5sum | awk '{print $1}')
           echo "content_hash=$CONTENT_HASH" >> $GITHUB_OUTPUT
@@ -212,6 +212,7 @@ jobs:
           path: |
             b4m-core/*/dist
             packages/database/dist
+            packages/sdk/dist
           # Intra-run handoff only: the jobs that consume this all `needs:
           # core-build`, so it is dead weight the moment the run ends. It was on
           # 7 days, which at ~1.8 GiB/day of CI artifacts overran the org's 2 GB
@@ -1020,10 +1021,6 @@ jobs:
       - name: Build bike4mind core packages (fallback)
         if: steps.download-core.outcome == 'failure'
         run: pnpm core:build
-
-      # core-build covers b4m-core only; the SDK is a leaf package with no workspace deps.
-      - name: Build @bike4mind/sdk
-        run: pnpm --filter @bike4mind/sdk build
 
       # The consumer install has no lockfile, so the key tracks the manifests being packed instead.
       - name: Cache npm downloads
