@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  bike4mindSpecifiers,
   checkExitCode,
   discoverPackages,
   domLibFiles,
@@ -302,10 +303,12 @@ describe('discoverPackages', () => {
 
   function makeRoot(packages) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'discover-packages-'));
+    fs.mkdirSync(path.join(root, 'b4m-core'), { recursive: true });
     for (const [dir, { manifest, built }] of Object.entries(packages)) {
-      fs.mkdirSync(path.join(root, 'b4m-core', dir), { recursive: true });
-      fs.writeFileSync(path.join(root, 'b4m-core', dir, 'package.json'), JSON.stringify(manifest));
-      if (built) fs.mkdirSync(path.join(root, 'b4m-core', dir, 'dist'));
+      const pkgDir = path.join(root, dir.includes('/') ? dir : path.join('b4m-core', dir));
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify(manifest));
+      if (built) fs.mkdirSync(path.join(pkgDir, 'dist'));
     }
     return root;
   }
@@ -320,6 +323,10 @@ describe('discoverPackages', () => {
       utils: { manifest: { name: '@bike4mind/utils', version: '1.0.0' }, built: false },
       agents: { manifest: { name: '@bike4mind/agents', version: '1.0.0' }, built: false },
     });
+    roots.sdk = makeRoot({
+      common,
+      'packages/sdk': { manifest: { name: '@bike4mind/sdk', version: '0.1.0' }, built: true },
+    });
   });
 
   afterAll(() => Object.values(roots).forEach(root => fs.rmSync(root, { recursive: true, force: true })));
@@ -330,7 +337,30 @@ describe('discoverPackages', () => {
 
   it('names every published package that has no dist', () => {
     expect(() => discoverPackages(roots.unbuilt)).toThrow(
-      'no dist/ in b4m-core/{agents,utils}; run pnpm turbo:core:build first'
+      'no dist/ in b4m-core/agents, b4m-core/utils; run pnpm turbo:core:build and pnpm --filter @bike4mind/sdk build first'
     );
+  });
+
+  it('includes packages/sdk, flagged standalone', () => {
+    expect(discoverPackages(roots.sdk).map(pkg => [pkg.packageName, pkg.standalone])).toEqual([
+      ['@bike4mind/common', false],
+      ['@bike4mind/sdk', true],
+    ]);
+  });
+});
+
+describe('bike4mindSpecifiers', () => {
+  it('finds @bike4mind imports in every declaration form', () => {
+    const source = [
+      "import { A } from '@bike4mind/common';",
+      'export type B = import("@bike4mind/utils").B;',
+      "import C = require('@bike4mind/agents');",
+      "import { D } from 'eventsource-parser';",
+    ].join('\n');
+    expect(bike4mindSpecifiers(source)).toEqual(['@bike4mind/common', '@bike4mind/utils', '@bike4mind/agents']);
+  });
+
+  it('ignores the scope in prose', () => {
+    expect(bike4mindSpecifiers('/** see @bike4mind/common for the contracts */')).toEqual([]);
   });
 });

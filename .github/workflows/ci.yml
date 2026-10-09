@@ -411,12 +411,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --recursive
 
+      # Also regenerates the @bike4mind/sdk types and operation manifest from the fresh spec.
       - name: Regenerate OpenAPI spec from Zod schemas
         run: pnpm turbo:openapi:generate
 
-      # Fails the PR if a schema change did not regenerate the committed spec.
+      # Fails the PR if a schema change did not regenerate the committed spec or the SDK types built from it.
       - name: Verify committed spec is up to date (no drift)
-        run: git diff --exit-code apps/client/public/openapi.json
+        run: git diff --exit-code apps/client/public/openapi.json packages/sdk/src/generated
 
       # Structural lint. Rules + intentional-rule exceptions live in redocly.yaml.
       - name: Lint OpenAPI spec (redocly)
@@ -1020,12 +1021,16 @@ jobs:
         if: steps.download-core.outcome == 'failure'
         run: pnpm core:build
 
+      # core-build covers b4m-core only; the SDK is a leaf package with no workspace deps.
+      - name: Build @bike4mind/sdk
+        run: pnpm --filter @bike4mind/sdk build
+
       # The consumer install has no lockfile, so the key tracks the manifests being packed instead.
       - name: Cache npm downloads
         uses: actions/cache@v5
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-published-dts-${{ hashFiles('b4m-core/*/package.json') }}
+          key: ${{ runner.os }}-npm-published-dts-${{ hashFiles('b4m-core/*/package.json', 'packages/sdk/package.json') }}
           restore-keys: |
             ${{ runner.os }}-npm-published-dts-
 
