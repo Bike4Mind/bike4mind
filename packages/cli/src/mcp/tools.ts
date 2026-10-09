@@ -393,7 +393,7 @@ export async function sendMessage(
     throw new Error(`${code}${reply || 'chat completion failed'} (${ref})`);
   }
 
-  const notebookId = args.notebookId ?? ack.sessionId ?? quest.sessionId;
+  const notebookId = sessionId ?? quest.sessionId;
   // Drop `metadata`: it can carry `fullContext` passage text that would bloat the MCP client's context.
   const citables = (quest.promptMeta?.citables ?? []).map(c => ({
     id: c.id,
