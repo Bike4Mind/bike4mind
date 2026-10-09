@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { TFunction } from 'i18next';
-import { createBlockedSendToastGate, getSendBlockedLabel, getSendBlockedReason } from './sendBlockedReason';
+import {
+  createBlockedSendToastGate,
+  getBlockedSendToastLabel,
+  getSendBlockedLabel,
+  getSendBlockedReason,
+} from './sendBlockedReason';
 
 const ready = {
   isGenerating: false,
@@ -51,9 +56,22 @@ describe('getSendBlockedLabel', () => {
   });
 });
 
+describe('getBlockedSendToastLabel', () => {
+  const t = ((_key: string, fallback: string) => fallback) as unknown as TFunction;
+
+  it('says a refused send is waiting on another message, not that it is sending', () => {
+    expect(getBlockedSendToastLabel('sending', t)).toBe('Another message is still sending');
+  });
+
+  it('matches the Send tooltip for every other reason', () => {
+    expect(getBlockedSendToastLabel('generating', t)).toBe(getSendBlockedLabel('generating', t));
+    expect(getBlockedSendToastLabel('reconnecting', t)).toBe(getSendBlockedLabel('reconnecting', t));
+  });
+});
+
 describe('createBlockedSendToastGate', () => {
   it('toasts reasons the UI does not already show, once per window', () => {
-    const shouldToast = createBlockedSendToastGate(3_000);
+    const shouldToast = createBlockedSendToastGate({ windowMs: 3_000 });
     expect(shouldToast('reconnecting', 1_000)).toBe(true);
     expect(shouldToast('reconnecting', 2_000)).toBe(false);
     expect(shouldToast('uploading', 2_000)).toBe(true);
@@ -64,5 +82,14 @@ describe('createBlockedSendToastGate', () => {
     const shouldToast = createBlockedSendToastGate();
     expect(shouldToast('generating', 0)).toBe(false);
     expect(shouldToast('sending', 0)).toBe(false);
+  });
+
+  it('with toastEveryReason, also toasts generating and sending, still once per window', () => {
+    const shouldToast = createBlockedSendToastGate({ windowMs: 3_000, toastEveryReason: true });
+    expect(shouldToast('generating', 1_000)).toBe(true);
+    expect(shouldToast('generating', 2_000)).toBe(false);
+    expect(shouldToast('sending', 2_000)).toBe(true);
+    expect(shouldToast('reconnecting', 2_000)).toBe(true);
+    expect(shouldToast('generating', 4_000)).toBe(true);
   });
 });
