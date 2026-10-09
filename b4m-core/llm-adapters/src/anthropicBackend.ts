@@ -1422,6 +1422,7 @@ export class AnthropicBackend implements ICompletionBackend {
                           name: toolBlock.name,
                           input: {},
                         };
+                        await cb([], { toolsUsed, toolStarted: { name: toolBlock.name, id: toolBlock.id } });
                       }
                     }
                   } else if (event.type === 'content_block_delta') {
