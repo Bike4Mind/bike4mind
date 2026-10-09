@@ -106,7 +106,8 @@ function infoDescription(): string {
     '',
     'The shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a ' +
       'missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown ' +
-      'resource is `404` and an exceeded rate limit is `429`.',
+      'resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: "provider_rejected"` ' +
+      'means the upstream provider refused the platform key, not that your credential is bad.',
     '',
     '## Async jobs',
     'Work that is not provably fast is queued and polled rather than held open:',
