@@ -28,7 +28,8 @@ function isAccountIdLike(userIdentifier: string): boolean {
 /**
  * Read-only lookup for previews, under the same rule as the write. The resolved accountId is what the
  * confirm token replays, so Confirm acts on the user the preview showed. A failed lookup yields a bare
- * preview and the write searches again.
+ * preview and the write searches again. displayName rides in the token only for the Slack card (the tool's
+ * input schema strips it on replay).
  */
 async function resolveUserForPreview(userIdentifier: string): Promise<{ accountId?: string; displayName?: string }> {
   if (isAccountIdLike(userIdentifier)) return { accountId: userIdentifier };
@@ -116,7 +117,11 @@ export function registerJiraUserTools(server: McpServer) {
           'watcher',
           {
             tool: JIRA_ADD_WATCHER,
-            params: { issueKey, userIdentifier: resolved.accountId ?? userIdentifier },
+            params: {
+              issueKey,
+              userIdentifier: resolved.accountId ?? userIdentifier,
+              displayName: resolved.displayName,
+            },
           }
         );
       }
@@ -183,7 +188,11 @@ export function registerJiraUserTools(server: McpServer) {
           'watcher',
           {
             tool: JIRA_REMOVE_WATCHER,
-            params: { issueKey, userIdentifier: resolved.accountId ?? userIdentifier },
+            params: {
+              issueKey,
+              userIdentifier: resolved.accountId ?? userIdentifier,
+              displayName: resolved.displayName,
+            },
           }
         );
       }

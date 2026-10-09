@@ -98,14 +98,14 @@ const cases: GatedCase[] = [
     args: { issueKey: 'PROJ-1', userIdentifier: 'a@example.com' },
     write: () => jiraApi.addWatcher,
     expectedWriteArgs: { issueKey: 'PROJ-1', accountId: ACCOUNT_ID },
-    expectedTokenParams: { issueKey: 'PROJ-1', userIdentifier: ACCOUNT_ID },
+    expectedTokenParams: { issueKey: 'PROJ-1', userIdentifier: ACCOUNT_ID, displayName: 'Ada' },
   },
   {
     tool: JIRA_REMOVE_WATCHER,
     args: { issueKey: 'PROJ-1', userIdentifier: 'a@example.com' },
     write: () => jiraApi.removeWatcher,
     expectedWriteArgs: { issueKey: 'PROJ-1', accountId: ACCOUNT_ID },
-    expectedTokenParams: { issueKey: 'PROJ-1', userIdentifier: ACCOUNT_ID },
+    expectedTokenParams: { issueKey: 'PROJ-1', userIdentifier: ACCOUNT_ID, displayName: 'Ada' },
   },
   {
     tool: JIRA_CREATE_SPRINT,

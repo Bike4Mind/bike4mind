@@ -13,6 +13,8 @@ import {
   JIRA_DELETE_ISSUE,
   JIRA_UPLOAD_ATTACHMENT,
   JIRA_DELETE_ATTACHMENT,
+  JIRA_ADD_WATCHER,
+  JIRA_REMOVE_WATCHER,
   CONFLUENCE_CREATE_PAGE,
   CONFLUENCE_UPDATE_PAGE,
   CONFLUENCE_DELETE_PAGE,
@@ -462,6 +464,20 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
         '> *Warning:* This action cannot be undone!',
         '',
         'Click ✅ Confirm to DELETE this issue, or ❌ Cancel to abort.',
+      ].join('\n');
+    }
+
+    case JIRA_ADD_WATCHER:
+    case JIRA_REMOVE_WATCHER: {
+      const adding = tool === JIRA_ADD_WATCHER;
+      const user = params.displayName ? `${params.displayName} (${params.userIdentifier})` : params.userIdentifier;
+      return [
+        `\u{1F441}\u{FE0F} *Preview: Jira ${adding ? 'Add' : 'Remove'} Watcher*`,
+        '',
+        `> *Issue:* ${params.issueKey}`,
+        `> *${adding ? 'Add' : 'Remove'} watcher:* ${user}`,
+        '',
+        `Click \u2705 Confirm to ${adding ? 'add' : 'remove'} this watcher, or \u274C Cancel to abort.`,
       ].join('\n');
     }
 

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildConfirmationButtons, parseConfirmationButtonValue } from './confirmation-buttons';
+import { JIRA_ADD_WATCHER, JIRA_REMOVE_WATCHER } from '@bike4mind/mcp/atlassian/constants';
+import {
+  buildConfirmationButtons,
+  formatPreviewFromParams,
+  parseConfirmationButtonValue,
+} from './confirmation-buttons';
 
 const questId = '0123456789abcdef01234567';
 const ts = 1700000000000;
@@ -41,5 +46,27 @@ describe('parseConfirmationButtonValue', () => {
 
   it('uses the final separator when a quest id contains a colon', () => {
     expect(parseConfirmationButtonValue('a:b:5')).toEqual({ questId: 'a:b', pendingActionTs: 5 });
+  });
+});
+
+describe('formatPreviewFromParams watcher cards', () => {
+  const accountId = '5b10ac8d82e05b22cc7d4ef5';
+
+  it('names the resolved user next to the account the confirm will act on', () => {
+    const text = formatPreviewFromParams(JIRA_ADD_WATCHER, {
+      issueKey: 'PROJ-1',
+      userIdentifier: accountId,
+      displayName: 'Jane Doe',
+    });
+
+    expect(text).toContain('Add watcher:* Jane Doe (5b10ac8d82e05b22cc7d4ef5)');
+    expect(text).toContain('PROJ-1');
+  });
+
+  it('falls back to the bare account when the lookup gave no name', () => {
+    const text = formatPreviewFromParams(JIRA_REMOVE_WATCHER, { issueKey: 'PROJ-1', userIdentifier: accountId });
+
+    expect(text).toContain(`Remove watcher:* ${accountId}`);
+    expect(text).not.toContain('Parameters');
   });
 });
