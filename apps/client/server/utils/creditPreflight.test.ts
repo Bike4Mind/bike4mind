@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mocks } = vi.hoisted(() => ({
-  mocks: {
-    findById: vi.fn(),
-    getSettingsMap: vi.fn(),
-  },
-}));
+const { mocks } = vi.hoisted(() => {
+  // The enforceCredits default (hosted on, self-host off) is computed when the
+  // settings module first loads, so pin the hosted environment before the import
+  // below. Without this the default-on cases flip on a self-host shell.
+  process.env.B4M_SELF_HOST = 'false';
+  return {
+    mocks: {
+      findById: vi.fn(),
+      getSettingsMap: vi.fn(),
+    },
+  };
+});
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
