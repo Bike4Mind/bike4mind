@@ -185,6 +185,23 @@ export interface PremiumRouteIndexing {
  */
 export type PremiumLocalStorageKeyPrefixes = string[];
 
+/**
+ * Extra entitlements, per registered workspace id, whose holders may fork, snip or clone a session
+ * that lives in that workspace and keep the copy there. Contributed as literal data in
+ * `b4mContributions.workspaceCopyEntitlements` (`{ "<surface id>": ["<entitlement key>"] }`) and
+ * enforced by `canCopyWithinSurface` (@bike4mind/common surfaces.ts) on the server and in the
+ * clone/fork menus alike.
+ *
+ * Core cannot hold this table without naming an overlay's workspace, so the overlay declares it.
+ * A grant only keeps a copy where its source already lives: creating a session in the workspace,
+ * moving one into it, or naming it as an explicit copy target still needs the workspace's own
+ * `requiredEntitlement`. An id this repo does not register as a workspace is inert.
+ *
+ * DATA, like `PremiumLocalStorageKeyPrefixes`: read straight out of package.json, so server-side
+ * enforcement sees it without importing overlay code. Grants from several overlays are merged.
+ */
+export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly string[]>>;
+
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {
   /** The reply's quest id - the same key the UI side-effect bus dispatches as `dedupeKey`. */

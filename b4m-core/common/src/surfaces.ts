@@ -85,6 +85,12 @@ export interface SurfaceAccessUser {
   tags?: readonly string[] | null;
   /** The user's resolved entitlement keys (subscriptions, tag grants, domain grants). */
   entitlements?: readonly string[] | null;
+  /**
+   * Extra entitlement keys per workspace id whose holders may keep a fork, snip or clone of a session
+   * in that workspace (see `canCopyWithinSurface`). Host-supplied from what the build's premium
+   * overlays declare (apps/client `PremiumWorkspaceCopyEntitlements`); this repo registers none.
+   */
+  copyEntitlements?: Readonly<Record<string, readonly string[]>> | null;
 }
 
 /** True when `surface` is registered and the user may use it. */
@@ -95,6 +101,26 @@ export function canUseSurface(user: SurfaceAccessUser | null | undefined, surfac
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return true;
   const required = entry.requiredEntitlement.trim().toLowerCase();
   return (user.entitlements ?? []).some(key => key.trim().toLowerCase() === required);
+}
+
+/**
+ * True when `user` may fork, snip or clone a session that lives in `surface` and keep the copy there:
+ * anyone `canUseSurface` admits, plus holders of a key `user.copyEntitlements` lists for that
+ * workspace. A copy grant is deliberately weaker than use: creating a session in the workspace,
+ * moving one into it, or naming it as an explicit copy target all still go through `canUseSurface`.
+ */
+export function canCopyWithinSurface(
+  user: SurfaceAccessUser | null | undefined,
+  surface: string | null | undefined
+): boolean {
+  if (canUseSurface(user, surface)) return true;
+  const entry = getWorkspaceSurface(surface);
+  // A null id is the main list, which is ungated, so canUseSurface has already answered for it.
+  if (!entry?.id || !user?.copyEntitlements) return false;
+  const granted = user.copyEntitlements[entry.id];
+  if (!Array.isArray(granted) || granted.length === 0) return false;
+  const held = new Set((user.entitlements ?? []).map(key => key.trim().toLowerCase()));
+  return granted.some(key => held.has(key.trim().toLowerCase()));
 }
 
 export type SurfaceTransitionDenial = {

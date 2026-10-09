@@ -15,6 +15,7 @@
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
+ *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
@@ -382,6 +383,64 @@ export const premiumReplyAccessories: PremiumReplyAccessory[] = [
 ${entries},
 ];
 `
+  );
+}
+
+// --- Generate workspace copy entitlements ---
+
+// Extra entitlements whose holders may keep a fork/snip/clone inside a registered
+// workspace (b4mContributions.workspaceCopyEntitlements, `{ "<workspace id>": [keys] }`).
+// Core cannot name an overlay's workspace, so the overlay declares the table. Pure data,
+// like the localStorage prefixes below: nothing here imports overlay code, so the server
+// enforces it with or without a node_modules link. Both halves are validated, so a
+// malformed table fails the build instead of quietly granting nothing or the wrong thing.
+const WORKSPACE_ID_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+const ENTITLEMENT_KEY_RE = /^[a-z0-9][a-z0-9:_.-]*$/i;
+
+function generateWorkspaceCopyEntitlements(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumWorkspaceCopyEntitlements.generated.ts');
+  const typeImport = `import type { PremiumWorkspaceCopyEntitlements } from '../premiumContract';`;
+
+  const merged = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.workspaceCopyEntitlements;
+    if (declared === undefined) continue;
+    if (declared === null || typeof declared !== 'object' || Array.isArray(declared)) {
+      throw new Error(
+        `[codegen] invalid workspaceCopyEntitlements from package "${pkg.name}": ` +
+          `expected an object of workspace id -> entitlement keys, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [workspaceId, keys] of Object.entries(declared)) {
+      if (!WORKSPACE_ID_RE.test(workspaceId)) {
+        throw new Error(
+          `[codegen] invalid workspaceCopyEntitlements workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} is not of [A-Za-z0-9_-]`
+        );
+      }
+      if (!Array.isArray(keys) || keys.some(key => typeof key !== 'string' || !ENTITLEMENT_KEY_RE.test(key))) {
+        throw new Error(
+          `[codegen] invalid workspaceCopyEntitlements keys for "${workspaceId}" from package "${pkg.name}": ` +
+            `expected an array of entitlement keys of [A-Za-z0-9:_.-], got ${JSON.stringify(keys)}`
+        );
+      }
+      const list = merged.get(workspaceId) ?? [];
+      for (const key of keys) {
+        const normalized = key.toLowerCase();
+        if (!list.includes(normalized)) list.push(normalized);
+      }
+      merged.set(workspaceId, list);
+    }
+  }
+
+  const entries = [...merged].map(
+    ([workspaceId, keys]) => `  ${JSON.stringify(workspaceId)}: [${keys.map(key => JSON.stringify(key)).join(', ')}],`
+  );
+  const body = entries.length === 0 ? '{}' : `{\n${entries.join('\n')}\n}`;
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceCopyEntitlements: PremiumWorkspaceCopyEntitlements = ${body};\n`
   );
 }
 
@@ -973,5 +1032,6 @@ generateInfraGlue(packages);
 // No-import glue: pure data copied out of package.json, so it imports the overlay
 // not at all and is link-independent for an even simpler reason than the group above.
 generateLocalStorageKeyPrefixes(packages);
+generateWorkspaceCopyEntitlements(packages);
 
 console.log('[codegen] done.');
