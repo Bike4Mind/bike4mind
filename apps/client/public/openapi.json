@@ -1607,6 +1607,20 @@
               "thinking": {
                 "type": "array",
                 "items": {}
+              },
+              "toolStarted": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
               }
             },
             "required": [
@@ -4152,10 +4166,12 @@
         "properties": {
           "file_name": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 255
           },
           "notes": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 10000
           }
         },
         "additionalProperties": false,
@@ -14482,7 +14498,7 @@
       "get": {
         "operationId": "listFiles",
         "summary": "List files",
-        "description": "Lists the files you own, excluding archived and deleted ones. Files shared with you are not listed, though `GET /api/v1/files/{id}` resolves them by id: listing shares would need access checks that cannot be paged by cursor. Items carry no `download_url`; fetch a file by id for its bytes. `search` keeps only files whose name contains it, ignoring case; results stay in `id` order with no relevance ranking. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor`, with the same `search`, until it is `null`.",
+        "description": "Lists the files you own, newest first, excluding archived and deleted ones. Files shared with you are not listed, though `GET /api/v1/files/{id}` resolves them by id: listing shares would need access checks that cannot be paged by cursor. Items carry no `download_url`; fetch a file by id for its bytes. `search` keeps only files whose name contains it, ignoring case; results stay newest first with no relevance ranking. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor`, with the same `search`, until it is `null`. Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.",
         "tags": [
           "Files"
         ],
@@ -14528,7 +14544,7 @@
         ],
         "responses": {
           "200": {
-            "description": "One page of files, ordered by `id`.",
+            "description": "One page of files, newest first by `id`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14600,7 +14616,7 @@
             }
           },
           "403": {
-            "description": "The API key holds neither `files:read` nor `files:write`.",
+            "description": "The API key lacks `files:read`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14787,8 +14803,7 @@
           }
         },
         "x-required-scopes": [
-          "files:read",
-          "files:write"
+          "files:read"
         ],
         "x-codeSamples": [
           {
@@ -14813,7 +14828,7 @@
       "get": {
         "operationId": "getFile",
         "summary": "Get a file",
-        "description": "Returns a file you own or that has been shared with you, with a short-lived signed `download_url` once it is downloadable. This is both the upload poll (after `POST /api/v1/files`) and the way to fetch any file id another endpoint hands back. `download_url` is `null` until `moderation_status` is `clean`; it expires at `download_url_expires_at`, so re-read this endpoint rather than storing it. Safe (GET) requests are exempt from the per-day API-key quota: a poll consumes no daily slot, and only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read` or `files:write`, or a JWT.",
+        "description": "Returns a file you own or that has been shared with you, with a short-lived signed `download_url` once it is downloadable. This is both the upload poll (after `POST /api/v1/files`) and the way to fetch any file id another endpoint hands back. `download_url` is `null` until `moderation_status` is `clean`; it expires at `download_url_expires_at`, so re-read this endpoint rather than storing it. Safe (GET) requests are exempt from the per-day API-key quota: a poll consumes no daily slot, and only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.",
         "tags": [
           "Files"
         ],
@@ -14910,7 +14925,7 @@
             }
           },
           "403": {
-            "description": "The API key holds neither `files:read` nor `files:write`.",
+            "description": "The API key lacks `files:read`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -15151,8 +15166,7 @@
           }
         },
         "x-required-scopes": [
-          "files:read",
-          "files:write"
+          "files:read"
         ],
         "x-codeSamples": [
           {
@@ -15175,7 +15189,7 @@
       "patch": {
         "operationId": "updateFile",
         "summary": "Update a file",
-        "description": "Renames a file you can edit or changes its notes: a file you own, or one shared with you with write permission. Omitted fields are left unchanged. Unknown body fields are rejected.",
+        "description": "Renames a file you can edit or changes its notes: a file you own, or one shared with you with edit (`update`) permission. Omitted fields are left unchanged. Unknown body fields are rejected. `download_url` is null in the response when you can edit the file but not read it.",
         "tags": [
           "Files"
         ],

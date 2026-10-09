@@ -26,34 +26,48 @@ const makeFile = (fileName: string, overrides: Record<string, unknown> = {}) =>
 
 async function collectAllPages(limit: number, search?: string) {
   const names: string[] = [];
-  let afterId: string | undefined;
+  let beforeId: string | undefined;
   for (let guard = 0; guard < 20; guard++) {
-    const page = await fabFileRepository.listOwnedAfterId(OWNER, { afterId, limit, search });
+    const page = await fabFileRepository.listOwnedBeforeId(OWNER, { beforeId, limit, search });
     names.push(...page.data.map(f => f.fileName));
     if (!page.hasMore) return names;
-    afterId = String(page.data.at(-1)!.id);
+    beforeId = String(page.data.at(-1)!.id);
   }
   throw new Error('paging did not terminate');
 }
 
-describe('FabFileRepository.listOwnedAfterId', () => {
-  it('lists only live, unarchived files the user owns, in _id order', async () => {
+describe('FabFileRepository.listOwnedBeforeId', () => {
+  it('lists only live, unarchived files the user owns, newest first', async () => {
     await makeFile('a.txt');
     await makeFile('deleted.txt', { deletedAt: new Date() });
     await makeFile('archived.txt', { archivedAt: new Date() });
     await makeFile('theirs.txt', { userId: OTHER, users: [{ userId: OWNER, permissions: ['read'] }] });
     await makeFile('b.txt');
 
-    expect(await collectAllPages(10)).toEqual(['a.txt', 'b.txt']);
+    expect(await collectAllPages(10)).toEqual(['b.txt', 'a.txt']);
   });
 
   it('pages across the whole set without gaps or repeats', async () => {
     for (let i = 0; i < 5; i++) await makeFile(`f${i}.txt`);
 
-    const first = await fabFileRepository.listOwnedAfterId(OWNER, { limit: 2 });
+    const first = await fabFileRepository.listOwnedBeforeId(OWNER, { limit: 2 });
     expect(first.data).toHaveLength(2);
     expect(first.hasMore).toBe(true);
-    expect(await collectAllPages(2)).toEqual(['f0.txt', 'f1.txt', 'f2.txt', 'f3.txt', 'f4.txt']);
+    expect(await collectAllPages(2)).toEqual(['f4.txt', 'f3.txt', 'f2.txt', 'f1.txt', 'f0.txt']);
+  });
+
+  // An exact multiple of the page size: the last page must not claim another (a `>=` would).
+  it('reports no further page when the last page is exactly full', async () => {
+    for (let i = 0; i < 4; i++) await makeFile(`f${i}.txt`);
+
+    const first = await fabFileRepository.listOwnedBeforeId(OWNER, { limit: 2 });
+    expect(first.hasMore).toBe(true);
+    const second = await fabFileRepository.listOwnedBeforeId(OWNER, {
+      beforeId: String(first.data.at(-1)!.id),
+      limit: 2,
+    });
+    expect(second.data.map(f => f.fileName)).toEqual(['f1.txt', 'f0.txt']);
+    expect(second.hasMore).toBe(false);
   });
 
   it('matches a case-insensitive substring and treats regex metacharacters literally', async () => {
@@ -62,7 +76,7 @@ describe('FabFileRepository.listOwnedAfterId', () => {
     await makeFile('notes (v1).txt');
     await makeFile('notes v1.txt');
 
-    expect(await collectAllPages(10, 'q3 REPORT')).toEqual(['Q3 Report.PDF', 'q3 report draft.pdf']);
+    expect(await collectAllPages(10, 'q3 REPORT')).toEqual(['q3 report draft.pdf', 'Q3 Report.PDF']);
     expect(await collectAllPages(10, '(v1)')).toEqual(['notes (v1).txt']);
     expect(await collectAllPages(10, '.*')).toEqual([]);
   });
@@ -72,19 +86,20 @@ describe('FabFileRepository.listOwnedAfterId', () => {
       await makeFile(`keep-${i}.txt`);
       await makeFile(`skip-${i}.txt`);
     }
-    expect(await collectAllPages(1, 'KEEP')).toEqual(['keep-0.txt', 'keep-1.txt', 'keep-2.txt']);
+    expect(await collectAllPages(1, 'KEEP')).toEqual(['keep-2.txt', 'keep-1.txt', 'keep-0.txt']);
   });
 
   it('selects only the summary fields', async () => {
     await makeFile('a.txt', { filePath: 'secret/path', notes: 'private', fileSize: 12 });
-    const [file] = (await fabFileRepository.listOwnedAfterId(OWNER, { limit: 1 })).data;
+    const [file] = (await fabFileRepository.listOwnedBeforeId(OWNER, { limit: 1 })).data;
     expect(file).toMatchObject({ fileName: 'a.txt', mimeType: 'text/plain', fileSize: 12 });
+    expect(file.createdAt).toBeInstanceOf(Date);
     expect(file).not.toHaveProperty('filePath');
     expect(file).not.toHaveProperty('notes');
   });
 
   it('rejects a cursor id that is not an ObjectId', async () => {
-    await expect(fabFileRepository.listOwnedAfterId(OWNER, { afterId: 'nope', limit: 1 })).rejects.toThrow(
+    await expect(fabFileRepository.listOwnedBeforeId(OWNER, { beforeId: 'nope', limit: 1 })).rejects.toThrow(
       /Invalid file cursor id/
     );
   });

@@ -1156,26 +1156,26 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
-   * One `_id`-ordered page of the files a user owns, for the public list. Owned-only, excluding
+   * One newest-first (`_id` descending) page of the files a user owns, for the public list. Owned-only, excluding
    * archived files, matching the default view of GET /api/files; shares are left to the by-id read.
    * `search` is a case-insensitive substring match on `fileName`, the same clause GET /api/files
    * builds (buildFabFileSearchQuery), so the two doors agree on what a name search finds.
    */
-  async listOwnedAfterId(
+  async listOwnedBeforeId(
     userId: string,
-    { afterId, limit, search }: { afterId?: string; limit: number; search?: string }
+    { beforeId, limit, search }: { beforeId?: string; limit: number; search?: string }
   ) {
     const conditions: Record<string, unknown> = { userId, deletedAt: null, archivedAt: null };
     if (search) conditions.fileName = { $regex: escapeRegex(search), $options: 'i' };
-    if (afterId !== undefined) {
-      if (!mongoose.isObjectIdOrHexString(afterId)) throw new Error(`Invalid file cursor id: ${afterId}`);
-      conditions._id = { $gt: convertId(afterId) };
+    if (beforeId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid file cursor id: ${beforeId}`);
+      conditions._id = { $lt: convertId(beforeId) };
     }
 
     const result = await this.fabFileModel
       .find(conditions)
       .select('fileName mimeType fileSize moderationStatus createdAt')
-      .sort({ _id: 1 })
+      .sort({ _id: -1 })
       .limit(limit + 1)
       .exec();
 
@@ -3886,8 +3886,8 @@ FabFileSchema.index(
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
-// Public v1 file list (listOwnedAfterId): equality on the owned/live/unarchived filter, then the
-// `_id` keyset, so each page streams in order instead of sorting the user's whole file set.
+// Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the
+// `_id` keyset (scanned in reverse for newest first), so each page streams in order instead of sorting the user's whole file set.
 // Pre-built by 20260921235999_ensure-fabfile-owned-keyset-index rather than left to autoIndex: prod
 // runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
 FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });

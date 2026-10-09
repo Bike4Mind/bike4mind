@@ -5,39 +5,21 @@
  * DELETE /api/v1/files/{id} - the public twin of DELETE /api/files/[id].
  *
  * Loading, updating and deleting are shared with the SPA-internal /api/files/[id] route
- * (`loadAccessibleFabFile`, `fabFilesService.updateFabFile`, `deleteFileForUser`), so the doors
+ * (`loadAccessibleFabFile`, `updateFileForUser`, `deleteFileForUser`), so the doors
  * cannot authorize differently; these handlers only map the published snake_case shape.
  */
 
-import { deleteFileContract, FileEvents, getFileContract, updateFileContract } from '@bike4mind/common';
-import {
-  dataLakeRepository,
-  dataLakeAccessGrantRepository,
-  fabFileRepository,
-  scopedSettingsRepository,
-  withTransaction,
-} from '@bike4mind/database';
-import { fabFilesService } from '@bike4mind/services';
+import { deleteFileContract, getFileContract, updateFileContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
 import { deleteFileForUser } from '@server/files/deleteFileForUser';
-import { toPublicFile } from '@server/files/toPublicFile';
-import { logEvent } from '@server/utils/analyticsLog';
-import { getFilesStorage } from '@server/utils/storage';
+import { updateFileForUser } from '@server/files/updateFileForUser';
+import { toPublicFile, type PublicFileSource } from '@server/files/toPublicFile';
 import { isValidObjectId } from '@server/utils/objectId';
 import { NotFoundError } from '@server/utils/errors';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
-import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-
-// Named so every file id shares one bucket per method instead of one per pathname.
-const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
 
 // A malformed id is a 404, not a CastError from deep in the query (CONVENTIONS.md status table).
 function assertValidFileId(id: string) {
@@ -64,55 +46,28 @@ const updateRoute = nextRouteForContract(updateFileContract, {
   assertValidFileId(id);
   const { file_name, notes } = req.validated;
 
-  // updateFabFile only reaches the lake adapters when `tags` is passed, which this body cannot
-  // carry; they are wired exactly as PUT /api/files/[id] wires them so that stays true by
-  // construction rather than by stub. Its update-access lookup answers a denial with NotFoundError.
+  // updateFabFile only reaches the lake gates when `tags` is passed, which this body cannot carry;
+  // they are wired exactly as PUT /api/files/[id] wires them so that stays true by construction
+  // rather than by stub. Its update-access lookup answers a denial with NotFoundError.
   const ctx = await toAccessContext(req);
-  const updated = await withTransaction(() =>
-    fabFilesService.updateFabFile(
-      req.user,
-      {
-        id,
-        // Spread so an omitted field stays absent instead of being set undefined.
-        ...(file_name !== undefined && { fileName: file_name }),
-        ...(notes !== undefined && { notes }),
-      },
-      {
-        db: {
-          fabFiles: fabFileRepository,
-          dataLakes: dataLakeRepository,
-          dataLakeAccessGrants: dataLakeAccessGrantRepository,
-          ...lakeConfigAuditDb,
-          ...lakeMembershipAuditDb,
-          scopedSettings: scopedSettingsRepository,
-        },
-        administeredOrgIds: ctx.administeredOrgIds,
-        auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
-        assertWriteScope: () => assertDataLakeWriteScope(req),
-        logger: req.logger,
-        storage: {
-          upload: (filepath, content, option) => getFilesStorage().upload(content, filepath, option),
-          generateSignedUrl: (path: string, expireInSeconds: number) =>
-            getFilesStorage().getSignedUrl(path, undefined, { expiresIn: expireInSeconds }),
-        },
-      }
-    )
-  );
+  const updated = await updateFileForUser(req, ctx.administeredOrgIds, {
+    id,
+    // Spread so an omitted field stays absent instead of being set undefined.
+    ...(file_name !== undefined && { fileName: file_name }),
+    ...(notes !== undefined && { notes }),
+  });
 
-  // Same analytics event PUT /api/files/[id] emits.
-  await logEvent(
-    {
-      userId: req.user.id,
-      type: FileEvents.UPDATE_FILE,
-      metadata: { fileId: id, fileContent: updated.filePath ?? '' },
-    },
-    { ability: req.ability }
-  );
-
-  // Re-read rather than project `updated`: the read path signs a fresh download URL.
-  const fabFile = await loadAccessibleFabFile(req, id);
   res.setHeader('Cache-Control', 'private, no-store');
-  return res.json(toPublicFile(fabFile));
+  try {
+    // Re-read rather than project `updated`: the read path signs a fresh download URL.
+    return res.json(toPublicFile(await loadAccessibleFabFile(req, id)));
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) throw error;
+    // Update access is not a subset of read access, and the write has already committed, so answer
+    // with the updated file minus its stored (possibly stale) URL rather than a 404. The cast is safe:
+    // updateFabFile returns the whole loaded document with the changes spread over it.
+    return res.json(toPublicFile({ ...(updated as PublicFileSource), fileUrl: undefined }));
+  }
 });
 
 const deleteRoute = nextRouteForContract(deleteFileContract, {

@@ -156,10 +156,8 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFiles, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/index.ts':
     'gated via generateSignedUrl choke (search -> get.ts) for reads; the other match is a delete-only storage.delete call',
-  'apps/client/pages/api/files/[id]/index.ts':
-    'GET/PUT route through fabFileService.getFabFile/updateFabFile (both gated: get.ts via the generateSignedUrl choke, update.ts imports isImageServeable directly); DELETE branch only calls storage.delete (delete.ts is delete-only)',
-  'apps/client/pages/api/v1/files/[id]/index.ts':
-    'PATCH DI passthrough - generateSignedUrl closure consumed by fabFileService.updateFabFile (update.ts imports isImageServeable directly); GET/PATCH responses go through toPublicFile, which gates download_url on isImageServeable; DELETE only reaches storage.delete via deleteFileForUser',
+  'apps/client/server/files/updateFileForUser.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.updateFabFile (update.ts imports isImageServeable directly); shared by PUT /api/files/[id] and PATCH /api/v1/files/[id]',
   'apps/client/server/files/loadAccessibleFabFile.ts':
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.getFabFile and, on the data-lake fallback, fabFileService.generateSignedUrl directly; both return through the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/data-lakes/[id]/articles.ts':

@@ -20,11 +20,9 @@ import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
  * shape, and LEGACY_PUBLIC_PATHS is frozen. Both doors share their logic with the internal
  * routes (apps/client/server/files/), so the gates cannot drift apart.
  */
-// files:write is accepted for reads so a key that uploads can poll and list what it wrote without
-// also being minted files:read.
-const READ_SCOPES = [ApiKeyScope.READ_FILES, ApiKeyScope.WRITE_FILES];
-
-const READ_FORBIDDEN = 'The API key holds neither `files:read` nor `files:write`.';
+// Write does not imply read for files, as on the SPA-internal /api/files doors
+// (apps/client/server/files/fileScopes.ts): both doors reach the same file, so they must agree.
+const READ_FORBIDDEN = 'The API key lacks `files:read`.';
 const WRITE_FORBIDDEN = 'The API key lacks `files:write`.';
 
 export const createFileUploadContract = defineEndpoint({
@@ -85,10 +83,10 @@ export const getFileContract = defineEndpoint({
     'it expires at `download_url_expires_at`, so re-read this endpoint rather than storing it. ' +
     'Safe (GET) requests are exempt from the per-day API-key quota: a poll consumes no daily ' +
     'slot, and only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) ' +
-    'carrying `files:read` or `files:write`, or a JWT.',
+    'carrying `files:read`, or a JWT.',
   tags: ['Files'],
   auth: 'apiKeyOrJwt',
-  scopes: READ_SCOPES,
+  scopes: [ApiKeyScope.READ_FILES],
   pathParams: FileIdParamSchema,
   emitsRateLimitHeaders: true,
   responses: {
@@ -123,20 +121,22 @@ export const listFilesContract = defineEndpoint({
   operationId: 'listFiles',
   summary: 'List files',
   description:
-    'Lists the files you own, excluding archived and deleted ones. Files shared with you are not ' +
+    'Lists the files you own, newest first, excluding archived and deleted ones. Files shared with you are not ' +
     'listed, though `GET /api/v1/files/{id}` resolves them by id: listing shares would need access ' +
     'checks that cannot be paged by cursor. Items carry no `download_url`; fetch a file by id for its ' +
-    'bytes. `search` keeps only files whose name contains it, ignoring case; results stay in `id` ' +
-    'order with no relevance ranking. Cursor-paginated (see the pagination convention): pass ' +
-    '`next_cursor` back as `cursor`, with the same `search`, until it is `null`.',
+    'bytes. `search` keeps only files whose name contains it, ignoring case; results stay newest ' +
+    'first with no relevance ranking. Cursor-paginated (see the pagination convention): pass ' +
+    '`next_cursor` back as `cursor`, with the same `search`, until it is `null`. Safe (GET) requests ' +
+    'are exempt from the per-day API-key quota; only the per-minute burst limit applies. ' +
+    'Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.',
   tags: ['Files'],
   auth: 'apiKeyOrJwt',
-  scopes: READ_SCOPES,
+  scopes: [ApiKeyScope.READ_FILES],
   queryParams: ListFilesQuerySchema,
   emitsRateLimitHeaders: true,
   responses: {
     200: {
-      description: 'One page of files, ordered by `id`.',
+      description: 'One page of files, newest first by `id`.',
       schema: ListFilesResponseSchema,
       example: {
         data: [
@@ -173,7 +173,8 @@ export const updateFileContract = defineEndpoint({
   summary: 'Update a file',
   description:
     'Renames a file you can edit or changes its notes: a file you own, or one shared with you with ' +
-    'write permission. Omitted fields are left unchanged. Unknown body fields are rejected.',
+    'edit (`update`) permission. Omitted fields are left unchanged. Unknown body fields are rejected. ' +
+    '`download_url` is null in the response when you can edit the file but not read it.',
   tags: ['Files'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.WRITE_FILES],
