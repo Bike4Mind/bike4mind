@@ -202,6 +202,16 @@ export type PremiumLocalStorageKeyPrefixes = string[];
  * moving one into it, or naming it as an explicit copy target still needs the workspace's own
  * `requiredEntitlement`. An id this repo does not register as a workspace is inert.
  *
+ * Every granted key must also pass the workspace's own route gate AND its API gates. A kept copy
+ * carries the workspace's surface, so it leaves the main list; if those gates then turn its owner
+ * away, the owner holds a session no list shows and no page opens. Core cannot see those gates, so
+ * the overlay declares them alongside the grants, as data of the same shape, in
+ * `b4mContributions.workspaceGateEntitlements`: every key the workspace's route and API gates admit
+ * (the route descriptor's `requireEntitlement`, plus whatever an in-page or API check accepts).
+ * Codegen fails the build when a package grants a key that its own gate declaration for that
+ * workspace does not list. The declaration is the overlay's promise, so keep it in step with the
+ * gates themselves; widening the gates and declaring a grant belong in the same change.
+ *
  * DATA, like `PremiumLocalStorageKeyPrefixes`: read straight out of package.json, so server-side
  * enforcement sees it without importing overlay code. Grants from several overlays are merged.
  */

@@ -7,7 +7,8 @@ import { join } from 'node:path';
 /**
  * Guard for the workspace copy-grant contribution: overlays declare which extra entitlements may keep
  * a fork/snip/clone inside a workspace (see `PremiumWorkspaceCopyEntitlements`), and the server
- * enforces whatever lands in the generated table - so the validator is the control on its shape.
+ * enforces whatever lands in the generated table - so the validator is the control on its shape, and
+ * on the rule that every grant is also admitted by the workspace's own gates (`workspaceGateEntitlements`).
  *
  * Runs the real script inside a sandbox tree, since its paths derive from its own
  * location: sandbox/apps/client/scripts/ next to sandbox/packages/premium/.
@@ -68,7 +69,10 @@ describe('premium workspace copy entitlements', () => {
   });
 
   it('emits the declared grants for an overlay that is NOT linked into node_modules', () => {
-    writeOverlay('alpha', { workspaceCopyEntitlements: { 'alpha-space': ['Base:Pro'] } });
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { 'alpha-space': ['Base:Pro'] },
+      workspaceGateEntitlements: { 'alpha-space': ['alpha:pro', 'base:pro'] },
+    });
 
     const generated = generate();
 
@@ -79,8 +83,14 @@ describe('premium workspace copy entitlements', () => {
   });
 
   it('merges grants for the same workspace across overlays and drops duplicates', () => {
-    writeOverlay('alpha', { workspaceCopyEntitlements: { shared: ['base:pro', 'alpha:pro'] } });
-    writeOverlay('beta', { workspaceCopyEntitlements: { shared: ['base:pro', 'beta:pro'], other: ['beta:pro'] } });
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { shared: ['base:pro', 'alpha:pro'] },
+      workspaceGateEntitlements: { shared: ['base:pro', 'alpha:pro'] },
+    });
+    writeOverlay('beta', {
+      workspaceCopyEntitlements: { shared: ['base:pro', 'beta:pro'], other: ['beta:pro'] },
+      workspaceGateEntitlements: { shared: ['base:pro', 'beta:pro'], other: ['beta:pro'] },
+    });
 
     const generated = generate();
 
@@ -117,5 +127,70 @@ describe('premium workspace copy entitlements', () => {
     const { status, stderr } = runCodegen();
     expect(status).toBe(1);
     expect(stderr).toContain('invalid workspaceCopyEntitlements keys');
+  });
+});
+
+describe('premium workspace copy entitlements - gate cross-check', () => {
+  // A grant whose key the workspace's own gates refuse strands the copy: it leaves the main list
+  // and its owner cannot open it where it went. Codegen cannot read those gates, so the package
+  // declares them, and the build fails on any grant they do not admit.
+
+  it('passes a grant the same package declares its workspace gates admit, in any case', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { space: ['base:pro'] },
+      workspaceGateEntitlements: { space: ['ALPHA:PRO', 'Base:Pro'] },
+    });
+
+    expect(generate()).toContain(`"space": ["base:pro"]`);
+  });
+
+  it('fails a grant with no gate declaration for its workspace, naming the key', () => {
+    writeOverlay('alpha', { workspaceCopyEntitlements: { space: ['base:pro'] } });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain(`grants ["base:pro"] for workspace "space"`);
+    expect(stderr).toContain('does not admit them');
+  });
+
+  it('fails a grant the declared gates do not admit, even when the others pass', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { space: ['alpha:pro', 'base:pro'] },
+      workspaceGateEntitlements: { space: ['alpha:pro'], elsewhere: ['base:pro'] },
+    });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain(`grants ["base:pro"] for workspace "space"`);
+  });
+
+  it("does not take another package's gate declaration on the granting package's behalf", () => {
+    writeOverlay('alpha', { workspaceCopyEntitlements: { space: ['base:pro'] } });
+    writeOverlay('beta', { workspaceGateEntitlements: { space: ['base:pro'] } });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('package "@bike4mind/premium-alpha"');
+  });
+
+  it('accepts a gate declaration on its own and grants nothing from it', () => {
+    writeOverlay('alpha', { workspaceGateEntitlements: { space: ['base:pro'] } });
+
+    expect(generate()).toContain('premiumWorkspaceCopyEntitlements: PremiumWorkspaceCopyEntitlements = {}');
+  });
+
+  it('validates the gate declaration with the same shape rules as the grants', () => {
+    writeOverlay('alpha', { workspaceGateEntitlements: ['base:pro'] });
+    let result = runCodegen();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('invalid workspaceGateEntitlements from package');
+
+    writeOverlay('alpha', { workspaceGateEntitlements: { space: [`x"]; //`] } });
+    result = runCodegen();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('invalid workspaceGateEntitlements keys');
   });
 });

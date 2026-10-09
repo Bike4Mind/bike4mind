@@ -394,8 +394,46 @@ ${entries},
 // like the localStorage prefixes below: nothing here imports overlay code, so the server
 // enforces it with or without a node_modules link. Both halves are validated, so a
 // malformed table fails the build instead of quietly granting nothing or the wrong thing.
+//
+// A grant is only safe if the workspace's own route and API gates admit the same key: the
+// copy carries the workspace's surface, so it leaves the main list, and a gate that turns
+// its owner away leaves it in no list at all. Those gates live in overlay code this script
+// never reads (the route descriptor's requireEntitlement, or an in-page check), so the
+// package also declares them as data (b4mContributions.workspaceGateEntitlements, same
+// shape: every key the workspace's gates admit) and every grant must appear there. A
+// missing or narrower declaration fails the build rather than passing on trust.
 const WORKSPACE_ID_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 const ENTITLEMENT_KEY_RE = /^[a-z0-9][a-z0-9:_.-]*$/i;
+
+// Validated `{ "<workspace id>": [keys] }` table from one package, keys lowercased to match
+// the normalized entitlement list they are compared to. Empty map when the field is absent.
+function readWorkspaceKeyTable(pkg, field) {
+  const declared = pkg.contributions[field];
+  const table = new Map();
+  if (declared === undefined) return table;
+  if (declared === null || typeof declared !== 'object' || Array.isArray(declared)) {
+    throw new Error(
+      `[codegen] invalid ${field} from package "${pkg.name}": ` +
+        `expected an object of workspace id -> entitlement keys, got ${JSON.stringify(declared)}`
+    );
+  }
+  for (const [workspaceId, keys] of Object.entries(declared)) {
+    if (!WORKSPACE_ID_RE.test(workspaceId)) {
+      throw new Error(
+        `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+          `${JSON.stringify(workspaceId)} is not of [A-Za-z0-9_-]`
+      );
+    }
+    if (!Array.isArray(keys) || keys.some(key => typeof key !== 'string' || !ENTITLEMENT_KEY_RE.test(key))) {
+      throw new Error(
+        `[codegen] invalid ${field} keys for "${workspaceId}" from package "${pkg.name}": ` +
+          `expected an array of entitlement keys of [A-Za-z0-9:_.-], got ${JSON.stringify(keys)}`
+      );
+    }
+    table.set(workspaceId, [...new Set(keys.map(key => key.toLowerCase()))]);
+  }
+  return table;
+}
 
 function generateWorkspaceCopyEntitlements(packages) {
   const outPath = join(GENERATED_DIR, 'premiumWorkspaceCopyEntitlements.generated.ts');
@@ -403,31 +441,23 @@ function generateWorkspaceCopyEntitlements(packages) {
 
   const merged = new Map();
   for (const pkg of packages) {
-    const declared = pkg.contributions.workspaceCopyEntitlements;
-    if (declared === undefined) continue;
-    if (declared === null || typeof declared !== 'object' || Array.isArray(declared)) {
-      throw new Error(
-        `[codegen] invalid workspaceCopyEntitlements from package "${pkg.name}": ` +
-          `expected an object of workspace id -> entitlement keys, got ${JSON.stringify(declared)}`
-      );
-    }
-    for (const [workspaceId, keys] of Object.entries(declared)) {
-      if (!WORKSPACE_ID_RE.test(workspaceId)) {
+    const grants = readWorkspaceKeyTable(pkg, 'workspaceCopyEntitlements');
+    const gates = readWorkspaceKeyTable(pkg, 'workspaceGateEntitlements');
+    for (const [workspaceId, keys] of grants) {
+      const admitted = gates.get(workspaceId) ?? [];
+      const stranded = keys.filter(key => !admitted.includes(key));
+      if (stranded.length > 0) {
         throw new Error(
-          `[codegen] invalid workspaceCopyEntitlements workspace id from package "${pkg.name}": ` +
-            `${JSON.stringify(workspaceId)} is not of [A-Za-z0-9_-]`
-        );
-      }
-      if (!Array.isArray(keys) || keys.some(key => typeof key !== 'string' || !ENTITLEMENT_KEY_RE.test(key))) {
-        throw new Error(
-          `[codegen] invalid workspaceCopyEntitlements keys for "${workspaceId}" from package "${pkg.name}": ` +
-            `expected an array of entitlement keys of [A-Za-z0-9:_.-], got ${JSON.stringify(keys)}`
+          `[codegen] workspaceCopyEntitlements from package "${pkg.name}" grants ${JSON.stringify(stranded)} ` +
+            `for workspace "${workspaceId}", but its workspaceGateEntitlements["${workspaceId}"] does not admit them. ` +
+            `A copy kept in a workspace whose route or API gate refuses its owner is stranded: it leaves the ` +
+            `main list and opens nowhere. Widen the workspace's gates to admit the key and list it in ` +
+            `workspaceGateEntitlements, or drop the grant.`
         );
       }
       const list = merged.get(workspaceId) ?? [];
       for (const key of keys) {
-        const normalized = key.toLowerCase();
-        if (!list.includes(normalized)) list.push(normalized);
+        if (!list.includes(key)) list.push(key);
       }
       merged.set(workspaceId, list);
     }
