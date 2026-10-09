@@ -136,6 +136,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/v1/projects',
       'GET /api/v1/projects',
       'GET /api/v1/projects/:id',
+      'PATCH|DELETE /api/v1/projects/:id',
     ],
   },
   {

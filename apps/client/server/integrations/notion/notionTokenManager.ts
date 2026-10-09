@@ -1,6 +1,7 @@
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 import { NOTION_API_BASE_URL, NOTION_VERSION } from './notionConfig';
 
 const TOKEN_VALIDATION_TIMEOUT = 10000;
@@ -167,11 +168,15 @@ export class NotionTokenManager {
     });
 
     if (notionServer) {
-      await mcpServerRepository.update({
-        id: notionServer.id,
-        envVariables,
-        enabled: true,
-      });
+      await mcpServerRepository.update(
+        {
+          id: notionServer.id,
+          envVariables,
+          enabled: true,
+        },
+        // Reconnect: drop any prior "confirmed empty" marker so the retry loop below is trusted.
+        { unset: ['toolSchemasFetchedAt'] }
+      );
       console.log('Updated existing Notion MCP server');
     } else {
       notionServer = await mcpServerRepository.create({
@@ -206,11 +211,7 @@ export class NotionTokenManager {
 
         const tools = Array.isArray(result) ? result : [result].flat();
         if (notionServer) {
-          await mcpServerRepository.update({
-            id: notionServer.id,
-            tools: tools.map((tool: { name: string }) => tool.name),
-            toolSchemas: tools as Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>,
-          });
+          await mcpServerRepository.update(buildMcpToolCacheUpdate(notionServer.id, tools as Array<{ name: string }>));
         }
         console.log(`Notion MCP server configured with ${tools.length} tools`);
         toolsFetched = true;

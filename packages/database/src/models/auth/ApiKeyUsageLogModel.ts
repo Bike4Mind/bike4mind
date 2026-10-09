@@ -306,8 +306,9 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
     // This is a plain string prefix, not a path-segment one: `/api/chat` also
     // matches `/api/chatbots`. Over-reporting is the safe direction here (the
     // operator re-mints a key that would not have broken), and segment-awareness
-    // would break the query-string match this relies on, since `endpoint` is
-    // `req.originalUrl` - `/api/chat?x=1` has to match too.
+    // would break the match on templated endpoints, since `endpoint` is the route
+    // template (`/api/agents/[id]`). Rows written before templating still hold the
+    // raw URL, so `/api/chat?x=1` has to match too until they age out of the TTL.
     const escaped = endpointPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     return this.model.aggregate<IApiKeyEndpointTraffic>([

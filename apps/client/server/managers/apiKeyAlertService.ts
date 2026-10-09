@@ -31,6 +31,8 @@ export interface AnomalyDetectionRequest {
   keyId: string;
   ipAddress: string;
   endpoint: string;
+  /** Raw request path without the query string; the sensitive-endpoint check reads this, never the templated endpoint. */
+  pathname?: string;
   timestamp: Date;
 }
 
@@ -44,7 +46,7 @@ export class ApiKeyAlertService {
    * Should be called asynchronously (fire-and-forget) to avoid blocking requests
    */
   static async detectAnomalies(request: AnomalyDetectionRequest, logger?: Logger): Promise<void> {
-    const { userId, keyId, ipAddress, endpoint } = request;
+    const { userId, keyId, ipAddress, endpoint, pathname } = request;
 
     try {
       const apiKey = await userApiKeyRepository.findById(keyId);
@@ -78,7 +80,7 @@ export class ApiKeyAlertService {
       const [highRateResult, isNewIP, isUnusualPattern] = await Promise.all([
         this.detectHighRate(userId, keyId, baseline, logger),
         this.detectNewIP(ipAddress, baseline, logger),
-        this.detectUnusualPattern(endpoint, baseline, logger),
+        this.detectUnusualPattern(endpoint, pathname ?? endpoint, baseline, logger),
       ]);
 
       if (highRateResult.isAnomaly) {
@@ -211,7 +213,12 @@ export class ApiKeyAlertService {
   /**
    * Detect if request is accessing an unusual endpoint pattern
    */
-  private static detectUnusualPattern(endpoint: string, baseline: IUserApiKeyBaseline, logger?: Logger): boolean {
+  private static detectUnusualPattern(
+    endpoint: string,
+    pathname: string,
+    baseline: IUserApiKeyBaseline,
+    logger?: Logger
+  ): boolean {
     // Skip if baseline has no common endpoints yet
     if (!baseline.commonEndpoints || baseline.commonEndpoints.length === 0) {
       return false;
@@ -224,7 +231,7 @@ export class ApiKeyAlertService {
     }
 
     // Check if endpoint is sensitive (should always alert on sensitive endpoints)
-    const isSensitiveEndpoint = DETECTION_CONFIG.SENSITIVE_ENDPOINTS.some(sensitive => endpoint.startsWith(sensitive));
+    const isSensitiveEndpoint = DETECTION_CONFIG.SENSITIVE_ENDPOINTS.some(sensitive => pathname.startsWith(sensitive));
 
     if (isSensitiveEndpoint) {
       logger?.warn('Unusual pattern detected (sensitive endpoint)', {
