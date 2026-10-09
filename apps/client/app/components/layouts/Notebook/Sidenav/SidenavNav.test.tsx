@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import type { ComponentType } from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -12,10 +13,12 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * page, so its row could never appear on its own. Feature FLAGS still gate, and
  * still fail closed.
  */
-const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock } = vi.hoisted(() => ({
+const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock, navItems } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
   useGearsNavSignalMock: vi.fn(),
   useVideoModelsMock: vi.fn(),
+  // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
+  navItems: [] as Array<{ path: string; label: string; icon?: ComponentType }>,
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -41,6 +44,7 @@ vi.mock('@client/app/components/Files/Browser', () => ({
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [] }));
+vi.mock('@client/app/premium-generated/premiumNavItems.generated', () => ({ premiumNavItems: navItems }));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
   useLocation: () => ({ pathname: '/new', search: {} }),
@@ -74,6 +78,7 @@ beforeEach(() => {
   useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
   useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 0 });
   useVideoModelsMock.mockReturnValue({ data: [] });
+  navItems.length = 0;
 });
 
 describe('SidenavNav feature rows', () => {
@@ -146,5 +151,27 @@ describe('SidenavNav Video Studio row', () => {
     useVideoModelsMock.mockReturnValue({ data: undefined });
     renderNav();
     expect(videoRow()).not.toBeInTheDocument();
+  });
+});
+
+describe('SidenavNav Bob row', () => {
+  const bobRow = () => screen.queryByTestId('sidenav-nav-bob');
+
+  it('hides when no overlay contributes the /bob nav item', () => {
+    renderNav();
+    expect(bobRow()).not.toBeInTheDocument();
+  });
+
+  it('uses the icon the overlay contributes with its nav item', () => {
+    navItems.push({ path: '/bob', label: 'Bob', icon: () => <svg data-testid="contributed-nav-icon" /> });
+    renderNav();
+    expect(bobRow()).toContainElement(screen.getByTestId('contributed-nav-icon'));
+    expect(screen.queryByTestId('Diversity3OutlinedIcon')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the stock icon when the nav item has none', () => {
+    navItems.push({ path: '/bob', label: 'Bob' });
+    renderNav();
+    expect(bobRow()).toContainElement(screen.getByTestId('Diversity3OutlinedIcon'));
   });
 });
