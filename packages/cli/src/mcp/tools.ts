@@ -97,7 +97,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'send_message',
     title: 'Send message',
     description:
-      'Send a chat message and wait for the assistant reply, reporting progress while it is generated; returns the cited sources (citables) the answer was grounded in.',
+      'Send a chat message and wait for the assistant reply, reporting progress while it is generated; returns the cited sources (citables) the answer was grounded in. Fails on an errored or stopped turn, and stops the turn when the call is cancelled.',
     scope: 'ai:chat',
   },
   {
@@ -351,8 +351,8 @@ export async function createProject(
 }
 
 /**
- * Queue a chat turn and poll its quest to completion. A failed turn ends `type: 'error'` with its
- * explanation as the reply, which is returned as-is like any other reply.
+ * Queue a chat turn and poll its quest to completion. A failed (`type: 'error'`) or stopped turn
+ * throws, so the tool reports `isError`; a cancelled call makes a best-effort stop of its quest.
  */
 export async function sendMessage(
   client: B4mApiClient,
@@ -361,17 +361,37 @@ export async function sendMessage(
 ) {
   const ack = await client.sendChat(args);
   const questId = ack.id;
-  const quest = await pollQuest(
-    client,
-    {
-      questId,
-      ref: questRef(questId, ack.sessionId),
-      task: 'chat completion',
-      scope: 'ai:chat',
-      isFinished: isSettled,
-    },
-    { ...poll, timeoutMs, interval: elapsedMs => chatPollInterval(elapsedMs, intervalMs) }
-  );
+  const sessionId = args.notebookId ?? ack.sessionId;
+  const ref = questRef(questId, sessionId);
+  let quest: QuestResponse;
+  try {
+    quest = await pollQuest(
+      client,
+      { questId, ref, task: 'chat completion', scope: 'ai:chat', isFinished: isSettled },
+      { ...poll, timeoutMs, interval: elapsedMs => chatPollInterval(elapsedMs, intervalMs) }
+    );
+  } catch (err) {
+    // Only a cancel stops the turn: after a timeout or poll failure it may still finish and be read later.
+    if (poll.signal?.aborted && sessionId) {
+      await client
+        .stopReply(sessionId, questId)
+        .catch(stopErr =>
+          logger.warn(
+            `mcp: stopping the cancelled turn failed (${ref}): ${stopErr instanceof Error ? stopErr.message : String(stopErr)}`
+          )
+        );
+    }
+    throw err;
+  }
+
+  const reply = replyText(quest);
+  if (quest.status === 'stopped') {
+    throw new Error(`chat completion was stopped (${ref})${reply ? `: ${reply}` : ''}`);
+  }
+  if (quest.type === 'error') {
+    const code = quest.errorCode ? `${quest.errorCode}: ` : '';
+    throw new Error(`${code}${reply || 'chat completion failed'} (${ref})`);
+  }
 
   const notebookId = args.notebookId ?? ack.sessionId ?? quest.sessionId;
   // Drop `metadata`: it can carry `fullContext` passage text that would bloat the MCP client's context.
@@ -383,7 +403,7 @@ export async function sendMessage(
     description: c.description,
   }));
 
-  return { notebookId, questId, reply: replyText(quest), model: ack.model, citables };
+  return { notebookId, questId, reply, model: ack.model, citables };
 }
 
 export async function searchKnowledgeBase(

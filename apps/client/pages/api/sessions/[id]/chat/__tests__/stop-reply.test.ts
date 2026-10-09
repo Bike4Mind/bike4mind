@@ -40,8 +40,8 @@ vi.mock('@bike4mind/observability', () => ({
 
 import '@pages/api/sessions/[id]/chat/stop-reply';
 
-function post(sessionId: string) {
-  const { req, res } = createMocks({ method: 'POST', query: { id: sessionId }, body: {} });
+function post(sessionId: string, body: Record<string, unknown> = {}) {
+  const { req, res } = createMocks({ method: 'POST', query: { id: sessionId }, body });
   (req as any).user = { id: 'user-1' };
   (req as any).ability = {};
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -83,5 +83,30 @@ describe('POST /api/sessions/[id]/chat/stop-reply', () => {
 
     expect(dispatchQuestCallback).not.toHaveBeenCalled();
     expect(res._getJSONData().questId).toBeUndefined();
+  });
+
+  it('passes a questId from the body through so only that turn is stopped', async () => {
+    stopReply.mockResolvedValue({ status: 'stopped', id: '64b7f0c2a1b2c3d4e5f60718' });
+    const { req, res } = post('session-1', { questId: '64b7f0c2a1b2c3d4e5f60718' });
+
+    await mockRefs.handler!(req, res);
+
+    expect(stopReply).toHaveBeenCalledWith('session-1', {}, '64b7f0c2a1b2c3d4e5f60718');
+  });
+
+  it('stops the latest quest (no questId) when the body carries none', async () => {
+    stopReply.mockResolvedValue({ status: 'stopped', id: 'quest-1' });
+    const { req, res } = post('session-1');
+
+    await mockRefs.handler!(req, res);
+
+    expect(stopReply).toHaveBeenCalledWith('session-1', {}, undefined);
+  });
+
+  it('rejects a malformed questId before it reaches the query', async () => {
+    const { req, res } = post('session-1', { questId: 'not-an-id' });
+
+    await expect(mockRefs.handler!(req, res)).rejects.toThrow('Invalid questId');
+    expect(stopReply).not.toHaveBeenCalled();
   });
 });

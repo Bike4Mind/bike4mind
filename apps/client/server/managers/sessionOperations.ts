@@ -132,8 +132,12 @@ export const deleteMessageFromSession = async (
   return await Quest.findOneAndUpdate({ _id: messageId, sessionId }, { $set: { deletedAt: new Date() } });
 };
 
-export const stopReply = async (sessionId: string, ability: Ability) => {
-  const latestQuest = await Quest.findOne({ sessionId }).sort({ timestamp: -1 });
+// Without questId this stops the session's latest quest; a caller that knows its own turn passes
+// questId so a newer turn in the same session is not stopped instead.
+export const stopReply = async (sessionId: string, ability: Ability, questId?: string) => {
+  const latestQuest = questId
+    ? await Quest.findOne({ _id: questId, sessionId })
+    : await Quest.findOne({ sessionId }).sort({ timestamp: -1 });
   const session = await Session.findOne({
     _id: sessionId,
     ...accessibleBy(ability, Permission.update).ofType(SessionModel),
