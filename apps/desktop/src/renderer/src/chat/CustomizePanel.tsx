@@ -1,16 +1,83 @@
 import Box from '@mui/joy/Box';
+import Chip from '@mui/joy/Chip';
 import IconButton from '@mui/joy/IconButton';
+import List from '@mui/joy/List';
+import ListItem from '@mui/joy/ListItem';
+import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
+import Tab from '@mui/joy/Tab';
+import TabList from '@mui/joy/TabList';
+import TabPanel from '@mui/joy/TabPanel';
+import Tabs from '@mui/joy/Tabs';
 import Typography from '@mui/joy/Typography';
+import type { SkillSummary } from '@shared/skills';
 import { entryAttentionChip, EntrySection, type ConfigEntry } from './ConfigEntry';
 import { CloseIcon, ServerIcon, SlidersIcon } from './icons';
 import { McpServersSettings } from './McpServersSettings';
 import { NavItem } from './SessionList';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { useMcpServers, type McpServersController } from './useMcpServers';
+import { useSkills } from './useSkills';
 
 /** What this screen is for, said on the screen so it does not have to be inferred from a name. */
 const CUSTOMIZE_INTRO = 'What tools the app can reach.';
+
+function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSummary[]; empty: string }) {
+  return (
+    <Sheet variant="outlined" sx={{ borderRadius: 'sm', px: 1.5, py: 1.25 }} data-testid="skill-group">
+      <Typography level="title-sm">{title}</Typography>
+      {skills.length === 0 ? (
+        <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.75 }}>
+          {empty}
+        </Typography>
+      ) : (
+        <List size="sm" sx={{ mt: 0.5, '--ListItem-paddingX': 0 }}>
+          {skills.map(skill => (
+            <ListItem key={`${skill.source}:${skill.name}`} data-testid="customize-skill-row">
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Stack direction="row" spacing={0.75} alignItems="baseline">
+                  <Typography level="title-sm" noWrap>
+                    /{skill.name}
+                  </Typography>
+                  {skill.argumentHint && (
+                    <Typography level="body-xs" textColor="text.tertiary" noWrap>
+                      {skill.argumentHint}
+                    </Typography>
+                  )}
+                  <Box sx={{ flex: 1 }} />
+                  <Chip size="sm" variant="soft" color={skill.source === 'project' ? 'warning' : 'neutral'}>
+                    {skill.source}
+                  </Chip>
+                </Stack>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  {skill.description}
+                </Typography>
+              </Box>
+            </ListItem>
+          ))}
+        </List>
+      )}
+    </Sheet>
+  );
+}
+
+function SkillsSettings({ sessionId }: { sessionId: string | null }) {
+  const { skills, untrustedProject } = useSkills(sessionId);
+  const bike4MindSkills = skills.filter(skill => /[\\/]\.bike4mind[\\/]/.test(skill.filePath));
+  const customSkills = skills.filter(skill => !bike4MindSkills.includes(skill));
+
+  return (
+    <Stack spacing={1.25} data-testid="skills-settings">
+      {untrustedProject && (
+        <Typography level="body-xs" textColor="warning.500">
+          Project skills are hidden until this project is trusted.
+        </Typography>
+      )}
+      <SkillGroup title="Your custom skills" skills={customSkills} empty="No custom skills found for this project." />
+      <SkillGroup title="Bike4Mind skills" skills={bike4MindSkills} empty="No Bike4Mind skills found." />
+    </Stack>
+  );
+}
 
 function mcpEntry(controller: McpServersController): ConfigEntry {
   const connected = controller.servers.filter(server => server.status === 'connected').length;
@@ -86,7 +153,7 @@ export function CustomizeNavItem({ onOpen }: { onOpen: () => void }) {
  * App preferences, the server and updates are Settings. The two screens say which half they own
  * under their titles, so neither has to be searched for the other's half.
  */
-export function CustomizeScreen({ onClose }: { onClose: () => void }) {
+export function CustomizeScreen({ onClose, sessionId = null }: { onClose: () => void; sessionId?: string | null }) {
   const entries = useCustomizeEntries();
 
   return (
@@ -112,13 +179,26 @@ export function CustomizeScreen({ onClose }: { onClose: () => void }) {
         </Stack>
       </Box>
 
-      <Box sx={{ flex: 1, ...scrollingColumnHostSx }}>
-        <Box sx={{ ...contentColumnSx, py: 2 }}>
-          {entries.map(entry => (
-            <EntrySection key={entry.id} entry={entry} />
-          ))}
+      <Tabs defaultValue={0} sx={{ flex: 1, minHeight: 0 }}>
+        <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+          <TabList sx={{ ...contentColumnSx }}>
+            <Tab data-testid="customize-skills-tab">Skills</Tab>
+            <Tab data-testid="customize-mcp-tab">MCP</Tab>
+          </TabList>
         </Box>
-      </Box>
+        <TabPanel value={0} sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>
+          <Box sx={{ ...contentColumnSx, py: 2 }}>
+            <SkillsSettings sessionId={sessionId} />
+          </Box>
+        </TabPanel>
+        <TabPanel value={1} sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>
+          <Box sx={{ ...contentColumnSx, py: 2 }}>
+            {entries.map(entry => (
+              <EntrySection key={entry.id} entry={entry} />
+            ))}
+          </Box>
+        </TabPanel>
+      </Tabs>
     </Stack>
   );
 }
