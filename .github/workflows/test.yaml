@@ -9,6 +9,7 @@ on:
     paths:
       - 'b4m-core/**'
       - 'packages/cli/**'
+      - 'packages/sdk/**'
       # Bucket-route / SPA-route collision guard lives in b4m-core/infra but parses
       # these files, so changes to them must re-run the suite (see issue #9133).
       - 'infra/**'
@@ -79,8 +80,9 @@ jobs:
           fi
         continue-on-error: true
 
+      # packages/sdk too: the CLI imports @bike4mind/sdk, whose types resolve from its dist/.
       - name: Build Packages
-        run: pnpm --filter "./b4m-core/*" build
+        run: pnpm --filter "./b4m-core/*" --filter "./packages/sdk" build
 
       # Fast typecheck: tsgo (TypeScript 7.0 native) runs first; on any failure it
       # falls back to classic tsc, which remains the authoritative gate. When tsgo
