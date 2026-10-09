@@ -30,7 +30,9 @@ type LakeTagParams = Pick<UpdateFabFileParams, 'tags' | 'primaryTag'>;
 export async function updateFileForUser(
   req: Request,
   administeredOrgIds: string[] | undefined,
-  params: Omit<UpdateFabFileParams, keyof LakeTagParams>,
+  // `?: never` rather than a bare Omit: an Omit still accepts a full UpdateFabFileParams variable
+  // carrying tags, which would skip the gate `gatedLakeTags` exists to mark.
+  params: Omit<UpdateFabFileParams, keyof LakeTagParams> & { [K in keyof LakeTagParams]?: never },
   gatedLakeTags?: LakeTagParams
 ) {
   const updated = await withTransaction(async () => {
