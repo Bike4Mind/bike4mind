@@ -136,10 +136,9 @@ export const sessionSpawn: ToolDefinition = {
       'When they approve it, the USER chooses where it runs: in this working directory, or in a ' +
       'git worktree of its own on a new branch, cut from the branch this conversation is on. You ' +
       'cannot choose and must not assume - so write the prompt so it stands on its own in ' +
-      'either, naming files by their path within the ' +
-      'repository rather than telling it to carry on with something uncommitted here. They may ' +
-      'also answer that they want the work done in this conversation, in which case nothing is ' +
-      'started and you do it yourself.',
+      'either, naming files by their path within the repository rather than telling it to carry ' +
+      'on with something uncommitted here. They may also answer that they want the work done in ' +
+      'this conversation, in which case nothing is started and you do it yourself.',
     parameters: {
       type: 'object',
       properties: {
@@ -206,9 +205,9 @@ export const sessionSpawn: ToolDefinition = {
     const title = typeof input.title === 'string' && input.title.trim() ? input.title.trim() : undefined;
 
     // Set by the approval card and by nothing else - none of these properties is in the schema
-    // above, so a model cannot send one. Absent means no gate was configured at all, and the answer there
-    // is the placement that touches nothing: creating a checkout nobody asked for is the worse
-    // of the two ways to be wrong.
+    // above, so a model cannot send one. Absent means no gate was configured at all, and the
+    // answer there is the placement that touches nothing: creating a checkout nobody asked for is
+    // the worse of the two ways to be wrong.
     const branch = typeof input.branch === 'string' ? input.branch.trim() : '';
     const worktree = input.placement === 'worktree' && branch !== '';
     // Only empty when no card ran to resolve it, and then resolved the same way the card would.
