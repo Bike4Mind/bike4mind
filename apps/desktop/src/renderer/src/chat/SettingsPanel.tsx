@@ -1,18 +1,74 @@
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
+import Switch from '@mui/joy/Switch';
+import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import Typography from '@mui/joy/Typography';
+import { useColorScheme, useTheme } from '@mui/joy/styles';
 import type { AuthState } from '@shared/auth';
 import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
 import { EntrySection, type ConfigEntry } from './ConfigEntry';
-import { CloseIcon, DownloadIcon, ServerIcon } from './icons';
+import { CloseIcon, ContrastIcon, DownloadIcon, ServerIcon, SparkIcon } from './icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
+import { promptSuggestionsSummary, usePromptSuggestions } from './promptSuggestions';
+import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
 import { UpdateSettings } from './UpdateSettings';
 import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 
 /** What this screen is for, said on the screen so it does not have to be inferred from a name. */
-const SETTINGS_INTRO = 'What this app connects to, and how it keeps itself up to date.';
+const SETTINGS_INTRO = 'How the app looks, behaves, connects, and keeps itself up to date.';
+
+const THEME_MODE_LABEL: Record<ThemeMode, string> = { system: 'System', light: 'Light', dark: 'Dark' };
+
+function appearanceEntry(
+  mode: string | undefined,
+  setMode: (mode: ThemeMode) => void,
+  resolved: ResolvedThemeMode
+): ConfigEntry {
+  return {
+    id: 'appearance',
+    icon: <ContrastIcon />,
+    label: 'Appearance',
+    summary: themeModeSummary(mode, resolved),
+    control: (
+      <ToggleButtonGroup
+        size="sm"
+        value={currentThemeMode(mode)}
+        onChange={(_event, next) => {
+          if (next) setMode(next as ThemeMode);
+        }}
+        data-testid="settings-appearance-group"
+      >
+        {THEME_MODES.map(themeMode => (
+          <Button key={themeMode} value={themeMode} data-testid={`settings-appearance-${themeMode}-btn`}>
+            {THEME_MODE_LABEL[themeMode]}
+          </Button>
+        ))}
+      </ToggleButtonGroup>
+    ),
+  };
+}
+
+function suggestionsEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'prompt-suggestions',
+    icon: <SparkIcon />,
+    label: 'Suggested next prompt',
+    summary: promptSuggestionsSummary(enabled),
+    control: (
+      <Switch
+        size="sm"
+        checked={enabled}
+        onChange={toggle}
+        slotProps={{
+          input: { 'aria-label': 'Suggested next prompt', 'data-testid': 'settings-suggestions-switch' },
+        }}
+      />
+    ),
+  };
+}
 
 /**
  * Which backend every conversation talks to.
@@ -66,16 +122,22 @@ function updatesEntry(controller: AppUpdateController): ConfigEntry {
  */
 function useSettingsEntries(auth: AuthState | null): ConfigEntry[] {
   const update = useAppUpdate();
+  const { mode, setMode } = useColorScheme();
+  const theme = useTheme();
+  const [suggestions, toggleSuggestions] = usePromptSuggestions();
 
-  return auth ? [serverEntry(auth), updatesEntry(update)] : [updatesEntry(update)];
+  const preferences = [
+    appearanceEntry(mode, setMode, theme.palette.mode),
+    suggestionsEntry(suggestions, toggleSuggestions),
+  ];
+  return auth ? [...preferences, serverEntry(auth), updatesEntry(update)] : [...preferences, updatesEntry(update)];
 }
 
 /**
- * "Settings": what the app connects to and how it is maintained, as a screen beside Customize.
+ * "Settings": app preferences, connections and maintenance, as a screen beside Customize.
  *
- * The split with Customize is by subject, not by importance: nothing here changes how the app
- * looks or what it can reach, and nothing in Customize changes which deployment a reply came
- * from. Each screen says which half it owns under its title, so neither has to be searched.
+ * Customize owns tool connections. Settings owns app-wide preferences, the deployment a reply
+ * comes from, and updates. Each screen says which half it owns under its title.
  *
  * Customize is a nav row and this is not. Two config rows stacked in the nav list read as one
  * thing split in half; Settings is reached from the account menu, where the server it owns used

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
@@ -290,6 +290,120 @@ describe('ChatService.updateProject', () => {
     expect(await currentBranch(main)).toBe('main');
   });
 
+  describe('a branch another worktree has checked out', () => {
+    async function heldElsewhere(name: string): Promise<{ container: string; main: string; other: string }> {
+      const made = await repository(name);
+      const other = join(made.container, 'feat+held');
+      await git(made.main, ['worktree', 'add', '--quiet', '-b', 'feat/held', other]);
+      return { ...made, other };
+    }
+
+    it('is refused with the toggle off before git is asked to switch, naming where it is', async () => {
+      const { main, other } = await heldElsewhere('held-off');
+      const id = await codeSession(main);
+
+      const result = await service.updateProject({ sessionId: id, branch: 'feat/held' });
+
+      expect(result).toMatchObject({ ok: false, elsewhere: { branch: 'feat/held', path: other } });
+      expect(result.ok === false && result.error).not.toMatch(/fatal:/i);
+      expect(await currentBranch(main)).toBe('main');
+      expect((await service.getSession(id))?.project?.branch).toBe('main');
+    });
+
+    /** Neither way on touches this folder, so its uncommitted work is no reason to withhold them. */
+    it('offers the ways on even over uncommitted changes in this folder', async () => {
+      const { main } = await heldElsewhere('held-dirty');
+      const id = await codeSession(main);
+      await writeFile(join(main, 'README.md'), 'edited\n', 'utf8');
+
+      expect(await service.updateProject({ sessionId: id, branch: 'feat/held' })).toMatchObject({
+        ok: false,
+        elsewhere: { branch: 'feat/held' },
+      });
+    });
+
+    it('moves the session into that checkout when the user chooses to use it', async () => {
+      const { main, other } = await heldElsewhere('held-use');
+      const id = await codeSession(main);
+      const before = await listWorktrees(main);
+
+      expect(
+        await service.updateProject({ sessionId: id, directory: other, branch: 'feat/held', workspace: false })
+      ).toMatchObject({ ok: true });
+
+      expect((await service.getSession(id))?.project).toMatchObject({
+        directory: other,
+        workingDirectory: other,
+        branch: 'feat/held',
+        workspace: false,
+      });
+      expect(await currentBranch(main)).toBe('main');
+      expect(await listWorktrees(main)).toEqual(before);
+    });
+
+    it('turns the worktree toggle on with it as the base when the user chooses a worktree', async () => {
+      const { main } = await heldElsewhere('held-cut');
+      const id = await codeSession(main);
+
+      expect(await service.updateProject({ sessionId: id, branch: 'feat/held', workspace: true })).toMatchObject({
+        ok: true,
+      });
+
+      expect((await service.getSession(id))?.project).toMatchObject({
+        branch: 'feat/held',
+        workspace: true,
+        workingDirectory: main,
+      });
+      expect(await currentBranch(main)).toBe('main');
+    });
+
+    it('is picked as a base with the toggle on without any refusal', async () => {
+      const { main } = await heldElsewhere('held-on');
+      const id = await codeSession(main);
+      await service.updateProject({ sessionId: id, workspace: true });
+
+      expect(await service.updateProject({ sessionId: id, branch: 'feat/held' })).toMatchObject({ ok: true });
+    });
+
+    /** A plain-object lookup found Object.prototype.constructor and refused the switch. */
+    it('still checks out a branch named like an Object member that nothing else holds', async () => {
+      const { main } = await heldElsewhere('held-proto');
+      await git(main, ['branch', 'constructor']);
+      const id = await codeSession(main);
+
+      expect(await service.updateProject({ sessionId: id, branch: 'constructor' })).toMatchObject({ ok: true });
+      expect(await currentBranch(main)).toBe('constructor');
+    });
+
+    it('marks a holder whose folder is gone as prunable', async () => {
+      const { main, other } = await heldElsewhere('held-gone');
+      await rm(other, { recursive: true, force: true });
+      const id = await codeSession(main);
+
+      expect(await service.updateProject({ sessionId: id, branch: 'feat/held' })).toMatchObject({
+        ok: false,
+        elsewhere: { branch: 'feat/held', path: other, prunable: true },
+      });
+    });
+  });
+
+  it("reports any other refused switch without git's fatal: tag", async () => {
+    const { main } = await repository('off-clash');
+    await git(main, ['switch', '--quiet', '-c', 'feat/x']);
+    await writeFile(join(main, 'clash.txt'), 'tracked on feat/x\n', 'utf8');
+    await git(main, ['add', 'clash.txt']);
+    await git(main, ['commit', '--quiet', '-m', 'clash']);
+    await git(main, ['switch', '--quiet', 'main']);
+    await writeFile(join(main, 'clash.txt'), 'untracked on main\n', 'utf8');
+    const id = await codeSession(main);
+
+    const result = await service.updateProject({ sessionId: id, branch: 'feat/x' });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toMatch(/^Could not switch .* to feat\/x: /);
+    expect(result.ok === false && result.error).not.toMatch(/fatal:|error:|hint:/i);
+  });
+
   it('turning it back off returns the session to the project directory', async () => {
     const { main } = await repository('beta');
     const id = await codeSession(main);
@@ -491,6 +605,21 @@ describe('the worktree a Code session gets on its first turn', () => {
       join(appWorktreeRoot(container), worktreeFolderName(project?.workspaceBranch ?? ''))
     );
     expect(project?.workingDirectory).not.toBe(main);
+  });
+
+  it('cuts a new branch from a base another worktree holds, leaving that checkout alone', async () => {
+    const { container, main } = await repository('turn-held');
+    const other = join(container, 'feat+held');
+    await git(main, ['worktree', 'add', '--quiet', '-b', 'feat/held', other]);
+    const id = await bound(main, 'main');
+    await service.updateProject({ sessionId: id, branch: 'feat/held', workspace: true });
+
+    await service.send(id, 'Fix the login form');
+
+    const project = (await service.getSession(id))?.project;
+    expect(project?.workspaceBranch).toMatch(/^b4m\//);
+    expect(project?.workingDirectory).not.toBe(other);
+    expect(await currentBranch(other)).toBe('feat/held');
   });
 
   /**

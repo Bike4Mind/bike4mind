@@ -1224,6 +1224,11 @@ export interface ProjectInspection {
   isRepository: boolean;
   branches: string[];
   currentBranch: string | null;
+  /**
+   * Branches checked out in a worktree other than `directory`, by name. git lets a branch be
+   * checked out in one worktree only, so with the toggle off these cannot be switched to here.
+   */
+  checkedOutElsewhere?: Record<string, BranchCheckout>;
   /** Set when git could be asked but answered with a failure; the dialog shows it verbatim. */
   error?: string;
   /**
@@ -1281,7 +1286,39 @@ export interface UpdateProjectRequest {
  * request succeeds once the session is idle.
  */
 export type UpdateProjectResult =
-  { ok: true; session: ChatSessionSummary } | { ok: false; error: string; busy?: boolean };
+  | { ok: true; session: ChatSessionSummary }
+  | {
+      ok: false;
+      error: string;
+      busy?: boolean;
+      /**
+       * Set when a toggle-off pick names a branch another worktree has checked out. Nothing was
+       * switched; the chip row offers to move into that checkout or cut a worktree from it.
+       */
+      elsewhere?: BranchElsewhere;
+    };
+
+/** Where a branch is checked out, when that is not the folder a session asked about. */
+export interface BranchCheckout {
+  path: string;
+  /** Its folder is gone, but git still holds the branch for it until `git worktree prune`. */
+  prunable?: boolean;
+}
+
+export interface BranchElsewhere extends BranchCheckout {
+  branch: string;
+}
+
+/**
+ * The checkout holding `branch`, if any. An own-key lookup because branch names come from the
+ * user's repository, and `constructor` or `__proto__` are names git accepts.
+ */
+export function branchHolder(
+  checkouts: Readonly<Record<string, BranchCheckout>>,
+  branch: string
+): BranchCheckout | undefined {
+  return Object.prototype.hasOwnProperty.call(checkouts, branch) ? checkouts[branch] : undefined;
+}
 
 /**
  * Why a spawn was refused, for the message handed back to the MODEL.

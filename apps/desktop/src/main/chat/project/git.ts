@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import type { BranchCheckout } from '@shared/chat';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,9 +23,24 @@ export class GitError extends Error {
     readonly args: readonly string[],
     stderr: string
   ) {
-    super(stderr.trim() || `git ${args.join(' ')} failed`);
+    super(readableGitMessage(stderr) || `git ${args.join(' ')} failed`);
     this.name = 'GitError';
   }
+}
+
+/**
+ * git's stderr as a sentence for the person reading the chip row: the `fatal:`/`error:` tags
+ * dropped and `hint:` lines left out, since they name commands to type into a terminal the user
+ * is not in. What git actually says is kept word for word.
+ */
+export function readableGitMessage(stderr: string): string {
+  return stderr
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !/^hint:/i.test(line))
+    .map(line => line.replace(/^(fatal|error|warning):\s*/i, ''))
+    .join(' ')
+    .trim();
 }
 
 export async function git(directory: string, args: readonly string[]): Promise<string> {
@@ -135,6 +151,38 @@ export interface WorktreeEntry {
   branch?: string;
 }
 
+/** One record of `git worktree list --porcelain`, flags included. */
+export interface PorcelainWorktree extends WorktreeEntry {
+  bare?: boolean;
+  /** Registered, but its folder is gone. git still refuses to check its branch out elsewhere. */
+  prunable?: boolean;
+}
+
+export function parseWorktreePorcelain(stdout: string): PorcelainWorktree[] {
+  const entries: PorcelainWorktree[] = [];
+  let current: PorcelainWorktree | null = null;
+
+  for (const line of stdout.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      if (current) entries.push(current);
+      current = { path: line.slice('worktree '.length).trim() };
+    } else if (!current) {
+      continue;
+    } else if (line === 'bare') {
+      current.bare = true;
+    } else if (line === 'prunable' || line.startsWith('prunable ')) {
+      current.prunable = true;
+    } else if (line.startsWith('branch refs/heads/')) {
+      current.branch = line.slice('branch refs/heads/'.length).trim();
+    } else if (line === '') {
+      entries.push(current);
+      current = null;
+    }
+  }
+  if (current) entries.push(current);
+  return entries;
+}
+
 /**
  * True when `path` is itself a git directory (HEAD, objects/ and refs/), as <container>/.bare is.
  * Checked on disk rather than through git: a bare repo that also carries core.bare=false in a
@@ -159,31 +207,48 @@ export async function isGitDirectory(path: string): Promise<boolean> {
  * made it win a lookup for the branch the main worktree actually holds.
  */
 export async function listWorktrees(directory: string): Promise<WorktreeEntry[]> {
-  const stdout = await git(directory, ['worktree', 'list', '--porcelain']);
-  const entries: (WorktreeEntry & { bare?: boolean })[] = [];
-  let current: (WorktreeEntry & { bare?: boolean }) | null = null;
-
-  for (const line of stdout.split('\n')) {
-    if (line.startsWith('worktree ')) {
-      if (current) entries.push(current);
-      current = { path: line.slice('worktree '.length).trim() };
-    } else if (line === 'bare' && current) {
-      current.bare = true;
-    } else if (line.startsWith('branch refs/heads/') && current) {
-      current.branch = line.slice('branch refs/heads/'.length).trim();
-    } else if (line === '' && current) {
-      entries.push(current);
-      current = null;
-    }
-  }
-  if (current) entries.push(current);
-
+  const entries = parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain']));
   const checkouts: WorktreeEntry[] = [];
-  for (const { bare, ...entry } of entries) {
-    if (bare || (await isGitDirectory(entry.path))) continue;
-    checkouts.push(entry);
+  for (const { path, branch, bare } of entries) {
+    if (bare || (await isGitDirectory(path))) continue;
+    checkouts.push(branch ? { path, branch } : { path });
   }
   return checkouts;
+}
+
+/**
+ * Every local branch checked out in a worktree other than `directory`, from ONE listing.
+ *
+ * Read alongside the branch list so the menu can mark them without a git call per branch. A
+ * prunable entry is kept: git refuses to switch to its branch exactly as it does for a live one.
+ * Only the first record is checked on disk for being the bare repo, because git always lists
+ * the main worktree - or the bare repo standing in for it - first.
+ */
+export async function branchCheckouts(directory: string): Promise<Record<string, BranchCheckout>> {
+  const entries = parseWorktreePorcelain(await git(directory, ['worktree', 'list', '--porcelain']));
+  const own = await samePathAs(directory);
+  const checkouts: [string, BranchCheckout][] = [];
+  for (const [index, entry] of entries.entries()) {
+    if (!entry.branch || entry.bare || own(entry.path)) continue;
+    if (index === 0 && (await isGitDirectory(entry.path))) continue;
+    checkouts.push([entry.branch, entry.prunable ? { path: entry.path, prunable: true } : { path: entry.path }]);
+  }
+  // fromEntries defines own keys, so a branch named `__proto__` is kept rather than swallowed.
+  return Object.fromEntries(checkouts);
+}
+
+/**
+ * A matcher for `directory` that tolerates the /var vs /private/var split on macOS: git reports
+ * resolved paths, while the folder handed in is whatever the picker or the store held.
+ */
+async function samePathAs(directory: string): Promise<(path: string) => boolean> {
+  const names = new Set([resolve(directory)]);
+  try {
+    names.add(await realpath(directory));
+  } catch {
+    // Gone or unreadable: the plain resolve is all there is to match on.
+  }
+  return path => names.has(resolve(path));
 }
 
 /** How many checkouts the refusal below names before it stops listing them. */
@@ -283,8 +348,9 @@ export async function uncommittedChanges(directory: string): Promise<string[]> {
 /**
  * Switch `directory` onto `branch`, creating it from HEAD when `create` is set.
  *
- * Never forced and never stashed: a refusal from git (a conflicting untracked file, a branch
- * another worktree holds) comes back as its own GitError for the user to read. `--no-guess`
+ * Never forced and never stashed: a refusal from git (a conflicting untracked file, say) comes
+ * back as its own GitError for the user to read. A branch another worktree holds is caught
+ * before this is called; see ChatService.checkoutInPlace. `--no-guess`
  * keeps a name that is only on a remote from being quietly turned into a new tracking branch.
  */
 export async function checkoutBranch(directory: string, branch: string, create: boolean): Promise<void> {

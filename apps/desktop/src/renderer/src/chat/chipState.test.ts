@@ -365,3 +365,27 @@ describe('the worktree chip before the first turn has made one', () => {
     expect(row.worktree.tooltip).toContain('/w/b4m+thing-a1b2c3');
   });
 });
+
+describe('the branch menu notice when another worktree holds some of the branches', () => {
+  const lookup = { isRepository: true, count: 3, checkedOut: 'main', elsewhereCount: 1 };
+
+  it('says with the toggle off that a held branch offers the two ways on', () => {
+    const notice = describeChipRow(project, lookup).branchNotice ?? '';
+
+    expect(notice).toMatch(/cannot be checked out here too/i);
+    expect(notice).toMatch(/work in that folder, or to cut a worktree from it/i);
+  });
+
+  it('says with the toggle on that a held branch is a fine base, not an obstacle', () => {
+    const notice = describeChipRow({ ...project, workspace: true }, lookup).branchNotice ?? '';
+
+    expect(notice).toMatch(/fine base/i);
+    expect(notice).not.toMatch(/cannot be checked out/i);
+  });
+
+  it('says nothing about held branches when there are none', () => {
+    const notice = describeChipRow(project, { ...lookup, elsewhereCount: 0 }).branchNotice ?? '';
+
+    expect(notice).not.toMatch(/another folder/i);
+  });
+});

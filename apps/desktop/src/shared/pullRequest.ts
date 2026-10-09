@@ -49,6 +49,11 @@ export interface PrBinding extends PrRef {
   lastState?: PrState;
   /** Set when auto-archive has fired, so it fires once even if the user unarchives. */
   archivedOnClose?: boolean;
+  /**
+   * The read that found the PR merged or closed, kept so the bar can draw it after a relaunch
+   * without reading a PR that will not change again. Dropped if a closed PR is reopened.
+   */
+  finalSnapshot?: PrBarSnapshot;
 }
 
 export type PrCheckBucket = 'pending' | 'pass' | 'fail' | 'skipped';
@@ -98,7 +103,7 @@ export interface PrChangeRequest {
   url: string;
 }
 
-/** One read of a pull request. Never stored; main holds the latest in memory. */
+/** One read of a pull request. Main holds the latest in memory; only a finished one is stored (see PrBinding.finalSnapshot). */
 export interface PrSnapshot extends PrRef {
   title: string;
   author: string;
@@ -117,11 +122,21 @@ export interface PrSnapshot extends PrRef {
   checks: PrCheck[];
   repoSettings: PrRepoSettings;
   viewer: string;
+  /** ISO time, for a merged PR. */
+  mergedAt?: string;
   /** Present only when the read asked for threads, which it does only while auto-fix is on. */
   threads?: PrReviewThread[];
   /** Read with the threads, for the same reason. */
   changeRequests?: PrChangeRequest[];
   fetchedAt: number;
+}
+
+/** A snapshot without the review data only auto-fix reads. */
+export type PrBarSnapshot = Omit<PrSnapshot, 'threads' | 'changeRequests'>;
+
+/** Merged or closed: nothing reads it on its own any more. A closed PR can still be refreshed by hand. */
+export function isFinishedState(state: PrState | undefined): state is 'MERGED' | 'CLOSED' {
+  return state === 'MERGED' || state === 'CLOSED';
 }
 
 /** Whether `gh` can be used at all. Anything but 'ok' replaces the bar's content with a fix-it line. */
@@ -135,7 +150,7 @@ export interface PrBarState {
   /** Null when the conversation has no PR, or the user dismissed it: no bar. */
   binding: PrBinding | null;
   /** Null until the first read lands. */
-  snapshot: Omit<PrSnapshot, 'threads' | 'changeRequests'> | null;
+  snapshot: PrBarSnapshot | null;
   gh: PrGhStatus;
   /** The last read's failure, one line, while it is still the latest word. */
   error?: string;

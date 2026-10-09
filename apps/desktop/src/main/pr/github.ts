@@ -19,7 +19,7 @@ const REPO_FIELDS =
   'autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed viewerDefaultMergeMethod';
 
 function pullRequestFields(number: string, threads: string): string {
-  return `number title url state isDraft
+  return `number title url state isDraft mergedAt
       author { login }
       headRefName headRefOid baseRefName additions deletions
       mergeable mergeStateStatus reviewDecision
@@ -213,6 +213,7 @@ function parseRepository(
       ...(allowedMethods.includes(viewerDefault) ? { defaultMethod: viewerDefault } : {}),
     },
     viewer,
+    ...(str(pr.mergedAt) ? { mergedAt: str(pr.mergedAt) } : {}),
     ...(withThreads
       ? {
           threads: nodes(pr.reviewThreads).flatMap(node => toThread(node) ?? []),

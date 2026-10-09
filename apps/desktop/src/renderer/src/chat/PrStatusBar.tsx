@@ -5,10 +5,11 @@ import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import { useTheme } from '@mui/joy/styles';
 import type { PrActionResult, PrBarState, PrOption } from '@shared/pullRequest';
-import { CloseIcon, ExternalLinkIcon, PullRequestIcon, ReloadIcon } from './icons';
+import { CloseIcon, ExternalLinkIcon, MergedIcon, PullRequestClosedIcon, PullRequestIcon, ReloadIcon } from './icons';
 import { contentColumnSx } from './layout';
-import { ghFixLine, lifecycleLabel, middleTruncate } from './prBarModel';
+import { MERGED_COLOR, ghFixLine, lifecycleLabel, middleTruncate, timeAgo } from './prBarModel';
 import { PrAutomations, autoFixDescription, autoMergeDescription } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
 
@@ -18,12 +19,12 @@ function openExternally(url: string): void {
   void window.b4m.shell.openExternal(url);
 }
 
-/** The +adds -dels pair, green and red like a diff gutter. */
-function DiffChip({ additions, deletions }: { additions: number; deletions: number }) {
+/** The +adds -dels pair, green and red like a diff gutter; grey once the PR is finished. */
+function DiffChip({ additions, deletions, muted }: { additions: number; deletions: number; muted: boolean }) {
   return (
     <Typography level="body-xs" sx={{ fontFamily: 'code', whiteSpace: 'nowrap' }} data-testid="pr-bar-diff">
-      <Box component="span" sx={{ color: 'success.plainColor' }}>{`+${additions}`}</Box>{' '}
-      <Box component="span" sx={{ color: 'danger.plainColor' }}>{`-${deletions}`}</Box>
+      <Box component="span" sx={{ color: muted ? 'text.tertiary' : 'success.plainColor' }}>{`+${additions}`}</Box>{' '}
+      <Box component="span" sx={{ color: muted ? 'text.tertiary' : 'danger.plainColor' }}>{`-${deletions}`}</Box>
     </Typography>
   );
 }
@@ -46,14 +47,20 @@ export function PrStatusBar({
   onSetOption: (option: PrOption, enabled: boolean) => Promise<PrActionResult>;
 }) {
   const [actionError, setActionError] = useState<string | null>(null);
+  const theme = useTheme();
   const binding = state?.binding;
   if (!state || !binding) return null;
   const snapshot = state.snapshot;
   const fix = ghFixLine(state.gh);
   const lifecycle = lifecycleLabel(state);
+  const merged = snapshot?.state === 'MERGED';
+  const closed = snapshot?.state === 'CLOSED';
+  const finished = merged || closed;
+  const mergedColor = MERGED_COLOR[theme.palette.mode === 'dark' ? 'dark' : 'light'];
+  const mergedAgo = merged && snapshot.mergedAt ? timeAgo(snapshot.mergedAt, Date.now()) : null;
 
   return (
-    <Box sx={{ ...contentColumnSx, pt: 1 }} data-testid="pr-bar">
+    <Box sx={{ ...contentColumnSx, pt: 1 }} data-testid="pr-bar" data-state={snapshot?.state}>
       <Stack
         direction="row"
         alignItems="center"
@@ -62,15 +69,32 @@ export function PrStatusBar({
           minHeight: 32,
           px: 1.25,
           border: '1px solid',
-          borderColor: 'neutral.outlinedBorder',
+          borderColor: merged ? `color-mix(in srgb, ${mergedColor} 40%, transparent)` : 'neutral.outlinedBorder',
           borderRadius: 'md',
-          bgcolor: 'background.surface',
+          bgcolor: merged
+            ? `color-mix(in srgb, ${mergedColor} 6%, ${theme.vars.palette.background.surface})`
+            : closed
+              ? 'background.level1'
+              : 'background.surface',
           minWidth: 0,
         }}
       >
-        <Box sx={{ display: 'flex', color: 'text.tertiary', flexShrink: 0 }}>
-          <PullRequestIcon />
-        </Box>
+        {merged ? (
+          <Box sx={{ display: 'flex', color: mergedColor, flexShrink: 0 }} data-testid="pr-bar-merged-icon">
+            <MergedIcon />
+          </Box>
+        ) : closed ? (
+          <Box
+            sx={{ display: 'flex', color: 'danger.plainColor', opacity: 0.7, flexShrink: 0 }}
+            data-testid="pr-bar-closed-icon"
+          >
+            <PullRequestClosedIcon />
+          </Box>
+        ) : (
+          <Box sx={{ display: 'flex', color: 'text.tertiary', flexShrink: 0 }}>
+            <PullRequestIcon />
+          </Box>
+        )}
 
         <Tooltip title={snapshot?.title || binding.url} size="sm" variant="soft" placement="top-start">
           <Typography
@@ -107,23 +131,38 @@ export function PrStatusBar({
                   level="body-xs"
                   textColor="text.tertiary"
                   noWrap
-                  sx={{ fontFamily: 'code', minWidth: 0 }}
+                  sx={{ fontFamily: 'code', minWidth: 0, opacity: finished ? 0.7 : 1 }}
                   data-testid="pr-bar-branch"
                 >
                   {middleTruncate(snapshot.headRefName, BRANCH_MAX_CHARS)}
                 </Typography>
               </Tooltip>
             )}
-            {snapshot && <DiffChip additions={snapshot.additions} deletions={snapshot.deletions} />}
+            {snapshot && <DiffChip additions={snapshot.additions} deletions={snapshot.deletions} muted={finished} />}
             {lifecycle && (
               <Chip
                 size="sm"
-                variant="soft"
-                color={lifecycle === 'Merged' ? 'primary' : 'neutral'}
+                variant={closed ? 'outlined' : 'soft'}
+                color="neutral"
+                sx={
+                  merged
+                    ? { color: mergedColor, bgcolor: `color-mix(in srgb, ${mergedColor} 14%, transparent)` }
+                    : closed
+                      ? { color: 'text.tertiary' }
+                      : undefined
+                }
                 data-testid="pr-bar-lifecycle"
+                data-state={snapshot?.state}
               >
                 {lifecycle}
               </Chip>
+            )}
+            {mergedAgo && snapshot?.mergedAt && (
+              <Tooltip title={new Date(snapshot.mergedAt).toLocaleString()} size="sm" variant="soft" placement="top">
+                <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="pr-bar-merged-at">
+                  {`merged ${mergedAgo}`}
+                </Typography>
+              </Tooltip>
             )}
             {!snapshot && !state.error && (
               <Typography level="body-xs" textColor="text.tertiary">
@@ -184,19 +223,23 @@ export function PrStatusBar({
           </PrCiMenu>
         )}
 
-        <Tooltip title="Refresh" size="sm" variant="soft">
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            loading={state.refreshing}
-            onClick={onRefresh}
-            aria-label="Refresh pull request"
-            data-testid="pr-bar-refresh-btn"
-          >
-            <ReloadIcon />
-          </IconButton>
-        </Tooltip>
+        {/* A merged PR cannot change again; a closed one can be reopened, and only this notices. The
+          fix line's "then refresh" needs the button whatever the PR's state. */}
+        {(!merged || fix) && (
+          <Tooltip title="Refresh" size="sm" variant="soft">
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              loading={state.refreshing}
+              onClick={onRefresh}
+              aria-label="Refresh pull request"
+              data-testid="pr-bar-refresh-btn"
+            >
+              <ReloadIcon />
+            </IconButton>
+          </Tooltip>
+        )}
 
         <Tooltip title="Open in browser" size="sm" variant="soft">
           <IconButton

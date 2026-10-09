@@ -66,6 +66,8 @@ export interface BranchLookup {
    * read as true.
    */
   pickedExists?: boolean;
+  /** How many listed branches another worktree has checked out; see ProjectInspection. */
+  elsewhereCount?: number;
 }
 
 /** Shown while git is still being asked, so no name is put up before one has been read. */
@@ -213,7 +215,7 @@ function lockedBranchTooltip(project: ChatProject, branches: BranchLookup): stri
  * What a pick will do, which differs by an entire branch between the two toggle states: with it
  * off the folder itself is switched, with it on the folder is left alone and the pick is a base.
  */
-function branchNotice(project: ChatProject, { isRepository, count }: BranchLookup): string | null {
+function branchNotice(project: ChatProject, { isRepository, count, elsewhereCount = 0 }: BranchLookup): string | null {
   if (count === 0) return isRepository ? 'This repository has no branches yet.' : 'Not a git repository.';
   if (project.workspace) {
     // Two things the user cannot see and would otherwise get wrong. That picking `main` means
@@ -222,14 +224,22 @@ function branchNotice(project: ChatProject, { isRepository, count }: BranchLooku
     const pending = project.workspaceBranch
       ? ''
       : ' Nothing is cut until you send your first message, so you can still change this.';
+    // A base is never checked out, so another worktree holding it is no obstacle - and the
+    // marks in the list must not read as one.
+    const held = elsewhereCount > 0 ? ' A branch checked out in another folder is a fine base too.' : '';
     return (
       'With worktree on, the branch you pick is the BASE: this session gets a new branch cut ' +
-      `from it, in a worktree of its own. The branch you pick is never checked out here.${pending}`
+      `from it, in a worktree of its own. The branch you pick is never checked out here.${held}${pending}`
     );
   }
+  const held =
+    elsewhereCount > 0
+      ? ' A branch already checked out in another folder cannot be checked out here too: picking one ' +
+        'offers to work in that folder, or to cut a worktree from it.'
+      : '';
   // Said up front because the folder may be shared - with another session, or a terminal.
   return (
     `Picking a branch checks it out in ${project.workingDirectory}. Uncommitted changes there, or ` +
-    'another session running there, stop the switch. Turn on worktree to leave this folder as it is.'
+    `another session running there, stop the switch. Turn on worktree to leave this folder as it is.${held}`
   );
 }

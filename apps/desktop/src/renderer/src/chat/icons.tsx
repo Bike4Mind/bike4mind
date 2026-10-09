@@ -376,6 +376,30 @@ export function PullRequestIcon() {
   );
 }
 
+/** A merged pull request: the branch has joined its base. */
+export function MergedIcon() {
+  return (
+    <Glyph>
+      <circle cx="4.5" cy="3.8" r="1.6" />
+      <circle cx="4.5" cy="12.2" r="1.6" />
+      <circle cx="11.5" cy="9" r="1.6" />
+      <path d="M4.5 5.4v5.2M4.5 5.4c0 2.2 1.8 3.6 5.4 3.6" />
+    </Glyph>
+  );
+}
+
+/** A pull request closed without merging. */
+export function PullRequestClosedIcon() {
+  return (
+    <Glyph>
+      <circle cx="4.5" cy="3.8" r="1.6" />
+      <circle cx="4.5" cy="12.2" r="1.6" />
+      <circle cx="11.5" cy="12.2" r="1.6" />
+      <path d="M4.5 5.4v5.2M11.5 7.5v3.1M10 2.5l3 3M13 2.5l-3 3" />
+    </Glyph>
+  );
+}
+
 /** Opens in the user's own browser rather than anywhere in this app. */
 export function ExternalLinkIcon() {
   return (

@@ -42,6 +42,8 @@ const binding: ProjectBindingController = {
   pickDirectory: vi.fn(),
   setBranch: vi.fn(),
   setWorkspace: vi.fn(),
+  moveToCheckout: vi.fn(),
+  worktreeFrom: vi.fn(),
   addContextDirectory: vi.fn(),
   removeContextDirectory: vi.fn(),
 };
@@ -343,5 +345,153 @@ describe('the chip row once the session has run here', () => {
     await act(async () => button.click());
     expect(document.body.querySelector('[data-testid="session-chip-branch-option"]')).toBeNull();
     expect(document.body.querySelector('[data-testid="session-chip-branch-notice"]')).toBeNull();
+  });
+});
+
+describe('a branch another worktree has checked out', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const inspectProject = vi.fn();
+  const HELD = `${CHECKOUT}/.claude/worktrees/feat-held`;
+
+  async function show(bound: ChatProject, over: Partial<ProjectBindingController> = {}): Promise<void> {
+    await act(async () =>
+      root.render(<SessionChips project={bound} binding={{ ...binding, ...over }} settledTurns={0} />)
+    );
+    await act(async () => undefined);
+  }
+
+  async function openMenu(): Promise<void> {
+    await act(async () => {
+      (host.querySelector('[data-testid="session-chip-branch-btn"]') as HTMLElement).click();
+    });
+  }
+
+  const option = (name: string): HTMLElement =>
+    [...document.body.querySelectorAll('[data-testid="session-chip-branch-option"]')].find(
+      node => node.querySelector('[data-testid="session-chip-branch-name"]')?.textContent?.replace(/^\* /, '') === name
+    ) as HTMLElement;
+
+  const mark = (name: string): string | undefined =>
+    option(name)?.querySelector('[data-testid="session-chip-branch-elsewhere-label"]')?.textContent ?? undefined;
+
+  async function hoverMark(name: string): Promise<string> {
+    const node = option(name).querySelector('[data-testid="session-chip-branch-elsewhere-label"]') as HTMLElement;
+    await act(async () => {
+      node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 150));
+    });
+    return [...document.body.querySelectorAll('[role="tooltip"]')].map(tip => tip.textContent).join('\n');
+  }
+
+  beforeEach(() => {
+    inspectProject.mockReset();
+    inspectProject.mockResolvedValue(
+      inspection({
+        branches: ['main', 'feat/held', 'feat/free'],
+        checkedOutElsewhere: { 'feat/held': { path: HELD } },
+      })
+    );
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject } };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('marks it with the path, shortened against the project, and leaves it selectable', async () => {
+    await show(project());
+    await openMenu();
+
+    expect(mark('feat/held')).toBe('.claude/worktrees/feat-held');
+    expect(mark('feat/free')).toBeUndefined();
+    expect(option('feat/held').getAttribute('aria-disabled')).not.toBe('true');
+    expect(await hoverMark('feat/held')).toContain(HELD);
+  });
+
+  it('lists a branch named like an Object member without marking it', async () => {
+    inspectProject.mockResolvedValue(
+      inspection({ branches: ['main', 'constructor'], checkedOutElsewhere: { 'feat/held': { path: HELD } } })
+    );
+    await show(project());
+    await openMenu();
+
+    expect(option('constructor')).toBeDefined();
+    expect(mark('constructor')).toBeUndefined();
+  });
+
+  it('does not make the mark read as a problem with the toggle on', async () => {
+    await show(project({ workspace: true }));
+    await openMenu();
+
+    const tip = await hoverMark('feat/held');
+    expect(tip).toMatch(/only the base/i);
+    expect(tip).not.toMatch(/offers to/i);
+  });
+
+  it('does not mark the worktree the session itself runs in', async () => {
+    inspectProject.mockImplementation(async (directory: string) =>
+      directory === WORKTREE
+        ? inspection({ directory: WORKTREE, currentBranch: 'b4m/own' })
+        : inspection({
+            branches: ['main', 'b4m/own'],
+            checkedOutElsewhere: { 'b4m/own': { path: WORKTREE } },
+          })
+    );
+    await show(project({ workspace: true, workspaceBranch: 'b4m/own', workingDirectory: WORKTREE }));
+    await openMenu();
+
+    expect(mark('b4m/own')).toBeUndefined();
+  });
+
+  it('offers both ways on when main refuses a toggle-off pick, and uses the checkout', async () => {
+    const moveToCheckout = vi.fn();
+    const elsewhere = { branch: 'feat/held', path: HELD };
+    await show(project(), {
+      moveToCheckout,
+      error: { message: `feat/held is already checked out in ${HELD}.`, busy: false, elsewhere },
+    });
+
+    expect(host.querySelector('[data-testid="session-chip-error"]')).toBeNull();
+    expect(host.querySelector('[data-testid="session-chip-elsewhere-message"]')?.textContent).toContain(HELD);
+    await act(async () => {
+      (host.querySelector('[data-testid="session-chip-elsewhere-use-btn"]') as HTMLElement).click();
+    });
+
+    expect(moveToCheckout).toHaveBeenCalledWith(elsewhere);
+  });
+
+  it('turns the toggle on with that branch as the base when a worktree is chosen', async () => {
+    const worktreeFrom = vi.fn();
+    await show(project(), {
+      worktreeFrom,
+      error: { message: 'held', busy: false, elsewhere: { branch: 'feat/held', path: HELD } },
+    });
+
+    await act(async () => {
+      (host.querySelector('[data-testid="session-chip-elsewhere-worktree-btn"]') as HTMLElement).click();
+    });
+
+    expect(worktreeFrom).toHaveBeenCalledWith('feat/held');
+  });
+
+  it('offers only the worktree when the holding folder is gone', async () => {
+    await show(project(), {
+      error: { message: 'gone', busy: false, elsewhere: { branch: 'feat/held', path: HELD, prunable: true } },
+    });
+
+    expect(host.querySelector('[data-testid="session-chip-elsewhere-use-btn"]')).toBeNull();
+    expect(host.querySelector('[data-testid="session-chip-elsewhere-worktree-btn"]')).not.toBeNull();
+  });
+
+  it('leaves any other refusal as the plain notice', async () => {
+    await show(project(), { error: { message: 'Could not switch: nope', busy: false } });
+
+    expect(host.querySelector('[data-testid="session-chip-error"]')?.textContent).toBe('Could not switch: nope');
+    expect(host.querySelector('[data-testid="session-chip-elsewhere"]')).toBeNull();
   });
 });

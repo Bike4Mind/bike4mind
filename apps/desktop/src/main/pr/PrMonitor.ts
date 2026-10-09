@@ -1,11 +1,13 @@
 import type { ChatAutomaticOrigin, ChatToolCall } from '@shared/chat';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
+  isFinishedState,
   parsePullRequestUrl,
   pullRequestFromShell,
   samePullRequest,
   type PrActionResult,
   type PrAutoFixStatus,
+  type PrBarSnapshot,
   type PrBarState,
   type PrBinding,
   type PrBindingSource,
@@ -154,7 +156,7 @@ export class PrMonitor {
   async start(): Promise<void> {
     const all = await this.deps.store.all();
     for (const [sessionId, binding] of all) {
-      if (binding.lastState === 'MERGED' || binding.lastState === 'CLOSED' || !this.armed(binding)) continue;
+      if (isFinishedState(binding.lastState) || !this.armed(binding)) continue;
       const jitter = Math.floor((this.deps.random ?? Math.random)() * UNOPENED_JITTER_MS);
       this.arm(sessionId, POLL_MS.unopenedArmed + jitter);
     }
@@ -197,7 +199,7 @@ export class PrMonitor {
       void this.lookUpBranch(sessionId);
       return null;
     }
-    if (!binding.dismissed && this.wantsRead(sessionId)) void this.read(sessionId);
+    if (!binding.dismissed && this.wantsRead(sessionId, binding)) void this.read(sessionId);
     else void this.schedule(sessionId);
     return this.state(sessionId, binding);
   }
@@ -210,11 +212,11 @@ export class PrMonitor {
   }
 
   /** Whether opening this conversation should start a read: nothing in hand, or it went stale. */
-  protected wantsRead(sessionId: string): boolean {
+  protected wantsRead(sessionId: string, binding: PrBinding): boolean {
     if (this.gh !== 'ok' || this.now() < this.pausedUntil) return false;
-    const live = this.live.get(sessionId);
-    if (!live?.snapshot) return true;
-    return live.snapshot.state === 'OPEN' && this.now() - live.snapshot.fetchedAt > POLL_MS.onScreenActive;
+    const snapshot = this.live.get(sessionId)?.snapshot ?? binding.finalSnapshot;
+    if (!snapshot) return true;
+    return snapshot.state === 'OPEN' && this.now() - snapshot.fetchedAt > POLL_MS.onScreenActive;
   }
 
   /**
@@ -257,7 +259,8 @@ export class PrMonitor {
     if (current && samePullRequest(current, ref)) {
       if (source === 'manual' && current.dismissed) {
         await this.deps.store.set(sessionId, { ...current, dismissed: false });
-        void this.read(sessionId);
+        if (current.finalSnapshot) await this.publish(sessionId);
+        else void this.read(sessionId);
       }
       return;
     }
@@ -292,6 +295,10 @@ export class PrMonitor {
   async setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult> {
     const binding = await this.deps.store.get(sessionId);
     if (!binding || binding.dismissed) return { ok: false, error: 'This conversation has no pull request.' };
+    const known = this.live.get(sessionId)?.snapshot?.state ?? binding.lastState;
+    if (enabled && isFinishedState(known)) {
+      return { ok: false, error: `#${binding.number} is ${known.toLowerCase()}; there is nothing left to automate.` };
+    }
     let result: PrActionResult = { ok: true };
     if (option === 'autoArchive') {
       await this.deps.store.set(sessionId, { ...binding, autoArchive: enabled });
@@ -597,8 +604,11 @@ export class PrMonitor {
   protected read(sessionId: string): Promise<void> {
     const live = this.entry(sessionId);
     if (live.inflight) return live.inflight;
+    // Published only once inflight is clear: a push from inside the read says `refreshing`, and
+    // with nothing pushed after it the bar's spinner would turn forever.
     live.inflight = this.readOnce(sessionId).finally(() => {
       live.inflight = null;
+      return this.publish(sessionId);
     });
     void this.publish(sessionId);
     return live.inflight;
@@ -631,7 +641,6 @@ export class PrMonitor {
       }
     }
     await this.schedule(sessionId);
-    await this.publish(sessionId);
   }
 
   protected wantsThreads(binding: PrBinding): boolean {
@@ -642,12 +651,16 @@ export class PrMonitor {
     // Re-read, not the copy the read started with: the user may have changed an option while gh ran.
     const current = (await this.deps.store.get(sessionId)) ?? binding;
     const archiving = shouldAutoArchive(current, snapshot.state);
-    if (current.lastState !== snapshot.state || archiving) {
+    const finished = isFinishedState(snapshot.state);
+    if (current.lastState !== snapshot.state || archiving || finished || current.finalSnapshot) {
+      const { finalSnapshot: _previous, ...rest } = current;
       // Recorded before archiving, so a crash in between errs toward not archiving twice.
       await this.deps.store.set(sessionId, {
-        ...current,
+        ...rest,
         lastState: snapshot.state,
         ...(archiving ? { archivedOnClose: true } : {}),
+        // Without checks: a finished bar draws none, and every launch reads this file whole.
+        ...(finished ? { finalSnapshot: { ...forTheBar(snapshot), checks: [] } } : {}),
       });
     }
     if (archiving) {
@@ -757,10 +770,10 @@ export class PrMonitor {
   protected async state(sessionId: string, known?: PrBinding | null): Promise<PrBarState> {
     const binding = known === undefined ? await this.deps.store.get(sessionId) : known;
     const live = this.live.get(sessionId);
-    const snapshot = live?.snapshot ?? null;
+    const snapshot = live?.snapshot ?? binding?.finalSnapshot ?? null;
     return {
       sessionId,
-      binding: binding && !binding.dismissed ? binding : null,
+      binding: binding && !binding.dismissed ? withoutFinal(binding) : null,
       snapshot: snapshot ? forTheBar(snapshot) : null,
       gh: this.gh,
       ...(live?.error ? { error: live.error } : {}),
@@ -784,7 +797,13 @@ export class PrMonitor {
   }
 }
 
-function forTheBar(snapshot: PrSnapshot): Omit<PrSnapshot, 'threads' | 'changeRequests'> {
+function forTheBar(snapshot: PrSnapshot): PrBarSnapshot {
   const { threads: _threads, changeRequests: _changeRequests, ...rest } = snapshot;
+  return rest;
+}
+
+/** The bar already gets the snapshot on its own; no need to send it twice. */
+function withoutFinal(binding: PrBinding): PrBinding {
+  const { finalSnapshot: _finalSnapshot, ...rest } = binding;
   return rest;
 }
