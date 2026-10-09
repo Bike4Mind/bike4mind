@@ -16,15 +16,20 @@ export function resolveRouteTemplate(req: RouteRequest): string {
   const pathname = raw.split(/[?#]/, 1)[0] || '/';
   const segments = pathname.split('/');
 
-  // req.query also carries the real query string; those keys are not route params, and letting
-  // them claim a segment would mis-template (`/api/x/1?n=1`). A route param that shares a name
-  // with a query key is skipped too - its segment stays raw rather than risk a wrong slot.
-  const searchKeys = new Set(new URLSearchParams(raw.split('#', 1)[0].split('?').slice(1).join('?')).keys());
-  const params = Object.entries(req.query ?? {}).filter(
-    (entry): entry is [string, string | string[]] =>
-      !searchKeys.has(entry[0]) &&
-      (typeof entry[1] === 'string' || (Array.isArray(entry[1]) && entry[1].every(v => typeof v === 'string')))
-  );
+  // req.query also carries the real query string, and Next.js lets a route param override a query
+  // key of the same name. A key whose single string value equals the query-string value is
+  // indistinguishable from a query-only key, and letting it claim a segment would mis-template
+  // (`/api/x/1?n=1`), so it is skipped. A differing value, or an array, can only be a route
+  // param, so a colliding name (`?path=1` on a `[...path]` route) still gets templated.
+  const search = new URLSearchParams(raw.split('#', 1)[0].split('?').slice(1).join('?'));
+  const params = Object.entries(req.query ?? {}).filter((entry): entry is [string, string | string[]] => {
+    const [key, value] = entry;
+    if (typeof value === 'string') {
+      const fromSearch = search.getAll(key);
+      return !(fromSearch.length === 1 && fromSearch[0] === value);
+    }
+    return Array.isArray(value) && value.every(v => typeof v === 'string');
+  });
 
   const used = new Set<string>();
   const out: string[] = [];
