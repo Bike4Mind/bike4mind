@@ -269,6 +269,7 @@ describe('buildOpenApiDocument', () => {
     expect(errors).toContain('malformed JSON body is `400`');
     expect(errors).toContain('fails schema validation is `422`');
     expect(errors).toContain('`errorCode: "provider_rejected"`');
+    expect(errors).toContain('your API key itself was accepted');
   });
 
   it('gives every tag used by an operation a top-level description', () => {
