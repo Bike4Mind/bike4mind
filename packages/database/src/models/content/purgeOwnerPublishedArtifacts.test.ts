@@ -130,13 +130,15 @@ describe('purgeOwnerPublishedArtifacts', () => {
 });
 
 describe('purgeOwnerPublishedArtifacts - org pages', () => {
-  const liveUser = async () => {
+  // Org-scope artifacts key scopeId on the Organization _id; membership is User.organizationId.
+  const ORG_ID = new mongoose.Types.ObjectId();
+  const liveUser = async (organizationId: mongoose.Types.ObjectId | null = ORG_ID) => {
     const _id = new mongoose.Types.ObjectId();
-    await User.collection.insertOne({ _id, email: `${_id}@example.com`, username: String(_id) });
+    await User.collection.insertOne({ _id, email: `${_id}@example.com`, username: String(_id), organizationId });
     return String(_id);
   };
   const orgArtifact = (ownerId: string, lastPublishedBy?: string) =>
-    makeArtifact(ownerId, { tier: 'organization', scopeId: 'org1', lastPublishedBy });
+    makeArtifact(ownerId, { tier: 'organization', scopeId: String(ORG_ID), lastPublishedBy });
 
   it('hands an org page to a still-existing last publisher and leaves it and its children live', async () => {
     const teammate = await liveUser();
@@ -169,6 +171,16 @@ describe('purgeOwnerPublishedArtifacts - org pages', () => {
     expect(result.artifacts.map(x => x.publicId).sort()).toEqual(
       [solo.publicId, self.publicId, goneTeammate.publicId].sort()
     );
+  });
+
+  it('purges an org page whose last publisher has since left the organization', async () => {
+    const leftOrg = await orgArtifact('owner1', await liveUser(null));
+    const otherOrg = await orgArtifact('owner1', await liveUser(new mongoose.Types.ObjectId()));
+
+    const result = await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
+
+    expect(result.transferred).toEqual([]);
+    expect(result.artifacts.map(x => x.publicId).sort()).toEqual([leftOrg.publicId, otherOrg.publicId].sort());
   });
 
   it('always purges a personal page, even one someone else published last', async () => {

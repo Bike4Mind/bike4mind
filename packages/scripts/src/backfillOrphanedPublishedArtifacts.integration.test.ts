@@ -27,9 +27,11 @@ beforeEach(async () => {
 
 const silent = () => undefined;
 
-const liveUser = async () => {
+const ORG_ID = new mongoose.Types.ObjectId();
+
+const liveUser = async (organizationId: mongoose.Types.ObjectId | null = ORG_ID) => {
   const _id = new mongoose.Types.ObjectId();
-  await User.collection.insertOne({ _id, email: `${_id}@example.com`, username: String(_id) });
+  await User.collection.insertOne({ _id, email: `${_id}@example.com`, username: String(_id), organizationId });
   return String(_id);
 };
 
@@ -101,9 +103,9 @@ describe('backfillOrphanedPublishedArtifacts', () => {
   it('hands org pages to a still-existing last publisher, reported separately in a dry run', async () => {
     const gone = String(new mongoose.Types.ObjectId());
     const teammate = await liveUser();
-    await artifact(gone, { tier: 'organization', scopeId: 'org1', lastPublishedBy: teammate });
+    await artifact(gone, { tier: 'organization', scopeId: String(ORG_ID), lastPublishedBy: teammate });
     const orgPublicId = `pub-${seq}`;
-    await artifact(gone, { tier: 'organization', scopeId: 'org1' });
+    await artifact(gone, { tier: 'organization', scopeId: String(ORG_ID) });
     await artifact(gone, { lastPublishedBy: teammate });
 
     const dry = await backfillOrphanedPublishedArtifacts({ dryRun: true, log: silent });

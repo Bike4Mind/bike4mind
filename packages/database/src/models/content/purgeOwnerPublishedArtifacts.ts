@@ -47,7 +47,10 @@ export async function findMissingUserIds(ids: string[]): Promise<string[]> {
  * The live org-tier artifacts of `ownerId` that a teammate revised last and that should outlive
  * the owner's account: a revise keeps the original ownerId and only moves `lastPublishedBy`
  * (apps/client/pages/api/publish/artifact/finalize.ts), so without this the org's page would go
- * down with whoever first published it. Only a last publisher that still exists qualifies.
+ * down with whoever first published it. Only a last publisher that still exists AND is still a
+ * member of the artifact's organization qualifies: `ownerId` grants full management of the page
+ * (visibility, share links, delete) with no further membership check, so handing it to someone
+ * who has since left the org would give an outsider control of the org's page.
  */
 export async function findTransferableOrgArtifacts(ownerId: string): Promise<TransferredPublishedArtifact[]> {
   const candidates = await PublishedArtifact.find({
@@ -60,9 +63,16 @@ export async function findTransferableOrgArtifacts(ownerId: string): Promise<Tra
     .lean<(PurgedPublishedArtifact & { lastPublishedBy: string })[]>();
   if (candidates.length === 0) return [];
 
-  const missing = new Set(await findMissingUserIds([...new Set(candidates.map(a => a.lastPublishedBy))]));
+  const publisherIds = [...new Set(candidates.map(a => a.lastPublishedBy))].filter(id => OBJECT_ID_HEX.test(id));
+  const publishers = await User.collection
+    .find(
+      { _id: { $in: publisherIds.map(id => new Types.ObjectId(id)) } },
+      { projection: { _id: 1, organizationId: 1 } }
+    )
+    .toArray();
+  const orgOf = new Map(publishers.map(u => [String(u._id), u.organizationId ? String(u.organizationId) : null]));
   return candidates
-    .filter(a => !missing.has(a.lastPublishedBy))
+    .filter(a => orgOf.get(a.lastPublishedBy) === String(a.scopeId))
     .map(({ publicId, tier, scopeId, slug, visibility, source, lastPublishedBy }) => ({
       publicId,
       tier,
