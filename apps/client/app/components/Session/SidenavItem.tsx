@@ -17,7 +17,7 @@ import {
 import { useJobStatus } from '@client/app/hooks/useJobStatus';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { ISessionDocument, ISessionFavoriteItem, InviteType, type WorkspaceSurface } from '@bike4mind/common';
-import { formatSessionTitle } from '@client/app/utils/sessionTitle';
+import { formatSessionTitle, getPendingTitleLabel } from '@client/app/utils/sessionTitle';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -167,8 +167,11 @@ const SessionSidenavItem: FC<{
   // Existing sessions may have a raw JSON literal as their name. Format it for
   // display so the sidebar (and the derived accessible name) stays readable.
   const displayName = useMemo(
-    () => displayNameOverride || formatSessionTitle(session.name),
-    [displayNameOverride, session.name]
+    () =>
+      displayNameOverride ||
+      getPendingTitleLabel(session.name, session.firstCreated) ||
+      formatSessionTitle(session.name),
+    [displayNameOverride, session.name, session.firstCreated]
   );
 
   // The real underlying title - used to pre-fill the rename input so the user edits what's
