@@ -548,3 +548,67 @@ describe('POST /api/organizations/subscriptions/subscribe - request-shape and id
     expect(args.subscription_data.metadata).not.toHaveProperty('organizationId');
   });
 });
+
+describe('POST /api/organizations/subscriptions/subscribe - acquisition attribution', () => {
+  const enc = (v: unknown) => encodeURIComponent(JSON.stringify(v));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
+    mockVerifyOrgOwner.mockResolvedValue({ id: 'org_1', name: 'Org One', users: [{ userId: 'user_1' }] });
+    mockAttachOrgStripeCustomer.mockResolvedValue('cus_org');
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  const metadataOf = () => mockSessionsCreate.mock.calls[0][0].subscription_data.metadata as Record<string, string>;
+
+  it('carries the same acq_* keys as individual checkout, alongside the org metadata', async () => {
+    const { req, res } = makeReq();
+    (req as Record<string, Record<string, unknown>>).body.attributionConsent = true;
+    req.headers.cookie = `b4m_app_first_touch=${enc({ source: 'widgets', medium: 'teaser' })}; b4m_last_touch=${enc({ source: 'email' })}`;
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(metadataOf()).toEqual({
+      userId: 'user_1',
+      stage: 'test',
+      ownerType: SubscriptionOwnerType.Organization,
+      organizationId: 'org_1',
+      acq_first_source: 'widgets',
+      acq_first_medium: 'teaser',
+      acq_last_source: 'email',
+    });
+  });
+
+  it.each([false, undefined])('attaches no attribution without explicit consent (%s)', async consent => {
+    const { req, res } = makeReq();
+    (req as Record<string, Record<string, unknown>>).body.attributionConsent = consent;
+    req.headers.cookie = `b4m_app_first_touch=${enc({ source: 'widgets' })}`;
+    (req as Record<string, Record<string, unknown>>).user.acquisition = { firstTouch: { source: 'reddit' } };
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(Object.keys(metadataOf()).filter(k => k.startsWith('acq_'))).toEqual([]);
+  });
+
+  it("falls back to the owner's stored signup touches when the browser has none", async () => {
+    const { req, res } = makeReq();
+    (req as Record<string, Record<string, unknown>>).body.attributionConsent = true;
+    (req as Record<string, Record<string, unknown>>).user.acquisition = {
+      firstTouch: { source: 'reddit' },
+      lastTouch: { source: 'blog' },
+    };
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(metadataOf()).toMatchObject({ acq_first_source: 'reddit', acq_last_source: 'blog' });
+  });
+
+  it('records the checkout surface', async () => {
+    const { req, res } = makeReq();
+    (req as Record<string, Record<string, unknown>>).body.surface = 'team_invite';
+    await (handler as HandlerFn)(req, res);
+    expect(metadataOf().checkout_surface).toBe('team_invite');
+  });
+});

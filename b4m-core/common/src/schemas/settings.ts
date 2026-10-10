@@ -393,6 +393,7 @@ export const SettingKeySchema = z.enum([
   'allowOpenRegistration',
   'blockDisposableEmails',
   'defaultFreeCredits',
+  'syntheticUserEmailDomains',
 
   // GOOGLE CALENDAR SETTINGS
   'enableGoogleCalendar',
@@ -3181,6 +3182,15 @@ export const settingsMap = {
     defaultValue: 0,
     description:
       'Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup — an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this — their hard ceiling of real model cost is roughly credits ÷ 1500 USD.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  syntheticUserEmailDomains: makeStringSetting({
+    key: 'syntheticUserEmailDomains',
+    name: 'Synthetic User Email Domains',
+    defaultValue: '',
+    description:
+      'Comma-separated email domains whose new signups are flagged synthetic (test personas) and excluded from funnel analytics. Accounts whose username starts with "persona-" are always flagged. Applies at signup only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
