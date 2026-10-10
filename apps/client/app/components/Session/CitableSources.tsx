@@ -1,4 +1,4 @@
-import { FC, useMemo, useState } from 'react';
+import { FC, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Stack, Tooltip, Typography } from '@mui/joy';
 import {
   Language as WebIcon,
@@ -22,6 +22,14 @@ interface CitableSourcesProps {
 
 /** Sources shown before the reader asks for the rest. Enough to see the list has substance. */
 const COLLAPSED_COUNT = 3;
+
+/**
+ * The detector is a pattern match over prose, and its contract is that a finding means "worth a
+ * human's eye", never a proven contradiction (b4m-core/common/src/constants/corpusInconsistency.ts).
+ * Shown once under the list so each badge tooltip stays one line. Names no specific kind, so it holds for a future kind joining the asserted list.
+ */
+const CONFLICT_NOTE =
+  'Flagged sources may disagree. This is a heuristic match over the retrieved passages, not a proven contradiction - read the sources before relying on either.';
 
 const getIconForType = (type: CitableSourceType) => {
   switch (type) {
@@ -74,6 +82,27 @@ const conflictingTitlesOf = (source: CitableSource, titleById: Map<string, strin
   return unnamed > 0 ? [...named, `${unnamed} further source${unnamed === 1 ? '' : 's'}`] : named;
 };
 
+const conflictIdsOf = (source: CitableSource): string[] => {
+  const ids = source.metadata?.conflictsWith;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+};
+
+/**
+ * Side the conflict tooltip opens on, chosen so it does not cover the partner it names. Chips are
+ * full-width and stack, and conflicts are stamped symmetrically, so the lower chip of an adjacent
+ * pair opens downward. A chip with partners both above and below keeps `top`: no side clears both.
+ * A partner hidden behind Show More is not adjacent, since it is not rendered.
+ */
+export const conflictPlacementOf = (
+  source: CitableSource,
+  above: CitableSource | undefined,
+  below: CitableSource | undefined
+): 'top' | 'bottom' => {
+  const ids = conflictIdsOf(source);
+  const isPartner = (chip: CitableSource | undefined) => !!chip?.id && ids.includes(chip.id);
+  return isPartner(above) && !isPartner(below) ? 'bottom' : 'top';
+};
+
 /**
  * Label (and optional full-list tooltip) for an internal chip's origin.
  *
@@ -102,12 +131,31 @@ const internalLabelOf = (source: CitableSource): { label: string; title?: string
   return { label: DATA_LAKE };
 };
 
-const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[] }> = ({
+interface CitableSourceItemProps {
+  source: CitableSource;
+  conflictingTitles: string[];
+  conflictPlacement: 'top' | 'bottom';
+  /** Outlined while another chip's conflict tooltip names this one. */
+  highlighted: boolean;
+  onConflictTooltipChange: (open: boolean) => void;
+}
+
+const CitableSourceItem: FC<CitableSourceItemProps> = ({
   source,
   conflictingTitles,
+  conflictPlacement,
+  highlighted,
+  onConflictTooltipChange,
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const navigate = useNavigate();
+  // Joy never fires onClose when an open tooltip unmounts (e.g. Show less after a tap on touch),
+  // which would leave the partner outlined. The ref keeps the cleanup on the latest callback.
+  const onConflictTooltipChangeRef = useRef(onConflictTooltipChange);
+  useEffect(() => {
+    onConflictTooltipChangeRef.current = onConflictTooltipChange;
+  });
+  useEffect(() => () => onConflictTooltipChangeRef.current(false), []);
   // Opt-in host overrides: when a surface provides onCitationClick (any source) or
   // onInternalCitationClick (relative URLs only), the click is handled in-surface instead of
   // navigating. onCitationClick wins when both are set. Default (no provider) keeps the existing
@@ -175,14 +223,11 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
 
   // Retrieval found this source stating a value another cited source states differently (#3041) -
   // the same finding the model was warned about, so the reader is not the only one left unaware.
-  // Worded as "may disagree" deliberately: the detector is a pattern match over prose and its own
-  // contract is that a finding means "worth a human's eye", never a proven contradiction
-  // (b4m-core/common/src/constants/corpusInconsistency.ts). Holds for a future kind joining the
-  // asserted list too, which is why the wording names no specific kind.
+  // Worded as "may disagree" deliberately; the heuristic caveat lives once under the list
+  // (CONFLICT_NOTE) so this stays one line and does not cover the chip it names.
   const conflictTooltip = conflictingTitles.length
     ? `May disagree with ${conflictingTitles.slice(0, CONFLICT_NAMES_SHOWN).join(', ')}` +
-      `${conflictingTitles.length > CONFLICT_NAMES_SHOWN ? ` and ${conflictingTitles.length - CONFLICT_NAMES_SHOWN} more` : ''}. ` +
-      'This is a heuristic match over the retrieved passages, not a proven contradiction - read the sources before relying on either.'
+      `${conflictingTitles.length > CONFLICT_NAMES_SHOWN ? ` and ${conflictingTitles.length - CONFLICT_NAMES_SHOWN} more` : ''}.`
     : '';
 
   return (
@@ -191,6 +236,7 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
       type={renderAsButton ? 'button' : undefined}
       href={!renderAsButton ? source.url : undefined}
       data-testid="citable-source-chip"
+      data-conflict-highlighted={highlighted || undefined}
       onClick={handleClick}
       target={!renderAsButton && source.url ? '_blank' : undefined}
       rel={!renderAsButton && source.url ? 'noopener noreferrer' : undefined}
@@ -214,6 +260,11 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
         borderWidth: 1,
         borderStyle: 'solid',
         borderColor: theme.palette.reading.cardLine,
+        // The ring doubles the border without changing the chip's size, so nothing below shifts.
+        ...(highlighted && {
+          borderColor: theme.palette.warning.outlinedBorder,
+          boxShadow: `0 0 0 1px ${theme.palette.warning.outlinedBorder}`,
+        }),
         transition: 'all 0.2s ease-in-out',
         cursor: source.url ? 'pointer' : 'default',
         // A source with nowhere to go does not lift: the same hover on a dead row is a
@@ -292,11 +343,9 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
               </Typography>
             </Tooltip>
           )}
-          {/* Both badges below pin placement="top": chips are full-width and stack, so Joy's
-              default bottom lands the box on the next chip down. Note this does not clear the
-              conflict case entirely - conflicts are stamped symmetrically, so the lower chip of
-              a pair now opens over the partner above it. No placement clears both on a stacked
-              list; removing it needs a design change, not a prop (#3290). */}
+          {/* Chips are full-width and stack, so Joy's default bottom lands a tooltip on the next
+              chip down. The truncation badge names no other chip and always opens on top; the
+              conflict badge picks its side per chip, away from its partner (conflictPlacementOf). */}
           {isTruncated && (
             <Tooltip
               size="sm"
@@ -312,13 +361,22 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             </Tooltip>
           )}
           {conflictTooltip && (
-            <Tooltip size="sm" placement="top" title={conflictTooltip}>
+            <Tooltip
+              size="sm"
+              placement={conflictPlacement}
+              title={conflictTooltip}
+              onOpen={() => onConflictTooltipChange(true)}
+              onClose={() => onConflictTooltipChange(false)}
+            >
               <ConflictIcon
                 data-testid="citable-conflict-badge"
-                // The Tooltip only names the conflict to a reader who can hover it. titleAccess is
-                // what puts the same sentence on the accessibility tree (SvgIcon renders it as
-                // <title> and drops its default aria-hidden), so the signal is not sight-only.
-                titleAccess={conflictTooltip}
+                // Named on the accessibility tree so the signal is not sight-only. Not via
+                // titleAccess: the <title> it renders raises a second, native browser tooltip below
+                // the cursor, which covers the partner chip underneath. aria-hidden is overridden
+                // because SvgIcon hides any icon without titleAccess.
+                role="img"
+                aria-label={conflictTooltip}
+                aria-hidden={false}
                 sx={{ fontSize: '0.9rem', color: 'warning.500', flexShrink: 0 }}
               />
             </Tooltip>
@@ -360,6 +418,9 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
  */
 const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
   const [expanded, setExpanded] = useState(false);
+  // Partners of the conflict badge whose tooltip is open, keyed by that chip so a late close from
+  // the badge just left cannot clear the highlight of the one just entered.
+  const [openConflict, setOpenConflict] = useState<{ owner: string; ids: string[] } | null>(null);
   // Citables accumulate across multiple tool calls (e.g. several search_knowledge_base
   // invocations returning overlapping files), so the same source can appear more than
   // once. Dedupe by a stable identity before rendering - otherwise repeated ids produce
@@ -389,6 +450,8 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
 
   const visible = expanded ? uniqueCitables : uniqueCitables.slice(0, COLLAPSED_COUNT);
   const hiddenCount = uniqueCitables.length - COLLAPSED_COUNT;
+  const conflictingTitlesByIndex = visible.map(source => conflictingTitlesOf(source, titleById));
+  const showConflictNote = conflictingTitlesByIndex.some(titles => titles.length > 0);
 
   return (
     <Box sx={{ mt: 1.5, mb: 1 }} data-testid="citable-sources">
@@ -405,18 +468,40 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
         Sources ({uniqueCitables.length})
       </Typography>
 
-      {/* The whole gap to the pill below. It does NOT add to the pill's own 8px top margin:
-          block-level siblings collapse to the larger of the two, so this value alone is what
-          shows. */}
+      {/* The gap to the pill below, or to the conflict note when one shows. It does NOT add to the
+          pill's own 8px top margin: block-level siblings collapse to the larger of the two, so this
+          value alone is what shows. */}
       <Stack spacing={1} sx={{ mb: '16px' }}>
-        {visible.map((source, index) => (
-          <CitableSourceItem
-            key={source.id || source.url || index}
-            source={source}
-            conflictingTitles={conflictingTitlesOf(source, titleById)}
-          />
-        ))}
+        {visible.map((source, index) => {
+          const key = String(source.id || source.url || index);
+          return (
+            <CitableSourceItem
+              key={key}
+              source={source}
+              conflictingTitles={conflictingTitlesByIndex[index]}
+              conflictPlacement={conflictPlacementOf(source, visible[index - 1], visible[index + 1])}
+              highlighted={!!source.id && !!openConflict?.ids.includes(source.id)}
+              onConflictTooltipChange={open =>
+                setOpenConflict(current =>
+                  open ? { owner: key, ids: conflictIdsOf(source) } : current?.owner === key ? null : current
+                )
+              }
+            />
+          );
+        })}
       </Stack>
+
+      {/* Relies on margin collapsing (keep the parent Box free of padding and borders): -8px against
+          the Stack's 16px leaves an 8px gap above, and 16px still separates the pill below. */}
+      {showConflictNote && (
+        <Typography
+          level="body-xs"
+          data-testid="citable-sources-conflict-note"
+          sx={{ color: 'text.tertiary', mt: '-8px', mb: '16px' }}
+        >
+          {CONFLICT_NOTE}
+        </Typography>
+      )}
 
       <ExpandCollapseButton
         needsTruncation={hiddenCount > 0}
