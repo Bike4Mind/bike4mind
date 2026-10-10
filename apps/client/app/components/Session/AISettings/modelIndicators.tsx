@@ -152,6 +152,7 @@ export const MetricIcon = ({
     <Box
       role="img"
       aria-label={label}
+      data-testid={`model-indicator-${label.toLowerCase().replace(/\s+/g, '-')}`}
       sx={{
         ...frameSx(size, filled),
         justifyContent: 'center',

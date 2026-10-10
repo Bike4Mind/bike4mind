@@ -267,6 +267,7 @@ export const SettingKeySchema = z.enum([
   'EnableKnowledgeBaseSearch',
   'DefaultChunkSize',
   'DefaultAPIModel',
+  'recommendedModelIds',
   'AutoNameNotebook',
   'FormatPromptTemplate',
   'ArtifactEmissionPrompt',
@@ -2057,6 +2058,21 @@ export const settingsMap = {
     order: 1,
     // publicSafe: read by LLMContext at startup; a model name is not sensitive (M2.5).
     publicSafe: true,
+  }),
+  recommendedModelIds: makeObjectSetting<string[]>({
+    key: 'recommendedModelIds',
+    name: 'Recommended Model IDs',
+    // Empty means "follow DefaultAPIModel", so a fresh deploy recommends only the default model
+    // and an admin who changes that setting sees the change here too. Resolved client-side by
+    // resolveRecommendedModelIds (apps/client/app/utils/recommendedModels.ts).
+    defaultValue: [],
+    description:
+      'Model IDs pinned in a "Recommended" group at the top of the model picker, in display order. Unknown or inaccessible IDs are skipped. Empty recommends the Default API Model.',
+    category: 'AI',
+    order: 2,
+    // The picker renders for every user, and a list of model ids is not sensitive.
+    userReadable: true,
+    schema: z.array(z.string()),
   }),
   openaiDemoKey: makeStringSetting({
     key: 'openaiDemoKey',
