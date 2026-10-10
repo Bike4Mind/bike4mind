@@ -66,6 +66,7 @@ import { useTranslation } from 'react-i18next';
 import { LexicalChatInput, LexicalChatInputRef } from '../LexicalChatInput';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
+import { dismissCreditNudge, isCreditNudgeDismissed } from '../creditNudgeDismissal';
 import { NoModelsWarning, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
 import { LOW_CREDITS_THRESHOLD } from '../CreditButton';
 import { getComposerCreditUi } from './composerCreditUi';
@@ -135,7 +136,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   );
   const [rephraseGlow, setRephraseGlow] = useState(false);
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
-  const [lowCreditsWarningDismissed, setLowCreditsWarningDismissed] = useState(false);
+  const [lowCreditsWarningDismissed, setLowCreditsWarningDismissed] = useState(() => isCreditNudgeDismissed());
   // Band at which the user dismissed the context warning; re-shows on escalation.
   const [contextWarningDismissedBand, setContextWarningDismissedBand] = useState<ContextUsageBand | null>(null);
 
@@ -253,8 +254,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const maxFileSize = Number(useGetSettingsValue('MaxFileSize')) || 30;
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
 
-  // Out of credits replaces the message box outright (see CreditsWarning); only the
-  // low-credits notice still overlays it, so only that one needs the box to hold its height.
+  // Out of credits replaces the message box outright (see CreditsWarning); the low-credits
+  // notice sits above it without blocking typing.
   const creditUi = getComposerCreditUi({
     enforceCredits,
     effectiveCredits,
@@ -666,7 +667,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         flex: 1,
                         overflow: 'visible',
                         position: 'relative',
-                        minHeight: creditUi.lowCreditsNotice ? '60px' : undefined,
                         transition: 'box-shadow 300ms, outline 300ms',
                         boxShadow: rephraseGlow
                           ? '0 0 0 2px rgba(59,130,246,0.3), 0 0 12px rgba(59,130,246,0.45)'
@@ -678,7 +678,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                       <LowCreditsWarning
                         show={creditUi.lowCreditsNotice}
                         currentCredits={effectiveCredits}
-                        onDismiss={() => setLowCreditsWarningDismissed(true)}
+                        onDismiss={() => {
+                          dismissCreditNudge();
+                          setLowCreditsWarningDismissed(true);
+                        }}
                       />
                       {/* Slash command suggestions */}
                       {showSlashSuggestions && (

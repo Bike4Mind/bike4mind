@@ -14,15 +14,24 @@ vi.mock('../subscription/CreditsModal', () => ({
 vi.mock('../subscription/SubscriptionModal', () => ({
   default: () => null,
 }));
+vi.mock('./useProCreditOffer', () => ({
+  useProCreditOffer: () => ({ name: 'Professional', credits: 50000, priceLabel: '$30' }),
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { name: 'Sam', username: 'sam' } }),
+}));
+vi.mock('@client/app/hooks/data/organizations', () => ({
+  useGetOrganization: () => ({ data: { name: 'Acme' } }),
+}));
 
 // useSelectedAccount lives in AccountSelector, which transitively imports LLMContext /
 // UserContext / org data hooks. Mock just the selector so we can drive personal vs. org
 // without the deep chain. accountRef is hoisted so the factory can read it lazily.
 const { accountRef } = vi.hoisted(() => ({
-  accountRef: { current: null as null | { personal: boolean } },
+  accountRef: { current: null as null | { id?: string; personal: boolean } },
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
-  useSelectedAccount: (selector: (s: { selectedAccount: null | { personal: boolean } }) => unknown) =>
+  useSelectedAccount: (selector: (s: { selectedAccount: null | { id?: string; personal: boolean } }) => unknown) =>
     selector({ selectedAccount: accountRef.current }),
 }));
 
@@ -55,15 +64,15 @@ describe('InsufficientCreditsNotice', () => {
     expect(screen.getByTestId('insufficient-credits-message')).toHaveTextContent(MESSAGE);
   });
 
-  it('renders Subscribe + Add Credits CTAs for a personal account', () => {
+  it('leads with Pro and offers a credit pack for a personal account', () => {
     render(
       <TestWrapper>
         <InsufficientCreditsNotice message={MESSAGE} />
       </TestWrapper>
     );
 
-    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Add Credits');
-    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent('Subscribe');
+    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Buy a credit pack');
+    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent('Subscribe to Professional');
   });
 
   it('opens the purchase modal when the CTA is clicked', () => {
@@ -78,17 +87,18 @@ describe('InsufficientCreditsNotice', () => {
     expect(screen.getByTestId('credits-modal-open')).toBeInTheDocument();
   });
 
-  it('suppresses the dead-end CTA for an org account (they cannot self-purchase)', () => {
-    accountRef.current = { personal: false };
+  it('offers Ask your admin instead of purchase CTAs for an org account', () => {
+    accountRef.current = { id: 'org1', personal: false };
     render(
       <TestWrapper>
         <InsufficientCreditsNotice message={ORG_MESSAGE} />
       </TestWrapper>
     );
 
-    // The message (with admin guidance) still renders, but neither purchase CTA.
+    // Org members cannot self-purchase, so they get the admin request action.
     expect(screen.getByTestId('insufficient-credits-message')).toHaveTextContent(ORG_MESSAGE);
     expect(screen.queryByTestId('session-credits-btn')).not.toBeInTheDocument();
     expect(screen.queryByTestId('session-subscribe-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('credit-offer-ask-admin-btn')).toBeInTheDocument();
   });
 });

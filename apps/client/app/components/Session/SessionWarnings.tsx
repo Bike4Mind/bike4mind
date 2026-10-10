@@ -3,7 +3,7 @@ import { keyframes } from '@mui/system';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
 import BlockRoundedIcon from '@mui/icons-material/BlockRounded';
-import { SubscribeButton, SessionCreditsButton } from './SessionCreditsButtons';
+import { CreditOfferActions } from './CreditOfferActions';
 
 const fadeIn = keyframes`
   from {
@@ -83,97 +83,60 @@ interface CreditsWarningProps {
   show: boolean;
 }
 
-// Softer pulse animation for low credits (warning state, not danger)
-const warningPulseGlow = keyframes`
-  0%, 100% {
-    box-shadow: 0 0 6px rgba(234, 179, 8, 0.3), inset 0 0 15px rgba(234, 179, 8, 0.03);
-  }
-  50% {
-    box-shadow: 0 0 14px rgba(234, 179, 8, 0.45), inset 0 0 20px rgba(234, 179, 8, 0.06);
-  }
-`;
-
 interface LowCreditsWarningProps {
   show: boolean;
   currentCredits: number;
   onDismiss: () => void;
 }
 
+/**
+ * Low but not out: an in-flow banner above the message box, so typing is never blocked. Dismissal
+ * is the caller's to remember (see creditNudgeDismissal).
+ */
 export function LowCreditsWarning({ show, currentCredits, onDismiss }: LowCreditsWarningProps) {
-  const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
-
   if (!show) return null;
 
   return (
     <Box
       data-testid="session-low-credits-warning"
       sx={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        background: isDarkMode
-          ? 'linear-gradient(135deg, rgba(120, 80, 20, 0.95) 0%, rgba(80, 55, 15, 0.98) 100%)'
-          : 'linear-gradient(135deg, rgba(254, 249, 195, 0.98) 0%, rgba(254, 240, 138, 0.98) 100%)',
+        gap: 1.5,
+        flexWrap: 'wrap',
+        backgroundColor: 'background.level1',
+        border: '1px solid',
+        borderColor: 'warning.outlinedBorder',
         borderRadius: '8px',
-        border: isDarkMode ? '2px solid rgba(234, 179, 8, 0.6)' : '2px solid rgba(202, 138, 4, 0.5)',
-        px: 2,
+        px: 1.5,
         py: 1,
-        zIndex: 1000,
-        animation: `${warningPulseGlow} 3s ease-in-out infinite`,
+        mb: 1,
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
         <WarningAmberRoundedIcon
           data-testid="low-credits-warning-icon"
-          sx={{
-            fontSize: '26px',
-            color: isDarkMode ? '#fbbf24' : '#ca8a04',
-            filter: isDarkMode ? 'drop-shadow(0 0 4px rgba(251, 191, 36, 0.4))' : 'none',
-          }}
+          sx={{ fontSize: '22px', color: 'warning.plainColor', flexShrink: 0 }}
         />
         <Box>
-          <Typography
-            data-testid="low-credits-warning-text"
-            sx={{
-              fontSize: '17px',
-              fontWeight: 700,
-              color: isDarkMode ? '#fef08a' : '#854d0e',
-              letterSpacing: '-0.01em',
-              textShadow: isDarkMode ? '0 1px 2px rgba(0,0,0,0.3)' : 'none',
-            }}
-          >
-            Running Low on Credits
+          <Typography data-testid="low-credits-warning-text" level="title-sm">
+            Running low on credits
           </Typography>
-          <Typography
-            sx={{
-              fontSize: '13px',
-              color: isDarkMode ? 'rgba(254, 240, 138, 0.85)' : '#a16207',
-              mt: 0.25,
-            }}
-          >
-            Only {currentCredits.toLocaleString()} credits remaining — add more to avoid interruption
+          <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+            {currentCredits.toLocaleString()} credits remaining. Your work isn&apos;t interrupted.
           </Typography>
         </Box>
       </Box>
       <Box data-testid="low-credits-warning-actions" display="flex" gap={1.5} alignItems="center">
-        <SessionCreditsButton />
+        <CreditOfferActions moment="low" />
         <IconButton
           data-testid="low-credits-warning-dismiss"
+          aria-label="Dismiss low credits notice"
           size="sm"
           variant="plain"
+          color="neutral"
           onClick={onDismiss}
-          sx={{
-            color: isDarkMode ? 'rgba(254, 240, 138, 0.7)' : '#a16207',
-            '&:hover': {
-              backgroundColor: isDarkMode ? 'rgba(254, 240, 138, 0.1)' : 'rgba(161, 98, 7, 0.1)',
-            },
-          }}
         >
           <CloseRoundedIcon />
         </IconButton>
@@ -217,23 +180,11 @@ export function CreditsWarning({ show }: CreditsWarningProps) {
             Out of Credits
           </Typography>
           <Typography level="body-sm" sx={{ mt: '2px', fontSize: '13px', color: 'text.tertiary' }}>
-            Add credits or subscribe to continue
+            Your message is saved. Pick up where you left off once you have credits.
           </Typography>
         </Box>
-        {/* Subscribe is the one primary action; topping up is the fallback. */}
-        <Box
-          data-testid="credits-warning-actions"
-          sx={{
-            // Two equal grid columns on a phone rather than flex: flex never shrinks an
-            // item below its padding and border, so the outlined button came out 2px wider.
-            display: { xs: 'grid', sm: 'flex' },
-            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-            gap: 1,
-            flexShrink: 0,
-          }}
-        >
-          <SessionCreditsButton secondary />
-          <SubscribeButton />
+        <Box data-testid="credits-warning-actions" sx={{ flexShrink: 0 }}>
+          <CreditOfferActions moment="out" />
         </Box>
       </Box>
       <Divider />
