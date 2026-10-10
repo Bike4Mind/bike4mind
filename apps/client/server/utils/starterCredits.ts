@@ -9,10 +9,10 @@ import { settingsMap } from '@bike4mind/common';
  */
 export async function getOpenSignupStarterCredits(): Promise<number> {
   try {
-    const [openReg, freeCredits] = await Promise.all([
-      adminSettingsRepository.findBySettingName('allowOpenRegistration'),
-      adminSettingsRepository.findBySettingName('defaultFreeCredits'),
-    ]);
+    // One round trip: this runs on every anonymous view of an open-public page.
+    const rows = await adminSettingsRepository.findBySettingNames(['allowOpenRegistration', 'defaultFreeCredits']);
+    const openReg = rows.find(r => r.settingName === 'allowOpenRegistration');
+    const freeCredits = rows.find(r => r.settingName === 'defaultFreeCredits');
     const open = settingsMap.allowOpenRegistration.schema.safeParse(openReg?.settingValue);
     if (!(open.success ? open.data : settingsMap.allowOpenRegistration.defaultValue)) return 0;
     const amount = settingsMap.defaultFreeCredits.schema.safeParse(freeCredits?.settingValue);
