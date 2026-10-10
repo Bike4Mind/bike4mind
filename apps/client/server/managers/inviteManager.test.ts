@@ -47,6 +47,15 @@ describe('filterInviteRecipientsToSelf', () => {
     expect(out.recipients).toEqual({ pending: [], accepted: [], refused: [] });
   });
 
+  it('drops typedRecipients, which lists every address the inviter typed', () => {
+    const out = filterInviteRecipientsToSelf(
+      { ...baseInvite(), typedRecipients: ['a@x.com', 'b@x.com'] },
+      'a@x.com'
+    ) as any;
+    expect(out).not.toHaveProperty('typedRecipients');
+    expect(JSON.stringify(out)).not.toContain('b@x.com');
+  });
+
   it('leaves an invite without recipients untouched', () => {
     const out = filterInviteRecipientsToSelf({ id: 'i2', type: 'Session' }, 'a@x.com') as any;
     expect('recipients' in out).toBe(false);

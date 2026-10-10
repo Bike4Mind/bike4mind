@@ -130,6 +130,8 @@ export function filterInviteRecipientsToSelf<T>(invite: T, userEmail?: string | 
   // these routes already holds it (it is the key they addressed the request with), so echoing it
   // buys nothing and would hand a redeemable secret to any future caller of this serializer.
   delete plain.token;
+  // The addresses the inviter typed, co-recipients' included.
+  delete plain.typedRecipients;
   return plain;
 }
 
