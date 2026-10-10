@@ -125,7 +125,49 @@ beforeEach(() => {
   mockProjectFindOne.mockReset().mockResolvedValue(null);
   mockDownload.mockReset();
   mockUpdateOne.mockReset().mockResolvedValue(undefined);
-  mockUserFindById.mockReset().mockResolvedValue(null);
+  // Every artifact's owner exists by default; the owner-check tests override this per id.
+  mockUserFindById.mockReset().mockResolvedValue({});
+});
+
+describe('GET /api/publish/serve - owner check', () => {
+  const ownerIs = (doc: unknown) =>
+    mockUserFindById.mockImplementation((id: string) => (id === 'owner1' ? doc : { email: 'v@x.com' }));
+
+  it('serves an artifact whose owner exists', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ source: { kind: 'reply' }, renderedBody: 'Hello' }));
+    ownerIs({ name: 'Ada' });
+
+    const { res, promise } = run(['r', 'pub1']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFindById).toHaveBeenCalledWith('owner1');
+  });
+
+  it.each([
+    ['deleted', null],
+    ['banned', { isBanned: true }],
+    ['suspended', { moderation: { status: 'suspended' } }],
+  ])('returns 404 for every surface when the owner is %s', async (_label, ownerDoc) => {
+    ownerIs(ownerDoc);
+
+    mockArtifactFindOne.mockReturnValue(bundle({ source: { kind: 'reply' }, renderedBody: 'Hello' }));
+    const reply = run(['r', 'pub1']);
+    await reply.promise;
+    expect(reply.res._getStatusCode()).toBe(404);
+
+    mockArtifactFindOne.mockReturnValue(bundle());
+    const page = run(['u', 'scope123', 'my-slug']);
+    await page.promise;
+    expect(page.res._getStatusCode()).toBe(404);
+
+    mockArtifactFindOne.mockReturnValue(bundle({ shareToken: 'tok' }));
+    const share = run(['a', 'tok']);
+    await share.promise;
+    expect(share.res._getStatusCode()).toBe(404);
+
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/publish/serve - sandboxed bundle', () => {

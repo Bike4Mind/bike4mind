@@ -58,6 +58,7 @@
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "backfill:session-image-count": "tsx src/backfill-session-image-count.ts",
+    "backfill:orphaned-published-artifacts": "tsx src/backfill-orphaned-published-artifacts.ts",
     "repair:bedrock-profile-absence": "tsx src/repair-bedrock-profile-absence.ts",
     "repair:stale-organization-pointers": "tsx src/repair-stale-organization-pointers.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",

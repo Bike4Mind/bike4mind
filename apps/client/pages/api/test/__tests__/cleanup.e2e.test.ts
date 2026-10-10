@@ -26,6 +26,10 @@ import {
   LakeMembershipDecisionModel,
   DataLakeCorpusActionModel,
   DataLakeOwnershipOfferModel,
+  PublishedArtifact,
+  PublishedArtifactReport,
+  PublishedArtifactViewAuditModel,
+  Annotation,
 } from '@bike4mind/database';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -139,7 +143,14 @@ const seedChildren = async (userId: mongoose.Types.ObjectId) => {
   await DataLakeCorpusActionModel.collection.insertOne({ _id: oid(), lakeId: lakeId.toString() });
   await DataLakeOwnershipOfferModel.collection.insertOne({ _id: oid(), dataLakeId: lakeId.toString() });
 
-  return { sessionId, lakeId };
+  // A published page with one row in each publicId-keyed child collection.
+  const publicId = `pub-${uid}`;
+  await PublishedArtifact.collection.insertOne({ _id: oid(), publicId, ownerId: uid, deletedAt: null });
+  await Annotation.collection.insertOne({ _id: oid(), publicId, authorId: `viewer-${uid}` });
+  await PublishedArtifactReport.collection.insertOne({ _id: oid(), publicId, reporterId: `viewer-${uid}` });
+  await PublishedArtifactViewAuditModel.collection.insertOne({ _id: oid(), publicId, viewerId: `viewer-${uid}` });
+
+  return { sessionId, lakeId, publicId };
 };
 
 const callCleanup = async (query: Record<string, string>) => {
@@ -222,11 +233,34 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect((body.cleaned as Record<string, number>).dataLakes).toBe(1);
   });
 
+  it('removes published artifacts, deleted ones included, and their publicId-keyed children', async () => {
+    const sweptUserId = await seedUser(SWEPT_EMAIL, `sweep-${TEST_ID}-12345678-e2e`);
+    const { publicId } = await seedChildren(sweptUserId);
+    const uid = sweptUserId.toString();
+    await PublishedArtifact.collection.insertOne({
+      _id: oid(),
+      publicId: `gone-${uid}`,
+      ownerId: uid,
+      deletedAt: new Date(),
+    });
+    // The swept user's own annotation on someone else's page goes too.
+    await Annotation.collection.insertOne({ _id: oid(), publicId: 'someone-else', authorId: uid });
+
+    const { body } = await callCleanup({ testId: TEST_ID });
+
+    expect(await PublishedArtifact.collection.countDocuments({ ownerId: uid })).toBe(0);
+    expect(await Annotation.collection.countDocuments({ publicId })).toBe(0);
+    expect(await Annotation.collection.countDocuments({ authorId: uid })).toBe(0);
+    expect(await PublishedArtifactReport.collection.countDocuments({ publicId })).toBe(0);
+    expect(await PublishedArtifactViewAuditModel.collection.countDocuments({ publicId })).toBe(0);
+    expect((body.cleaned as Record<string, number>).publishedArtifacts).toBe(2);
+  });
+
   it("leaves a non-e2e user's rows untouched", async () => {
     const sweptUserId = await seedUser(SWEPT_EMAIL, `sweep-${TEST_ID}-12345678-e2e`);
     const controlUserId = await seedUser(CONTROL_EMAIL, 'control-user-12345678');
     await seedChildren(sweptUserId);
-    const { lakeId: controlLakeId } = await seedChildren(controlUserId);
+    const { lakeId: controlLakeId, publicId: controlPublicId } = await seedChildren(controlUserId);
     const cuid = controlUserId.toString();
 
     await callCleanup({ testId: TEST_ID });
@@ -239,6 +273,10 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect(await DataLakeAccessGrantModel.collection.countDocuments({ dataLakeId: controlLakeId.toString() })).toBe(1);
     expect(await DataLakeProposalModel.collection.countDocuments({ dataLakeId: controlLakeId.toString() })).toBe(1);
     expect(await DataLakeFindingModel.collection.countDocuments({ lakeId: controlLakeId.toString() })).toBe(1);
+    expect(await PublishedArtifact.collection.countDocuments({ ownerId: cuid })).toBe(1);
+    expect(await Annotation.collection.countDocuments({ publicId: controlPublicId })).toBe(1);
+    expect(await PublishedArtifactReport.collection.countDocuments({ publicId: controlPublicId })).toBe(1);
+    expect(await PublishedArtifactViewAuditModel.collection.countDocuments({ publicId: controlPublicId })).toBe(1);
   });
 
   it('warns when users were swept but no child rows were deleted', async () => {
