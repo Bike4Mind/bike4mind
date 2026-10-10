@@ -75,6 +75,33 @@ const addOrganizationCredits = async ({
 };
 
 /**
+ * Seat counts before and after a mid-period quantity change, read from the proration invoice.
+ *
+ * A seat raise billed with `always_invoice` (organizations/subscriptions/update-seats.ts) carries
+ * an "unused time" credit line (negative amount, old quantity) and a "remaining time" charge line
+ * (positive amount, new quantity). Stripe does not promise their order, so picking `lines[0]` could
+ * read the new quantity as the old one and grant nothing. The live subscription quantity is only a
+ * fallback: it is fetched when the event is processed and may already reflect a later change.
+ */
+export const resolveSeatChangeFromInvoice = (
+  invoice: Stripe.Invoice,
+  subscriptionQuantity: number
+): { previousQuantity: number; currentQuantity: number } => {
+  const lines = invoice.lines?.data ?? [];
+  const creditLine = lines.find(line => line.amount < 0 && line.quantity != null);
+  const chargeLine = lines.find(line => line.amount > 0 && line.quantity != null);
+
+  if (creditLine && chargeLine) {
+    return { previousQuantity: creditLine.quantity ?? 0, currentQuantity: chargeLine.quantity ?? 0 };
+  }
+
+  return {
+    previousQuantity: creditLine?.quantity ?? lines[0]?.quantity ?? 0,
+    currentQuantity: subscriptionQuantity,
+  };
+};
+
+/**
  * Handle organization subscription invoice payment
  * This includes:
  * - Initial subscription creation
@@ -166,30 +193,40 @@ export const handleOrganizationSubscriptionInvoice = async (
             );
           }
         } else if (metadata.newOrganizationName) {
-          // Create a new organization only during subscription creation
-          organization = await organizationService.create(
-            user,
-            {
-              name: metadata.newOrganizationName,
-              seats: subscriptionQuantity,
-              personal: false,
-              stripeCustomerId: customerId,
-            },
-            {
-              db: {
-                organizations: organizationRepository,
-                users: userRepository,
+          // Event redelivery re-runs this branch. Checkout mints a fresh Stripe customer for a
+          // new team (organizations/subscriptions/subscribe.ts), so an org already carrying it
+          // means a prior delivery created it: reuse it instead of creating a duplicate org.
+          const existingOrganization = await organizationRepository.findByStripeCustomerId(customerId);
+          if (existingOrganization) {
+            organization = existingOrganization;
+            logger.info(
+              `Organization for customer ${customerId} already exists (${existingOrganization.id}); not creating another`
+            );
+          } else {
+            organization = await organizationService.create(
+              user,
+              {
+                name: metadata.newOrganizationName,
+                seats: subscriptionQuantity,
+                personal: false,
+                stripeCustomerId: customerId,
               },
-              logger,
+              {
+                db: {
+                  organizations: organizationRepository,
+                  users: userRepository,
+                },
+                logger,
+              }
+            );
+
+            if (!organization) {
+              logger.error(`Failed to create organization: ${metadata.newOrganizationName}`);
+              return;
             }
-          );
 
-          if (!organization) {
-            logger.error(`Failed to create organization: ${metadata.newOrganizationName}`);
-            return;
+            logger.info(`Organization created: ${organization.name} (${organization.id})`);
           }
-
-          logger.info(`Organization created: ${organization.name} (${organization.id})`);
         } else {
           logger.debug(`Ignoring subscription creation without organization details: ${subscription.id}`);
           return;
@@ -302,9 +339,15 @@ export const handleOrganizationSubscriptionInvoice = async (
           return;
         }
 
-        // Calculate the seat change by comparing with previous quantity
-        const previousQuantity = invoice.lines.data[0].quantity ?? 0;
-        const currentQuantity = subscriptionQuantity;
+        // Idempotency: a redelivered seat-increase invoice must not reach addCredits, whose duplicate-key
+        // rejection would abort this transaction and fail every retry instead of skipping cleanly.
+        const existingSeatGrant = await creditTransactionRepository.findByPaymentIntentId(idempotencyKey);
+        if (existingSeatGrant) {
+          logger.info(`subscription_update already processed for idempotencyKey ${idempotencyKey}, skipping`);
+          break;
+        }
+
+        const { previousQuantity, currentQuantity } = resolveSeatChangeFromInvoice(invoice, subscriptionQuantity);
         const seatIncrease = currentQuantity - previousQuantity;
 
         // Calculate prorated credits based on remaining days in billing period

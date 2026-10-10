@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Stripe from 'stripe';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { organizationRepository, userRepository } from '@bike4mind/database';
-import { creditService } from '@bike4mind/services';
+import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
+import { creditService, organizationService } from '@bike4mind/services';
 import { emitMetric } from '@server/utils/cloudwatch';
-import { handleOrganizationSubscriptionInvoice, handleUserSubscriptionInvoice } from './serverUtils';
+import {
+  handleOrganizationSubscriptionInvoice,
+  handleUserSubscriptionInvoice,
+  resolveSeatChangeFromInvoice,
+} from './serverUtils';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { Logger } from '@bike4mind/observability';
 
@@ -397,6 +401,171 @@ describe('handleOrganizationSubscriptionInvoice - seat sync on initial purchase'
   });
 });
 
+describe('handleOrganizationSubscriptionInvoice - new team on event redelivery', () => {
+  const newTeamMetadata = {
+    userId: 'u1',
+    stage: 'test',
+    ownerType: SubscriptionOwnerType.Organization,
+    newOrganizationName: 'Brand New Team',
+  } as unknown as Parameters<typeof handleOrganizationSubscriptionInvoice>[2];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue(null);
+    vi.mocked(subscriptionRepository.findNonTerminalSubscriptionsByOwner).mockResolvedValue([]);
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue(null);
+  });
+
+  it('creates the team org with the purchased seats on first delivery', async () => {
+    vi.mocked(organizationService.create).mockResolvedValue({
+      id: 'org_new',
+      name: 'Brand New Team',
+      users: [],
+    } as unknown as Awaited<ReturnType<typeof organizationService.create>>);
+
+    await handleOrganizationSubscriptionInvoice(buildInvoice(), buildSubscription(), newTeamMetadata, logger);
+
+    expect(organizationService.create).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(organizationService.create).mock.calls[0][1]).toMatchObject({
+      name: 'Brand New Team',
+      seats: 4,
+      stripeCustomerId: 'cus_test',
+    });
+    expect(subscriptionRepository.create).toHaveBeenCalledWith(expect.objectContaining({ ownerId: 'org_new' }));
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'org_new', credits: 4 * 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('reuses the org already created for this Stripe customer instead of creating a duplicate', async () => {
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue({
+      id: 'org_from_first_delivery',
+      name: 'Brand New Team',
+      users: [],
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findByStripeCustomerId>>);
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+      id: 'subDoc_existing',
+    } as unknown as Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>);
+
+    await handleOrganizationSubscriptionInvoice(buildInvoice(), buildSubscription(), newTeamMetadata, logger);
+
+    expect(organizationRepository.findByStripeCustomerId).toHaveBeenCalledWith('cus_test');
+    expect(organizationService.create).not.toHaveBeenCalled();
+    expect(subscriptionRepository.create).not.toHaveBeenCalled();
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleOrganizationSubscriptionInvoice - seat increase credits', () => {
+  const buildSeatChangeInvoice = (lines: Array<{ amount: number; quantity: number }>): Stripe.Invoice =>
+    ({
+      id: 'in_seats',
+      customer: 'cus_test',
+      billing_reason: 'subscription_update',
+      // Same instant as the period start, so the proration factor is exactly 1.
+      created: 1700000000,
+      lines: { data: lines },
+      payments: { data: [] },
+    }) as unknown as Stripe.Invoice;
+
+  const buildSixSeatSubscription = (): Stripe.Subscription => {
+    const subscription = buildSubscription();
+    subscription.items.data[0].quantity = 6;
+    return subscription;
+  };
+
+  const orgMetadata = {
+    userId: 'u1',
+    stage: 'test',
+    ownerType: SubscriptionOwnerType.Organization,
+    organizationId: 'org_team',
+  } as unknown as Parameters<typeof handleOrganizationSubscriptionInvoice>[2];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      users: [],
+      seats: 4,
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findByStripeCustomerId>>);
+  });
+
+  it.each([
+    [
+      'credit line first',
+      [
+        { amount: -10000, quantity: 4 },
+        { amount: 15000, quantity: 6 },
+      ],
+    ],
+    [
+      'charge line first',
+      [
+        { amount: 15000, quantity: 6 },
+        { amount: -10000, quantity: 4 },
+      ],
+    ],
+  ])('grants credits for the added seats regardless of line order (%s)', async (_label, lines) => {
+    await handleOrganizationSubscriptionInvoice(
+      buildSeatChangeInvoice(lines),
+      buildSixSeatSubscription(),
+      orgMetadata,
+      logger
+    );
+
+    expect(creditService.addCredits).toHaveBeenCalledTimes(1);
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'org_team', credits: 2 * 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('skips a redelivered seat-increase invoice that was already credited', async () => {
+    vi.mocked(creditTransactionRepository.findByPaymentIntentId).mockResolvedValueOnce({
+      id: 'tx_prior',
+    } as unknown as Awaited<ReturnType<typeof creditTransactionRepository.findByPaymentIntentId>>);
+
+    await handleOrganizationSubscriptionInvoice(
+      buildSeatChangeInvoice([
+        { amount: -10000, quantity: 4 },
+        { amount: 15000, quantity: 6 },
+      ]),
+      buildSixSeatSubscription(),
+      orgMetadata,
+      logger
+    );
+
+    expect(creditTransactionRepository.findByPaymentIntentId).toHaveBeenCalledWith('in_seats');
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveSeatChangeFromInvoice', () => {
+  const invoiceWith = (lines: Array<{ amount: number; quantity: number | null }>) =>
+    ({ lines: { data: lines } }) as unknown as Stripe.Invoice;
+
+  it('reads old and new quantities from the proration lines, not the live subscription', () => {
+    expect(
+      resolveSeatChangeFromInvoice(
+        invoiceWith([
+          { amount: 15000, quantity: 6 },
+          { amount: -10000, quantity: 4 },
+        ]),
+        9
+      )
+    ).toEqual({ previousQuantity: 4, currentQuantity: 6 });
+  });
+
+  it('falls back to the first line and the live quantity when there is no credit/charge pair', () => {
+    expect(resolveSeatChangeFromInvoice(invoiceWith([{ amount: 15000, quantity: 5 }]), 5)).toEqual({
+      previousQuantity: 5,
+      currentQuantity: 5,
+    });
+  });
+});
+
 describe('handleUserSubscriptionInvoice — plan lookup', () => {
   const metadata = {
     userId: 'u1',
@@ -471,7 +640,14 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
   it('stores the campaign touches checkout recorded on the new subscription row', async () => {
     const sub = {
       ...buildUserSubscription('price_test_professional'),
-      metadata: { userId: 'u1', stage: 'test', ownerType: 'User', acq_first_source: 'widgets', acq_first_medium: 'teaser', acq_last_source: 'email' },
+      metadata: {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: 'User',
+        acq_first_source: 'widgets',
+        acq_first_medium: 'teaser',
+        acq_last_source: 'email',
+      },
     } as unknown as Stripe.Subscription;
 
     await handleUserSubscriptionInvoice(buildInvoice(), sub, metadata, logger);
