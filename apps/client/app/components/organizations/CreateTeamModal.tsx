@@ -37,7 +37,10 @@ const CreateTeamModal = () => {
   const { isOpen, close } = useCreateTeamModal();
   const [teamName, setTeamName] = useState('');
   const { minSeats, maxSeats } = useTeamSeatLimits();
-  const [teamSize, setTeamSize] = useState(minSeats);
+  // Mounted app-wide before settings load, so the initial pick can fall outside a range that arrives
+  // later; clamp on read so the stepper, the total and the checkout quantity match what the API accepts.
+  const [requestedTeamSize, setTeamSize] = useState(minSeats);
+  const teamSize = Math.min(Math.max(requestedTeamSize, minSeats), maxSeats);
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const createTeamDev = useCreateTeamDev();
   const plans = useGetSubscriptionPlans();
@@ -58,11 +61,11 @@ const CreateTeamModal = () => {
   };
 
   const handleIncreaseTeamSize = () => {
-    setTeamSize(prev => (prev < maxSeats ? prev + 1 : prev));
+    setTeamSize(Math.min(teamSize + 1, maxSeats));
   };
 
   const handleDecreaseTeamSize = () => {
-    setTeamSize(prev => (prev > minSeats ? prev - 1 : prev));
+    setTeamSize(Math.max(teamSize - 1, minSeats));
   };
 
   const handleSubmit = async () => {

@@ -35,7 +35,9 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
   const creditsPerSeat = useTeamCreditsPerSeat();
   const [subscriptionType, setSubscriptionType] = useState<'individual' | 'team'>('individual');
   const [priceId, setPriceId] = useState<string>('');
-  const [seats, setSeats] = useState(minSeats);
+  // Clamped on read: the initial pick is taken before the seat settings load (see CreateTeamModal).
+  const [requestedSeats, setSeats] = useState(minSeats);
+  const seats = Math.min(Math.max(requestedSeats, minSeats), maxSeats);
   const [organizationName, setOrganizationName] = useState('');
   const [durationMonths, setDurationMonths] = useState(1);
   const [billingOwnerId, setBillingOwnerId] = useState<string | null>(null);
@@ -201,7 +203,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
                     variant="soft"
                     color="neutral"
                     disabled={seats <= minSeats}
-                    onClick={() => setSeats(prev => Math.max(minSeats, prev - 1))}
+                    onClick={() => setSeats(Math.max(minSeats, seats - 1))}
                   >
                     <RemoveIcon />
                   </IconButton>
@@ -212,7 +214,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
                     variant="soft"
                     color="neutral"
                     disabled={seats >= maxSeats}
-                    onClick={() => setSeats(prev => Math.min(maxSeats, prev + 1))}
+                    onClick={() => setSeats(Math.min(maxSeats, seats + 1))}
                   >
                     <AddIcon />
                   </IconButton>

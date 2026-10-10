@@ -67,7 +67,10 @@ const SubscriptionModal = ({
   // mirrors the server validateSeatChange clamp; otherwise the decrement gate never lets it recover.
   const minimumSeats = Math.min(Math.max(planMinSeats, organization.users.length + 1), planMaxSeats);
   // Initialize with current seats if it's an existing subscription, otherwise use minimum seats
-  const [seats, setSeats] = useState(subscription ? organization.seats : minimumSeats);
+  const [requestedSeats, setSeats] = useState(subscription ? organization.seats : minimumSeats);
+  // Clamped on read: the initial pick can predate the seat settings loading, or sit outside a range an
+  // admin has since changed, and update-seats/subscribe reject anything outside it.
+  const seats = Math.min(Math.max(requestedSeats, minimumSeats), planMaxSeats);
   const updateSeats = useUpdateSubscriptionSeats();
 
   // Update seats when organization.seats changes
@@ -101,11 +104,11 @@ const SubscriptionModal = ({
   };
 
   const handleIncreaseSeats = () => {
-    setSeats(prev => (prev < planMaxSeats ? prev + 1 : prev));
+    setSeats(Math.min(seats + 1, planMaxSeats));
   };
 
   const handleDecreaseSeats = () => {
-    setSeats(prev => (prev > minimumSeats ? prev - 1 : prev));
+    setSeats(Math.max(seats - 1, minimumSeats));
   };
 
   // Calculate if we're decreasing seats from current allocation
