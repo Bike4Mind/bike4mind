@@ -1,6 +1,6 @@
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
 import { ModelBackend } from '@bike4mind/common';
@@ -412,6 +412,16 @@ describe('ModelSelection recommended group', () => {
     expect(section).toHaveTextContent('Recommended');
     expect(section).toHaveTextContent(textModel.name);
     expect(screen.getAllByTestId(`model-card-${textModel.id}`).length).toBeGreaterThan(1);
+  });
+
+  it('keeps the configured order, not the provider sort, and shows a repeated id once', () => {
+    adminSettings.recommendedModelIds = [imageModel.id, textModel.id, imageModel.id];
+    renderSelection({});
+    const cards = within(screen.getByTestId('recommended-section')).getAllByTestId(/^model-card-/);
+    expect(cards.map(c => c.getAttribute('data-testid'))).toEqual([
+      `model-card-${imageModel.id}`,
+      `model-card-${textModel.id}`,
+    ]);
   });
 
   it('skips ids that are unknown or inaccessible', () => {

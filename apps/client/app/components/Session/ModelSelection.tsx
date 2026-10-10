@@ -852,7 +852,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   const recommendedIds = getSettingObject<string[]>('recommendedModelIds', emptyIds);
   const recommendedModels = useMemo(() => {
     const byId = new Map<string, ModelInfo>(filteredModels.map(m => [m.id, m]));
-    return (Array.isArray(recommendedIds) ? recommendedIds : []).flatMap(id => {
+    // Set: a repeated id would render two cards with the same React key.
+    return [...new Set(Array.isArray(recommendedIds) ? recommendedIds : [])].flatMap(id => {
       const found = byId.get(id);
       return found ? [found] : [];
     });
