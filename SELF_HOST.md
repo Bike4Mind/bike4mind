@@ -66,6 +66,8 @@ BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
 ```
 
+**Organization feedback summaries** - set **Organization Feedback Summary Model** (`OrgFeedbackSummaryModel`) in Admin Settings to an available model for your configured provider. The default remains Claude 4.5 Haiku via Bedrock. To run without Bedrock, explicitly select another provider's model, for example Claude 4.5 Haiku with `ANTHROPIC_API_KEY` available to the worker. The job uses the system provider credentials, not the requesting user's key. An unavailable selected model fails the job instead of silently choosing another model. Completed-job replay delivers completion again without generating or uploading another summary. Generation is capped at 2,000 output tokens; provider retries can still add cost.
+
 **No API keys? Run local models instead.** You can skip every provider key and run open-weight models (Qwen, Llama, etc.) locally via Ollama, with nothing leaving your machine. See [Local models with Ollama](#local-models-with-ollama-no-api-keys) below.
 
 ## 3. Bring up the stack
