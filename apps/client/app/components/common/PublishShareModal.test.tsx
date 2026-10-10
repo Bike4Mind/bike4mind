@@ -677,5 +677,7 @@ describe('PublishShareModal - plain-language copy', () => {
     expect(option.textContent).toContain('Anyone with the link');
     expect(document.body.textContent).not.toContain('\u26a0');
     expect(document.body.textContent).not.toContain('List in search engines');
+    // The gate options name the same secret the passphrase option asks for.
+    expect(document.body.textContent).not.toContain('passcode');
   });
 });

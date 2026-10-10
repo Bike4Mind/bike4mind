@@ -1888,7 +1888,6 @@ ${
   </div>
   <div class="b4m-ph-right">
     <span class="b4m-live">Live</span>
-    
   </div>
 </header>`
 }

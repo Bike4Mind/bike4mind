@@ -120,7 +120,7 @@ type GateKind = 'none' | 'passphrase' | 'domain';
 const GATE_OPTIONS: Array<{ value: GateKind; label: string; hint: string; icon: React.ReactNode }> = [
   {
     value: 'none',
-    label: 'No passcode needed',
+    label: 'No passphrase needed',
     hint: 'Viewers just open the link',
     icon: <PublicIcon fontSize="small" />,
   },
