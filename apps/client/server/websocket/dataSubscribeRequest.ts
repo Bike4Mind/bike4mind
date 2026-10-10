@@ -171,6 +171,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const fieldLimits = resolveFieldLimits(collectionName, {
     questCollectionName: Quest.collection.collectionName,
     organizationCollectionName: Organization.collection.collectionName,
+    inviteCollectionName: Invite.collection.collectionName,
     isQuestOwner: isOwnQuestSession,
     isPlatformAdmin: !!user.isAdmin,
   });

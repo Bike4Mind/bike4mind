@@ -148,3 +148,100 @@ export function omitInviteToken<T>(invite: T): Record<string, unknown> {
   delete plain.token;
   return plain;
 }
+
+/** A recipient a sharer-facing invite view names by id rather than by address. */
+export interface SharerInviteRecipientUser {
+  userId: string;
+  name: string;
+}
+
+/** `a***@example.com`. Shown only for an address that matches no user, so there is no id to give. */
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf('@');
+  if (at <= 0) return '***';
+  return `${email[0]}***${email.slice(at)}`;
+}
+
+type RecipientLists = { pending?: string[]; accepted?: string[]; refused?: string[] };
+
+/**
+ * Sharer-facing serialization: omitInviteToken, plus withholding every recipient address the viewer
+ * did not supply. createInvite resolves user ids and usernames to addresses server-side, so without
+ * this, inviting someone by id would hand their email back to whoever invited them.
+ *
+ * Each `recipients` entry stays a string, so counts and existing consumers keep working, and becomes:
+ * - the address itself, for a platform admin, for the viewer's own address, or for an address this
+ *   viewer typed when minting the invite (`typedRecipients`, checked against `inviterId`);
+ * - otherwise the recipient's user id, listed with a display name in `recipientUsers`;
+ * - otherwise (no user has that address any more) a masked address.
+ * A legacy invite has no `typedRecipients`, so typed and resolved entries cannot be told apart and
+ * none of its addresses are shown back to a non-admin.
+ *
+ * Use on every route that returns invites to someone with share access to the document. Invitees get
+ * filterInviteRecipientsToSelf instead.
+ */
+export async function toSharerInviteViews(
+  invites: unknown[],
+  viewer: Pick<IUserDocument, 'id' | 'email' | 'isAdmin'>
+): Promise<Record<string, unknown>[]> {
+  const plains = invites.map(invite => omitInviteToken(invite));
+  if (viewer.isAdmin) {
+    return plains;
+  }
+
+  const viewerEmail = viewer.email?.toLowerCase();
+  const isDisclosed = (plain: Record<string, unknown>, lower: string) => {
+    if (lower === viewerEmail) return true;
+    const typed = plain.typedRecipients as string[] | undefined;
+    return !!typed && String(plain.inviterId ?? '') === viewer.id && typed.includes(lower);
+  };
+
+  const withheld = new Set<string>();
+  for (const plain of plains) {
+    const recipients = plain.recipients as RecipientLists | null | undefined;
+    for (const entry of [
+      ...(recipients?.pending ?? []),
+      ...(recipients?.accepted ?? []),
+      ...(recipients?.refused ?? []),
+    ]) {
+      if (typeof entry === 'string' && !isDisclosed(plain, entry.toLowerCase())) withheld.add(entry.toLowerCase());
+    }
+  }
+
+  // Case-insensitive, matching how createInvite resolved the address (findAllByEmailsOrUsernames).
+  const usersByEmail = new Map<string, SharerInviteRecipientUser>();
+  if (withheld.size > 0) {
+    const users = await User.find({ email: { $in: [...withheld] } }, { _id: 1, name: 1, email: 1 })
+      .collation({ locale: 'en', strength: 2 })
+      .lean();
+    for (const user of users) {
+      const lower = user.email?.toLowerCase();
+      if (lower && !usersByEmail.has(lower)) usersByEmail.set(lower, { userId: String(user._id), name: user.name });
+    }
+  }
+
+  return plains.map(plain => {
+    const recipients = plain.recipients as RecipientLists | null | undefined;
+    if (recipients) {
+      const recipientUsers = new Map<string, SharerInviteRecipientUser>();
+      const view = (entries?: string[]) =>
+        (entries ?? []).map(entry => {
+          if (typeof entry !== 'string' || isDisclosed(plain, entry.toLowerCase())) return entry;
+          const user = usersByEmail.get(entry.toLowerCase());
+          if (!user) return maskEmail(entry);
+          recipientUsers.set(user.userId, user);
+          return user.userId;
+        });
+      plain.recipients = {
+        ...recipients,
+        pending: view(recipients.pending),
+        accepted: view(recipients.accepted),
+        refused: view(recipients.refused),
+      };
+      plain.recipientUsers = [...recipientUsers.values()];
+    }
+    // The typed list is itself a set of addresses, readable only by the inviter it belongs to.
+    delete plain.typedRecipients;
+    return plain;
+  });
+}

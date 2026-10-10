@@ -296,6 +296,43 @@ describe('sharingService - createInvite (recipient resolution)', () => {
     expect((invite as any).isLinkOnly).toBe(false);
   });
 
+  describe('typedRecipients', () => {
+    it('records an address the inviter typed, matched case-insensitively', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'Friend@Example.com', username: 'friend' }]);
+
+      const invite = await createFabFile(['friend@example.com']);
+
+      expect((invite as any).typedRecipients).toEqual(['friend@example.com']);
+    });
+
+    it('does not record an address resolved from a username', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'friend@example.com', username: 'friend' }]);
+
+      const invite = await createFabFile(['friend']);
+
+      expect((invite as any).recipients.pending).toEqual(['friend@example.com']);
+      expect((invite as any).typedRecipients).toEqual([]);
+    });
+
+    it('does not record an address resolved from a user id', async () => {
+      db.users.findByIds = vi.fn(async () => [{ id: 'user-id-123', email: 'member@x.com', username: 'member' }]);
+
+      const invite = await createProject(['user-id-123']);
+
+      expect((invite as any).recipients.pending).toEqual(['member@x.com']);
+      expect((invite as any).typedRecipients).toEqual([]);
+    });
+
+    it('records only the typed entry when a project invite mixes an id and an address', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'typed@x.com', username: 'typed' }]);
+      db.users.findByIds = vi.fn(async () => [{ id: 'user-id-123', email: 'member@x.com', username: 'member' }]);
+
+      const invite = await createProject(['typed@x.com', 'user-id-123']);
+
+      expect((invite as any).typedRecipients).toEqual(['typed@x.com']);
+    });
+  });
+
   it('throws rather than minting a Project invite whose recipients all fail to resolve', async () => {
     db.users.findAllByEmailsOrUsernames = vi.fn(async () => []);
     db.users.findByIds = vi.fn(async () => []);

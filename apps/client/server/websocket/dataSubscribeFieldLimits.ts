@@ -30,14 +30,26 @@ import {
  * is per-query, not per-document, so an owner-keyed keep would also hand over the billing contact
  * of every co-member org the same subscription happens to match. An owner's own billing contact
  * still reaches them through the access-gated REST GET.
+ *
+ * invites: the subscription matches both invites addressed to the caller and every invite on a
+ * project the caller may share, so a raw document carries co-recipients' addresses and addresses
+ * resolved from user ids, plus the bearer `token`. The REST paths strip these per document
+ * (inviteManager.filterInviteRecipientsToSelf / toSharerInviteViews); a per-query projection cannot,
+ * so `recipients` and `typedRecipients` are dropped for every non-admin and `token` for everyone.
+ * Client subscribers treat an invite event as a cue to refetch through REST rather than reading it.
  */
 /** Quest fields no session viewer should see, the owner included; see the quests note above. */
 const QUEST_SERVER_ONLY_FIELDS = ['callback'] as const;
+
+/** Invite fields no subscriber may see, and those only a platform admin may; see the invites note above. */
+const INVITE_SECRET_FIELDS = ['token'] as const;
+const INVITE_ADMIN_ONLY_FIELDS = ['recipients', 'typedRecipients'] as const;
 
 export type FieldLimitOptions = {
   /** Passed in rather than hardcoded so a collection rename can't silently drop the exclusion. */
   questCollectionName: string;
   organizationCollectionName: string;
+  inviteCollectionName: string;
   /** The subscribed session belongs to the caller (see the quests note above). */
   isQuestOwner?: boolean;
   /** Caller is a platform admin, the only viewer a per-query projection can safely privilege. */
@@ -46,7 +58,13 @@ export type FieldLimitOptions = {
 
 export function resolveFieldLimits(
   collectionName: string,
-  { questCollectionName, organizationCollectionName, isQuestOwner = false, isPlatformAdmin = false }: FieldLimitOptions
+  {
+    questCollectionName,
+    organizationCollectionName,
+    inviteCollectionName,
+    isQuestOwner = false,
+    isPlatformAdmin = false,
+  }: FieldLimitOptions
 ): Record<string, boolean> | undefined {
   if (collectionName === 'users') {
     return { password: false, stripeCustomerId: false, resetPasswordToken: false };
@@ -57,6 +75,10 @@ export function resolveFieldLimits(
   }
   if (collectionName === organizationCollectionName) {
     const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];
+    return Object.fromEntries(excluded.map(field => [field, false]));
+  }
+  if (collectionName === inviteCollectionName) {
+    const excluded = [...INVITE_SECRET_FIELDS, ...(isPlatformAdmin ? [] : INVITE_ADMIN_ONLY_FIELDS)];
     return Object.fromEntries(excluded.map(field => [field, false]));
   }
   return undefined;

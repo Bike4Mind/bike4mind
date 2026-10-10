@@ -6,7 +6,7 @@ import {
 } from '@server/projects/projectScopes';
 import { inviteRepository, projectRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
-import { omitInviteToken } from '@server/managers/inviteManager';
+import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sharingService } from '@bike4mind/services';
 import { InviteEvents, InviteType, ProjectEvents, Permission } from '@bike4mind/common';
@@ -51,8 +51,8 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
     });
 
     // Same reason as the sibling document list: the token is a redeemable secret with no consumer
-    // on this surface.
-    return res.json({ ...result, data: result.data.map(omitInviteToken) });
+    // on this surface. Recipient addresses the caller did not type are withheld as well.
+    return res.json({ ...result, data: await toSharerInviteViews(result.data, req.user!) });
   })
   .post(
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
@@ -120,7 +120,8 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
       };
 
-      return res.json({ ...omitInviteToken(created), link: generateInviteLink(created) });
+      const [view] = await toSharerInviteViews([created], req.user);
+      return res.json({ ...view, link: generateInviteLink(created) });
     })
   );
 

@@ -65,6 +65,33 @@ describe('sharingService - cancelInvite authority', () => {
     expect(db.invites.update.mock.calls[0][0]).toStrictEqual({ id: 'invite-1', remaining: 0 });
   });
 
+  describe('cancelling one recipient by userId', () => {
+    beforeEach(() => {
+      db.projects.shareable.findShareAccessById = vi.fn(async () => ({ id: DOC_ID, name: 'Confidential Project' }));
+      db.invites.findAllByDocumentId = vi.fn(async () => [anInvite(), aLinkInvite()]);
+    });
+
+    const cancelByUserId = (userId: string) =>
+      cancelInvite(asUser(), { id: DOC_ID, type: InviteType.Project, userId } as any, { db });
+
+    it('resolves the id to its address, case-insensitively, and removes only that recipient', async () => {
+      db.users.findById = vi.fn(async () => ({ id: 'victim-id', email: 'Victim@Example.com' }));
+
+      const result = await cancelByUserId('victim-id');
+
+      expect(db.users.findById).toHaveBeenCalledWith('victim-id');
+      expect(result.find((invite: any) => invite.id === 'invite-1').recipients.pending).toEqual([]);
+      expect(result.find((invite: any) => invite.id === 'invite-2').remaining).toBe(1000);
+    });
+
+    it('refuses an id that resolves to nobody instead of cancelling every invite', async () => {
+      db.users.findById = vi.fn(async () => null);
+
+      await expect(cancelByUserId('nobody')).rejects.toBeInstanceOf(NotFoundError);
+      expect(db.invites.update).not.toHaveBeenCalled();
+    });
+  });
+
   it('cancelling one email only touches the invite it was actually pending on', async () => {
     const project = { id: DOC_ID, name: 'Confidential Project' };
     db.projects.shareable.findShareAccessById = vi.fn(async () => project);

@@ -5,6 +5,7 @@ import { resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeField
 const opts = (overrides: Partial<FieldLimitOptions> = {}): FieldLimitOptions => ({
   questCollectionName: 'quests',
   organizationCollectionName: 'organizations',
+  inviteCollectionName: 'invites',
   ...overrides,
 });
 
@@ -96,5 +97,17 @@ describe('resolveFieldLimits', () => {
       stripeCustomerId: false,
       billingContact: false,
     });
+  });
+
+  it('drops invite recipients and the bearer token for a non-admin', () => {
+    expect(resolveFieldLimits('invites', opts())).toEqual({
+      token: false,
+      recipients: false,
+      typedRecipients: false,
+    });
+  });
+
+  it('keeps invite recipients for a platform admin but never the token', () => {
+    expect(resolveFieldLimits('invites', opts({ isPlatformAdmin: true }))).toEqual({ token: false });
   });
 });

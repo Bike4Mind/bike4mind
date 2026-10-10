@@ -215,6 +215,12 @@ export const createInvite = async (
     }
   }
 
+  // Only an address the inviter typed may be shown back to them; anything resolved from an id or a
+  // username is withheld by the sharer-facing invite views. Recorded against `pending` so a typed
+  // address that matched nobody is not listed.
+  const typedEmails = new Set(recipientsArray.filter(r => r.includes('@')).map(r => r.toLowerCase()));
+  const typedRecipients = pending.map(email => email.toLowerCase()).filter(email => typedEmails.has(email));
+
   // No caller sets `available` explicitly today. Defaulting it to a flat 1 regardless of
   // recipient count meant a multi-recipient By-Users share minted one invite whose single
   // accept slot only the first recipient could ever claim, while the sharer was told all of
@@ -248,6 +254,7 @@ export const createInvite = async (
     // what this user actually holds, so an attached file the inviter cannot share
     // does not silently inherit the invite's permissions.
     inviterId: user.id,
+    typedRecipients,
   };
 
   const invite = await db.invites.create(build);

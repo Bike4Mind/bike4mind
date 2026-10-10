@@ -1,5 +1,5 @@
 import { InviteEvents, InviteType, Permission } from '@bike4mind/common';
-import { omitInviteToken } from '@server/managers/inviteManager';
+import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -110,8 +110,8 @@ const handler = baseApi()
       );
       // Sharer-facing, and the bearer token has no consumer here: the create response is what hands
       // back a link. Leaving it in would put a redeemable secret in a list any share-authorized
-      // caller can re-read at will.
-      return res.json(shares.map(omitInviteToken));
+      // caller can re-read at will. Recipient addresses the caller did not type are withheld too.
+      return res.json(await toSharerInviteViews(shares, req.user));
     })
   )
   /**
@@ -225,7 +225,8 @@ const handler = baseApi()
         });
       }
 
-      return res.json({ ...omitInviteToken(created), link: generateInviteLink(created) });
+      const [view] = await toSharerInviteViews([created], req.user);
+      return res.json({ ...view, link: generateInviteLink(created) });
     })
   )
   /**
@@ -244,11 +245,11 @@ const handler = baseApi()
       const inviteType = resolveInviteType(type);
       if (!inviteType) throw new BadRequestError('Invalid cancel invite request');
       if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
-      const { email } = (req.body ?? {}) as { email?: string };
+      const { email, userId } = (req.body ?? {}) as { email?: string; userId?: string };
 
       const invites = await sharingService.cancelInvite(
         req.user,
-        { type: inviteType, id, email },
+        { type: inviteType, id, email, userId },
         {
           db: {
             invites: inviteRepository,
@@ -271,7 +272,7 @@ const handler = baseApi()
         { ability: req.ability }
       );
 
-      return res.json(invites);
+      return res.json(await toSharerInviteViews(invites, req.user));
     })
   );
 

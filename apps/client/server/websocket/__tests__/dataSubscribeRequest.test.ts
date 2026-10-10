@@ -44,7 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {},
   findModelByCollectionName: (...args: unknown[]) => mockFindModelByCollectionName(...args),
   Inbox: {},
-  Invite: {},
+  Invite: { collection: { collectionName: 'invites' } },
   mongoose: {},
   Organization: { collection: { collectionName: 'organizations' } },
   Project: {},
