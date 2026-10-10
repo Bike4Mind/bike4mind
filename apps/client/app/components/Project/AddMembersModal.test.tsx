@@ -5,11 +5,15 @@ import type { IProjectDocument } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
+  params: undefined as unknown,
   users: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('@client/app/hooks/data/user', () => ({
-  useGetUsers: () => ({ data: { users: mocks.users }, isFetching: false }),
+  useGetUsers: (params: unknown) => {
+    mocks.params = params;
+    return { data: { users: mocks.users }, isFetching: false };
+  },
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({
   useShareDocument: () => ({ mutate: mocks.mutate, isPending: false }),
@@ -38,8 +42,23 @@ vi.mock('./GenericAddItemsModal', () => ({
   ),
 }));
 vi.mock('../common/UserCard', () => ({
-  default: ({ user, hideEmail }: { user: { name: string; email?: string }; hideEmail?: boolean }) => (
-    <div data-testid="user-card" data-hide-email={String(!!hideEmail)}>
+  default: ({
+    user,
+    hideEmail,
+    inviteStatus,
+    onClick,
+  }: {
+    user: { name: string };
+    hideEmail?: boolean;
+    inviteStatus?: string;
+    onClick?: () => void;
+  }) => (
+    <div
+      data-testid="user-card"
+      data-hide-email={String(!!hideEmail)}
+      data-invite-status={inviteStatus ?? ''}
+      data-selectable={String(!!onClick)}
+    >
       {user.name}
     </div>
   ),
@@ -74,5 +93,20 @@ describe('ProjectAddMembersModal', () => {
     const cards = screen.getAllByTestId('user-card');
     expect(cards).toHaveLength(2);
     for (const card of cards) expect(card.getAttribute('data-hide-email')).toBe('true');
+  });
+
+  it('marks a server-flagged pending invitee as pending and not selectable', () => {
+    mocks.users = [
+      { id: 'invitee-id', name: 'Invitee', username: 'invitee', pendingInvite: true },
+      { id: 'colleague-id', name: 'Colleague', username: 'colleague', pendingInvite: false },
+    ];
+    render(<ProjectAddMembersModal project={project} ownerId={OWNER} />);
+
+    expect(mocks.params).toMatchObject({ pendingInviteProjectId: 'project-id' });
+    const [invitee, colleague] = screen.getAllByTestId('user-card');
+    expect(invitee.getAttribute('data-invite-status')).toBe('pending');
+    expect(invitee.getAttribute('data-selectable')).toBe('false');
+    expect(colleague.getAttribute('data-invite-status')).toBe('');
+    expect(colleague.getAttribute('data-selectable')).toBe('true');
   });
 });

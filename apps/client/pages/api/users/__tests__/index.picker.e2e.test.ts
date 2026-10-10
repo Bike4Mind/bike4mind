@@ -7,7 +7,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { Organization, Project, User } from '@bike4mind/database';
+import { InviteType } from '@bike4mind/common';
+import { Invite, Organization, Project, User } from '@bike4mind/database';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -90,6 +91,25 @@ beforeAll(async () => {
     users: [{ userId: PROJECT_COLLEAGUE.toString(), permissions: ['read'] }],
     deletedAt: null,
   });
+  // One open invite (stored in a different case than the account) and one expired invite.
+  await Invite.collection.insertMany([
+    {
+      type: InviteType.Project,
+      documentId: PROJECT.toString(),
+      userId: REQUESTER.toString(),
+      remaining: 1,
+      recipients: { pending: ['ZEPHYR.ORGMATE@example.test'], accepted: [], refused: [] },
+      expiresAt: null,
+    },
+    {
+      type: InviteType.Project,
+      documentId: PROJECT.toString(),
+      userId: REQUESTER.toString(),
+      remaining: 1,
+      recipients: { pending: [STRANGER_EMAIL], accepted: [], refused: [] },
+      expiresAt: new Date(Date.now() - 60_000),
+    },
+  ]);
 });
 
 afterAll(async () => {
@@ -155,5 +175,34 @@ describe('GET /api/users publicView - non-admin picker scope (real mongod)', () 
     const rows = await search(ADMIN, true, { search: 'zep' });
     expect(ids(rows)).toEqual([REQUESTER, ORG_COLLEAGUE, PROJECT_COLLEAGUE, STRANGER, ADMIN].map(String).sort());
     expect(rows.find(r => r.id === STRANGER.toString())?.email).toBe(STRANGER_EMAIL);
+  });
+
+  it('flags open project invitees with pendingInvite, without returning their email', async () => {
+    const rows = await search(REQUESTER, false, { search: 'zep', pendingInviteProjectId: PROJECT.toString() });
+    const flags = Object.fromEntries(rows.map(r => [r.id, (r as { pendingInvite?: boolean }).pendingInvite]));
+    expect(flags).toEqual({
+      [REQUESTER.toString()]: false,
+      [ORG_COLLEAGUE.toString()]: true,
+      [PROJECT_COLLEAGUE.toString()]: false,
+    });
+    for (const row of rows) expect(row).not.toHaveProperty('email');
+  });
+
+  it('does not flag an expired invite', async () => {
+    const rows = await search(REQUESTER, false, { search: STRANGER_EMAIL, pendingInviteProjectId: PROJECT.toString() });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: STRANGER.toString(), name: 'Zephyr stranger', pendingInvite: false });
+    expect(rows[0]).not.toHaveProperty('email');
+    expect(rows[0]).not.toHaveProperty('username');
+  });
+
+  it('404s pendingInviteProjectId for a caller without share access to the project', async () => {
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { publicView: 'true', search: 'zep', pendingInviteProjectId: PROJECT.toString() },
+    });
+    (req as unknown as { user: unknown }).user = { id: ORG_COLLEAGUE.toString(), groups: [], isAdmin: false };
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(404);
   });
 });

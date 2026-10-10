@@ -21,7 +21,10 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const queryClient = useQueryClient();
 
-  const params: IGetUsersParams = useMemo(() => ({ search, page: 1, limit: 10, publicView: true }), [search]);
+  const params: IGetUsersParams = useMemo(
+    () => ({ search, page: 1, limit: 10, publicView: true, pendingInviteProjectId: project.id }),
+    [search, project.id]
+  );
   const { data, isFetching } = useGetUsers(params, { enabled: search.length >= 3 });
 
   const [permissions] = useState<{ value: Permission[]; error?: string | null }>({
@@ -70,6 +73,7 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
     (user: any) => {
       return (
         alreadyInvitedUsers.get(user.id) ||
+        (user.pendingInvite ? 'pending' : undefined) ||
         alreadyInvitedUsers.get(user.email ?? '') ||
         alreadyInvitedUsers.get(user.username) ||
         undefined

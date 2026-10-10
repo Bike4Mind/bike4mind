@@ -21,6 +21,7 @@ import {
   PUBLIC_USER_SORT_FIELDS,
 } from '@client/app/utils/adminUserProjection';
 import { findSharedWorkspaceUserIds } from '@server/users/sharedWorkspaceUserIds';
+import { findPendingProjectInviteeIds } from '@server/users/pendingProjectInviteeIds';
 import * as z from 'zod';
 import qs from 'qs';
 import { Request } from 'express';
@@ -42,6 +43,11 @@ const querySchema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{24}$/)
     .optional(),
+  // Flags rows with an open invite to this project (`pendingInvite`); does not narrow the results.
+  pendingInviteProjectId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/)
+    .optional(),
   publicView: z
     .string()
     .optional()
@@ -54,8 +60,19 @@ const querySchema = z.object({
 
 const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
   try {
-    const { page, limit, search, publicView, sortField, sortOrder, orgSearch, tags, downloadAll, projectId } =
-      querySchema.parse(qs.parse(req.query));
+    const {
+      page,
+      limit,
+      search,
+      publicView,
+      sortField,
+      sortOrder,
+      orgSearch,
+      tags,
+      downloadAll,
+      projectId,
+      pendingInviteProjectId,
+    } = querySchema.parse(qs.parse(req.query));
 
     // publicView is the limited directory search used by invite/member pickers; it
     // bypasses CASL by design (regular users have no read grant on User). Keep it
@@ -322,10 +339,29 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
           )
         : results[0].paginatedResults;
 
+      // Project invites store recipients as emails, which the picker never returns, so the
+      // "already invited" match is made here instead of in the modal.
+      const pendingInviteeIds = pendingInviteProjectId
+        ? await findPendingProjectInviteeIds(
+            req.user,
+            pendingInviteProjectId,
+            users.map(user => String(user._id))
+          )
+        : undefined;
+      if (pendingInviteeIds === null) {
+        return res.status(404).json({ message: 'Project not found.' });
+      }
+
       await User.populate(users, { path: 'organizationId' });
 
       return res.json({
-        users: users.map((user: IUserObject) => User.hydrate(user)),
+        users: users.map((user: IUserObject) => {
+          const hydrated = User.hydrate(user);
+          // pendingInvite is not a User path, so it is added after hydrate rather than through it.
+          return pendingInviteeIds
+            ? { ...hydrated.toJSON(), pendingInvite: pendingInviteeIds.has(String(user._id)) }
+            : hydrated;
+        }),
         currentPage: page,
         totalPages: Math.ceil(total / effectiveLimit),
         totalUsers: total,
