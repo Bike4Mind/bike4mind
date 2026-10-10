@@ -41,9 +41,13 @@ const REQUESTER = oid();
 const ORG_COLLEAGUE = oid();
 const PROJECT_COLLEAGUE = oid();
 const STRANGER = oid();
+const OTHER_ORG_MEMBER = oid();
+const OTHER_PROJECT_MEMBER = oid();
 const ADMIN = oid();
 const ORG = oid();
 const PROJECT = oid();
+const OTHER_ORG = oid();
+const OTHER_PROJECT = oid();
 
 const STRANGER_EMAIL = 'zephyr.stranger@example.test';
 
@@ -75,22 +79,44 @@ beforeAll(async () => {
     user(ORG_COLLEAGUE, 'orgmate'),
     user(PROJECT_COLLEAGUE, 'projectmate'),
     user(STRANGER, 'stranger'),
+    user(OTHER_ORG_MEMBER, 'otherorg'),
+    user(OTHER_PROJECT_MEMBER, 'otherproject'),
     user(ADMIN, 'admin', true),
   ]);
-  await Organization.collection.insertOne({
-    _id: ORG,
-    name: 'Shared org',
-    userId: ORG_COLLEAGUE.toString(),
-    users: [{ userId: REQUESTER.toString(), permissions: ['read'] }],
-    deletedAt: null,
-  });
-  await Project.collection.insertOne({
-    _id: PROJECT,
-    name: 'Shared project',
-    userId: REQUESTER.toString(),
-    users: [{ userId: PROJECT_COLLEAGUE.toString(), permissions: ['read'] }],
-    deletedAt: null,
-  });
+  // The requester belongs to ORG and owns PROJECT. OTHER_ORG and OTHER_PROJECT are someone else's
+  // workspaces the requester has no part in, so their members are out of scope.
+  await Organization.collection.insertMany([
+    {
+      _id: ORG,
+      name: 'Shared org',
+      userId: ORG_COLLEAGUE.toString(),
+      users: [{ userId: REQUESTER.toString(), permissions: ['read'] }],
+      deletedAt: null,
+    },
+    {
+      _id: OTHER_ORG,
+      name: 'Other org',
+      userId: STRANGER.toString(),
+      users: [{ userId: OTHER_ORG_MEMBER.toString(), permissions: ['read'] }],
+      deletedAt: null,
+    },
+  ]);
+  await Project.collection.insertMany([
+    {
+      _id: PROJECT,
+      name: 'Shared project',
+      userId: REQUESTER.toString(),
+      users: [{ userId: PROJECT_COLLEAGUE.toString(), permissions: ['read'] }],
+      deletedAt: null,
+    },
+    {
+      _id: OTHER_PROJECT,
+      name: 'Other project',
+      userId: STRANGER.toString(),
+      users: [{ userId: OTHER_PROJECT_MEMBER.toString(), permissions: ['read'] }],
+      deletedAt: null,
+    },
+  ]);
   // One open invite (stored in a different case than the account) and one expired invite.
   await Invite.collection.insertMany([
     {
@@ -117,10 +143,15 @@ afterAll(async () => {
   await mongoServer?.stop();
 });
 
-async function search(caller: mongoose.Types.ObjectId, isAdmin: boolean, query: Record<string, string>) {
+async function request(caller: mongoose.Types.ObjectId, isAdmin: boolean, query: Record<string, string>) {
   const { req, res } = createMocks({ method: 'GET', query: { publicView: 'true', ...query } });
   (req as unknown as { user: unknown }).user = { id: caller.toString(), groups: [], isAdmin };
   await mockRefs.getHandler!(req, res);
+  return res;
+}
+
+async function search(caller: mongoose.Types.ObjectId, isAdmin: boolean, query: Record<string, string>) {
+  const res = await request(caller, isAdmin, query);
   expect(res._getStatusCode()).toBe(200);
   // Round-trip through JSON so the assertions see exactly what the client receives.
   return JSON.parse(JSON.stringify(res._getJSONData().users)) as PickerRow[];
@@ -138,6 +169,33 @@ describe('GET /api/users publicView - non-admin picker scope (real mongod)', () 
     expect(ids(await search(REQUESTER, false, { search: 'zephyr_str' }))).toEqual([]);
     expect(ids(await search(REQUESTER, false, { search: 'zephyr.str' }))).toEqual([]);
     expect(ids(await search(REQUESTER, false, { search: 'zephyr.stranger@example' }))).toEqual([]);
+  });
+
+  it('does not reach members of an organization or project the caller is not part of', async () => {
+    expect(ids(await search(REQUESTER, false, { search: 'zephyr_other' }))).toEqual([]);
+    expect(ids(await search(REQUESTER, false, { search: 'zep' }))).not.toContain(OTHER_ORG_MEMBER.toString());
+    expect(ids(await search(REQUESTER, false, { search: 'zep' }))).not.toContain(OTHER_PROJECT_MEMBER.toString());
+  });
+
+  it('treats regex metacharacters as literals in both the prefix and the exact-email arm', async () => {
+    for (const term of ['.*.', '^.*$', 'zep.*', '.*@.*', 'zephyr\\..*@example\\.test', '[a-z]+@example.test']) {
+      expect(ids(await search(REQUESTER, false, { search: term }))).toEqual([]);
+    }
+  });
+
+  it('requires a 3-character search without a projectId', async () => {
+    expect((await request(REQUESTER, false, {}))._getStatusCode()).toBe(400);
+    expect((await request(REQUESTER, false, { search: '  z ' }))._getStatusCode()).toBe(400);
+  });
+
+  it('404s a projectId the caller cannot read, so a forged id does not widen the scope', async () => {
+    const res = await request(REQUESTER, false, { projectId: OTHER_PROJECT.toString() });
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData()).not.toHaveProperty('users');
+  });
+
+  it('keeps an exact-email match inside the roster on a projectId request', async () => {
+    expect(ids(await search(REQUESTER, false, { projectId: PROJECT.toString(), search: STRANGER_EMAIL }))).toEqual([]);
   });
 
   it('never returns an email to a non-admin', async () => {
@@ -179,7 +237,11 @@ describe('GET /api/users publicView - non-admin picker scope (real mongod)', () 
 
   it('leaves admin results unchanged: whole directory, with email', async () => {
     const rows = await search(ADMIN, true, { search: 'zep' });
-    expect(ids(rows)).toEqual([REQUESTER, ORG_COLLEAGUE, PROJECT_COLLEAGUE, STRANGER, ADMIN].map(String).sort());
+    expect(ids(rows)).toEqual(
+      [REQUESTER, ORG_COLLEAGUE, PROJECT_COLLEAGUE, STRANGER, OTHER_ORG_MEMBER, OTHER_PROJECT_MEMBER, ADMIN]
+        .map(String)
+        .sort()
+    );
     expect(rows.find(r => r.id === STRANGER.toString())?.email).toBe(STRANGER_EMAIL);
   });
 
