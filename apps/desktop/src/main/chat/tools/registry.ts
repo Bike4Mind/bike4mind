@@ -20,6 +20,7 @@ import { requestDirectory } from './requestDirectoryTool';
 import { bashExecute } from './shellTools';
 import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
+import { WEB_TOOLS } from './webTools';
 import { fileEdit, fileWrite } from './writeTools';
 import type { ToolDefinition, ToolSchema } from './types';
 
@@ -132,6 +133,7 @@ const BY_NAME = new Map(
     askUser,
     requestDirectory,
     ...MCP_TOOLS,
+    ...WEB_TOOLS,
   ].map(tool => [tool.schema.name, tool])
 );
 
@@ -180,6 +182,11 @@ export function toolsForRequest(options: {
   memory?: boolean;
   /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
   skills?: boolean;
+  /**
+   * A signed-in session to search and fetch through. Needs nothing else: like the generation
+   * tools, the work happens on the server and touches no file the user owns.
+   */
+  web?: boolean;
   /** A user is present to answer: main conversations, not spawned sessions. */
   ask?: boolean;
   /**
@@ -203,6 +210,7 @@ export function toolsForRequest(options: {
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
+    ...(options.web ? WEB_TOOLS : []),
     // Offered with no folder granted too: asking for one is exactly what that conversation needs.
     ...(options.ask ? [askUser, requestDirectory] : []),
     ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),

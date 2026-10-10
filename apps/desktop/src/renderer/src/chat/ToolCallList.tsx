@@ -25,6 +25,7 @@ import { MediaAttachments } from './MediaAttachment';
 import { thinScrollbarSx } from './layout';
 import { QuestionCard, QuestionSummary } from './QuestionCard';
 import { VideoJobsForCall } from './VideoJobCard';
+import { WebResultCount, WebToolDetail, useWebSearchHits } from './WebResults';
 import {
   diffTotals,
   groupToolCalls,
@@ -308,6 +309,8 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
   // string twice in three lines - and a write has no other argument worth a line of its own.
   const diffs = call.diffs ?? (call.diff ? [call.diff] : []);
   const argument = diffs.length > 0 ? '' : summarizeInput(call);
+  // The list stands in for the raw text it was parsed from; the model still got that text.
+  const listsHits = useWebSearchHits(call).length > 0;
 
   const asked = call.name === ASK_USER_TOOL_NAME ? parseQuestions(call.input.questions) : null;
   if (asked && 'questions' in asked && call.status === 'done') {
@@ -353,22 +356,26 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
         </Stack>
       )}
 
-      <Typography
-        level="body-xs"
-        fontFamily="monospace"
-        sx={{
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          maxHeight: 260,
-          overflowY: 'auto',
-          mt: 0.5,
-          ...thinScrollbarSx,
-        }}
-        textColor={call.error ? 'danger.400' : 'text.tertiary'}
-        data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
-      >
-        {call.error ?? call.preview ?? call.progress ?? 'Running...'}
-      </Typography>
+      <WebToolDetail call={call} />
+
+      {!listsHits && (
+        <Typography
+          level="body-xs"
+          fontFamily="monospace"
+          sx={{
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: 260,
+            overflowY: 'auto',
+            mt: 0.5,
+            ...thinScrollbarSx,
+          }}
+          textColor={call.error ? 'danger.400' : 'text.tertiary'}
+          data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
+        >
+          {call.error ?? call.preview ?? call.progress ?? 'Running...'}
+        </Typography>
+      )}
     </Box>
   );
 }
@@ -444,6 +451,7 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
           {toolRowLabel(call)}
         </Typography>
         {totals && <DiffStat totals={totals} />}
+        <WebResultCount call={call} />
         {onMove && isMovable(call) && <MoveToBackgroundButton call={call} onMove={onMove} />}
         <Box sx={{ display: 'flex', opacity: 0.6 }}>
           <ChevronIcon open={open} />
@@ -528,6 +536,7 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
             {group.label}
           </Typography>
           {group.diffstat && <DiffStat totals={group.diffstat} />}
+          {single && <WebResultCount call={group.calls[0]} />}
           {onMove && movable.length === 1 && <MoveToBackgroundButton call={movable[0]} onMove={onMove} />}
           <Box sx={{ display: 'flex', opacity: 0.6 }}>
             <ChevronIcon open={open} />

@@ -38,7 +38,7 @@ const MAX_SCHEMA_NODES = 2_000;
  * and the bidirectional-override codepoints. Tabs and newlines stay, because a tool description
  * legitimately has paragraphs and removing them only makes the text harder to read.
  */
-function stripControl(text: string): string {
+export function stripControl(text: string): string {
   // eslint-disable-next-line no-control-regex -- the point of this function is control bytes.
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e]/g, '');
 }

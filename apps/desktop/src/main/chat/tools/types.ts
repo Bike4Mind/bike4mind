@@ -79,6 +79,18 @@ export interface ExploreContext extends ExploreTarget {
 }
 
 /**
+ * The web tools' door to the server: /api/tools/web-search and /api/tools/web-fetch over the
+ * app's authenticated session. The server does the reaching - its configured search provider,
+ * and its SSRF-guarded fetch - so a model-chosen URL never leaves from this machine.
+ *
+ * Each resolves with the route's `result` text, unframed. Errors are thrown as they come.
+ */
+export interface WebContext {
+  search(body: { query: string; num_results?: number }, signal: AbortSignal): Promise<string>;
+  fetch(body: { url: string; offset?: number }, signal: AbortSignal): Promise<string>;
+}
+
+/**
  * Side channels a tool can push to besides its return value, wired per call by ChatService.
  *
  * Absent in tests and anywhere a tool is run outside the chat loop; every tool treats it as
@@ -163,7 +175,8 @@ export interface BrowserContext {
 
 /**
  * Everything a tool may use. Narrow by default: no api client and no token, except for the
- * server-backed generation tools, which get exactly {@link MediaContext}.
+ * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
+ * which get exactly {@link WebContext}.
  */
 export interface ToolContext {
   /** Granted roots. Empty means the user has allowed nothing, and every path tool denies. */
@@ -211,6 +224,8 @@ export interface ToolContext {
   host?: HostContext;
   /** Absent in tests and when signed out; `explore` then refuses rather than runs. */
   explore?: ExploreContext;
+  /** Absent when signed out; web_search and web_fetch are then not declared, and refuse if called. */
+  web?: WebContext;
   /** Absent outside a Code session; the browser tools are then not declared at all. */
   browser?: BrowserContext;
   /**

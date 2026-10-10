@@ -1,6 +1,7 @@
 import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
+import { WEB_FETCH_TOOL_NAME, hostOf } from '@shared/webSearch';
 
 /**
  * How each tool is spoken about in the transcript.
@@ -271,6 +272,22 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Generated ${n} tracks`,
     active: 'Generating music...',
   },
+  web_search: {
+    did: 'Searched the web:',
+    didAlone: 'Searched the web',
+    to: 'search the web for',
+    toAlone: 'search the web',
+    many: n => `Searched the web ${n} times`,
+    active: 'Searching the web...',
+  },
+  web_fetch: {
+    did: 'Read',
+    didAlone: 'Read a web page',
+    to: 'read',
+    toAlone: 'read a web page',
+    many: n => `Read ${n} web pages`,
+    active: 'Reading a web page...',
+  },
   generate_video: {
     didAlone: 'Started a video',
     toAlone: 'generate a video',
@@ -308,6 +325,7 @@ const ARGUMENT_PRIORITY: Record<string, readonly string[]> = {
   grep_search: ['pattern', 'path'],
   glob_files: ['pattern', 'path'],
   explore: ['question'],
+  web_search: ['query'],
   // The title if it was given one, never the seed prompt: that is a paragraph, and a row
   // showing its first 56 characters names the task less well than "Started a session" does.
   session_spawn: ['title'],
@@ -346,6 +364,8 @@ export function summarizeInput(call: ChatToolCall): string {
     const parsed = parseQuestions(input.questions);
     return 'questions' in parsed ? parsed.questions.map(entry => entry.question).join(' ') : '';
   }
+  // The host, not the URL: what was read is the site, and a query string is not a name.
+  if (call.name === WEB_FETCH_TOOL_NAME && typeof input.url === 'string') return hostOf(input.url) || input.url;
   const keys = [...(ARGUMENT_PRIORITY[call.name] ?? []), ...DEFAULT_ARGUMENT_PRIORITY];
   for (const key of keys) {
     const value = input[key];
