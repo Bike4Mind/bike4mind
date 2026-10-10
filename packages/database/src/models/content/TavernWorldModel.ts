@@ -92,22 +92,29 @@ const MAX_HISTORY_ENTRIES = 500;
 const MAX_BATCH_SIZE = 2000;
 
 const VALID_LAYERS = new Set(['ground', 'walls', 'structures', 'furniture', 'decoration']);
-const MAX_COORD = 95;
+const MAX_COORD = 159;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function validateEditKey(key: string): boolean {
+const CANONICAL_INT = /^(0|[1-9][0-9]*)$/;
+
+function parseCoord(raw: string): number | null {
+  if (!CANONICAL_INT.test(raw)) return null;
+  const n = Number(raw);
+  return n <= MAX_COORD ? n : null;
+}
+
+/** Returns true for keys of the form `layer:col,row` with canonical integer coords in 0..MAX_COORD. */
+export function validateEditKey(key: string): boolean {
   const parts = key.split(':');
   if (parts.length !== 2) return false;
   const [layer, coords] = parts;
   if (!VALID_LAYERS.has(layer)) return false;
   const coordParts = coords.split(',');
   if (coordParts.length !== 2) return false;
-  const col = parseInt(coordParts[0], 10);
-  const row = parseInt(coordParts[1], 10);
-  return Number.isInteger(col) && Number.isInteger(row) && col >= 0 && col <= MAX_COORD && row >= 0 && row <= MAX_COORD;
+  return parseCoord(coordParts[0]) !== null && parseCoord(coordParts[1]) !== null;
 }
 
 function validateGid(gid: number): boolean {

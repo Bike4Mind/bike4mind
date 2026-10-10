@@ -7,12 +7,12 @@ const ModelName = 'TavernMap';
 // ---------------------------------------------------------------------------
 
 /**
- * Custom map dimension bounds (tiles). Max is bounded by TavernWorld MAX_COORD=95
- * (coords 0..95 -> up to 96 tiles per axis). Maps are rectangular: width and
+ * Custom map dimension bounds (tiles). Max is bounded by TavernWorld MAX_COORD=159
+ * (coords 0..159 -> up to 160 tiles per axis). Maps are rectangular: width and
  * height are chosen independently.
  */
 export const MIN_MAP_DIM = 4;
-export const MAX_MAP_DIM = 96;
+export const MAX_MAP_DIM = 160;
 
 /** Default dimensions for a new custom map (landscape, fits a wide screen). */
 export const DEFAULT_MAP_WIDTH = 30;
@@ -85,7 +85,7 @@ export const TavernMap: ITavernMapModel =
 // Helpers
 // ---------------------------------------------------------------------------
 
-function isValidDim(n: unknown): n is number {
+export function isValidDim(n: unknown): n is number {
   return typeof n === 'number' && Number.isInteger(n) && n >= MIN_MAP_DIM && n <= MAX_MAP_DIM;
 }
 
