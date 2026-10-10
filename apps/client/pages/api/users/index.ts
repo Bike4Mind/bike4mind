@@ -27,8 +27,17 @@ import qs from 'qs';
 import { Request } from 'express';
 
 const querySchema = z.object({
-  page: z.string().regex(/^\d+$/).transform(Number).default(1),
-  limit: z.string().regex(/^\d+$/).transform(Number).default(10),
+  // Positive only: 0 reaches $limit/$skip as an invalid stage and surfaces as a 500.
+  page: z
+    .string()
+    .regex(/^[1-9]\d*$/)
+    .transform(Number)
+    .default(1),
+  limit: z
+    .string()
+    .regex(/^[1-9]\d*$/)
+    .transform(Number)
+    .default(10),
   search: z
     .string()
     .optional()

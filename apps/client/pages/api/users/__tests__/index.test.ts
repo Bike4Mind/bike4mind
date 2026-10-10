@@ -102,6 +102,13 @@ describe('GET /api/users - publicView enumeration guards', () => {
     expect(limitStage.$limit).toBe(1000);
   });
 
+  it.each([{ limit: '0' }, { page: '0' }])('returns 400 rather than running the query for %o', async query => {
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', search: 'abc', ...query });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockRefs.facet).toBeUndefined();
+  });
+
   it('returns 400 when non-admin publicView has no search term', async () => {
     const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true' });
     await mockRefs.getHandler!(req, res);
