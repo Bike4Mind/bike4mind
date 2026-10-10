@@ -34,6 +34,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import AdminSettingInputField from './AdminSettingInputField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
 import { AdminVideoModelsSetting } from './AdminVideoModelsSetting';
+import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 
 import AdminLogoUpload from './AdminLogoUpload';
@@ -335,6 +336,8 @@ const AdminSettingsTab: React.FC = () => {
           'logoSettings',
           // Per-model video toggles are rendered by <AdminVideoModelsSetting />
           'videoGeneration',
+          // Ordered model list is rendered by <AdminRecommendedModelsSetting />
+          'recommendedModelIds',
           'RapidReplySettings',
           'SystemFiles',
           // What's New settings are managed in the What's New Modals tab
@@ -578,6 +581,8 @@ const AdminSettingsTab: React.FC = () => {
 
         {/* Operations Model component for the AI category */}
         {category === 'AI' && <AdminOperationsModelSetting />}
+
+        {category === 'AI' && <AdminRecommendedModelsSetting />}
 
         {category === 'AI' && <AdminVideoModelsSetting />}
 
