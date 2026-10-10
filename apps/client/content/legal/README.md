@@ -15,7 +15,7 @@ These agreements go **into force as drafted** to gate the public launch. Formal 
 | Bike4Mind doc | Version | Mirrors — Anthropic | Mirrors — OpenAI |
 |---|---|---|---|
 | [`terms-of-service.md`](./terms-of-service.md) | `1.0.0` (draft) | [Consumer Terms of Service](https://www.anthropic.com/legal/consumer-terms) | [Terms of Use](https://openai.com/policies/terms-of-use/) |
-| [`usage-policy.md`](./usage-policy.md) | `1.0.0` (draft) | [Usage Policy](https://www.anthropic.com/legal/aup) | [Usage Policies](https://openai.com/policies/usage-policies/) |
+| [`usage-policy.md`](./usage-policy.md) | `1.0.0` (effective 2026-10-10) | [Usage Policy](https://www.anthropic.com/legal/aup) | [Usage Policies](https://openai.com/policies/usage-policies/) |
 | Privacy Policy — *separate track* | — | [Privacy Policy](https://www.anthropic.com/legal/privacy) | [Privacy Policy](https://openai.com/policies/privacy-policy/) |
 
 **Privacy** currently lives at `apps/client/content/privacy.mdx` (a JSX component, unversioned). It is a **separate workstream** (data-handling / GDPR) and should graduate into this folder as `privacy-policy.md` on the same versioned format in a follow-up. It is *linked* from the ToS but is **not** part of the P0-B signup acceptance gate (which is ToS + Usage Policy).
