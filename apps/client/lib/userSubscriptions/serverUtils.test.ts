@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Stripe from 'stripe';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { organizationRepository, userRepository } from '@bike4mind/database';
+import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, organizationService } from '@bike4mind/services';
 import { emitMetric } from '@server/utils/cloudwatch';
 import {
@@ -520,6 +520,25 @@ describe('handleOrganizationSubscriptionInvoice - seat increase credits', () => 
       expect.objectContaining({ ownerId: 'org_team', credits: 2 * 50000 }),
       expect.anything()
     );
+  });
+
+  it('skips a redelivered seat-increase invoice that was already credited', async () => {
+    vi.mocked(creditTransactionRepository.findByPaymentIntentId).mockResolvedValueOnce({
+      id: 'tx_prior',
+    } as unknown as Awaited<ReturnType<typeof creditTransactionRepository.findByPaymentIntentId>>);
+
+    await handleOrganizationSubscriptionInvoice(
+      buildSeatChangeInvoice([
+        { amount: -10000, quantity: 4 },
+        { amount: 15000, quantity: 6 },
+      ]),
+      buildSixSeatSubscription(),
+      orgMetadata,
+      logger
+    );
+
+    expect(creditTransactionRepository.findByPaymentIntentId).toHaveBeenCalledWith('in_seats');
+    expect(creditService.addCredits).not.toHaveBeenCalled();
   });
 });
 

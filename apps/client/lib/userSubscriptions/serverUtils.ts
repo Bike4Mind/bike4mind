@@ -339,6 +339,14 @@ export const handleOrganizationSubscriptionInvoice = async (
           return;
         }
 
+        // Idempotency: a redelivered seat-increase invoice must not reach addCredits, whose duplicate-key
+        // rejection would abort this transaction and fail every retry instead of skipping cleanly.
+        const existingSeatGrant = await creditTransactionRepository.findByPaymentIntentId(idempotencyKey);
+        if (existingSeatGrant) {
+          logger.info(`subscription_update already processed for idempotencyKey ${idempotencyKey}, skipping`);
+          break;
+        }
+
         const { previousQuantity, currentQuantity } = resolveSeatChangeFromInvoice(invoice, subscriptionQuantity);
         const seatIncrease = currentQuantity - previousQuantity;
 
