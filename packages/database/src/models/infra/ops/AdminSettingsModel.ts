@@ -1,5 +1,13 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IAdminSettings, IAdminSettingsRepository, SettingKey, settingsMap, SettingValue } from '@bike4mind/common';
+import {
+  AdminSettingDoc,
+  IAdminSettings,
+  IAdminSettingsRepository,
+  redactSettingSecrets,
+  SettingKey,
+  settingsMap,
+  SettingValue,
+} from '@bike4mind/common';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { softDeletePlugin } from '../../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
@@ -37,9 +45,16 @@ const AdminSettingsSchema = new Schema<IAdminSettings, IAdminSettingsModel, IAdm
     virtuals: true,
     toJSON: {
       virtuals: true,
+      // Chokepoint: any code path that serialises a hydrated AdminSettings document
+      // (e.g. res.json, JSON.stringify) gets a masked settingValue automatically.
+      // Trusted reads that need plaintext must use .lean() + decryptSettingInPlace,
+      // which bypasses this transform entirely. Does NOT decrypt -- decryption stays
+      // in the repository layer where the key is available.
+      transform: (_doc, ret) => redactSettingSecrets(ret as AdminSettingDoc),
     },
     toObject: {
       virtuals: true,
+      transform: (_doc, ret) => redactSettingSecrets(ret as AdminSettingDoc),
     },
   }
 );
@@ -50,6 +65,8 @@ export const AdminSettings =
   (mongoose.models.AdminSettings as IAdminSettingsModel) ??
   mongoose.model<IAdminSettings, IAdminSettingsModel>('AdminSettings', AdminSettingsSchema);
 
+// Only the readers overridden below return plaintext. Inherited find/findById/create/update/updateGuarded serialise through the masking transform
+// (sensitive, unmapped and sreAgentConfig secret values), so never write their result back.
 class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements IAdminSettingsRepository {
   constructor(model: IAdminSettingsModel) {
     super(model);
@@ -63,22 +80,31 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
   }
 
   async findBySettingNames(settingNames: IAdminSettings['settingName'][]) {
-    const result = await this.model.find({ settingName: { $in: settingNames } });
-    return result.map(r => decryptSettingInPlace(r.toJSON()));
+    // lean({ virtuals: true }) bypasses the toJSON masking transform so these trusted
+    // callers receive plaintext after decryptSettingInPlace, same as findBySettingName.
+    const result = await this.model.find({ settingName: { $in: settingNames } }).lean({ virtuals: true });
+    return result.map(r => decryptSettingInPlace(r as IAdminSettings & { settingName: string }));
   }
 
   async findAllByTag(tag: string) {
-    const result = await this.model.find({ tags: { $in: [tag] } });
-    return result.map(r => decryptSettingInPlace(r.toJSON()));
+    const result = await this.model.find({ tags: { $in: [tag] } }).lean({ virtuals: true });
+    return result.map(r => decryptSettingInPlace(r as IAdminSettings & { settingName: string }));
   }
 
   async findAll() {
-    const result = await this.model.find();
-    return result.map(r => decryptSettingInPlace(r.toJSON()));
+    const result = await this.model.find().lean({ virtuals: true });
+    return result.map(r => decryptSettingInPlace(r as IAdminSettings & { settingName: string }));
+  }
+
+  // Override BaseRepository.findOne which calls .toJSON() and would trigger the masking
+  // transform. Lean path bypasses the transform; decryptSettingInPlace restores plaintext.
+  async findOne(filter: Record<string, unknown>) {
+    const result = await this.model.findOne(filter).lean({ virtuals: true });
+    return decryptSettingInPlace(result as (IAdminSettings & { settingName: string }) | null);
   }
 
   async getSettingsValue<K extends SettingKey>(settingName: K): Promise<SettingValue<K> | undefined> {
-    const setting = decryptSettingInPlace(await this.findOne({ settingName }));
+    const setting = await this.findOne({ settingName }); // findOne already decrypts via lean path
     const value = settingsMap?.[settingName]?.schema?.safeParse(setting?.settingValue);
 
     if (value.success) {
