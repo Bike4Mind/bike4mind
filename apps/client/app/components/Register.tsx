@@ -32,6 +32,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import React, { useEffect, useState, useRef } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
+import { dismissOtcCodeSentToast, toastOtcCodeSent } from './otcToast';
 import useGetLogo from '../hooks/useGetLogo';
 import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
@@ -205,7 +206,7 @@ const Register: React.FC = () => {
       setPendingToken(result.pendingToken);
       setCurrentStep('otc');
       startResendCooldown();
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
     } catch (error: unknown) {
       const serverMsg: string = (error as Record<string, string>)?.message || '';
       setCreateError(serverMsg || t('auth.errors.registrationFailed'));
@@ -217,7 +218,7 @@ const Register: React.FC = () => {
     try {
       const result = await sendOTC({ email: submittedData.email });
       setPendingToken(result.pendingToken);
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to resend code';
@@ -346,6 +347,7 @@ const Register: React.FC = () => {
         acceptedPolicyVersion: CURRENT_POLICY_VERSION,
         ageAttestation: submittedData.confirmAdult,
       });
+      dismissOtcCodeSentToast();
 
       // The email may already have an account - the server then answers with the LOGIN
       // shapes, including MFA challenges. Without these branches the code below would set
