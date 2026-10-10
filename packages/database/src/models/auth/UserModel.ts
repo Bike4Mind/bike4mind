@@ -616,6 +616,26 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 }
 
+const AcquisitionTouchSchema = new Schema(
+  {
+    source: { type: String, required: true },
+    medium: { type: String },
+    campaign: { type: String },
+    content: { type: String },
+  },
+  { _id: false }
+);
+
+const UserAcquisitionSchema = new Schema(
+  {
+    firstTouch: { type: AcquisitionTouchSchema, required: false },
+    lastTouch: { type: AcquisitionTouchSchema, required: false },
+    signupMethod: { type: String, required: true },
+    capturedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
     username: { type: String, required: true, unique: true },
@@ -872,6 +892,11 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     preferences: { type: UserPreferencesSchema, default: null },
 
     lastCreditGrantAt: { type: Date, required: false },
+
+    // Written once at signup, consent-gated - see IUser.acquisition.
+    acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
+    isSynthetic: { type: Boolean, required: false },
+    firstValueAt: { type: Date, required: false },
   },
   {
     timestamps: true,

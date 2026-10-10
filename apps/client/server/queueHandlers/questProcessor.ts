@@ -46,6 +46,7 @@ import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.gener
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
+import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
 import { accessibleBy } from '@casl/mongoose';
@@ -342,6 +343,11 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     logger,
     externalTools,
     videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
+  });
+
+  await recordFirstChatValue({
+    user,
+    loadQuestStatus: async () => (await questRepository.findById(params.questId))?.status,
   });
 
   return;

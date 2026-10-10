@@ -258,6 +258,7 @@ export const handleOrganizationSubscriptionInvoice = async (
             break;
           }
 
+          const acquisition = acquisitionFromStripeMetadata(subscription.metadata);
           await subscriptionRepository.create({
             ownerType: SubscriptionOwnerType.Organization,
             ownerId: org.id,
@@ -269,6 +270,8 @@ export const handleOrganizationSubscriptionInvoice = async (
             periodEndsAt: dayjs.unix(periodEnd).toDate(),
             canceledAt: null,
             quantity: subscriptionQuantity,
+            // Recorded at checkout (pages/api/organizations/subscriptions/subscribe.ts).
+            ...(acquisition && { acquisition }),
           });
         }
 

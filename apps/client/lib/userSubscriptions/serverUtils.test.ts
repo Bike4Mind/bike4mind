@@ -208,6 +208,28 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
     expect(subscriptionRepository.update).not.toHaveBeenCalled();
   });
 
+  it('stores the campaign touches the org checkout recorded on the new subscription row', async () => {
+    (organizationRepository.findById as any).mockResolvedValue({ id: 'org2', name: 'Beta', users: [] });
+    (subscriptionRepository.findNonTerminalSubscriptionsByOwner as any).mockResolvedValue([]);
+    const sub = {
+      ...buildSubscription(),
+      metadata: { acq_first_source: 'reddit', acq_last_source: 'email', acq_last_campaign: 'launch' },
+    } as unknown as Stripe.Subscription;
+
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      sub,
+      { userId: 'u1', stage: 'test', ownerType: SubscriptionOwnerType.Organization, organizationId: 'org2' } as any,
+      logger
+    );
+
+    expect(subscriptionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        acquisition: { firstTouch: { source: 'reddit' }, lastTouch: { source: 'email', campaign: 'launch' } },
+      })
+    );
+  });
+
   it('refuses to create a duplicate Stripe Subscription if one already exists for the org', async () => {
     // Simulates a double-Convert-to-paid race: the first checkout already
     // flipped the admin_grant to source=stripe; a second checkout completes
@@ -471,7 +493,14 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
   it('stores the campaign touches checkout recorded on the new subscription row', async () => {
     const sub = {
       ...buildUserSubscription('price_test_professional'),
-      metadata: { userId: 'u1', stage: 'test', ownerType: 'User', acq_first_source: 'widgets', acq_first_medium: 'teaser', acq_last_source: 'email' },
+      metadata: {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: 'User',
+        acq_first_source: 'widgets',
+        acq_first_medium: 'teaser',
+        acq_last_source: 'email',
+      },
     } as unknown as Stripe.Subscription;
 
     await handleUserSubscriptionInvoice(buildInvoice(), sub, metadata, logger);

@@ -3,6 +3,7 @@ import {
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
 } from '@client/lib/subscriptions/constants';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { checkoutSurfaceSchema } from '@client/lib/userSubscriptions/schemas';
 import { z } from 'zod';
 
 export const BaseStripeSubscriptionMetadata = z.object({
@@ -70,6 +71,12 @@ export const OrgSubscriptionSubscribeSchema = z
         name: z.string(),
       })
       .optional(),
+
+    /** Consent to attach campaign attribution, as individual checkout sends it. */
+    attributionConsent: z.boolean().optional(),
+
+    /** Which UI started the checkout; see checkoutSurfaceSchema. */
+    surface: checkoutSurfaceSchema.optional(),
   })
   .refine(data => data.organizationId !== undefined || data.organizationData !== undefined, {
     path: ['organizationId'], // path of error

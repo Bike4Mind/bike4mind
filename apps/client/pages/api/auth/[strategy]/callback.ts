@@ -16,6 +16,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
+import { recordSignupAcquisition } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -151,6 +152,7 @@ const handler = baseApi({ auth: false })
             touches: readConsentedAcquisitionTouches(req),
             method: strategy,
           });
+          await recordSignupAcquisition({ req, user, method: strategy });
         }
 
         const { accessToken } = await issueBrowserSession(req, res, user.id, {

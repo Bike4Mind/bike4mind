@@ -36,6 +36,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
+import { emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
 import { mfaService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import jwt from 'jsonwebtoken';
@@ -493,6 +494,20 @@ const handler = baseApi({ auth: false })
       touches: readConsentedAcquisitionTouches(req),
       method: 'otc',
     });
+
+    // Funnel floor (server/analytics/funnel.ts): keep the consented touches on the user so later
+    // stages stay joinable to the door, then report the stages OTC completes in one step - the
+    // code proved the email, and registerViaOTC plus the domain grant above seeded the credits.
+    const signupFunnel = await recordSignupAcquisition({ req, user: newUser, method: 'otc' });
+    const funnelUser = { id: newUser.id, ...signupFunnel };
+    await emitFunnelEvent({ user: funnelUser, event: 'email_verified', metadata: { method: 'otc' } });
+    if ((newUser.currentCredits ?? 0) > 0) {
+      await emitFunnelEvent({
+        user: funnelUser,
+        event: 'credits_granted',
+        metadata: { amount: newUser.currentCredits, source: 'signup', method: 'otc' },
+      });
+    }
 
     const registrationSession = await authSessionService.issueSession(
       newUser.id,

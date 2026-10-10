@@ -37,6 +37,10 @@ const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
 }));
+const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
+vi.mock('@server/analytics/funnel', () => ({
+  recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
+}));
 
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
@@ -196,11 +200,20 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
   });
 
+  it("persists a new account's acquisition with the provider as the signup method", async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockRecordSignupAcquisition).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-new' }), method: 'github' })
+    );
+  });
+
   it('sends nothing for a returning user', async () => {
     await runCallback(null, { id: 'u-old', isBanned: false }, undefined, { cookie: touchCookie });
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
+    expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
   });
 
   // The REGISTER log and the emit are separate statements; folding the emit into the log's

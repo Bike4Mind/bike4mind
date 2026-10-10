@@ -1,6 +1,8 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { resolveConsent } from '@client/app/utils/consentRegion';
+import { checkoutSurfaceParam, trackBeginCheckout, type UpsellSurface } from '@client/app/utils/funnelEvents';
+import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { subscriptionPlanSchema } from '@client/lib/userSubscriptions/schemas';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
@@ -11,9 +13,16 @@ import { z } from 'zod';
 
 export const useSubscribePlan = () => {
   return useMutation({
-    mutationFn: async (data: z.infer<typeof subscriptionPlanSchema>) => {
+    mutationFn: async (data: z.infer<typeof subscriptionPlanSchema> & { surface?: UpsellSurface }) => {
+      trackBeginCheckout({
+        plan: SUBSCRIPTION_PLANS_MAP[data.priceId]?.name ?? 'unknown',
+        priceId: data.priceId,
+        ownerType: 'user',
+        surface: data.surface,
+      });
       const response = await api.post<{ sessionUrl: string }>(`/api/subscriptions/subscribe`, {
         ...data,
+        surface: checkoutSurfaceParam(data.surface),
         attributionConsent: resolveConsent() === 'granted',
       });
       return response.data;
@@ -181,8 +190,19 @@ export const useGetSubscriptionStats = (
  */
 export const useSubscribeTeamPlan = () => {
   return useMutation({
-    mutationFn: async (data: OrgSubscriptionSubscribeRequest) => {
-      const response = await api.post<{ sessionUrl: string }>('/api/organizations/subscriptions/subscribe', data);
+    mutationFn: async (data: Omit<OrgSubscriptionSubscribeRequest, 'attributionConsent'>) => {
+      trackBeginCheckout({
+        plan: 'team',
+        priceId: data.priceId,
+        ownerType: 'organization',
+        surface: data.surface,
+        quantity: data.quantity,
+      });
+      const response = await api.post<{ sessionUrl: string }>('/api/organizations/subscriptions/subscribe', {
+        ...data,
+        surface: checkoutSurfaceParam(data.surface),
+        attributionConsent: resolveConsent() === 'granted',
+      });
       return response.data;
     },
     onError: err => {

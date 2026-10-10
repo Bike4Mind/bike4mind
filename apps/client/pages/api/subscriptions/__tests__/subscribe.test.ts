@@ -339,4 +339,44 @@ describe('POST /api/subscriptions/subscribe - acquisition touches', () => {
       'userId',
     ]);
   });
+
+  it('falls back to the touches stored on the buyer at signup when the browser carries none', async () => {
+    const { req, res } = makeReq('price_open', CALLBACK_URL, {
+      acquisition: {
+        firstTouch: { source: 'reddit', campaign: 'launch' },
+        signupMethod: 'otc',
+        capturedAt: new Date(),
+      },
+    });
+    req.body.attributionConsent = true;
+    await (handler as HandlerFn)(req, res);
+    expect(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata).toMatchObject({
+      acq_first_source: 'reddit',
+      acq_first_campaign: 'launch',
+    });
+  });
+
+  it('never uses the stored touches without consent', async () => {
+    const { req, res } = makeReq('price_open', CALLBACK_URL, {
+      acquisition: { firstTouch: { source: 'reddit' }, signupMethod: 'otc', capturedAt: new Date() },
+    });
+    await (handler as HandlerFn)(req, res);
+    expect(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata.acq_first_source).toBeUndefined();
+  });
+
+  it('records which surface started the checkout', async () => {
+    const { req, res } = makeReq('price_open');
+    req.body.surface = 'out_of_credits_notice';
+    await (handler as HandlerFn)(req, res);
+    expect(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata.checkout_surface).toBe(
+      'out_of_credits_notice'
+    );
+  });
+
+  it('rejects a malformed surface id', async () => {
+    const { req, res } = makeReq('price_open');
+    req.body.surface = 'Not A Surface!';
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
 });
