@@ -26,6 +26,7 @@ export interface IGetUsersParams {
   orgSearch?: string[];
   tags?: string[];
   projectId?: string;
+  pendingInviteProjectId?: string;
   publicView?: boolean;
 }
 
@@ -33,7 +34,8 @@ export interface IGetUsersResponse {
   // Derived from the endpoint's projection, so reading a field GET /api/users does not
   // emit is a compile error. publicView requests return only the PUBLIC_USER_LIST_PROJECTION
   // subset of these fields.
-  users: AdminUserListItem[];
+  // pendingInvite is set only when the request carried pendingInviteProjectId.
+  users: (AdminUserListItem & { pendingInvite?: boolean })[];
   currentPage: number;
   totalPages: number;
   totalUsers: number;

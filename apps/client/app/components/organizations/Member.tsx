@@ -45,7 +45,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
 
   // For the add members modal
   const [modalSearch, setModalSearch] = useState('');
-  const [selectedUserNames, setSelectedUserNames] = useState<string[]>([]);
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const params: IGetUsersParams = useMemo(
     () => ({ search: modalSearch, page: 1, limit: 10, publicView: true }),
     [modalSearch]
@@ -62,7 +62,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', organization.id] });
 
       setModalSearch('');
-      setSelectedUserNames([]);
+      setSelectedUserIds([]);
       toast.success(t('organizations.modals.members.invited', 'Member invited to organization'));
     },
     onError: err => {
@@ -307,16 +307,16 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
                 buttonLabel={t('organizations.modals.members.button_label', 'Add Member')}
                 buttonIcon={<AddIcon />}
                 items={modalUsers}
-                selectedIds={selectedUserNames}
+                selectedIds={selectedUserIds}
                 onSelectIds={ids => {
                   // Only allow selecting up to available seats
                   if (maxSeats > 0 && ids.length > availableSeats) {
                     toast.error(`You can only add up to ${availableSeats} more members with your current plan`);
                     return;
                   }
-                  setSelectedUserNames(ids);
+                  setSelectedUserIds(ids);
                 }}
-                getItemId={user => user.username}
+                getItemId={user => user.id}
                 onSearch={term => debouncedModalSearch(term)}
                 searchPlaceholder={t('common.search_users', 'Search users')}
                 searchMinLength={3}

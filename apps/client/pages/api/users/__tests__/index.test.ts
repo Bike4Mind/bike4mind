@@ -45,6 +45,10 @@ vi.mock('@bike4mind/database', () => ({
   convertPipelineForDocumentDB: (p: any) => p,
   mongoose: { Types: { ObjectId: class {} } },
 }));
+vi.mock('@server/users/sharedWorkspaceUserIds', () => ({
+  findSharedWorkspaceUserIds: vi.fn().mockResolvedValue(new Set(['u1'])),
+}));
+vi.mock('@server/users/pendingProjectInviteeIds', () => ({ findPendingProjectInviteeIds: vi.fn() }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 vi.mock('@bike4mind/utils/escapeRegex', () => ({ escapeRegex: (s: string) => s }));
 
@@ -96,6 +100,13 @@ describe('GET /api/users - publicView enumeration guards', () => {
     await mockRefs.getHandler!(req, res);
     const limitStage = mockRefs.facet.paginatedResults.find((s: any) => '$limit' in s);
     expect(limitStage.$limit).toBe(1000);
+  });
+
+  it.each([{ limit: '0' }, { page: '0' }])('returns 400 rather than running the query for %o', async query => {
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', search: 'abc', ...query });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockRefs.facet).toBeUndefined();
   });
 
   it('returns 400 when non-admin publicView has no search term', async () => {
@@ -221,5 +232,35 @@ describe('GET /api/users - publicView projection coupling', () => {
     await mockRefs.getHandler!(req, res);
     const clause = JSON.stringify(matchStage());
     expect(clause).not.toContain('^com');
+  });
+
+  const projectStage = () => mockRefs.pipeline?.find((st: any) => '$project' in st)?.$project;
+
+  it('never projects email for a non-admin picker', async () => {
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', search: 'abc' });
+    await mockRefs.getHandler!(req, res);
+    expect(projectStage()).not.toHaveProperty('email');
+  });
+
+  it('keeps email in the admin publicView projection', async () => {
+    const { req, res } = mocks({ id: 'a1', isAdmin: true }, { publicView: 'true', search: 'abc' });
+    await mockRefs.getHandler!(req, res);
+    expect(projectStage()).toHaveProperty('email', 1);
+  });
+
+  it('ignores sortField=email for a non-admin picker', async () => {
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', search: 'abc', sortField: 'email' });
+    await mockRefs.getHandler!(req, res);
+    expect(sortStage()).toEqual({ username: 1 });
+  });
+
+  it('matches email only exactly, and only for a full address', async () => {
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', search: 'abc' });
+    await mockRefs.getHandler!(req, res);
+    expect(JSON.stringify(matchStage())).not.toContain('email');
+
+    const full = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', search: 'a@b.test' });
+    await mockRefs.getHandler!(full.req, full.res);
+    expect(JSON.stringify(matchStage())).toContain('"email":{"$regex":"^a@b.test$"');
   });
 });
