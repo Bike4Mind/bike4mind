@@ -159,7 +159,7 @@
     "jsonrepair": "^3.15.0",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.1",
-    "katex": "^0.17.0",
+    "katex": "^0.18.2",
     "leaflet": "^1.9.4",
     "lexical": "^0.47.0",
     "lexical-beautiful-mentions": "^0.1.48",
