@@ -113,6 +113,7 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedVal
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
+  stableEventId: (...parts: string[]) => parts.join(':'),
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('jsonwebtoken', () => ({
