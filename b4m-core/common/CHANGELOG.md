@@ -1,5 +1,41 @@
 # @bike4mind/common
 
+## 14.1.0
+
+### Minor Changes
+
+- [#4177](https://github.com/Bike4Mind/bike4mind/pull/4177) [`2684a62`](https://github.com/Bike4Mind/bike4mind/commit/2684a6225aca69a1d9cc1e522dc63b5dbcedee5d) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - Export the API-key rate-limit header names and descriptions (`API_KEY_RATE_LIMIT_HEADERS`, `API_KEY_RATE_LIMIT_HEADER_NAMES`, `ApiKeyRateLimitHeader`) as the single source for the limiter and the API docs.
+
+- [#3945](https://github.com/Bike4Mind/bike4mind/pull/3945) [`7da670f`](https://github.com/Bike4Mind/bike4mind/commit/7da670f8868e9cf0f30ddf97b6bcd799c0cc0992) Thanks [@vinchi777](https://github.com/vinchi777)! - add an Access lost state for a GitHub lake
+
+- [#4146](https://github.com/Bike4Mind/bike4mind/pull/4146) [`ddd3792`](https://github.com/Bike4Mind/bike4mind/commit/ddd37926424c5748eb85b549c4265c95d6193cb3) Thanks [@julsanchez](https://github.com/julsanchez)! - add public v1 project update and delete endpoints
+
+- [#4164](https://github.com/Bike4Mind/bike4mind/pull/4164) [`d553e0d`](https://github.com/Bike4Mind/bike4mind/commit/d553e0d6e290d89abe8d5f375d463fbf9ff077d9) Thanks [@julsanchez](https://github.com/julsanchez)! - add public v1 file list, update and delete endpoints
+
+- [#4165](https://github.com/Bike4Mind/bike4mind/pull/4165) [`9e8e683`](https://github.com/Bike4Mind/bike4mind/commit/9e8e683270d93003dd254b8908cc878d40b1b6db) Thanks [@julsanchez](https://github.com/julsanchez)! - add public v1 agents API (list, create, get, update, delete)
+
+- [#4187](https://github.com/Bike4Mind/bike4mind/pull/4187) [`8ad3249`](https://github.com/Bike4Mind/bike4mind/commit/8ad32497393db0a4a0d01b419ca398a276d46b11) Thanks [@vinchi777](https://github.com/vinchi777)! - emit a toolStarted frame when a tool call opens
+
+- [#4214](https://github.com/Bike4Mind/bike4mind/pull/4214) [`d2535a6`](https://github.com/Bike4Mind/bike4mind/commit/d2535a668e73dea53c6002250e33d0dd7a10a12e) Thanks [@erikbethke](https://github.com/erikbethke)! - overlay-declared workspace copy grants and sidebar nav items
+
+- [#4243](https://github.com/Bike4Mind/bike4mind/pull/4243) [`6857653`](https://github.com/Bike4Mind/bike4mind/commit/6857653b24a6476d14e9efaad819b9ae1792a968) Thanks [@erikbethke](https://github.com/erikbethke)! - visible balance, per-answer cost and new-user welcome
+
+- [#4248](https://github.com/Bike4Mind/bike4mind/pull/4248) [`d645fac`](https://github.com/Bike4Mind/bike4mind/commit/d645fac844755c997e702bf95fe11faa1716cffd) Thanks [@erikbethke](https://github.com/erikbethke)! - add admin-configurable Recommended group
+
+- [#4250](https://github.com/Bike4Mind/bike4mind/pull/4250) [`a543c77`](https://github.com/Bike4Mind/bike4mind/commit/a543c77991e50229e34b0dbe4cc6e2b90687c95b) Thanks [@erikbethke](https://github.com/erikbethke)! - funnel instrumentation floor
+
+- [#4251](https://github.com/Bike4Mind/bike4mind/pull/4251) [`382f8f6`](https://github.com/Bike4Mind/bike4mind/commit/382f8f60b701d4b93046bd7ff1be6ad7a25a60fc) Thanks [@erikbethke](https://github.com/erikbethke)! - growth and pricing settings in one place
+
+### Patch Changes
+
+- [#4147](https://github.com/Bike4Mind/bike4mind/pull/4147) [`270d5c2`](https://github.com/Bike4Mind/bike4mind/commit/270d5c2275d56b79fc9b4591682479cded1de442) Thanks [@vinchi777](https://github.com/vinchi777)! - make TTS and transcribe credit pre-flight cost- and enforcement-aware
+
+- [#4177](https://github.com/Bike4Mind/bike4mind/pull/4177) [`2684a62`](https://github.com/Bike4Mind/bike4mind/commit/2684a6225aca69a1d9cc1e522dc63b5dbcedee5d) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - derive in-app API reference rate-limit facts from one source
+
+- [#4196](https://github.com/Bike4Mind/bike4mind/pull/4196) [`f927f61`](https://github.com/Bike4Mind/bike4mind/commit/f927f61ab02c5f46406bd628ef39470bdeca447b) Thanks [@jjmarfa](https://github.com/jjmarfa)! - cache confirmed-empty tool fetches so zero-tool servers stop refetching
+
+- [#4265](https://github.com/Bike4Mind/bike4mind/pull/4265) [`92970d1`](https://github.com/Bike4Mind/bike4mind/commit/92970d15401e0a7103b88a6caa65eba0b4085de7) Thanks [@erikbethke](https://github.com/erikbethke)! - don't return invitee emails resolved from user ids
+
 ## 14.0.0
 
 ### Major Changes
