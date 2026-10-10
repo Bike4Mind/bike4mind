@@ -151,3 +151,28 @@ describe('stripSignupGateHtml', () => {
     expect(stripSignupGateHtml(page)).toBe(page);
   });
 });
+
+describe('pickSharedByName', () => {
+  it('returns the display name', async () => {
+    const { pickSharedByName } = await import('./shareFooter');
+    expect(pickSharedByName({ name: ' Ada Lovelace ', username: 'ada_l_1987' })).toBe('Ada Lovelace');
+  });
+
+  it('never exposes the raw username or an email', async () => {
+    const { pickSharedByName } = await import('./shareFooter');
+    expect(pickSharedByName({ name: 'ada_l_1987', username: 'Ada_L_1987' })).toBeUndefined();
+    expect(pickSharedByName({ name: 'ada@example.com', username: 'ada' })).toBeUndefined();
+    expect(pickSharedByName({ name: '', username: 'ada' })).toBeUndefined();
+    expect(pickSharedByName(null)).toBeUndefined();
+  });
+});
+
+describe('buildShareFooterHtml hideCta', () => {
+  it('renders only the report link, with no brand CTA card', async () => {
+    const build = await loadFooter({ NEXT_PUBLIC_WEBSITE_URL: 'https://acme.example', NEXT_PUBLIC_APP_NAME: 'Acme' });
+    const html = build({ hideCta: true, reportPublicId: 'abc' });
+    expect(html).toContain('/report/abc');
+    expect(html).not.toContain('utm_medium=share-footer');
+    expect(html).not.toContain('Try Acme');
+  });
+});

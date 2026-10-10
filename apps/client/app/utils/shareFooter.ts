@@ -38,6 +38,22 @@ export interface ShareFooterOptions {
    * footers, where the publicId isn't known until finalize.
    */
   reportPublicId?: string;
+  /** Render only the report link (no brand card); used when the sign-up gate is the page's CTA. */
+  hideCta?: boolean;
+}
+
+/**
+ * Public attribution name for a share page: the owner's display name, never the raw login
+ * handle. Returns undefined (no "Shared by" line) when the only name on file is the username
+ * itself or an email address.
+ */
+export function pickSharedByName(
+  user: { name?: string | null; username?: string | null } | null | undefined
+): string | undefined {
+  const name = user?.name?.trim();
+  if (!name || name.includes('@')) return undefined;
+  if (user?.username && name.toLowerCase() === user.username.trim().toLowerCase()) return undefined;
+  return name;
 }
 
 /**
@@ -218,6 +234,8 @@ export function buildShareFooterHtml(opts: ShareFooterOptions = {}): string {
        style="font-size:11.5px;color:#94a3b8;text-decoration:none">⚑ Report this page</a>
   </div>`
     : '';
+
+  if (opts.hideCta) return report;
 
   // Self-contained navy card (inline styles only) so it renders consistently on
   // any host page, light or dark.

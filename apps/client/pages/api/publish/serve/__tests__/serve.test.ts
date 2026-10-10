@@ -574,7 +574,8 @@ describe('GET /api/publish/serve - sign-up prompt honesty (#318)', () => {
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
     expect(data).toContain('id="b4m-gate-panel"');
-    expect(data).toContain('>Sign up<');
+    // One CTA only: the gate card, no header Sign up link and no brand footer card.
+    expect(data).not.toContain('>Sign up<');
     // Honest and non-modal: no scroll lock, no blur/gradient overlay, not a dialog.
     expect(data).not.toContain('overflow:hidden');
     expect(data).not.toContain('b4m-gate-ol');

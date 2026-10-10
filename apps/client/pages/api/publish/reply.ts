@@ -199,14 +199,23 @@ export function deriveTitle(markdown: string): string {
     .map(l => l.trim())
     .find(Boolean);
   if (firstLine) {
-    const cleaned = firstLine
-      .replace(/^#+\s*/, '')
-      .replace(/^[*_>-]+\s*/, '')
-      .slice(0, 120);
+    const cleaned = truncateAtWord(firstLine.replace(/^#+\s*/, '').replace(/^[*_>-]+\s*/, ''), TITLE_MAX);
     if (cleaned) return cleaned;
   }
   const named = artifacts.find(a => a.title && a.title !== 'Untitled Artifact');
-  return named?.title?.slice(0, 120) || 'Shared reply';
+  return (named?.title && truncateAtWord(named.title, TITLE_MAX)) || 'Shared reply';
+}
+
+const TITLE_MAX = 120;
+
+/** Cut `text` to at most `max` chars at a word boundary, appending an ellipsis when shortened. */
+export function truncateAtWord(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const room = max - 3;
+  const cut = text.slice(0, room + 1);
+  const lastSpace = cut.search(/\s\S*$/);
+  const base = lastSpace > room / 2 ? cut.slice(0, lastSpace) : text.slice(0, room);
+  return `${base.replace(/[\s.,;:!?-]+$/, '')}...`;
 }
 
 export const config = {
