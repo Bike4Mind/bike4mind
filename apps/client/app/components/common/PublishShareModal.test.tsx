@@ -665,3 +665,17 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
     });
   });
 });
+
+describe('PublishShareModal - plain-language copy', () => {
+  it('labels the default option in plain words with no warning glyph', () => {
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={vi.fn()} title="My artifact" defaultVisibility="public" />
+      </Wrapper>
+    );
+    const option = screen.getByTestId('publish-share-visibility-public');
+    expect(option.textContent).toContain('Anyone with the link');
+    expect(document.body.textContent).not.toContain('\u26a0');
+    expect(document.body.textContent).not.toContain('List in search engines');
+  });
+});

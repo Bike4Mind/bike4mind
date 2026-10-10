@@ -102,8 +102,8 @@ type VisibilityOption = { value: PublishVisibility; label: string; hint: string;
 
 const PUBLIC_OPTION: VisibilityOption = {
   value: 'public',
-  label: 'Public',
-  hint: 'Anyone with the link',
+  label: 'Anyone with the link',
+  hint: 'Anyone you send the link to can view it',
   icon: <PublicIcon />,
 };
 const PRIVATE_OPTION: VisibilityOption = { value: 'private', label: 'Private', hint: 'Only you', icon: <LockIcon /> };
@@ -120,8 +120,8 @@ type GateKind = 'none' | 'passphrase' | 'domain';
 const GATE_OPTIONS: Array<{ value: GateKind; label: string; hint: string; icon: React.ReactNode }> = [
   {
     value: 'none',
-    label: 'Anyone with the link',
-    hint: 'No extra step for viewers',
+    label: 'No passcode needed',
+    hint: 'Viewers just open the link',
     icon: <PublicIcon fontSize="small" />,
   },
   {
@@ -478,7 +478,7 @@ export function PublishShareModal({
     }
   };
   const onCreateShareToken = () =>
-    runShareToken(async () => (await createOrGetShareToken(result!.publicId)).shareToken, 'No-sign-in link created');
+    runShareToken(async () => (await createOrGetShareToken(result!.publicId)).shareToken, 'Link created');
   const onRegenerateShareToken = () =>
     runShareToken(
       async () => (await regenerateShareToken(result!.publicId)).shareToken,
@@ -488,7 +488,7 @@ export function PublishShareModal({
     runShareToken(async () => {
       await revokeShareToken(result!.publicId);
       return null;
-    }, 'No-sign-in link revoked');
+    }, 'Link turned off');
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -641,9 +641,9 @@ export function PublishShareModal({
               "anyone with the link" would be a falsehood when a gate is set; the
               Access note below tells the truth instead. */}
           {isPublic && gateKind === 'none' && !existing && !gateTouched && (
-            <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
-              ⚠ Public: anyone with the link will be able to view this. It stays out of search engines unless you turn
-              on &quot;List in search engines&quot; below.
+            <Typography level="body-xs" sx={{ mt: 0.75, opacity: 0.75 }}>
+              Anyone with the link can view this. It stays out of search engines unless you turn on &quot;Show in search
+              results&quot; below.
             </Typography>
           )}
         </FormControl>
@@ -767,7 +767,7 @@ export function PublishShareModal({
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <TravelExploreIcon fontSize="small" />
               <Box>
-                <FormLabel sx={{ mb: 0 }}>List in search engines</FormLabel>
+                <FormLabel sx={{ mb: 0 }}>Show in search results</FormLabel>
                 {/* FormHelperText, not Typography: only a FormHelperText child registers itself into
                     Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
                     reader user actually hears this caveat instead of just the label. */}
@@ -866,10 +866,10 @@ export function PublishShareModal({
             >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
                 <LinkIcon fontSize="small" />
-                <FormLabel sx={{ mb: 0 }}>No-sign-in link</FormLabel>
+                <FormLabel sx={{ mb: 0 }}>Link that works without an account</FormLabel>
               </Box>
               <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }}>
-                A link anyone can open without an account. Regenerate to instantly revoke old links.
+                Anyone with this link can open it without signing in. Making a new link stops the old ones from working.
               </Typography>
               {shareToken ? (
                 <>
@@ -882,7 +882,7 @@ export function PublishShareModal({
                       }}
                       sx={{ flex: 1, fontFamily: 'monospace', fontSize: '13px' }}
                     />
-                    <Tooltip title="Copy no-sign-in link">
+                    <Tooltip title="Copy link that works without an account">
                       <IconButton
                         variant="outlined"
                         color="neutral"
@@ -902,7 +902,7 @@ export function PublishShareModal({
                       onClick={() => void onRegenerateShareToken()}
                       data-testid="publish-share-token-regenerate"
                     >
-                      Regenerate
+                      Make a new link
                     </Button>
                     <Button
                       size="sm"
@@ -916,7 +916,7 @@ export function PublishShareModal({
                     </Button>
                   </Box>
                   <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
-                    ⚠ Anyone with this link can view without signing in.
+                    Anyone with this link can view without signing in.
                   </Typography>
                 </>
               ) : (
@@ -929,7 +929,7 @@ export function PublishShareModal({
                   onClick={() => void onCreateShareToken()}
                   data-testid="publish-share-token-create"
                 >
-                  Create no-sign-in link
+                  Create link that works without an account
                 </Button>
               )}
             </Box>

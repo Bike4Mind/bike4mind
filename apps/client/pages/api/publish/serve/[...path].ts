@@ -45,6 +45,7 @@ import {
 } from '@server/services/publish/viewerSecurity';
 import {
   buildShareFooterHtml,
+  pickSharedByName,
   buildSignupGateHtml,
   shouldShowSignupGate,
   stripSignupGateHtml,
@@ -641,9 +642,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     const exportFormats = exportSelfAuthorizes ? exportFormatsFor(artifact.source.kind) : [];
     // Best-effort lookup: a missing/failed name degrades to no attribution line, never blocks rendering.
     const ownerName = await User.findById(artifact.ownerId)
-      .select('name')
-      .lean<{ name?: string } | null>()
-      .then(u => u?.name ?? null)
+      .select('name username')
+      .lean<{ name?: string; username?: string } | null>()
+      .then(u => pickSharedByName(u))
       .catch(() => null);
     const page = renderViewerPage(artifact, {
       noindex: !searchIndexable,
@@ -1790,6 +1791,8 @@ function renderViewerPage(
     : buildShareFooterHtml({
         source: artifact.source.kind === 'reply' ? 'reply' : 'fabfile',
         reportPublicId: artifact.publicId,
+        // The sign-up card below is the single CTA; don't stack the brand card on top of it.
+        hideCta: signupGate,
       }) + buildExportActionsHtml(selfPath, exportFormats);
 
   // Sign-up prompt: shown to anonymous, non-share-link viewers of an open-public page only
@@ -1861,15 +1864,12 @@ function renderViewerPage(
   .b4m-ph-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .b4m-live { font: 600 11px Manrope, sans-serif; letter-spacing: .06em; text-transform: uppercase;
               color: #0A7DC1; background: rgba(41,211,245,.14); padding: 6px 11px; border-radius: 999px; }
-  .b4m-ph-share { font: 600 12.5px Manrope, sans-serif; color: #0B1524; text-decoration: none;
-                  border: 1px solid rgba(11,21,36,.14); padding: 7px 14px; border-radius: 8px; }
   #b4m-content { margin-top: 22px; }
   @media (prefers-color-scheme: dark) {
     #b4m-ph { border-color: rgba(255,255,255,.1); }
     .b4m-ph-title { color: #e6e6f0; }
     .b4m-ph-sub { color: rgba(255,255,255,.5); }
     .b4m-live { background: rgba(41,211,245,.2); color: #29D3F5; }
-    .b4m-ph-share { color: #e6e6f0; border-color: rgba(255,255,255,.2); }
   }
   ${gateStyles}
 </style>
@@ -1888,7 +1888,7 @@ ${
   </div>
   <div class="b4m-ph-right">
     <span class="b4m-live">Live</span>
-    ${signupGate ? '<a href="/register" class="b4m-ph-share">Sign up</a>' : ''}
+    
   </div>
 </header>`
 }
