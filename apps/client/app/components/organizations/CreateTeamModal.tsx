@@ -137,7 +137,11 @@ const CreateTeamModal = () => {
             >
               <RemoveIcon />
             </IconButton>
-            <Typography sx={{ minWidth: '40px', textAlign: 'center' }} className="create-team-size-value">
+            <Typography
+              sx={{ minWidth: '40px', textAlign: 'center' }}
+              className="create-team-size-value"
+              data-testid="create-team-size-value"
+            >
               {teamSize}
             </Typography>
             <IconButton

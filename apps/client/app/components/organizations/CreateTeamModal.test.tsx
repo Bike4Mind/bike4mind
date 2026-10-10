@@ -80,7 +80,10 @@ describe('CreateTeamModal', () => {
   it('shows the live per-seat price times the seat count', () => {
     renderModal();
 
-    expect(screen.getByTestId('create-team-price-value').textContent).toBe('Total Price: $40/month');
+    // Read the size back rather than assuming the seat floor, which the admin settings can move.
+    const seats = Number(screen.getByTestId('create-team-size-value').textContent);
+    expect(seats).toBeGreaterThan(0);
+    expect(screen.getByTestId('create-team-price-value').textContent).toBe(`Total Price: $${seats * 10}/month`);
   });
 
   it('blocks checkout instead of quoting $0 when the team price is missing from Stripe', async () => {
