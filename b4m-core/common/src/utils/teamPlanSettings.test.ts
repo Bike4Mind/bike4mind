@@ -61,6 +61,21 @@ describe('team plan settings', () => {
       ).toEqual({ minSeats: 2, maxSeats: 250, creditsPerSeat: 75000 });
     });
 
+    it('treats the null the server cache returns for an absent key, or a blank value, as unset', () => {
+      expect(
+        resolveTeamPlanSettings({ teamPlanMinSeats: null, teamPlanMaxSeats: '', teamPlanCreditsPerSeat: null })
+      ).toEqual({
+        minSeats: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+        maxSeats: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+        creditsPerSeat: ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+      });
+      expect(resolveLowCreditsThreshold(null)).toBe(LOW_CREDITS_THRESHOLD_DEFAULT);
+    });
+
+    it('rejects a fractional seat count', () => {
+      expect(resolveTeamPlanSettings({ teamPlanMinSeats: '2.5' }).minSeats).toBe(ORGANIZATION_SUBSCRIPTION_MIN_SEATS);
+    });
+
     it('falls back per key when a stored value is invalid', () => {
       expect(resolveTeamPlanSettings({ teamPlanMinSeats: 'abc', teamPlanMaxSeats: -5 })).toEqual({
         minSeats: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
