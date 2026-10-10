@@ -170,8 +170,8 @@ describe('emitFunnelEvent', () => {
 });
 
 describe('recordFirstValue', () => {
-  const now = new Date('2026-10-10T00:01:40Z');
-  const user = { id: 'u1', createdAt: new Date('2026-10-10T00:00:00Z') };
+  const now = new Date('2026-10-11T00:01:40Z');
+  const user = { id: 'u1', createdAt: new Date('2026-10-11T00:00:00Z') };
 
   it('sets firstValueAt only where unset and emits first_value with time since signup', async () => {
     expect(await recordFirstValue({ user, feature: 'chat', now })).toBe(true);
@@ -179,6 +179,21 @@ describe('recordFirstValue', () => {
     expect(mockEmit).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'first_value', metadata: { feature: 'chat', secondsSinceSignup: 100 } })
     );
+  });
+
+  it('skips a user who signed up before launch: no write, no emit', async () => {
+    const early = { id: 'u1', createdAt: new Date('2026-10-10T23:59:59Z') };
+    expect(await recordFirstValue({ user: early, feature: 'chat', now })).toBe(false);
+    expect(await recordFirstValue({ user: { id: 'u1' }, feature: 'chat', now })).toBe(false);
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it('emits once for a post-launch user: a second completion finds firstValueAt set', async () => {
+    mockUpdateOne.mockResolvedValueOnce({ modifiedCount: 1 }).mockResolvedValueOnce({ modifiedCount: 0 });
+    expect(await recordFirstValue({ user, feature: 'chat', now })).toBe(true);
+    expect(await recordFirstValue({ user, feature: 'chat', now })).toBe(false);
+    expect(mockEmit).toHaveBeenCalledTimes(1);
   });
 
   it('emits nothing when another request already set it', async () => {
@@ -201,7 +216,15 @@ describe('recordFirstValue', () => {
 });
 
 describe('recordFirstChatValue', () => {
-  const user = { id: 'u1', createdAt: new Date() };
+  const user = { id: 'u1', createdAt: new Date('2026-10-12T00:00:00Z') };
+
+  it('does not even read the quest for a user who signed up before launch', async () => {
+    const loadQuest = vi.fn();
+    const early = { id: 'u1', createdAt: new Date('2026-09-01T00:00:00Z') };
+    expect(await recordFirstChatValue({ user: early, loadQuest })).toBe(false);
+    expect(loadQuest).not.toHaveBeenCalled();
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+  });
 
   it('costs nothing for a user who already has a first answer', async () => {
     const loadQuest = vi.fn();

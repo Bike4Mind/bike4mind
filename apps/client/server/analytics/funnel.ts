@@ -90,6 +90,16 @@ export type FunnelUser = {
   acquisition?: Pick<IUserAcquisition, 'firstTouch'> | null;
 };
 
+// first_value counts only users who sign up after the funnel ships; no backfill. Without it every
+// pre-existing user (firstValueAt unset) would emit on their next answer.
+export const FIRST_VALUE_LAUNCH_AT = new Date('2026-10-11T00:00:00Z');
+
+/** Whether the account was created on or after launch; a missing or unparseable createdAt is not. */
+function signedUpAfterLaunch(createdAt: Date | string | null | undefined): boolean {
+  const ms = createdAt ? new Date(createdAt).getTime() : NaN;
+  return Number.isFinite(ms) && ms >= FIRST_VALUE_LAUNCH_AT.getTime();
+}
+
 export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value';
 
 /**
@@ -121,13 +131,15 @@ export async function emitFunnelEvent(opts: {
  * Mark the user's first completed chat answer and emit `first_value` once. The conditional update
  * is what makes it once: only the request that flips firstValueAt from unset emits, so concurrent
  * completions cannot double-count. Callers skip this when the loaded user already has
- * firstValueAt, which keeps the steady-state cost at zero writes. Never throws.
+ * firstValueAt, which keeps the steady-state cost at zero writes. Users created before
+ * FIRST_VALUE_LAUNCH_AT are skipped. Never throws.
  */
 export async function recordFirstValue(opts: {
   user: FunnelUser & { createdAt?: Date | string | null };
   feature: string;
   now?: Date;
 }): Promise<boolean> {
+  if (!signedUpAfterLaunch(opts.user.createdAt)) return false;
   try {
     const now = opts.now ?? new Date();
     const res = await User.updateOne({ _id: opts.user.id, firstValueAt: null }, { $set: { firstValueAt: now } });
@@ -160,7 +172,7 @@ export async function recordFirstChatValue(opts: {
   user: FunnelUser & { createdAt?: Date | string | null; firstValueAt?: Date | null };
   loadQuest: () => Promise<{ status?: string; type?: string } | null | undefined>;
 }): Promise<boolean> {
-  if (opts.user.firstValueAt) return false;
+  if (opts.user.firstValueAt || !signedUpAfterLaunch(opts.user.createdAt)) return false;
   const quest = await opts.loadQuest().catch(() => undefined);
   if (quest?.status !== 'done' || quest.type === 'error') return false;
   return recordFirstValue({ user: opts.user, feature: 'chat' });
