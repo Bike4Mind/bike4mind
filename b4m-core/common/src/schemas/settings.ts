@@ -2058,6 +2058,22 @@ export const settingsMap = {
     // publicSafe: read by LLMContext at startup; a model name is not sensitive (M2.5).
     publicSafe: true,
   }),
+  recommendedModelIds: makeObjectSetting<string[]>({
+    key: 'recommendedModelIds',
+    name: 'Recommended Model IDs',
+    // Ships as the default model only, so a fresh deploy makes no product claim beyond it.
+    // Must stay equal to DefaultAPIModel's defaultValue.
+    defaultValue: [
+      process.env.B4M_SELF_HOST === 'true' ? ChatModels.CLAUDE_5_SONNET : ChatModels.CLAUDE_5_SONNET_BEDROCK,
+    ],
+    description:
+      'Model IDs pinned in a "Recommended" group at the top of the model picker, in display order. Unknown or inaccessible IDs are skipped.',
+    category: 'AI',
+    order: 2,
+    // The picker renders for every user, and a list of model ids is not sensitive.
+    userReadable: true,
+    schema: z.array(z.string()),
+  }),
   openaiDemoKey: makeStringSetting({
     key: 'openaiDemoKey',
     name: 'OpenAI API Key',

@@ -261,6 +261,21 @@ describe('public settings projection (M2.5 security boundary)', () => {
     });
   });
 
+  describe('recommendedModelIds', () => {
+    it('is user-readable and defaults to the default model only', () => {
+      expect(userReadableSettingKeys()).toContain('recommendedModelIds');
+      expect(settingsMap.recommendedModelIds.defaultValue).toEqual([settingsMap.DefaultAPIModel.defaultValue]);
+    });
+
+    it('accepts a string array, including its JSON-string storage form, and rejects other shapes', () => {
+      const { schema } = settingsMap.recommendedModelIds;
+      expect(schema.safeParse(['a', 'b']).success).toBe(true);
+      expect(schema.safeParse('["a","b"]').success).toBe(true);
+      expect(schema.safeParse('a').success).toBe(false);
+      expect(schema.safeParse([1]).success).toBe(false);
+    });
+  });
+
   describe('publicSafeSettingKeys', () => {
     it('returns only keys explicitly tagged publicSafe', () => {
       const keys = publicSafeSettingKeys();

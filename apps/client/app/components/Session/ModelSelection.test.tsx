@@ -19,6 +19,7 @@ import ModelSelection, {
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
 const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
+const adminSettings = vi.hoisted(() => ({ recommendedModelIds: [] as string[] }));
 
 const textModel = {
   id: 'gpt-text-model',
@@ -58,6 +59,13 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
 
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (state: { isAdmin: boolean }) => unknown) => selector({ isAdmin: admin.isAdmin }),
+}));
+
+vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
+  useAdminSettings: () => ({
+    getSettingObject: (key: string, fallback: unknown) =>
+      key === 'recommendedModelIds' ? adminSettings.recommendedModelIds : fallback,
+  }),
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => admin.navigate }));
@@ -384,5 +392,31 @@ describe('provider classifiers cover every backend', () => {
 
   it.each(Object.values(ModelBackend))('%s gets the expected fallback tooltip label', backend => {
     expect(getModelProviderLabel(REPRESENTATIVE[backend].id, backend)).toBe(REPRESENTATIVE[backend].label ?? undefined);
+  });
+});
+
+describe('ModelSelection recommended group', () => {
+  afterEach(() => {
+    adminSettings.recommendedModelIds = [];
+  });
+
+  it('renders no Recommended group when the list is empty', () => {
+    renderSelection({});
+    expect(screen.queryByTestId('recommended-section')).not.toBeInTheDocument();
+  });
+
+  it('pins configured models above the full list and keeps them in the full list', () => {
+    adminSettings.recommendedModelIds = [textModel.id];
+    renderSelection({});
+    const section = screen.getByTestId('recommended-section');
+    expect(section).toHaveTextContent('Recommended');
+    expect(section).toHaveTextContent(textModel.name);
+    expect(screen.getAllByTestId(`model-card-${textModel.id}`).length).toBeGreaterThan(1);
+  });
+
+  it('skips ids that are unknown or inaccessible', () => {
+    adminSettings.recommendedModelIds = ['no-such-model'];
+    renderSelection({});
+    expect(screen.queryByTestId('recommended-section')).not.toBeInTheDocument();
   });
 });
