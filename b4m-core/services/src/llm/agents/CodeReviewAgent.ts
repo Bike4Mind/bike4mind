@@ -8,7 +8,13 @@ export const CodeReviewAgent = (config?: ServerAgentConfig): ServerAgentDefiniti
   fallbackModels: [ChatModels.CLAUDE_4_6_SONNET, ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
   defaultThoroughness: config?.defaultThoroughness ?? 'medium',
   maxIterations: { quick: 3, medium: 8, very_thorough: 15 },
-  deniedTools: ['image_generation', 'edit_image', 'delegate_to_agent', ...(config?.extraDeniedTools ?? [])],
+  deniedTools: [
+    'image_generation',
+    'edit_image',
+    'video_generation',
+    'delegate_to_agent',
+    ...(config?.extraDeniedTools ?? []),
+  ],
   allowedTools: config?.extraAllowedTools,
   systemPrompt: `You are a code review specialist. Your job is to analyze code for quality, correctness, security, and maintainability.
 

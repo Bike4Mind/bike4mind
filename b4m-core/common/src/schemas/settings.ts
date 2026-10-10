@@ -545,6 +545,7 @@ export const SettingKeySchema = z.enum([
 
   // VIDEO GENERATION
   'videoGeneration',
+  'agentVideoClipsPerRun',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -615,6 +616,8 @@ export const OrchestrationDefaultsSchema = z.object({
     'music_generation',
     'audio_generation',
     'excel_generation',
+    // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
+    'video_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
     // they are strictly safer than the storage-backed tools above. Without
@@ -4833,6 +4836,19 @@ export const settingsMap = {
     category: 'AI',
     order: 145,
     schema: VideoGenerationSettingsSchema,
+  }),
+  agentVideoClipsPerRun: makeNumberSetting({
+    key: 'agentVideoClipsPerRun',
+    name: 'Agent Video Clips Per Run',
+    defaultValue: 2,
+    min: 0,
+    int: true,
+    description:
+      'Most video_generation clips one agent-mode run may start, counted across the run and all of its subagents. 0 removes the tool from agent mode. Each clip still holds and settles its own credits.',
+    category: 'AI',
+    order: 146,
+    // Consumed by apps/client/server/queueHandlers/agentExecutor.videoToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',

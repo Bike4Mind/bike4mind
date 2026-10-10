@@ -197,6 +197,9 @@ export interface IChatHistoryItem {
   /** Ids of the video generation jobs this quest started */
   videoJobIds?: string[];
 
+  /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentVideoClip). */
+  agentVideoClipsClaimed?: number;
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
