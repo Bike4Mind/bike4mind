@@ -11,15 +11,12 @@ import { WORKSPACE_SURFACES, type ISessionDocument } from '@bike4mind/common';
  */
 const main = WORKSPACE_SURFACES[0];
 const opti = WORKSPACE_SURFACES[1];
-const moveTarget = WORKSPACE_SURFACES[1];
 
 const h = vi.hoisted(() => ({
   clone: { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false },
   move: { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false },
   navigate: vi.fn(),
   targets: { current: undefined, copyTargets: [], moveTargets: [] } as Record<string, unknown>,
-  pathname: '/notebooks/session-1',
-  routes: [] as { path: string; appShell?: boolean; hostsWorkspace?: string }[],
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -59,16 +56,7 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => true }),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => h.navigate,
-  useLocation: ({ select }: { select: (location: { pathname: string }) => unknown }) =>
-    select({ pathname: h.pathname }),
-}));
-vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({
-  get premiumRoutes() {
-    return h.routes;
-  },
-}));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
 vi.mock('@client/app/components/common/SessionMetadataModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/common/ShareModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/RenameInput', () => ({ default: () => null }));
@@ -100,8 +88,6 @@ describe.each([
   beforeEach(() => {
     vi.clearAllMocks();
     h.targets = { current: main, copyTargets: [main, opti], moveTargets: [opti] };
-    h.pathname = '/notebooks/session-1';
-    h.routes = [];
   });
 
   it('shows a plain Clone and no Move to when there is no other workspace', () => {
@@ -172,22 +158,6 @@ describe.each([
       expect(h.move.mutateAsync).toHaveBeenCalledWith({ sessionId: 'session-1', targetSurface: 'opti' })
     );
     await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ href: '/opti?mode=canvas&session=session-1' }));
-  });
-
-  it('follows the moved notebook onto the current page when that page hosts its new workspace', async () => {
-    const target = moveTarget.id as string;
-    const defaultHref = moveTarget.sessionHref('session-1');
-    h.move.mutateAsync.mockResolvedValue({ id: 'session-1', surface: target });
-    h.routes = [{ path: '/hub/$view', appShell: true, hostsWorkspace: target }];
-    h.pathname = '/hub/board';
-    renderAndOpenMenu(location);
-
-    fireEvent.click(screen.getByTestId(`session-menu-move-to-${target}`));
-    fireEvent.click(screen.getByTestId('move-session-modal-confirm-btn'));
-
-    await waitFor(() =>
-      expect(h.navigate).toHaveBeenCalledWith({ href: `/hub/board${defaultHref.slice(defaultHref.indexOf('?'))}` })
-    );
   });
 
   it('does nothing when the move is cancelled', async () => {

@@ -55,7 +55,6 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
-  useLocation: () => '/',
 }));
 
 // --- heavy child components (not under test) --------------------------------

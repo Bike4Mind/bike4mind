@@ -36,8 +36,6 @@ const TavernArtifactRenderer = lazy(() => import('../tavern/TavernArtifactRender
 import { useForkSession, useGetSession, useSnipSession } from '@client/app/hooks/data/sessions';
 import { getWorkspaceSurface, type WorkspaceSurface } from '@bike4mind/common';
 import { surfaceRouteExists, useWorkspacePresenter, useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
-import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
-import { workspaceSessionHref } from '@client/app/utils/premiumHostedWorkspace';
 import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
 import { Refresh } from '@mui/icons-material';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -45,7 +43,7 @@ import CodeIcon from '@mui/icons-material/Code';
 import ForkRightIcon from '@mui/icons-material/ForkRight';
 import StartIcon from '@mui/icons-material/Start';
 import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined';
-import { useLocation, useNavigate } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import BugReportModal from '@client/app/components/BugReportModal';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import { CorrectionComposer } from './CorrectionComposer';
@@ -177,7 +175,6 @@ const MessageContent: React.FC<ContentProps> = memo(
     const { data: sourceSession } = useGetSession(sessionId);
     const { current: currentWorkspace, copyTargets: forkTargets } = useWorkspaceTargets(sourceSession);
     const presentWorkspace = useWorkspacePresenter();
-    const pathname = useLocation({ select: location => location.pathname });
     // Destination picked from "Fork into"; null = the source's own workspace (a plain fork).
     const [forkTarget, setForkTarget] = useState<WorkspaceSurface | null>(null);
     const snipSession = useSnipSession();
@@ -520,9 +517,8 @@ const MessageContent: React.FC<ContentProps> = memo(
         // Open the fork in its home workspace; an unregistered or unshipped one keeps the notebook route.
         const registered = getWorkspaceSurface(data?.surface);
         const home = registered && presentWorkspace(registered);
-        if (home && surfaceRouteExists(home) && data?.id) {
-          navigate({ href: workspaceSessionHref(home, data.id, pathname, premiumRoutes) });
-        } else navigate({ to: '/notebooks/$id', params: { id: data?.id || '' } });
+        if (home && surfaceRouteExists(home) && data?.id) navigate({ href: home.sessionHref(data.id) });
+        else navigate({ to: '/notebooks/$id', params: { id: data?.id || '' } });
       } catch (error) {
         console.log(error);
       }

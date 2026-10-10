@@ -51,13 +51,6 @@ const forkFlow = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   navigate: vi.fn(),
   present: vi.fn((surface: unknown) => surface),
-  pathname: '/notebooks/session-1',
-  routes: [] as { path: string; appShell?: boolean; hostsWorkspace?: string }[],
-}));
-vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({
-  get premiumRoutes() {
-    return forkFlow.routes;
-  },
 }));
 vi.mock('@client/app/hooks/useWorkspaceTargets', () => ({
   surfaceRouteExists: () => true,
@@ -110,8 +103,6 @@ vi.mock('@client/app/hooks/useSubscribeChatCompletion', () => ({
 }));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => forkFlow.navigate,
-  useLocation: ({ select }: { select: (location: { pathname: string }) => unknown }) =>
-    select({ pathname: forkFlow.pathname }),
 }));
 
 // --- utils with API/server dependencies ------------------------------------
@@ -771,8 +762,6 @@ describe('MessageContent actions menu - Fork into', () => {
   });
   afterEach(() => {
     workspaceTargets.value = { current: undefined, copyTargets: [], moveTargets: [] };
-    forkFlow.pathname = '/notebooks/session-1';
-    forkFlow.routes = [];
   });
 
   it('keeps the single Fork Notebook item when there is no other workspace', () => {
@@ -811,41 +800,5 @@ describe('MessageContent actions menu - Fork into', () => {
 
     await waitFor(() => expect(forkFlow.navigate).toHaveBeenCalledWith({ href: '/desk?session=fork-1' }));
     expect(forkFlow.present).toHaveBeenCalledWith(home);
-  });
-
-  it('keeps the fork on the current page when that page hosts its workspace', async () => {
-    const home = WORKSPACE_SURFACES.find(surface => surface.id !== null);
-    if (!home?.id) throw new Error('expected a registered workspace');
-    const defaultHref = home.sessionHref('fork-1');
-    if (!defaultHref.includes('?')) throw new Error('expected a query-shaped workspace link');
-    forkFlow.mutateAsync.mockResolvedValueOnce({ id: 'fork-1', surface: home.id });
-    forkFlow.routes = [{ path: '/hub/$view', appShell: true, hostsWorkspace: home.id }];
-    forkFlow.pathname = '/hub/board';
-    workspaceTargets.value = { current: home, copyTargets: [home], moveTargets: [] };
-
-    renderAndOpenActionsMenu();
-    fireEvent.click(screen.getByTestId('message-menu-fork'));
-    fireEvent.click(screen.getByTestId('fork-confirm-mock'));
-
-    await waitFor(() =>
-      expect(forkFlow.navigate).toHaveBeenCalledWith({
-        href: `/hub/board${defaultHref.slice(defaultHref.indexOf('?'))}`,
-      })
-    );
-  });
-
-  it("opens the fork at its workspace's default link from a page that does not host it", async () => {
-    const home = WORKSPACE_SURFACES.find(surface => surface.id !== null);
-    if (!home?.id) throw new Error('expected a registered workspace');
-    forkFlow.mutateAsync.mockResolvedValueOnce({ id: 'fork-1', surface: home.id });
-    forkFlow.routes = [{ path: '/hub/$view', appShell: true, hostsWorkspace: home.id }];
-    forkFlow.pathname = '/elsewhere';
-    workspaceTargets.value = { current: home, copyTargets: [home], moveTargets: [] };
-
-    renderAndOpenActionsMenu();
-    fireEvent.click(screen.getByTestId('message-menu-fork'));
-    fireEvent.click(screen.getByTestId('fork-confirm-mock'));
-
-    await waitFor(() => expect(forkFlow.navigate).toHaveBeenCalledWith({ href: home.sessionHref('fork-1') }));
   });
 });

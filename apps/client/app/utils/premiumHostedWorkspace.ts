@@ -1,4 +1,4 @@
-import { getWorkspaceSurface, WORKSPACE_SURFACES, type WorkspaceSurface } from '@bike4mind/common';
+import { getWorkspaceSurface, WORKSPACE_SURFACES } from '@bike4mind/common';
 import type { PremiumRouteDescriptor } from '@client/app/premiumContract';
 
 type HostingRoute = Pick<PremiumRouteDescriptor, 'path' | 'appShell' | 'hostsWorkspace'>;
@@ -30,26 +30,4 @@ export function hostedWorkspaceAt(pathname: string, routes: readonly HostingRout
     if (hosted?.id) return hosted.id;
   }
   return null;
-}
-
-/**
- * Where to open `sessionId`, a session in `surface`, from `pathname`. On an app-shell premium route
- * that hosts that workspace (see `hostedWorkspaceAt`), the same route with the query
- * `surface.sessionHref` carries, so the user stays on the page they were using; elsewhere, or when
- * the link carries the id in its path rather than its query, the link itself.
- */
-export function workspaceSessionHref(
-  surface: WorkspaceSurface,
-  sessionId: string,
-  pathname: string,
-  routes: readonly HostingRoute[]
-): string {
-  const href = surface.sessionHref(sessionId);
-  if (surface.id === null || hostedWorkspaceAt(pathname, routes) !== surface.id) return href;
-  // The workspace's own route is already what its registry link opens; a presented link may
-  // deliberately point elsewhere, so it is not rewritten onto that route.
-  if (getWorkspaceSurface(surface.id)?.routePrefix === pathname) return href;
-  const queryAt = href.indexOf('?');
-  if (queryAt < 0 || href.slice(0, queryAt).includes(encodeURIComponent(sessionId))) return href;
-  return `${pathname}${href.slice(queryAt)}`;
 }
