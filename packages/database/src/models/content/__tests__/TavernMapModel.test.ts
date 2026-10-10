@@ -93,6 +93,15 @@ describe('TavernMapModel', () => {
       await expect(tavernMapRepository.createMap('user-1', 'm1', '   ', 16, 16)).rejects.toThrow(/Invalid map name/);
     });
 
+    it('accepts the maximum dimension (160) and rejects 161', async () => {
+      expect(MAX_MAP_DIM).toBe(160);
+      const map = await tavernMapRepository.createMap('user-1', 'big', 'Big', 160, 160);
+      expect(map.widthTiles).toBe(160);
+      await expect(tavernMapRepository.createMap('user-1', 'bigger', 'Bigger', 161, 160)).rejects.toThrow(
+        /Invalid map dimensions/
+      );
+    });
+
     it('rejects out-of-range or non-integer dimensions', async () => {
       await expect(tavernMapRepository.createMap('user-1', 'm1', 'Too big', MAX_MAP_DIM + 1, 16)).rejects.toThrow(
         /Invalid map dimensions/

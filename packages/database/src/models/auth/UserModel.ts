@@ -851,7 +851,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     mfa: { type: MFASchema, default: null },
 
     // User preferences
-    showCreditsUsed: { type: Boolean, default: false },
+    showCreditsUsed: { type: Boolean, default: true },
 
     // Email Integration (Email-to-Platform Ingestion)
     platformEmailAddress: { type: String, unique: true, sparse: true },

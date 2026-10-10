@@ -10,6 +10,11 @@ import {
   SubscriptionSource,
 } from '@client/lib/subscriptions/types';
 import {
+  ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+} from '@client/lib/subscriptions/constants';
+import {
   SubscriptionPlanInterval,
   UserSubscriptionTier,
   SubscriptionPlanDetail,
@@ -73,6 +78,8 @@ const SubscriptionModalContent = () => {
   const theme = useTheme();
   const [activeTab, setActiveTab] = useState<SubscriptionModalTabs>(SubscriptionModalTabs.Personal);
   const enableTeamPlan = useGetSettingsValue('enableTeamPlan');
+  // The starter-credits line is only true while sign-ups are actually granted something.
+  const hasStarterCredits = Number(useGetSettingsValue('defaultFreeCredits')) > 0;
   const { data: config } = useConfig();
   const seedStageName = config?.seedStageName || process.env.NEXT_PUBLIC_SEED_STAGE_NAME || '';
   const isTestMode = seedStageName !== 'production';
@@ -97,6 +104,12 @@ const SubscriptionModalContent = () => {
       {} as Record<string, number>
     );
   }, [plans.data]);
+
+  // The card quotes the cheapest Team checkout (minimum seats at the live Stripe per-seat price), the
+  // same figure CreateTeamModal opens on. Undefined hides the price rather than inventing one.
+  const teamSeatPrice = priceMap?.[ORGANIZATION_SUBSCRIPTION_PRICE_ID];
+  const teamPlanMinimumPrice =
+    teamSeatPrice === undefined ? undefined : centsToDollars(teamSeatPrice) * ORGANIZATION_SUBSCRIPTION_MIN_SEATS;
 
   // Build subscription plans based on runtime stage
   const subscriptionPlans: SubscriptionPlanDetail[] = useMemo(
@@ -158,16 +171,17 @@ const SubscriptionModalContent = () => {
       <Typography sx={{ mb: '36px', fontSize: '16px', color: 'neutral.500', textAlign: 'center' }}>
         {t('subscription_modal.description')}
         <br />
-        <Box
-          component="span"
-          sx={{
-            textDecoration: 'underline',
-            color: theme.palette.subscriptionModal.linkColor,
-            fontWeight: '500',
-          }}
-        >
-          {t('subscription_modal.no_free_tier')}
-        </Box>{' '}
+        {hasStarterCredits && (
+          <>
+            <Box
+              component="span"
+              data-testid="subscription-modal-starter-credits"
+              sx={{ color: theme.palette.subscriptionModal.linkColor, fontWeight: '500' }}
+            >
+              {t('subscription_modal.starter_credits')}
+            </Box>{' '}
+          </>
+        )}
         {t('subscription_modal.credits_rollover')}
       </Typography>
 
@@ -258,10 +272,11 @@ const SubscriptionModalContent = () => {
             <PlanCard
               name={t('subscription_modal.team')}
               description="Collaborative AI workspace with shared resources and advanced project management."
-              price={100}
+              price={teamPlanMinimumPrice}
+              credits={ORGANIZATION_SUBSCRIPTION_MIN_SEATS * ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT}
               interval="month"
               features={[
-                '4 team member accounts included',
+                `${ORGANIZATION_SUBSCRIPTION_MIN_SEATS} team member accounts included`,
                 'Shared credit pool with 3-month rollover',
                 'Advanced Projects with RAG & Auto-Summary',
                 'Team workspace & knowledge management',
@@ -271,7 +286,13 @@ const SubscriptionModalContent = () => {
                 'Dedicated support channel',
               ]}
               actionButton={
-                <Button variant="solid" color="primary" fullWidth onClick={openCreateTeamModal}>
+                <Button
+                  variant="solid"
+                  color="primary"
+                  fullWidth
+                  onClick={openCreateTeamModal}
+                  data-testid="subscription-modal-create-team-btn"
+                >
                   Create Team
                 </Button>
               }

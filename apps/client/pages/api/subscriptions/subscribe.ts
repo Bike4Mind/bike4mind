@@ -32,8 +32,13 @@ const handler = baseApi()
     // be publicly purchasable; when it's off we refuse checkout on the write path, so an
     // un-launched product can't be bought via a stale client OR a direct POST. Admin
     // comp-grants go through a different route and are intentionally unaffected.
+    // Only configured plans are purchasable; any other Stripe price id is refused here
+    // rather than relying on stripe.prices.retrieve below, which accepts any live price.
     const requestedPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
-    if (requestedPlan?.availabilityFlag) {
+    if (!requestedPlan) {
+      throw new BadRequestError('Unknown plan');
+    }
+    if (requestedPlan.availabilityFlag) {
       // Read strictly as `=== true`: `availabilityFlag` is typed as any SettingKey, so if a
       // plan ever points it at a non-boolean setting, "not exactly true" fails closed here
       // rather than coercing a number/string into a truthy "launched".

@@ -17,6 +17,7 @@
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
+ *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
@@ -585,6 +586,61 @@ function generateWorkspaceCopyEntitlements(packages) {
   writeFile(
     displaysOutPath,
     `${GENERATED_BANNER}\n${displaysTypeImport}\n\nexport const premiumWorkspaceGrantDisplays: PremiumWorkspaceGrantDisplays = ${displaysBody};\n`
+  );
+}
+
+// --- Generate tool display labels ---
+
+// Display names for overlay LLM tools (b4mContributions.toolDisplayLabels, `{ "<tool id>": "Label" }`),
+// so a reply's tool chips never show a raw id. Pure data like the grants above. Labels reach the UI
+// verbatim, so they are held to the grant label's shape.
+const TOOL_ID_RE = /^[a-z0-9][a-z0-9_.-]*$/i;
+
+function generateToolDisplayLabels(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumToolDisplayLabels.generated.ts');
+  const typeImport = `import type { PremiumToolDisplayLabels } from '../premiumContract';`;
+
+  // tool id -> { label, from }
+  const merged = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.toolDisplayLabels;
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) {
+      throw new Error(
+        `[codegen] invalid toolDisplayLabels from package "${pkg.name}": ` +
+          `expected an object of tool id -> label, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [toolId, label] of Object.entries(declared)) {
+      if (!TOOL_ID_RE.test(toolId)) {
+        throw new Error(
+          `[codegen] invalid toolDisplayLabels tool id from package "${pkg.name}": ` +
+            `${JSON.stringify(toolId)} is not of [A-Za-z0-9_.-]`
+        );
+      }
+      if (typeof label !== 'string' || label.length > GRANT_LABEL_MAX || !GRANT_LABEL_RE.test(label)) {
+        throw new Error(
+          `[codegen] invalid toolDisplayLabels label for "${toolId}" from package "${pkg.name}": ` +
+            `${JSON.stringify(label)} must be one trimmed line of at most ${GRANT_LABEL_MAX} characters`
+        );
+      }
+      const prior = merged.get(toolId);
+      if (prior && prior.label !== label) {
+        throw new Error(
+          `[codegen] toolDisplayLabels names "${toolId}" differently in packages "${prior.from}" and ` +
+            `"${pkg.name}"; declare its label in one.`
+        );
+      }
+      if (!prior) merged.set(toolId, { label, from: pkg.name });
+    }
+  }
+
+  const entries = [...merged].map(([toolId, { label }]) => `  ${JSON.stringify(toolId)}: ${JSON.stringify(label)},`);
+  const body = entries.length === 0 ? '{}' : `{\n${entries.join('\n')}\n}`;
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumToolDisplayLabels: PremiumToolDisplayLabels = ${body};\n`
   );
 }
 
@@ -1177,5 +1233,6 @@ generateInfraGlue(packages);
 // not at all and is link-independent for an even simpler reason than the group above.
 generateLocalStorageKeyPrefixes(packages);
 generateWorkspaceCopyEntitlements(packages);
+generateToolDisplayLabels(packages);
 
 console.log('[codegen] done.');

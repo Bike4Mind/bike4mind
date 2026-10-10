@@ -45,10 +45,13 @@ import {
 } from '@server/services/publish/viewerSecurity';
 import {
   buildShareFooterHtml,
+  pickSharedByName,
   buildSignupGateHtml,
+  replaceSignupGateHtml,
   shouldShowSignupGate,
   stripSignupGateHtml,
 } from '@client/app/utils/shareFooter';
+import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -652,8 +655,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       selfPath,
       canFrameArtifacts,
       exportFormats,
-      sharedBy: owner.name || undefined,
+      sharedBy: pickSharedByName(owner),
       signupGate: showSignupGate,
+      starterCredits: showSignupGate ? await getOpenSignupStarterCredits() : 0,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -744,7 +748,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
     });
   }
-  if (!showSignupGate) indexHtml = stripSignupGateHtml(indexHtml);
+  indexHtml = showSignupGate
+    ? replaceSignupGateHtml(indexHtml, { starterCredits: await getOpenSignupStarterCredits() })
+    : stripSignupGateHtml(indexHtml);
 
   if (isFormatRaw) {
     if (!isOpenPublic) {
@@ -1708,6 +1714,8 @@ function renderViewerPage(
      * shouldShowSignupGate; ignored for a standalone export, which never carries either.
      */
     signupGate?: boolean;
+    /** Starter-credit amount the sign-up card advertises; 0 renders no number. */
+    starterCredits?: number;
   }
 ): string {
   const {
@@ -1719,6 +1727,7 @@ function renderViewerPage(
     standalone = false,
     sharedBy,
     signupGate = false,
+    starterCredits = 0,
   } = opts;
   const body = replyBodyForExport(artifact);
   let contentHtml: string;
@@ -1791,12 +1800,14 @@ function renderViewerPage(
     : buildShareFooterHtml({
         source: artifact.source.kind === 'reply' ? 'reply' : 'fabfile',
         reportPublicId: artifact.publicId,
+        // The sign-up card below is the single CTA; don't stack the brand card on top of it.
+        hideCta: signupGate,
       }) + buildExportActionsHtml(selfPath, exportFormats);
 
   // Sign-up prompt: shown to anonymous, non-share-link viewers of an open-public page only
   // (not standalone exports, share-link holders, or signed-in viewers - all of whom already
   // have full access, so there is nothing to invite them past). See shouldShowSignupGate.
-  const gate = signupGate && !standalone ? buildSignupGateHtml() : null;
+  const gate = signupGate && !standalone ? buildSignupGateHtml({ starterCredits }) : null;
   const gateStyles = gate?.styles ?? '';
   const gateHtml = gate?.html ?? '';
 
@@ -1862,15 +1873,12 @@ function renderViewerPage(
   .b4m-ph-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .b4m-live { font: 600 11px Manrope, sans-serif; letter-spacing: .06em; text-transform: uppercase;
               color: #0A7DC1; background: rgba(41,211,245,.14); padding: 6px 11px; border-radius: 999px; }
-  .b4m-ph-share { font: 600 12.5px Manrope, sans-serif; color: #0B1524; text-decoration: none;
-                  border: 1px solid rgba(11,21,36,.14); padding: 7px 14px; border-radius: 8px; }
   #b4m-content { margin-top: 22px; }
   @media (prefers-color-scheme: dark) {
     #b4m-ph { border-color: rgba(255,255,255,.1); }
     .b4m-ph-title { color: #e6e6f0; }
     .b4m-ph-sub { color: rgba(255,255,255,.5); }
     .b4m-live { background: rgba(41,211,245,.2); color: #29D3F5; }
-    .b4m-ph-share { color: #e6e6f0; border-color: rgba(255,255,255,.2); }
   }
   ${gateStyles}
 </style>
@@ -1889,7 +1897,6 @@ ${
   </div>
   <div class="b4m-ph-right">
     <span class="b4m-live">Live</span>
-    ${signupGate ? '<a href="/register" class="b4m-ph-share">Sign up</a>' : ''}
   </div>
 </header>`
 }

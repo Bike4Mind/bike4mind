@@ -310,7 +310,7 @@ export const registerUser = async (
     googleDrive: null,
     photoUrl: null,
     lastCreditsPurchasedAt: null,
-    showCreditsUsed: false,
+    showCreditsUsed: true,
     preferredVoice: null,
     preferredReasoningEffort: 'auto',
 

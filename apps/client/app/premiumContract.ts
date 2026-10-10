@@ -255,6 +255,16 @@ export interface PremiumWorkspaceGrantDisplay {
 /** Grant displays per registered workspace id, in declaration order; a user holding several gets the first. */
 export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly PremiumWorkspaceGrantDisplay[]>>;
 
+/**
+ * Names shown for an overlay's LLM tools wherever a reply lists the tools it used (`getToolDisplayName`
+ * in app/utils/toolMapping.ts), keyed by tool id. Contributed as literal data in
+ * `b4mContributions.toolDisplayLabels` (`{ "<tool id>": "Label" }`), like the copy grants above, so the
+ * labels reach the client without importing overlay code. A core tool keeps its own name; a tool with
+ * no label from either gets a humanized form of its id. Two overlays naming one tool differently fail
+ * the build.
+ */
+export type PremiumToolDisplayLabels = Readonly<Record<string, string>>;
+
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {
   /** The reply's quest id - the same key the UI side-effect bus dispatches as `dedupeKey`. */
