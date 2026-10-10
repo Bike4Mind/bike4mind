@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../__test__/createMongoServer';
+import { User } from '../auth/UserModel';
 import { Annotation } from './AnnotationModel';
 import { PublishedArtifact, shareTokenFilter } from './PublishedArtifactModel';
 import { PublishedArtifactReport } from './PublishedArtifactReportModel';
@@ -99,7 +100,7 @@ describe('purgeOwnerPublishedArtifacts', () => {
     expect((await PublishedArtifact.findOne({ publicId: a.publicId }).lean())!.deletedAt).toEqual(firstDeletedAt);
 
     const third = await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
-    expect(third).toEqual({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+    expect(third).toEqual({ artifacts: [], transferred: [], annotations: 0, reports: 0, viewAudits: 0 });
   });
 
   it('leaves the artifacts live when the child sweep fails, so a re-run finishes the job', async () => {
@@ -120,9 +121,63 @@ describe('purgeOwnerPublishedArtifacts', () => {
   it('is a no-op for a user who never published', async () => {
     expect(await purgeOwnerPublishedArtifacts('nobody', { deletedBy: 'admin1' })).toEqual({
       artifacts: [],
+      transferred: [],
       annotations: 0,
       reports: 0,
       viewAudits: 0,
     });
+  });
+});
+
+describe('purgeOwnerPublishedArtifacts - org pages', () => {
+  const liveUser = async () => {
+    const _id = new mongoose.Types.ObjectId();
+    await User.collection.insertOne({ _id, email: `${_id}@example.com`, username: String(_id) });
+    return String(_id);
+  };
+  const orgArtifact = (ownerId: string, lastPublishedBy?: string) =>
+    makeArtifact(ownerId, { tier: 'organization', scopeId: 'org1', lastPublishedBy });
+
+  it('hands an org page to a still-existing last publisher and leaves it and its children live', async () => {
+    const teammate = await liveUser();
+    const a = await orgArtifact('owner1', teammate);
+    await seedChildren(a.publicId);
+
+    const result = await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
+
+    expect(result.artifacts).toEqual([]);
+    expect(result.transferred).toEqual([expect.objectContaining({ publicId: a.publicId, ownerId: teammate })]);
+    expect(result).toMatchObject({ annotations: 0, reports: 0, viewAudits: 0 });
+    const row = await PublishedArtifact.findOne({ publicId: a.publicId }).lean();
+    expect(row).toMatchObject({ ownerId: teammate, deletedAt: null });
+    expect(await Annotation.countDocuments({ publicId: a.publicId, deletedAt: null })).toBe(1);
+    expect(await PublishedArtifactViewAuditModel.countDocuments({ publicId: a.publicId })).toBe(1);
+
+    const again = await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
+    expect(again.transferred).toEqual([]);
+    expect(await PublishedArtifact.countDocuments({ publicId: a.publicId, deletedAt: null })).toBe(1);
+  });
+
+  it('purges an org page nobody else published, or whose last publisher is gone', async () => {
+    const solo = await orgArtifact('owner1');
+    const self = await orgArtifact('owner1', 'owner1');
+    const goneTeammate = await orgArtifact('owner1', String(new mongoose.Types.ObjectId()));
+
+    const result = await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
+
+    expect(result.transferred).toEqual([]);
+    expect(result.artifacts.map(x => x.publicId).sort()).toEqual(
+      [solo.publicId, self.publicId, goneTeammate.publicId].sort()
+    );
+  });
+
+  it('always purges a personal page, even one someone else published last', async () => {
+    const teammate = await liveUser();
+    const a = await makeArtifact('owner1', { lastPublishedBy: teammate });
+
+    const result = await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
+
+    expect(result.transferred).toEqual([]);
+    expect(result.artifacts.map(x => x.publicId)).toEqual([a.publicId]);
   });
 });

@@ -34,7 +34,7 @@ const liveUser = async () => {
 };
 
 let seq = 0;
-const artifact = (ownerId: string) => {
+const artifact = (ownerId: string, over: Record<string, unknown> = {}) => {
   seq += 1;
   return PublishedArtifact.collection.insertOne({
     publicId: `pub-${seq}`,
@@ -45,6 +45,7 @@ const artifact = (ownerId: string) => {
     visibility: 'public',
     source: { kind: 'bundle' },
     deletedAt: null,
+    ...over,
   });
 };
 
@@ -57,7 +58,7 @@ describe('backfillOrphanedPublishedArtifacts', () => {
 
     const result = await backfillOrphanedPublishedArtifacts({ dryRun: true, log: silent });
 
-    expect(result).toEqual({ orphanedOwners: 1, artifacts: 2 });
+    expect(result).toEqual({ orphanedOwners: 1, artifacts: 2, transferred: 0 });
     expect(await PublishedArtifact.countDocuments({ deletedAt: null })).toBe(3);
   });
 
@@ -70,7 +71,7 @@ describe('backfillOrphanedPublishedArtifacts', () => {
 
     const result = await backfillOrphanedPublishedArtifacts({ dryRun: false, batchSize: 1, log: silent });
 
-    expect(result).toEqual({ orphanedOwners: 1, artifacts: 1 });
+    expect(result).toEqual({ orphanedOwners: 1, artifacts: 1, transferred: 0 });
     expect(await PublishedArtifact.countDocuments({ ownerId: gone, deletedBy: ORPHAN_BACKFILL_DELETED_BY })).toBe(1);
     expect(await PublishedArtifact.countDocuments({ ownerId: live, deletedAt: null })).toBe(1);
     expect(await Annotation.countDocuments({ deletedAt: null })).toBe(0);
@@ -81,7 +82,7 @@ describe('backfillOrphanedPublishedArtifacts', () => {
 
     const result = await backfillOrphanedPublishedArtifacts({ dryRun: false, log: silent });
 
-    expect(result).toEqual({ orphanedOwners: 1, artifacts: 1 });
+    expect(result).toEqual({ orphanedOwners: 1, artifacts: 1, transferred: 0 });
   });
 
   it('is a no-op on a re-run', async () => {
@@ -91,6 +92,28 @@ describe('backfillOrphanedPublishedArtifacts', () => {
     expect(await backfillOrphanedPublishedArtifacts({ dryRun: false, log: silent })).toEqual({
       orphanedOwners: 0,
       artifacts: 0,
+      transferred: 0,
     });
+  });
+
+  it('hands org pages to a still-existing last publisher, reported separately in a dry run', async () => {
+    const gone = String(new mongoose.Types.ObjectId());
+    const teammate = await liveUser();
+    await artifact(gone, { tier: 'organization', scopeId: 'org1', lastPublishedBy: teammate });
+    const orgPublicId = `pub-${seq}`;
+    await artifact(gone, { tier: 'organization', scopeId: 'org1' });
+    await artifact(gone, { lastPublishedBy: teammate });
+
+    const dry = await backfillOrphanedPublishedArtifacts({ dryRun: true, log: silent });
+    expect(dry).toEqual({ orphanedOwners: 1, artifacts: 2, transferred: 1 });
+    expect(await PublishedArtifact.countDocuments({ ownerId: gone, deletedAt: null })).toBe(3);
+
+    const applied = await backfillOrphanedPublishedArtifacts({ dryRun: false, log: silent });
+    expect(applied).toEqual({ orphanedOwners: 1, artifacts: 2, transferred: 1 });
+    expect(await PublishedArtifact.findOne({ publicId: orgPublicId }).lean()).toMatchObject({
+      ownerId: teammate,
+      deletedAt: null,
+    });
+    expect(await PublishedArtifact.countDocuments({ ownerId: gone, deletedAt: null })).toBe(0);
   });
 });

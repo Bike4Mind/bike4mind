@@ -31,6 +31,7 @@ describe('purgeUserPublishedArtifacts', () => {
   it('purges the owner and invalidates the CDN for the public artifacts only', async () => {
     purgeMock.mockResolvedValue({
       artifacts: [purged('pub', 'public'), purged('priv', 'private'), purged('rep', 'public', 'reply')],
+      transferred: [],
       annotations: 0,
       reports: 0,
       viewAudits: 0,
@@ -45,8 +46,25 @@ describe('purgeUserPublishedArtifacts', () => {
     expect(invalidateMock.mock.calls[1][0]).toMatchObject({ sourceKind: 'reply' });
   });
 
+  it('invalidates the CDN for public org pages handed to their last publisher', async () => {
+    purgeMock.mockResolvedValue({
+      artifacts: [],
+      transferred: [
+        { ...purged('org-pub', 'public'), ownerId: 'u2' },
+        { ...purged('org-priv', 'private'), ownerId: 'u2' },
+      ],
+      annotations: 0,
+      reports: 0,
+      viewAudits: 0,
+    });
+
+    await purgeUserPublishedArtifacts('u1', { deletedBy: 'admin1' });
+
+    expect(invalidateMock.mock.calls.map(([target]) => target.publicId)).toEqual(['org-pub']);
+  });
+
   it('issues no invalidation when nothing was live', async () => {
-    purgeMock.mockResolvedValue({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+    purgeMock.mockResolvedValue({ artifacts: [], transferred: [], annotations: 0, reports: 0, viewAudits: 0 });
 
     await purgeUserPublishedArtifacts('u1', { deletedBy: 'admin1' });
 

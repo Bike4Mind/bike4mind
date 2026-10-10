@@ -1,5 +1,6 @@
 import type { PublishScopeTier, PublishSourceKind, PublishVisibility } from '@bike4mind/common';
-import type { Types } from 'mongoose';
+import { Types } from 'mongoose';
+import { User } from '../auth/UserModel';
 import { Annotation } from './AnnotationModel';
 import { PublishedArtifact } from './PublishedArtifactModel';
 import { PublishedArtifactReport } from './PublishedArtifactReportModel';
@@ -15,18 +16,70 @@ export interface PurgedPublishedArtifact {
   source: { kind: PublishSourceKind };
 }
 
+/** An org-tier artifact handed to `ownerId`, its last publisher, instead of being removed. */
+export interface TransferredPublishedArtifact extends PurgedPublishedArtifact {
+  ownerId: string;
+}
+
 export interface PurgeOwnerPublishedArtifactsResult {
   /** Artifacts that were live before this call and are now soft-deleted. */
   artifacts: PurgedPublishedArtifact[];
+  /** Org-tier artifacts that stay live under their last publisher. */
+  transferred: TransferredPublishedArtifact[];
   annotations: number;
   reports: number;
   viewAudits: number;
 }
 
+const OBJECT_ID_HEX = /^[a-f0-9]{24}$/i;
+
+/** The subset of `ids` with no row in the users collection. A non-ObjectId id can never match one. */
+export async function findMissingUserIds(ids: string[]): Promise<string[]> {
+  const valid = ids.filter(id => OBJECT_ID_HEX.test(id));
+  const existing = await User.collection
+    .find({ _id: { $in: valid.map(id => new Types.ObjectId(id)) } }, { projection: { _id: 1 } })
+    .toArray();
+  const found = new Set(existing.map(u => String(u._id)));
+  return ids.filter(id => !found.has(id));
+}
+
+/**
+ * The live org-tier artifacts of `ownerId` that a teammate revised last and that should outlive
+ * the owner's account: a revise keeps the original ownerId and only moves `lastPublishedBy`
+ * (apps/client/pages/api/publish/artifact/finalize.ts), so without this the org's page would go
+ * down with whoever first published it. Only a last publisher that still exists qualifies.
+ */
+export async function findTransferableOrgArtifacts(ownerId: string): Promise<TransferredPublishedArtifact[]> {
+  const candidates = await PublishedArtifact.find({
+    ownerId,
+    tier: 'organization',
+    deletedAt: null,
+    lastPublishedBy: { $nin: [null, ownerId] },
+  })
+    .select('publicId tier scopeId slug visibility source.kind lastPublishedBy')
+    .lean<(PurgedPublishedArtifact & { lastPublishedBy: string })[]>();
+  if (candidates.length === 0) return [];
+
+  const missing = new Set(await findMissingUserIds([...new Set(candidates.map(a => a.lastPublishedBy))]));
+  return candidates
+    .filter(a => !missing.has(a.lastPublishedBy))
+    .map(({ publicId, tier, scopeId, slug, visibility, source, lastPublishedBy }) => ({
+      publicId,
+      tier,
+      scopeId,
+      slug,
+      visibility,
+      source: { kind: source.kind },
+      ownerId: lastPublishedBy,
+    }));
+}
+
 /**
  * Remove everything a user has published, for when the account itself is going away.
  *
- * Soft-deletes the annotations on every PublishedArtifact owned by `ownerId`, resolves their open
+ * First hands each org-tier artifact a different, still-existing user published last over to
+ * that user (see findTransferableOrgArtifacts); those stay live with their annotations, reports
+ * and audits. Then soft-deletes the annotations on every PublishedArtifact owned by `ownerId`, resolves their open
  * reports and drops their gated-view audit rows (viewer IPs/user agents kept only for the owner's
  * benefit), then soft-deletes the live artifacts themselves - every reader filters on
  * `deletedAt: null`, so their share tokens and `/p` URLs stop resolving at once.
@@ -44,9 +97,17 @@ export async function purgeOwnerPublishedArtifacts(
 ): Promise<PurgeOwnerPublishedArtifactsResult> {
   const now = new Date();
 
+  const transferred = await findTransferableOrgArtifacts(ownerId);
+  for (const artifact of transferred) {
+    await PublishedArtifact.updateOne(
+      { publicId: artifact.publicId, ownerId, deletedAt: null },
+      { $set: { ownerId: artifact.ownerId } }
+    );
+  }
+
   const publicIds = await PublishedArtifact.distinct<string>('publicId', { ownerId });
   if (publicIds.length === 0) {
-    return { artifacts: [], annotations: 0, reports: 0, viewAudits: 0 };
+    return { artifacts: [], transferred, annotations: 0, reports: 0, viewAudits: 0 };
   }
 
   const [annotations, reports, viewAudits] = await Promise.all([
@@ -77,6 +138,7 @@ export async function purgeOwnerPublishedArtifacts(
       visibility,
       source: { kind: source.kind },
     })),
+    transferred,
     annotations: annotations.modifiedCount,
     reports: reports.modifiedCount,
     viewAudits: viewAudits.deletedCount,

@@ -144,6 +144,27 @@ describe('GET /api/publish/serve - owner check', () => {
     expect(mockUserFindById).toHaveBeenCalledWith('owner1');
   });
 
+  it('serves an org page handed to its last publisher after the original owner was deleted', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        tier: 'organization',
+        storageKeyPrefix: 'organization/scope123/my-slug/',
+        ownerId: 'teammate1',
+        lastPublishedBy: 'teammate1',
+        source: { kind: 'reply' },
+        renderedBody: 'Hello',
+      })
+    );
+    mockUserFindById.mockImplementation((id: string) => (id === 'owner1' ? null : { name: 'Grace' }));
+
+    const { res, promise } = run(['o', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFindById).toHaveBeenCalledWith('teammate1');
+    expect(mockUserFindById).not.toHaveBeenCalledWith('owner1');
+  });
+
   it.each([
     ['deleted', null],
     ['banned', { isBanned: true }],
