@@ -42,6 +42,7 @@ import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSession
 import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
 import { shouldShowEmptySessionSplash } from './emptySessionSplashGate';
+import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { buildChatHistory } from './buildChatHistory';
 import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
 import { useSessionReconnectProbe } from './AgentExecution/useSessionReconnectProbe';
@@ -282,18 +283,21 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   const [historyLines] = useState<number>(INFINITE_VALUE);
   const liveAI = useAdvancedAISettings(state => state.liveAI);
   const { sendJsonMessage } = useWebsocket();
+  // Read-only hides the controls in MessageContent; these guards keep any remaining path
+  // (image edit, a stale menu, a programmatic call) from writing anyway.
+  const readOnly = useSessionReadOnly();
 
   // useCallback is not enough here as it won't work when calling react query hooks
   // Using only useCallback will cause ChatHistory component to rerender every time chatCompletion is being streamed
   const onDelete = useStableCallback(async (messageData: IChatHistoryItem) => {
-    if (!messageData?.id) return;
+    if (readOnly || !messageData?.id) return;
     deleteQuest.mutate({ sessionId: messageData.sessionId, id: messageData.id });
   });
 
   // useCallback is not enough here as it won't work when calling react query hooks
   // Using only useCallback will cause ChatHistory component to rerender every time chatCompletion is being streamed
   const handlePinToggle = useStableCallback(async (messageData: IChatHistoryItem) => {
-    if (!messageData.id) return;
+    if (readOnly || !messageData.id) return;
     const newPinnedState = !messageData.pinned;
 
     updateQuest.mutate({
@@ -310,6 +314,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   const sendMessage = useStableCallback(
     async (messageData: Partial<IChatHistoryItem>, options: SendMessageOptions = { isRetry: false }) => {
       const { isRetry, isImageEdit, isVariation, correctsQuestId } = options;
+      if (readOnly) return;
       if (!sessionId) return;
       if (!messageData.prompt) return;
       if (isRetry && !messageData.id) return;
