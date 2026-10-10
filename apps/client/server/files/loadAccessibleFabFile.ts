@@ -31,7 +31,7 @@ export async function loadAccessibleFabFile(req: Request, id: string) {
     storage: {
       generateSignedUrl: async (path: string, expireInSeconds: number) => {
         try {
-          return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
+          return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds, audience: 'browser' });
         } catch (error) {
           req.logger.error('Error generating signed URL:', { error, path });
           throw error;

@@ -1,17 +1,13 @@
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 import { BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
 import { Request } from 'express';
-import { Resource } from 'sst';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
 import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
-
-const s3Client = new S3Client();
+import { getFilesStorage } from '@server/utils/storage';
 
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),
@@ -117,11 +113,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       const presignedUrls = await Promise.all(
         serveableFileKeys.map(decodedFilePath => {
           if (!decodedFilePath) return null;
-          const command = new GetObjectCommand({
-            Bucket: Resource.fabFileBucket.name,
-            Key: decodedFilePath,
-          });
-          return getSignedUrl(s3Client, command, { expiresIn });
+          return getFilesStorage().getSignedUrl(decodedFilePath, 'get', { expiresIn, audience: 'browser' });
         })
       );
 
