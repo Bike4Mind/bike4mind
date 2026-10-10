@@ -1,5 +1,11 @@
 # @bike4mind/cli
 
+## 2.2.0
+
+### Minor Changes
+
+- [#4187](https://github.com/Bike4Mind/bike4mind/pull/4187) [`8ad3249`](https://github.com/Bike4Mind/bike4mind/commit/8ad32497393db0a4a0d01b419ca398a276d46b11) Thanks [@vinchi777](https://github.com/vinchi777)! - emit a toolStarted frame when a tool call opens
+
 ## 2.1.0
 
 ### Minor Changes

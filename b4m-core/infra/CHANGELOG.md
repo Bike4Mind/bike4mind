@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 2.2.0
+
+### Minor Changes
+
+- [#4164](https://github.com/Bike4Mind/bike4mind/pull/4164) [`d553e0d`](https://github.com/Bike4Mind/bike4mind/commit/d553e0d6e290d89abe8d5f375d463fbf9ff077d9) Thanks [@julsanchez](https://github.com/julsanchez)! - add public v1 file list, update and delete endpoints
+
 ## 2.1.0
 
 ### Minor Changes

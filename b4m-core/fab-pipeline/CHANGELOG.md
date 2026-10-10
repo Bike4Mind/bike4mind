@@ -1,5 +1,15 @@
 # @bike4mind/fab-pipeline
 
+## 2.0.1
+
+### Patch Changes
+
+- [#4175](https://github.com/Bike4Mind/bike4mind/pull/4175) [`416fe11`](https://github.com/Bike4Mind/bike4mind/commit/416fe118d70ecbb52e132a036ba5314d7fec6f3d) Thanks [@poysama](https://github.com/poysama)! - sign browser-reachable object URLs
+
+- Updated dependencies [[`2684a62`](https://github.com/Bike4Mind/bike4mind/commit/2684a6225aca69a1d9cc1e522dc63b5dbcedee5d), [`7da670f`](https://github.com/Bike4Mind/bike4mind/commit/7da670f8868e9cf0f30ddf97b6bcd799c0cc0992), [`ddd3792`](https://github.com/Bike4Mind/bike4mind/commit/ddd37926424c5748eb85b549c4265c95d6193cb3), [`270d5c2`](https://github.com/Bike4Mind/bike4mind/commit/270d5c2275d56b79fc9b4591682479cded1de442), [`d553e0d`](https://github.com/Bike4Mind/bike4mind/commit/d553e0d6e290d89abe8d5f375d463fbf9ff077d9), [`9e8e683`](https://github.com/Bike4Mind/bike4mind/commit/9e8e683270d93003dd254b8908cc878d40b1b6db), [`64135d1`](https://github.com/Bike4Mind/bike4mind/commit/64135d100a82bee95541f1a9c4ca4d9057aaa37f), [`2684a62`](https://github.com/Bike4Mind/bike4mind/commit/2684a6225aca69a1d9cc1e522dc63b5dbcedee5d), [`8ad3249`](https://github.com/Bike4Mind/bike4mind/commit/8ad32497393db0a4a0d01b419ca398a276d46b11), [`f927f61`](https://github.com/Bike4Mind/bike4mind/commit/f927f61ab02c5f46406bd628ef39470bdeca447b), [`d2535a6`](https://github.com/Bike4Mind/bike4mind/commit/d2535a668e73dea53c6002250e33d0dd7a10a12e), [`6857653`](https://github.com/Bike4Mind/bike4mind/commit/6857653b24a6476d14e9efaad819b9ae1792a968), [`d645fac`](https://github.com/Bike4Mind/bike4mind/commit/d645fac844755c997e702bf95fe11faa1716cffd), [`a543c77`](https://github.com/Bike4Mind/bike4mind/commit/a543c77991e50229e34b0dbe4cc6e2b90687c95b), [`382f8f6`](https://github.com/Bike4Mind/bike4mind/commit/382f8f60b701d4b93046bd7ff1be6ad7a25a60fc), [`92970d1`](https://github.com/Bike4Mind/bike4mind/commit/92970d15401e0a7103b88a6caa65eba0b4085de7)]:
+  - @bike4mind/common@14.1.0
+  - @bike4mind/db-core@0.7.5
+
 ## 2.0.0
 
 ### Major Changes
