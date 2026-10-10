@@ -46,6 +46,16 @@ export interface PremiumRouteDescriptor {
    */
   edgeToEdge?: boolean;
   /**
+   * STRUCTURAL field, meaningful only with `appShell: true`. A registered workspace id (see
+   * `WORKSPACE_SURFACES` in @bike4mind/common): the notebook sidebar on this route draws that
+   * workspace's conversation list - the `notebookSidenavExport` component - in place of the default
+   * notebook list, as it does on the workspace's own route. Omitted -> the default list. An id this
+   * repo does not register is inert. Matched against the route's `path`, where a `$param` segment
+   * stands for any one segment. `partitionPremiumRoutes` throws when it is set without `appShell`,
+   * since only the notebook layout has a sidebar to draw the list in.
+   */
+  hostsWorkspace?: string;
+  /**
    * STRUCTURAL field, like `appShell`. `true` -> the route renders for signed-out
    * visitors: parented under the root route with no `RestrictedPage`, no
    * `ProviderBundle` and no consent guard, the way `/login` and `/verify-email`
@@ -105,10 +115,11 @@ export interface PremiumNavDescriptor {
 
 /**
  * A premium package's full-surface notebook sidenav - a component that REPLACES
- * the default notebook sidenav body on the package's own appShell route (e.g.
- * OptiHashi's `/opti` surface). Contributed via `b4mContributions.notebookSidenavExport`
- * (a module default-exporting the component) and consumed by the Notebook layout's
- * `Sidenav` through the generated `premiumNotebookSidenav.generated.ts`.
+ * the default notebook sidenav body on its workspace's own route, and on any app-shell
+ * route that declares `hostsWorkspace` (see `hostedWorkspaceAt`). Contributed via
+ * `b4mContributions.notebookSidenavExport` (a module default-exporting the component)
+ * and consumed by the Notebook layout's `Sidenav` through the generated
+ * `premiumNotebookSidenav.generated.ts`.
  *
  * `null` is the absent (open-core fork) form: the same annotate-both-forms rule as
  * routes/nav keeps the consumer's type stable whether or not an overlay is installed,
@@ -214,8 +225,35 @@ export type PremiumLocalStorageKeyPrefixes = string[];
  *
  * DATA, like `PremiumLocalStorageKeyPrefixes`: read straight out of package.json, so server-side
  * enforcement sees it without importing overlay code. Grants from several overlays are merged.
+ *
+ * An entry may also be an object, `{ "key": "<entitlement key>", "label": "...", "sessionHref": "..." }`,
+ * which grants `key` exactly as the bare string does and also says how the workspace is shown to a
+ * user who reaches it only through that key (see `PremiumWorkspaceGrantDisplay`). This table keeps
+ * only the keys; the display half lands in `premiumWorkspaceGrantDisplays.generated.ts`.
  */
 export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * How a workspace is named and opened for a user whose access to it comes through a copy grant: one
+ * who holds `key` but cannot use the workspace outright (`canUseSurface` is false). Without it that
+ * user sees the registry's label and link, which name a product they do not hold. Declared as the
+ * object form of a `workspaceCopyEntitlements` entry; everyone else keeps the registry's values.
+ */
+export interface PremiumWorkspaceGrantDisplay {
+  /** The granted entitlement key, lowercased. */
+  key: string;
+  /** Name shown for the workspace in the clone/fork/move menus and dialogs, in place of the registry label. */
+  label: string;
+  /**
+   * Same-origin path template with exactly one `{sessionId}` slot, e.g. `/route?session={sessionId}`,
+   * that opens a session for this user. Its path (before `?`) also stands in for the registry's
+   * `routePrefix` when checking the build ships the route. Omitted -> the registry's link.
+   */
+  sessionHref?: string;
+}
+
+/** Grant displays per registered workspace id, in declaration order; a user holding several gets the first. */
+export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly PremiumWorkspaceGrantDisplay[]>>;
 
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {
