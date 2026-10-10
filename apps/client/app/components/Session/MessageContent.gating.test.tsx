@@ -654,7 +654,16 @@ describe('MessageContent per-message credits-used chip - enforceCredits gating',
 
     renderMessageContent(creditsMessageData);
 
-    expect(screen.getByTestId('credits-used')).toBeInTheDocument();
+    expect(screen.getByTestId('credits-used')).toHaveTextContent('42 credits');
+  });
+
+  it('hides the chip when the user turned it off in their profile', () => {
+    mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: true }];
+    mocks.showCreditsUsed = false;
+
+    renderMessageContent(creditsMessageData);
+
+    expect(screen.queryByTestId('credits-used')).not.toBeInTheDocument();
   });
 
   it('hides the chip when enforceCredits is off, even with a credits value present', () => {

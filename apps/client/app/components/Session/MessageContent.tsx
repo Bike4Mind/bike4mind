@@ -68,6 +68,7 @@ import { Article as ArticleIcon } from '@mui/icons-material';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import EditIcon from '@mui/icons-material/Edit';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import { formatAnswerCost } from '@client/app/utils/formatCredits';
 import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
@@ -1343,10 +1344,10 @@ const MessageContent: React.FC<ContentProps> = memo(
             )}
 
             {adminSettings.enforceCredits &&
-            currentUser?.showCreditsUsed &&
+            currentUser?.showCreditsUsed !== false &&
             !isProcessingPrompt &&
-            messageData.creditsUsed !== undefined ? (
-              <Tooltip title={`Credits Used: ${messageData.creditsUsed ?? 0}`}>
+            typeof messageData.creditsUsed === 'number' ? (
+              <Tooltip title="Credits this answer used. You can hide this in your profile.">
                 <Chip
                   data-testid="credits-used"
                   size="sm"
@@ -1354,7 +1355,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                   sx={messageMetaChipSx}
                   startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
                 >
-                  {messageData.creditsUsed ?? 0}
+                  {formatAnswerCost(messageData.creditsUsed)}
                 </Chip>
               </Tooltip>
             ) : null}

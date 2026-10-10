@@ -160,13 +160,10 @@ const SubscriptionModalContent = () => {
         <br />
         <Box
           component="span"
-          sx={{
-            textDecoration: 'underline',
-            color: theme.palette.subscriptionModal.linkColor,
-            fontWeight: '500',
-          }}
+          data-testid="subscription-modal-starter-credits"
+          sx={{ color: theme.palette.subscriptionModal.linkColor, fontWeight: '500' }}
         >
-          {t('subscription_modal.no_free_tier')}
+          {t('subscription_modal.starter_credits')}
         </Box>{' '}
         {t('subscription_modal.credits_rollover')}
       </Typography>

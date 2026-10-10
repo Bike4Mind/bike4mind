@@ -90,6 +90,15 @@ describe('SubscriptionModal', () => {
     sessionStorage.clear();
   });
 
+  it('says every account starts with free credits rather than claiming there is no free tier', () => {
+    renderModal();
+
+    expect(screen.getByTestId('subscription-modal-starter-credits')).toHaveTextContent(
+      'subscription_modal.starter_credits'
+    );
+    expect(screen.queryByText(/no_free_tier/)).not.toBeInTheDocument();
+  });
+
   it('shows a delinquent plan as the current plan and lets the user cancel it', async () => {
     subscriptions = [subRow({ status: 'past_due' })];
 
