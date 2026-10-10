@@ -83,3 +83,36 @@ export function resolveFieldLimits(
   }
   return undefined;
 }
+
+const FILTER_COMBINATORS = new Set(['$and', '$or', '$nor']);
+
+/**
+ * Field paths in a subscription filter that touch a path `fieldLimits` withholds. A projection only
+ * hides a value from the payload; the filter still runs against the full document, so matching on
+ * a withheld field (a range on `recipients.pending`, say) would let a subscriber read it back one
+ * comparison at a time from which documents arrive. Two paths touch when either is a dotted prefix
+ * of the other, which also covers a literal sub-document or `$elemMatch` on a parent field.
+ */
+export function findWithheldFilterPaths(filter: unknown, fieldLimits: Record<string, boolean> | undefined): string[] {
+  const withheld = Object.entries(fieldLimits ?? {})
+    .filter(([, keep]) => !keep)
+    .map(([path]) => path);
+  if (!withheld.length) return [];
+
+  const touches = (path: string) =>
+    withheld.some(field => field === path || field.startsWith(`${path}.`) || path.startsWith(`${field}.`));
+  const found: string[] = [];
+  const walk = (node: unknown) => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (FILTER_COMBINATORS.has(key)) walk(value);
+      else if (!key.startsWith('$') && touches(key)) found.push(key);
+    }
+  };
+  walk(filter);
+  return found;
+}
