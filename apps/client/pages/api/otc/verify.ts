@@ -483,22 +483,24 @@ const handler = baseApi({ auth: false })
       type: AuthEvents.REGISTER,
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
-    // Credit the signup to the product the visitor came through, if any, and only with consent
-    // - see readConsentedAcquisitionTouches. Never throws.
-    //
-    // Awaited rather than fire-and-forget for the reason the OAuth callback sets out: a signup
-    // occurs once per account, so an emit lost to a freeze is lost permanently, and the wait is
-    // paid only by the signups that actually name a product.
-    await emitSignupForSourceProducts({
-      userId: newUser.id,
-      touches: readConsentedAcquisitionTouches(req),
-      method: 'otc',
-    });
-
     // Funnel floor (server/analytics/funnel.ts): keep the consented touches on the user so later
     // stages stay joinable to the door, then report the stages OTC completes in one step - the
     // code proved the email, and registerViaOTC plus the domain grant above seeded the credits.
     const signupFunnel = await recordSignupAcquisition({ req, user: newUser, method: 'otc' });
+    // Credit the signup to the product the visitor came through, if any, and only with consent
+    // - see readConsentedAcquisitionTouches. Never throws. Synthetic accounts are detected
+    // above so they never reach a signup conversion.
+    //
+    // Awaited rather than fire-and-forget for the reason the OAuth callback sets out: a signup
+    // occurs once per account, so an emit lost to a freeze is lost permanently, and the wait is
+    // paid only by the signups that actually name a product.
+    if (!signupFunnel.isSynthetic) {
+      await emitSignupForSourceProducts({
+        userId: newUser.id,
+        touches: readConsentedAcquisitionTouches(req),
+        method: 'otc',
+      });
+    }
     const funnelUser = { id: newUser.id, ...signupFunnel };
     await emitFunnelEvent({ user: funnelUser, event: 'email_verified', metadata: { method: 'otc' } });
     if ((newUser.currentCredits ?? 0) > 0) {

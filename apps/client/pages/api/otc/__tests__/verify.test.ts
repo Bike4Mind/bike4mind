@@ -164,6 +164,24 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     });
   });
 
+  it('keeps a synthetic account out of the signup conversion', async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: true });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).not.toHaveBeenCalled();
+  });
+
+  it('sends the signup conversion for a normal account', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
+  });
+
   it('reports no credits_granted when the signup seeded none', async () => {
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);

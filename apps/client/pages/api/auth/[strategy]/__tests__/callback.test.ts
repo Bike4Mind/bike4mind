@@ -208,6 +208,16 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     );
   });
 
+  it('keeps a synthetic new account out of the signup emit and the ad conversion fragment', async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: true });
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: touchCookie,
+    });
+
+    expect(mockEmitSignup).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).not.toMatch(/isNewUser=1/);
+  });
+
   it('sends nothing for a returning user', async () => {
     await runCallback(null, { id: 'u-old', isBanned: false }, undefined, { cookie: touchCookie });
 
