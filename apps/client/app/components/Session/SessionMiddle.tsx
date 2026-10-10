@@ -283,8 +283,8 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   const [historyLines] = useState<number>(INFINITE_VALUE);
   const liveAI = useAdvancedAISettings(state => state.liveAI);
   const { sendJsonMessage } = useWebsocket();
-  // Read-only hides the controls in MessageContent; these guards keep any remaining path
-  // (image edit, a stale menu, a programmatic call) from writing anyway.
+  // Read-only hides the controls in MessageContent and ImageContainer; these guards keep any
+  // remaining path (a stale menu, a programmatic call) from sending or mutating anyway.
   const readOnly = useSessionReadOnly();
 
   // useCallback is not enough here as it won't work when calling react query hooks

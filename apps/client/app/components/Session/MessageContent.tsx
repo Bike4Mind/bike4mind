@@ -991,7 +991,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             holds; it is only the "the turn you are still thinking about" part that weakens.
             Rendered here rather than inside either action row so the desktop/mobile branches below
             cannot drift into showing it twice or not at all. */}
-        {!isProcessingPrompt && isLastMessage && (
+        {!readOnly && !isProcessingPrompt && isLastMessage && (
           <AnswerFeedbackPrompt
             promptMeta={messageData.promptMeta}
             questId={isPersistedMessage ? messageData.id : undefined}

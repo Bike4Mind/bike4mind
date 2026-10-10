@@ -844,4 +844,15 @@ describe('MessageContent - read-only mode', () => {
     expect(screen.getByText('Toggle Code View')).toBeInTheDocument();
     expect(screen.getByText(/^Save as/)).toBeInTheDocument();
   });
+
+  it('shows no proactive report banner on a failing turn when read-only', () => {
+    const brokenTurn = {
+      ...persisted,
+      promptMeta: { functionCalls: [{ name: 'search_knowledge_base', success: false }] },
+    } as unknown as IChatHistoryItem;
+
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true, readOnly: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
 });
