@@ -168,7 +168,9 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
                   cancelInvite({
                     id: organizationId,
                     type: InviteType.Organization,
-                    email: user.email || undefined,
+                    // By id: the pending-users list carries no address for non-admins, and a cancel
+                    // naming nobody would cancel every open invite to the organization.
+                    userId: user.id,
                   }),
               })
             }

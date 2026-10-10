@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
-import { resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeFieldLimits';
+import { findWithheldFilterPaths, resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeFieldLimits';
 
 const opts = (overrides: Partial<FieldLimitOptions> = {}): FieldLimitOptions => ({
   questCollectionName: 'quests',
   organizationCollectionName: 'organizations',
+  inviteCollectionName: 'invites',
   ...overrides,
 });
 
@@ -96,5 +97,42 @@ describe('resolveFieldLimits', () => {
       stripeCustomerId: false,
       billingContact: false,
     });
+  });
+
+  it('drops invite recipients and the bearer token for a non-admin', () => {
+    expect(resolveFieldLimits('invites', opts())).toEqual({
+      token: false,
+      recipients: false,
+      typedRecipients: false,
+    });
+  });
+
+  it('keeps invite recipients for a platform admin but never the token', () => {
+    expect(resolveFieldLimits('invites', opts({ isPlatformAdmin: true }))).toEqual({ token: false });
+  });
+});
+
+describe('findWithheldFilterPaths', () => {
+  const inviteLimits = resolveFieldLimits('invites', opts());
+
+  it('names a filter path equal to, under, or above a withheld path', () => {
+    expect(findWithheldFilterPaths({ token: 'x' }, inviteLimits)).toEqual(['token']);
+    expect(findWithheldFilterPaths({ 'recipients.pending': 'x' }, inviteLimits)).toEqual(['recipients.pending']);
+    const questLimits = resolveFieldLimits('quests', opts());
+    expect(findWithheldFilterPaths({ promptMeta: {} }, questLimits)).toEqual(['promptMeta']);
+  });
+
+  it('walks $and/$or/$nor', () => {
+    expect(findWithheldFilterPaths({ $nor: [{ $and: [{ typedRecipients: 'x' }] }] }, inviteLimits)).toEqual([
+      'typedRecipients',
+    ]);
+  });
+
+  it('passes filters that touch nothing withheld, and every filter when nothing is withheld', () => {
+    expect(findWithheldFilterPaths({ documentId: 'd', type: 'Project', recipientsCount: 1 }, inviteLimits)).toEqual([]);
+    expect(findWithheldFilterPaths({ token: 'x' }, undefined)).toEqual([]);
+    expect(
+      findWithheldFilterPaths({ recipients: 'x' }, resolveFieldLimits('invites', opts({ isPlatformAdmin: true })))
+    ).toEqual([]);
   });
 });

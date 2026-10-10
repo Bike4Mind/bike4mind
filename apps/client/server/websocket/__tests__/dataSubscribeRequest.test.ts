@@ -44,7 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {},
   findModelByCollectionName: (...args: unknown[]) => mockFindModelByCollectionName(...args),
   Inbox: {},
-  Invite: {},
+  Invite: { collection: { collectionName: 'invites' } },
   mongoose: {},
   Organization: { collection: { collectionName: 'organizations' } },
   Project: {},
@@ -113,7 +113,8 @@ vi.mock('sst', () => ({
 }));
 
 import { func } from '../dataSubscribeRequest';
-import { User } from '@bike4mind/database';
+import { Project, User } from '@bike4mind/database';
+import { inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
 
 const baseEvent = (accessToken = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },
@@ -242,5 +243,63 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     expect(noopLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Dropping inclusion fields'), {
       fields: { reply: 1 },
     });
+  });
+});
+
+describe('dataSubscribeRequest WS handler - filters on withheld fields', () => {
+  const inviteEvent = (query: Record<string, unknown>) => ({
+    requestContext: { connectionId: 'conn-1' },
+    body: JSON.stringify({
+      action: 'subscribe_query',
+      accessToken: 'token-123',
+      subscriptionId: 'sub-1',
+      collectionName: 'invites',
+      query,
+      fields: {},
+      fetchInitialData: true,
+    }),
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'caller-1',
+      email: 'caller@example.test',
+      tokenVersion: undefined,
+    });
+    (Project as unknown as { find: unknown }).find = vi.fn(() => ({ distinct: vi.fn().mockResolvedValue([]) }));
+    mockQuerySubscriptionFindOneAndUpdate.mockResolvedValue({ id: 'sub-doc-1' });
+  });
+
+  it.each([
+    ['a range on a withheld array', { 'recipients.pending': { $elemMatch: { $gte: 'a', $lt: 'b' } } }],
+    ['the bearer token', { token: { $gte: 'a' } }],
+    ['a withheld field inside a combinator', { $or: [{ documentId: 'doc-1' }, { typedRecipients: 'x@y.test' }] }],
+    ['a literal parent sub-document', { recipients: { pending: ['x@y.test'], accepted: [], refused: [] } }],
+  ])('refuses a non-admin filter on %s before running or persisting it', async (_label, query) => {
+    const find = vi.fn();
+    mockFindModelByCollectionName.mockReturnValue({ find });
+
+    await expect(func(inviteEvent(query) as any, {} as any, noopLogger as any)).rejects.toThrow(
+      'Disallowed subscription filter'
+    );
+    expect(find).not.toHaveBeenCalled();
+    expect(mockQuerySubscriptionFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still accepts the filters the app sends', async () => {
+    const find = vi.fn().mockReturnValue({
+      setOptions: vi.fn().mockReturnValue({ getQuery: () => ({}), then: (r: (v: unknown[]) => void) => r([]) }),
+    });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+    vi.mocked(inviteSubscriptionScope).mockReturnValue({ $or: [] });
+
+    await func(inviteEvent({ documentId: 'doc-1', type: 'Project' }) as any, {} as any, noopLogger as any);
+
+    expect(find).toHaveBeenCalled();
+    expect(mockQuerySubscriptionFindOneAndUpdate).toHaveBeenCalled();
   });
 });

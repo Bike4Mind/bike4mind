@@ -94,6 +94,14 @@ export const InviteSchema = new Schema<IInviteDocument>(
       type: String,
       required: false,
     },
+    // See IBaseInvite.typedRecipients. `default: undefined` keeps it absent on legacy rows: a
+    // Mongoose array path otherwise defaults to [], which would read as "typed nothing" and make
+    // every legacy row look like a new one.
+    typedRecipients: {
+      type: [String],
+      required: false,
+      default: undefined,
+    },
     // Names nobody by design (a redeemable share link), as opposed to a named invite whose
     // recipients did not resolve. Absent on invites created before this field existed.
     isLinkOnly: {

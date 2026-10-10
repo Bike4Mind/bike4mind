@@ -33,4 +33,10 @@ describe('useCancelInvite', () => {
 
     expect(api.delete).toHaveBeenCalledWith(expectedUrl, { data: { email: 'a@b.test' } });
   });
+
+  it('forwards a userId so one recipient can be cancelled without knowing their address', async () => {
+    await (useCancelInvite({}) as any).mutationFn({ id: 'doc-1', type: InviteType.Organization, userId: 'user-1' });
+
+    expect(api.delete).toHaveBeenCalledWith('/api/Organization/doc-1/invites', { data: { userId: 'user-1' } });
+  });
 });

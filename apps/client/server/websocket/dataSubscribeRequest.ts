@@ -31,7 +31,7 @@ import pLimit from 'p-limit';
 import ability from '../auth/ability';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
-import { resolveFieldLimits } from './dataSubscribeFieldLimits';
+import { findWithheldFilterPaths, resolveFieldLimits } from './dataSubscribeFieldLimits';
 
 const HARD_LIMIT = 200;
 
@@ -171,9 +171,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const fieldLimits = resolveFieldLimits(collectionName, {
     questCollectionName: Quest.collection.collectionName,
     organizationCollectionName: Organization.collection.collectionName,
+    inviteCollectionName: Invite.collection.collectionName,
     isQuestOwner: isOwnQuestSession,
     isPlatformAdmin: !!user.isAdmin,
   });
+  const withheldFilterPaths = findWithheldFilterPaths(query, fieldLimits);
+  if (withheldFilterPaths.length) {
+    const error = new Error(`Disallowed subscription filter: ${withheldFilterPaths.join(', ')}`);
+    await notifySubscribeError(connectionId, endpoint, clientSubscriberId, error);
+    throw error;
+  }
 
   let scopedFields: undefined | Record<string, boolean | number> =
     (fields || fieldLimits) &&
