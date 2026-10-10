@@ -54,6 +54,10 @@ vi.mock('@server/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Admin-configurable team-plan knobs, pinned to their defaults (see server/services/teamPlanSettings).
+vi.mock('@server/services/teamPlanSettings', () => ({
+  getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
+}));
 vi.mock('@server/utils/cloudwatch', () => ({
   emitMetric: vi.fn().mockResolvedValue(undefined),
 }));
@@ -471,7 +475,14 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
   it('stores the campaign touches checkout recorded on the new subscription row', async () => {
     const sub = {
       ...buildUserSubscription('price_test_professional'),
-      metadata: { userId: 'u1', stage: 'test', ownerType: 'User', acq_first_source: 'widgets', acq_first_medium: 'teaser', acq_last_source: 'email' },
+      metadata: {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: 'User',
+        acq_first_source: 'widgets',
+        acq_first_medium: 'teaser',
+        acq_last_source: 'email',
+      },
     } as unknown as Stripe.Subscription;
 
     await handleUserSubscriptionInvoice(buildInvoice(), sub, metadata, logger);

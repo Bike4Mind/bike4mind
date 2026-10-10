@@ -8,10 +8,8 @@ import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Config } from '@server/utils/config';
-import {
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-} from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
 import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
@@ -53,9 +51,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       throw new BadRequestError('Organization has no active admin grant to convert');
     }
 
-    if (organization.seats < ORGANIZATION_SUBSCRIPTION_MIN_SEATS) {
+    const { minSeats } = await getTeamPlanSettings();
+    if (organization.seats < minSeats) {
       throw new BadRequestError(
-        `Org has ${organization.seats} seats; Stripe minimum is ${ORGANIZATION_SUBSCRIPTION_MIN_SEATS}. Adjust seats up before converting.`
+        `Org has ${organization.seats} seats; Stripe minimum is ${minSeats}. Adjust seats up before converting.`
       );
     }
 
@@ -108,7 +107,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           price: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
           quantity: organization.seats,
           // adjustable_quantity intentionally omitted (defaults to disabled).
-          // ORGANIZATION_SUBSCRIPTION_MAX_SEATS is enforced at admin endpoint
+          // The teamPlanMaxSeats ceiling is enforced at admin endpoint
           // boundaries; the convert endpoint above already gates seats >= MIN.
         },
       ],

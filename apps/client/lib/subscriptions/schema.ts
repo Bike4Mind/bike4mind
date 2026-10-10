@@ -1,7 +1,4 @@
-import {
-  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-} from '@client/lib/subscriptions/constants';
+import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { z } from 'zod';
 
@@ -36,12 +33,13 @@ export const OrgSubscriptionSubscribeSchema = z
     priceId: z.string(),
 
     /**
-     * Number of seats to subscribe to. Whole seats only, bounded by the platform
-     * min/max - this value flows into Stripe checkout line_items and into
-     * organization.seats at creation, so a non-integer or over-cap value must be
-     * rejected here rather than relying on Stripe to bounce it.
+     * Number of seats to subscribe to. Whole seats only - this value flows into Stripe checkout
+     * line_items and into organization.seats at creation, so a non-integer value must be rejected
+     * here rather than relying on Stripe to bounce it. The paid-plan floor/ceiling are admin
+     * settings (`teamPlanMinSeats` / `teamPlanMaxSeats`), so the subscribe handler checks them;
+     * this schema only holds the absolute rail.
      */
-    quantity: z.number().int().min(ORGANIZATION_SUBSCRIPTION_MIN_SEATS).max(ORGANIZATION_SUBSCRIPTION_MAX_SEATS),
+    quantity: z.number().int().min(1).max(TEAM_PLAN_SEATS_HARD_LIMIT),
 
     /**
      * The organization that is subscribing. If not provided, a new organization will be created.

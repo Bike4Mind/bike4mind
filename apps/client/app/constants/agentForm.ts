@@ -33,7 +33,8 @@ export const CREDIT_SOURCE = {
 
 export type CreditSource = (typeof CREDIT_SOURCE)[keyof typeof CREDIT_SOURCE];
 
-export const LOW_CREDITS_THRESHOLD = 1000;
+// Default only - the live value is the `lowCreditsThreshold` admin setting (useLowCreditsThreshold).
+export { LOW_CREDITS_THRESHOLD_DEFAULT as LOW_CREDITS_THRESHOLD } from '@bike4mind/common';
 
 export const GENDER_OPTIONS = [
   { value: 'male', label: 'Male' },

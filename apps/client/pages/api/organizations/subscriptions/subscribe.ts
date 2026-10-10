@@ -1,9 +1,5 @@
 import { BadRequestError } from '@bike4mind/utils';
-import {
-  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-} from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import { OrgSubscriptionSubscribeSchema, StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -16,6 +12,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
+import { assertSeatsWithinPlan, getTeamPlanSettings } from '@server/services/teamPlanSettings';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
@@ -27,6 +24,10 @@ const handler = baseApi()
     if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
     }
+
+    // Admin-configured paid-plan floor/ceiling (Admin -> Growth & Pricing).
+    const { minSeats: planMinSeats, maxSeats: planMaxSeats } = await getTeamPlanSettings();
+    assertSeatsWithinPlan(quantity, { minSeats: planMinSeats, maxSeats: planMaxSeats });
 
     // Restrict the Stripe success/cancel redirect to the deployed app origin. An
     // external callbackUrl is an open-redirect/phishing vector off Stripe's hosted
@@ -86,7 +87,7 @@ const handler = baseApi()
       }
     }
 
-    let minSeats = ORGANIZATION_SUBSCRIPTION_MIN_SEATS;
+    let minSeats = planMinSeats;
 
     let customerId: string | undefined;
     if (organization) {
@@ -99,10 +100,7 @@ const handler = baseApi()
 
       // Clamp at the ceiling so an over-cap org's checkout minimum can't exceed the maximum (#1424) -
       // without this, minimum > maximum makes Stripe reject the session and the self-serve checkout wedges.
-      minSeats = Math.min(
-        Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1),
-        ORGANIZATION_SUBSCRIPTION_MAX_SEATS
-      );
+      minSeats = Math.min(Math.max(planMinSeats, organization.users.length + 1), planMaxSeats);
     } else {
       const customer = await createCustomer({
         email: req.user.email!,
@@ -138,7 +136,7 @@ const handler = baseApi()
           adjustable_quantity: {
             enabled: true,
             minimum: minSeats,
-            maximum: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+            maximum: planMaxSeats,
           },
         },
       ],

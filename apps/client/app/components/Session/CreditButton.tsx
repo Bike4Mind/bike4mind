@@ -2,12 +2,14 @@ import { Typography, Tooltip, Button, useTheme, Box } from '@mui/joy';
 import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
 import { FC, useState, useMemo } from 'react';
 import CreditsModal from '../subscription/CreditsModal';
+import { LOW_CREDITS_THRESHOLD_DEFAULT } from '@bike4mind/common';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 
 /**
- * Threshold below which credits are considered "low".
- * Used by both CreditButton (visual warning state) and LowCreditsWarning (overlay prompt).
+ * Default threshold below which credits are considered "low". The live value is the
+ * `lowCreditsThreshold` admin setting - read it with `useLowCreditsThreshold()`.
  */
-export const LOW_CREDITS_THRESHOLD = 1000;
+export const LOW_CREDITS_THRESHOLD = LOW_CREDITS_THRESHOLD_DEFAULT;
 
 interface CreditsButtonProps {
   currentCredits?: number;
@@ -17,8 +19,9 @@ const SessionCreditsButton: FC<CreditsButtonProps> = ({ currentCredits = 0 }) =>
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
   const [isOpen, setIsOpen] = useState(false);
+  const lowCreditsThreshold = useLowCreditsThreshold();
 
-  const buttonColor = currentCredits <= 0 ? 'danger' : currentCredits < LOW_CREDITS_THRESHOLD ? 'warning' : 'neutral';
+  const buttonColor = currentCredits <= 0 ? 'danger' : currentCredits < lowCreditsThreshold ? 'warning' : 'neutral';
 
   const tooltipTitle = useMemo(() => {
     // Common message for low/no credits
@@ -26,12 +29,12 @@ const SessionCreditsButton: FC<CreditsButtonProps> = ({ currentCredits = 0 }) =>
 
     if (currentCredits <= 0) {
       return <CreditTooltipContent title="Ready for Refill" message={creditWarningMessage} />;
-    } else if (currentCredits < LOW_CREDITS_THRESHOLD) {
+    } else if (currentCredits < lowCreditsThreshold) {
       return <CreditTooltipContent title="Low on Credits!" message={creditWarningMessage} />;
     } else {
       return 'Credits';
     }
-  }, [currentCredits]);
+  }, [currentCredits, lowCreditsThreshold]);
 
   return (
     <>

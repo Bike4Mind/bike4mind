@@ -32,6 +32,12 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import {
+  ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+  TEAM_PLAN_SEATS_HARD_LIMIT,
+} from '../constants/organization';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -392,6 +398,10 @@ export const SettingKeySchema = z.enum([
   'allowOpenRegistration',
   'blockDisposableEmails',
   'defaultFreeCredits',
+  'teamPlanMinSeats',
+  'teamPlanMaxSeats',
+  'teamPlanCreditsPerSeat',
+  'lowCreditsThreshold',
 
   // GOOGLE CALENDAR SETTINGS
   'enableGoogleCalendar',
@@ -861,6 +871,9 @@ interface BaseSetting {
   /** What a `clearDeletesRow` setting resolves to while unset, shown by the admin UI in place of a value. */
   unsetLabel?: string;
 }
+
+/** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
+export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
 
 /**
  * "No stored choice", for a setting of ANY type (the scoped resolver applies this to every key, not
@@ -1908,6 +1921,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'enforceCredits', order: 2 },
       { key: 'billOperationalUsage', order: 3 },
       { key: 'enableTeamPlan', order: 4 },
+      { key: 'teamPlanMinSeats', order: 5 },
+      { key: 'teamPlanMaxSeats', order: 6 },
+      { key: 'teamPlanCreditsPerSeat', order: 7 },
+      { key: 'lowCreditsThreshold', order: 8 },
     ],
   },
   KNOWLEDGE: {
@@ -3163,6 +3180,59 @@ export const settingsMap = {
     defaultValue: 0,
     description:
       'Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup — an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this — their hard ceiling of real model cost is roughly credits ÷ 1500 USD.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  teamPlanMinSeats: makeNumberSetting({
+    key: 'teamPlanMinSeats',
+    // Read by the create-team and billing UIs for non-admin org owners.
+    userReadable: true,
+    name: 'Team Plan Minimum Seats',
+    defaultValue: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+    int: true,
+    min: 1,
+    max: TEAM_PLAN_SEATS_HARD_LIMIT,
+    description:
+      'Fewest seats a paid team subscription can be bought with. Enforced at checkout, on seat changes from Stripe and on admin conversion to paid. Admin grants may still go down to 1. If set above the maximum seats, the maximum wins.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  teamPlanMaxSeats: makeNumberSetting({
+    key: 'teamPlanMaxSeats',
+    userReadable: true,
+    name: 'Team Plan Maximum Seats',
+    defaultValue: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+    int: true,
+    min: 1,
+    max: TEAM_PLAN_SEATS_HARD_LIMIT,
+    description:
+      'Most seats any team can hold (owner + members + pending invites). Enforced at checkout, on every seat change, on admin grants and on the partner-signup auto-raise. Lowering it below a team that is already larger does not remove anyone; that team can only be set down to this cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  teamPlanCreditsPerSeat: makeNumberSetting({
+    key: 'teamPlanCreditsPerSeat',
+    name: 'Team Plan Credits Per Seat',
+    defaultValue: ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits added to a team pool per paid seat each billing cycle (and per seat-month on admin team grants). Applies to invoices issued after the change; credits already granted are not adjusted.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  lowCreditsThreshold: makeNumberSetting({
+    key: 'lowCreditsThreshold',
+    // The credit chip and low-credit warnings read this for every signed-in user.
+    userReadable: true,
+    name: 'Low Credit Warning Threshold',
+    defaultValue: LOW_CREDITS_THRESHOLD_DEFAULT,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Below this many credits a user sees the low-credit warning state. Set to 0 to show warnings only once credits run out.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

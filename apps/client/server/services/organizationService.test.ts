@@ -30,6 +30,11 @@ vi.mock('@bike4mind/database', async () => {
   };
 });
 
+const mockGetTeamPlanSettings = vi.hoisted(() =>
+  vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 }))
+);
+vi.mock('@server/services/teamPlanSettings', () => ({ getTeamPlanSettings: mockGetTeamPlanSettings }));
+
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveSubscriptionsByOwner: vi.fn(),
@@ -222,6 +227,17 @@ describe('organizationService', () => {
       (organizationRepository.findById as any).mockResolvedValue(org);
       await expect(setSeats('org1', 3, { type: 'stripe' })).rejects.toThrow(/Minimum required seats: 4/);
       expect(organizationRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('enforces the admin-configured teamPlanMinSeats/teamPlanMaxSeats instead of the constants', async () => {
+      mockGetTeamPlanSettings.mockResolvedValueOnce({ minSeats: 2, maxSeats: 6, creditsPerSeat: 50000 });
+      (organizationRepository.findById as any).mockResolvedValue(orgFixture({ seats: 4, users: [] }));
+      (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([]);
+      // Below the old constant floor of 4, but within the configured floor of 2.
+      await expect(setSeats('org1', 2, { type: 'stripe' })).resolves.toBeDefined();
+
+      mockGetTeamPlanSettings.mockResolvedValueOnce({ minSeats: 2, maxSeats: 6, creditsPerSeat: 50000 });
+      await expect(setSeats('org1', 7, { type: 'admin', userId: 'a1' })).rejects.toThrow(/Seats cannot exceed 6/);
     });
 
     it('rejects a reduction that would shrink below accepted members + pending invites', async () => {

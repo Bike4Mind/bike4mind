@@ -8,11 +8,9 @@ import {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
 import { organizationService, creditService } from '@bike4mind/services';
-import { ApiKeyScope, CreditHolderType, dayjs } from '@bike4mind/common';
-import {
-  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
-  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-} from '@client/lib/subscriptions/constants';
+import { ApiKeyScope, CreditHolderType, dayjs, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -35,7 +33,8 @@ const MAX_INITIAL_CREDITS = 10_000_000;
 const GrantOrgSchema = z.object({
   name: z.string().min(1).max(120),
   ownerEmail: z.string().email(),
-  seats: z.number().int().min(1).max(ORGANIZATION_SUBSCRIPTION_MAX_SEATS),
+  // Absolute rail; the configured teamPlanMaxSeats ceiling is checked in the handler.
+  seats: z.number().int().min(1).max(TEAM_PLAN_SEATS_HARD_LIMIT),
   initialCredits: z.number().int().min(0).max(MAX_INITIAL_CREDITS),
   reason: z.string().min(1).max(500),
 });
@@ -51,6 +50,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     }
 
     const { name, ownerEmail, seats, initialCredits, reason } = GrantOrgSchema.parse(req.body);
+    const { maxSeats } = await getTeamPlanSettings();
+    if (seats > maxSeats) {
+      throw new BadRequestError(`Seats cannot exceed ${maxSeats}`);
+    }
 
     const owner = await userRepository.findByEmail(ownerEmail);
     if (!owner) {

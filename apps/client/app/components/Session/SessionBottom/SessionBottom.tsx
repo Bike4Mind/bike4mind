@@ -67,7 +67,7 @@ import { LexicalChatInput, LexicalChatInputRef } from '../LexicalChatInput';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import { NoModelsWarning, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
-import { LOW_CREDITS_THRESHOLD } from '../CreditButton';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { getComposerCreditUi } from './composerCreditUi';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useMcpServerSync } from './useMcpServerSync';
@@ -255,13 +255,14 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   // Out of credits replaces the message box outright (see CreditsWarning); only the
   // low-credits notice still overlays it, so only that one needs the box to hold its height.
+  const lowCreditsThreshold = useLowCreditsThreshold();
   const creditUi = getComposerCreditUi({
     enforceCredits,
     effectiveCredits,
     exhaustedByVoice: creditsExhaustedByVoice,
     hasModels,
     lowWarningDismissed: lowCreditsWarningDismissed,
-    lowThreshold: LOW_CREDITS_THRESHOLD,
+    lowThreshold: lowCreditsThreshold,
   });
 
   // FilePond expects the max file size as an MB string, e.g. '100MB'

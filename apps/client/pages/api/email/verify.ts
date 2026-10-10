@@ -209,7 +209,14 @@ const handler = baseApi({ auth: false })
         try {
           const result = await organizationService.applyPartnerRuleMembership(
             { userId: userBeforeVerify.id, organizationId: partnerOrganizationId },
-            { db: { users: userRepository, organizations: organizationRepository }, logger: req.logger }
+            {
+              db: {
+                users: userRepository,
+                organizations: organizationRepository,
+                adminSettings: adminSettingsRepository,
+              },
+              logger: req.logger,
+            }
           );
           if (result.added) {
             req.logger.info(

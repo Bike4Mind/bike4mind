@@ -4,10 +4,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { stripe } from '@server/integrations/stripe/stripe';
 import { z } from 'zod';
-import {
-  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-} from '@client/lib/subscriptions/constants';
+import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import dayjs from 'dayjs';
@@ -17,19 +14,22 @@ import {
   validateSeatChange,
   resolveSubscriptionSource,
 } from '@server/services/organizationService';
+import { assertSeatsWithinPlan, getTeamPlanSettings } from '@server/services/teamPlanSettings';
 
 const UpdateSeatsSchema = z.object({
   organizationId: z.string(),
-  // Whole seats only, within platform bounds. validateSeatChange re-checks the floor
-  // against team size and the ceiling, but only for finite integers - keep the .int()
-  // and .max() here so a fractional or over-cap value is rejected before Stripe.
-  seats: z.number().int().min(ORGANIZATION_SUBSCRIPTION_MIN_SEATS).max(ORGANIZATION_SUBSCRIPTION_MAX_SEATS),
+  // Whole seats only. The admin-configured floor/ceiling are checked in the handler (they are
+  // settings, not static bounds); the hard rail here still rejects a fractional or absurd value
+  // before anything else runs.
+  seats: z.number().int().min(1).max(TEAM_PLAN_SEATS_HARD_LIMIT),
 });
 
 const handler = baseApi()
   .use(requireStripeWebhook())
   .post(async (req, res) => {
     const { organizationId, seats } = UpdateSeatsSchema.parse(req.body);
+    const teamPlan = await getTeamPlanSettings();
+    assertSeatsWithinPlan(seats, teamPlan);
 
     const organization = await organizationRepository.findById(organizationId);
     if (!organization) throw new NotFoundError('Organization not found');
@@ -61,7 +61,7 @@ const handler = baseApi()
     // without this, a customer can shrink below accepted+pending and pending
     // acceptances fail later with "org full".
     const pendingInviteCount = await countPendingOrganizationInvites(organization.id);
-    validateSeatChange(organization, seats, { type: 'stripe' }, pendingInviteCount);
+    validateSeatChange(organization, seats, { type: 'stripe' }, pendingInviteCount, teamPlan);
 
     const subscriptions = await stripe.subscriptions.list({
       customer: organization.stripeCustomerId,
@@ -93,7 +93,7 @@ const handler = baseApi()
     return res.status(200).json({
       seats,
       currentTeamSize,
-      minimumRequiredSeats: Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, currentTeamSize),
+      minimumRequiredSeats: Math.max(teamPlan.minSeats, currentTeamSize),
       nextBillingDate: dayjs.unix(updatedItem.current_period_end).format(),
       proration: {
         amount: updatedItem.price.unit_amount ? (updatedItem.quantity! * updatedItem.price.unit_amount) / 100 : null,
