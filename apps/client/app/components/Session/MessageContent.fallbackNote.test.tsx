@@ -64,7 +64,7 @@ vi.mock('@client/app/components/Session/PromptMetaInspector', () => {
   return { usePromptMetaInspector: (selector: (s: typeof state) => unknown) => selector(state) };
 });
 vi.mock('@client/app/hooks/useSubscribeChatCompletion', () => ({ useSubscribeChatCompletion: vi.fn() }));
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn(), useLocation: () => '/' }));
 vi.mock('@client/app/utils/fabFileUtils', () => ({ saveToFileAndWorkbench: vi.fn() }));
 vi.mock('@client/app/utils/publishApi', () => ({ replyPublisher: vi.fn(() => vi.fn()) }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({

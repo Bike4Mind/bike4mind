@@ -53,6 +53,10 @@ export interface PremiumRouteDescriptor {
    * repo does not register is inert. Matched against the route's `path`, where a `$param` segment
    * stands for any one segment. `partitionPremiumRoutes` throws when it is set without `appShell`,
    * since only the notebook layout has a sidebar to draw the list in.
+   *
+   * A fork or move made on this route that lands in that workspace opens on this route too, with
+   * the query its registry link carries (see `workspaceSessionHref`), so declare it only on a route
+   * that reads the same query.
    */
   hostsWorkspace?: string;
   /**

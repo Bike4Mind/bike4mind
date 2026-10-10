@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { WORKSPACE_SURFACES } from '@bike4mind/common';
-import { hostedWorkspaceAt, matchesRoutePath } from './premiumHostedWorkspace';
+import { hostedWorkspaceAt, matchesRoutePath, workspaceSessionHref } from './premiumHostedWorkspace';
 
 // Found by shape rather than by name, so these cases follow whichever workspace the registry carries.
 const workspace = WORKSPACE_SURFACES.find(surface => surface.id !== null);
@@ -56,5 +56,49 @@ describe('hostedWorkspaceAt', () => {
   it('returns null on the main list routes and anywhere else', () => {
     expect(hostedWorkspaceAt('/notebooks/abc', [])).toBeNull();
     expect(hostedWorkspaceAt(`${workspace.routePrefix}/sub`, [])).toBeNull();
+  });
+});
+
+describe('workspaceSessionHref', () => {
+  const queryShaped = {
+    ...workspace,
+    sessionHref: (id: string) => `${workspace.routePrefix}?view=board&session=${id}`,
+  };
+  const hosting = [{ path: '/hub/$view', appShell: true, hostsWorkspace: ID }];
+
+  it('keeps the query shape on the current page when that page hosts the workspace', () => {
+    expect(workspaceSessionHref(queryShaped, 'a b', '/hub/plan', hosting)).toBe('/hub/plan?view=board&session=a b');
+  });
+
+  it("uses the workspace's link on a page that hosts another workspace or none", () => {
+    const other = [{ path: '/hub/$view', appShell: true, hostsWorkspace: 'not-registered' }];
+
+    expect(workspaceSessionHref(queryShaped, 's1', '/hub/plan', other)).toBe(queryShaped.sessionHref('s1'));
+    expect(workspaceSessionHref(queryShaped, 's1', '/elsewhere', hosting)).toBe(queryShaped.sessionHref('s1'));
+  });
+
+  it('ignores a hosting route outside the app shell', () => {
+    const bare = [{ path: '/hub/$view', hostsWorkspace: ID }];
+
+    expect(workspaceSessionHref(queryShaped, 's1', '/hub/plan', bare)).toBe(queryShaped.sessionHref('s1'));
+  });
+
+  it("does not rewrite a presented link onto the workspace's own route", () => {
+    const presented = { ...workspace, sessionHref: (id: string) => `/desk?session=${id}` };
+
+    expect(workspaceSessionHref(presented, 's1', workspace.routePrefix, hosting)).toBe('/desk?session=s1');
+  });
+
+  it('keeps a link that carries the id in its path', () => {
+    const pathShaped = { ...workspace, sessionHref: (id: string) => `/desk/${id}?tab=chat` };
+
+    expect(workspaceSessionHref(pathShaped, 's1', '/hub/plan', hosting)).toBe('/desk/s1?tab=chat');
+  });
+
+  it('never rewrites the main notebook list', () => {
+    const main = WORKSPACE_SURFACES.find(surface => surface.id === null);
+    if (!main) throw new Error('expected the main notebook list');
+
+    expect(workspaceSessionHref(main, 's1', '/hub/plan', hosting)).toBe(main.sessionHref('s1'));
   });
 });

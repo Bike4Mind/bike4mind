@@ -60,7 +60,7 @@ import ShareDocumentModal from '@client/app/components/common/ShareModal';
 import SessionRenameInput from '@client/app/components/Session/RenameInput';
 import { userCanDeleteDoc, userCanShareDoc, userCanUpdateDoc } from '@client/app/utils/userPermission';
 import clsx from 'clsx';
-import { useNavigate } from '@tanstack/react-router';
+import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import { useProjectAddToModal } from '@client/app/components/Project/ProjectAddToModal';
@@ -74,6 +74,8 @@ import { useTriggerProactiveMessages } from '@client/app/hooks/data/agentProacti
 import { useSessionUnreadCount } from '@client/app/hooks/useUnreadProactiveMessages';
 import { green, greenAlpha } from '@client/app/utils/themes/colors';
 import { useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
+import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
+import { workspaceSessionHref } from '@client/app/utils/premiumHostedWorkspace';
 import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
 import MoveSessionConfirmModal from '@client/app/components/Session/MoveSessionConfirmModal';
 
@@ -151,6 +153,7 @@ const SessionSidenavItem: FC<{
   const [isTextTruncated, setIsTextTruncated] = useState(false);
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const pathname = useLocation({ select: location => location.pathname });
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const isFavorite = useMemo(
     () => favoriteSessions.some(favSession => favSession.id === session.id),
@@ -240,12 +243,12 @@ const SessionSidenavItem: FC<{
     try {
       await moveSession.mutateAsync({ sessionId: session.id, targetSurface: pendingMove.id });
       // The open notebook just left the workspace being viewed: follow it to its new home.
-      if (isSelected) navigate({ href: pendingMove.sessionHref(session.id) });
+      if (isSelected) navigate({ href: workspaceSessionHref(pendingMove, session.id, pathname, premiumRoutes) });
     } catch {
       // useMoveSession already reports the failure.
     }
     setPendingMove(null);
-  }, [pendingMove, moveSession, session.id, isSelected, navigate]);
+  }, [pendingMove, moveSession, session.id, isSelected, navigate, pathname]);
 
   const handleMoveCancel = useCallback(() => setPendingMove(null), []);
 
