@@ -15,6 +15,7 @@ import {
   useUpdateSessionTags,
 } from '@client/app/hooks/data/sessions';
 import { useJobStatus } from '@client/app/hooks/useJobStatus';
+import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { ISessionDocument, ISessionFavoriteItem, InviteType, type WorkspaceSurface } from '@bike4mind/common';
 import { AUTO_TITLE_PENDING_WINDOW_MS, formatSessionTitle, getPendingTitleLabel } from '@client/app/utils/sessionTitle';
@@ -169,7 +170,13 @@ const SessionSidenavItem: FC<{
   // `now` is state so the row re-renders when the pending window closes; otherwise a session
   // whose auto-title never lands would show the placeholder until the row remounts.
   const [now, setNow] = useState(() => Date.now());
-  const pendingTitleLabel = getPendingTitleLabel(session.name, session.firstCreated, now);
+  // Auto-naming runs off the first prompt, so an empty notebook from New keeps its default name.
+  // sawPrompt bridges the gap between the stream ending and the new title (or lastUsedModel) landing.
+  const isPromptInFlight = useStreamingState(s => s.sessions.has(session.id));
+  const [sawPrompt, setSawPrompt] = useState(false);
+  if (isPromptInFlight && !sawPrompt) setSawPrompt(true);
+  const hasPrompt = isPromptInFlight || sawPrompt || !!session.lastUsedModel || (session.messageCount ?? 0) > 0;
+  const pendingTitleLabel = hasPrompt ? getPendingTitleLabel(session.name, session.firstCreated, now) : null;
   useEffect(() => {
     if (!pendingTitleLabel || !session.firstCreated) return;
     const closesIn = new Date(session.firstCreated).getTime() + AUTO_TITLE_PENDING_WINDOW_MS - Date.now();

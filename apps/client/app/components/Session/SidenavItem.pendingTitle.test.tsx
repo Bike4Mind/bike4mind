@@ -65,6 +65,7 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 }));
 
 import SidenavItem from './SidenavItem';
+import { useStreamingState } from '@client/app/hooks/useStreamingState';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -78,22 +79,52 @@ describe('SidenavItem - pending auto-title label', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+    act(() => useStreamingState.getState().resetStreaming('session-1'));
   });
 
-  it('drops the placeholder when the window closes even if the title never lands', () => {
-    const session = {
+  const freshSession = (extra: Partial<ISessionDocument> = {}) =>
+    ({
       id: 'session-1',
       name: 'New Notebook',
       userId: 'user-1',
       users: [],
       firstCreated: new Date(Date.now() - 60_000),
-    } as unknown as ISessionDocument;
+      ...extra,
+    }) as unknown as ISessionDocument;
 
+  const renderItem = (session: ISessionDocument) =>
     render(
       <TestWrapper>
         <SidenavItem session={session} />
       </TestWrapper>
     );
+
+  it('keeps the default name on an empty notebook, which is never auto-named', () => {
+    renderItem(freshSession({ messageCount: 0 }));
+
+    expect(screen.queryByText('Naming chat...')).not.toBeInTheDocument();
+    expect(screen.getByText('New Notebook')).toBeInTheDocument();
+  });
+
+  it('shows the placeholder once a first prompt is in flight, and keeps it after the stream ends', () => {
+    renderItem(freshSession());
+    expect(screen.queryByText('Naming chat...')).not.toBeInTheDocument();
+
+    act(() => useStreamingState.getState().startStreaming('session-1'));
+    expect(screen.getByText('Naming chat...')).toBeInTheDocument();
+
+    // The title lands after the reply, so the end of the stream alone must not drop the label.
+    act(() => useStreamingState.getState().completeStreaming('session-1'));
+    expect(screen.getByText('Naming chat...')).toBeInTheDocument();
+  });
+
+  it('shows the placeholder for a notebook that already has a message', () => {
+    renderItem(freshSession({ messageCount: 1 }));
+    expect(screen.getByText('Naming chat...')).toBeInTheDocument();
+  });
+
+  it('drops the placeholder when the window closes even if the title never lands', () => {
+    renderItem(freshSession({ lastUsedModel: 'some-model' }));
     expect(screen.getByText('Naming chat...')).toBeInTheDocument();
 
     act(() => {
