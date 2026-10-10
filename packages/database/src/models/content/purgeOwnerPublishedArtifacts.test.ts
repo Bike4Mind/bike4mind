@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { Annotation } from './AnnotationModel';
@@ -100,6 +100,21 @@ describe('purgeOwnerPublishedArtifacts', () => {
 
     const third = await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
     expect(third).toEqual({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+  });
+
+  it('leaves the artifacts live when the child sweep fails, so a re-run finishes the job', async () => {
+    const a = await makeArtifact('owner1');
+    await seedChildren(a.publicId);
+    const spy = vi.spyOn(Annotation, 'updateMany').mockRejectedValueOnce(new Error('boom'));
+
+    await expect(purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' })).rejects.toThrow('boom');
+    spy.mockRestore();
+    expect(await PublishedArtifact.countDocuments({ ownerId: 'owner1', deletedAt: null })).toBe(1);
+
+    const retry = await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
+    expect(retry.artifacts.map(x => x.publicId)).toEqual([a.publicId]);
+    expect(await Annotation.countDocuments({ publicId: a.publicId, deletedAt: null })).toBe(0);
+    expect(await PublishedArtifact.countDocuments({ ownerId: 'owner1', deletedAt: null })).toBe(0);
   });
 
   it('is a no-op for a user who never published', async () => {
