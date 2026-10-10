@@ -8,7 +8,7 @@
 export { formatSessionTitle } from '@bike4mind/common';
 
 const DEFAULT_SESSION_NAME = 'New Notebook';
-const AUTO_TITLE_PENDING_WINDOW_MS = 2 * 60 * 1000;
+export const AUTO_TITLE_PENDING_WINDOW_MS = 2 * 60 * 1000;
 
 /**
  * Returns an in-progress label while a freshly created session still carries the
