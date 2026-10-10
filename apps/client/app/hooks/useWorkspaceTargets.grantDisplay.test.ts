@@ -30,6 +30,7 @@ vi.mock('@client/app/premium-generated/premiumWorkspaceGrantDisplays.generated',
 }));
 
 import { WORKSPACE_SURFACES, type SurfaceAccessUser } from '@bike4mind/common';
+import { NEUTRAL_WORKSPACE_LABEL } from '@client/app/utils/workspaceLabels';
 import {
   presentWorkspace,
   surfaceRouteExists,
@@ -102,9 +103,16 @@ describe('presentWorkspace', () => {
     expect(presentWorkspace(gated, { ...grantHolder(), isAdmin: true }, displays)).toBe(gated);
   });
 
-  it('leaves the workspace as registered when no display matches a held key', () => {
-    expect(presentWorkspace(gated, grantHolder(['second:pro']), displays)).toBe(gated);
-    expect(presentWorkspace(gated, grantHolder(), {})).toBe(gated);
+  it('shows the neutral label, with the registry link, when no display matches a held key', () => {
+    for (const shown of [
+      presentWorkspace(gated, grantHolder(['second:pro']), displays),
+      presentWorkspace(gated, grantHolder(), {}),
+      presentWorkspace(gated, grantHolder([]), displays),
+    ]) {
+      expect(shown.label).toBe(NEUTRAL_WORKSPACE_LABEL);
+      expect(shown.routePrefix).toBe(gated.routePrefix);
+      expect(shown.sessionHref('s1')).toBe(gated.sessionHref('s1'));
+    }
   });
 
   it('uses the first declared display the user holds', () => {
@@ -138,6 +146,14 @@ describe('useWorkspaceTargets and useWorkspacePresenter with grant displays', ()
     expect(result.current.current?.label).toBe('Partner Desk');
     expect(result.current.copyTargets.map(surface => surface.label)).toEqual(['Partner Desk', main.label]);
     expect(result.current.moveTargets.map(surface => surface.label)).toEqual([main.label]);
+  });
+
+  it('names the current workspace neutrally for a grant holder with no declared display', () => {
+    h.displays = {};
+    const { result } = renderHook(() => useWorkspaceTargets({ userId: 'user-1', surface: GATED }));
+
+    expect(result.current.current?.label).toBe(NEUTRAL_WORKSPACE_LABEL);
+    expect(result.current.copyTargets.map(surface => surface.label)).toEqual([NEUTRAL_WORKSPACE_LABEL, main.label]);
   });
 
   it("shows the registry label to a holder of the workspace's own key", () => {

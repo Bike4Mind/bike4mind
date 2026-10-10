@@ -1,6 +1,7 @@
 import type { WorkspaceSurface } from '@bike4mind/common';
 import { Box, Button, DialogContent, DialogTitle, List, ListItem, Modal, ModalDialog, Typography } from '@mui/joy';
 import { FC } from 'react';
+import { NEUTRAL_WORKSPACE_LABEL } from '@client/app/utils/workspaceLabels';
 
 /** Confirms moving a notebook between workspaces, spelling out what the move changes. */
 const MoveSessionConfirmModal: FC<{
@@ -13,7 +14,8 @@ const MoveSessionConfirmModal: FC<{
   onCancel: () => void;
 }> = ({ open, sessionName, from, to, loading = false, onConfirm, onCancel }) => {
   if (!to) return null;
-  const fromLabel = from?.label ?? 'this workspace';
+  // Mid-sentence, so the neutral label (a workspace the user cannot use) reads in lower case.
+  const fromLabel = !from || from.label === NEUTRAL_WORKSPACE_LABEL ? 'this workspace' : from.label;
   return (
     <Modal open={open} onClose={() => !loading && onCancel()}>
       <ModalDialog data-testid="move-session-modal" sx={{ maxWidth: '440px', gap: '16px' }}>

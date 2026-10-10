@@ -14,6 +14,7 @@ import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.gener
 import { premiumWorkspaceCopyEntitlements } from '@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generated';
 import { premiumWorkspaceGrantDisplays } from '@client/app/premium-generated/premiumWorkspaceGrantDisplays.generated';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
+import { NEUTRAL_WORKSPACE_LABEL } from '@client/app/utils/workspaceLabels';
 
 // A product surface ships only in builds that carry its route; offering one without it dead-ends.
 export const surfaceRouteExists = (surface: WorkspaceSurface): boolean =>
@@ -22,10 +23,10 @@ export const surfaceRouteExists = (surface: WorkspaceSurface): boolean =>
 const SESSION_ID_SLOT = '{sessionId}';
 
 /**
- * `surface` as `user` should see it. A user who can use the workspace, or who holds no grant for it
- * that declares a display, gets the registry entry untouched. One whose only way in is a copy grant
- * gets the label (and, when declared, the link and route) of the first displayed grant they hold, so
- * menus and dialogs never name a product that user does not have.
+ * `surface` as `user` should see it. A user who can use the workspace gets the registry entry
+ * untouched. One who cannot gets the label (and, when declared, the link and route) of the first
+ * displayed grant they hold, or else `NEUTRAL_WORKSPACE_LABEL` with the registry link, so menus and
+ * dialogs never name a product that user does not have.
  */
 export function presentWorkspace(
   surface: WorkspaceSurface,
@@ -35,7 +36,7 @@ export function presentWorkspace(
   if (surface.id === null || canUseSurface(user, surface.id)) return surface;
   const held = new Set((user.entitlements ?? []).map(key => key.trim().toLowerCase()));
   const display = displays[surface.id]?.find(entry => held.has(entry.key.trim().toLowerCase()));
-  if (!display) return surface;
+  if (!display) return { ...surface, label: NEUTRAL_WORKSPACE_LABEL };
   const template = display.sessionHref;
   if (!template) return { ...surface, label: display.label };
   return {
