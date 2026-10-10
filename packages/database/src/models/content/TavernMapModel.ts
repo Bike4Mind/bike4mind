@@ -7,8 +7,8 @@ const ModelName = 'TavernMap';
 // ---------------------------------------------------------------------------
 
 /**
- * Custom map dimension bounds (tiles). Max is bounded by TavernWorld MAX_COORD=159
- * (coords 0..159 -> up to 160 tiles per axis). Maps are rectangular: width and
+ * Custom map dimension bounds (tiles). MAX_MAP_DIM also sets the TavernWorld edit-key
+ * coordinate cap (MAX_COORD = MAX_MAP_DIM - 1). Maps are rectangular: width and
  * height are chosen independently.
  */
 export const MIN_MAP_DIM = 4;

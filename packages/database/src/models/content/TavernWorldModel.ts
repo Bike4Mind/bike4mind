@@ -1,5 +1,6 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
 import { randomUUID } from 'crypto';
+import { MAX_MAP_DIM } from './TavernMapModel';
 
 const ModelName = 'TavernWorld';
 
@@ -92,7 +93,8 @@ const MAX_HISTORY_ENTRIES = 500;
 const MAX_BATCH_SIZE = 2000;
 
 const VALID_LAYERS = new Set(['ground', 'walls', 'structures', 'furniture', 'decoration']);
-const MAX_COORD = 159;
+// Coords are 0-based, so the largest map's last tile is the highest a key may address.
+const MAX_COORD = MAX_MAP_DIM - 1;
 
 // ---------------------------------------------------------------------------
 // Helpers
