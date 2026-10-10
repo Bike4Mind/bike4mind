@@ -1,7 +1,8 @@
-import { InviteType, IProjectDocument, Permission } from '@bike4mind/common';
+import { grantablePermissions, heldPermissions, InviteType, IProjectDocument, Permission } from '@bike4mind/common';
 import { FC, useState, useCallback, useMemo } from 'react';
 import { useShareDocument } from '@client/app/hooks/data/invites';
 import { useGetUsers } from '@client/app/hooks/data/user';
+import { useUser } from '@client/app/contexts/UserContext';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import AddIcon from '@mui/icons-material/Add';
 import { useQueryClient } from '@tanstack/react-query';
@@ -20,17 +21,25 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
   const [search, setSearch] = useState('');
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const queryClient = useQueryClient();
+  const { currentUser } = useUser();
+  const userGroups = useMemo(() => currentUser?.groups ?? [], [currentUser?.groups]);
+
+  // Same rule the server applies to minting a project invite and to the picker's pendingInvite
+  // flag (shareable.findShareAccessById): owner, users[].share, or groups[].share.
+  const canShare = heldPermissions(project, ownerId, userGroups).has(Permission.share);
 
   const params: IGetUsersParams = useMemo(
     () => ({ search, page: 1, limit: 10, publicView: true, pendingInviteProjectId: project.id }),
     [search, project.id]
   );
-  const { data, isFetching } = useGetUsers(params, { enabled: search.length >= 3 });
+  const { data, isFetching } = useGetUsers(params, { enabled: canShare && search.length >= 3 });
 
-  const [permissions] = useState<{ value: Permission[]; error?: string | null }>({
-    value: [Permission.read, Permission.update],
-    error: null,
-  });
+  // createInvite refuses a grant the inviter does not hold, so a share-holder without update
+  // invites with read only rather than failing outright.
+  const permissions = useMemo(() => {
+    const grantable = grantablePermissions(project, ownerId, userGroups);
+    return [Permission.read, Permission.update].filter(permission => grantable.has(permission));
+  }, [project, ownerId, userGroups]);
 
   const shareDocument = useShareDocument({
     onSuccess: () => {
@@ -55,11 +64,11 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
           recipients: [id],
           id: project.id,
           type: InviteType.Project,
-          permissions: permissions.value,
+          permissions,
         });
       });
     },
-    [project.id, permissions.value, shareDocument]
+    [project.id, permissions, shareDocument]
   );
 
   const alreadyInvitedUsers = useMemo(() => {
@@ -98,8 +107,7 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
     [getInviteStatus]
   );
 
-  // Only show the modal button if the current user is the owner
-  if (ownerId !== project.userId) {
+  if (!canShare) {
     return null;
   }
 

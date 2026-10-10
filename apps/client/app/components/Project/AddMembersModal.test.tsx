@@ -7,7 +7,10 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   params: undefined as unknown,
   users: [] as Array<Record<string, unknown>>,
+  currentUser: { id: 'owner-id', groups: [] as string[] } as { id: string; groups: string[] } | null,
 }));
+
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetUsers: (params: unknown) => {
@@ -67,11 +70,15 @@ vi.mock('../common/UserCard', () => ({
 import ProjectAddMembersModal from './AddMembersModal';
 
 const OWNER = 'owner-id';
+const MEMBER = 'member-id';
 const project = { id: 'project-id', userId: OWNER, users: [] } as unknown as IProjectDocument;
+const sharedProject = (users: unknown[], groups: unknown[] = []) =>
+  ({ id: 'project-id', userId: OWNER, users, groups }) as unknown as IProjectDocument;
 
 describe('ProjectAddMembersModal', () => {
   beforeEach(() => {
     mocks.mutate.mockReset();
+    mocks.currentUser = { id: OWNER, groups: [] };
     // The non-admin picker returns no email, and an exact-email match outside the caller's
     // workspaces carries no username either.
     mocks.users = [
@@ -108,5 +115,47 @@ describe('ProjectAddMembersModal', () => {
     expect(invitee.getAttribute('data-selectable')).toBe('false');
     expect(colleague.getAttribute('data-invite-status')).toBe('');
     expect(colleague.getAttribute('data-selectable')).toBe('true');
+  });
+
+  describe('share access', () => {
+    it('renders nothing for a member without share access', () => {
+      mocks.currentUser = { id: MEMBER, groups: [] };
+      const { container } = render(
+        <ProjectAddMembersModal
+          project={sharedProject([{ userId: MEMBER, permissions: ['read', 'update'] }])}
+          ownerId={MEMBER}
+        />
+      );
+      expect(container.innerHTML).toBe('');
+    });
+
+    it('shows the picker to a member holding share through a group', () => {
+      mocks.currentUser = { id: MEMBER, groups: ['group-id'] };
+      render(
+        <ProjectAddMembersModal
+          project={sharedProject([], [{ groupId: 'group-id', permissions: ['read', 'update', 'share'] }])}
+          ownerId={MEMBER}
+        />
+      );
+      expect(screen.getAllByTestId('user-card')).toHaveLength(2);
+    });
+
+    it('caps the invite to permissions the sharer holds', () => {
+      mocks.currentUser = { id: MEMBER, groups: [] };
+      render(
+        <ProjectAddMembersModal
+          project={sharedProject([{ userId: MEMBER, permissions: ['read', 'share'] }])}
+          ownerId={MEMBER}
+        />
+      );
+      fireEvent.click(screen.getByTestId('add-all-btn'));
+      expect(mocks.mutate.mock.calls[0][0].permissions).toEqual(['read']);
+    });
+
+    it('invites with read and update as the owner', () => {
+      render(<ProjectAddMembersModal project={project} ownerId={OWNER} />);
+      fireEvent.click(screen.getByTestId('add-all-btn'));
+      expect(mocks.mutate.mock.calls[0][0].permissions).toEqual(['read', 'update']);
+    });
   });
 });

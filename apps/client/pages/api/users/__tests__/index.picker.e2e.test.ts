@@ -202,13 +202,9 @@ describe('GET /api/users publicView - non-admin picker scope (real mongod)', () 
     expect(rows[0]).not.toHaveProperty('username');
   });
 
-  it('404s pendingInviteProjectId for a caller without share access to the project', async () => {
-    const { req, res } = createMocks({
-      method: 'GET',
-      query: { publicView: 'true', search: 'zep', pendingInviteProjectId: PROJECT.toString() },
-    });
-    (req as unknown as { user: unknown }).user = { id: ORG_COLLEAGUE.toString(), groups: [], isAdmin: false };
-    await mockRefs.getHandler!(req, res);
-    expect(res._getStatusCode()).toBe(404);
+  it('omits pendingInvite for a caller without share access, but still answers the search', async () => {
+    const rows = await search(ORG_COLLEAGUE, false, { search: 'zep', pendingInviteProjectId: PROJECT.toString() });
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row).not.toHaveProperty('pendingInvite');
   });
 });

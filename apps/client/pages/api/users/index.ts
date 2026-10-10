@@ -343,17 +343,16 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       const users: IUserObject[] = results[0].paginatedResults;
 
       // Project invites store recipients as emails, which the picker never returns, so the
-      // "already invited" match is made here instead of in the modal.
+      // "already invited" match is made here instead of in the modal. A caller without share
+      // access gets no flag at all (null -> undefined) rather than an error: the flag is an
+      // annotation on the search, and must not break the search itself.
       const pendingInviteeIds = pendingInviteProjectId
-        ? await findPendingProjectInviteeIds(
+        ? ((await findPendingProjectInviteeIds(
             req.user,
             pendingInviteProjectId,
             users.map(user => String(user._id))
-          )
+          )) ?? undefined)
         : undefined;
-      if (pendingInviteeIds === null) {
-        return res.status(404).json({ message: 'Project not found.' });
-      }
 
       const pagination = {
         currentPage: page,
