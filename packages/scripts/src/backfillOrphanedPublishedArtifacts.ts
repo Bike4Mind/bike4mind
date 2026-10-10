@@ -41,8 +41,9 @@ export interface BackfillOrphanedPublishedArtifactsResult {
  * (on other people's pages) go to the dustbin via hideDeletedAuthorAnnotations, as the delete
  * path does, and expire 90 days later.
  *
- * Does NOT purge the CDN (that client lives in apps/client): a cached public copy expires on
- * its own short TTL, and the serve route already refuses artifacts with no live owner.
+ * Does NOT purge the CDN (that client lives in apps/client). It does not need to: the serve
+ * route already 404s artifacts with no live owner, so a cached public copy stops serving once
+ * its s-maxage (1 hour) runs out after that check is deployed, whether or not this has run.
  */
 export async function backfillOrphanedPublishedArtifacts(
   options: BackfillOrphanedPublishedArtifactsOptions
