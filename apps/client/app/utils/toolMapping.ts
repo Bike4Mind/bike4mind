@@ -27,7 +27,7 @@ import {
   Groups as BobPanelIcon,
   SaveAlt as SaveToDataLakeIcon,
 } from '@mui/icons-material';
-import { B4MLLMTools } from '@bike4mind/common';
+import { B4MLLMTools, B4MLLMToolsList } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services/llm';
 import type { ToolAvailability } from '@pages/api/settings/serverConfig';
 import type { PremiumToolDisplayLabels } from '@client/app/premiumContract';
@@ -345,14 +345,18 @@ export const getToolInfo = (toolName: PublicTools): ToolInfo | undefined => {
   return TOOL_MAPPING[toolName];
 };
 
+// Core ids TOOL_MAPPING leaves out (e.g. `edit_image`) lead with a verb, not a namespace.
+const CORE_TOOL_IDS: ReadonlySet<string> = new Set(B4MLLMToolsList);
+
 /**
  * Readable name for a tool id with no declared label: separators become spaces, words are
- * title-cased, and a leading namespace segment (`<prefix>_...`) is dropped, so a raw id - which
- * may name the product that registered it - never reaches the UI.
+ * title-cased, and a leading namespace segment (`<prefix>_...`, or an MCP `<server>:`) is dropped
+ * from a non-core id, so a raw id - which may name the product that registered it - never reaches
+ * the UI.
  */
 export const humanizeToolId = (toolName: string): string => {
-  const words = toolName.split(/[_.\-\s]+/).filter(Boolean);
-  const shown = words.length > 1 ? words.slice(1) : words;
+  const words = toolName.split(/[_.:\-\s]+/).filter(Boolean);
+  const shown = words.length > 1 && !CORE_TOOL_IDS.has(toolName) ? words.slice(1) : words;
   return shown.map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
 };
 

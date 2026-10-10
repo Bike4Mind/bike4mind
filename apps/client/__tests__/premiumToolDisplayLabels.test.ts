@@ -61,6 +61,10 @@ beforeEach(() => {
 });
 
 describe('premium tool display labels', () => {
+  it('emits the empty form when no overlay is present', () => {
+    expect(generate()).toContain('premiumToolDisplayLabels: PremiumToolDisplayLabels = {}');
+  });
+
   it('emits the empty form when no overlay declares any', () => {
     writeOverlay('silent', {});
 

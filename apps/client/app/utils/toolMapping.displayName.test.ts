@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { getToolDisplayName, humanizeToolId } from './toolMapping';
+import { premiumToolDisplayLabels } from '@client/app/premium-generated/premiumToolDisplayLabels.generated';
+import { getToolDisplayName, humanizeToolId, TOOL_MAPPING } from './toolMapping';
 
 describe('humanizeToolId', () => {
   it('drops a leading namespace segment and title-cases the rest', () => {
@@ -13,6 +14,15 @@ describe('humanizeToolId', () => {
 
   it('never returns a snake_case id', () => {
     expect(humanizeToolId('ACME_DEEP_SCAN')).toBe('Deep Scan');
+  });
+
+  it('keeps the verb of a core tool that TOOL_MAPPING does not list', () => {
+    expect(humanizeToolId('edit_image')).toBe('Edit Image');
+    expect(humanizeToolId('count_knowledge_base')).not.toBe(humanizeToolId('describe_knowledge_base'));
+  });
+
+  it('treats a colon as a separator, as in MCP server:tool ids', () => {
+    expect(humanizeToolId('github:create_issue')).toBe('Create Issue');
   });
 });
 
@@ -31,5 +41,17 @@ describe('getToolDisplayName', () => {
 
   it('ignores inherited keys on the label table', () => {
     expect(getToolDisplayName('constructor', {})).toBe('Constructor');
+  });
+});
+
+describe('premiumToolDisplayLabels', () => {
+  // Empty in an open-core build; in an overlay build this keeps contributed labels distinct from core.
+  const coreNames = new Set(Object.values(TOOL_MAPPING).map(info => info.displayName));
+
+  it('does not shadow a core tool id or display name', () => {
+    for (const [toolId, label] of Object.entries(premiumToolDisplayLabels)) {
+      expect(Object.hasOwn(TOOL_MAPPING, toolId), toolId).toBe(false);
+      expect(coreNames.has(label), label).toBe(false);
+    }
   });
 });
