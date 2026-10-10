@@ -19,6 +19,8 @@ import { useDataLakeSurface } from '@client/app/components/datalake/surfaceToken
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
+import { rejectUnscannedImage, useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
+import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import useSetIncludeLibraryFiles from '@client/app/hooks/useSetIncludeLibraryFiles';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
@@ -44,7 +46,7 @@ import { RemoveFileFromLakeCopy } from '@client/app/components/DataLakeWizard/Re
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { toast } from 'sonner';
-import type { IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
+import { type IFabFileDocument, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 /**
  * The Data Lake surface: a browse tree beside a chat (main app + premium /opti). File rows carry
@@ -178,6 +180,11 @@ export default function DataLakeExplorer({
   const pendingLakeTags = usePendingLakeScope(s => s.lakeTags);
   const setPendingLakeTags = usePendingLakeScope(s => s.setLakeTags);
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const { addToNotebookContext } = useNotebookContextFiles();
+  const activeNotebook = useActiveNotebook();
+  // Primitives, not the object: useActiveNotebook returns a fresh object every render.
+  const activeNotebookOnScreen = activeNotebook.onScreen;
+  const activeNotebookSessionId = activeNotebook.onScreen ? activeNotebook.sessionId : null;
   // Files currently attached to the chat's prompt - drives the tree's persistent highlight, so a
   // file stays marked "already added" regardless of which action attached it (View or the menu's
   // Attach) or how far the user has since navigated the tree (#1693).
@@ -232,14 +239,45 @@ export default function DataLakeExplorer({
     [setWorkBenchFiles]
   );
 
+  // Resolves whether the file was newly attached. An existing session must persist
+  // knowledgeIds: a workbench-only add rides one send as fabFileIds, then drops out of context.
+  // A freshly minted session was created already holding the file, so the workbench suffices.
+  // Mid notebook switch (route on B, currentSessionId still A) there is no safe target yet.
+  // The docked overlay chat is outside the notebook routes, so its current session is the target.
+  // An explicit gesture, so project propagation keeps its default (as in FilesSection).
+  const attachToSession = useCallback(
+    async (file: IFabFileDocument): Promise<boolean> => {
+      if (chatEmbedded && !activeNotebookOnScreen) {
+        toast.info('Wait for the notebook to finish opening, then attach the file.');
+        return false;
+      }
+      const sessionId = chatEmbedded ? activeNotebookSessionId : currentSessionId;
+      // The shared writer refuses an optimistic id and an unscanned image itself.
+      if (sessionId) return addToNotebookContext(sessionId, file);
+      // Session creation stores knowledgeIds directly, bypassing the shared writer's scan guard.
+      if (rejectUnscannedImage(file)) return false;
+      const createdSessionId = await ensureSessionId(file);
+      if (!createdSessionId) return false;
+      return addToWorkBench(createdSessionId, file);
+    },
+    [
+      activeNotebookOnScreen,
+      activeNotebookSessionId,
+      chatEmbedded,
+      currentSessionId,
+      addToNotebookContext,
+      ensureSessionId,
+      addToWorkBench,
+    ]
+  );
+
   const attachFileToChat = useCallback(
     async (file: IFabFileDocument) => {
-      const sessionId = await ensureSessionId(file);
-      if (!sessionId) return;
-      addToWorkBench(sessionId, file);
-      toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
+      // A rejected add was already rolled back and surfaced by the hook.
+      const added = await attachToSession(file).catch(() => false);
+      if (added) toast.success(`"${file.fileName.replace(/\.[^/.]+$/, '')}" is now available to this whole notebook`);
     },
-    [ensureSessionId, addToWorkBench]
+    [attachToSession]
   );
 
   // View opens the file in the KnowledgeViewer on both hosts - and ONLY that. It must not

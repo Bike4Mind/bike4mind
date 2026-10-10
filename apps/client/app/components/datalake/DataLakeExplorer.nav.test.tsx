@@ -43,6 +43,13 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useRemoveFileFromDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+// The attach writer needs a QueryClient; these tests never attach.
+vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
+  useNotebookContextFiles: () => ({ addToNotebookContext: vi.fn() }),
+}));
+vi.mock('@client/app/hooks/useActiveNotebook', () => ({
+  useActiveNotebook: () => ({ onScreen: true, sessionId: 'sess-1' }),
+}));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
   useSessions: () => ({ currentSessionId: 'sess-1' }),

@@ -251,7 +251,17 @@ export function SessionFilePond({
                 // propagateToProjects is false: landing in notebook context by default
                 // is consent to THIS notebook, not to every project containing it.
                 if (scope === 'notebook' && (!isImageUpload || buffered?.moderationStatus === 'clean')) {
-                  void addToNotebookContext(uploadSessionId, fabFile, { propagateToProjects: false }).catch(() => {
+                  // The upload response still carries the schema-default 'pending'; the hook's scan
+                  // guard would refuse it, and the consumed buffered event never fires again.
+                  const promotedFile =
+                    isImageUpload && buffered
+                      ? {
+                          ...fabFile,
+                          moderationStatus: buffered.moderationStatus,
+                          ...(buffered.fileUrl ? { fileUrl: buffered.fileUrl } : {}),
+                        }
+                      : fabFile;
+                  void addToNotebookContext(uploadSessionId, promotedFile, { propagateToProjects: false }).catch(() => {
                     // Already rolled back and surfaced by the hook.
                   });
                 }
