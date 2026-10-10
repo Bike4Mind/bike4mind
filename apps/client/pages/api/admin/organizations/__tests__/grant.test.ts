@@ -48,6 +48,10 @@ vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { create: (...a: unknown[]) => mockSubCreate(...a) },
 }));
 
+// Admin-configurable team-plan knobs, pinned to their defaults (see server/services/teamPlanSettings).
+vi.mock('@server/services/teamPlanSettings', () => ({
+  getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
+}));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
 vi.mock('@server/utils/auditLog', () => ({
   AdminOrgAuditEvents: { ORG_GRANTED: 'org_granted' },

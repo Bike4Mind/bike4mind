@@ -10,7 +10,7 @@ import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
 import { ICreditTransaction } from '@bike4mind/common';
 import { useTranslation } from 'react-i18next';
-import { LOW_CREDITS_THRESHOLD } from '../Session/CreditButton';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import {
   brand,
   brandAlpha,
@@ -75,7 +75,8 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
 
   // Hide credit packages when selected account is an organization
   const canPurchaseCredits = !selectedAccount || selectedAccount.personal;
-  const isLowCredits = currentCredits < LOW_CREDITS_THRESHOLD;
+  const lowCreditsThreshold = useLowCreditsThreshold();
+  const isLowCredits = currentCredits < lowCreditsThreshold;
   const noCredits = currentCredits <= 0;
   const color = noCredits ? 'danger' : isLowCredits ? 'warning' : 'neutral';
   const safeMode = mode === 'dark' || mode === 'light' ? mode : 'light';

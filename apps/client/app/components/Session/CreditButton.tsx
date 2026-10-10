@@ -5,16 +5,18 @@ import CreditsModal from '../subscription/CreditsModal';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { formatCreditBalance } from '@client/app/utils/formatCredits';
+import { LOW_CREDITS_THRESHOLD_DEFAULT } from '@bike4mind/common';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 
 /**
- * Threshold below which credits are considered "low".
- * Used by CreditBalanceChip (warning colour), LowCreditsWarning and CreditsModal.
+ * Default threshold below which credits are considered "low". The live value is the
+ * `lowCreditsThreshold` admin setting - read it with `useLowCreditsThreshold()`.
  */
-export const LOW_CREDITS_THRESHOLD = 1000;
+export const LOW_CREDITS_THRESHOLD = LOW_CREDITS_THRESHOLD_DEFAULT;
 
-function balanceTooltip(credits: number): string {
+function balanceTooltip(credits: number, lowThreshold: number): string {
   if (credits <= 0) return 'Out of credits. Add credits to keep chatting.';
-  if (credits < LOW_CREDITS_THRESHOLD) return 'Running low. Add credits so your work is not interrupted.';
+  if (credits < lowThreshold) return 'Running low. Add credits so your work is not interrupted.';
   return 'Your credit balance. Each answer shows what it cost. Click to add credits or see usage.';
 }
 
@@ -27,16 +29,17 @@ function balanceTooltip(credits: number): string {
 const CreditBalanceChip: FC<{ compact?: boolean }> = ({ compact = false }) => {
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const credits = useEffectiveCredits();
+  const lowCreditsThreshold = useLowCreditsThreshold();
   const [isOpen, setIsOpen] = useState(false);
 
   if (!enforceCredits) return null;
 
-  const color = credits <= 0 ? 'danger' : credits < LOW_CREDITS_THRESHOLD ? 'warning' : 'neutral';
+  const color = credits <= 0 ? 'danger' : credits < lowCreditsThreshold ? 'warning' : 'neutral';
   const label = formatCreditBalance(credits, compact);
 
   return (
     <>
-      <Tooltip title={balanceTooltip(credits)} placement="top" variant="soft">
+      <Tooltip title={balanceTooltip(credits, lowCreditsThreshold)} placement="top" variant="soft">
         <Button
           size="sm"
           variant="outlined"

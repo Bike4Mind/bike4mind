@@ -71,6 +71,14 @@ vi.mock('@server/integrations/stripe/callbackUrl', async importOriginal => {
 });
 vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'test' } }));
 
+const mockGetTeamPlanSettings = vi.hoisted(() =>
+  vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 }))
+);
+vi.mock('@server/services/teamPlanSettings', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/services/teamPlanSettings')>()),
+  getTeamPlanSettings: mockGetTeamPlanSettings,
+}));
+
 const mockSessionsCreate = vi.fn();
 const mockCreateCustomer = vi.fn();
 vi.mock('@server/integrations/stripe/stripe', () => ({
@@ -213,6 +221,27 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
       maximum: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  it('bounds checkout by the admin-configured teamPlanMinSeats/teamPlanMaxSeats', async () => {
+    mockGetTeamPlanSettings.mockResolvedValueOnce({ minSeats: 2, maxSeats: 20, creditsPerSeat: 50000 });
+    const { req, res } = makeReq();
+    (req as Record<string, unknown>).body = { ...(req as { body: object }).body, quantity: 2 };
+
+    await (handler as HandlerFn)(req, res);
+
+    const args = mockSessionsCreate.mock.calls[0][0] as { line_items: { adjustable_quantity: unknown }[] };
+    expect(args.line_items[0].adjustable_quantity).toEqual({ enabled: true, minimum: 2, maximum: 20 });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects a quantity outside the configured range before touching Stripe', async () => {
+    mockGetTeamPlanSettings.mockResolvedValueOnce({ minSeats: 5, maxSeats: 20, creditsPerSeat: 50000 });
+    const { req, res } = makeReq();
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow(/Seats must be between 5 and 20/);
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+    expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
   });
 
   it('creates a customer with no org lookup on the new-organization branch', async () => {

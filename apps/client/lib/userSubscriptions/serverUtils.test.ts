@@ -11,6 +11,7 @@ import {
 } from './serverUtils';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { Logger } from '@bike4mind/observability';
+import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
 
 // Vitest hoists these mocks above the imports.
 vi.mock('@server/models/Subscription', () => ({
@@ -58,6 +59,10 @@ vi.mock('@server/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Admin-configurable team-plan knobs, pinned to their defaults (see server/services/teamPlanSettings).
+vi.mock('@server/services/teamPlanSettings', () => ({
+  getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
+}));
 vi.mock('@server/utils/cloudwatch', () => ({
   emitMetric: vi.fn().mockResolvedValue(undefined),
 }));
@@ -678,6 +683,35 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
       expect.objectContaining({
         acquisition: { firstTouch: { source: 'widgets', medium: 'teaser' }, lastTouch: { source: 'email' } },
       })
+    );
+  });
+});
+
+describe('handleOrganizationSubscriptionInvoice - configured credits per seat', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getTeamPlanSettings).mockResolvedValueOnce({ minSeats: 4, maxSeats: 100, creditsPerSeat: 1234 });
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      users: [],
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findByStripeCustomerId>>);
+  });
+
+  it('grants renewal credits from the teamPlanCreditsPerSeat setting, not the constant', async () => {
+    const invoice = { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice;
+    const metadata = {
+      userId: 'u1',
+      stage: 'test',
+      ownerType: SubscriptionOwnerType.Organization,
+      organizationId: 'org_team',
+    } as unknown as Parameters<typeof handleOrganizationSubscriptionInvoice>[2];
+
+    await handleOrganizationSubscriptionInvoice(invoice, buildSubscription(), metadata, logger);
+
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'org_team', credits: 4 * 1234 }),
+      expect.anything()
     );
   });
 });

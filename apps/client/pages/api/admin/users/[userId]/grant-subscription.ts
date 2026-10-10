@@ -9,11 +9,8 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
 import { organizationService, creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
-import {
-  ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-} from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
 import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
@@ -30,7 +27,7 @@ import { randomUUID } from 'crypto';
 const GrantSubscriptionSchema = z.object({
   subscriptionType: z.enum(['individual', 'team']),
   priceId: z.string().optional(), // For individual subscriptions
-  seats: z.number().min(ORGANIZATION_SUBSCRIPTION_MIN_SEATS).optional(), // For team subscriptions
+  seats: z.number().int().optional(), // For team subscriptions; teamPlanMinSeats/teamPlanMaxSeats checked below
   organizationName: z.string().optional(), // For new team subscriptions
   organizationId: z.string().optional(), // For existing team subscriptions
   durationMonths: z.number().min(1).max(12).prefault(1), // How many months to grant
@@ -50,10 +47,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     }
 
     const { userId } = req.query as RequestQuery;
+    const teamPlan = await getTeamPlanSettings();
     const {
       subscriptionType,
       priceId,
-      seats = ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+      seats = teamPlan.minSeats,
       organizationName,
       organizationId,
       durationMonths,
@@ -63,6 +61,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');
+    }
+
+    if (seats < teamPlan.minSeats) {
+      throw new BadRequestError(`Team grants need at least ${teamPlan.minSeats} seats`);
+    }
+    if (seats > teamPlan.maxSeats) {
+      throw new BadRequestError(`Seats cannot exceed ${teamPlan.maxSeats}`);
     }
 
     const user = await userRepository.findById(userId);
@@ -250,7 +255,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         });
 
         // Add credits to organization
-        const creditsToAdd = seats * ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT * durationMonths;
+        const creditsToAdd = seats * teamPlan.creditsPerSeat * durationMonths;
         await creditService.addCredits(
           {
             ownerId: targetOrganization.id,
@@ -293,7 +298,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             subscriptionType: 'team',
             organizationId: targetOrganization.id,
             seats,
-            credits: seats * ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT * durationMonths,
+            credits: seats * teamPlan.creditsPerSeat * durationMonths,
             durationMonths,
           },
         },
@@ -338,7 +343,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         message: `Team subscription granted for ${durationMonths} month(s)`,
         organizationId: targetOrganization.id,
         seats,
-        credits: seats * ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT * durationMonths,
+        credits: seats * teamPlan.creditsPerSeat * durationMonths,
       });
     }
 

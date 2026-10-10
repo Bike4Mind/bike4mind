@@ -1,5 +1,5 @@
 import { organizationRepository, inviteRepository, withTransaction } from '@bike4mind/database';
-import { IOrganizationDocument, IMongoDocument } from '@bike4mind/common';
+import { IOrganizationDocument, IMongoDocument, type TeamPlanSettings } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import {
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
@@ -12,6 +12,7 @@ import {
   resolveSubscriptionSource,
 } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
+import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
 
 /**
  * Count outstanding org invites that haven't been accepted yet. Pending invites
@@ -60,10 +61,13 @@ const ADMIN_MIN_SEATS = 1;
  * Throws if the requested seat count is invalid given the org's current state
  * and the actor performing the change.
  *
- *  - Stripe path: seats must be >= ORGANIZATION_SUBSCRIPTION_MIN_SEATS (the paid-plan minimum)
+ *  - Stripe path: seats must be >= the paid-plan minimum (`teamPlanMinSeats` setting)
  *  - Admin path:  seats must be >= 1 (admin grants may be smaller than the paid minimum)
  *  - Both:        seats >= current team size (owner + members + pending invites),
- *                 and <= ORGANIZATION_SUBSCRIPTION_MAX_SEATS
+ *                 and <= the ceiling (`teamPlanMaxSeats` setting)
+ *
+ * `limits` is the caller-resolved `getTeamPlanSettings()`; it defaults to the constants so a pure
+ * call (tests, previews) keeps the historical bounds.
  *
  * Pending invites count toward the floor because each one will consume a seat
  * the moment the recipient accepts. Letting an admin shrink below
@@ -79,20 +83,25 @@ export function validateSeatChange(
   organization: Pick<IOrganizationDocument, 'users'>,
   newSeats: number,
   actor: SeatChangeActor,
-  pendingInviteCount: number = 0
+  pendingInviteCount: number = 0,
+  limits: Pick<TeamPlanSettings, 'minSeats' | 'maxSeats'> = {
+    minSeats: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+    maxSeats: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  }
 ): void {
+  const { minSeats, maxSeats } = limits;
   // Owner + accepted members + outstanding invites.
   const currentTeamSize = organization.users.length + 1 + pendingInviteCount;
-  const platformMin = actor.type === 'stripe' ? ORGANIZATION_SUBSCRIPTION_MIN_SEATS : ADMIN_MIN_SEATS;
+  const platformMin = actor.type === 'stripe' ? minSeats : ADMIN_MIN_SEATS;
   // Clamp the floor at the ceiling so an over-cap org (team size > MAX) can still be set down to MAX,
   // instead of a floor above MAX that the ceiling check below would then always reject (#1424).
-  const minimumRequiredSeats = Math.min(Math.max(platformMin, currentTeamSize), ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
+  const minimumRequiredSeats = Math.min(Math.max(platformMin, currentTeamSize), maxSeats);
 
   if (newSeats < minimumRequiredSeats) {
-    if (currentTeamSize > ORGANIZATION_SUBSCRIPTION_MAX_SEATS) {
+    if (currentTeamSize > maxSeats) {
       throw new BadRequestError(
-        `Organization has ${currentTeamSize} team members, over the ${ORGANIZATION_SUBSCRIPTION_MAX_SEATS}-seat maximum. ` +
-          `Set seats to ${ORGANIZATION_SUBSCRIPTION_MAX_SEATS}, then remove members to get back under the cap.`
+        `Organization has ${currentTeamSize} team members, over the ${maxSeats}-seat maximum. ` +
+          `Set seats to ${maxSeats}, then remove members to get back under the cap.`
       );
     }
     const pendingNote =
@@ -103,8 +112,8 @@ export function validateSeatChange(
       `Cannot reduce seats below current team size. Minimum required seats: ${minimumRequiredSeats} (${currentTeamSize} team members${pendingNote})`
     );
   }
-  if (newSeats > ORGANIZATION_SUBSCRIPTION_MAX_SEATS) {
-    throw new BadRequestError(`Seats cannot exceed ${ORGANIZATION_SUBSCRIPTION_MAX_SEATS}`);
+  if (newSeats > maxSeats) {
+    throw new BadRequestError(`Seats cannot exceed ${maxSeats}`);
   }
 }
 
@@ -129,7 +138,7 @@ export async function setSeats(orgId: string, newSeats: number, actor: SeatChang
     if (!organization) throw new NotFoundError('Organization not found');
 
     const pendingInviteCount = await countPendingOrganizationInvites(organization.id);
-    validateSeatChange(organization, newSeats, actor, pendingInviteCount);
+    validateSeatChange(organization, newSeats, actor, pendingInviteCount, await getTeamPlanSettings());
 
     organization.seats = newSeats;
     await organizationRepository.update({ id: organization.id, seats: newSeats });

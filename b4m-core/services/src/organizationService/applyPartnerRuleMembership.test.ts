@@ -1,5 +1,5 @@
 import { applyPartnerRuleMembership } from './applyPartnerRuleMembership';
-import { Permission } from '@bike4mind/common';
+import { Permission, ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { cloneDeep } from 'lodash';
 
@@ -22,11 +22,23 @@ describe('applyPartnerRuleMembership', () => {
         addMemberIfUnderCeiling: vi.fn(),
         ensureUserDetails: vi.fn(),
       },
+      adminSettings: { findBySettingNames: vi.fn().mockResolvedValue([]), findAll: vi.fn().mockResolvedValue([]) },
     };
     logger = { info: vi.fn() };
   });
 
   const run = () => applyPartnerRuleMembership({ userId: 'user-id', organizationId: 'org-id' }, { db, logger });
+
+  it('passes the admin-configured teamPlanMaxSeats ceiling to the atomic raise', async () => {
+    db.adminSettings.findBySettingNames.mockResolvedValue([{ settingName: 'teamPlanMaxSeats', settingValue: '12' }]);
+    db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
+    db.organizations.findById.mockResolvedValue(cloneDeep(org));
+    db.organizations.addMemberRaisingSeats.mockResolvedValue(cloneDeep(org));
+
+    await run();
+
+    expect(db.organizations.addMemberRaisingSeats).toHaveBeenCalledWith('org-id', expect.any(Object), 12);
+  });
 
   it('adds a verified user that fits under the ceiling as a read-permission member and sets organizationId', async () => {
     db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
@@ -37,10 +49,12 @@ describe('applyPartnerRuleMembership', () => {
     const result = await run();
 
     expect(result).toEqual({ added: true, reason: 'added', previousSeats: 5, newSeats: 5 });
-    expect(db.organizations.addMemberRaisingSeats).toHaveBeenCalledWith('org-id', {
-      userId: 'user-id',
-      permissions: [Permission.read],
-    });
+    // No teamPlanMaxSeats row stored: the ceiling passed to the model is the historical constant.
+    expect(db.organizations.addMemberRaisingSeats).toHaveBeenCalledWith(
+      'org-id',
+      { userId: 'user-id', permissions: [Permission.read] },
+      ORGANIZATION_SUBSCRIPTION_MAX_SEATS
+    );
     expect(db.organizations.addMemberIfUnderCeiling).not.toHaveBeenCalled();
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
     // The atomic seat-add touches only users[]; seed the credit side-table so the new member is

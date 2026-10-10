@@ -1,9 +1,6 @@
 import { useSubscribeTeamPlan, useCreateTeamDev } from '@client/app/hooks/data/subscriptions';
-import {
-  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-} from '@client/lib/subscriptions/constants';
+import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import {
@@ -39,7 +36,11 @@ export const useCreateTeamModal = create<{
 const CreateTeamModal = () => {
   const { isOpen, close } = useCreateTeamModal();
   const [teamName, setTeamName] = useState('');
-  const [teamSize, setTeamSize] = useState(ORGANIZATION_SUBSCRIPTION_MIN_SEATS);
+  const { minSeats, maxSeats } = useTeamSeatLimits();
+  // Mounted app-wide before settings load, so the initial pick can fall outside a range that arrives
+  // later; clamp on read so the stepper, the total and the checkout quantity match what the API accepts.
+  const [requestedTeamSize, setTeamSize] = useState(minSeats);
+  const teamSize = Math.min(Math.max(requestedTeamSize, minSeats), maxSeats);
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const createTeamDev = useCreateTeamDev();
   const plans = useGetSubscriptionPlans();
@@ -57,16 +58,16 @@ const CreateTeamModal = () => {
 
   const handleClose = () => {
     setTeamName('');
-    setTeamSize(ORGANIZATION_SUBSCRIPTION_MIN_SEATS);
+    setTeamSize(minSeats);
     close();
   };
 
   const handleIncreaseTeamSize = () => {
-    setTeamSize(prev => (prev < ORGANIZATION_SUBSCRIPTION_MAX_SEATS ? prev + 1 : prev));
+    setTeamSize(Math.min(teamSize + 1, maxSeats));
   };
 
   const handleDecreaseTeamSize = () => {
-    setTeamSize(prev => (prev > ORGANIZATION_SUBSCRIPTION_MIN_SEATS ? prev - 1 : prev));
+    setTeamSize(Math.max(teamSize - 1, minSeats));
   };
 
   const handleSubmit = async () => {
@@ -131,7 +132,7 @@ const CreateTeamModal = () => {
             <IconButton
               variant="outlined"
               color="neutral"
-              disabled={teamSize <= ORGANIZATION_SUBSCRIPTION_MIN_SEATS || isLoading || hasError}
+              disabled={teamSize <= minSeats || isLoading || hasError}
               onClick={handleDecreaseTeamSize}
               className="create-team-size-decrease"
             >
@@ -148,15 +149,14 @@ const CreateTeamModal = () => {
               variant="outlined"
               color="neutral"
               onClick={handleIncreaseTeamSize}
-              disabled={isLoading || hasError || teamSize >= ORGANIZATION_SUBSCRIPTION_MAX_SEATS}
+              disabled={isLoading || hasError || teamSize >= maxSeats}
               className="create-team-size-increase"
             >
               <AddIcon />
             </IconButton>
           </Box>
           <Typography level="body-xs" sx={{ mt: 0.5 }} className="create-team-size-note">
-            Team size must be between {ORGANIZATION_SUBSCRIPTION_MIN_SEATS} and {ORGANIZATION_SUBSCRIPTION_MAX_SEATS}{' '}
-            members
+            Team size must be between {minSeats} and {maxSeats} members
           </Typography>
           <Box sx={{ mt: 1 }} className="create-team-price-container">
             {isLoading ? (
@@ -185,7 +185,7 @@ const CreateTeamModal = () => {
             Cancel
           </Button>
           <Button
-            disabled={!teamName.trim() || teamSize < ORGANIZATION_SUBSCRIPTION_MIN_SEATS || isLoading || hasError}
+            disabled={!teamName.trim() || teamSize < minSeats || isLoading || hasError}
             onClick={handleSubmit}
             loading={isSubmitting}
             className="create-team-submit-button"

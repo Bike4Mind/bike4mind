@@ -17,7 +17,7 @@ import { sendToClient } from '@server/websocket/utils';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { organizationService, creditService } from '@bike4mind/services';
-import { ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT } from '../subscriptions/constants';
+import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
 import { CreditHolderType, IOrganizationDocument, dayjs } from '@bike4mind/common';
 import { Resource } from 'sst';
 
@@ -313,7 +313,7 @@ export const handleOrganizationSubscriptionInvoice = async (
         }
 
         // Add initial credits based on number of seats
-        const creditsToAdd = subscriptionQuantity * ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT;
+        const creditsToAdd = subscriptionQuantity * (await getTeamPlanSettings()).creditsPerSeat;
         const addedCredits = await addOrganizationCredits({
           organization: org,
           creditsToAdd,
@@ -376,13 +376,13 @@ export const handleOrganizationSubscriptionInvoice = async (
             seatIncrease,
           },
           credits: {
-            fullCreditsPerSeat: ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+            fullCreditsPerSeat: (await getTeamPlanSettings()).creditsPerSeat,
             prorationFactor: Number(prorationFactor.toFixed(4)),
           },
         });
 
         // Calculate prorated credits
-        const fullCreditsPerSeat = ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT;
+        const fullCreditsPerSeat = (await getTeamPlanSettings()).creditsPerSeat;
         const proratedCreditsPerSeat = Math.floor(fullCreditsPerSeat * prorationFactor);
         const creditsToAdd = seatIncrease * proratedCreditsPerSeat;
 
@@ -430,7 +430,7 @@ export const handleOrganizationSubscriptionInvoice = async (
           break;
         }
 
-        const creditsToAdd = subscriptionQuantity * ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT;
+        const creditsToAdd = subscriptionQuantity * (await getTeamPlanSettings()).creditsPerSeat;
         const addedCredits = await addOrganizationCredits({
           organization,
           creditsToAdd,
