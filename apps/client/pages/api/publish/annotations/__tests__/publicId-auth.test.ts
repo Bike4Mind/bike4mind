@@ -61,6 +61,7 @@ vi.mock('@server/services/publish', () => ({
   authorDisplayName: vi.fn(),
   toAnnotationDto: vi.fn(),
   requestHasGateProof: vi.fn(),
+  loadLiveOwner: vi.fn(async () => ({})),
 }));
 
 import handler from '../[publicId]';

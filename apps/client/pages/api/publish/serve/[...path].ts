@@ -8,7 +8,6 @@ import type { Types } from 'mongoose';
 import { getPublishedArtifactsStorage } from '@server/utils/storage';
 import {
   PublishedArtifact,
-  User,
   liveShareTokens,
   shareTokenFilter,
   type PublishedArtifactShareToken,
@@ -18,6 +17,7 @@ import {
   checkShareGrant,
   checkVisibility,
   collectInlineAssets,
+  loadLiveOwner,
   prepareShareMeta,
   recordGatedView,
   renderBundleLoaderShell,
@@ -323,6 +323,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   if (!artifact) {
     // Unknown OR revoked token -> plain 404 (never 401/403), so a prober can't
     // distinguish a revoked/never-existed token from a private artifact.
+    return res.status(404).json({ error: 'Not found' });
+  }
+  // Nothing is served on behalf of a deleted, banned or suspended account - the same plain 404,
+  // so the cases stay indistinguishable. Backstop for account removal paths that skip
+  // purgeUserPublishedArtifacts; also supplies the "Shared by" name for the viewer page.
+  const owner = await loadLiveOwner(artifact.ownerId);
+  if (!owner) {
     return res.status(404).json({ error: 'Not found' });
   }
 
@@ -642,19 +649,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // we render the placeholder card instead of a frame that can never load.
     const canFrameArtifacts = isOpenPublic || isShare || passphraseVerified;
     const exportFormats = exportSelfAuthorizes ? exportFormatsFor(artifact.source.kind) : [];
-    // Best-effort lookup: a missing/failed name degrades to no attribution line, never blocks rendering.
-    const ownerName = await User.findById(artifact.ownerId)
-      .select('name username')
-      .lean<{ name?: string; username?: string } | null>()
-      .then(u => pickSharedByName(u))
-      .catch(() => null);
     const page = renderViewerPage(artifact, {
       noindex: !searchIndexable,
       noReferrer: isShare,
       selfPath,
       canFrameArtifacts,
       exportFormats,
-      sharedBy: ownerName ?? undefined,
+      sharedBy: pickSharedByName(owner),
       signupGate: showSignupGate,
       starterCredits: showSignupGate ? await getOpenSignupStarterCredits() : 0,
     });
