@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -35,7 +35,6 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 describe('CreateTeamModal', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
-    seatLimits.current = { minSeats: 3, maxSeats: 7 };
     useCreateTeamModal.setState({ isOpen: true });
   });
 
@@ -49,32 +48,38 @@ describe('CreateTeamModal', () => {
     expect(screen.getByText(/Team size must be between 3 and 7/)).toBeTruthy();
   });
 
-  it('keeps the picked size inside a seat range that loads after mount', () => {
-    const { rerender } = render(
-      <TestWrapper>
-        <CreateTeamModal />
-      </TestWrapper>
-    );
-    expect(screen.getByText('3')).toBeTruthy();
+  describe('with seat settings that change after mount', () => {
+    afterEach(() => {
+      seatLimits.current = { minSeats: 3, maxSeats: 7 };
+    });
 
-    // Settings arrive with a higher floor than the default the modal was mounted with.
-    seatLimits.current = { minSeats: 5, maxSeats: 7 };
-    rerender(
-      <TestWrapper>
-        <CreateTeamModal />
-      </TestWrapper>
-    );
-    expect(screen.getByText('5')).toBeTruthy();
+    it('keeps the picked size inside a seat range that loads after mount', () => {
+      const { rerender } = render(
+        <TestWrapper>
+          <CreateTeamModal />
+        </TestWrapper>
+      );
+      expect(screen.getByText('3')).toBeTruthy();
 
-    // ...and a ceiling below the current pick.
-    seatLimits.current = { minSeats: 2, maxSeats: 2 };
-    rerender(
-      <TestWrapper>
-        <CreateTeamModal />
-      </TestWrapper>
-    );
-    expect(screen.getByText('2')).toBeTruthy();
-    expect(screen.getByText(/Total Price: \$20\/month/)).toBeTruthy();
+      // Settings arrive with a higher floor than the default the modal was mounted with.
+      seatLimits.current = { minSeats: 5, maxSeats: 7 };
+      rerender(
+        <TestWrapper>
+          <CreateTeamModal />
+        </TestWrapper>
+      );
+      expect(screen.getByText('5')).toBeTruthy();
+
+      // ...and a ceiling below the current pick.
+      seatLimits.current = { minSeats: 2, maxSeats: 2 };
+      rerender(
+        <TestWrapper>
+          <CreateTeamModal />
+        </TestWrapper>
+      );
+      expect(screen.getByText('2')).toBeTruthy();
+      expect(screen.getByText(/Total Price: \$20\/month/)).toBeTruthy();
+    });
   });
 
   it('submits only once when Create Team is double-clicked rapidly', async () => {
