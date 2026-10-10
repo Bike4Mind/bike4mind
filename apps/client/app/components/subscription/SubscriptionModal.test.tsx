@@ -6,6 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import SubscriptionModal from './SubscriptionModal';
 
 /**
@@ -26,6 +27,7 @@ const portalMutate = vi.fn();
 const USER_ID = 'user_1';
 
 let subscriptions: IUserSubscription[] = [];
+let teamPlanEnabled = false;
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptions: () => ({ data: subscriptions, isPending: false }),
@@ -35,7 +37,13 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 }));
 
 vi.mock('@client/app/hooks/data/stripe', () => ({
-  useGetSubscriptionPlans: () => ({ data: [{ id: PRICE_ID, active: true, unit_amount: 1500 }], isPending: false }),
+  useGetSubscriptionPlans: () => ({
+    data: [
+      { id: PRICE_ID, active: true, unit_amount: 1500 },
+      { id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, active: true, unit_amount: 3000 },
+    ],
+    isPending: false,
+  }),
   useStripePortal: () => ({ mutate: (...args: unknown[]) => portalMutate(...args), isPending: false }),
 }));
 
@@ -43,8 +51,10 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: USER_ID } }),
 }));
 
+let settingValues: Record<string, unknown> = {};
+
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: () => false,
+  useGetSettingsValue: (key: string) => (key === 'enableTeamPlan' ? teamPlanEnabled : (settingValues[key] ?? false)),
   useConfig: () => ({ data: { seedStageName: 'production' } }),
 }));
 
@@ -80,14 +90,58 @@ const renderModal = () =>
     </TestWrapper>
   );
 
+describe('SubscriptionModal - Team tab', () => {
+  beforeEach(() => {
+    subscriptions = [];
+  });
+
+  it('keeps the Business tab disabled while the team plan is switched off', () => {
+    teamPlanEnabled = false;
+    renderModal();
+
+    expect(screen.getByRole('tab', { name: 'subscription_modal.business' })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('quotes the minimum-seat Team price from Stripe once the team plan is on', async () => {
+    teamPlanEnabled = true;
+    renderModal();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+
+    // 4 seats x $30 from the mocked Stripe price, not a hardcoded figure.
+    expect(screen.getByText(/\$120\.00/)).toBeInTheDocument();
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+  });
+});
+
 describe('SubscriptionModal', () => {
   beforeEach(() => {
     subscriptions = [];
+    teamPlanEnabled = false;
+    settingValues = {};
     cancelMutate.mockReset();
     subscribeMutate.mockReset();
     changeMutate.mockReset();
     portalMutate.mockReset();
     sessionStorage.clear();
+  });
+
+  it('says every account starts with free credits rather than claiming there is no free tier', () => {
+    settingValues = { defaultFreeCredits: 5000 };
+    renderModal();
+
+    expect(screen.getByTestId('subscription-modal-starter-credits')).toHaveTextContent(
+      'subscription_modal.starter_credits'
+    );
+    expect(screen.queryByText(/no_free_tier/)).not.toBeInTheDocument();
+  });
+
+  it('makes no starter-credits claim when sign-ups are granted nothing', () => {
+    settingValues = { defaultFreeCredits: 0 };
+    renderModal();
+
+    expect(screen.queryByTestId('subscription-modal-starter-credits')).not.toBeInTheDocument();
+    expect(screen.getByText(/subscription_modal.credits_rollover/)).toBeInTheDocument();
   });
 
   it('shows a delinquent plan as the current plan and lets the user cancel it', async () => {

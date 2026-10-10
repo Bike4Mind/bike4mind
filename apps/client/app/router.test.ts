@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { feedbackRollupRoute, dataLakesRoute, newRoute, router } from './router';
+import { billingRoute, feedbackRollupRoute, dataLakesRoute, newRoute, router } from './router';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 
 // validateSearch is what makes a bare /feedback/rollup URL load at all (see the route's own
@@ -83,5 +83,24 @@ describe('Video studio route', () => {
     const ids = router.matchRoutes('/studio/video', {}).map(match => match.routeId);
     expect(ids).toContain('/layout');
     expect(ids.some(id => id.endsWith('/studio/video'))).toBe(true);
+  });
+});
+
+describe('billingRoute forwards /billing/<view> to the modal deep link', () => {
+  const forwardOf = (view: string) => {
+    try {
+      (billingRoute.options.beforeLoad as (ctx: unknown) => unknown)({ params: { view } });
+    } catch (thrown) {
+      return (thrown as { options: { href?: string; replace?: boolean } }).options;
+    }
+    throw new Error('expected beforeLoad to redirect');
+  };
+
+  it.each([
+    ['credits', '/new?billing=credits'],
+    ['plans', '/new?billing=plans'],
+    ['bogus', '/new'],
+  ])('/billing/%s -> %s', (view, href) => {
+    expect(forwardOf(view)).toMatchObject({ href, replace: true });
   });
 });

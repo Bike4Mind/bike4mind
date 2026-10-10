@@ -136,11 +136,11 @@ export function EmbedAllowlistEditor({
     <Box data-testid={`${testIdPrefix}-section`}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
         <CodeIcon fontSize="small" />
-        <FormLabel sx={{ mb: 0 }}>Embed on your site</FormLabel>
+        <FormLabel sx={{ mb: 0 }}>Show on your website</FormLabel>
       </Box>
       <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }}>
-        Allow specific sites to frame this artifact. Add the exact origin (up to {EMBED_ORIGINS_MAX}) where you&apos;ll
-        paste the embed code.
+        Let specific websites show this artifact inside their pages. Add the site address (up to {EMBED_ORIGINS_MAX})
+        where you&apos;ll paste the embed code.
       </Typography>
       <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
         <Input

@@ -60,6 +60,7 @@ vi.mock('@client/app/components/Session/SessionBottom/AgentModeToggleButton', ()
 vi.mock('@client/app/components/Session/AttachFileButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/AISettings/FilesSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/AdvancedAISettings', () => ({ default: () => null }));
+vi.mock('@client/app/components/Session/CreditButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/RephraseButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/common/VoiceRecordButton', () => {
   const VoiceRecordButtonStub = React.forwardRef<HTMLDivElement, { onRecordingEnd: (prompt: string) => Promise<void> }>(
