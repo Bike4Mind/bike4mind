@@ -27,7 +27,7 @@ import { randomUUID } from 'crypto';
 const GrantSubscriptionSchema = z.object({
   subscriptionType: z.enum(['individual', 'team']),
   priceId: z.string().optional(), // For individual subscriptions
-  seats: z.number().optional(), // For team subscriptions; floor is the teamPlanMinSeats setting, checked below
+  seats: z.number().int().optional(), // For team subscriptions; teamPlanMinSeats/teamPlanMaxSeats checked below
   organizationName: z.string().optional(), // For new team subscriptions
   organizationId: z.string().optional(), // For existing team subscriptions
   durationMonths: z.number().min(1).max(12).prefault(1), // How many months to grant
@@ -65,6 +65,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     if (seats < teamPlan.minSeats) {
       throw new BadRequestError(`Team grants need at least ${teamPlan.minSeats} seats`);
+    }
+    if (seats > teamPlan.maxSeats) {
+      throw new BadRequestError(`Seats cannot exceed ${teamPlan.maxSeats}`);
     }
 
     const user = await userRepository.findById(userId);
