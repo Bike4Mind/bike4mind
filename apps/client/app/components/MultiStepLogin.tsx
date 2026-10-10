@@ -4,6 +4,7 @@ import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect'
 import { getLoginErrorMessage } from '@client/app/utils/loginErrorMessages';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
+import { dismissOtcCodeSentToast, toastOtcCodeSent } from './otcToast';
 import {
   Box,
   Button,
@@ -224,7 +225,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
 
       const sendResult = await sendOTC({ email: trimmedEmail });
       setPendingToken(sendResult.pendingToken);
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
       setCurrentStep('otc');
       startResendCooldown();
     } catch (error) {
@@ -243,7 +244,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     try {
       const sendResult = await sendOTC({ email: email.trim() });
       setPendingToken(sendResult.pendingToken);
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
     } catch (error) {
       // Same plain-object rejection shape as handleEmailSubmit above.
@@ -365,6 +366,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         pendingToken: pendingToken || undefined,
         clientData,
       });
+      dismissOtcCodeSentToast();
 
       if ('mfaRequired' in response && response.mfaRequired) {
         if ('accessToken' in response) {

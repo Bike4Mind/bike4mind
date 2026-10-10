@@ -538,10 +538,10 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
           }}
         >
           <Typography level="h2" sx={{ mb: 2 }}>
-            No News is Good News!
+            You&apos;re all caught up
           </Typography>
           <Typography level="body-md" sx={{ mb: 3 }}>
-            But seriously, there&apos;s nothing new to show right now. Check back later for updates!
+            There are no new updates at the moment. New features and release notes will appear here as they ship.
           </Typography>
           <Button
             variant="solid"

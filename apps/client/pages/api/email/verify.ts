@@ -13,6 +13,7 @@ import { CreditHolderType, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4m
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@server/utils/analyticsLog';
+import { emitFunnelEvent } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
@@ -89,6 +90,8 @@ const handler = baseApi({ auth: false })
       //  2) tag removal is a set-difference filter, also idempotent.
       // If this throws, we log loudly but still return success - verification IS complete; the
       // grant can be retried by an admin/maintenance flow without re-issuing a new email token.
+      // Summed across both grants below for the credits_granted funnel event.
+      let creditsGranted = 0;
       if (userBeforeVerify?.tags?.includes(PENDING_FREE_CREDITS_TAG)) {
         try {
           // An invite-resolved pending amount travels on the user doc and wins;
@@ -114,6 +117,7 @@ const handler = baseApi({ auth: false })
                 creditHolderMethods: userRepository,
               }
             );
+            creditsGranted += amount;
             req.logger.info(`Granted ${amount} deferred free credits to verified user ${userBeforeVerify.id}`);
           } else {
             req.logger.info(`Cleared pending-free-credits tag for user ${userBeforeVerify.id} (nothing to grant)`);
@@ -184,6 +188,7 @@ const handler = baseApi({ auth: false })
                 creditHolderMethods: userRepository,
               }
             );
+            creditsGranted += signupCredits;
             req.logger.info(
               `Granted ${signupCredits} one-time domain-grant signup credits to verified user ${userBeforeVerify.id}`
             );
@@ -287,6 +292,16 @@ const handler = baseApi({ auth: false })
           });
         } catch (error) {
           req.logger.warn('Failed to log email verification event:', error);
+        }
+
+        // Funnel floor (server/analytics/funnel.ts); both never throw.
+        await emitFunnelEvent({ user: userBeforeVerify, event: 'email_verified', metadata: { method: 'link' } });
+        if (creditsGranted > 0) {
+          await emitFunnelEvent({
+            user: userBeforeVerify,
+            event: 'credits_granted',
+            metadata: { amount: creditsGranted, source: 'signup', method: 'link' },
+          });
         }
       }
 

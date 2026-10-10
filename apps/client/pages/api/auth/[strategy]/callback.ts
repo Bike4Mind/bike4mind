@@ -16,6 +16,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
+import { recordSignupAcquisition } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -118,6 +119,9 @@ const handler = baseApi({ auth: false })
         // also logs REGISTER, matching the OTC signup path (pages/api/otc/verify.ts)
         // - OAuth signups used to be indistinguishable from logins in the event log.
         const isNewUser = Boolean((user as { isNewUser?: boolean }).isNewUser);
+        // Detected before any signup conversion so synthetic accounts stay out of the ad pixel
+        // (fragment below) and the product signup emit, not just the funnel events.
+        let isSyntheticSignup = false;
         if (isNewUser) {
           try {
             await logEvent({
@@ -146,11 +150,14 @@ const handler = baseApi({ auth: false })
           // - a Lambda freeze after the redirect would drop it for good. The cost is bounded
           // and narrow: emitProductEvent has its own 2s timeout and per-emit catch, and a
           // signup naming no product resolves here immediately, which is most of them.
-          await emitSignupForSourceProducts({
-            userId: user.id,
-            touches: readConsentedAcquisitionTouches(req),
-            method: strategy,
-          });
+          ({ isSynthetic: isSyntheticSignup } = await recordSignupAcquisition({ req, user, method: strategy }));
+          if (!isSyntheticSignup) {
+            await emitSignupForSourceProducts({
+              userId: user.id,
+              touches: readConsentedAcquisitionTouches(req),
+              method: strategy,
+            });
+          }
         }
 
         const { accessToken } = await issueBrowserSession(req, res, user.id, {
@@ -199,7 +206,8 @@ const handler = baseApi({ auth: false })
         // sent in Referer headers, or stored in browser history as query params.
         // isNewUser/signupMethod ride the same fragment: /auth/success reads and
         // clears it exactly once, firing the signup ad conversion for new accounts.
-        const signupFragment = isNewUser ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
+        const signupFragment =
+          isNewUser && !isSyntheticSignup ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
         const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
         return res.redirect(redirectUrl);
       } catch (callbackError) {

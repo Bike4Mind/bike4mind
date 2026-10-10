@@ -13,13 +13,13 @@ import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
   .post<Request<{}, {}, z.infer<typeof OrgSubscriptionSubscribeSchema>>>(async (req, res) => {
-    const { priceId, organizationId, quantity, organizationData, callbackUrl } = OrgSubscriptionSubscribeSchema.parse(
-      req.body
-    );
+    const { priceId, organizationId, quantity, organizationData, callbackUrl, attributionConsent, surface } =
+      OrgSubscriptionSubscribeSchema.parse(req.body);
 
     if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
@@ -145,7 +145,13 @@ const handler = baseApi()
       success_url: appendSuccessParams(callbackUrl),
       cancel_url: callbackUrl,
       subscription_data: {
-        metadata,
+        // Attribution is spread after the schema parse, which would strip unknown keys. Same
+        // acq_* keys as individual checkout; the invoice webhook stores them on the org row.
+        metadata: {
+          ...metadata,
+          ...checkoutAcquisitionMetadata(req, attributionConsent, req.user.acquisition),
+          ...(surface && { checkout_surface: surface }),
+        },
       },
     });
 

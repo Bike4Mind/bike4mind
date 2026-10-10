@@ -8,7 +8,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
-import { acquisitionToStripeMetadata, readAcquisitionTouches } from '@server/analytics/acquisition';
+import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -18,7 +18,7 @@ type RequestBody = z.infer<typeof subscriptionCheckoutSchema>;
 const handler = baseApi()
   .use(requireStripeWebhook())
   .post<Request<unknown, RequestBody>>(async (req, res) => {
-    const { priceId, callbackUrl, attributionConsent } = subscriptionCheckoutSchema.parse(req.body);
+    const { priceId, callbackUrl, attributionConsent, surface } = subscriptionCheckoutSchema.parse(req.body);
 
     // Restrict the Stripe success/cancel redirect to the deployed app origin - an
     // external callbackUrl is an open-redirect/phishing vector off Stripe's hosted
@@ -114,7 +114,8 @@ const handler = baseApi()
           ownerType: 'User', // Identifies this as a user subscription (vs organization)
           // Where the customer came from (first and last campaign touch), carried to the
           // invoice webhook, which stores it on the subscription row. See acquisition.ts.
-          ...(attributionConsent === true && acquisitionToStripeMetadata(readAcquisitionTouches(req))),
+          ...checkoutAcquisitionMetadata(req, attributionConsent, req.user.acquisition),
+          ...(surface && { checkout_surface: surface }),
         },
       },
     });

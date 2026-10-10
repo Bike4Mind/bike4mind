@@ -403,6 +403,7 @@ export const SettingKeySchema = z.enum([
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
   'lowCreditsThreshold',
+  'syntheticUserEmailDomains',
 
   // GOOGLE CALENDAR SETTINGS
   'enableGoogleCalendar',
@@ -3253,6 +3254,15 @@ export const settingsMap = {
     max: 100_000_000,
     description:
       'Below this many credits a user sees the low-credit warning state. Set to 0 to show warnings only once credits run out.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  syntheticUserEmailDomains: makeStringSetting({
+    key: 'syntheticUserEmailDomains',
+    name: 'Synthetic User Email Domains',
+    defaultValue: '',
+    description:
+      'Comma-separated email domains whose new signups are flagged synthetic (test personas) and excluded from funnel analytics. Accounts whose username starts with "persona-" are always flagged. Applies at signup only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

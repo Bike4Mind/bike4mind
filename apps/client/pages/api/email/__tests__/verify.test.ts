@@ -18,6 +18,8 @@ vi.mock('@server/middlewares/csrfProtection', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+const mockEmitFunnelEvent = vi.fn().mockResolvedValue(true);
+vi.mock('@server/analytics/funnel', () => ({ emitFunnelEvent: (...a: any[]) => mockEmitFunnelEvent(...a) }));
 vi.mock('@server/utils/auditLog', () => ({
   logAuditEvent: vi.fn(),
   EmailAuditEvents: {
@@ -244,5 +246,61 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     expect(res._getStatusCode()).toBe(200);
     // 0 credits -> no domain grant credit call at all, and definitely not the env 250k.
     expect(domainGrantCall()).toBeFalsy();
+  });
+});
+
+describe('/api/email/verify - funnel events', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVerifyEmailToken.mockResolvedValue(undefined);
+    mockUpdate.mockResolvedValue(undefined);
+    mockAddCredits.mockResolvedValue({});
+    mockFindBySettingName.mockResolvedValue({ settingValue: 1000 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+  });
+
+  const funnelEvents = () => mockEmitFunnelEvent.mock.calls.map(([c]) => [c.event, c.metadata]);
+
+  it('reports email_verified and the summed credits_granted for both grants', async () => {
+    mockUser({ email: DOMAIN_EMAIL, tags: [PENDING_FREE_CREDITS_TAG] });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(funnelEvents()).toEqual([
+      ['email_verified', { method: 'link' }],
+      ['credits_granted', { amount: 1000 + EXPECTED_DOMAIN_CREDITS, source: 'signup', method: 'link' }],
+    ]);
+    expect(mockEmitFunnelEvent.mock.calls[0][0].user).toEqual(expect.objectContaining({ id: 'user-1' }));
+  });
+
+  it('reports no credits_granted when nothing was granted', async () => {
+    mockUser({ email: NON_DOMAIN_EMAIL, tags: [] });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(funnelEvents()).toEqual([['email_verified', { method: 'link' }]]);
+  });
+
+  it('leaves a failed grant out of the credits_granted amount', async () => {
+    mockUser({ email: NON_DOMAIN_EMAIL, tags: [PENDING_FREE_CREDITS_TAG] });
+    mockAddCredits.mockRejectedValue(new Error('ledger down'));
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(funnelEvents()).toEqual([['email_verified', { method: 'link' }]]);
+  });
+
+  it('reports nothing when the token does not verify', async () => {
+    mockUser({ email: NON_DOMAIN_EMAIL, tags: [] });
+    mockVerifyEmailToken.mockRejectedValue(new Error('Token has expired'));
+    const { req, res } = makeReqRes();
+
+    await Promise.resolve(handler(req, res)).catch(() => {});
+
+    expect(mockEmitFunnelEvent).not.toHaveBeenCalled();
   });
 });

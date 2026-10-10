@@ -1,7 +1,7 @@
 export interface ComposerCreditUi {
   /** Out of credits: CreditsWarning takes the place of the message box. */
   replaceComposer: boolean;
-  /** Low but not out: the dismissible notice overlays the message box. */
+  /** Low but not out: the dismissible notice sits above the message box. */
   lowCreditsNotice: boolean;
   /** Send and voice are disabled in the toolbar. */
   toolbarBlocked: boolean;
