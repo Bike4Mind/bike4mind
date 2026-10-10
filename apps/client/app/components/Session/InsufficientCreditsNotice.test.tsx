@@ -23,6 +23,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetOrganization: () => ({ data: { name: 'Acme' } }),
 }));
+vi.mock('@client/app/hooks/data/subscriptions', () => ({
+  useGetSubscriptions: () => ({ data: [] }),
+}));
 
 // useSelectedAccount lives in AccountSelector, which transitively imports LLMContext /
 // UserContext / org data hooks. Mock just the selector so we can drive personal vs. org
