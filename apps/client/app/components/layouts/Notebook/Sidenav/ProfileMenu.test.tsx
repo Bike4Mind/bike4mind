@@ -14,16 +14,18 @@ vi.mock('react-i18next', () => ({
 vi.mock('@client/app/components/inbox/Badge', () => ({
   default: ({ children }: { children: React.ReactNode }) => children,
 }));
-vi.mock('@client/app/components/subscription/CreditsModal', () => ({ default: () => null }));
-vi.mock('@client/app/components/subscription/SubscriptionModal', () => ({ default: () => null }));
+const billing = vi.hoisted(() => ({ openView: vi.fn(), creditsEnabled: false }));
+vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
+  useBillingView: () => ({ view: undefined, openView: billing.openView, closeView: vi.fn() }),
+}));
 vi.mock('@client/app/contexts/InboxContext', () => ({
   useInbox: { getState: () => ({ setOpen: vi.fn() }) },
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (select: (s: unknown) => unknown) => select({ currentUser: { id: 'u1', name: 'Jane' }, isAdmin: false }),
 }));
-vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => vi.fn() }));
-vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => false }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: vi.fn() }) }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => billing.creditsEnabled }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetFriendRequests: () => ({ data: [] }),
   useReturnToAdmin: () => vi.fn(),
@@ -158,5 +160,37 @@ describe('ProfileMenu - API Docs', () => {
     expect(clicked[0].getAttribute('href')).toBe('/api/v1/docs');
     expect(clicked[0].target).toBe('_blank');
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProfileMenu - billing rows open URL-addressable views', () => {
+  beforeEach(() => {
+    billing.openView.mockClear();
+    billing.creditsEnabled = true;
+  });
+
+  afterEach(() => {
+    billing.creditsEnabled = false;
+  });
+
+  const openMenu = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+  };
+
+  it('opens the credits view through the URL', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-credits'));
+    expect(billing.openView).toHaveBeenCalledWith('credits');
+  });
+
+  it('opens the plans view through the URL', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-subscriptions'));
+    expect(billing.openView).toHaveBeenCalledWith('plans');
   });
 });

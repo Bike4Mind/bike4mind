@@ -78,6 +78,8 @@ const SubscriptionModalContent = () => {
   const theme = useTheme();
   const [activeTab, setActiveTab] = useState<SubscriptionModalTabs>(SubscriptionModalTabs.Personal);
   const enableTeamPlan = useGetSettingsValue('enableTeamPlan');
+  // The starter-credits line is only true while sign-ups are actually granted something.
+  const hasStarterCredits = Number(useGetSettingsValue('defaultFreeCredits')) > 0;
   const { data: config } = useConfig();
   const seedStageName = config?.seedStageName || process.env.NEXT_PUBLIC_SEED_STAGE_NAME || '';
   const isTestMode = seedStageName !== 'production';
@@ -169,16 +171,17 @@ const SubscriptionModalContent = () => {
       <Typography sx={{ mb: '36px', fontSize: '16px', color: 'neutral.500', textAlign: 'center' }}>
         {t('subscription_modal.description')}
         <br />
-        <Box
-          component="span"
-          sx={{
-            textDecoration: 'underline',
-            color: theme.palette.subscriptionModal.linkColor,
-            fontWeight: '500',
-          }}
-        >
-          {t('subscription_modal.no_free_tier')}
-        </Box>{' '}
+        {hasStarterCredits && (
+          <>
+            <Box
+              component="span"
+              data-testid="subscription-modal-starter-credits"
+              sx={{ color: theme.palette.subscriptionModal.linkColor, fontWeight: '500' }}
+            >
+              {t('subscription_modal.starter_credits')}
+            </Box>{' '}
+          </>
+        )}
         {t('subscription_modal.credits_rollover')}
       </Typography>
 

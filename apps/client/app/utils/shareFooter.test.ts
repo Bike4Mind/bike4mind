@@ -110,6 +110,41 @@ describe('buildSignupGateHtml', () => {
     expect(html).toContain('id="b4m-gate-dismiss"');
     expect(html).toContain('for="b4m-gate-dismiss"');
   });
+
+  it('states the starter-credit amount it is given', async () => {
+    const buildGate = await loadSignupGate();
+    const { html } = buildGate({ starterCredits: 12000 });
+    expect(html).toContain('<span class="b4m-credits-num">12,000</span>');
+    expect(html).toContain('free credits');
+  });
+
+  it('states no amount when none is given or none is granted', async () => {
+    const buildGate = await loadSignupGate();
+    for (const starterCredits of [undefined, null, 0, -5, Number.NaN]) {
+      const { html } = buildGate({ starterCredits });
+      expect(html).not.toContain('b4m-credits-num');
+      expect(html).not.toContain('free credits');
+    }
+  });
+});
+
+describe('replaceSignupGateHtml', () => {
+  it('swaps a baked gate for one carrying the live starter-credit amount', async () => {
+    const { buildSignupGateHtml, replaceSignupGateHtml } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const page = `<html><head><style>${gate.styles}</style></head><body><p>content</p>${gate.html}</body></html>`;
+    const replaced = replaceSignupGateHtml(page, { starterCredits: 2500 });
+    expect(replaced).toContain('<span class="b4m-credits-num">2,500</span>');
+    expect(replaced.match(/id="b4m-gate-panel"/g)).toHaveLength(1);
+    expect(replaced).toContain('<p>content</p>');
+    expect(replaced.endsWith('</body></html>')).toBe(true);
+  });
+
+  it('is a no-op on a page without a gate', async () => {
+    const { replaceSignupGateHtml } = await import('./shareFooter');
+    const page = '<html><body><p>content</p></body></html>';
+    expect(replaceSignupGateHtml(page, { starterCredits: 2500 })).toBe(page);
+  });
 });
 
 describe('shouldShowSignupGate', () => {
@@ -149,5 +184,30 @@ describe('stripSignupGateHtml', () => {
     const { stripSignupGateHtml } = await import('./shareFooter');
     const page = '<html><body><p>content</p></body></html>';
     expect(stripSignupGateHtml(page)).toBe(page);
+  });
+});
+
+describe('pickSharedByName', () => {
+  it('returns the display name', async () => {
+    const { pickSharedByName } = await import('./shareFooter');
+    expect(pickSharedByName({ name: ' Ada Lovelace ', username: 'ada_l_1987' })).toBe('Ada Lovelace');
+  });
+
+  it('never exposes the raw username or an email', async () => {
+    const { pickSharedByName } = await import('./shareFooter');
+    expect(pickSharedByName({ name: 'ada_l_1987', username: 'Ada_L_1987' })).toBeUndefined();
+    expect(pickSharedByName({ name: 'ada@example.com', username: 'ada' })).toBeUndefined();
+    expect(pickSharedByName({ name: '', username: 'ada' })).toBeUndefined();
+    expect(pickSharedByName(null)).toBeUndefined();
+  });
+});
+
+describe('buildShareFooterHtml hideCta', () => {
+  it('renders only the report link, with no brand CTA card', async () => {
+    const build = await loadFooter({ NEXT_PUBLIC_WEBSITE_URL: 'https://acme.example', NEXT_PUBLIC_APP_NAME: 'Acme' });
+    const html = build({ hideCta: true, reportPublicId: 'abc' });
+    expect(html).toContain('/report/abc');
+    expect(html).not.toContain('utm_medium=share-footer');
+    expect(html).not.toContain('Try Acme');
   });
 });

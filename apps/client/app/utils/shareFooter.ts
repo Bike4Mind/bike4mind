@@ -38,6 +38,22 @@ export interface ShareFooterOptions {
    * footers, where the publicId isn't known until finalize.
    */
   reportPublicId?: string;
+  /** Render only the report link (no brand card); used when the sign-up gate is the page's CTA. */
+  hideCta?: boolean;
+}
+
+/**
+ * Public attribution name for a share page: the owner's display name, never the raw login
+ * handle. Returns undefined (no "Shared by" line) when the only name on file is the username
+ * itself or an email address.
+ */
+export function pickSharedByName(
+  user: { name?: string | null; username?: string | null } | null | undefined
+): string | undefined {
+  const name = user?.name?.trim();
+  if (!name || name.includes('@')) return undefined;
+  if (user?.username && name.toLowerCase() === user.username.trim().toLowerCase()) return undefined;
+  return name;
 }
 
 /**
@@ -75,7 +91,7 @@ function shareWordmarkHtml(): string {
  * Pure inline CSS + an HTML checkbox-trick dismiss (no JS) so it passes the same
  * `script-src 'none'` CSP constraint as the share footer.
  */
-export function buildSignupGateHtml(): { styles: string; html: string } {
+export function buildSignupGateHtml(opts: SignupGateOptions = {}): { styles: string; html: string } {
   // Link to the marketing site when configured; fall back to the app's own signup page so the
   // gate renders on self-hosted deployments (and in local dev) without a marketing URL.
   const signupHref = SITE_URL
@@ -151,10 +167,7 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
     `<p class="b4m-gate-body">Create a free ${brandName} account to explore this artifact and build your own \u2014 no credit card required.</p>`,
     '</div>',
     '<div class="b4m-gate-right">',
-    '<div class="b4m-credits-inline">',
-    '<span class="b4m-credits-num">5,000</span>',
-    '<span class="b4m-credits-label">free credits</span>',
-    '</div>',
+    starterCreditsHtml(opts.starterCredits),
     `<a href="${signupHref}" class="b4m-cta-btn">Create free account</a>`,
     '<label for="b4m-gate-dismiss" class="b4m-dismiss-label">No thanks</label>',
     '</div>',
@@ -166,6 +179,25 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
 }
 
 const SIGNUP_GATE_MARKER = '<input type="checkbox" id="b4m-gate-dismiss"';
+
+export interface SignupGateOptions {
+  /**
+   * Credits a new account starts with (the `defaultFreeCredits` admin setting). Omitted or
+   * non-positive renders no number, so a page baked at publish time never states a stale amount -
+   * the serve handler re-renders the gate with the live value (replaceSignupGateHtml).
+   */
+  starterCredits?: number | null;
+}
+
+function starterCreditsHtml(starterCredits: number | null | undefined): string {
+  if (typeof starterCredits !== 'number' || !Number.isFinite(starterCredits) || starterCredits <= 0) return '';
+  return [
+    '<div class="b4m-credits-inline">',
+    `<span class="b4m-credits-num">${Math.floor(starterCredits).toLocaleString('en-US')}</span>`,
+    '<span class="b4m-credits-label">free credits</span>',
+    '</div>',
+  ].join('');
+}
 
 /**
  * Whether a served page should carry the sign-up gate. Only an anonymous viewer of an
@@ -195,6 +227,19 @@ export function stripSignupGateHtml(html: string): string {
   return html.slice(0, start) + html.slice(end);
 }
 
+/**
+ * Swap a gate baked into stored bytes for a freshly built one, so the starter-credit number
+ * reflects the current setting rather than whatever was true at publish time. The baked CSS
+ * is reused as-is (it does not depend on the number). No-op on a page without a gate.
+ */
+export function replaceSignupGateHtml(html: string, opts: SignupGateOptions = {}): string {
+  const start = html.lastIndexOf(SIGNUP_GATE_MARKER);
+  if (start === -1) return html;
+  const end = html.indexOf('</body>', start);
+  if (end === -1) return html;
+  return html.slice(0, start) + buildSignupGateHtml(opts).html + html.slice(end);
+}
+
 /** Returns the footer as an HTML string ready to inject before `</body>`. */
 export function buildShareFooterHtml(opts: ShareFooterOptions = {}): string {
   // The footer is a brand lead-gen card (inlined brand wordmark + a CTA to the marketing
@@ -218,6 +263,8 @@ export function buildShareFooterHtml(opts: ShareFooterOptions = {}): string {
        style="font-size:11.5px;color:#94a3b8;text-decoration:none">⚑ Report this page</a>
   </div>`
     : '';
+
+  if (opts.hideCta) return report;
 
   // Self-contained navy card (inline styles only) so it renders consistently on
   // any host page, light or dark.

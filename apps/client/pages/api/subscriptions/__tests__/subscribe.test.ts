@@ -169,6 +169,43 @@ describe('POST /api/subscriptions/subscribe — launch/availability gate', () =>
   });
 });
 
+describe('POST /api/subscriptions/subscribe - configured plan validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindUserSubByPrice.mockResolvedValue(null);
+    mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing' });
+    mockPricesRetrieve.mockResolvedValue({ id: 'price_other', active: true });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it('rejects a price id that is not a configured plan with a 400, before any lookup or Stripe call', async () => {
+    // Stripe would happily retrieve this price, so the configured-plan check is the only guard.
+    const { req, res } = makeReq('price_other');
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: BadRequestError,
+      statusCode: HttpStatus.BadRequest,
+      message: 'Unknown plan',
+    });
+
+    expect(mockGetSettingsValue).not.toHaveBeenCalled();
+    expect(mockFindUserSubByPrice).not.toHaveBeenCalled();
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockPricesRetrieve).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a configured plan id', async () => {
+    const { req, res } = makeReq('price_open');
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+  });
+});
+
 describe('POST /api/subscriptions/subscribe - callbackUrl origin guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();

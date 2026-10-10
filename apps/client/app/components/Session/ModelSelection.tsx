@@ -22,6 +22,7 @@ import {
   StarBorderRounded,
 } from '@mui/icons-material';
 import ClearIcon from '@mui/icons-material/Clear';
+import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import GridViewOutlinedIcon from '@mui/icons-material/GridViewOutlined';
@@ -29,6 +30,8 @@ import ViewListOutlinedIcon from '@mui/icons-material/ViewListOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
+import { resolveRecommendedModelIds } from '@client/app/utils/recommendedModels';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -65,6 +68,7 @@ import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/N
 // List of model IDs to exclude from the dropdown
 // Add any model IDs you want to hide here
 const emptyRecord: Record<string, number> = {};
+const emptyIds: string[] = [];
 
 const EXCLUDED_MODEL_IDS: ModelName[] = [
   // Now handled in admin settings
@@ -689,7 +693,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
   // State for user-toggled accordion backends (manual expand/collapse)
   const [userToggledBackends, setUserToggledBackends] = useState<Set<string>>(
-    new Set(['Favorites', 'OpenAI', 'Anthropic'])
+    new Set(['Recommended', 'Favorites', 'OpenAI', 'Anthropic'])
   );
 
   // Memoize backend logos to prevent unnecessary re-renders and network requests
@@ -843,6 +847,19 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   // Compute favorite models from the already-filtered list (respects search, filter, access control)
   const favoriteModels = useMemo(() => filteredModels.filter(m => isFavorite(m.id)), [filteredModels, isFavorite]);
 
+  // Admin-ordered ids -> models. Reads from filteredModels so search, type filter and access
+  // control apply, and an id that is unknown or inaccessible is dropped rather than shown dead.
+  const { getSetting, getSettingObject } = useAdminSettings();
+  const storedRecommendedIds = getSettingObject<string[]>('recommendedModelIds', emptyIds);
+  const defaultModelId = getSetting('DefaultAPIModel');
+  const recommendedModels = useMemo(() => {
+    const byId = new Map<string, ModelInfo>(filteredModels.map(m => [m.id, m]));
+    return resolveRecommendedModelIds(storedRecommendedIds, defaultModelId).flatMap(id => {
+      const found = byId.get(id);
+      return found ? [found] : [];
+    });
+  }, [filteredModels, storedRecommendedIds, defaultModelId]);
+
   // Provider section order for display. Same ordering the memo above applies when flattening
   // filteredModels, so the accordions and the flat list agree.
   const sortedBackends = useMemo(() => sortBackendsByPriority(Object.keys(modelsByBackend)), [modelsByBackend]);
@@ -852,6 +869,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     if (debouncedSearchQuery) {
       // Expand all backends (including Favorites) when searching
       const all = new Set(Object.keys(modelsByBackend));
+      all.add('Recommended');
       all.add('Favorites');
       return all;
     }
@@ -921,6 +939,131 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       </Box>
     );
   if (error) return <div>Error loading models: {error.message}</div>;
+
+  // Pinned sections (Recommended, Favorites) sit above the provider accordions and share one
+  // layout; only the key, label, icon and model list differ.
+  const renderPinnedSection = ({
+    sectionKey,
+    testId,
+    label,
+    icon,
+    sectionModels,
+  }: {
+    sectionKey: string;
+    testId: string;
+    label: string;
+    icon: React.ReactNode;
+    sectionModels: ModelInfo[];
+  }) => (
+    <Accordion
+      data-testid={testId}
+      expanded={expandedBackends.has(sectionKey)}
+      onChange={() => toggleBackend(sectionKey)}
+      sx={theme => ({
+        backgroundColor: 'background.surface',
+        '& .MuiAccordionSummary-root': {
+          height: '48px !important',
+          minHeight: '48px !important',
+          maxHeight: '48px !important',
+          // Frame sits flush with the list; the 12px inset lives on the button so the
+          // hover fill covers it.
+          paddingInline: 0,
+        },
+        // Favorites only: breathing room above the cards once open. Lives on the root,
+        // not the button - the root's height is pinned, so a margin there would shrink
+        // the button instead of spacing the section.
+        '& .MuiAccordionSummary-root.Mui-expanded': {
+          marginBottom: '8px',
+        },
+        '& .MuiAccordionSummary-button': {
+          paddingInline: '8px',
+          borderRadius: '6px',
+          transition: 'background 0.2s',
+          // Matches the sidenav list items. Must go through Joy's own variant vars:
+          // its `:not(...):hover` rule ties on specificity and lands later in the
+          // stylesheet, so a plain `&:hover` here loses.
+          '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+          '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+          // Sidenav rows keep their text colour on hover; Joy's plain variant darkens it.
+          '--variant-plainHoverColor': 'inherit',
+          // Joy's SvgIcon override reads `--Icon-color` rather than the inherited
+          // `color`, so the chevron only responds through the variable. The section
+          // logo/star set their own colour and are unaffected.
+          '--Icon-color': 'var(--joy-palette-text-tertiary)',
+          '& .MuiSvgIcon-root': {
+            transition: 'color 0.2s',
+          },
+          '&:hover': {
+            '--Icon-color': 'var(--joy-palette-text-primary)',
+          },
+        },
+        '&.Mui-expanded': {
+          pb: '16px',
+        },
+        '& .MuiAccordionSummary-indicator': {
+          display: 'none',
+        },
+        // Gives the first card's corner badge room to overhang. Joy clips this slot with
+        // overflow: hidden, and its expanded top padding is calc(var(--ListItem-paddingY)
+        // / 2) - a var no Accordion component defines, so the declaration is invalid and
+        // computes to 0. Must stay scoped to .Mui-expanded: Joy zeroes paddingBlock while
+        // collapsed so the section can animate to zero height.
+        '& .MuiAccordionDetails-content.Mui-expanded': {
+          paddingBlockStart: '8px',
+        },
+      })}
+    >
+      <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '48px' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          {icon}
+          <Typography
+            level="h4"
+            sx={{
+              color: 'text.primary',
+              fontSize: '16px',
+              fontWeight: 500,
+            }}
+          >
+            {label}
+          </Typography>
+        </Box>
+        <ExpandMoreIcon
+          style={{
+            transform: expandedBackends.has(sectionKey) ? 'rotate(180deg)' : 'none',
+          }}
+        />
+      </AccordionSummary>
+      <AccordionDetails>
+        {expandedBackends.has(sectionKey) && (
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
+              gap: 2,
+            }}
+          >
+            {sectionModels.map(modelInfo => (
+              <ModelOption
+                key={modelInfo.id}
+                model={modelInfo}
+                isSelected={modelInfo.id === model}
+                maxContextWindow={maxContextWindow}
+                maxTokens={maxTokens}
+                onSelect={handleModelSelect}
+                onSettingsClick={onSettingsClick}
+                isFavorite={isFavorite(modelInfo.id)}
+                onToggleFavorite={toggleFavorite}
+                avgResponseTimeByModel={avgResponseTimeByModel}
+                statsLoading={statsLoading}
+                mode={mode}
+                viewMode={effectiveViewMode}
+              />
+            ))}
+          </Box>
+        )}
+      </AccordionDetails>
+    </Accordion>
+  );
 
   return (
     <Box
@@ -1233,117 +1376,23 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
             width: '100%',
           }}
         >
-          {/* Favorites Section */}
-          {favoriteModels.length > 0 && (
-            <Accordion
-              data-testid="favorites-section"
-              expanded={expandedBackends.has('Favorites')}
-              onChange={() => toggleBackend('Favorites')}
-              sx={theme => ({
-                backgroundColor: 'background.surface',
-                '& .MuiAccordionSummary-root': {
-                  height: '48px !important',
-                  minHeight: '48px !important',
-                  maxHeight: '48px !important',
-                  // Frame sits flush with the list; the 12px inset lives on the button so the
-                  // hover fill covers it.
-                  paddingInline: 0,
-                },
-                // Favorites only: breathing room above the cards once open. Lives on the root,
-                // not the button - the root's height is pinned, so a margin there would shrink
-                // the button instead of spacing the section.
-                '& .MuiAccordionSummary-root.Mui-expanded': {
-                  marginBottom: '8px',
-                },
-                '& .MuiAccordionSummary-button': {
-                  paddingInline: '8px',
-                  borderRadius: '6px',
-                  transition: 'background 0.2s',
-                  // Matches the sidenav list items. Must go through Joy's own variant vars:
-                  // its `:not(...):hover` rule ties on specificity and lands later in the
-                  // stylesheet, so a plain `&:hover` here loses.
-                  '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
-                  '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
-                  // Sidenav rows keep their text colour on hover; Joy's plain variant darkens it.
-                  '--variant-plainHoverColor': 'inherit',
-                  // Joy's SvgIcon override reads `--Icon-color` rather than the inherited
-                  // `color`, so the chevron only responds through the variable. The section
-                  // logo/star set their own colour and are unaffected.
-                  '--Icon-color': 'var(--joy-palette-text-tertiary)',
-                  '& .MuiSvgIcon-root': {
-                    transition: 'color 0.2s',
-                  },
-                  '&:hover': {
-                    '--Icon-color': 'var(--joy-palette-text-primary)',
-                  },
-                },
-                '&.Mui-expanded': {
-                  pb: '16px',
-                },
-                '& .MuiAccordionSummary-indicator': {
-                  display: 'none',
-                },
-                // Gives the first card's corner badge room to overhang. Joy clips this slot with
-                // overflow: hidden, and its expanded top padding is calc(var(--ListItem-paddingY)
-                // / 2) - a var no Accordion component defines, so the declaration is invalid and
-                // computes to 0. Must stay scoped to .Mui-expanded: Joy zeroes paddingBlock while
-                // collapsed so the section can animate to zero height.
-                '& .MuiAccordionDetails-content.Mui-expanded': {
-                  paddingBlockStart: '8px',
-                },
-              })}
-            >
-              <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '48px' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                  <StarRounded sx={{ fontSize: '18px', color: 'primary.solidBg' }} />
-                  <Typography
-                    level="h4"
-                    sx={{
-                      color: 'text.primary',
-                      fontSize: '16px',
-                      fontWeight: 500,
-                    }}
-                  >
-                    Favorites
-                  </Typography>
-                </Box>
-                <ExpandMoreIcon
-                  style={{
-                    transform: expandedBackends.has('Favorites') ? 'rotate(180deg)' : 'none',
-                  }}
-                />
-              </AccordionSummary>
-              <AccordionDetails>
-                {expandedBackends.has('Favorites') && (
-                  <Box
-                    sx={{
-                      display: 'grid',
-                      gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-                      gap: 2,
-                    }}
-                  >
-                    {favoriteModels.map(modelInfo => (
-                      <ModelOption
-                        key={modelInfo.id}
-                        model={modelInfo}
-                        isSelected={modelInfo.id === model}
-                        maxContextWindow={maxContextWindow}
-                        maxTokens={maxTokens}
-                        onSelect={handleModelSelect}
-                        onSettingsClick={onSettingsClick}
-                        isFavorite={true}
-                        onToggleFavorite={toggleFavorite}
-                        avgResponseTimeByModel={avgResponseTimeByModel}
-                        statsLoading={statsLoading}
-                        mode={mode}
-                        viewMode={effectiveViewMode}
-                      />
-                    ))}
-                  </Box>
-                )}
-              </AccordionDetails>
-            </Accordion>
-          )}
+          {recommendedModels.length > 0 &&
+            renderPinnedSection({
+              sectionKey: 'Recommended',
+              testId: 'recommended-section',
+              label: 'Recommended',
+              icon: <AutoAwesomeRoundedIcon sx={{ fontSize: '18px', color: 'primary.solidBg' }} />,
+              sectionModels: recommendedModels,
+            })}
+
+          {favoriteModels.length > 0 &&
+            renderPinnedSection({
+              sectionKey: 'Favorites',
+              testId: 'favorites-section',
+              label: 'Favorites',
+              icon: <StarRounded sx={{ fontSize: '18px', color: 'primary.solidBg' }} />,
+              sectionModels: favoriteModels,
+            })}
 
           {sortedBackends.map(backend => (
             <Accordion

@@ -51,8 +51,10 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: USER_ID } }),
 }));
 
+let settingValues: Record<string, unknown> = {};
+
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'enableTeamPlan' ? teamPlanEnabled : false),
+  useGetSettingsValue: (key: string) => (key === 'enableTeamPlan' ? teamPlanEnabled : (settingValues[key] ?? false)),
   useConfig: () => ({ data: { seedStageName: 'production' } }),
 }));
 
@@ -116,11 +118,30 @@ describe('SubscriptionModal', () => {
   beforeEach(() => {
     subscriptions = [];
     teamPlanEnabled = false;
+    settingValues = {};
     cancelMutate.mockReset();
     subscribeMutate.mockReset();
     changeMutate.mockReset();
     portalMutate.mockReset();
     sessionStorage.clear();
+  });
+
+  it('says every account starts with free credits rather than claiming there is no free tier', () => {
+    settingValues = { defaultFreeCredits: 5000 };
+    renderModal();
+
+    expect(screen.getByTestId('subscription-modal-starter-credits')).toHaveTextContent(
+      'subscription_modal.starter_credits'
+    );
+    expect(screen.queryByText(/no_free_tier/)).not.toBeInTheDocument();
+  });
+
+  it('makes no starter-credits claim when sign-ups are granted nothing', () => {
+    settingValues = { defaultFreeCredits: 0 };
+    renderModal();
+
+    expect(screen.queryByTestId('subscription-modal-starter-credits')).not.toBeInTheDocument();
+    expect(screen.getByText(/subscription_modal.credits_rollover/)).toBeInTheDocument();
   });
 
   it('shows a delinquent plan as the current plan and lets the user cancel it', async () => {
