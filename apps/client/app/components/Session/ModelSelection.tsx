@@ -31,6 +31,7 @@ import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
+import { resolveRecommendedModelIds } from '@client/app/utils/recommendedModels';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -848,16 +849,16 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
   // Admin-ordered ids -> models. Reads from filteredModels so search, type filter and access
   // control apply, and an id that is unknown or inaccessible is dropped rather than shown dead.
-  const { getSettingObject } = useAdminSettings();
-  const recommendedIds = getSettingObject<string[]>('recommendedModelIds', emptyIds);
+  const { getSetting, getSettingObject } = useAdminSettings();
+  const storedRecommendedIds = getSettingObject<string[]>('recommendedModelIds', emptyIds);
+  const defaultModelId = getSetting('DefaultAPIModel');
   const recommendedModels = useMemo(() => {
     const byId = new Map<string, ModelInfo>(filteredModels.map(m => [m.id, m]));
-    // Set: a repeated id would render two cards with the same React key.
-    return [...new Set(Array.isArray(recommendedIds) ? recommendedIds : [])].flatMap(id => {
+    return resolveRecommendedModelIds(storedRecommendedIds, defaultModelId).flatMap(id => {
       const found = byId.get(id);
       return found ? [found] : [];
     });
-  }, [filteredModels, recommendedIds]);
+  }, [filteredModels, storedRecommendedIds, defaultModelId]);
 
   // Provider section order for display. Same ordering the memo above applies when flattening
   // filteredModels, so the accordions and the flat list agree.

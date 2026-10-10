@@ -19,7 +19,10 @@ import ModelSelection, {
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
 const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
-const adminSettings = vi.hoisted(() => ({ recommendedModelIds: [] as string[] }));
+const adminSettings = vi.hoisted(() => ({
+  recommendedModelIds: [] as string[],
+  DefaultAPIModel: undefined as string | undefined,
+}));
 
 const textModel = {
   id: 'gpt-text-model',
@@ -63,6 +66,8 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
   useAdminSettings: () => ({
+    getSetting: (key: string, fallback = '') =>
+      key === 'DefaultAPIModel' ? (adminSettings.DefaultAPIModel ?? fallback) : fallback,
     getSettingObject: (key: string, fallback: unknown) =>
       key === 'recommendedModelIds' ? adminSettings.recommendedModelIds : fallback,
   }),
@@ -398,9 +403,17 @@ describe('provider classifiers cover every backend', () => {
 describe('ModelSelection recommended group', () => {
   afterEach(() => {
     adminSettings.recommendedModelIds = [];
+    adminSettings.DefaultAPIModel = undefined;
   });
 
-  it('renders no Recommended group when the list is empty', () => {
+  it('recommends the admin-set default model when the list is empty', () => {
+    adminSettings.DefaultAPIModel = imageModel.id;
+    renderSelection({});
+    const cards = within(screen.getByTestId('recommended-section')).getAllByTestId(/^model-card-/);
+    expect(cards.map(c => c.getAttribute('data-testid'))).toEqual([`model-card-${imageModel.id}`]);
+  });
+
+  it('renders no Recommended group when the list is empty and the compiled default is not available', () => {
     renderSelection({});
     expect(screen.queryByTestId('recommended-section')).not.toBeInTheDocument();
   });

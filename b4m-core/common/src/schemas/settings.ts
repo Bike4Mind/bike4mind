@@ -2062,13 +2062,12 @@ export const settingsMap = {
   recommendedModelIds: makeObjectSetting<string[]>({
     key: 'recommendedModelIds',
     name: 'Recommended Model IDs',
-    // Ships as the default model only, so a fresh deploy makes no product claim beyond it.
-    // Must stay equal to DefaultAPIModel's defaultValue.
-    defaultValue: [
-      process.env.B4M_SELF_HOST === 'true' ? ChatModels.CLAUDE_5_SONNET : ChatModels.CLAUDE_5_SONNET_BEDROCK,
-    ],
+    // Empty means "follow DefaultAPIModel", so a fresh deploy recommends only the default model
+    // and an admin who changes that setting sees the change here too. Resolved client-side by
+    // resolveRecommendedModelIds (apps/client/app/utils/recommendedModels.ts).
+    defaultValue: [],
     description:
-      'Model IDs pinned in a "Recommended" group at the top of the model picker, in display order. Unknown or inaccessible IDs are skipped.',
+      'Model IDs pinned in a "Recommended" group at the top of the model picker, in display order. Unknown or inaccessible IDs are skipped. Empty recommends the Default API Model.',
     category: 'AI',
     order: 2,
     // The picker renders for every user, and a list of model ids is not sensitive.
