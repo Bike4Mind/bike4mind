@@ -1229,3 +1229,39 @@ Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/
 ## Kubernetes evaluation package
 
 For an independent package using the current application and worker entrypoints, see [the Kubernetes self-host guide](selfhost/kubernetes/README.md). It runs on portable Kubernetes, including EKS, with retained database/object/queue volumes and explicit image references. It is an evaluation deployment; complete workflow parity and production readiness remain separate validation work.
+
+### Background capability inventory guard
+
+The scripts unit suite checks hosted queue, schedule and event declarations against
+`packages/scripts/src/selfhostParityPolicy.ts`. The guard parses source without running
+SST. New or changed declarations, stale policy entries and changed mapped local
+registrations require review. Mapped imports must resolve; boot-path checks are syntactic
+inside `main` and registered callbacks, not proof that runtime gates are enabled. It includes disabled/conditional schedules, shared function
+targets and dead-letter infrastructure; a DLQ is not another application workflow.
+
+Run the focused guard with:
+
+```bash
+pnpm --filter @bike4mind/scripts exec vitest run src/selfhostParityInventory.test.ts
+```
+
+A failing guard reports the declaration identity, current declaration/local fingerprint
+and changed AWS signals. Inspect the corresponding infra declaration, referenced cadence
+and stage gates, selected registration/route and its imports before updating the policy.
+Copy the reported fingerprint only after that review; retain a concrete tracked gap or
+reviewed wiring mapping. Do not automatically regenerate the policy to clear CI.
+
+Review each changed record before updating its fingerprint. `portable` means checked
+registration or routing only; required resource/provider configuration and outcome proof
+remain separate. `pending` retains a tracked gap or capability decision. The infrastructure
+records excluded as separate workflows still require the associated consumer's broker
+configuration and recovery proof. Existing pending records remain under the queue and
+schedule roadmap trackers.
+
+AWS signals cover known exclusive hosted permissions and direct handler SDK imports.
+They are review flags, not proof that AWS is required: a configured provider or portable
+adapter can satisfy the capability. Compatible S3/SQS SDK use is not flagged as exclusive.
+The guard does not analyze arbitrary transitive dependencies or discover every application
+feature. Unsupported dynamic declaration names/options fail rather than disappear.
+Passing this static guard does not prove browser workflows, runtime configuration,
+retry/recovery behavior, actual timed effects or production parity.
