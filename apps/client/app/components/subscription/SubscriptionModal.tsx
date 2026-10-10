@@ -9,11 +9,7 @@ import {
   resolveSubscriptionSource,
   SubscriptionSource,
 } from '@client/lib/subscriptions/types';
-import {
-  ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-} from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import {
   SubscriptionPlanInterval,
   UserSubscriptionTier,
@@ -39,6 +35,7 @@ import { useTranslation } from 'react-i18next';
 import SubscribeButton from '../Credits/SubscribeButton';
 import ManageSubscriptionButton from './ManageSubscriptionButton';
 import PlanCard from './PlanCard';
+import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 
 function centsToDollars(cents: number | undefined) {
   if (cents === undefined) return 0;
@@ -107,9 +104,10 @@ const SubscriptionModalContent = () => {
 
   // The card quotes the cheapest Team checkout (minimum seats at the live Stripe per-seat price), the
   // same figure CreateTeamModal opens on. Undefined hides the price rather than inventing one.
+  const { minSeats: teamMinSeats } = useTeamSeatLimits();
+  const teamCreditsPerSeat = useTeamCreditsPerSeat();
   const teamSeatPrice = priceMap?.[ORGANIZATION_SUBSCRIPTION_PRICE_ID];
-  const teamPlanMinimumPrice =
-    teamSeatPrice === undefined ? undefined : centsToDollars(teamSeatPrice) * ORGANIZATION_SUBSCRIPTION_MIN_SEATS;
+  const teamPlanMinimumPrice = teamSeatPrice === undefined ? undefined : centsToDollars(teamSeatPrice) * teamMinSeats;
 
   // Build subscription plans based on runtime stage
   const subscriptionPlans: SubscriptionPlanDetail[] = useMemo(
@@ -273,10 +271,10 @@ const SubscriptionModalContent = () => {
               name={t('subscription_modal.team')}
               description="Collaborative AI workspace with shared resources and advanced project management."
               price={teamPlanMinimumPrice}
-              credits={ORGANIZATION_SUBSCRIPTION_MIN_SEATS * ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT}
+              credits={teamMinSeats * teamCreditsPerSeat}
               interval="month"
               features={[
-                `${ORGANIZATION_SUBSCRIPTION_MIN_SEATS} team member accounts included`,
+                `${teamMinSeats} team member accounts included`,
                 'Shared credit pool with 3-month rollover',
                 'Advanced Projects with RAG & Auto-Summary',
                 'Team workspace & knowledge management',

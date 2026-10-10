@@ -63,7 +63,9 @@ vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, opts?: { credits?: string }) => (opts?.credits ? `${key}:${opts.credits}` : key),
+  }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -111,6 +113,19 @@ describe('SubscriptionModal - Team tab', () => {
     // 4 seats x $30 from the mocked Stripe price, not a hardcoded figure.
     expect(screen.getByText(/\$120\.00/)).toBeInTheDocument();
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+  });
+
+  it('quotes seats, price and pool size from the admin team plan settings', async () => {
+    teamPlanEnabled = true;
+    settingValues = { teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
+    renderModal();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+
+    expect(screen.getByText(/\$60\.00/)).toBeInTheDocument();
+    expect(screen.getByText('2 team member accounts included')).toBeInTheDocument();
+    expect(screen.getByText('subscription_modal.credits_per_month:2,000')).toBeInTheDocument();
+    settingValues = {};
   });
 });
 

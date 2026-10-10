@@ -42,7 +42,7 @@ describe('team plan settings', () => {
       expect(readable.has('teamPlanMinSeats')).toBe(true);
       expect(readable.has('teamPlanMaxSeats')).toBe(true);
       expect(readable.has('lowCreditsThreshold')).toBe(true);
-      expect(readable.has('teamPlanCreditsPerSeat')).toBe(false);
+      expect(readable.has('teamPlanCreditsPerSeat')).toBe(true);
     });
   });
 

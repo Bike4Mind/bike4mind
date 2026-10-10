@@ -3239,6 +3239,8 @@ export const settingsMap = {
       'Credits added to a team pool per paid seat each billing cycle (and per seat-month on admin team grants). Applies to invoices issued after the change; credits already granted are not adjusted.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
+    // The Team plan card quotes the pool size to every signed-in user.
+    userReadable: true,
   }),
   lowCreditsThreshold: makeNumberSetting({
     key: 'lowCreditsThreshold',
