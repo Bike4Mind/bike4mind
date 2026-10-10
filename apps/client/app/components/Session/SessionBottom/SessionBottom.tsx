@@ -8,6 +8,7 @@ import Tooltip from '@mui/joy/Tooltip';
 
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { useUser } from '@client/app/contexts/UserContext';
 import { isChatCompletionActiveFor } from '@client/app/hooks/chatCompletionState';
 import {
   useSessions,
@@ -136,7 +137,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   );
   const [rephraseGlow, setRephraseGlow] = useState(false);
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
-  const [lowCreditsWarningDismissed, setLowCreditsWarningDismissed] = useState(() => isCreditNudgeDismissed());
+  const currentUserId = useUser(state => state.currentUser?.id);
+  // Keyed by user so a dismissal never applies to whoever signs in next on this browser.
+  const [lowCreditsDismissedFor, setLowCreditsDismissedFor] = useState<string | null>(null);
+  const lowCreditsWarningDismissed =
+    !!currentUserId && (lowCreditsDismissedFor === currentUserId || isCreditNudgeDismissed(currentUserId));
   // Band at which the user dismissed the context warning; re-shows on escalation.
   const [contextWarningDismissedBand, setContextWarningDismissedBand] = useState<ContextUsageBand | null>(null);
 
@@ -679,8 +684,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         show={creditUi.lowCreditsNotice}
                         currentCredits={effectiveCredits}
                         onDismiss={() => {
-                          dismissCreditNudge();
-                          setLowCreditsWarningDismissed(true);
+                          dismissCreditNudge(currentUserId);
+                          setLowCreditsDismissedFor(currentUserId ?? null);
                         }}
                       />
                       {/* Slash command suggestions */}
