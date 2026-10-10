@@ -204,26 +204,32 @@ describe('recordFirstChatValue', () => {
   const user = { id: 'u1', createdAt: new Date() };
 
   it('costs nothing for a user who already has a first answer', async () => {
-    const loadQuestStatus = vi.fn();
-    expect(await recordFirstChatValue({ user: { ...user, firstValueAt: new Date() }, loadQuestStatus })).toBe(false);
-    expect(loadQuestStatus).not.toHaveBeenCalled();
+    const loadQuest = vi.fn();
+    expect(await recordFirstChatValue({ user: { ...user, firstValueAt: new Date() }, loadQuest })).toBe(false);
+    expect(loadQuest).not.toHaveBeenCalled();
     expect(mockUpdateOne).not.toHaveBeenCalled();
   });
 
   it('records a completed answer as chat first_value', async () => {
-    expect(await recordFirstChatValue({ user, loadQuestStatus: async () => 'done' })).toBe(true);
+    expect(await recordFirstChatValue({ user, loadQuest: async () => ({ status: 'done', type: 'message' }) })).toBe(
+      true
+    );
     expect(mockEmit).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'first_value', metadata: expect.objectContaining({ feature: 'chat' }) })
     );
   });
 
-  it.each(['stopped', 'error', undefined])('ignores a quest that ended %s', async status => {
-    expect(await recordFirstChatValue({ user, loadQuestStatus: async () => status })).toBe(false);
+  it.each([
+    ['stopped', { status: 'stopped', type: 'message' }],
+    ['failed (done with an error reply, e.g. out of credits)', { status: 'done', type: 'error' }],
+    ['missing', null],
+  ])('ignores a quest that is %s', async (_label, quest) => {
+    expect(await recordFirstChatValue({ user, loadQuest: async () => quest })).toBe(false);
     expect(mockUpdateOne).not.toHaveBeenCalled();
   });
 
   it('never throws when the quest read fails', async () => {
-    const loadQuestStatus = () => Promise.reject(new Error('db down'));
-    await expect(recordFirstChatValue({ user, loadQuestStatus })).resolves.toBe(false);
+    const loadQuest = () => Promise.reject(new Error('db down'));
+    await expect(recordFirstChatValue({ user, loadQuest })).resolves.toBe(false);
   });
 });

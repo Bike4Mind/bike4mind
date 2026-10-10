@@ -151,15 +151,17 @@ export async function recordFirstValue(opts: {
 
 /**
  * The chat path's first_value hook, called after a quest finishes processing. A user who already
- * has firstValueAt costs nothing; otherwise the quest's status is read once and only a completed
- * (`done`) answer counts - a stopped or failed turn is not value. Never throws.
+ * has firstValueAt costs nothing; otherwise the quest is read once and only a completed answer
+ * counts - a stopped turn is not value, and neither is a failed one, which still ends `done` but
+ * with `type: 'error'` (out of credits, provider failure; see ChatQuestPollResultSchema in
+ * @bike4mind/common schemas/chat.ts). Never throws.
  */
 export async function recordFirstChatValue(opts: {
   user: FunnelUser & { createdAt?: Date | string | null; firstValueAt?: Date | null };
-  loadQuestStatus: () => Promise<string | undefined>;
+  loadQuest: () => Promise<{ status?: string; type?: string } | null | undefined>;
 }): Promise<boolean> {
   if (opts.user.firstValueAt) return false;
-  const status = await opts.loadQuestStatus().catch(() => undefined);
-  if (status !== 'done') return false;
+  const quest = await opts.loadQuest().catch(() => undefined);
+  if (quest?.status !== 'done' || quest.type === 'error') return false;
   return recordFirstValue({ user: opts.user, feature: 'chat' });
 }

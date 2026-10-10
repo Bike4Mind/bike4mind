@@ -347,7 +347,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
 
   await recordFirstChatValue({
     user,
-    loadQuestStatus: async () => (await questRepository.findById(params.questId))?.status,
+    loadQuest: () => questRepository.findById(params.questId),
   });
 
   return;
