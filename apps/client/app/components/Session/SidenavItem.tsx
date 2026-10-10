@@ -109,6 +109,9 @@ const SessionSidenavItem: FC<{
   /** Optional icon/badge rendered before the session name. Surface-scoped rails use it to
    *  mark rows that carry a surface-specific artifact; omitted rows render unchanged. */
   leadingDecorator?: ReactNode;
+  /** Row only opens the session: no actions menu (rename, favorite, share, move, delete, export).
+   *  Header mode falls back to the plain row, since its name button is the menu trigger. */
+  readOnly?: boolean;
 }> = ({
   session,
   onClick,
@@ -122,6 +125,7 @@ const SessionSidenavItem: FC<{
   displayNameOverride,
   selected,
   leadingDecorator,
+  readOnly = false,
 }): React.JSX.Element => {
   const { currentSessionId } = useSessions();
   const { currentUser, isAdmin } = useUser();
@@ -438,7 +442,7 @@ const SessionSidenavItem: FC<{
             type="text"
             onSuccess={handleRenameSuccess}
           />
-        ) : location === 'header' ? (
+        ) : location === 'header' && !readOnly ? (
           /* Header mode: name, chip, and dropdown arrow all in one unified container */
           <Dropdown>
             <Badge
@@ -814,7 +818,7 @@ const SessionSidenavItem: FC<{
           </Box>
         )}
         {/* Hide menu button in edit mode to focus on selection actions - sidenav only */}
-        {!isEditMode && location !== 'header' && (
+        {!isEditMode && !readOnly && location !== 'header' && (
           <Box
             sx={{
               position: 'absolute',

@@ -172,6 +172,7 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { replyPublisher } from '@client/app/utils/publishApi';
 import MessageContent from './MessageContent';
+import { SessionReadOnlyProvider } from './SessionReadOnlyContext';
 
 const replyPublisherMock = replyPublisher as unknown as ReturnType<typeof vi.fn>;
 
@@ -197,22 +198,25 @@ function renderMessageContent(
   {
     onSendMessage = vi.fn(),
     isLastMessage = false,
-  }: { onSendMessage?: (...args: never[]) => Promise<void>; isLastMessage?: boolean } = {}
+    readOnly = false,
+  }: { onSendMessage?: (...args: never[]) => Promise<void>; isLastMessage?: boolean; readOnly?: boolean } = {}
 ) {
   render(
     <TestWrapper queryClient={queryClient}>
-      <MessageContent
-        sessionId="session-1"
-        messageData={data}
-        index={0}
-        onDelete={vi.fn()}
-        onPinToggle={vi.fn()}
-        onSendMessage={onSendMessage as never}
-        isLastMessage={isLastMessage}
-        model="gpt-4o"
-        totalMessages={1}
-        canUseAdminTools={false}
-      />
+      <SessionReadOnlyProvider readOnly={readOnly}>
+        <MessageContent
+          sessionId="session-1"
+          messageData={data}
+          index={0}
+          onDelete={vi.fn()}
+          onPinToggle={vi.fn()}
+          onSendMessage={onSendMessage as never}
+          isLastMessage={isLastMessage}
+          model="gpt-4o"
+          totalMessages={1}
+          canUseAdminTools={false}
+        />
+      </SessionReadOnlyProvider>
     </TestWrapper>
   );
 }
@@ -800,5 +804,55 @@ describe('MessageContent actions menu - Fork into', () => {
 
     await waitFor(() => expect(forkFlow.navigate).toHaveBeenCalledWith({ href: '/desk?session=fork-1' }));
     expect(forkFlow.present).toHaveBeenCalledWith(home);
+  });
+});
+
+describe('MessageContent - read-only mode', () => {
+  // Persisted (24-hex id) so the correct-and-retry button is eligible when not read-only.
+  const persisted = { ...messageData, id: '0123456789abcdef01234567' } as IChatHistoryItem;
+  const writeMenuItems = [
+    'message-menu-edit',
+    'message-menu-pin',
+    'message-menu-fork',
+    'message-menu-quickstart',
+    'message-menu-try-again',
+    'message-menu-reprompt',
+    'message-send-to-datalake',
+    'message-menu-delete',
+  ];
+  const writeButtons = ['message-report-btn', 'message-correct-retry-btn', 'message-publish-share-btn'];
+
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+  });
+
+  it('offers every write action when not read-only', () => {
+    renderMessageContent(persisted);
+    for (const id of writeButtons) expect(screen.getByTestId(id)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+    for (const id of writeMenuItems) expect(screen.getByTestId(id)).toBeInTheDocument();
+  });
+
+  it('hides every write action but keeps the read-only ones when read-only', () => {
+    renderMessageContent(persisted, undefined, { readOnly: true });
+    for (const id of writeButtons) expect(screen.queryByTestId(id)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+    for (const id of writeMenuItems) expect(screen.queryByTestId(id)).not.toBeInTheDocument();
+    expect(screen.getByText('Toggle Code View')).toBeInTheDocument();
+    expect(screen.getByText(/^Save as/)).toBeInTheDocument();
+  });
+
+  it('shows no proactive report banner on a failing turn when read-only', () => {
+    const brokenTurn = {
+      ...persisted,
+      promptMeta: { functionCalls: [{ name: 'search_knowledge_base', success: false }] },
+    } as unknown as IChatHistoryItem;
+
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true, readOnly: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
   });
 });
