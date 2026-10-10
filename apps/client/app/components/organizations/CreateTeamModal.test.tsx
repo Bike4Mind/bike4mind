@@ -22,6 +22,10 @@ vi.mock('@client/app/hooks/data/stripe', () => ({
   }),
 }));
 
+vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
+  useTeamSeatLimits: () => ({ minSeats: 3, maxSeats: 7 }),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
@@ -31,6 +35,16 @@ describe('CreateTeamModal', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
     useCreateTeamModal.setState({ isOpen: true });
+  });
+
+  it('shows the admin-configured seat range', () => {
+    render(
+      <TestWrapper>
+        <CreateTeamModal />
+      </TestWrapper>
+    );
+
+    expect(screen.getByText(/Team size must be between 3 and 7/)).toBeTruthy();
   });
 
   it('submits only once when Create Team is double-clicked rapidly', async () => {
