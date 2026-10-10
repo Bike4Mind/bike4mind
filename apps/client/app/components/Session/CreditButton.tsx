@@ -1,73 +1,62 @@
-import { Typography, Tooltip, Button, useTheme, Box } from '@mui/joy';
+import { Button, Tooltip } from '@mui/joy';
+import { FC, useState } from 'react';
 import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
-import { FC, useState, useMemo } from 'react';
 import CreditsModal from '../subscription/CreditsModal';
+import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { formatCreditBalance } from '@client/app/utils/formatCredits';
 
 /**
  * Threshold below which credits are considered "low".
- * Used by both CreditButton (visual warning state) and LowCreditsWarning (overlay prompt).
+ * Used by CreditBalanceChip (warning colour), LowCreditsWarning and CreditsModal.
  */
 export const LOW_CREDITS_THRESHOLD = 1000;
 
-interface CreditsButtonProps {
-  currentCredits?: number;
+function balanceTooltip(credits: number): string {
+  if (credits <= 0) return 'Out of credits. Add credits to keep chatting.';
+  if (credits < LOW_CREDITS_THRESHOLD) return 'Running low. Add credits so your work is not interrupted.';
+  return 'Your credit balance. Each answer shows what it cost. Click to add credits or see usage.';
 }
 
-const SessionCreditsButton: FC<CreditsButtonProps> = ({ currentCredits = 0 }) => {
-  const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
+/**
+ * Always-visible, labeled credit balance for the composer toolbar; opens the credits modal
+ * (packages + transaction history). Renders nothing while `enforceCredits` is off, matching the
+ * profile menu - nothing decrements then, so a balance would mislead. Uses the display (not
+ * live) balance so it holds steady through a turn's reservation dip (see useEffectiveCredits).
+ */
+const CreditBalanceChip: FC<{ compact?: boolean }> = ({ compact = false }) => {
+  const enforceCredits = !!useGetSettingsValue('enforceCredits');
+  const credits = useEffectiveCredits();
   const [isOpen, setIsOpen] = useState(false);
 
-  const buttonColor = currentCredits <= 0 ? 'danger' : currentCredits < LOW_CREDITS_THRESHOLD ? 'warning' : 'neutral';
+  if (!enforceCredits) return null;
 
-  const tooltipTitle = useMemo(() => {
-    // Common message for low/no credits
-    const creditWarningMessage = "Buy more credits to make sure your work won't be interrupted";
-
-    if (currentCredits <= 0) {
-      return <CreditTooltipContent title="Ready for Refill" message={creditWarningMessage} />;
-    } else if (currentCredits < LOW_CREDITS_THRESHOLD) {
-      return <CreditTooltipContent title="Low on Credits!" message={creditWarningMessage} />;
-    } else {
-      return 'Credits';
-    }
-  }, [currentCredits]);
+  const color = credits <= 0 ? 'danger' : credits < LOW_CREDITS_THRESHOLD ? 'warning' : 'neutral';
+  const label = formatCreditBalance(credits, compact);
 
   return (
     <>
-      <Tooltip
-        title={tooltipTitle}
-        arrow
-        variant="outlined"
-        placement="top"
-        color={buttonColor}
-        sx={{
-          borderColor: theme.palette[buttonColor][400],
-          backgroundColor: isDarkMode ? theme.palette[buttonColor][800] : theme.palette[buttonColor][100],
-          '& .MuiTooltip-arrow:before': {
-            borderTopColor: theme.palette[buttonColor][400],
-            borderRightColor: theme.palette[buttonColor][400],
-          },
-        }}
-      >
+      <Tooltip title={balanceTooltip(credits)} placement="top" variant="soft">
         <Button
+          size="sm"
           variant="outlined"
-          sx={{
-            gap: '8px',
-            borderColor: theme.palette[buttonColor][400],
-            backgroundColor: isDarkMode ? theme.palette[buttonColor][800] : theme.palette[buttonColor][100],
-          }}
+          color={color}
           onClick={() => setIsOpen(true)}
+          data-testid="credit-balance-chip"
+          aria-label={`${formatCreditBalance(credits)}. Open credits`}
+          startDecorator={<Bike4MindIcon size="14" fill="currentColor" />}
+          sx={{
+            height: '32px',
+            minHeight: '32px',
+            px: 1.25,
+            borderRadius: '6px',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            fontWeight: 500,
+            fontVariantNumeric: 'tabular-nums',
+          }}
         >
-          <Bike4MindIcon size="15px" fill={theme.palette[buttonColor][400]} />
-          <Typography
-            level="body-sm"
-            sx={{
-              color: theme.palette[buttonColor][400],
-            }}
-          >
-            {currentCredits}
-          </Typography>
+          {label}
         </Button>
       </Tooltip>
       <CreditsModal open={isOpen} onClose={() => setIsOpen(false)} />
@@ -75,12 +64,4 @@ const SessionCreditsButton: FC<CreditsButtonProps> = ({ currentCredits = 0 }) =>
   );
 };
 
-// Helper component for tooltip content
-const CreditTooltipContent = ({ title, message }: { title: string; message: string }) => (
-  <Box sx={{ p: '10px', maxWidth: '268px' }}>
-    <Typography sx={{ fontWeight: 500, fontSize: '16px', lineHeight: '16px', mb: '8px' }}>{title}</Typography>
-    <Typography sx={{ fontSize: '14px', lineHeight: '140%', opacity: 0.5 }}>{message}</Typography>
-  </Box>
-);
-
-export default SessionCreditsButton;
+export default CreditBalanceChip;

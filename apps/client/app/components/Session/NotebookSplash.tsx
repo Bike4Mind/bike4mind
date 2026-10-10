@@ -20,6 +20,7 @@ import type { SkyGreetingResponse } from '@client/pages/api/sky-greeting/index';
 import { brandAlpha, gray } from '@client/app/utils/themes/colors';
 import { APP_NAME } from '@client/config/general';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
+import NewUserWelcome from './NewUserWelcome';
 
 // Shake animation for the magic 8-ball logo
 const shakeAnimation = keyframes`
@@ -847,6 +848,8 @@ const NotebookSplash: React.FC = () => {
           )}
         </Box>
       </Box>
+
+      <NewUserWelcome />
 
       {/* Prompt Cards */}
       {settings.showSplashCards &&

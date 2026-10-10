@@ -2,14 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { VIEWER_SANDBOX } from '@server/services/publish/viewerSecurity';
 
-const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne, mockUserFindById } = vi.hoisted(() => ({
-  mockArtifactFindOne: vi.fn(),
-  mockProjectFindOne: vi.fn(),
-  mockDownload: vi.fn(),
-  mockUpdateOne: vi.fn(() => Promise.resolve()),
-  // Domain access gates look the viewer's verified email up through User (checkVisibility).
-  mockUserFindById: vi.fn(),
-}));
+const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne, mockUserFindById, mockStarterCredits } =
+  vi.hoisted(() => ({
+    mockArtifactFindOne: vi.fn(),
+    mockProjectFindOne: vi.fn(),
+    mockDownload: vi.fn(),
+    mockUpdateOne: vi.fn(() => Promise.resolve()),
+    // Domain access gates look the viewer's verified email up through User (checkVisibility).
+    mockUserFindById: vi.fn(),
+    mockStarterCredits: vi.fn(() => Promise.resolve(0)),
+  }));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is handler.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -36,6 +38,10 @@ vi.mock('@server/middlewares/optionalJwtAuth', () => ({
 // Rate limiter: pass-through so share-branch requests proceed. rateLimit itself is unit-tested.
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+vi.mock('@server/utils/starterCredits', () => ({
+  getOpenSignupStarterCredits: () => mockStarterCredits(),
 }));
 
 vi.mock('@server/utils/storage', () => ({
@@ -580,6 +586,19 @@ describe('GET /api/publish/serve - sign-up prompt honesty (#318)', () => {
     expect(data).not.toContain('overflow:hidden');
     expect(data).not.toContain('b4m-gate-ol');
     expect(data).not.toContain('role="dialog"');
+  });
+
+  it('advertises the starter-credit amount from the setting, and no number when none is granted', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReplyFixture());
+    mockStarterCredits.mockResolvedValueOnce(12000);
+    const withCredits = run(['r', 'r1']);
+    await withCredits.promise;
+    const data = withCredits.res._getData() as string;
+    expect(data).toContain('<span class="b4m-credits-num">12,000</span>');
+
+    const noCredits = run(['r', 'r1']);
+    await noCredits.promise;
+    expect(noCredits.res._getData() as string).not.toContain('class="b4m-credits-num"');
   });
 });
 

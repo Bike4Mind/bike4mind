@@ -110,6 +110,41 @@ describe('buildSignupGateHtml', () => {
     expect(html).toContain('id="b4m-gate-dismiss"');
     expect(html).toContain('for="b4m-gate-dismiss"');
   });
+
+  it('states the starter-credit amount it is given', async () => {
+    const buildGate = await loadSignupGate();
+    const { html } = buildGate({ starterCredits: 12000 });
+    expect(html).toContain('<span class="b4m-credits-num">12,000</span>');
+    expect(html).toContain('free credits');
+  });
+
+  it('states no amount when none is given or none is granted', async () => {
+    const buildGate = await loadSignupGate();
+    for (const starterCredits of [undefined, null, 0, -5, Number.NaN]) {
+      const { html } = buildGate({ starterCredits });
+      expect(html).not.toContain('b4m-credits-num');
+      expect(html).not.toContain('free credits');
+    }
+  });
+});
+
+describe('replaceSignupGateHtml', () => {
+  it('swaps a baked gate for one carrying the live starter-credit amount', async () => {
+    const { buildSignupGateHtml, replaceSignupGateHtml } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const page = `<html><head><style>${gate.styles}</style></head><body><p>content</p>${gate.html}</body></html>`;
+    const replaced = replaceSignupGateHtml(page, { starterCredits: 2500 });
+    expect(replaced).toContain('<span class="b4m-credits-num">2,500</span>');
+    expect(replaced.match(/id="b4m-gate-panel"/g)).toHaveLength(1);
+    expect(replaced).toContain('<p>content</p>');
+    expect(replaced.endsWith('</body></html>')).toBe(true);
+  });
+
+  it('is a no-op on a page without a gate', async () => {
+    const { replaceSignupGateHtml } = await import('./shareFooter');
+    const page = '<html><body><p>content</p></body></html>';
+    expect(replaceSignupGateHtml(page, { starterCredits: 2500 })).toBe(page);
+  });
 });
 
 describe('shouldShowSignupGate', () => {

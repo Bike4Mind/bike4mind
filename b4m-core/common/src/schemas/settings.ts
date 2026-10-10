@@ -3159,6 +3159,8 @@ export const settingsMap = {
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
+    // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
+    userReadable: true,
     name: 'Default Free Credits',
     defaultValue: 0,
     description:

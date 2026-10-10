@@ -47,9 +47,11 @@ import {
   buildShareFooterHtml,
   pickSharedByName,
   buildSignupGateHtml,
+  replaceSignupGateHtml,
   shouldShowSignupGate,
   stripSignupGateHtml,
 } from '@client/app/utils/shareFooter';
+import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -654,6 +656,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       exportFormats,
       sharedBy: ownerName ?? undefined,
       signupGate: showSignupGate,
+      starterCredits: showSignupGate ? await getOpenSignupStarterCredits() : 0,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -744,7 +747,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
     });
   }
-  if (!showSignupGate) indexHtml = stripSignupGateHtml(indexHtml);
+  indexHtml = showSignupGate
+    ? replaceSignupGateHtml(indexHtml, { starterCredits: await getOpenSignupStarterCredits() })
+    : stripSignupGateHtml(indexHtml);
 
   if (isFormatRaw) {
     if (!isOpenPublic) {
@@ -1708,6 +1713,8 @@ function renderViewerPage(
      * shouldShowSignupGate; ignored for a standalone export, which never carries either.
      */
     signupGate?: boolean;
+    /** Starter-credit amount the sign-up card advertises; 0 renders no number. */
+    starterCredits?: number;
   }
 ): string {
   const {
@@ -1719,6 +1726,7 @@ function renderViewerPage(
     standalone = false,
     sharedBy,
     signupGate = false,
+    starterCredits = 0,
   } = opts;
   const body = replyBodyForExport(artifact);
   let contentHtml: string;
@@ -1798,7 +1806,7 @@ function renderViewerPage(
   // Sign-up prompt: shown to anonymous, non-share-link viewers of an open-public page only
   // (not standalone exports, share-link holders, or signed-in viewers - all of whom already
   // have full access, so there is nothing to invite them past). See shouldShowSignupGate.
-  const gate = signupGate && !standalone ? buildSignupGateHtml() : null;
+  const gate = signupGate && !standalone ? buildSignupGateHtml({ starterCredits }) : null;
   const gateStyles = gate?.styles ?? '';
   const gateHtml = gate?.html ?? '';
 
