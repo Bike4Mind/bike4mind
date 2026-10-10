@@ -9,7 +9,8 @@ description: >-
   docs-changed=true when any changed file matches the docs pathspec list - the
   docs-site/ corpus plus the help tooling in packages/scripts/help/; returns
   published-changed=true when any changed file matches the published pathspec
-  list - b4m-core, the lockfile, the check, its fixture and the CI wiring.
+  list - b4m-core, the SDK and its spec, the lockfile, the check, its fixture
+  and the CI wiring.
   Fails open (deployable=true) when the diff range can't be resolved.
 
   PR events use the merge-base (not the per-push before..after range) so a
@@ -82,6 +83,8 @@ inputs:
     required: false
     default: |
       b4m-core/**
+      packages/sdk/**
+      apps/client/public/openapi.json
       pnpm-lock.yaml
       scripts/check-published-dts.mjs
       scripts/fixtures/dangling-dts/**
@@ -96,7 +99,7 @@ outputs:
     description: "'true' if the run touched the docs corpus (docs-site/) or the help tooling (packages/scripts/help/), or the range was unresolved; 'false' otherwise. Gates the help-docs job in ci.yml, which runs the help guards a non-deployable docs-only run would otherwise skip."
     value: ${{ steps.filter.outputs.docs-changed }}
   published-changed:
-    description: "'true' if the run touched b4m-core, the lockfile, the check, its fixture or the CI wiring, or the range was unresolved; 'false' otherwise. Gates the published-dts job in ci.yml."
+    description: "'true' if the run touched b4m-core, the SDK or the spec it is generated from, the lockfile, the check, its fixture or the CI wiring, or the range was unresolved; 'false' otherwise. Gates the published-dts job in ci.yml."
     value: ${{ steps.filter.outputs.published-changed }}
 
 runs:

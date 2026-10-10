@@ -174,7 +174,7 @@ jobs:
       - name: Calculate core packages content hash
         id: core-hash
         run: |
-          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database | awk '{print $3}' | sort | md5sum | awk '{print $1}')
+          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database packages/sdk | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONFIG_HASH=$(git ls-tree HEAD package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json 2>/dev/null | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONTENT_HASH=$(echo "${TREE_HASH_B4M}${CONFIG_HASH}" | md5sum | awk '{print $1}')
           echo "content_hash=$CONTENT_HASH" >> $GITHUB_OUTPUT
@@ -212,6 +212,7 @@ jobs:
           path: |
             b4m-core/*/dist
             packages/database/dist
+            packages/sdk/dist
           # Intra-run handoff only: the jobs that consume this all `needs:
           # core-build`, so it is dead weight the moment the run ends. It was on
           # 7 days, which at ~1.8 GiB/day of CI artifacts overran the org's 2 GB
@@ -411,12 +412,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --recursive
 
+      # Also regenerates the @bike4mind/sdk types and operation manifest from the fresh spec.
       - name: Regenerate OpenAPI spec from Zod schemas
         run: pnpm turbo:openapi:generate
 
-      # Fails the PR if a schema change did not regenerate the committed spec.
+      # Fails the PR if a schema change did not regenerate the committed spec or the SDK types built from it.
       - name: Verify committed spec is up to date (no drift)
-        run: git diff --exit-code apps/client/public/openapi.json
+        run: git diff --exit-code apps/client/public/openapi.json packages/sdk/src/generated
 
       # Structural lint. Rules + intentional-rule exceptions live in redocly.yaml.
       - name: Lint OpenAPI spec (redocly)
@@ -1029,7 +1031,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-published-dts-${{ hashFiles('b4m-core/*/package.json') }}
+          key: ${{ runner.os }}-npm-published-dts-${{ hashFiles('b4m-core/*/package.json', 'packages/sdk/package.json') }}
           restore-keys: |
             ${{ runner.os }}-npm-published-dts-
 

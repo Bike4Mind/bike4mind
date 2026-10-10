@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-// Packs every published b4m-core package, installs the tarballs into a bare consumer project and runs tsc over
+// Packs every published b4m-core package (plus the standalone packages below), installs the tarballs into a bare consumer project and runs tsc over
 // each importable export with skipLibCheck off. The repo's own tsconfigs skip lib checking, so a name that dangles
 // inside a generated dist declaration only breaks a consumer's build. The consumer is DOM-free (lib es2022 plus
 // @types/node), so a dist that leans on DOM globals fails too.
 //
-// Usage: pnpm turbo:core:build && node scripts/check-published-dts.mjs   (KEEP_TMP=1 keeps the temp directory)
+// Usage: pnpm turbo:core:build && pnpm --filter @bike4mind/sdk build && node scripts/check-published-dts.mjs
+//        (KEEP_TMP=1 keeps the temp directory)
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -19,6 +20,9 @@ const fixtureDir = path.join(repoRoot, 'scripts', 'fixtures', 'dangling-dts');
 const FIXTURE_PACKAGE = '@bike4mind-fixture/dangling';
 const OTHER_GROUP = 'other (not a @bike4mind package)';
 const DECLARATION_FILE = /\.d\.[cm]?ts$/;
+// Published packages outside b4m-core. They are standalone: unlike the b4m-core packages (restricted on npm), their
+// declarations may not reference any @bike4mind package, so a public consumer can install them alone.
+const STANDALONE_PACKAGE_DIRS = ['packages/sdk'];
 
 // Shared by the real check and the self-test, so the self-test proves the exact options the real check runs with.
 const COMPILER_OPTIONS = {
@@ -115,24 +119,54 @@ export function groupTscErrors(output) {
 }
 
 export function discoverPackages(root = repoRoot) {
-  const coreDir = path.join(root, 'b4m-core');
+  const coreDirs = fs
+    .readdirSync(path.join(root, 'b4m-core'))
+    .sort()
+    .map(name => `b4m-core/${name}`);
   const packages = [];
-  for (const name of fs.readdirSync(coreDir).sort()) {
-    const dir = path.join(coreDir, name);
+  for (const name of [...coreDirs, ...STANDALONE_PACKAGE_DIRS]) {
+    const dir = path.join(root, name);
     const manifestPath = path.join(dir, 'package.json');
     if (!fs.existsSync(manifestPath)) continue;
     const manifest = readJson(manifestPath);
     if (manifest.private === true) continue;
-    packages.push({ dir, name, packageName: manifest.name, version: manifest.version });
+    const standalone = STANDALONE_PACKAGE_DIRS.includes(name);
+    packages.push({ dir, name, packageName: manifest.name, version: manifest.version, standalone });
   }
-  if (packages.length === 0) throw new Error('no published packages found under b4m-core');
+  if (packages.length === 0) throw new Error('no published packages found under b4m-core or packages/sdk');
   const unbuilt = packages.filter(pkg => !fs.existsSync(path.join(pkg.dir, 'dist')));
   if (unbuilt.length > 0) {
     throw new Error(
-      `no dist/ in b4m-core/{${unbuilt.map(pkg => pkg.name).join(',')}}; run pnpm turbo:core:build first`
+      `no dist/ in ${unbuilt.map(pkg => pkg.name).join(', ')}; run pnpm turbo:core:build and pnpm --filter @bike4mind/sdk build first`
     );
   }
   return packages;
+}
+
+// `@bike4mind/*` module specifiers referenced by a declaration file's source.
+export function bike4mindSpecifiers(source) {
+  const specifiers = new Set();
+  for (const match of source.matchAll(/(?:from|import\(|require\()\s*['"](@bike4mind\/[^'"]+)['"]/g)) {
+    specifiers.add(match[1]);
+  }
+  return [...specifiers];
+}
+
+function assertStandalone(packages) {
+  const problems = [];
+  for (const pkg of packages.filter(p => p.standalone)) {
+    const distDir = path.join(pkg.dir, 'dist');
+    for (const file of fs
+      .readdirSync(distDir, { recursive: true })
+      .map(String)
+      .filter(f => DECLARATION_FILE.test(f))) {
+      const found = bike4mindSpecifiers(fs.readFileSync(path.join(distDir, file), 'utf8'));
+      if (found.length > 0) problems.push(`${pkg.name}/dist/${file} references ${found.join(', ')}`);
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(`a standalone package's declarations reference a @bike4mind package:\n${problems.join('\n')}`);
+  }
 }
 
 function packAll(packages, tarballDir) {
@@ -307,6 +341,7 @@ export function checkExitCode(results) {
 
 function check(packages, pins, tmp) {
   const consumerDir = path.join(tmp, 'consumer');
+  assertStandalone(packages);
   console.log(`packing ${packages.length} packages`);
   const tarballs = packAll(packages, path.join(tmp, 'tarballs'));
   console.log(`installing into a bare consumer with ${pins.join(' and ')}`);

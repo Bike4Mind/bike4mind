@@ -349,6 +349,7 @@ export default defineConfig([
     '**/.sst/**',
     '**/sst-env.d.ts',
     'apps/client/public/**',
+    'packages/sdk/src/generated/**',
     'apps/client/next.config.js',
     'apps/client/next-i18next.config.js',
     'apps/client/test-csp.js',
