@@ -1,6 +1,8 @@
 import {
+  Annotation,
   PublishedArtifact,
   findMissingUserIds,
+  hideDeletedAuthorAnnotations,
   findTransferableOrgArtifacts,
   purgeOwnerPublishedArtifacts,
 } from '@bike4mind/database';
@@ -21,6 +23,11 @@ export interface BackfillOrphanedPublishedArtifactsResult {
   artifacts: number;
   /** Org-tier artifacts handed to their last publisher instead - or in a dry run, that would be. */
   transferred: number;
+  /** Distinct authors of live annotations whose user row no longer exists. */
+  deletedAuthors: number;
+  /** Their live annotations, moved to the deleted-account dustbin - or in a dry run, that would be.
+   *  A dry run also counts ones on pages the owner pass above would remove. */
+  annotations: number;
 }
 
 /**
@@ -29,6 +36,10 @@ export interface BackfillOrphanedPublishedArtifactsResult {
  * purgeOwnerPublishedArtifacts the delete path uses, so the result is identical (including
  * handing org pages to a still-existing last publisher) and a re-run is a no-op. An ownerId that is not a 24-hex ObjectId can never match a user, so it counts
  * as orphaned too.
+ *
+ * Then does the same for annotation authors: a deleted author's remaining live annotations
+ * (on other people's pages) go to the dustbin via hideDeletedAuthorAnnotations, as the delete
+ * path does, and expire 90 days later.
  *
  * Does NOT purge the CDN (that client lives in apps/client): a cached public copy expires on
  * its own short TTL, and the serve route already refuses artifacts with no live owner.
@@ -76,5 +87,27 @@ export async function backfillOrphanedPublishedArtifacts(
       `${orphans.length} orphaned; ${dryRun ? 'would remove' : 'removed'} ${artifacts} artifact(s), ` +
       `${dryRun ? 'would transfer' : 'transferred'} ${transferred} org artifact(s)`
   );
-  return { orphanedOwners: orphans.length, artifacts, transferred };
+
+  const authorIds = (await Annotation.distinct<string>('authorId', { deletedAt: null })).map(String);
+  const deletedAuthors: string[] = [];
+  for (let i = 0; i < authorIds.length; i += batchSize) {
+    deletedAuthors.push(...(await findMissingUserIds(authorIds.slice(i, i + batchSize))));
+  }
+
+  let annotations = 0;
+  for (const authorId of deletedAuthors) {
+    const count = dryRun
+      ? await Annotation.countDocuments({ authorId, deletedAt: null })
+      : await hideDeletedAuthorAnnotations(authorId);
+    annotations += count;
+    log(
+      `[backfill-orphaned-published-artifacts] author ${authorId}: ${dryRun ? 'would hide' : 'hid'} ${count} annotation(s)`
+    );
+  }
+
+  log(
+    `[backfill-orphaned-published-artifacts] ${authorIds.length} author(s) with live annotations; ` +
+      `${deletedAuthors.length} deleted; ${dryRun ? 'would hide' : 'hid'} ${annotations} annotation(s)`
+  );
+  return { orphanedOwners: orphans.length, artifacts, transferred, deletedAuthors: deletedAuthors.length, annotations };
 }

@@ -2,7 +2,8 @@
 
 /**
  * Soft-delete published artifacts whose owner account no longer exists (deleted before account
- * deletion started purging them). Logic and idempotency notes: ./backfillOrphanedPublishedArtifacts.ts.
+ * deletion started purging them), handing org pages to a still-existing last publisher, and move
+ * annotations written by deleted accounts to the 90-day dustbin. Logic and idempotency notes: ./backfillOrphanedPublishedArtifacts.ts.
  *
  * Dry run by default; pass --execute to write.
  *

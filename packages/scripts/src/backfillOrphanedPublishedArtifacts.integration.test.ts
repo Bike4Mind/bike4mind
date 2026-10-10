@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import { Annotation, PublishedArtifact, User } from '@bike4mind/database';
+import { Annotation, DELETED_AUTHOR_ANNOTATION_MARKER, PublishedArtifact, User } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 
 vi.mock('../utils/config', () => ({ Config: {} }));
@@ -58,7 +58,7 @@ describe('backfillOrphanedPublishedArtifacts', () => {
 
     const result = await backfillOrphanedPublishedArtifacts({ dryRun: true, log: silent });
 
-    expect(result).toEqual({ orphanedOwners: 1, artifacts: 2, transferred: 0 });
+    expect(result).toEqual({ orphanedOwners: 1, artifacts: 2, transferred: 0, deletedAuthors: 0, annotations: 0 });
     expect(await PublishedArtifact.countDocuments({ deletedAt: null })).toBe(3);
   });
 
@@ -71,7 +71,7 @@ describe('backfillOrphanedPublishedArtifacts', () => {
 
     const result = await backfillOrphanedPublishedArtifacts({ dryRun: false, batchSize: 1, log: silent });
 
-    expect(result).toEqual({ orphanedOwners: 1, artifacts: 1, transferred: 0 });
+    expect(result).toEqual({ orphanedOwners: 1, artifacts: 1, transferred: 0, deletedAuthors: 0, annotations: 0 });
     expect(await PublishedArtifact.countDocuments({ ownerId: gone, deletedBy: ORPHAN_BACKFILL_DELETED_BY })).toBe(1);
     expect(await PublishedArtifact.countDocuments({ ownerId: live, deletedAt: null })).toBe(1);
     expect(await Annotation.countDocuments({ deletedAt: null })).toBe(0);
@@ -82,7 +82,7 @@ describe('backfillOrphanedPublishedArtifacts', () => {
 
     const result = await backfillOrphanedPublishedArtifacts({ dryRun: false, log: silent });
 
-    expect(result).toEqual({ orphanedOwners: 1, artifacts: 1, transferred: 0 });
+    expect(result).toEqual({ orphanedOwners: 1, artifacts: 1, transferred: 0, deletedAuthors: 0, annotations: 0 });
   });
 
   it('is a no-op on a re-run', async () => {
@@ -93,6 +93,8 @@ describe('backfillOrphanedPublishedArtifacts', () => {
       orphanedOwners: 0,
       artifacts: 0,
       transferred: 0,
+      deletedAuthors: 0,
+      annotations: 0,
     });
   });
 
@@ -105,15 +107,43 @@ describe('backfillOrphanedPublishedArtifacts', () => {
     await artifact(gone, { lastPublishedBy: teammate });
 
     const dry = await backfillOrphanedPublishedArtifacts({ dryRun: true, log: silent });
-    expect(dry).toEqual({ orphanedOwners: 1, artifacts: 2, transferred: 1 });
+    expect(dry).toEqual({ orphanedOwners: 1, artifacts: 2, transferred: 1, deletedAuthors: 0, annotations: 0 });
     expect(await PublishedArtifact.countDocuments({ ownerId: gone, deletedAt: null })).toBe(3);
 
     const applied = await backfillOrphanedPublishedArtifacts({ dryRun: false, log: silent });
-    expect(applied).toEqual({ orphanedOwners: 1, artifacts: 2, transferred: 1 });
+    expect(applied).toEqual({ orphanedOwners: 1, artifacts: 2, transferred: 1, deletedAuthors: 0, annotations: 0 });
     expect(await PublishedArtifact.findOne({ publicId: orgPublicId }).lean()).toMatchObject({
       ownerId: teammate,
       deletedAt: null,
     });
     expect(await PublishedArtifact.countDocuments({ ownerId: gone, deletedAt: null })).toBe(0);
+  });
+
+  it("moves a deleted author's annotations on live pages to the dustbin, dry run first", async () => {
+    const owner = await liveUser();
+    const viewer = await liveUser();
+    const goneAuthor = String(new mongoose.Types.ObjectId());
+    await artifact(owner);
+    const publicId = `pub-${seq}`;
+    await Annotation.collection.insertMany([
+      { publicId, authorId: goneAuthor, deletedAt: null },
+      { publicId, authorId: goneAuthor, deletedAt: null },
+      { publicId, authorId: viewer, deletedAt: null },
+    ]);
+
+    const dry = await backfillOrphanedPublishedArtifacts({ dryRun: true, log: silent });
+    expect(dry).toMatchObject({ orphanedOwners: 0, deletedAuthors: 1, annotations: 2 });
+    expect(await Annotation.countDocuments({ deletedAt: null })).toBe(3);
+
+    const applied = await backfillOrphanedPublishedArtifacts({ dryRun: false, log: silent });
+    expect(applied).toMatchObject({ deletedAuthors: 1, annotations: 2 });
+    expect(await Annotation.countDocuments({ authorId: goneAuthor, deletedBy: DELETED_AUTHOR_ANNOTATION_MARKER })).toBe(
+      2
+    );
+    expect(await Annotation.countDocuments({ authorId: viewer, deletedAt: null })).toBe(1);
+    expect(await backfillOrphanedPublishedArtifacts({ dryRun: false, log: silent })).toMatchObject({
+      deletedAuthors: 0,
+      annotations: 0,
+    });
   });
 });
