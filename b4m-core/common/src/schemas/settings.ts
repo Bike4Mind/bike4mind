@@ -267,6 +267,7 @@ export const SettingKeySchema = z.enum([
   'EnableKnowledgeBaseSearch',
   'DefaultChunkSize',
   'DefaultAPIModel',
+  'recommendedModelIds',
   'AutoNameNotebook',
   'FormatPromptTemplate',
   'ArtifactEmissionPrompt',
