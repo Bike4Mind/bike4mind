@@ -331,13 +331,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       });
 
       const total = results[0].totalCount[0]?.count || 0;
-      // A row outside the shared-workspace scope can only be the exact-email match: return its id
-      // and name, nothing else.
-      const users: IUserObject[] = sharedUserIds
-        ? results[0].paginatedResults.map((user: IUserObject) =>
-            sharedUserIds.has(String(user._id)) ? user : { _id: user._id, name: user.name }
-          )
-        : results[0].paginatedResults;
+      const users: IUserObject[] = results[0].paginatedResults;
 
       // Project invites store recipients as emails, which the picker never returns, so the
       // "already invited" match is made here instead of in the modal.
@@ -352,6 +346,31 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         return res.status(404).json({ message: 'Project not found.' });
       }
 
+      const pagination = {
+        currentPage: page,
+        totalPages: Math.ceil(total / effectiveLimit),
+        totalUsers: total,
+      };
+
+      if (isPicker) {
+        // Built field by field, not hydrated: hydrate fills every unprojected path with its schema
+        // default (isAdmin: false, level, ...), which would ship as if it were the user's own data.
+        // A row outside the shared-workspace scope can only be the exact-email match, so it gets
+        // id and name, nothing else.
+        return res.json({
+          users: users.map((user: IUserObject) => {
+            const id = String(user._id);
+            return {
+              id,
+              name: user.name,
+              ...((!sharedUserIds || sharedUserIds.has(id)) && { username: user.username }),
+              ...(pendingInviteeIds && { pendingInvite: pendingInviteeIds.has(id) }),
+            };
+          }),
+          ...pagination,
+        });
+      }
+
       await User.populate(users, { path: 'organizationId' });
 
       return res.json({
@@ -362,9 +381,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
             ? { ...hydrated.toJSON(), pendingInvite: pendingInviteeIds.has(String(user._id)) }
             : hydrated;
         }),
-        currentPage: page,
-        totalPages: Math.ceil(total / effectiveLimit),
-        totalUsers: total,
+        ...pagination,
       });
     } else {
       const convertedBasePipeline = convertPipelineForDocumentDB(baseAggregationPipeline);

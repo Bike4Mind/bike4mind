@@ -160,6 +160,12 @@ describe('GET /api/users publicView - non-admin picker scope (real mongod)', () 
     expect(rows[0]).not.toHaveProperty('username');
   });
 
+  it('returns only the picker fields, not schema defaults for unprojected paths', async () => {
+    expect(Object.keys((await search(REQUESTER, false, { search: STRANGER_EMAIL }))[0]).sort()).toEqual(['id', 'name']);
+    const inScope = await search(REQUESTER, false, { search: 'zep' });
+    for (const row of inScope) expect(Object.keys(row).sort()).toEqual(['id', 'name', 'username']);
+  });
+
   it('ignores orgSearch for a non-admin, so it cannot reveal an exact-email match organization', async () => {
     const rows = await search(REQUESTER, false, { search: STRANGER_EMAIL, 'orgSearch[0]': 'No such org' });
     expect(ids(rows)).toEqual([STRANGER.toString()]);
