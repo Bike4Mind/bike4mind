@@ -55,6 +55,7 @@ import {
   type ThinkingConfig,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
+import { logAnthropicLimitResponse, pickRateLimitHeaders } from './anthropicRateLimitLog';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
 import {
@@ -177,7 +178,9 @@ export class AnthropicBackend implements ICompletionBackend {
       const MAX_TRANSPORT_RETRIES = 2;
       for (let attempt = 0; attempt <= MAX_TRANSPORT_RETRIES; attempt++) {
         try {
-          return await fetch(input, init);
+          const response = await fetch(input, init);
+          await logAnthropicLimitResponse(this.logger, response, init);
+          return response;
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
           const isTransportError = err instanceof TypeError && (msg === 'terminated' || msg === 'fetch failed');
@@ -2606,7 +2609,11 @@ export class AnthropicBackend implements ICompletionBackend {
         this.logger.error('[AnthropicBackend] Rate limit error after all retries exhausted', {
           model,
           status: error.status,
-          message: error.message,
+          // The logger reserves `message` for the log line itself, so Anthropic's text goes elsewhere
+          anthropicMessage: error.message,
+          requestID: error.requestID,
+          errorType: (error.error as { error?: { type?: string } } | undefined)?.error?.type,
+          headers: pickRateLimitHeaders(error.headers as Parameters<typeof pickRateLimitHeaders>[0]),
           // Context for ops
           featureArea,
           requestType,
