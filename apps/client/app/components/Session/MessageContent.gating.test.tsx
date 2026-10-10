@@ -16,7 +16,7 @@ import { WORKSPACE_SURFACES, type IChatHistoryItem } from '@bike4mind/common';
  */
 
 const mocks = vi.hoisted(() => ({
-  showCreditsUsed: true,
+  showCreditsUsed: true as boolean | undefined,
   serverSettings: [] as Array<{ settingName: string; settingValue: unknown }>,
   sessionFeedback: [] as Array<{ questId?: string }>,
   sessionFeedbackLoading: false,
@@ -651,6 +651,15 @@ describe('MessageContent per-message credits-used chip - enforceCredits gating',
   it('shows the chip when enforcement is on and the user opted in', () => {
     mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: true }];
     mocks.showCreditsUsed = true;
+
+    renderMessageContent(creditsMessageData);
+
+    expect(screen.getByTestId('credits-used')).toHaveTextContent('42 credits');
+  });
+
+  it('shows the chip when the user has never set the preference', () => {
+    mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: true }];
+    mocks.showCreditsUsed = undefined;
 
     renderMessageContent(creditsMessageData);
 
