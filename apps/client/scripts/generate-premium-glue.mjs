@@ -127,6 +127,12 @@ function ensureDir(dir) {
 
 function writeFile(path, content) {
   ensureDir(dirname(path));
+  // Rewriting identical files on every start fires watcher events, and sst dev
+  // crashes when it lstats the temp file after the rename has removed it.
+  if (existsSync(path) && readFileSync(path, 'utf8') === content) {
+    console.log(`  unchanged ${path.replace(REPO_ROOT + '/', '')}`);
+    return;
+  }
   // Atomic write: write to a temp file in the same directory, then rename over the
   // real path. A plain writeFileSync truncates the target before writing its new
   // content, so a concurrent reader (e.g. another turbo task's test statically
