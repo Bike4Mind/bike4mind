@@ -107,7 +107,7 @@ function parseCoord(raw: string): number | null {
 }
 
 /** Returns true for keys of the form `layer:col,row` with canonical integer coords in 0..MAX_COORD. */
-export function validateEditKey(key: string): boolean {
+function validateEditKey(key: string): boolean {
   const parts = key.split(':');
   if (parts.length !== 2) return false;
   const [layer, coords] = parts;

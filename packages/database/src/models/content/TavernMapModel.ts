@@ -85,7 +85,7 @@ export const TavernMap: ITavernMapModel =
 // Helpers
 // ---------------------------------------------------------------------------
 
-export function isValidDim(n: unknown): n is number {
+function isValidDim(n: unknown): n is number {
   return typeof n === 'number' && Number.isInteger(n) && n >= MIN_MAP_DIM && n <= MAX_MAP_DIM;
 }
 
