@@ -14,12 +14,20 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useCreateTeamDev: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
+type PlansState = {
+  data: Array<{ id: string; unit_amount: number }> | undefined;
+  isLoading: boolean;
+  isError: boolean;
+};
+const defaultPlans = (): PlansState => ({
+  data: [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }],
+  isLoading: false,
+  isError: false,
+});
+let plansState: PlansState = defaultPlans();
+
 vi.mock('@client/app/hooks/data/stripe', () => ({
-  useGetSubscriptionPlans: () => ({
-    data: [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }],
-    isLoading: false,
-    isError: false,
-  }),
+  useGetSubscriptionPlans: () => plansState,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -30,6 +38,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 describe('CreateTeamModal', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
+    plansState = defaultPlans();
     useCreateTeamModal.setState({ isOpen: true });
   });
 
@@ -59,5 +68,50 @@ describe('CreateTeamModal', () => {
 
     resolveSubmit({ sessionUrl: 'https://stripe.example/checkout' });
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+  });
+
+  const renderModal = () =>
+    render(
+      <TestWrapper>
+        <CreateTeamModal />
+      </TestWrapper>
+    );
+
+  it('shows the live per-seat price times the seat count', () => {
+    renderModal();
+
+    expect(screen.getByTestId('create-team-price-value').textContent).toBe('Total Price: $40/month');
+  });
+
+  it('blocks checkout instead of quoting $0 when the team price is missing from Stripe', async () => {
+    plansState = { data: [{ id: 'price_some_other_plan', unit_amount: 3000 }], isLoading: false, isError: false };
+    renderModal();
+
+    expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
+    expect(screen.queryByTestId('create-team-price-value')).toBeNull();
+    expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+  });
+
+  it('does not sit on a loading skeleton forever when the plans query is disabled', () => {
+    plansState = { data: undefined, isLoading: false, isError: false };
+    renderModal();
+
+    expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
+  });
+
+  it('keeps a failed checkout request from escaping the click handler', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    mutateAsync.mockRejectedValue(new Error('stripe down'));
+    renderModal();
+
+    const user = userEvent.setup({ delay: null });
+    await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+    await user.click(screen.getByTestId('create-team-submit-btn'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
   });
 });
