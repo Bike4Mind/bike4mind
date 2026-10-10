@@ -46,6 +46,21 @@ vi.mock('./agentExecutor.subagentToolConfig', async () => {
   return { ...actual, buildSubagentToolConfig: vi.fn().mockReturnValue({}) };
 });
 
+vi.mock('./agentExecutor.videoToolConfig', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.videoToolConfig')>(
+    './agentExecutor.videoToolConfig'
+  );
+  return {
+    ...actual,
+    getAgentVideoToolConfigDeps: vi.fn().mockReturnValue({
+      resolveClipLimit: vi.fn().mockResolvedValue(2),
+      buildBaseConfig: vi.fn().mockResolvedValue({ createJob: vi.fn() }),
+      slots: { claim: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    }),
+  };
+});
+
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
@@ -126,6 +141,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(repo, 'markFailed').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'markAborted').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'checkAbortFlag').mockResolvedValue(false as never);
+  vi.spyOn(actual.questRepository, 'addVideoJobIds').mockResolvedValue(undefined as never);
   vi.spyOn(actual.usageEventRepository, 'record').mockResolvedValue(undefined as never);
   vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100 } as never);
   vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue(baseSession as never);
@@ -177,6 +193,46 @@ describe('processExecution tool deps', () => {
 
     expect((deps.attachedFileIds as string[]).slice().sort()).toEqual(['file-f', 'file-k', 'file-m']);
     expect(deps.sessionIncludeLibraryFiles).toBe(false);
+  });
+
+  describe('video_generation wiring', () => {
+    const videoExecDoc = {
+      ...execDoc,
+      linkedQuestId: 'q-run',
+      resolvedEnabledTools: ['video_generation'],
+    };
+
+    async function runWithExecDoc(doc: Record<string, unknown>) {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      await runWithSession(baseSession);
+    }
+
+    it('offers the video tool to a run without an API key', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      await runWithExecDoc(videoExecDoc);
+
+      expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].videoConfig).not.toBeNull();
+    });
+
+    it('withholds the video tool from a run started with an API key', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      await runWithExecDoc({ ...videoExecDoc, apiKeyId: 'key-1' });
+
+      expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].videoConfig).toBeNull();
+    });
+
+    it('attaches new video job ids to the run quest from onStatusUpdate', async () => {
+      const { questRepository } = await import('@bike4mind/database');
+      await runWithExecDoc(videoExecDoc);
+
+      const toolCallbacks = buildSharedToolsMock.mock.calls[0][1] as {
+        onStatusUpdate: (changes: Record<string, unknown>) => Promise<void>;
+      };
+      await toolCallbacks.onStatusUpdate({ videoJobIds: ['job-1'] });
+
+      expect(questRepository.addVideoJobIds).toHaveBeenCalledWith('q-run', ['job-1']);
+    });
   });
 
   it('resolves an unset library flag to included for a session with no explicit lake scope', async () => {

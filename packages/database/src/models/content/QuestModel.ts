@@ -1232,8 +1232,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Claim one of an agent run's `limit` video clip slots. The run's parent and subagents share this
-   * Quest but run in separate Lambdas, so the check and the increment must be one atomic update.
+   * Claim one of an agent run's `limit` video clip slots. The run's parent, its in-process subagents and its checkpoint continuations share
+   * this Quest and can claim concurrently, so the check and the increment must be one atomic update.
    * Returns false when the cap is reached or no Quest matches.
    */
   async claimAgentVideoClip(questId: string, limit: number): Promise<boolean> {
