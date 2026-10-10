@@ -19,13 +19,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
-vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: class {},
-  GetObjectCommand: class {
-    constructor(public input: unknown) {}
-  },
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({ getSignedUrl: vi.fn(async () => 'https://s3.test/signed') }),
 }));
-vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () => 'https://s3.test/signed') }));
 
 const findOne = vi.fn();
 const findAccessibleById = vi.fn();
