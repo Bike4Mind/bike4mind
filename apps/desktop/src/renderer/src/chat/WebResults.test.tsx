@@ -132,6 +132,19 @@ describe('a web search row', () => {
     expect(byTestId('chat-tool-detail-result')[0].textContent).toBe(preview);
   });
 
+  it('asks to read a page rather than to run a command', () => {
+    const gated: ChatToolCall = {
+      id: 'f2',
+      name: 'web_fetch',
+      input: { url: 'https://example.com/docs' },
+      status: 'awaiting-approval',
+      approvalId: 'a1',
+      approvalDetail: 'Read https://example.com/docs',
+    };
+    act(() => root.render(<ToolCallList calls={[gated]} onRespond={() => undefined} />));
+    expect(byTestId('chat-tool-approval')[0].textContent).toContain('Read this web page?');
+  });
+
   it('links a fetch to the page it read', () => {
     const fetched: ChatToolCall = {
       id: 'f1',

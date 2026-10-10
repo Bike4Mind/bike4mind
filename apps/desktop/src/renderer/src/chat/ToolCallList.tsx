@@ -16,6 +16,7 @@ import type {
 import { REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 import { isMcpConfigToolName, MCP_UPDATE_SERVER_TOOL_NAME, parseMcpServerRequest } from '@shared/mcp';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
+import { WEB_FETCH_TOOL_NAME } from '@shared/webSearch';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { DiffView } from './DiffView';
 import { DirectoryRequestCard } from './DirectoryRequestCard';
@@ -47,6 +48,11 @@ const HOST_QUESTION: Record<string, string> = {
   session_send: 'Send this to that conversation? It runs there on its own and costs credits.',
   session_archive: 'Archive this conversation?',
   session_delete: 'Delete this conversation for good?',
+};
+
+/** Read-only tools that still stop at the gate; "Run this command?" would misname them. */
+const READ_QUESTION: Record<string, string> = {
+  [WEB_FETCH_TOOL_NAME]: 'Read this web page?',
 };
 
 export type RespondToApproval = (approvalId: string, answer: ChatApprovalAnswer) => void;
@@ -207,6 +213,7 @@ function ApprovalPrompt({
             ? `Apply this patch to ${diffs.length} files?`
             : APPROVAL_QUESTION[diff.operation]
           : (HOST_QUESTION[call.name] ??
+            READ_QUESTION[call.name] ??
             (isGeneration(call.name)
               ? 'Generate this? It costs credits.'
               : call.name === 'bash_background'

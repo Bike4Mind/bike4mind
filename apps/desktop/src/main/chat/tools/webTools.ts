@@ -211,7 +211,8 @@ export function capFetchedChunk(text: string, requestedOffset: number, limit: nu
 
   const room = limit - 240;
   const lastBreak = content.lastIndexOf('\n', room);
-  const cut = lastBreak > room - 4_000 && lastBreak > prefix ? lastBreak : room;
+  // Clamped: a long llms.txt hint can push a chunk over the limit while its content fits.
+  const cut = Math.min(content.length, lastBreak > room - 4_000 && lastBreak > prefix ? lastBreak : room);
   const next = start + Math.max(0, cut - prefix);
   return (
     `${content.slice(0, cut)}\n\n[web_fetch: showing chars ${start}-${next} of ~${total}. ` +

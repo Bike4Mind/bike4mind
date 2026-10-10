@@ -207,6 +207,16 @@ describe('capFetchedChunk', () => {
     expect(next).toBe(1000 + kept);
   });
 
+  it('never points past the chunk when a long llms.txt hint is what pushed it over the limit', () => {
+    const markdown = 'z'.repeat(1_700);
+    const hint = ` A curated long-form version may be available at https://example.com/${'p'.repeat(200)}/llms-full.txt - fetching it can be more efficient than paging.`;
+    const server = `${markdown}\n\n[web_fetch: showing chars 0-1700 of ~9000. More content remains - call web_fetch again with the same url and offset=1700 to continue.${hint}]`;
+    const out = capFetchedChunk(server, 0, 2_000);
+    expect(out.length).toBeLessThanOrEqual(2_000);
+    expect(out).toContain('showing chars 0-1700 of ~9000');
+    expect(out).toContain('offset=1700 to continue');
+  });
+
   it('adds a marker when the server sent a whole page larger than the limit', () => {
     const out = capFetchedChunk('# T\n\n' + 'z'.repeat(5_000), 0, 2_000);
     expect(out).toMatch(/offset=\d+ to continue\.\]$/);
