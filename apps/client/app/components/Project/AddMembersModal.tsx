@@ -18,7 +18,7 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
 }) => {
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
-  const [selectedUserNames, setSelectedUserNames] = useState<string[]>([]);
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const queryClient = useQueryClient();
 
   const params: IGetUsersParams = useMemo(() => ({ search, page: 1, limit: 10, publicView: true }), [search]);
@@ -33,7 +33,7 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invites', 'projects', project.id] });
       setSearch('');
-      setSelectedUserNames([]);
+      setSelectedUserIds([]);
       toast.success('Sent an invite to the selected users');
     },
     onError: err => {
@@ -87,6 +87,7 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
           inviteStatus={inviteStatus}
           onClick={!!inviteStatus ? undefined : onSelect}
           checked={isSelected}
+          hideEmail={!user.email}
         />
       );
     },
@@ -105,9 +106,9 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
       buttonLabel={t('projects.modals.members.button_label', 'Add Members')}
       buttonIcon={<AddIcon />}
       items={users}
-      selectedIds={selectedUserNames}
-      onSelectIds={setSelectedUserNames}
-      getItemId={user => user.username}
+      selectedIds={selectedUserIds}
+      onSelectIds={setSelectedUserIds}
+      getItemId={user => user.id}
       onSearch={term => debouncedSearch(term)}
       searchPlaceholder={t('common.search_users', 'Search users')}
       searchMinLength={3}

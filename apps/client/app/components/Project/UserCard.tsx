@@ -126,16 +126,19 @@ const UserCard: FC<{
             >
               {inviteStatus === 'pending' ? userData?.email : userData?.name}
             </Box>
-            <Box
-              className="project-user-card-email"
-              sx={{
-                fontSize: '14px',
-                lineHeight: '14px',
-                color: 'text.primary50',
-              }}
-            >
-              {inviteStatus === 'pending' ? 'Pending Invite' : userData?.email}
-            </Box>
+            {/* The non-admin member list carries no email, so there is no second line to show. */}
+            {(inviteStatus === 'pending' || userData?.email) && (
+              <Box
+                className="project-user-card-email"
+                sx={{
+                  fontSize: '14px',
+                  lineHeight: '14px',
+                  color: 'text.primary50',
+                }}
+              >
+                {inviteStatus === 'pending' ? 'Pending Invite' : userData?.email}
+              </Box>
+            )}
           </Stack>
         </Stack>
       </Box>

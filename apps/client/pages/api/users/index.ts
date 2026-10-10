@@ -14,10 +14,13 @@ import {
   ADMIN_DEFAULT_SORT_FIELD,
   ADMIN_USER_PROJECTION,
   ADMIN_USER_SORT_FIELDS,
+  PICKER_USER_PROJECTION,
+  PICKER_USER_SORT_FIELDS,
   PUBLIC_DEFAULT_SORT_FIELD,
   PUBLIC_USER_LIST_PROJECTION,
   PUBLIC_USER_SORT_FIELDS,
 } from '@client/app/utils/adminUserProjection';
+import { findSharedWorkspaceUserIds } from '@server/users/sharedWorkspaceUserIds';
 import * as z from 'zod';
 import qs from 'qs';
 import { Request } from 'express';
@@ -60,7 +63,8 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // non-admins require a minimum search term to prevent blind pagination over all
     // users, downloadAll is admin-only, and the page size is hard-capped.
     const isAdmin = !!req.user?.isAdmin;
-    if (publicView && !isAdmin) {
+    const isPicker = publicView && !isAdmin;
+    if (isPicker) {
       // projectId-scoped requests show members of one specific project rather than the whole
       // directory, so they are exempt from the search-term minimum. What makes that safe is
       // the access check on the project itself, further down -- not the narrowing alone.
@@ -80,7 +84,11 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // picks the projection: a caller can only rank on fields their own response returns.
     // Out-of-allowlist values fall back to the default rather than 400, so a stale bookmark
     // still renders a list instead of an error.
-    const allowedSortFields = publicView ? PUBLIC_USER_SORT_FIELDS : ADMIN_USER_SORT_FIELDS;
+    const allowedSortFields = isPicker
+      ? PICKER_USER_SORT_FIELDS
+      : publicView
+        ? PUBLIC_USER_SORT_FIELDS
+        : ADMIN_USER_SORT_FIELDS;
     const defaultSortField = publicView ? PUBLIC_DEFAULT_SORT_FIELD : ADMIN_DEFAULT_SORT_FIELD;
     const effectiveSortField = allowedSortFields.has(sortField) ? sortField : defaultSortField;
     // username reads better ascending (A-Z); createdAt keeps the historical newest-first
@@ -93,34 +101,49 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       ? User.find().getQuery()
       : accessibleBy(req.ability!, 'read').ofType(User);
 
+    // The non-admin picker only reaches people the caller already works with: anyone sharing an
+    // organization or project. A projectId request is already narrowed to that project's roster
+    // (and access-checked below), which is a subset of the same set.
+    const sharedUserIds = isPicker && !projectId ? await findSharedWorkspaceUserIds(req.user) : undefined;
+
     const conditions = [];
     if (search) {
       const escapedSearch = escapeRegex(search);
-      // An unanchored substring over email made publicView a directory crawl: `search=com`
-      // matched every address on the instance. Anchor the public picker's match instead --
-      // username/email at the start, name at the start of any word so a last-name lookup
-      // still works. Admins and the CASL-scoped path keep substring search.
-      const searchConditions: mongoose.FilterQuery<typeof User>[] =
-        publicView && !isAdmin
-          ? [
-              { name: { $regex: `(?:^|[\\s.\\-])${escapedSearch}`, $options: 'i' } },
-              { username: { $regex: `^${escapedSearch}`, $options: 'i' } },
-              { email: { $regex: `^${escapedSearch}`, $options: 'i' } },
-            ]
-          : [
-              { name: { $regex: escapedSearch, $options: 'i' } },
-              { username: { $regex: escapedSearch, $options: 'i' } },
-              { email: { $regex: escapedSearch, $options: 'i' } },
-            ];
+      const idConditions: mongoose.FilterQuery<typeof User>[] = /^[0-9a-fA-F]{24}$/.test(search)
+        ? [{ _id: new mongoose.Types.ObjectId(search) }]
+        : [];
 
-      // If the search string looks like a valid ObjectId, add exact match condition
-      if (/^[0-9a-fA-F]{24}$/.test(search)) {
-        searchConditions.push({ _id: new mongoose.Types.ObjectId(search) });
+      if (isPicker) {
+        // Name (at the start of any word) or username prefix, within the shared-workspace scope.
+        // Email is never prefix-matched here: the only email match is an exact, fully typed
+        // address, which may reach a user outside that scope - that row is stripped to id + name
+        // further down, so the caller learns nothing beyond the address they already had.
+        const prefixMatch = {
+          $or: [
+            { name: { $regex: `(?:^|[\\s.\\-])${escapedSearch}`, $options: 'i' } },
+            { username: { $regex: `^${escapedSearch}`, $options: 'i' } },
+            ...idConditions,
+          ],
+        };
+        const scopedMatch = sharedUserIds
+          ? { $and: [{ _id: { $in: [...sharedUserIds].map(id => new mongoose.Types.ObjectId(id)) } }, prefixMatch] }
+          : prefixMatch;
+        conditions.push({
+          $or: [
+            scopedMatch,
+            ...(search.includes('@') ? [{ email: { $regex: `^${escapedSearch}$`, $options: 'i' } }] : []),
+          ],
+        });
+      } else {
+        conditions.push({
+          $or: [
+            { name: { $regex: escapedSearch, $options: 'i' } },
+            { username: { $regex: escapedSearch, $options: 'i' } },
+            { email: { $regex: escapedSearch, $options: 'i' } },
+            ...idConditions,
+          ],
+        });
       }
-
-      conditions.push({
-        $or: searchConditions,
-      });
     }
 
     // tags selects on isAdmin/tags, neither of which the public projection returns. On the
@@ -156,7 +179,9 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
     // Move organization filtering to the aggregation pipeline
     let organizationFilter = {};
-    if (!orgSearch.includes('all')) {
+    // Ignored for the picker: filtering on organization.name, which it does not return, would
+    // answer "which organization is this exact-email user in".
+    if (!isPicker && !orgSearch.includes('all')) {
       const conditions: Record<string, unknown>[] = [];
 
       // Filter by specific org names (excluding 'Unassigned')
@@ -194,6 +219,12 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         _id: { $in: project.users.map(u => new mongoose.Types.ObjectId(u.userId)) },
       };
     }
+
+    const projection = isPicker
+      ? PICKER_USER_PROJECTION
+      : publicView
+        ? PUBLIC_USER_LIST_PROJECTION
+        : ADMIN_USER_PROJECTION;
 
     let baseAggregationPipeline = [];
 
@@ -240,7 +271,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         },
         {
           $project: {
-            ...(publicView ? PUBLIC_USER_LIST_PROJECTION : ADMIN_USER_PROJECTION),
+            ...projection,
             score: 1,
           },
         },
@@ -268,7 +299,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
           },
         },
         { $sort: { [effectiveSortField]: effectiveSortOrder === 'asc' ? 1 : -1 } },
-        { $project: publicView ? PUBLIC_USER_LIST_PROJECTION : ADMIN_USER_PROJECTION },
+        { $project: projection },
       ];
     }
 
@@ -283,7 +314,13 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       });
 
       const total = results[0].totalCount[0]?.count || 0;
-      const users = results[0].paginatedResults;
+      // A row outside the shared-workspace scope can only be the exact-email match: return its id
+      // and name, nothing else.
+      const users: IUserObject[] = sharedUserIds
+        ? results[0].paginatedResults.map((user: IUserObject) =>
+            sharedUserIds.has(String(user._id)) ? user : { _id: user._id, name: user.name }
+          )
+        : results[0].paginatedResults;
 
       await User.populate(users, { path: 'organizationId' });
 
