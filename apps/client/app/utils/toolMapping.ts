@@ -30,6 +30,8 @@ import {
 import { B4MLLMTools } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services/llm';
 import type { ToolAvailability } from '@pages/api/settings/serverConfig';
+import type { PremiumToolDisplayLabels } from '@client/app/premiumContract';
+import { premiumToolDisplayLabels } from '@client/app/premium-generated/premiumToolDisplayLabels.generated';
 import React from 'react';
 
 export interface ToolInfo {
@@ -343,8 +345,27 @@ export const getToolInfo = (toolName: PublicTools): ToolInfo | undefined => {
   return TOOL_MAPPING[toolName];
 };
 
-export const getToolDisplayName = (toolName: PublicTools): string => {
-  return TOOL_MAPPING[toolName]?.displayName || toolName;
+/**
+ * Readable name for a tool id with no declared label: separators become spaces, words are
+ * title-cased, and a leading namespace segment (`<prefix>_...`) is dropped, so a raw id - which
+ * may name the product that registered it - never reaches the UI.
+ */
+export const humanizeToolId = (toolName: string): string => {
+  const words = toolName.split(/[_.\-\s]+/).filter(Boolean);
+  const shown = words.length > 1 ? words.slice(1) : words;
+  return shown.map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+};
+
+/** A core tool's own name, else the label an overlay contributed for it, else its humanized id. */
+export const getToolDisplayName = (
+  toolName: PublicTools | string,
+  overlayLabels: PremiumToolDisplayLabels = premiumToolDisplayLabels
+): string => {
+  return (
+    TOOL_MAPPING[toolName as PublicTools]?.displayName ||
+    (Object.hasOwn(overlayLabels, toolName) ? overlayLabels[toolName] : undefined) ||
+    humanizeToolId(toolName)
+  );
 };
 
 export const getToolDescription = (toolName: PublicTools): string => {
