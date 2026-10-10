@@ -9,7 +9,7 @@ vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 // value must NOT fall back to the (enabled) default.
 vi.mock('@bike4mind/common', () => ({ settingsMap: { EnableQuestMaster: { defaultValue: true } } }));
 
-import { requireFeatureEnabled } from './featureFlag';
+import { isFeatureEnabled, requireFeatureEnabled } from './featureFlag';
 
 type SettingKeyArg = Parameters<typeof requireFeatureEnabled>[0];
 
@@ -44,5 +44,27 @@ describe('requireFeatureEnabled - admin-disabled defaultValue:true flag stays di
     const { req, res, next } = mkCtx();
     await requireFeatureEnabled('EnableQuestMaster' as SettingKeyArg)(req, res, next);
     expect(next).toHaveBeenCalled();
+  });
+});
+
+describe('isFeatureEnabled', () => {
+  beforeEach(() => getSettingByNameMock.mockReset());
+
+  it('reads a stored false as off even when the default is true', async () => {
+    getSettingByNameMock.mockResolvedValue(false);
+    await expect(isFeatureEnabled('EnableQuestMaster')).resolves.toBe(false);
+  });
+
+  it('falls back to the default when the setting is absent', async () => {
+    getSettingByNameMock.mockResolvedValue(null);
+    await expect(isFeatureEnabled('EnableQuestMaster')).resolves.toBe(true);
+  });
+
+  // `Once`: under vitest 4.1 a persistent rejected mock after a beforeEach reset is reported as a
+  // test error even when the code under test catches it.
+  it('propagates a read error so callers fail closed', async () => {
+    const readError = new Error('db down');
+    getSettingByNameMock.mockRejectedValueOnce(readError);
+    await expect(isFeatureEnabled('EnableQuestMaster')).rejects.toBe(readError);
   });
 });

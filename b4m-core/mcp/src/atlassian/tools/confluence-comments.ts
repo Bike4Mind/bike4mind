@@ -35,8 +35,17 @@ export function registerConfluenceCommentTools(server: McpServer) {
         .describe(
           'For inline comments: the text selected in the page to attach the comment to. If omitted, creates a page-level comment.'
         ),
+      ...confirmationParams,
     },
-    async ({ pageId, content, inlineOriginalSelection }) => {
+    async ({ pageId, content, inlineOriginalSelection, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        const comment = { pageId, content, inlineOriginalSelection };
+        return createPreviewResponse('Preview: Confluence Comment', comment, 'comment', {
+          tool: CONFLUENCE_CREATE_COMMENT,
+          params: comment,
+        });
+      }
+
       try {
         const comment = await getConfluenceApi().addComment({
           pageId,
@@ -58,8 +67,17 @@ export function registerConfluenceCommentTools(server: McpServer) {
       pageId: pageIdSchema,
       parentCommentId: z.string().describe('The ID of the comment to reply to.'),
       content: z.string().describe('The reply text (HTML storage format supported).'),
+      ...confirmationParams,
     },
-    async ({ pageId, parentCommentId, content }) => {
+    async ({ pageId, parentCommentId, content, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        const reply = { pageId, parentCommentId, content };
+        return createPreviewResponse('Preview: Confluence Reply', reply, 'reply', {
+          tool: CONFLUENCE_REPLY_TO_COMMENT,
+          params: reply,
+        });
+      }
+
       try {
         const comment = await getConfluenceApi().addComment({
           pageId,

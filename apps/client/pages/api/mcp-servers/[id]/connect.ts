@@ -1,5 +1,6 @@
 import { McpServer, mcpServerRepository } from '@bike4mind/database/ai';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { NotFoundError } from '@bike4mind/utils';
 import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
@@ -9,6 +10,7 @@ import { isValidObjectId } from '@server/utils/objectId';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 const handler = baseApi().post(async (req, res) => {
+  await assertMcpServerEnabled();
   const { id } = req.query;
   const server = isValidObjectId(id) ? await McpServer.findOne({ _id: id, userId: req.user.id }) : null;
   if (!server) {

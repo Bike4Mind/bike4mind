@@ -11,6 +11,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   Session: { findById: vi.fn() },
@@ -33,6 +34,8 @@ import { Quest, Session } from '@bike4mind/database';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
+import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
+import { ForbiddenError } from '@server/utils/errors';
 import handler from '../confirm';
 
 const SESSION_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -77,6 +80,16 @@ describe('POST /api/mcp/confirm', () => {
     expect(vi.mocked(claimPendingAction).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
     );
+  });
+
+  it('refuses before claiming or invoking anything while the MCP admin flag is off', async () => {
+    vi.mocked(assertMcpServerEnabled).mockRejectedValueOnce(new ForbiddenError('MCP servers are disabled'));
+
+    await expect(
+      post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
   it('returns 409 and does not invoke the tool when the claim is lost', async () => {
@@ -191,5 +204,72 @@ describe('POST /api/mcp/confirm', () => {
       errorCode: 'action_replaced',
     });
     expect(claimPendingAction).not.toHaveBeenCalled();
+  });
+  it('reports a partial bulk create with created and failed counts', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: { tool: 'jira_bulk_create_issues', params: {}, ts: pendingActionTs },
+    } as never);
+    vi.mocked(invokeMcpHandler).mockResolvedValue({
+      content: [
+        {
+          type: 'text',
+          text: '{"success":true,"created":1,"failed":2,"issues":[{"key":"P-1"}],"errors":[{},{}]}',
+        },
+      ],
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getJSONData()).toMatchObject({ success: true });
+    expect(res._getJSONData().message).toContain('Created 1 of 3');
+    expect(res._getJSONData().message).toContain('2 failed');
+  });
+
+  it('reports a bulk create where every issue failed as a failure with the count', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: { tool: 'jira_bulk_create_issues', params: {}, ts: pendingActionTs },
+    } as never);
+    vi.mocked(invokeMcpHandler).mockResolvedValue({
+      content: [{ type: 'text', text: '{"success":false,"created":0,"failed":2,"issues":[],"errors":[{},{}]}' }],
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getJSONData()).toMatchObject({
+      success: false,
+      message: 'No Jira issues were created; 2 failed',
+    });
+  });
+
+  it('reports failure when the MCP result carries isError', async () => {
+    vi.mocked(invokeMcpHandler).mockResolvedValue({
+      content: [{ type: 'text', text: 'Error: boom' }],
+      isError: true,
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ success: false });
+  });
+
+  it('reports failure when the result text starts with "Error:" and isError is absent', async () => {
+    vi.mocked(invokeMcpHandler).mockResolvedValue({ content: [{ type: 'text', text: 'Error: boom' }] } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getJSONData()).toMatchObject({ success: false, message: 'Error: boom' });
+  });
+
+  it('still cancels when the MCP admin flag is off', async () => {
+    vi.mocked(assertMcpServerEnabled).mockRejectedValue(new ForbiddenError('MCP servers are disabled'));
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 });

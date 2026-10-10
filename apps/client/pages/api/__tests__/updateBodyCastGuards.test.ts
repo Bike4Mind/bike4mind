@@ -58,6 +58,9 @@ const createSpy = (...args: unknown[]) => {
   return found();
 };
 
+// The mcp-servers write methods check the MCP admin flag; on here so body validation decides.
+vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: () => Promise.resolve() }));
+
 vi.mock('@bike4mind/database', () => ({
   emailTemplateRepository: {
     findById: () => found({ slug: 'existing-slug' }),
