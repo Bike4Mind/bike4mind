@@ -68,6 +68,7 @@ import {
   SLEEP_CHECK_INTERVAL_MS,
   SLEEP_GAP_THRESHOLD_MS,
   shouldProbeOnFailedWsConnect,
+  useWebsocket,
   WebsocketProvider,
 } from './WebsocketContext';
 
@@ -591,5 +592,99 @@ describe('WebsocketProvider - catch-up refetch after a reconnect', () => {
 
     expect(h.queryClient.invalidateQueries).toHaveBeenCalledTimes(1);
     expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session'] });
+  });
+});
+
+describe('WebsocketProvider - reassembles fanout-chunked frames before dispatch', () => {
+  const received: unknown[] = [];
+  let lastJsonMessage: unknown = null;
+  let resetLastJsonMessage = () => {};
+
+  const Subscriber = () => {
+    const ws = useWebsocket();
+    lastJsonMessage = ws.lastJsonMessage;
+    resetLastJsonMessage = ws.resetLastJsonMessage;
+    React.useEffect(
+      () =>
+        ws.subscribeToAction('data_update' as Parameters<typeof ws.subscribeToAction>[0], async message => {
+          received.push(message);
+        }),
+      [ws.subscribeToAction]
+    );
+    return null;
+  };
+
+  beforeEach(() => {
+    received.length = 0;
+    lastJsonMessage = null;
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    stubVisibility('visible');
+  });
+
+  const mount = () => {
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement(Subscriber)));
+    // The last-message store is module-global, so start each test from empty.
+    act(() => resetLastJsonMessage());
+    return h.capturedOptions.current;
+  };
+
+  // A >120 KB push, split the way the fanout splits it.
+  const message = { action: 'data_update', subscriptionId: 's1', data: { body: 'x'.repeat(130 * 1024) } };
+  const raw = JSON.stringify(message);
+  const parts = (id: string, count: number) => {
+    const size = Math.ceil(raw.length / count);
+    return Array.from({ length: count }, (_, i) =>
+      JSON.stringify({
+        _chunked: true,
+        _chunkId: id,
+        _chunkIndex: i,
+        _totalChunks: count,
+        _data: raw.slice(i * size, (i + 1) * size),
+      })
+    );
+  };
+
+  const send = async (opts: Record<string, (arg: unknown) => void>, data: string) => {
+    await act(async () => {
+      opts.onMessage({ data });
+    });
+  };
+
+  it('dispatches a chunked message to its action listener exactly once, as if it were unchunked', async () => {
+    const opts = mount();
+    const [a, b, c] = parts('m1', 3);
+    await send(opts, c);
+    await send(opts, a);
+    await send(opts, a);
+    expect(received).toHaveLength(0);
+    await send(opts, b);
+    await send(opts, b);
+
+    expect(received).toEqual([message]);
+    expect(lastJsonMessage).toBeNull();
+  });
+
+  it('still dispatches an unchunked message on the existing path', async () => {
+    const opts = mount();
+    await send(opts, raw);
+    await send(opts, JSON.stringify({ action: 'unlistened', n: 1 }));
+
+    expect(received).toEqual([message]);
+    expect(lastJsonMessage).toEqual({ action: 'unlistened', n: 1 });
+  });
+
+  it('discards a partial message when the socket reconnects', async () => {
+    const opts = mount();
+    const [a, b] = parts('m1', 2);
+    await send(opts, a);
+    await act(async () => {
+      opts.onClose({ code: 1006 });
+      opts.onOpen({});
+    });
+    await send(opts, b);
+
+    expect(received).toHaveLength(0);
+    expect(lastJsonMessage).toBeNull();
   });
 });

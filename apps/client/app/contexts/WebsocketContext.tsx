@@ -8,6 +8,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 import { probeIdentity } from '@client/app/utils/sessionBootstrap';
 import { WEBSOCKET_TICKET_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
+import { isWsChunkEnvelope, WsChunkReassembler } from '@client/app/utils/wsChunkReassembler';
 
 export { ReadyState };
 
@@ -117,6 +118,9 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   const lastMessageAtRef = useRef(0);
   const probeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastProbeAtRef = useRef(0);
+  // Parts of a fanout-chunked push only ever arrive on one connection, so every open/close clears it.
+  const chunkReassemblerRef = useRef<WsChunkReassembler | null>(null);
+  chunkReassemblerRef.current ??= new WsChunkReassembler();
 
   // Map the action being listened for to the callbacks that want to hear about it
   const listeners = useRef(new Map<string, ((message: IMessageDataToClient) => Promise<void>)[]>());
@@ -173,11 +177,13 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       console.log('ws connected');
       openedThisAttemptRef.current = true;
       reconnectExhaustedRef.current = false;
+      chunkReassemblerRef.current?.clear();
     },
     onClose(event: CloseEvent) {
       console.log('ws disconnected', event.code, event.reason);
       const openedThisAttempt = openedThisAttemptRef.current;
       openedThisAttemptRef.current = false;
+      chunkReassemblerRef.current?.clear();
 
       if (
         shouldProbeOnFailedWsConnect({
@@ -234,7 +240,14 @@ export const WebsocketProvider = ({ children, url }: Props) => {
         }
 
         // Distribute everything else
-        const data = JSON.parse(rawData);
+        let data = JSON.parse(rawData);
+
+        if (isWsChunkEnvelope(data)) {
+          const result = chunkReassemblerRef.current?.accept(data);
+          if (result?.kind === 'dropped') console.warn('[WebSocket] Dropped chunk frame:', result.reason);
+          if (result?.kind !== 'complete') return;
+          data = JSON.parse(result.payload);
+        }
 
         // support subscribers
         const actionListeners = listeners.current.get(data.action);
