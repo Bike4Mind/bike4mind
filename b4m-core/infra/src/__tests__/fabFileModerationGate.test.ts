@@ -156,6 +156,8 @@ const ALLOWLIST: Record<string, string> = {
     'gated via generateSignedUrl choke (search -> get.ts) for reads; the other match is a delete-only storage.delete call',
   'apps/client/server/files/updateFileForUser.ts':
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.updateFabFile (update.ts imports isImageServeable directly); shared by PUT /api/files/[id] and PATCH /api/v1/files/[id]',
+  'apps/client/server/dataLakes/index.ts':
+    'DI passthrough - search and authorized single-file reads both use the generateSignedUrl moderation gate in fabFileService/get.ts',
   'apps/client/server/files/loadAccessibleFabFile.ts':
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.getFabFile and, on the data-lake fallback, fabFileService.generateSignedUrl directly; both return through the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/data-lakes/[id]/articles.ts':
@@ -312,6 +314,22 @@ describe('detectDangerPatterns() / referencesGate()', () => {
 
 describe('upload moderation gate — every FabFile serve/mint call site is gated or allowlisted', () => {
   const sourceFiles = SCAN_ROOTS.flatMap(root => collectSourceFiles(resolve(REPO_ROOT, root)));
+
+  it('hashes every external scanner root in the Turbo test cache', () => {
+    const config = readFileSync(resolve(REPO_ROOT, 'turbo.json'), 'utf8');
+    const task = config.match(/"@bike4mind\/infra#test"\s*:\s*\{([\s\S]*?)\n\s*\}/)?.[1];
+    const inputArray = task?.match(/"inputs"\s*:\s*(\[[\s\S]*?\])/)?.[1];
+    expect(inputArray).toBeDefined();
+    const inputs: unknown = JSON.parse(inputArray ?? '[]');
+    expect(inputs).toEqual(
+      expect.arrayContaining([
+        '$TURBO_DEFAULT$',
+        ...SCAN_ROOTS.map(
+          root => `${relative(resolve(REPO_ROOT, 'b4m-core/infra'), resolve(REPO_ROOT, root)).split(sep).join('/')}/**`
+        ),
+      ])
+    );
+  });
 
   it('scans a non-trivial number of source files (guards against a broken walk)', () => {
     // Loose canary, not an exact count - catches a walk that silently returns nothing

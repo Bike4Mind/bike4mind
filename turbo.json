@@ -92,6 +92,18 @@
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
     },
+    // The moderation scanner reads source outside this package.
+    "@bike4mind/infra#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../../apps/client/pages/**",
+        "../../apps/client/server/**",
+        "../../apps/workers/src/**",
+        "../services/src/**",
+        "../slack/src/**"
+      ]
+    },
     "test": {
       "dependsOn": ["^build"]
     },
