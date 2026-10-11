@@ -121,7 +121,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:*']
   ),
-  gap('event:infra/llm.ts:slack-completion-start', '4205a5deb21807d9c00bf3dee7dd8ff09a797d2e8ab77903ecd9a28e6943ba56', [
+  gap('event:infra/llm.ts:slack-completion-start', '1930395f8b5f18bcf69afb05749045175dcb6a338a762c499bf72d8c83bfc3f0', [
     'bedrock:*',
     'cloudwatch:PutMetricData',
     'events:PutEvents',
@@ -150,7 +150,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/emailMarketing.ts:emailBatchQueue',
-    'aff57efef115b5bad7c770f8f4804c6df1b6d65545c825d24d4dfb3e620ac697'
+    '0d25b7e7626d03c13e2121ebd39e167e02e858997138cb24408c94d1a61f6e90'
   ),
   broker(
     'queue:infra/emailMarketing.ts:emailBatchQueueDLQ',
@@ -174,7 +174,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    '6d84631d3242843b84b42e02eb7ed71a3cb0f542ef39ba6f0467fe0f4b79e985',
+    'c5ce7ea3e3f46b85ecb04258c1a1438f583651dba716f93cafa19c6631319d69',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   broker(
@@ -301,7 +301,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:generationCallbackQueue',
-    '9266fdb8248f7b80dc3890a1b32206813d9cbc647f418315bc9fa6f8e69c4daa',
+    'f0b096af47e6f3ab659f42d9e76caacd864ecb644451271fabd4cca245765106',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationCallbackQueue',
@@ -436,7 +436,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:questExportQueue',
-    '1619014baca05c841cd8904b42d461ba1357a4df5f87c373bf36c5dd16f8c125',
+    '2491d7a2d4d940dffb866f869fd5d2f117e090b70cd852b25a121fa6e1a00b25',
     {
       source: 'apps/workers/src/selfhost/questExportQueue.ts',
       symbol: 'registerQuestExportQueue',
@@ -475,7 +475,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:slackExportQueueDLQ',
     'e6f709c7a77ad92a6420578b8802c7199d3580045da4a245ec379dca2b2f2a84'
   ),
-  gap('queue:infra/queues.ts:sreFixQueue', 'b564105a8d0e90f3be13761c47c1da101006f50fbb0278746e10b92ecd3cfe95'),
+  gap('queue:infra/queues.ts:sreFixQueue', '6fb18fc3fa37c9c288d1a6788c30e78d8cbc953896412573d685a663933ba48f'),
   broker('queue:infra/queues.ts:sreFixQueueDLQ', '209afa13455584e3d213f4664f8bb372f97c4047b441a13c140c10a2d3b9950c'),
   gap('queue:infra/queues.ts:sreJobQueue', 'e9ce6cc3e4c99f28cece9335b4cca4634741b20724d82eb214a51a974534ae5a', [
     'bedrock:InvokeModel',

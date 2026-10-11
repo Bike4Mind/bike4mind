@@ -106,7 +106,10 @@ export function discoverParityInventory(sources: Record<string, string>): Parity
         if (choices.length > 1) throw new Error(`${source.fileName}: ambiguous resource ${node.name.text}`);
         const choice = choices[0];
         const kind = choice
-          ? /^sst\.aws\.(Queue|Bus|Function|Cron|SnsTopic)$/.exec(choice.expression.getText())?.[1]
+          ? /^(?:sst\.aws\.(Queue|Bus|Function|Cron|SnsTopic)|aws\.sqs\.(Queue))$/
+              .exec(choice.expression.getText())
+              ?.slice(1)
+              .find(Boolean)
           : undefined;
         if (kind) resources.set(`${source.fileName}:${node.name.text}`, { kind, file: source.fileName, node: choice });
       }
@@ -116,7 +119,10 @@ export function discoverParityInventory(sources: Record<string, string>): Parity
         ts.isIdentifier(node.left) &&
         ts.isNewExpression(node.right)
       ) {
-        const kind = /^sst\.aws\.(Queue|Bus|Function|Cron|SnsTopic)$/.exec(node.right.expression.getText())?.[1];
+        const kind = /^(?:sst\.aws\.(Queue|Bus|Function|Cron|SnsTopic)|aws\.sqs\.(Queue))$/
+          .exec(node.right.expression.getText())
+          ?.slice(1)
+          .find(Boolean);
         if (kind)
           resources.set(`${source.fileName}:${node.left.text}`, { kind, file: source.fileName, node: node.right });
       }
@@ -239,11 +245,12 @@ export function discoverParityInventory(sources: Record<string, string>): Parity
       referencedDefinitions(node.expression.getSourceFile(), node.expression)
     );
     const importedDefinitions: ts.Node[] = [];
-    const variables = new Map<string, ts.VariableDeclaration>();
+    const variables = new Map<string, ts.VariableDeclaration | ts.FunctionDeclaration>();
     for (const source of parsed)
       walk(source, node => {
         if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name))
           variables.set(`${source.fileName}:${node.name.text}`, node);
+        if (ts.isFunctionDeclaration(node) && node.name) variables.set(`${source.fileName}:${node.name.text}`, node);
       });
     for (const node of [...expanded, ...dependencyNodes, ...gates.map(guard => guard.expression), ...gateDefinitions])
       walk(node, child => {
@@ -333,9 +340,10 @@ function registration(source: ts.SourceFile, symbol: string): ts.Node | undefine
 }
 
 function referencedDefinitions(source: ts.SourceFile, node: ts.Node): ts.Node[] {
-  const declarations = new Map<string, ts.VariableDeclaration>();
+  const declarations = new Map<string, ts.VariableDeclaration | ts.FunctionDeclaration>();
   walk(source, child => {
     if (ts.isVariableDeclaration(child) && ts.isIdentifier(child.name)) declarations.set(child.name.text, child);
+    if (ts.isFunctionDeclaration(child) && child.name) declarations.set(child.name.text, child);
   });
   const found = new Set<ts.Node>();
   const collect = (current: ts.Node): void =>

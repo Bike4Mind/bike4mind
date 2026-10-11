@@ -41,6 +41,42 @@ describe('portable declaration inventory', () => {
     );
   });
 
+  it.each([
+    "const jobs = enabled ? new aws.sqs.Queue('jobs', {}) : undefined;",
+    "let jobs; if (enabled) jobs = new aws.sqs.Queue('jobs', {});",
+  ])('resolves raw SQS subscriptions after conditional creation: %s', declaration => {
+    const items = discoverParityInventory(
+      sources(`${declaration} jobs.subscribe({handler:'apps/workers/jobs.dispatch'});`)
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: 'queue:infra/test.ts:jobs', handlers: ['apps/workers/jobs.dispatch'] });
+  });
+
+  it('fingerprints declared cadence helpers referenced by hosted schedules', () => {
+    const before = "function cadence() { return 'rate(1 day)'; } new sst.aws.Cron('daily', {schedule:cadence()});";
+    const after = before.replace('1 day', '2 days');
+    expect(discoverParityInventory(sources(before))[0].fingerprint).not.toBe(
+      discoverParityInventory(sources(after))[0].fingerprint
+    );
+  });
+
+  it('fingerprints declared cadence helpers referenced by portable registrations', () => {
+    const before =
+      'function cadence() { return 4; } export function registerJobs(worker: Worker) { worker.registerDailyUtcTask("jobs", cadence(), dispatch); }';
+    expect(portableRegistrationFingerprint(before, 'registerJobs')).not.toBe(
+      portableRegistrationFingerprint(before.replace('return 4', 'return 5'), 'registerJobs')
+    );
+  });
+
+  it('fingerprints imported declared cadence helpers', () => {
+    const before = {
+      'infra/cadence.ts': "export function cadence() { return 'rate(1 day)'; }",
+      'infra/test.ts': "import {cadence} from './cadence'; new sst.aws.Cron('daily', {schedule:cadence()});",
+    };
+    const after = { ...before, 'infra/cadence.ts': before['infra/cadence.ts'].replace('1 day', '2 days') };
+    expect(discoverParityInventory(before)[0].fingerprint).not.toBe(discoverParityInventory(after)[0].fingerprint);
+  });
+
   it('discovers queues and their subscriptions without loading SST', () => {
     const inventory = discoverParityInventory(sources(queue));
     expect(inventory).toHaveLength(1);
