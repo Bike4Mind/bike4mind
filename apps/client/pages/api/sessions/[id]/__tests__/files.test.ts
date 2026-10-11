@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -35,7 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   userRepository: {},
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
 
 import '@pages/api/sessions/[id]/files';
 
@@ -80,4 +81,14 @@ describe('GET /api/sessions/[id]/files', () => {
 
     expect(listFabFilesBySession).not.toHaveBeenCalled();
   });
+});
+
+it('uses request-local browser signing for collection responses', async () => {
+  await call(SESSION_ID).result;
+  const adapter = listFabFilesBySession.mock.calls[0][2] as {
+    storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
+  };
+  expect(adapter.storage.signedUrlCache).toBe('bypass');
+  await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+  expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', { expiresIn: 600, audience: 'browser' });
 });

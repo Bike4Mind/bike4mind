@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, getDataLakeTags } from '@bike4mind/common';
 
@@ -45,7 +46,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
 
 // Import after mocks are registered so the chain capture runs.
 import '@pages/api/files/search';
@@ -68,6 +69,17 @@ function invokeGet(query: Record<string, unknown> = {}, user: Record<string, unk
 const scopeArg = () => mockRefs.searchArgs?.[3] as Record<string, unknown> | undefined;
 
 describe('GET /api/files/search', () => {
+  it('uses request-local browser signing for collection responses', async () => {
+    const { req, res } = invokeGet();
+    await mockRefs.getHandler!(req, res);
+    const adapter = mockRefs.searchArgs?.[2] as {
+      storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
+    };
+    expect(adapter.storage.signedUrlCache).toBe('bypass');
+    await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+    expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', { expiresIn: 600, audience: 'browser' });
+  });
+
   beforeEach(() => {
     mockRefs.searchArgs = undefined;
   });

@@ -17,13 +17,7 @@
  * (An owner's own gated lake used to be a third difference - the retrieval resolver now
  * restores it, so both surfaces agree.)
  */
-import {
-  DATA_LAKES,
-  STATIC_LAKE_IDS,
-  getAccessibleDataLakes,
-  hasDeveloperUserTag,
-  isImageServeable,
-} from '@bike4mind/common';
+import { DATA_LAKES, STATIC_LAKE_IDS, getAccessibleDataLakes, hasDeveloperUserTag } from '@bike4mind/common';
 import type { DataLakeConfig, DataLakeMembershipScope } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
@@ -239,6 +233,28 @@ export async function queryDataLakeArticles(
   const scopedLakes = narrowAccessibleLakes(lakes, query.lakeId);
   if (scopedLakes.length === 0) return { data: [], total: 0, hasMore: false };
 
+  const adapter = {
+    db: {
+      fabFiles: fabFileRepository,
+      users: userRepository,
+      adminSettings: adminSettingsRepository,
+      projects: projectRepository,
+    },
+    storage: {
+      signedUrlCache: 'bypass' as const,
+      generateSignedUrl: async (path: string, expireInSeconds: number) => {
+        try {
+          return await getFilesStorage().getSignedUrl(path, 'get', {
+            expiresIn: expireInSeconds,
+            audience: 'browser',
+          });
+        } catch {
+          return null;
+        }
+      },
+    },
+  };
+
   const dataLakeTags = scopedLakes.map(dl => dl.datalakeTag);
   const { openTagPrefixes } = splitTagPrefixes(scopedLakes);
 
@@ -257,14 +273,8 @@ export async function queryDataLakeArticles(
     if (!file || grantedLakeIds.length === 0) {
       return { data: [], total: 0, hasMore: false };
     }
-    const { content, chunks, vector, ...metadata } = file as unknown as Record<string, unknown>;
-    // A held/blocked uploaded image must not hand out its cached URL via the
-    // deep-link/single-id branch. Keep the metadata (so the client can render a
-    // placeholder) but strip the servable URL fields, mirroring fabFileService/get.ts.
-    if (!isImageServeable(file)) {
-      delete metadata.fileUrl;
-      delete metadata.fileUrlExpireAt;
-    }
+    const signedFile = await fabFilesService.generateSignedUrl(file, adapter);
+    const { content, chunks, vector, ...metadata } = signedFile as unknown as Record<string, unknown>;
     // Surfaced so the caller's own access-audit attribution can reuse this SAME grantingLakes
     // result (this is the sound, single-authorized-file case) instead of recomputing it - see
     // apps/client/pages/api/data-lakes/articles.ts.
@@ -298,23 +308,7 @@ export async function queryDataLakeArticles(
         excludeContent: true,
       },
     },
-    {
-      db: {
-        fabFiles: fabFileRepository,
-        users: userRepository,
-        adminSettings: adminSettingsRepository,
-        projects: projectRepository,
-      },
-      storage: {
-        generateSignedUrl: async (path: string, expireInSeconds: number) => {
-          try {
-            return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
-          } catch {
-            return null;
-          }
-        },
-      },
-    },
+    adapter,
     // Resolved from the lakes this caller can actually reach, never from the query string
     // (see SearchFabFilesServerOptions).
     {

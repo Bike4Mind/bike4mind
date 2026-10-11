@@ -106,9 +106,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           adminSettings: adminSettingsRepository,
         },
         storage: {
+          signedUrlCache: 'bypass' as const,
           generateSignedUrl: async (path: string, expireInSeconds: number) => {
             try {
-              return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
+              return await getFilesStorage().getSignedUrl(path, 'get', {
+                expiresIn: expireInSeconds,
+                audience: 'browser',
+              });
             } catch {
               return null;
             }

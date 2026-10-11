@@ -35,9 +35,13 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
         adminSettings: adminSettingsRepository,
       },
       storage: {
+        signedUrlCache: 'bypass' as const,
         generateSignedUrl: async (path: string, expireInSeconds: number) => {
           try {
-            return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
+            return await getFilesStorage().getSignedUrl(path, 'get', {
+              expiresIn: expireInSeconds,
+              audience: 'browser',
+            });
           } catch (e) {
             req.logger.error('Error generating signed URL for file', {
               error: e,

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 
 const LAKE = {
   id: 'lake1',
@@ -60,7 +61,7 @@ vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: { record: h.record },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
 
 import handler from '../articles';
 
@@ -361,4 +362,15 @@ describe('GET /api/data-lakes/:id/articles pagination walk', () => {
     const orders = (h.search.mock.calls as [string, { order: unknown }][]).map(call => call[1].order);
     expect(orders).toEqual(Array(4).fill({ by: 'fileName', direction: 'asc' }));
   });
+});
+
+it('uses request-local browser signing for collection responses', async () => {
+  const { res } = makeRes();
+  await handler(makeReq() as never, res);
+  const adapter = h.search.mock.calls[0][2] as {
+    storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
+  };
+  expect(adapter.storage.signedUrlCache).toBe('bypass');
+  await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+  expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', { expiresIn: 600, audience: 'browser' });
 });
