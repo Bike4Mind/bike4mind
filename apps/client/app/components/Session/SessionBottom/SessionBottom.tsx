@@ -389,7 +389,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const sendBlockedReason = getSendBlockedReason({
     isGenerating: shouldShowStopButton,
     submitting,
-    isModelsLoading,
+    // Until LLMProvider resolves the default there is no model to send with; hold the send rather
+    // than let it run on whatever the store held before the account's own default arrived.
+    isModelsLoading: isModelsLoading || (hasModels && !model),
     isModelsError,
     hasModels,
     isSocketOpen: readyState === ReadyState.OPEN,
