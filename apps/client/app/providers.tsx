@@ -17,6 +17,7 @@ import DefaultMetaTags from '@client/app/components/DefaultMetaTags';
 import ConfirmationModal from '@client/app/components/ConfirmationModal';
 import WebsocketReactQueryInvalidateListener from '@client/app/components/WebsocketReactQueryInvalidateListener';
 import VideoGenerationUpdatesListener from '@client/app/components/VideoGenerationUpdatesListener';
+import CreditBalanceSyncListener from '@client/app/components/CreditBalanceSyncListener';
 import AgentExecutionSubscriber from '@client/app/components/AgentExecutionSubscriber';
 import StripeCheckoutSuccessHandler from '@client/app/components/stripe/StripeCheckoutSuccessHandler';
 import { Toaster } from 'sonner';
@@ -197,6 +198,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
           <WebsocketConfigProvider>
             <WebsocketReactQueryInvalidateListener />
             <VideoGenerationUpdatesListener />
+            <CreditBalanceSyncListener />
             <AgentExecutionSubscriber />
             <Suspense fallback={null}>
               <StripeCheckoutSuccessHandler />
