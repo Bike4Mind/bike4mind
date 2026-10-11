@@ -1,4 +1,5 @@
-import { Box, Typography, Modal, ModalDialog, ModalClose, Divider, useTheme } from '@mui/joy';
+import { Box, Typography, Modal, ModalDialog, ModalClose, Divider, Link, useTheme } from '@mui/joy';
+import { useNavigate } from '@tanstack/react-router';
 import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
 import dayjs from 'dayjs';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
@@ -53,14 +54,18 @@ const CreditsModal = ({ open, onClose }: CreditsModalProps) => {
         }}
       >
         <ModalClose className="credits-modal-close" />
-        {open && <CreditsModalContent transactions={getTransactions.data || []} />}
+        {open && <CreditsModalContent transactions={getTransactions.data || []} onClose={onClose} />}
       </ModalDialog>
     </Modal>
   );
 };
 
-const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ transactions }) => {
+const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () => void }> = ({
+  transactions,
+  onClose,
+}) => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const handlePaymentComplete = useCallback(
     (credits: number) => {
       toast.success(t('credits_modal.purchase_success', { credits }));
@@ -343,6 +348,20 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
           })}
         >
           {t('credits_modal.history_title')}
+          <Typography level="body-sm" sx={{ fontWeight: 400, mt: 0.5 }}>
+            {t('credits_modal.history_usage_hint', 'This lists purchases only.')}{' '}
+            <Link
+              component="button"
+              type="button"
+              data-testid="credits-modal-see-usage-link"
+              onClick={() => {
+                onClose();
+                void navigate({ to: '/profile', search: { tab: 'usage' } });
+              }}
+            >
+              {t('credits_modal.see_usage', 'See usage')}
+            </Link>
+          </Typography>
         </Box>
         <Box
           className="credits-modal-transactions-list"
