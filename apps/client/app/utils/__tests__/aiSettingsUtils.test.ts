@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   buildModelSelectionPatch,
   computeDefaultMaxTokens,
+  getModelCreditRates,
   getModelSpeedFromStats,
+  getPriceTierTooltip,
   refitMaxTokensForModel,
 } from '../aiSettingsUtils';
-import type { ModelInfo } from '@bike4mind/common';
+import { CREDITS_PER_USD_COST, type ModelInfo } from '@bike4mind/common';
 
 describe('computeDefaultMaxTokens', () => {
   it('falls back to the catalog max_tokens when contextWindow is missing/0', () => {
@@ -169,5 +171,48 @@ describe('getModelSpeedFromStats', () => {
     expect(getModelSpeedFromStats('m', { m: 7000 })).toBe('medium');
     expect(getModelSpeedFromStats('m', { m: 14999 })).toBe('medium');
     expect(getModelSpeedFromStats('m', { m: 15000 })).toBe('slow');
+  });
+});
+
+describe('getPriceTierTooltip', () => {
+  const textModel = (pricing: ModelInfo['pricing']) => ({ type: 'text', pricing }) as ModelInfo;
+  // USD per 1M tokens -> credits per 1K tokens, at the rate settlement charges in expectation
+  const per1K = (usdPerMillion: number) => (usdPerMillion / 1000) * CREDITS_PER_USD_COST;
+  const shown = (credits: number) => Number(credits.toPrecision(3)).toLocaleString('en-US');
+
+  it('keeps fractional figures for cheap models instead of flooring them to 1 credit', () => {
+    const cheap = textModel({ 128000: { input: 0.075 / 1e6, output: 0.3 / 1e6 } });
+    const cheaper = textModel({ 128000: { input: 0.02 / 1e6, output: 0.1 / 1e6 } });
+
+    expect(per1K(0.3)).toBeLessThan(1);
+    expect(getModelCreditRates(cheap)).toEqual({ input: shown(per1K(0.075)), output: shown(per1K(0.3)) });
+    expect(getModelCreditRates(cheap)).not.toEqual(getModelCreditRates(cheaper));
+    expect(getPriceTierTooltip('Low', cheap)).toBe(
+      `Lower cost model: ${shown(per1K(0.075))} credits per 1K input tokens, ${shown(per1K(0.3))} per 1K output`
+    );
+  });
+
+  it('prices a premium model at its base tier, which is what a normal-length prompt pays', () => {
+    const premium = textModel({
+      1000000: { input: 6 / 1e6, output: 22.5 / 1e6 },
+      200000: { input: 3 / 1e6, output: 15 / 1e6 },
+    });
+
+    expect(getModelCreditRates(premium)).toEqual({ input: shown(per1K(3)), output: shown(per1K(15)) });
+    expect(getPriceTierTooltip('High', premium)).toBe(
+      `Premium cost model: ${shown(per1K(3))} credits per 1K input tokens, ${shown(per1K(15))} per 1K output`
+    );
+  });
+
+  it('falls back to the tier text when the model has no usable price', () => {
+    expect(getPriceTierTooltip('Low', textModel({}))).toBe('Lower cost model');
+    expect(getPriceTierTooltip('Low', textModel({ 128000: { input: 0, output: 0 } }))).toBe('Lower cost model');
+    expect(getPriceTierTooltip('Medium')).toBe('Medium cost model');
+    expect(getPriceTierTooltip('Unknown')).toBe('Cost information unavailable');
+  });
+
+  it('leaves image models on the tier text, since their pricing is not per token', () => {
+    const image = { type: 'image', pricing: { 1: { input: 0.04, output: 0.04 } } } as unknown as ModelInfo;
+    expect(getPriceTierTooltip('Medium', image)).toBe('Medium cost model');
   });
 });

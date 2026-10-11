@@ -2,7 +2,7 @@ import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ModelInfo } from '@bike4mind/common';
+import { CREDITS_PER_USD_COST, type ModelInfo } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CapabilityIndicators, MetricIndicators } from './modelIndicators';
 
@@ -87,5 +87,25 @@ describe('model indicator tooltips on touch screens', () => {
     fireEvent.click(screen.getByTestId('model-indicator-vision'));
 
     expect(onCardClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the credit figure for a priced model when the cost icon is tapped', () => {
+    stubNoHover();
+    const model = { type: 'text', pricing: { 200000: { input: 3 / 1e6, output: 15 / 1e6 } } } as unknown as ModelInfo;
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <MetricIndicators
+          priceTier={{ tier: 'High', variant: 'red' }}
+          modelSpeed={null}
+          statsLoading={false}
+          model={model}
+        />
+      </CssVarsProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('model-indicator-high-cost'));
+
+    const input = Number(((3 / 1e6) * 1000 * CREDITS_PER_USD_COST).toPrecision(3)).toLocaleString('en-US');
+    expect(screen.getByRole('tooltip')).toHaveTextContent(`Premium cost model: ${input} credits per 1K input tokens`);
   });
 });

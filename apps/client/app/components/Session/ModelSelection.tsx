@@ -401,7 +401,7 @@ const ModelOption = React.memo(
     );
 
     const metricIndicators = (
-      <MetricIndicators priceTier={priceTierInfo} modelSpeed={modelSpeed} statsLoading={statsLoading} />
+      <MetricIndicators priceTier={priceTierInfo} modelSpeed={modelSpeed} statsLoading={statsLoading} model={model} />
     );
 
     const capabilityIndicators = <CapabilityIndicators model={model} />;

@@ -841,6 +841,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   priceTier={priceTierInfo}
                   modelSpeed={modelSpeed}
                   statsLoading={metricsLoading}
+                  model={modelInfo}
                   size={INDICATOR_SIZE}
                   filled
                 />

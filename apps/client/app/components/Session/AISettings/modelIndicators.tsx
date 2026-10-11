@@ -182,7 +182,8 @@ export const MetricIcon = ({
 }) => {
   const { tooltipProps, anchorProps } = useTapTooltip();
   return (
-    <Tooltip title={tooltip} placement="top" {...tooltipProps}>
+    // Capped so the longer cost tooltip wraps instead of running off a phone screen
+    <Tooltip title={tooltip} placement="top" sx={{ maxWidth: 'min(280px, calc(100vw - 16px))' }} {...tooltipProps}>
       <Box
         role="img"
         aria-label={label}
@@ -240,13 +241,15 @@ export const MetricIndicators: React.FC<{
   priceTier: { tier: string; variant: ChipVariant };
   modelSpeed: ModelSpeed | null;
   statsLoading: boolean;
+  /** Adds the credit figure to the cost tooltip; without it the tooltip names the tier only. */
+  model?: ModelInfo;
   size?: number;
   filled?: boolean;
-}> = ({ priceTier, modelSpeed, statsLoading, size = DEFAULT_INDICATOR_SIZE, filled = false }) => (
+}> = ({ priceTier, modelSpeed, statsLoading, model, size = DEFAULT_INDICATOR_SIZE, filled = false }) => (
   <>
     <MetricIcon
       label={`${priceTier.tier} cost`}
-      tooltip={getPriceTierTooltip(priceTier.tier)}
+      tooltip={getPriceTierTooltip(priceTier.tier, model)}
       size={size}
       filled={filled}
     >

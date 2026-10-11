@@ -1,4 +1,4 @@
-import { FIXED_TEMPERATURE_MODELS, ModelInfo } from '@bike4mind/common';
+import { CREDITS_PER_USD_COST, FIXED_TEMPERATURE_MODELS, ModelInfo, pricingTierForTokens } from '@bike4mind/common';
 import dayjs from 'dayjs';
 
 export const isOpenAIModel = (modelName: string): boolean => {
@@ -167,18 +167,40 @@ export const getModelSpeedTooltip = (speed: 'fast' | 'medium' | 'slow'): string 
   }
 };
 
-// Model price tier tooltip text
-export const getPriceTierTooltip = (priceTier: string): string => {
-  switch (priceTier) {
-    case 'Low':
-      return 'Lower cost model';
-    case 'Medium':
-      return 'Medium cost model';
-    case 'High':
-      return 'Premium cost model';
-    default:
-      return 'Cost information unavailable';
-  }
+const creditFormat = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 3 });
+
+/**
+ * Credits per 1K input and output tokens at the model's base pricing tier, or null when the
+ * model is not a text model or has no price. Priced at CREDITS_PER_USD_COST, the rate settlement
+ * charges in expectation (usdToCreditsStochastic); usdToCredits' 1-credit floor would flatten
+ * every cheap model to the same figure. Prompt-cache discounts can make real turns cheaper.
+ */
+export const getModelCreditRates = (model: ModelInfo): { input: string; output: string } | null => {
+  if (model.type !== 'text' || !model.pricing) return null;
+  const tier = pricingTierForTokens(model, 0);
+  const rates = tier === null ? undefined : model.pricing[tier];
+  if (!rates || !(rates.input > 0 || rates.output > 0)) return null;
+  const per1K = (usdPerToken: number) => creditFormat.format(usdPerToken * 1000 * CREDITS_PER_USD_COST);
+  return { input: per1K(rates.input), output: per1K(rates.output) };
+};
+
+// Model price tier tooltip text, with the credit figure when the model has a price
+export const getPriceTierTooltip = (priceTier: string, model?: ModelInfo): string => {
+  const tierText = (() => {
+    switch (priceTier) {
+      case 'Low':
+        return 'Lower cost model';
+      case 'Medium':
+        return 'Medium cost model';
+      case 'High':
+        return 'Premium cost model';
+      default:
+        return 'Cost information unavailable';
+    }
+  })();
+  const rates = model ? getModelCreditRates(model) : null;
+  if (!rates) return tierText;
+  return `${tierText}: ${rates.input} credits per 1K input tokens, ${rates.output} per 1K output`;
 };
 
 // Smallest default we ever hand a large-context model, so the headroom share below can only
