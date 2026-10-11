@@ -14,7 +14,7 @@ import PeopleIcon from '@mui/icons-material/People';
 import LinkIcon from '@mui/icons-material/Link';
 import ShareIcon from '@mui/icons-material/Share';
 import dynamic from 'next/dynamic';
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -79,6 +79,27 @@ const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {
   'email-inbox': 'email-inbox',
   mementos: 'mementos',
 };
+
+/**
+ * Tab text label: hidden on phones unless the tab is active, so the icon-only row still fits at
+ * 390px while the current section is named. Truncates instead of widening the strip.
+ */
+const TabLabel = ({ active, children }: { active: boolean; children: React.ReactNode }) => (
+  <Typography
+    data-testid="profile-tab-label"
+    data-active={active}
+    sx={{
+      display: { xs: active ? 'block' : 'none', sm: 'block' },
+      color: 'text.primary',
+      maxWidth: { xs: '72px', sm: 'none' },
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    }}
+  >
+    {children}
+  </Typography>
+);
 
 const ProfilePage = () => {
   const { currentUser } = useUser();
@@ -204,9 +225,7 @@ const ProfilePage = () => {
             <Tooltip title={t('profile.tooltip')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <AccountCircleIcon sx={{ flexShrink: 0, color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                  {t('profile.title')}
-                </Typography>
+                <TabLabel active={activeTab === ProfileTab.Profile}>{t('profile.title')}</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
@@ -221,9 +240,7 @@ const ProfilePage = () => {
               <Badge size="sm" color="danger" invisible={friendRequests?.length === 0}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <PeopleIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                  <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                    {t('community.title')}
-                  </Typography>
+                  <TabLabel active={activeTab === ProfileTab.Community}>{t('community.title')}</TabLabel>
                 </Box>
               </Badge>
             </Tooltip>
@@ -233,9 +250,7 @@ const ProfilePage = () => {
             <Tooltip title={t('settings.tooltip')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <SettingsIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                  {t('settings.title')}
-                </Typography>
+                <TabLabel active={activeTab === ProfileTab.Settings}>{t('settings.title')}</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
@@ -244,7 +259,7 @@ const ProfilePage = () => {
             <Tooltip title="Manage your API keys">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <KeyOutlinedIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>API Keys</Typography>
+                <TabLabel active={activeTab === ProfileTab.ApiKeys}>API Keys</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
@@ -253,7 +268,7 @@ const ProfilePage = () => {
             <Tooltip title="View your credit usage and model pricing">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <InsightsIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>Usage</Typography>
+                <TabLabel active={activeTab === ProfileTab.Usage}>Usage</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
@@ -262,9 +277,7 @@ const ProfilePage = () => {
             <Tooltip title="Manage external integrations">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <LinkIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                  Integrations
-                </Typography>
+                <TabLabel active={activeTab === ProfileTab.Integrations}>Integrations</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
@@ -274,7 +287,7 @@ const ProfilePage = () => {
               <Tooltip title="View security events and alerts">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <SecurityIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                  <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>Security</Typography>
+                  <TabLabel active={activeTab === ProfileTab.Security}>Security</TabLabel>
                 </Box>
               </Tooltip>
             </PageTab>
@@ -285,9 +298,7 @@ const ProfilePage = () => {
               <Tooltip title="Manage your Live Artifacts (published & shared)">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <ShareIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                  <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                    Live Artifacts
-                  </Typography>
+                  <TabLabel active={activeTab === ProfileTab.Published}>Live Artifacts</TabLabel>
                 </Box>
               </Tooltip>
             </PageTab>

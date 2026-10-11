@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -113,6 +113,41 @@ describe('ProfilePage tab strip', () => {
       expect(screen.getByRole('tab', { name })).toBeInTheDocument();
     }
     expect(screen.getByTestId('profile-close-btn')).toHaveAccessibleName('Close');
+  });
+
+  // jsdom cannot evaluate media queries, so assert on the emotion-generated CSS text of each label.
+  it('shows only the active tab label below sm, and every label from sm up', () => {
+    searchValue = { tab: 'settings' };
+    renderPage();
+
+    const labelOf = (tabTestId: string) => within(screen.getByTestId(tabTestId)).getByTestId('profile-tab-label');
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(el => el.textContent ?? '')
+      .join('\n');
+    const rulesFor = (el: HTMLElement) => {
+      const cls = Array.from(el.classList).find(c => c.startsWith('css-')) ?? '';
+      return (css.match(new RegExp(`\\.${cls}[^{]*\\{[^}]*\\}`, 'g')) ?? []).join(' ');
+    };
+
+    const active = labelOf('settings-tab');
+    const inactive = labelOf('usage-tab');
+    expect(active).toHaveAttribute('data-active', 'true');
+    expect(active).toHaveTextContent('settings.title');
+    expect(inactive).toHaveAttribute('data-active', 'false');
+    expect(rulesFor(active)).not.toMatch(/display:\s*none/);
+    expect(rulesFor(inactive)).toMatch(/display:\s*none/);
+    // Rules emit mobile-first: xs (display:none) then the sm override (display:block, no max-width).
+    expect(rulesFor(inactive)).toMatch(/display:\s*none;[^}]*\}[^{]*\{display:\s*block;max-width:\s*none/);
+    expect(screen.getAllByTestId('profile-tab-label').filter(el => el.dataset.active === 'true')).toHaveLength(1);
+  });
+
+  it('treats the Profile tab as active when no tab is in the URL', () => {
+    renderPage();
+
+    expect(within(screen.getByTestId('profile-tab')).getByTestId('profile-tab-label')).toHaveAttribute(
+      'data-active',
+      'true'
+    );
   });
 
   it('shows the Security tab for admin users', () => {
