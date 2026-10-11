@@ -7,7 +7,7 @@
  * Invoked during deployment by scripts/invoke-data-syncer.mjs when SYNC_PREVIEW_SETTINGS=true.
  */
 
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
 import { secrets } from './secrets';
 import { lambdaVpc } from './vpc';
 
@@ -31,7 +31,7 @@ export const dataSyncer = new sst.aws.Function('DataSyncer', {
   vpc: lambdaVpc,
   link: [secrets.MONGODB_URI],
   logging: {
-    retention: '3 days',
+    retention: FUNCTION_LOG_RETENTION,
   },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,

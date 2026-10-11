@@ -1,4 +1,4 @@
-import { PRODUCTION_STAGES } from './constants';
+import { PRODUCTION_STAGES, FUNCTION_LOG_RETENTION } from './constants';
 import { cluster, resolvedVpcId } from './vpc';
 
 /**
@@ -93,7 +93,7 @@ function createSearxng() {
       retries: 3,
     },
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     transform: {
       service: args => {

@@ -15,7 +15,7 @@
  */
 
 import { secrets } from './secrets';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
   fabFileChunkQueueDLQ,
@@ -104,7 +104,7 @@ if (isMonitoredStage) {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-      logging: { retention: '3 days' },
+      logging: { retention: FUNCTION_LOG_RETENTION },
     },
     {
       transform: {

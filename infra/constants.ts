@@ -80,3 +80,6 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   // Suppress punycode deprecation warning (DEP0040) from SST's transitive aws-sdk v2 dependency
   NODE_OPTIONS: '--disable-warning=DEP0040',
 };
+
+/** CloudWatch retention for every Lambda function and service log group. */
+export const FUNCTION_LOG_RETENTION = '1 month' as const;

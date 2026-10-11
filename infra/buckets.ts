@@ -1,7 +1,7 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
 import { domain, getAllowedOrigins, router, routePrefix, isSharedRouterConsumer } from './router';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
 import { lambdaVpc } from './vpc';
 
 // Bucket options:  Named buckets are named, and kept; otherwise, they're auto-deleted.
@@ -254,7 +254,7 @@ const appFilesBucketNotification = appFilesBucket.notify({
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
         logging: {
-          retention: '3 days',
+          retention: FUNCTION_LOG_RETENTION,
         },
       },
       events: ['s3:ObjectCreated:*'],
@@ -372,7 +372,7 @@ const uploadCompleteFunction = new sst.aws.Function('HistoryUploadCompleteFuncti
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
   logging: {
-    retention: '3 days',
+    retention: FUNCTION_LOG_RETENTION,
   },
 });
 
@@ -385,7 +385,7 @@ const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunct
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
   logging: {
-    retention: '3 days',
+    retention: FUNCTION_LOG_RETENTION,
   },
   timeout: '5 minutes', // Longer timeout for large imports
   memory: '1024 MB', // More memory for processing

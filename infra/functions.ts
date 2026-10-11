@@ -1,5 +1,5 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
 import { eventBus } from './eventBus';
 import { slackEventBus } from './bus';
 import { imageProcessor } from './imageProcessor';
@@ -43,7 +43,7 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     imageProcessor,
   ],
   logging: {
-    retention: '3 days',
+    retention: FUNCTION_LOG_RETENTION,
   },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,

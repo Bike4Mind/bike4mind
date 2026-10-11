@@ -1,6 +1,6 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, FUNCTION_LOG_RETENTION } from './constants';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 
@@ -164,7 +164,7 @@ export const emailParserQueueSubscription = emailIngestionQueue.subscribe(
       websocketApi,
     ],
     logging: {
-      retention: '1 week',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -313,7 +313,7 @@ const emailAnalyzerQueueSubscription = emailAnalysisQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket],
     logging: {
-      retention: '1 week',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,

@@ -1,6 +1,6 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, FUNCTION_LOG_RETENTION } from './constants';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { appUrlForLambdaEnv } from './router';
@@ -34,7 +34,7 @@ export const emailBatchQueueSubscription = emailBatchQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, eventBus],
     logging: {
-      retention: '1 week',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -68,7 +68,7 @@ export const emailJobQueueSubscription = emailJobQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, emailBatchQueue, eventBus],
     logging: {
-      retention: '1 week',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,

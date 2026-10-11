@@ -1,6 +1,6 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket, appFilesBucket } from './buckets';
 import { eventBus } from './bus';
@@ -199,7 +199,7 @@ const sessionTaggingSubscription = eventBus.subscribe(
     vpc: lambdaVpc,
     timeout: '2 minutes',
     logging: {
-      retention: '1 day',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,

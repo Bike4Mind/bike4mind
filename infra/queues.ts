@@ -1,6 +1,7 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket, slackExportBucket } from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
+  FUNCTION_LOG_RETENTION,
   PRODUCTION_STAGES,
   SINGLE_RECORD_BATCH,
   TEST_VIDEO_PROVIDER_ENVIRONMENT,
@@ -144,7 +145,7 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
       lakeMemoryQueue,
     ],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -213,7 +214,7 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
       lakeMemoryQueue,
     ],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -268,7 +269,7 @@ const fabFileBucketNotification = fabFileBucket.notify({
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
         logging: {
-          retention: '3 days',
+          retention: FUNCTION_LOG_RETENTION,
         },
         transform: {
           // sst.aws.Function has no first-party `dlq`/destinations prop for async invoke
@@ -317,7 +318,7 @@ const generationCallbackQueueSubscription = generationCallbackQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets],
     logging: {
-      retention: '1 week', // Extended retention for delivery debugging
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -365,7 +366,7 @@ const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
       generationCallbackQueue,
     ],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -415,7 +416,7 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
       generationCallbackQueue,
     ],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -457,7 +458,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
     timeout: '15 minutes',
     link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -506,7 +507,7 @@ const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -554,7 +555,7 @@ const notebookCurationQueueSubscription = notebookCurationQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, eventBus, fabFileBucket, generatedImagesBucket, appFilesBucket],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -586,7 +587,7 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -649,7 +650,7 @@ const githubWebhookQueueSubscription = githubWebhookQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, mcpHandler],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -702,7 +703,7 @@ const webhookDeliveryQueueSubscription = webhookDeliveryQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
     logging: {
-      retention: '1 week', // Extended retention for delivery debugging
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -748,7 +749,7 @@ const slackExportQueueSubscription = slackExportQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, slackExportBucket],
     logging: {
-      retention: '1 week', // Longer retention for export debugging
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -784,7 +785,7 @@ const questExportQueueSubscription = questExportQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -822,7 +823,7 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
     // to it (releaseGitHubLakeConnection, githubLakeConnection.ts).
     link: [...allSecrets, fabFileBucket, githubLakeRevokeQueue],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -845,7 +846,7 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -870,7 +871,7 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     // the sqs:SendMessage grant that linking the queue confers.
     link: [...allSecrets, websocketApi, lakeMemoryQueue],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -894,7 +895,7 @@ const lakeInconsistencyModelQueueSubscription = lakeInconsistencyModelQueue.subs
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -917,7 +918,7 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -942,7 +943,7 @@ const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
     // linking the queue confers (mirrors lakeMemoryQueue above).
     link: [...allSecrets, fabFileBucket, driveLakeIngestQueue],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -970,7 +971,7 @@ const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscrib
     vpc: lambdaVpc,
     link: [...allSecrets, fabFileBucket, driveDisconnectPurgeQueue],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -988,7 +989,7 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
     // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues.
     link: [...allSecrets, fabFileBucket, githubLakeIngestQueue],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1007,7 +1008,7 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
     // hands a failed post-release uninstall back to this queue (githubLakeConnection.ts).
     link: [...allSecrets, fabFileBucket, githubLakeRevokeQueue],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1045,7 +1046,7 @@ const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1110,7 +1111,7 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       generationJobQueue,
     ],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1151,7 +1152,7 @@ const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus, mcpHandler],
     logging: {
-      retention: '1 week', // Extended retention for debugging
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1200,7 +1201,7 @@ const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
     logging: {
-      retention: '1 week',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1254,7 +1255,7 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1326,7 +1327,7 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets],
     logging: {
-      retention: '1 week',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1381,7 +1382,7 @@ const sreJobQueueSubscription = sreJobQueue.subscribe(
     // infra/eventBus.ts). sreFixQueue stays linked for the revision path's direct dispatch.
     link: [...allSecrets, websocketApi, sreFixQueue, eventBus],
     logging: {
-      retention: '1 week',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1497,7 +1498,7 @@ const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
     memory: '256 MB',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
-    logging: { retention: '3 days' },
+    logging: { retention: FUNCTION_LOG_RETENTION },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1578,7 +1579,7 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   logging: {
-    retention: '3 days',
+    retention: FUNCTION_LOG_RETENTION,
   },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1629,7 +1630,7 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -1666,7 +1667,7 @@ const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.
     vpc: lambdaVpc,
     link: [...allSecrets, fabFileBucket],
     logging: {
-      retention: '3 days',
+      retention: FUNCTION_LOG_RETENTION,
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,

@@ -22,7 +22,7 @@
  * Set ENABLE_MONITORING=true to opt in for other stages.
  */
 
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
 import { chatCompletion } from './chatCompletion';
 import { secrets } from './secrets';
 import { subscriberFanout } from './subscriberFanout';
@@ -105,7 +105,7 @@ if (isMonitoredStage) {
       handler: 'apps/workers/src/events/serviceHealthAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-      logging: { retention: '3 days' },
+      logging: { retention: FUNCTION_LOG_RETENTION },
     },
     {
       transform: {
