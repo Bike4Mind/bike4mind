@@ -4,6 +4,7 @@ import { createMocks } from 'node-mocks-http';
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
+  postMiddleware: [] as unknown[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -12,8 +13,9 @@ vi.mock('@server/middlewares/baseApi', () => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    post: (fn: any) => {
-      mockRefs.postHandler = fn;
+    post: (...fns: any[]) => {
+      mockRefs.postMiddleware = fns.slice(0, -1);
+      mockRefs.postHandler = fns[fns.length - 1];
       return chain;
     },
   };
@@ -27,7 +29,12 @@ vi.mock('@bike4mind/services', () => ({
   projectService: { listInvites },
 }));
 
+const tryIncrementWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
+const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptions: options })));
+vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit }));
+
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: { tryIncrementWithinLimitFixedWindow },
   projectRepository: {},
   inviteRepository: {},
   userRepository: {},
@@ -60,6 +67,74 @@ describe('POST /api/projects/:id/invites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createInvite.mockResolvedValue({ id: 'inv-1', recipients: { pending: [] } });
+    tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
+  });
+
+  it('rate limits invite creation per user with a route-wide bucket', () => {
+    expect(mockRefs.postMiddleware).toEqual([
+      { rateLimitOptions: expect.objectContaining({ bucket: 'POST /api/projects/[id]/invites' }) },
+    ]);
+  });
+
+  it('refuses more recipients than one request may name', async () => {
+    const recipients = Array.from({ length: 26 }, (_, i) => `507f1f77bcf86cd7994390${String(i).padStart(2, '0')}`);
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: '507f1f77bcf86cd799439033' },
+      body: { permissions: ['read'], recipients },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('refuses an over-long message, which would be mailed to every recipient', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: '507f1f77bcf86cd799439033' },
+      body: { permissions: ['read'], recipients: ['a@example.com'], description: 'x'.repeat(1001) },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('charges each typed address against the hourly budget and stops once it is spent', async () => {
+    tryIncrementWithinLimitFixedWindow
+      .mockResolvedValueOnce({ success: true, expiresAt: new Date() })
+      .mockResolvedValueOnce({ success: false, expiresAt: new Date() });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: '507f1f77bcf86cd799439033' },
+      body: { permissions: ['read'], recipients: ['a@example.com', '507f1f77bcf86cd799439034', 'b@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many email invitations/);
+    expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledTimes(2);
+    expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:project-invite-typed-address',
+      20,
+      60 * 60 * 1000
+    );
+    expect(createInvite).not.toHaveBeenCalled();
+    expect(sendInviteNotificationEmails).not.toHaveBeenCalled();
+  });
+
+  it('does not charge the typed-address budget for recipients named by user id', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: '507f1f77bcf86cd799439033' },
+      body: { permissions: ['read'], recipients: ['507f1f77bcf86cd799439034'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(createInvite).toHaveBeenCalledOnce();
   });
 
   it('does not allow a body id to redirect the invite to a different project', async () => {

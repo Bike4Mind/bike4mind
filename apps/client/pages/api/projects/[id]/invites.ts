@@ -4,7 +4,8 @@ import {
   assertProjectsWriteScope,
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
-import { inviteRepository, projectRepository } from '@bike4mind/database';
+import { cacheRepository, inviteRepository, projectRepository } from '@bike4mind/database';
+import { TooManyRequestsError } from '@bike4mind/utils';
 import { projectService } from '@bike4mind/services';
 import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -24,12 +25,24 @@ import {
 } from '@bike4mind/database';
 import { z } from 'zod';
 import { getInviteTypeName, sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
+import { rateLimit } from '@server/middlewares/rateLimit';
+
+// Creating a project invite emails every recipient, including addresses with no account, with the
+// inviter's name, the project name and their message. These bounds keep the route from being a
+// free mail relay. The request limit is loose because the Add Members modal sends one request per
+// selected user; typed addresses, the only way to reach someone with no account, get their own
+// tighter hourly budget, counted per address and the same whether or not the address has an account.
+const MAX_INVITE_RECIPIENTS = 25;
+const MAX_INVITE_MESSAGE_LENGTH = 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const PROJECT_INVITE_RATE_LIMIT = { limit: 100, windowMs: HOUR_MS, bucket: 'POST /api/projects/[id]/invites' } as const;
+const TYPED_ADDRESS_INVITES_PER_HOUR = 20;
 
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
   permissions: z.array(z.enum(Permission)),
-  recipients: z.string().array().optional(),
-  description: z.string().optional(),
+  recipients: z.string().array().max(MAX_INVITE_RECIPIENTS).optional(),
+  description: z.string().max(MAX_INVITE_MESSAGE_LENGTH).optional(),
   // null is the client's "no expiry" (hooks/data/invites.ts DataInput) -- map to undefined so
   // the service's 100-year prefault applies. z.coerce.date(null) would silently produce epoch.
   expiresAt: z.preprocess(
@@ -56,6 +69,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
     return res.json({ ...result, data: await toSharerInviteViews(result.data, req.user!) });
   })
   .post(
+    rateLimit(PROJECT_INVITE_RATE_LIMIT),
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
       assertProjectsWriteScope(req);
       const { id } = req.query as { id: string };
@@ -67,6 +81,16 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       if (!isValidObjectId(id)) throw new NotFoundError('Project not found');
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
+
+      const typedAddresses = (restBody.recipients ?? []).filter(recipient => recipient.includes('@'));
+      for (let i = 0; i < typedAddresses.length; i++) {
+        const { success } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+          `rate-limit:${req.user.id}:project-invite-typed-address`,
+          TYPED_ADDRESS_INVITES_PER_HOUR,
+          HOUR_MS
+        );
+        if (!success) throw new TooManyRequestsError('Too many email invitations. Try again later.');
+      }
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
