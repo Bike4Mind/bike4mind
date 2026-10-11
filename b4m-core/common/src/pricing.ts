@@ -1,3 +1,5 @@
+import { CACHE_READ_MULTIPLIER, pricingTierForTokens, type ModelInfo } from './models';
+
 const DEFAULT_PRICE_MARGIN = 1.2;
 const DEFAULT_USD_TO_CREDITS_RATE = 0.0006;
 
@@ -214,3 +216,39 @@ export const reservationOutputTokens = (requestedMaxTokens: number, reasonsWithi
     requestedMaxTokens,
     reasonsWithinOutputBudget ? PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS : PREFLIGHT_RESERVATION_OUTPUT_TOKENS
   );
+
+const TOKENS_PER_MILLION = 1_000_000;
+
+/**
+ * Credits per 1M tokens for a USD-per-token rate: the exact amount usdToCreditsStochastic
+ * settles in expectation, unrounded (4 decimals only to drop float noise). For display and
+ * comparison, not for charging.
+ */
+export const usdPerTokenToCreditsPer1M = (usdPerToken: number, rate: number = CREDITS_PER_USD_COST): number =>
+  Math.round(usdPerToken * TOKENS_PER_MILLION * rate * 10_000) / 10_000;
+
+export interface TextModelCreditsPer1M {
+  input: number;
+  output: number;
+  /** Rate for cache-read input tokens, by the same default multiplier getTextModelCost applies. */
+  cachedInput: number;
+}
+
+/**
+ * A text model's base-tier rates in credits per 1M tokens, priced exactly as getTextModelCost
+ * and the credit settlement charge them. Null for non-text models and for a text model with no
+ * usable price (missing or all-zero map), so "unpriced" never reads as "free"; a `freeToRun`
+ * model is genuinely free and reports zeros.
+ */
+export function getTextModelCreditsPer1M(model: ModelInfo): TextModelCreditsPer1M | null {
+  if (model.type !== 'text' || !model.pricing) return null;
+  const tier = pricingTierForTokens(model, 0);
+  const tierPricing = tier === null ? undefined : model.pricing[tier];
+  if (!tierPricing || !Number.isFinite(tierPricing.input) || !Number.isFinite(tierPricing.output)) return null;
+  if (!model.freeToRun && tierPricing.input === 0 && tierPricing.output === 0) return null;
+  return {
+    input: usdPerTokenToCreditsPer1M(tierPricing.input),
+    output: usdPerTokenToCreditsPer1M(tierPricing.output),
+    cachedInput: usdPerTokenToCreditsPer1M(tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER),
+  };
+}

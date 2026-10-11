@@ -345,7 +345,7 @@
     "model_pricing": "Model Pricing",
     "text_models": "Text Models",
     "image_models": "Image Models",
-    "pricing_per_1k_tokens": "Pricing shown in credits per 1,000 tokens",
+    "pricing_per_1m_tokens": "Pricing shown in credits per 1,000,000 tokens",
     "pricing_per_generation": "Pricing shown in credits per image generation",
     "model_name": "Model Name",
     "price_tier": "Price Tier",
