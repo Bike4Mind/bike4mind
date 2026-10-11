@@ -19,16 +19,20 @@ vi.mock('@client/app/contexts/SessionsContext', async () => {
   const { create } = await import('zustand');
   interface Store {
     files: Record<string, IFabFileDocument[]>;
+    hydrated: Record<string, boolean>;
     setWorkBenchFiles: (sid: string, u: IFabFileDocument[] | ((p: IFabFileDocument[]) => IFabFileDocument[])) => void;
     getWorkBenchFiles: (sid: string) => IFabFileDocument[];
+    isWorkBenchHydrated: (sid: string) => boolean;
   }
   const useWorkBenchStore = create<Store>((set, get) => ({
     files: {},
+    hydrated: {},
     setWorkBenchFiles: (sid, u) =>
       set(s => ({
         files: { ...s.files, [sid]: typeof u === 'function' ? u(s.files[sid] ?? []) : u },
       })),
     getWorkBenchFiles: (sid: string) => get().files[sid] ?? [],
+    isWorkBenchHydrated: (sid: string) => get().hydrated[sid] ?? false,
   }));
   return {
     useWorkBenchStore,
@@ -52,7 +56,7 @@ describe('useNotebookContextFiles', () => {
     vi.clearAllMocks();
     mockMutateAsync.mockResolvedValue({});
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- resetting the test double's state
-    (useWorkBenchStore as any).setState({ files: {} });
+    (useWorkBenchStore as any).setState({ files: {}, hydrated: { [SID]: true } });
   });
 
   it('appends the file and persists the full id list', async () => {
@@ -114,6 +118,22 @@ describe('useNotebookContextFiles', () => {
     expect(mockMutateAsync).not.toHaveBeenCalled();
     expect(mockToastInfo).toHaveBeenCalledWith(
       'This notebook is still saving, so the file was not pinned to it. Pin it once saving finishes.'
+    );
+  });
+
+  it('refuses an add before the workbench has hydrated instead of erasing the existing pins', async () => {
+    // The guard this locks: persist() sends the bucket as a full replace. Before hydration
+    // the bucket is empty, so the PUT would be [new] and the server would drop every pin.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- driving the test double's state
+    (useWorkBenchStore as any).setState({ hydrated: {} });
+    const { result } = renderHook(() => useNotebookContextFiles());
+    await act(async () => {
+      expect(await result.current.addToNotebookContext(SID, file('a'))).toBe(false);
+    });
+    expect(ids()).toEqual([]);
+    expect(mockMutateAsync).not.toHaveBeenCalled();
+    expect(mockToastInfo).toHaveBeenCalledWith(
+      "This notebook's files are still loading, so the file was not pinned. Try again in a moment."
     );
   });
 

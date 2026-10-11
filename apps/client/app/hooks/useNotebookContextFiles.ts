@@ -105,6 +105,12 @@ export function useNotebookContextFiles() {
         toast.info('This notebook is still saving, so the file was not pinned to it. Pin it once saving finishes.');
         return false;
       }
+      // persist() sends the bucket as a full replace, so an add before hydration lands would
+      // PUT only this file and erase every existing pin. '' has no server row to erase.
+      if (sid && !useWorkBenchStore.getState().isWorkBenchHydrated(sid)) {
+        toast.info("This notebook's files are still loading, so the file was not pinned. Try again in a moment.");
+        return false;
+      }
       // Already present: a no-op, and the caller must not report success for it.
       if (
         useWorkBenchStore
@@ -139,11 +145,10 @@ export function useNotebookContextFiles() {
       markPending(fabFileId, true);
       setWorkBenchFiles(sid, prev => prev.filter(f => f.id !== fabFileId));
       try {
-        // Never propagate on removal. The server propagates whatever knowledgeIds it
-        // receives, and on a removal that is the SURVIVING files - so propagating here
-        // would push files that were deliberately kept out of projects (an automatic
-        // upload promotion) into them, as a side effect of deleting something else.
-        // Nothing needs propagating anyway: project.fileIds is append-only.
+        // Never propagate on removal. The server propagates only the ids a write adds
+        // (sessionService/update.ts), so a removal has nothing to propagate; false keeps it
+        // that way if the PUT ever re-adds an id, e.g. one restored by a concurrent write.
+        // project.fileIds is append-only, so nothing is lost by skipping it.
         await persist(sid, false);
       } catch (error) {
         // Re-insert via an updater, not by restoring the pre-remove snapshot: an add
