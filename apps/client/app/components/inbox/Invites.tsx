@@ -1,6 +1,7 @@
 import { useInbox } from '@client/app/contexts/InboxContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAcceptDocument, useGetUserInvites, useRefuseDocument } from '@client/app/hooks/data/invites';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import CheckIcon from '@mui/icons-material/Check';
 import ConstructionOutlinedIcon from '@mui/icons-material/ConstructionOutlined';
 import DoDisturbIcon from '@mui/icons-material/DoDisturb';
@@ -28,6 +29,10 @@ type GroupedInvite = {
   username?: string;
 };
 
+// Chat in a shared project or notebook bills the member who sends (or the organization they pick),
+// never the inviter - see payerNoteText in components/Session/CreditPayerNote.tsx.
+export const SHARED_USAGE_BILLING_NOTE = 'Answers you get there use your own credits.';
+
 const DOCUMENT_ICONS = {
   FabFile: <PsychologyIcon />,
   Group: <GroupIcon />,
@@ -40,6 +45,7 @@ const DOCUMENT_ICONS = {
 const Invites: React.FC = () => {
   const { currentUser } = useUser();
   const userEmail = currentUser?.email;
+  const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const theme = useTheme();
   const [loading, setLoading] = React.useState<boolean>(false);
   const [removed, setRemoved] = React.useState<string[]>([]);
@@ -208,6 +214,11 @@ const Invites: React.FC = () => {
               {groupedInvite.description}
             </Typography>
           </Tooltip>
+        )}
+        {enforceCredits && (groupedInvite.type === InviteType.Project || groupedInvite.type === InviteType.Session) && (
+          <Typography data-testid="invite-billing-note" level="body-xs" sx={{ color: 'text.tertiary' }}>
+            {SHARED_USAGE_BILLING_NOTE}
+          </Typography>
         )}
       </Box>
       <Box display="flex" flexDirection="row" gap={1}>
