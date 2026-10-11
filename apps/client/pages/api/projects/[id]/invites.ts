@@ -23,6 +23,7 @@ import {
   Group,
 } from '@bike4mind/database';
 import { z } from 'zod';
+import { getInviteTypeName, sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
 
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
@@ -119,6 +120,24 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       const generateInviteLink = (invite: { id: string; token?: string }) => {
         return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
       };
+
+      // Same notification the generic invite route sends; without it an invitee only learns of the
+      // invite from the in-app inbox. Not awaited, so a mail failure never fails the invite.
+      const pendingRecipients = created.recipients?.pending || [];
+      if (pendingRecipients.length > 0) {
+        const brand = process.env.APP_NAME || '';
+        sendInviteNotificationEmails(
+          pendingRecipients,
+          req.user.name || req.user.username || `A${brand ? ` ${brand}` : ''} user`,
+          req.user.email || '',
+          project?.name || 'a project',
+          getInviteTypeName(InviteType.Project),
+          generateInviteLink(created),
+          restBody.description
+        ).catch(error => {
+          req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
+        });
+      }
 
       const [view] = await toSharerInviteViews([created], req.user);
       return res.json({ ...view, link: generateInviteLink(created) });

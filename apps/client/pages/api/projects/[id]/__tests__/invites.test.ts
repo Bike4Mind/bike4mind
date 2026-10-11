@@ -42,6 +42,12 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
+const sendInviteNotificationEmails = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
+  getInviteTypeName: () => 'project',
+  sendInviteNotificationEmails,
+}));
+
 import '@pages/api/projects/[id]/invites';
 
 /**
@@ -93,6 +99,48 @@ describe('POST /api/projects/:id/invites', () => {
       expect.objectContaining({ id: '507f1f77bcf86cd799439033', type: 'Project' }),
       expect.anything()
     );
+  });
+
+  it('emails the pending recipients a link to the invite', async () => {
+    createInvite.mockResolvedValue({
+      id: 'inv-2',
+      token: 'tok-2',
+      inviterId: 'u1',
+      recipients: { pending: ['new.person@example.com'] },
+      typedRecipients: ['new.person@example.com'],
+    });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: '507f1f77bcf86cd799439033' },
+      body: { permissions: ['read'], recipients: ['new.person@example.com'] },
+    });
+    (req as any).user = { id: 'u1', name: 'Sharer', email: 'sharer@example.com' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(sendInviteNotificationEmails).toHaveBeenCalledWith(
+      ['new.person@example.com'],
+      'Sharer',
+      'sharer@example.com',
+      'a project',
+      'project',
+      expect.stringMatching(/\/share\/tok-2$/),
+      undefined
+    );
+  });
+
+  it('sends no email when the invite has no pending recipients', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: '507f1f77bcf86cd799439033' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(sendInviteNotificationEmails).not.toHaveBeenCalled();
   });
 
   it('returns 400 when id is missing from the path', async () => {
