@@ -8,7 +8,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const h = vi.hoisted(() => ({
   enforceCredits: true,
   projects: [] as { userId: string; sessionIds: string[] }[],
-  account: null as { name: string; personal: boolean } | null,
+  account: null as { id: string; name: string; personal: boolean } | null,
+  organizationId: null as string | null,
 }));
 
 vi.mock('@client/app/hooks/data/settings', () => ({
@@ -19,6 +20,10 @@ vi.mock('@client/app/hooks/data/projects', () => ({
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: () => ({ selectedAccount: h.account }),
+}));
+vi.mock('@client/app/contexts/LLMContext', () => ({
+  useLLM: (selector: (s: { organizationId: string | null }) => unknown) =>
+    selector({ organizationId: h.organizationId }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: { currentUser: { id: string } }) => unknown) => selector({ currentUser: { id: 'me' } }),
@@ -71,6 +76,7 @@ describe('CreditPayerNote', () => {
     h.enforceCredits = true;
     h.projects = [];
     h.account = null;
+    h.organizationId = null;
   });
 
   it('renders the payer line in a shared notebook', () => {
@@ -84,5 +90,22 @@ describe('CreditPayerNote', () => {
     h.enforceCredits = false;
     renderNote(session('owner'));
     expect(screen.queryByTestId('session-credit-payer-note')).not.toBeInTheDocument();
+  });
+
+  it('names the organization the send bills', () => {
+    h.account = { id: 'org-1', name: 'Acme', personal: false };
+    h.organizationId = 'org-1';
+    renderNote(session('owner'));
+    expect(screen.getByTestId('session-credit-payer-note')).toHaveTextContent(
+      "Paid from Acme credits, not the owner's"
+    );
+  });
+
+  it('names the user when the menu shows a team but the send carries no organization', () => {
+    h.account = { id: 'org-1', name: 'Acme', personal: false };
+    renderNote(session('owner'));
+    expect(screen.getByTestId('session-credit-payer-note')).toHaveTextContent(
+      "Paid from your balance, not the owner's"
+    );
   });
 });

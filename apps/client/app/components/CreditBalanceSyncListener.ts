@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { CREDITS_BALANCE_KEY, fetchCreditsBalance } from '@client/app/hooks/data/credits';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
@@ -17,8 +17,8 @@ export const BALANCE_SYNC_DELAYS_MS = [1500, 5000] as const;
  * pool. Failures are swallowed; the `users` push and the next identify still apply.
  */
 export async function syncCreditBalance(queryClient: QueryClient): Promise<void> {
-  const { selectedAccount } = useSelectedAccount.getState();
-  if (selectedAccount && !selectedAccount.personal) {
+  // The organization the sends carried (see CreditPayerNote for why not the account menu's pick).
+  if (useLLM.getState().organizationId) {
     await queryClient.invalidateQueries({ queryKey: ['organizations'] });
   }
   try {

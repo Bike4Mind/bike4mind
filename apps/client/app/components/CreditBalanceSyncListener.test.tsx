@@ -10,7 +10,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 
 import { api } from '@client/app/contexts/ApiContext';
-import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import CreditBalanceSyncListener, { BALANCE_SYNC_DELAYS_MS } from './CreditBalanceSyncListener';
@@ -39,7 +39,7 @@ describe('CreditBalanceSyncListener', () => {
     vi.mocked(api.get).mockClear();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     h.balance = 9_903;
-    useSelectedAccount.setState({ selectedAccount: null });
+    useLLM.setState({ organizationId: null });
     useUser.getState().setCurrentUser({ id: 'u1', currentCredits: 10_000 } as IUserDocument);
   });
 
@@ -91,7 +91,7 @@ describe('CreditBalanceSyncListener', () => {
   });
 
   it('refreshes the organization pool when a team account is paying', async () => {
-    useSelectedAccount.setState({ selectedAccount: { id: 'org-1', name: 'Team', personal: false, credits: 500 } });
+    useLLM.setState({ organizationId: 'org-1' });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     renderListener();
     runTurn();
