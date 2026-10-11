@@ -52,6 +52,7 @@ const stats = (over: Record<string, unknown> = {}) => ({
   backfilled: 0,
   noFact: 0,
   noProviderKey: 0,
+  embedderUnavailable: 0,
   failed: 0,
   providerCalls: 0,
   embedderError: null,
@@ -171,6 +172,18 @@ describe('/api/admin/mementos/reembed-ledger', () => {
       hasMore: false,
       nextAfter: p('b'),
     });
+  });
+
+  it('lists a transient build failure distinctly from a missing key', async () => {
+    listPrincipals.mockResolvedValue([p('a')]);
+    migrateMock.mockResolvedValueOnce(stats({ embedderUnavailable: 3, embedderError: 'timeout' }));
+
+    const data = (await post({ execute: true }))._getJSONData();
+
+    expect(data.failedPrincipals).toEqual([
+      { ...p('a'), error: 'embedding service build failed for owner o1, retried next walk: timeout' },
+    ]);
+    expect(data).toMatchObject({ embedderUnavailable: 3, noProviderKey: 0 });
   });
 
   it('resumes rather than passes a principal that failed on only the leftover budget', async () => {

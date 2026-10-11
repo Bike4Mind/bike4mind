@@ -17,6 +17,9 @@ import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 
+/** The owner has no credential for the memento embedding provider: definitive, unlike a failed lookup. */
+class MissingEmbeddingCredentialError extends Error {}
+
 /**
  * Re-embed a user's mementos into the current vector space (MEMENTO_EMBEDDING_MODEL) and stamp each
  * one with the model that produced it.
@@ -42,7 +45,7 @@ async function createMementoEmbeddingService(userId: string) {
   const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
   const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
   if (missing) {
-    throw new Error(
+    throw new MissingEmbeddingCredentialError(
       `${missing === 'openai' ? 'OpenAI' : missing === 'voyageai' ? 'VoyageAI' : 'Ollama'} ${
         missing === 'ollama' ? 'base URL' : 'API key'
       } required to re-embed memory, but none is available`
@@ -124,6 +127,11 @@ export async function reembedMementosForUser(
   return stats;
 }
 
+// A transient build failure (say a failed key lookup) is retried on the principal's next embed, up to
+// this many tries, before the rest of its walk is passed over. Only a missing credential is final at once:
+// the build makes no provider call, so a provider-side 401/403 can only surface at embed time.
+const MAX_EMBEDDER_BUILD_ATTEMPTS = 2;
+
 /**
  * Give one principal's LEDGER events a current-space vector: backfill events written without one, and
  * migrate ones left in an older space. Works for any principal kind; `ownerUserId` is the DEK owner,
@@ -153,10 +161,11 @@ export async function reembedMementosForUser(
  * Idempotent: an event already in the current space is skipped. `limit` caps PROVIDER calls (embeds,
  * successful or not), never truncations; `providerCalls` is how many were made and `stoppedAtLimit` says
  * the principal has more to do. An event that needs an embed while the owner has no provider key counts
- * as `noProviderKey`, not `failed`: no call was made, so it spends no budget. `embedderError` carries
- * why the embedding service could not be built (also recorded once in `errors`), so a caller reports
- * the real cause rather than assuming a missing key. A dry run makes no provider call and no write, and
- * its counts mean "would".
+ * as `noProviderKey`, not `failed`: no call was made, so it spends no budget. A transient build failure
+ * counts its events as `embedderUnavailable` instead, also budget-free, and the build is retried up to
+ * MAX_EMBEDDER_BUILD_ATTEMPTS times. `embedderError` carries the last build failure (each attempt is
+ * recorded in `errors`), so a caller reports the real cause rather than assuming a missing key. A dry
+ * run makes no provider call and no write, and its counts mean "would".
  */
 export async function migrateLedgerVectorsForPrincipal(
   target: { principal: Principal; ownerUserId: string },
@@ -169,6 +178,7 @@ export async function migrateLedgerVectorsForPrincipal(
   backfilled: number;
   noFact: number;
   noProviderKey: number;
+  embedderUnavailable: number;
   failed: number;
   providerCalls: number;
   embedderError: string | null;
@@ -188,6 +198,7 @@ export async function migrateLedgerVectorsForPrincipal(
     backfilled: 0,
     noFact: 0,
     noProviderKey: 0,
+    embedderUnavailable: 0,
     failed: 0,
     providerCalls: 0,
     embedderError: null as string | null,
@@ -201,8 +212,10 @@ export async function migrateLedgerVectorsForPrincipal(
 
   const limit = opts.limit ?? Infinity;
   // Built on the first embed only, so a principal with no provider key still gets its free truncations.
-  // undefined = not built yet, null = could not be built (no provider key).
-  let service: Awaited<ReturnType<typeof createMementoEmbeddingService>> | null | undefined;
+  let service: Awaited<ReturnType<typeof createMementoEmbeddingService>> | undefined;
+  // Set once the build is given up on; names the counter the remaining embeds land in.
+  let unavailable: 'noProviderKey' | 'embedderUnavailable' | undefined;
+  let buildAttempts = 0;
 
   for (const event of events) {
     if (event.shredded || event.kind === 'retract') continue;
@@ -246,18 +259,19 @@ export async function migrateLedgerVectorsForPrincipal(
         continue;
       }
       if (!vector) {
-        if (service === undefined) {
+        if (!service && !unavailable) {
           try {
             service = await createMementoEmbeddingService(ownerUserId);
           } catch (err) {
-            // Recorded once: a missing key would otherwise repeat the same message for every event.
-            service = null;
+            buildAttempts += 1;
             stats.embedderError = err instanceof Error ? err.message : String(err);
             stats.errors.push(`owner ${ownerUserId}: ${stats.embedderError}`);
+            if (err instanceof MissingEmbeddingCredentialError) unavailable = 'noProviderKey';
+            else if (buildAttempts >= MAX_EMBEDDER_BUILD_ATTEMPTS) unavailable = 'embedderUnavailable';
           }
         }
         if (!service) {
-          stats.noProviderKey += 1;
+          stats[unavailable ?? 'embedderUnavailable'] += 1;
           continue;
         }
         stats.providerCalls += 1;
