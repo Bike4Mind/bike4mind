@@ -3052,18 +3052,28 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
       expect(page.res._getData() as string).toContain(BAR_CTA);
     });
 
-    it('keeps the bar CTA for an anonymous viewer of a bundle with no baked gate', async () => {
+    it('keeps only the footer card for an anonymous viewer of a gate-less page that carries one', async () => {
       mockArtifactFindOne.mockReturnValue(bundle());
       mockDownload.mockResolvedValue(Buffer.from(`<html><body><h1>Hi</h1>${FOOTER_CARD}</body></html>`));
       const page = run(['u', 'scope123', 'my-slug']);
       await page.promise;
-      expect(page.res._getData() as string).toContain(BAR_CTA);
+      const wrapper = page.res._getData() as string;
+      expect(wrapper).not.toContain(BAR_CTA);
+      expect(wrapper).toContain('class="b4m-bar-report"');
 
       const isolated = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
       await isolated.promise;
       const data = isolated.res._getData() as string;
       expect(data).not.toContain(GATE);
       expect(data).toContain(FOOTER_CTA);
+    });
+
+    it('keeps the bar CTA for an externally built bundle with neither gate nor footer card', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+      const page = run(['u', 'scope123', 'my-slug']);
+      await page.promise;
+      expect(page.res._getData() as string).toContain(BAR_CTA);
     });
   });
 

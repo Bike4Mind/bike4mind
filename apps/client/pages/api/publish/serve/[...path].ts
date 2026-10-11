@@ -47,6 +47,7 @@ import {
   buildShareFooterHtml,
   pickSharedByName,
   buildSignupGateHtml,
+  hasShareFooterCardHtml,
   hasSignupGateHtml,
   replaceSignupGateHtml,
   shouldShowSignupGate,
@@ -999,7 +1000,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     barHref,
     pillHref || barHref ? getBrandName() : '',
     exportHtmlHref,
-    !signupGateShown
+    // For a sign-up prospect the bar's "Try" link would repeat a CTA the framed page already
+    // carries: the gate, or the footer card baked into a gate-less page (full HTML documents).
+    !signupGateShown && !(showSignupGate && hasShareFooterCardHtml(indexHtml))
   );
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1061,7 +1064,7 @@ function renderBundleWrapper(
   brandName = '',
   /** `?export=html` href for the "Save as HTML" affordance; '' hides it. */
   exportHtmlHref = '',
-  /** False when the framed page carries the sign-up gate, which is then the page's one CTA. */
+  /** False when the framed page carries its own CTA (the sign-up gate or the footer card). */
   barCta = true
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);

@@ -270,6 +270,40 @@ describe('stripShareFooterCtaBeforeGate', () => {
     expect(stripShareFooterCtaBeforeGate(page)).toBe(page);
   });
 
+  it('removes the card when a pipeline left CRLF or whitespace around its close', async () => {
+    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const crlf = LEGACY_FOOTER_CARD.replace(/\n/g, '\r\n');
+    const page = `<html><body><p>content</p>${crlf}\r\n  ${gate.html}</body></html>`;
+    expect(stripShareFooterCtaBeforeGate(page)).toBe(`<html><body><p>content</p>${gate.html}</body></html>`);
+  });
+
+  it('strips only the card in front of the last (baked) gate when content quotes the marker', async () => {
+    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const quoted = `<p>${gate.html}</p>`;
+    const page = `<html><body>${quoted}${LEGACY_FOOTER_CARD}${gate.html}</body></html>`;
+    expect(stripShareFooterCtaBeforeGate(page)).toBe(`<html><body>${quoted}${gate.html}</body></html>`);
+  });
+
+  it('stays linear on a very large page with a far-away card lookalike', async () => {
+    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const open = LEGACY_FOOTER_CARD.slice(0, LEGACY_FOOTER_CARD.indexOf('\n'));
+    const page = `<html><body>${open}${'<div>x</div>'.repeat(500_000)}${gate.html}</body></html>`;
+    const started = performance.now();
+    expect(stripShareFooterCtaBeforeGate(page)).toBe(page);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  it('detects the baked footer card, but not a bare lookalike opening tag', async () => {
+    const { hasShareFooterCardHtml } = await import('./shareFooter');
+    const open = LEGACY_FOOTER_CARD.slice(0, LEGACY_FOOTER_CARD.indexOf('\n'));
+    expect(hasShareFooterCardHtml(`<html><body><p>x</p>${LEGACY_FOOTER_CARD}</body></html>`)).toBe(true);
+    expect(hasShareFooterCardHtml(`<html><body>${open}<a href="/elsewhere">x</a></div></body></html>`)).toBe(false);
+    expect(hasShareFooterCardHtml('<html><body><p>utm_medium=share-footer</p></body></html>')).toBe(false);
+  });
+
   it('never removes artifact content that merely starts like the card', async () => {
     const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
     const gate = buildSignupGateHtml();
