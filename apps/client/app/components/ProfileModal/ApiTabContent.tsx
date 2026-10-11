@@ -22,9 +22,9 @@ const ApiTabContent = () => {
 
   return (
     <Stack spacing={3}>
-      <ApiKeysSection />
-
       <UserApiKeysSection />
+
+      <ApiKeysSection />
 
       <AgentConnectSection />
 

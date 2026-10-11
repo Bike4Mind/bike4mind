@@ -8,6 +8,10 @@ import ApiReferenceTab from './ApiReferenceTab';
 
 const h = vi.hoisted(() => ({ hasOptiAccess: false }));
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
+vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
+  useOverwatchAccess: () => true,
+  useHearthEnabled: () => true,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
