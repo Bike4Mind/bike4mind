@@ -31,7 +31,8 @@ type GroupedInvite = {
 
 // Chat in a shared project or notebook bills the member who sends (or the organization they pick),
 // never the inviter - see payerNoteText in components/Session/CreditPayerNote.tsx.
-export const SHARED_USAGE_BILLING_NOTE = 'Answers you get there use your own credits.';
+export const SHARED_USAGE_BILLING_NOTE =
+  'Answers you get there are billed to you or your selected organization, not the inviter.';
 
 const DOCUMENT_ICONS = {
   FabFile: <PsychologyIcon />,
