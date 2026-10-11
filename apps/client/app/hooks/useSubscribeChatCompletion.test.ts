@@ -176,13 +176,22 @@ describe('useSubscribeChatCompletion - terminal frame for a session the view has
     expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
 
     rerender({ sessionId: 'session-b' });
-    // The session-switch reset is not what clears it here: assert the entry outlived the switch.
-    useStreamingState.getState().startStreaming('session-a', 'q-a');
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
 
     await act(async () => {
       await latestStreamHandler()(frame('q-a', 'session-a', 'done'));
     });
     expect(useStreamingState.getState().isAnyStreaming()).toBe(false);
+  });
+
+  it("leaves the other session's newer turn alone on a late terminal frame of an earlier quest", async () => {
+    mount('session-b');
+    useStreamingState.getState().startStreaming('session-a', 'q-new');
+
+    await act(async () => {
+      await latestStreamHandler()(frame('q-old', 'session-a', 'done'));
+    });
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
   });
 
   it("leaves the other session's entry alone on a non-terminal frame", async () => {
