@@ -214,6 +214,17 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
         });
 
         if (!isValidSession) {
+          // Still close out the other session's streaming entry on its terminal frame: nothing else
+          // will (its timeout check only runs while it is the viewed session), and a leftover entry
+          // keeps isAnyStreaming() true, which holds the composer credit chip at its pre-turn value.
+          const frameSessionId = typedMsg.quest.sessionId;
+          if (
+            frameSessionId &&
+            isTerminalQuestStatus(typedMsg.quest.status) &&
+            useStreamingState.getState().isStreamingSession(frameSessionId)
+          ) {
+            completeStreaming(frameSessionId);
+          }
           console.warn(`[QUEST-DROP] Wrong session for streaming chunk - subscription ${metrics.subscriptionId}`, {
             chunkSessionId: typedMsg.quest.sessionId,
             expectedSessionId: sessionId,
