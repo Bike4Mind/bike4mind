@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
-import { isWsChunkEnvelope, WsChunkReassembler } from './wsChunkReassembler';
+import { describe, expect, it, vi } from 'vitest';
+import { ALREADY_FINISHED, isWsChunkEnvelope, WsChunkReassembler } from './wsChunkReassembler';
 
 const frame = (id: string, index: number, total: number, data: string) => ({
   _chunked: true as const,
@@ -68,17 +68,31 @@ describe('WsChunkReassembler', () => {
     expect(r.accept(a2)).toEqual({ kind: 'complete', payload });
   });
 
-  it('evicts an incomplete message once its TTL passes', () => {
+  it('evicts an incomplete message once its TTL passes, and reports the loss', () => {
     let now = 0;
-    const r = new WsChunkReassembler({ ttlMs: 1000, now: () => now });
+    const onDiscard = vi.fn();
+    const r = new WsChunkReassembler({ ttlMs: 1000, now: () => now, onDiscard });
     const [a, b] = split('m1', payload, 2);
     r.accept(a);
     now = 1500;
     r.sweep();
     expect(r.pendingCount).toBe(0);
     expect(r.bufferedCharCount).toBe(0);
-    // The surviving half alone can never complete the evicted message.
-    expect(r.accept(b).kind).toBe('pending');
+    expect(onDiscard).toHaveBeenCalledTimes(1);
+    // A late part of the evicted message cannot open a buffer that would never fill.
+    expect(r.accept(b)).toEqual({ kind: 'dropped', reason: ALREADY_FINISHED });
+    expect(r.pendingCount).toBe(0);
+  });
+
+  it('measures the TTL from the latest part, so a slow but live message survives', () => {
+    let now = 0;
+    const r = new WsChunkReassembler({ ttlMs: 1000, now: () => now });
+    const [a, b, c] = split('m1', payload, 3);
+    r.accept(a);
+    now = 900;
+    r.accept(b);
+    now = 1800;
+    expect(r.accept(c)).toEqual({ kind: 'complete', payload });
   });
 
   it('refuses an absurd _totalChunks before buffering anything', () => {
@@ -122,14 +136,17 @@ describe('WsChunkReassembler', () => {
     expect(r.accept(frame('new', 1, 2, 'z'))).toEqual({ kind: 'complete', payload: 'y'.repeat(8) + 'z' });
   });
 
-  it('evicts the oldest incomplete message past the pending-count cap', () => {
-    const r = new WsChunkReassembler({ maxPending: 2 });
+  it('evicts the oldest incomplete message past the pending-count cap, and reports the loss', () => {
+    const onDiscard = vi.fn();
+    const r = new WsChunkReassembler({ maxPending: 2, onDiscard });
     r.accept(frame('a', 0, 2, 'a'));
     r.accept(frame('b', 0, 2, 'b'));
     r.accept(frame('c', 0, 2, 'c'));
     expect(r.pendingCount).toBe(2);
+    expect(onDiscard).toHaveBeenCalledTimes(1);
     expect(r.accept(frame('b', 1, 2, 'B'))).toEqual({ kind: 'complete', payload: 'bB' });
-    expect(r.accept(frame('a', 1, 2, 'A')).kind).toBe('pending');
+    expect(r.accept(frame('a', 1, 2, 'A'))).toEqual({ kind: 'dropped', reason: ALREADY_FINISHED });
+    expect(r.pendingCount).toBe(1);
   });
 
   it('clear() drops every buffer', () => {

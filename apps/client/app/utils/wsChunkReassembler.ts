@@ -27,19 +27,23 @@ export interface WsChunkReassemblerOptions {
   maxBufferedChars?: number;
   /** Most incomplete messages held at once; the oldest is evicted past this. */
   maxPending?: number;
-  /** An incomplete message older than this (ms since its first part) is evicted. */
+  /** An incomplete message that has received no part for this long (ms) is evicted. */
   ttlMs?: number;
   now?: () => number;
+  /** Called when a buffered incomplete message is evicted (TTL or a cap), so the loss is observable. */
+  onDiscard?: (reason: string) => void;
 }
 
 const MAX_CHUNK_ID_LENGTH = 256;
-const RECENTLY_COMPLETED_LIMIT = 64;
+const RECENTLY_FINISHED_LIMIT = 64;
+export const WS_CHUNK_TTL_MS = 30_000;
+export const ALREADY_FINISHED = 'already finished';
 
 interface PendingMessage {
   total: number;
   parts: Map<number, string>;
   chars: number;
-  startedAt: number;
+  lastPartAt: number;
 }
 
 export function isWsChunkEnvelope(value: unknown): value is { _chunked: true } {
@@ -53,9 +57,10 @@ export class WsChunkReassembler {
   private readonly maxPending: number;
   private readonly ttlMs: number;
   private readonly now: () => number;
+  private readonly onDiscard?: (reason: string) => void;
   private readonly pending = new Map<string, PendingMessage>();
-  // Ids that just completed, so a late duplicate part cannot open a buffer that never fills.
-  private readonly completed = new Map<string, number>();
+  // Ids that just completed or were dropped, so a late part cannot open a buffer that never fills.
+  private readonly finished = new Map<string, number>();
   private bufferedChars = 0;
 
   constructor(options: WsChunkReassemblerOptions = {}) {
@@ -63,8 +68,9 @@ export class WsChunkReassembler {
     this.maxMessageChars = options.maxMessageChars ?? 16 * 1024 * 1024;
     this.maxBufferedChars = options.maxBufferedChars ?? 32 * 1024 * 1024;
     this.maxPending = options.maxPending ?? 32;
-    this.ttlMs = options.ttlMs ?? 30_000;
+    this.ttlMs = options.ttlMs ?? WS_CHUNK_TTL_MS;
     this.now = options.now ?? Date.now;
+    this.onDiscard = options.onDiscard;
   }
 
   get pendingCount(): number {
@@ -77,7 +83,7 @@ export class WsChunkReassembler {
 
   clear(): void {
     this.pending.clear();
-    this.completed.clear();
+    this.finished.clear();
     this.bufferedChars = 0;
   }
 
@@ -85,10 +91,10 @@ export class WsChunkReassembler {
   sweep(): void {
     const cutoff = this.now() - this.ttlMs;
     for (const [id, message] of this.pending) {
-      if (message.startedAt <= cutoff) this.evict(id);
+      if (message.lastPartAt <= cutoff) this.discard(id, 'timed out waiting for parts');
     }
-    for (const [id, completedAt] of this.completed) {
-      if (completedAt <= cutoff) this.completed.delete(id);
+    for (const [id, finishedAt] of this.finished) {
+      if (finishedAt <= cutoff) this.finished.delete(id);
     }
   }
 
@@ -99,65 +105,66 @@ export class WsChunkReassembler {
     if (typeof parsed === 'string') return { kind: 'dropped', reason: parsed };
     const { _chunkId: id, _chunkIndex: index, _totalChunks: total, _data: data } = parsed;
 
-    if (this.completed.has(id)) return { kind: 'dropped', reason: 'already complete' };
+    if (this.finished.has(id)) return { kind: 'dropped', reason: ALREADY_FINISHED };
 
     let message = this.pending.get(id);
-    if (message && message.total !== total) {
-      this.evict(id);
-      return { kind: 'dropped', reason: 'total changed mid-message' };
-    }
+    if (message && message.total !== total) return this.drop(id, 'total changed mid-message');
     if (message?.parts.has(index)) return { kind: 'pending' };
 
     const messageChars = (message?.chars ?? 0) + data.length;
-    if (messageChars > this.maxMessageChars) {
-      this.evict(id);
-      return { kind: 'dropped', reason: 'message too large' };
-    }
-    if (data.length > this.maxBufferedChars) {
-      this.evict(id);
-      return { kind: 'dropped', reason: 'part too large' };
-    }
+    if (messageChars > this.maxMessageChars) return this.drop(id, 'message too large');
+    if (data.length > this.maxBufferedChars) return this.drop(id, 'part too large');
     while (this.bufferedChars + data.length > this.maxBufferedChars) {
       const oldest = this.oldestOtherThan(id);
-      if (oldest === undefined) {
-        this.evict(id);
-        return { kind: 'dropped', reason: 'buffer full' };
-      }
-      this.evict(oldest);
+      if (oldest === undefined) return this.drop(id, 'buffer full');
+      this.discard(oldest, 'evicted to stay under the buffer cap');
     }
 
     if (!message) {
       while (this.pending.size >= this.maxPending) {
         const oldest = this.oldestOtherThan(id);
         if (oldest === undefined) break;
-        this.evict(oldest);
+        this.discard(oldest, 'evicted to stay under the pending-message cap');
       }
-      message = { total, parts: new Map(), chars: 0, startedAt: this.now() };
+      message = { total, parts: new Map(), chars: 0, lastPartAt: this.now() };
       this.pending.set(id, message);
     }
 
     message.parts.set(index, data);
     message.chars += data.length;
+    message.lastPartAt = this.now();
     this.bufferedChars += data.length;
 
     if (message.parts.size < total) return { kind: 'pending' };
 
     const ordered: string[] = [];
     for (let i = 0; i < total; i++) ordered.push(message.parts.get(i) ?? '');
-    this.evict(id);
-    this.completed.set(id, this.now());
-    if (this.completed.size > RECENTLY_COMPLETED_LIMIT) {
-      const oldestCompleted = this.completed.keys().next().value;
-      if (oldestCompleted !== undefined) this.completed.delete(oldestCompleted);
-    }
+    this.finish(id);
     return { kind: 'complete', payload: ordered.join('') };
   }
 
-  private evict(id: string): void {
+  private drop(id: string, reason: string): WsChunkResult {
+    this.finish(id);
+    return { kind: 'dropped', reason };
+  }
+
+  private discard(id: string, reason: string): void {
+    this.finish(id);
+    this.onDiscard?.(reason);
+  }
+
+  private finish(id: string): void {
     const message = this.pending.get(id);
-    if (!message) return;
-    this.bufferedChars -= message.chars;
-    this.pending.delete(id);
+    if (message) {
+      this.bufferedChars -= message.chars;
+      this.pending.delete(id);
+    }
+    this.finished.delete(id);
+    this.finished.set(id, this.now());
+    if (this.finished.size > RECENTLY_FINISHED_LIMIT) {
+      const oldestFinished = this.finished.keys().next().value;
+      if (oldestFinished !== undefined) this.finished.delete(oldestFinished);
+    }
   }
 
   private oldestOtherThan(id: string): string | undefined {

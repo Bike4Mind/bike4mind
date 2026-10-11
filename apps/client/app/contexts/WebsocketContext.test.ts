@@ -71,6 +71,7 @@ import {
   useWebsocket,
   WebsocketProvider,
 } from './WebsocketContext';
+import { WS_CHUNK_TTL_MS } from '@client/app/utils/wsChunkReassembler';
 
 const base = { openedThisAttempt: false, accessToken: 'tok', mfaPending: false, pathname: '/new' };
 
@@ -617,6 +618,7 @@ describe('WebsocketProvider - reassembles fanout-chunked frames before dispatch'
   beforeEach(() => {
     received.length = 0;
     lastJsonMessage = null;
+    h.queryClient.invalidateQueries.mockReset();
     h.readyState = 1;
     h.accessTokenState.accessToken = 'tok';
     stubVisibility('visible');
@@ -663,6 +665,7 @@ describe('WebsocketProvider - reassembles fanout-chunked frames before dispatch'
 
     expect(received).toEqual([message]);
     expect(lastJsonMessage).toBeNull();
+    expect(h.queryClient.invalidateQueries).not.toHaveBeenCalled();
   });
 
   it('still dispatches an unchunked message on the existing path', async () => {
@@ -686,5 +689,41 @@ describe('WebsocketProvider - reassembles fanout-chunked frames before dispatch'
 
     expect(received).toHaveLength(0);
     expect(lastJsonMessage).toBeNull();
+  });
+
+  it('warns and refetches when a chunked message is refused', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const opts = mount();
+      const [a] = parts('m1', 2);
+      await send(opts, JSON.stringify({ ...JSON.parse(a), _totalChunks: 1e9 }));
+
+      expect(warn).toHaveBeenCalledWith('[WebSocket] Lost a chunked message:', 'too many chunks');
+      expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session'] });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('refetches once a partial message times out, with no further frames arriving', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const opts = mount();
+      const [a] = parts('m1', 2);
+      await send(opts, a);
+      expect(h.queryClient.invalidateQueries).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(WS_CHUNK_TTL_MS * 2);
+      });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(h.queryClient.invalidateQueries).toHaveBeenCalledTimes(1);
+      expect(received).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });
