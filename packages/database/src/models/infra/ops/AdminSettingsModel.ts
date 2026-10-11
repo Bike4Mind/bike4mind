@@ -50,6 +50,10 @@ const AdminSettingsSchema = new Schema<IAdminSettings, IAdminSettingsModel, IAdm
       // Trusted reads that need plaintext must use .lean() + decryptSettingInPlace,
       // which bypasses this transform entirely. Does NOT decrypt -- decryption stays
       // in the repository layer where the key is available.
+      // Note: redactSettingSecrets is fail-closed -- setting names absent from settingsMap
+      // (e.g. llmModelConfigurations) are also masked. Routes returning a hydrated doc for
+      // non-sensitive unmapped settings should avoid res.json(hydratedDoc) and return a
+      // plain value or { success: true } instead.
       transform: (_doc, ret) => redactSettingSecrets(ret as AdminSettingDoc),
     },
     toObject: {
