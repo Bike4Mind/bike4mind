@@ -65,7 +65,7 @@ async function resolveChannelModelConfig(
  * Format a model ID into a human-readable display name.
  * Returns the ID itself if no friendly name is found.
  */
-function formatModelName(modelId: string): string {
+export function formatModelName(modelId: string): string {
   // Known model ID -> display name mappings
   const knownModels: Record<string, string> = {
     // SYSTEM_MODEL_DEFAULTS.modelId is global.anthropic.claude-sonnet-5 -> covers the Bedrock Sonnet 5 id

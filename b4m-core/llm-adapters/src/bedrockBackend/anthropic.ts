@@ -692,7 +692,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-05-28',
         description:
-          "Anthropic's latest flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
+          "Anthropic's previous flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
         isSlowModel: true,
       },
       {
