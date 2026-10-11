@@ -837,6 +837,8 @@ Notebook exports are written under `exports/` in the FabFile bucket and download
 
 QuestMaster ZIP exports opt into `S3Storage.getSignedUrl` with `audience: 'browser'`. With the default container endpoint, the returned URL contains the internal MinIO hostname, which a browser cannot resolve. Set the optional `S3_PRESIGN_ENDPOINT` in the environment of both the app and workers to the S3 API origin the browser can reach. `AWS_ENDPOINT_URL_S3` stays on the private backend endpoint for uploads, metadata reads, downloads and default server-side signed URLs. `S3_PRESIGN_ENDPOINT` must be an absolute HTTP or HTTPS URL. If the signing override is unset, the existing signing behavior is unchanged.
 
+The app adds the configured HTTP or HTTPS origin to its browser connection, image and media policy. Paths and query parameters are normalized to the origin; invalid values are omitted with a diagnostic naming `S3_PRESIGN_ENDPOINT`. Other policy directives and the default policy when unset remain unchanged. The object store must still provide appropriate CORS headers for cross-origin browser requests.
+
 For the local Compose evaluation stack, MinIO's API is already published on loopback port 9000. Add this to `.env.selfhost`, then recreate the app and worker services so both receive the new environment:
 
 ```bash
