@@ -81,7 +81,7 @@ describe('AnthropicBedrockBackend prompt caching guard (#8322)', () => {
 describe('AnthropicBedrockBackend current inference profiles', () => {
   const profiles = [
     [ChatModels.CLAUDE_5_OPUS_BEDROCK, 5, 25],
-    [ChatModels.CLAUDE_5_5_OPUS_BEDROCK, 5, 25],
+    [ChatModels.CLAUDE_5_5_OPUS_BEDROCK, 4, 20],
     [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 3, 15],
     [ChatModels.CLAUDE_FABLE_5_BEDROCK, 10, 50],
     [ChatModels.CLAUDE_FABLE_5_1_BEDROCK, 10, 50],
@@ -97,7 +97,13 @@ describe('AnthropicBedrockBackend current inference profiles', () => {
       thinkingStyle: 'adaptive',
       rank: expect.any(Number),
     });
-    expect(model?.pricing[1_000_000]).toEqual({ input: input / 1_000_000, output: output / 1_000_000 });
+    expect(model?.pricing[1_000_000]).toMatchObject({ input: input / 1_000_000, output: output / 1_000_000 });
+  });
+
+  it('prices Opus 5.5 cache hits at 0.05x input ($0.20 / 1M), not the default 0.1x', async () => {
+    const model = (await backend.getModelInfo()).find(candidate => candidate.id === ChatModels.CLAUDE_5_5_OPUS_BEDROCK);
+
+    expect(model?.pricing[1_000_000]?.cache_read).toBe(0.2 / 1_000_000);
   });
 
   it.each(profiles)('omits sampling parameters for %s', (id, _input, _output) => {

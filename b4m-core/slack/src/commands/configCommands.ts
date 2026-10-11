@@ -77,6 +77,7 @@ function formatModelName(modelId: string): string {
     'claude-sonnet-4-5': 'Claude Sonnet 4.5',
     'claude-opus-5': 'Claude Opus 5',
     'global.anthropic.claude-opus-5': 'Claude Opus 5',
+    'claude-opus-5-5': 'Claude Opus 5.5',
     'global.anthropic.claude-opus-5-5': 'Claude Opus 5.5',
     'global.anthropic.claude-fable-5': 'Claude Fable 5',
     'global.anthropic.claude-fable-5-1': 'Claude Fable 5.1',
