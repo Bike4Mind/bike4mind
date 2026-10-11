@@ -7,6 +7,7 @@ import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 import { Request } from 'express';
@@ -92,6 +93,7 @@ const handler = baseApi()
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
+      ...USD_CHECKOUT_SESSION_PARAMS,
       payment_method_types: ['card'],
       line_items: [
         {

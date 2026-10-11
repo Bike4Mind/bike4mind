@@ -191,6 +191,18 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     expect(args.cancel_url).toBe(CALLBACK_URL);
   });
 
+  it('pins the session to USD with Adaptive Pricing off, whatever the visitor location', async () => {
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).toMatchObject({
+      currency: 'usd',
+      adaptive_pricing: { enabled: false },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
   // The #1424 clamp: minSeats = min(max(MIN, members + 1), MAX). Both bounds need a fixture
   // where they actually bite - with the default one-member org the floor coincides with MIN,
   // so asserting `minimum: MIN` passes even if the whole expression is deleted.

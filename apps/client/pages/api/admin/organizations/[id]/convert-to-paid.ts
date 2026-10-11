@@ -6,6 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Config } from '@server/utils/config';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
@@ -100,6 +101,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     // Stripe accepted - bypassing our org-internal floor.
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
+      ...USD_CHECKOUT_SESSION_PARAMS,
       customer: organization.stripeCustomerId,
       payment_method_types: ['card'],
       line_items: [
