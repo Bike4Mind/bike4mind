@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   adminDefaultModel: 'mid-model',
   authedSettingsLoaded: true,
+  entitlementsLoading: false,
   accessibleIds: [] as string[],
   fallbacks: {} as Record<string, string>,
   toastInfo: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock('../hooks/useAccessibleModels', () => ({
       const target = h.fallbacks[id];
       return target && h.accessibleIds.includes(target) ? ALL.find(m => m.id === target) : null;
     },
+    isEntitlementsLoading: h.entitlementsLoading,
   }),
 }));
 vi.mock('./AdminSettingsContext', () => ({
@@ -66,6 +68,7 @@ describe('LLMProvider default text model', () => {
     useLLM.getState().resetSettings();
     h.adminDefaultModel = MID.id;
     h.authedSettingsLoaded = true;
+    h.entitlementsLoading = false;
     h.accessibleIds = ALL.map(m => m.id);
     h.fallbacks = {};
     h.toastInfo.mockClear();
@@ -121,5 +124,21 @@ describe('LLMProvider default text model', () => {
       "gone-model isn't available on your account, so new messages use Mid.",
       expect.objectContaining({ id: 'llm-model-replaced' })
     );
+  });
+
+  it('keeps a persisted model that is only missing because entitlements have not loaded yet', async () => {
+    useLLM.setState({ model: CHEAP.id });
+    h.entitlementsLoading = true;
+    h.accessibleIds = [PAINT.id, MID.id];
+    const { rerender } = render(<LLMProvider />);
+    await act(async () => {});
+    expect(useLLM.getState().model).toBe(CHEAP.id);
+
+    h.entitlementsLoading = false;
+    h.accessibleIds = ALL.map(m => m.id);
+    rerender(<LLMProvider />);
+    await act(async () => {});
+    expect(useLLM.getState().model).toBe(CHEAP.id);
+    expect(h.toastInfo).not.toHaveBeenCalled();
   });
 });

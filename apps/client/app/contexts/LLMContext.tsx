@@ -390,7 +390,7 @@ export const LLMProvider: React.FC = () => {
   const { setState } = useLLM;
   const { settings, isHydrated: settingsHydrated } = useUserSettings();
   const { isFeatureEnabled, isLoading: areFeaturesLoading } = useFeatureEnabled();
-  const { accessibleModels, isModelAccessible, getFallbackModel } = useAccessibleModels();
+  const { accessibleModels, isModelAccessible, getFallbackModel, isEntitlementsLoading } = useAccessibleModels();
   const { data: modelInfoRepo } = useModelInfo();
   const activeModel = useLLM(s => s.model);
   const {
@@ -509,7 +509,9 @@ export const LLMProvider: React.FC = () => {
     setState(state => {
       const models = accessibleModelsRef.current;
       // Make sure admin settings are fetched before setting the default model
-      if (models && models.length > 0 && adminDefaultReady) {
+      // Also wait out the first entitlements fetch: before it lands, an entitlement-gated model reads
+      // as inaccessible, so a persisted pick would be swapped (and toasted) for no reason.
+      if (models && models.length > 0 && adminDefaultReady && !isEntitlementsLoading) {
         // Check if current model needs to be changed
         const hasNoModel = !state.model;
         const needsModelSwitch = state.model && !stableIsModelAccessible(state.model);
@@ -602,7 +604,7 @@ export const LLMProvider: React.FC = () => {
     // derive from the same cached catalog query, so accessibleModels already covers its arrival. Adding
     // it would re-run this effect on every catalog refetch for no new decision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setState, adminDefaultTextModel, adminDefaultReady, accessibleModels, activeModel]);
+  }, [setState, adminDefaultTextModel, adminDefaultReady, isEntitlementsLoading, accessibleModels, activeModel]);
 
   // Re-fit max_tokens whenever the active text/chat model changes (see refitMaxTokensForModel -
   // it corrects both a too-high carry-over and a too-low one). Skip image models: their catalog
