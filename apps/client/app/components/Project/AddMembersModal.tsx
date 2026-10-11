@@ -11,6 +11,10 @@ import { useTranslation } from 'react-i18next';
 import GenericAddItemsModal from './GenericAddItemsModal';
 import UserCard from '../common/UserCard';
 import { toast } from 'sonner';
+import { Box, Button, Typography } from '@mui/joy';
+import { z } from 'zod';
+
+const isEmailAddress = (value: string) => z.email().safeParse(value).success;
 
 const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; pendingInvites?: string[] }> = ({
   project,
@@ -52,6 +56,66 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
       toast.error(err.message);
     },
   });
+
+  // A typed address that matched nobody becomes a project invite addressed to that email. Offered
+  // only once the exact-email lookup for that same term has come back empty, so it says nothing
+  // beyond what that lookup already said.
+  const inviteByEmail = useShareDocument({
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invites', 'projects', project.id] });
+    },
+    onError: err => {
+      toast.error(err.message);
+    },
+  });
+
+  const handleInviteByEmail = useCallback(
+    (email: string) => {
+      inviteByEmail.mutate(
+        {
+          description: `You've been invited to join the project`,
+          recipients: [email],
+          id: project.id,
+          type: InviteType.Project,
+          permissions,
+        },
+        {
+          onSuccess: () =>
+            toast.success(t('projects.modals.members.invite_sent', 'Invitation sent to {{email}}', { email })),
+        }
+      );
+    },
+    [inviteByEmail, project.id, permissions, t]
+  );
+
+  const renderNoResults = useCallback(
+    (term: string) => {
+      const email = term.trim().toLowerCase();
+      const canInvite =
+        term === search && !isFetching && isEmailAddress(email) && email !== currentUser?.email?.toLowerCase();
+      return (
+        <Box display="flex" flexDirection="column" alignItems="center" gap={2}>
+          <Typography level="body-lg" color="neutral" textAlign="center">
+            {t(
+              'projects.modals.members.no_results',
+              'No one matches that. Enter their full email address to invite them.'
+            )}
+          </Typography>
+          {canInvite && (
+            <Button
+              data-testid="project-invite-by-email-btn"
+              loading={inviteByEmail.isPending}
+              onClick={() => handleInviteByEmail(email)}
+              sx={{ overflowWrap: 'anywhere' }}
+            >
+              {t('projects.modals.members.invite_by_email', 'Invite {{email}} by email', { email })}
+            </Button>
+          )}
+        </Box>
+      );
+    },
+    [search, isFetching, currentUser?.email, inviteByEmail.isPending, handleInviteByEmail, t]
+  );
 
   const users = useMemo(() => (data?.users ?? []).filter(u => u.id !== ownerId), [data?.users, ownerId]);
   const debouncedSearch = useMemo(() => debounce(setSearch, 300), []);
@@ -114,7 +178,7 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
   return (
     <GenericAddItemsModal
       title={t('projects.modals.members.title', 'Add Members to Project')}
-      subtitle={t('projects.modals.members.subtitle', 'Search for users to add to this project')}
+      subtitle={t('projects.modals.members.subtitle', 'Invite people to collaborate on this project')}
       buttonLabel={t('projects.modals.members.button_label', 'Add Members')}
       buttonIcon={<AddIcon />}
       items={users}
@@ -122,7 +186,7 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
       onSelectIds={setSelectedUserIds}
       getItemId={user => user.id}
       onSearch={term => debouncedSearch(term)}
-      searchPlaceholder={t('common.search_users', 'Search users')}
+      searchPlaceholder={t('projects.modals.members.search_placeholder', "Enter your teammate's full email address")}
       searchMinLength={3}
       onAdd={handleAddMembers}
       isPending={shareDocument.isPending}
@@ -130,6 +194,8 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
       isLoadingMore={isFetching}
       showButtonBadge={false}
       emptyResultMessage={t('projects.modals.members.no_members')}
+      renderNoResults={renderNoResults}
+      getAddLabel={count => t('projects.modals.members.add_members', { count })}
       triggerTestId="project-add-members-btn"
     />
   );
