@@ -474,7 +474,7 @@ export class OpenAIBackend implements ICompletionBackend {
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-06-23',
         description:
-          'GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision at mid-tier cost, a reliable workhorse for everyday professional tasks.',
+          'GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision, priced between Sol and Luna, a reliable workhorse for everyday professional tasks.',
       },
       {
         id: ChatModels.GPT5_6_LUNA,

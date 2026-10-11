@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildModelSelectionPatch,
   computeDefaultMaxTokens,
+  getModelPriceTier,
   getModelSpeedFromStats,
   refitMaxTokensForModel,
 } from '../aiSettingsUtils';
@@ -169,5 +170,21 @@ describe('getModelSpeedFromStats', () => {
     expect(getModelSpeedFromStats('m', { m: 7000 })).toBe('medium');
     expect(getModelSpeedFromStats('m', { m: 14999 })).toBe('medium');
     expect(getModelSpeedFromStats('m', { m: 15000 })).toBe('slow');
+  });
+});
+
+describe('getModelPriceTier', () => {
+  const textModel = (input: number, output: number): ModelInfo =>
+    ({
+      type: 'text',
+      pricing: { 272_000: { input: input / 1_000_000, output: output / 1_000_000 } },
+    }) as unknown as ModelInfo;
+
+  // The GPT-5.6 catalog descriptions position Terra between Sol and Luna, so the chip has to
+  // agree: Terra ($2.50 in / $15 out per 1M) is not a mid-tier price by this scale.
+  it('tiers the GPT-5.6 family by its real first-tier price', () => {
+    expect(getModelPriceTier(textModel(5, 30)).tier).toBe('High');
+    expect(getModelPriceTier(textModel(2.5, 15)).tier).toBe('High');
+    expect(getModelPriceTier(textModel(1, 6)).tier).toBe('Medium');
   });
 });
