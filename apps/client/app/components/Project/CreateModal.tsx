@@ -35,7 +35,7 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
     resolver: zodResolver(
       z.object({
         name: z.string().min(1, 'Project name is required.'),
-        description: z.string().min(1, 'Please write a description for the Project.'),
+        description: z.string(),
       }) as any
     ),
   });
@@ -125,7 +125,7 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
                     <span style={{ fontSize: '12px' }}>{watch('name').length}/50</span>
                   </FormHelperText>
                 </FormControl>
-                <FormControl required className="create-project-description-control">
+                <FormControl className="create-project-description-control">
                   <FormLabel className="create-project-description-label">Description</FormLabel>
                   <Textarea
                     data-testid="description-textarea"
