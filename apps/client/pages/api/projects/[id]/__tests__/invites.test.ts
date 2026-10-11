@@ -5,6 +5,7 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
   postMiddleware: [] as unknown[],
+  accounts: [] as Array<{ email: string }>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -45,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   // Return null so the ADD_MEMBER logEvent block is skipped for tests with empty pending.
   Project: { findById: () => Promise.resolve(null) },
   Group: {},
+  User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -67,6 +69,7 @@ describe('POST /api/projects/:id/invites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createInvite.mockResolvedValue({ id: 'inv-1', recipients: { pending: [] } });
+    mockRefs.accounts = [];
     tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
   });
 
@@ -176,33 +179,83 @@ describe('POST /api/projects/:id/invites', () => {
     );
   });
 
-  it('emails the pending recipients a link to the invite', async () => {
+  const postInvite = async (
+    pending: string[],
+    user: Record<string, unknown> = { id: 'u1', name: 'Sharer', email: 'sharer@example.com' }
+  ) => {
     createInvite.mockResolvedValue({
       id: 'inv-2',
       token: 'tok-2',
       inviterId: 'u1',
-      recipients: { pending: ['new.person@example.com'] },
-      typedRecipients: ['new.person@example.com'],
+      recipients: { pending },
+      typedRecipients: pending,
     });
     const { req, res } = createMocks({
       method: 'POST',
       query: { id: '507f1f77bcf86cd799439033' },
-      body: { permissions: ['read'], recipients: ['new.person@example.com'] },
+      body: { permissions: ['read'], recipients: pending, description: 'Custom note from the inviter' },
     });
-    (req as any).user = { id: 'u1', name: 'Sharer', email: 'sharer@example.com' };
-
+    (req as any).user = user;
     await mockRefs.postHandler!(req, res);
-
     expect(res._getStatusCode()).toBe(200);
+  };
+
+  it('emails an address with no account the fixed template only, without the custom message', async () => {
+    mockRefs.accounts = [];
+
+    await postInvite(['new.person@example.com']);
+
+    await vi.waitFor(() => expect(sendInviteNotificationEmails).toHaveBeenCalledTimes(1));
     expect(sendInviteNotificationEmails).toHaveBeenCalledWith(
       ['new.person@example.com'],
       'Sharer',
       'sharer@example.com',
       'a project',
       'project',
-      expect.stringMatching(/\/share\/tok-2$/),
-      undefined
+      expect.stringMatching(/\/share\/tok-2$/)
     );
+    expect(sendInviteNotificationEmails.mock.calls[0]).toHaveLength(6);
+  });
+
+  it('still sends the custom message to a recipient who has an account', async () => {
+    mockRefs.accounts = [{ email: 'Friend@Example.com' }];
+
+    await postInvite(['friend@example.com', 'new.person@example.com']);
+
+    await vi.waitFor(() => expect(sendInviteNotificationEmails).toHaveBeenCalledTimes(2));
+    expect(sendInviteNotificationEmails).toHaveBeenCalledWith(
+      ['friend@example.com'],
+      'Sharer',
+      'sharer@example.com',
+      'a project',
+      'project',
+      expect.stringMatching(/\/share\/tok-2$/),
+      'Custom note from the inviter'
+    );
+    const strangerCall = sendInviteNotificationEmails.mock.calls.find(call => call[0][0] === 'new.person@example.com');
+    expect(strangerCall).toHaveLength(6);
+  });
+
+  it('caps a long inviter name in an email to an address with no account', async () => {
+    mockRefs.accounts = [];
+    const longName = 'N'.repeat(500);
+
+    await postInvite(['new.person@example.com'], { id: 'u1', name: longName, email: 'sharer@example.com' });
+
+    await vi.waitFor(() => expect(sendInviteNotificationEmails).toHaveBeenCalledTimes(1));
+    const sentName = sendInviteNotificationEmails.mock.calls[0][1] as string;
+    expect(sentName).toHaveLength(60);
+    expect(sentName).toBe(`${'N'.repeat(57)}...`);
+  });
+
+  it('leaves the inviter name whole in an email to an account holder', async () => {
+    mockRefs.accounts = [{ email: 'friend@example.com' }];
+    const longName = 'N'.repeat(500);
+
+    await postInvite(['friend@example.com'], { id: 'u1', name: longName, email: 'sharer@example.com' });
+
+    await vi.waitFor(() => expect(sendInviteNotificationEmails).toHaveBeenCalledTimes(1));
+    expect(sendInviteNotificationEmails.mock.calls[0][1]).toBe(longName);
   });
 
   it('sends no email when the invite has no pending recipients', async () => {

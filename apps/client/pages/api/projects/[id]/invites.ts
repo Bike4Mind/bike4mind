@@ -22,6 +22,7 @@ import {
   organizationRepository,
   Project,
   Group,
+  User,
 } from '@bike4mind/database';
 import { z } from 'zod';
 import { getInviteTypeName, sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
@@ -37,6 +38,48 @@ const MAX_INVITE_MESSAGE_LENGTH = 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const PROJECT_INVITE_RATE_LIMIT = { limit: 100, windowMs: HOUR_MS, bucket: 'POST /api/projects/[id]/invites' } as const;
 const TYPED_ADDRESS_INVITES_PER_HOUR = 20;
+
+const MAX_EMAILED_NAME_LENGTH = 60;
+
+const capLength = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 3)}...` : value);
+
+/**
+ * Emails the invitees. An address with no account gets only the fixed template: no custom message,
+ * and the inviter-chosen names capped, so the platform cannot be used to mail free text to
+ * strangers. Recipients who already have an account get the message as before. Which is which is
+ * never reflected in the response, so the lookup discloses nothing to the inviter.
+ */
+async function notifyProjectInvitees(params: {
+  recipients: string[];
+  sharerName: string;
+  sharerEmail: string;
+  projectName: string;
+  inviteLink: string;
+  message?: string;
+}) {
+  const { recipients, sharerName, sharerEmail, projectName, inviteLink, message } = params;
+  const accounts = await User.find({ email: { $in: recipients } }, { email: 1 })
+    .collation({ locale: 'en', strength: 2 })
+    .lean();
+  const hasAccount = new Set(accounts.map(account => account.email?.toLowerCase()));
+  const members = recipients.filter(recipient => hasAccount.has(recipient.toLowerCase()));
+  const strangers = recipients.filter(recipient => !hasAccount.has(recipient.toLowerCase()));
+  const typeName = getInviteTypeName(InviteType.Project);
+
+  await Promise.all([
+    members.length > 0 &&
+      sendInviteNotificationEmails(members, sharerName, sharerEmail, projectName, typeName, inviteLink, message),
+    strangers.length > 0 &&
+      sendInviteNotificationEmails(
+        strangers,
+        capLength(sharerName, MAX_EMAILED_NAME_LENGTH),
+        sharerEmail,
+        capLength(projectName, MAX_EMAILED_NAME_LENGTH),
+        typeName,
+        inviteLink
+      ),
+  ]);
+}
 
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
@@ -150,15 +193,14 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       const pendingRecipients = created.recipients?.pending || [];
       if (pendingRecipients.length > 0) {
         const brand = process.env.APP_NAME || '';
-        sendInviteNotificationEmails(
-          pendingRecipients,
-          req.user.name || req.user.username || `A${brand ? ` ${brand}` : ''} user`,
-          req.user.email || '',
-          project?.name || 'a project',
-          getInviteTypeName(InviteType.Project),
-          generateInviteLink(created),
-          restBody.description
-        ).catch(error => {
+        notifyProjectInvitees({
+          recipients: pendingRecipients,
+          sharerName: req.user.name || req.user.username || `A${brand ? ` ${brand}` : ''} user`,
+          sharerEmail: req.user.email || '',
+          projectName: project?.name || 'a project',
+          inviteLink: generateInviteLink(created),
+          message: restBody.description,
+        }).catch(error => {
           req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
         });
       }
