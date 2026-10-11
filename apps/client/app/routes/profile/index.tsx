@@ -165,6 +165,8 @@ const ProfilePage = () => {
       >
         <ContextHelpButton helpId="features/profile-settings" tooltipText="Learn about Profile & Settings" />
         <IconButton
+          aria-label="Close"
+          data-testid="profile-close-btn"
           onClick={handleClose}
           sx={{
             backgroundColor: theme => theme.palette.background.surface,
@@ -181,7 +183,7 @@ const ProfilePage = () => {
       </Box>
 
       <Tabs
-        aria-label="Basic tabs"
+        aria-label="Profile sections"
         value={activeTab}
         defaultValue={ProfileTab.Profile}
         onChange={(_, tab) => {
@@ -193,7 +195,12 @@ const ProfilePage = () => {
         }}
       >
         <TabList data-testid="profile-tablist" sx={profileTabListSx}>
-          <PageTab data-testid="profile-tab" sx={{ borderBottomLeftRadius: '0' }} value={ProfileTab.Profile}>
+          <PageTab
+            data-testid="profile-tab"
+            sx={{ borderBottomLeftRadius: '0' }}
+            value={ProfileTab.Profile}
+            aria-label={t('profile.title')}
+          >
             <Tooltip title={t('profile.tooltip')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <AccountCircleIcon sx={{ flexShrink: 0, color: 'text.primary', fontSize: '16px' }} />
@@ -204,7 +211,12 @@ const ProfilePage = () => {
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="community-tab" sx={{ borderBottomLeftRadius: '0' }} value={ProfileTab.Community}>
+          <PageTab
+            data-testid="community-tab"
+            sx={{ borderBottomLeftRadius: '0' }}
+            value={ProfileTab.Community}
+            aria-label={t('community.title')}
+          >
             <Tooltip title={t('community.tooltip')}>
               <Badge size="sm" color="danger" invisible={friendRequests?.length === 0}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -217,7 +229,7 @@ const ProfilePage = () => {
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="settings-tab" value={ProfileTab.Settings}>
+          <PageTab data-testid="settings-tab" value={ProfileTab.Settings} aria-label={t('settings.title')}>
             <Tooltip title={t('settings.tooltip')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <SettingsIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
@@ -228,7 +240,7 @@ const ProfilePage = () => {
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="api-keys-tab" value={ProfileTab.ApiKeys}>
+          <PageTab data-testid="api-keys-tab" value={ProfileTab.ApiKeys} aria-label="API Keys">
             <Tooltip title="Manage your API keys">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <KeyOutlinedIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
@@ -237,7 +249,7 @@ const ProfilePage = () => {
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="usage-tab" value={ProfileTab.Usage}>
+          <PageTab data-testid="usage-tab" value={ProfileTab.Usage} aria-label="Usage">
             <Tooltip title="View your credit usage and model pricing">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <InsightsIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
@@ -246,7 +258,7 @@ const ProfilePage = () => {
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="integrations-tab" value={ProfileTab.Integrations}>
+          <PageTab data-testid="integrations-tab" value={ProfileTab.Integrations} aria-label="Integrations">
             <Tooltip title="Manage external integrations">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <LinkIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
@@ -258,7 +270,7 @@ const ProfilePage = () => {
           </PageTab>
 
           {isAdmin && (
-            <PageTab data-testid="security-tab" value={ProfileTab.Security}>
+            <PageTab data-testid="security-tab" value={ProfileTab.Security} aria-label="Security">
               <Tooltip title="View security events and alerts">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <SecurityIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
@@ -269,7 +281,7 @@ const ProfilePage = () => {
           )}
 
           {hasPublishedArtifacts && (
-            <PageTab data-testid="published-tab" value={ProfileTab.Published}>
+            <PageTab data-testid="published-tab" value={ProfileTab.Published} aria-label="Live Artifacts">
               <Tooltip title="Manage your Live Artifacts (published & shared)">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <ShareIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
