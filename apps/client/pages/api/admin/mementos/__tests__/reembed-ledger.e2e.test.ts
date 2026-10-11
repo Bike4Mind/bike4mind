@@ -27,9 +27,14 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
     }
   },
 }));
+// The owner's key lookup is the first step of building the embedding service.
+const getEffectiveLLMApiKeys = vi.fn(async (): Promise<Record<string, string>> => ({}));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
-  return { ...actual, apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: async () => ({}) } };
+  return {
+    ...actual,
+    apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: () => getEffectiveLLMApiKeys() },
+  };
 });
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ post: (fn: unknown) => fn }),
@@ -45,6 +50,7 @@ beforeAll(async () => {
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
   generateEmbedding.mockClear();
+  getEffectiveLLMApiKeys.mockClear();
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -165,5 +171,23 @@ describe('POST /api/admin/mementos/reembed-ledger against a real ledger', () => 
     expect(pages[0]).toMatchObject({ hasMore: true, nextAfter: null });
     expect(generateEmbedding).toHaveBeenCalledTimes(105);
     expect((await verified(user, 'user-1')).ok).toBe(true);
+  });
+
+  it('does not treat a transient key-lookup failure as a missing key for the rest of the walk', async () => {
+    const lake2: Principal = { kind: 'lake', id: 'lake-2' };
+    await seed(lake, 'lake-owner', 'pricing');
+    await seed(lake, 'lake-owner', 'roadmap');
+    await seed(lake2, 'lake-owner', 'hiring');
+    getEffectiveLLMApiKeys.mockRejectedValueOnce(new Error('connection reset'));
+
+    const [run] = await runLoop(true);
+    expect(run).toMatchObject({ processedPrincipals: 2, backfilled: 2, embedderUnavailable: 1, noProviderKey: 0 });
+    expect(run.failedPrincipals).toEqual([
+      expect.objectContaining({ principalId: 'lake-1', error: expect.stringContaining('retried next walk') }),
+    ]);
+
+    // The event the failed build skipped is still vectorless, so the next walk picks it up.
+    const [again] = await runLoop(true);
+    expect(again).toMatchObject({ processedPrincipals: 1, backfilled: 1, embedderUnavailable: 0 });
   });
 });

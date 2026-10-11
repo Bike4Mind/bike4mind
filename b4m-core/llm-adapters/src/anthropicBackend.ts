@@ -2,6 +2,7 @@ import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
+  JSONOutputFormat,
   RawMessageStreamEvent,
   Tool,
 } from '@anthropic-ai/sdk/resources/messages';
@@ -15,6 +16,7 @@ import {
   NO_TEMPERATURE_MODELS,
   PermissionDeniedError,
   REFUSAL_FALLBACK_MODELS,
+  supportsForcedToolChoice,
   type ModelInfo,
 } from '@bike4mind/common';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
@@ -37,7 +39,7 @@ import {
   stripAllToolBlocks,
   stripToolDependentMessages,
 } from './toolPairingUtils';
-import { getCachingAdapter, logCacheStats } from './caching/adapters';
+import { capCacheControlMarkers, getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
 import { toAnthropicContent } from './anthropicContent';
 import {
@@ -59,14 +61,23 @@ import { logAnthropicLimitResponse, pickRateLimitHeaders } from './anthropicRate
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
 import {
+  appendSystemText,
+  buildStructuredOutputFormat,
+  buildToolUseInstruction,
+  downgradeForcedToolChoice,
+  hasCitationsEnabled,
+  markToolStrict,
+} from './forcedToolChoice';
+import { buildJsonSchemaInstruction } from './responseFormatHelpers';
+import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
   type DegenerateStreamVerdict,
 } from './degenerateStreamGuard';
 
 type ExtendedMessageCreateParams = MessageCreateParamsBase &
-  Partial<ThinkingConfig> & {
-    output_config?: { effort: 'high' | 'medium' | 'low' };
+  Partial<Omit<ThinkingConfig, 'output_config'>> & {
+    output_config?: { effort?: 'high' | 'medium' | 'low'; format?: JSONOutputFormat };
   };
 
 interface ToolUseEvent {
@@ -764,6 +775,21 @@ export class AnthropicBackend implements ICompletionBackend {
       ...options,
     };
 
+    // Forced tool_choice ('any'/'tool') returns 400 on these models, so a caller's forced choice
+    // becomes auto + strict + an instruction, held fixed for every recursive turn of this request.
+    const forcedToolChoiceSupported = supportsForcedToolChoice(model);
+    const downgradedToolChoice = forcedToolChoiceSupported
+      ? undefined
+      : (options._internal?.downgradedToolChoice ??
+        (options.tools?.length ? downgradeForcedToolChoice(options.tool_choice) : undefined));
+    if (downgradedToolChoice && !options._internal?.downgradedToolChoice) {
+      this.logger.warn('[AnthropicBackend] Forced tool_choice is not supported by this model; sending auto instead', {
+        model,
+        toolName: downgradedToolChoice.toolName,
+      });
+      options = { ...options, _internal: { ...options._internal, downgradedToolChoice } };
+    }
+
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
 
@@ -1025,11 +1051,39 @@ export class AnthropicBackend implements ICompletionBackend {
     // Skip if the caller is already using their own tools (let those take
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
-    const usingResponseFormatToolUse = responseFormat?.type === 'json_schema' && !options.tools?.length;
+    const wantsJsonSchema = responseFormat?.type === 'json_schema' && !options.tools?.length;
+    const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported;
+    // A model without forced tool use gets native structured outputs instead of the synthesized tool,
+    // unless a document asks for citations (that pairing is a 400) or the schema is one structured
+    // outputs reject - then the schema goes in the prompt.
+    const citationsBlockFormat =
+      wantsJsonSchema && !forcedToolChoiceSupported && hasCitationsEnabled(apiParams.messages);
+    const nativeFormat =
+      wantsJsonSchema && !forcedToolChoiceSupported && !citationsBlockFormat && responseFormat.type === 'json_schema'
+        ? buildStructuredOutputFormat(responseFormat.json_schema.schema)
+        : null;
+    const usingResponseFormatNative = nativeFormat !== null;
+    const usingResponseFormatPrompt = wantsJsonSchema && !forcedToolChoiceSupported && !usingResponseFormatNative;
     if (responseFormat) {
       this.logger.info(
-        `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, callerTools=${options.tools?.length ?? 0}`
+        `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, nativeFormat=${usingResponseFormatNative}, callerTools=${options.tools?.length ?? 0}`
       );
+    }
+    if (usingResponseFormatPrompt && !citationsBlockFormat) {
+      this.logger.warn(
+        '[AnthropicBackend] json_schema not expressible as structured outputs; using prompt instruction',
+        {
+          model,
+        }
+      );
+    }
+    if (nativeFormat) {
+      apiParams.output_config = { format: nativeFormat };
+    }
+    const schemaInstruction =
+      usingResponseFormatPrompt && responseFormat ? buildJsonSchemaInstruction(responseFormat) : null;
+    if (schemaInstruction) {
+      apiParams.system = appendSystemText(apiParams.system, schemaInstruction);
     }
     if (usingResponseFormatToolUse && responseFormat.type === 'json_schema') {
       const schemaTool: Tool = {
@@ -1044,8 +1098,14 @@ export class AnthropicBackend implements ICompletionBackend {
     if (options.tools?.length) {
       apiParams.tools = this.formatTools(options.tools);
 
-      // Add tool_choice if specified (convert from OpenAI format to Anthropic format)
-      if (options.tool_choice) {
+      if (downgradedToolChoice) {
+        apiParams.tool_choice = { type: 'auto' };
+        if (downgradedToolChoice.toolName) {
+          apiParams.tools = markToolStrict(apiParams.tools, downgradedToolChoice.toolName);
+        }
+        apiParams.system = appendSystemText(apiParams.system, buildToolUseInstruction(downgradedToolChoice));
+      } else if (options.tool_choice) {
+        // Add tool_choice if specified (convert from OpenAI format to Anthropic format)
         if (options.tool_choice === 'auto') {
           apiParams.tool_choice = { type: 'auto' };
         } else if (options.tool_choice === 'required') {
@@ -1091,7 +1151,8 @@ export class AnthropicBackend implements ICompletionBackend {
         // Apply thinking config
         apiParams.thinking = result.thinkingConfig.thinking;
         if ('output_config' in result.thinkingConfig && result.thinkingConfig.output_config) {
-          apiParams.output_config = result.thinkingConfig.output_config;
+          // Merged, not assigned: output_config may already carry the structured-output format.
+          apiParams.output_config = { ...apiParams.output_config, ...result.thinkingConfig.output_config };
         }
         apiParams.max_tokens = result.maxTokens;
 
@@ -1133,6 +1194,7 @@ export class AnthropicBackend implements ICompletionBackend {
         cacheTTL: cacheStrategy.cacheTTL,
       });
     }
+    Object.assign(apiParams, capCacheControlMarkers(apiParams as unknown as Record<string, unknown>, this.logger));
 
     // The SDK refuses a non-streaming request whose max_tokens implies it could run
     // past its 10-minute ceiling, throwing before any HTTP call is made (see
@@ -1446,7 +1508,10 @@ export class AnthropicBackend implements ICompletionBackend {
                       streamedText[event.index] = event.delta.text;
                       streamedRoundText += event.delta.text;
                       checkDegenerate(event.delta.text);
-                      await cb(streamedText, { toolsUsed: toolsUsed });
+                      await cb(streamedText, {
+                        toolsUsed: toolsUsed,
+                        ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+                      });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
                       // response_format=json_schema: stream the tool's
                       // input JSON deltas directly to the caller as text. This
@@ -1729,6 +1794,8 @@ export class AnthropicBackend implements ICompletionBackend {
                     usageWithCache?.cache_creation_input_tokens
                   ),
                   ...(usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
+                  ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+                  ...(usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
                   ...(stopReason ? { stopReason } : {}),
                 });
               }
@@ -2283,6 +2350,8 @@ export class AnthropicBackend implements ICompletionBackend {
               }
             : {}),
           ...(isTerminalTurn && usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
+          ...(isTerminalTurn && usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+          ...(isTerminalTurn && usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
         });
 
         // If there are tool calls, execute them and continue the conversation

@@ -61,6 +61,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     backfilled: 0,
     noFact: 0,
     noProviderKey: 0,
+    embedderUnavailable: 0,
     failed: 0,
   };
   const failedPrincipals: Array<PrincipalCursor & { error: string }> = [];
@@ -115,6 +116,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         failedPrincipals.push({
           ...target,
           error: `embedding service unavailable for owner ${target.ownerUserId}: ${stats.embedderError ?? 'unknown error'}`,
+        });
+      } else if (stats.embedderUnavailable > 0) {
+        // A transient build failure, not a missing key: the next walk retries it.
+        failedPrincipals.push({
+          ...target,
+          error: `embedding service build failed for owner ${target.ownerUserId}, retried next walk: ${stats.embedderError ?? 'unknown error'}`,
         });
       }
     } catch (err) {

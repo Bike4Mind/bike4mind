@@ -1,11 +1,14 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import {
   buildModelSelectionPatch,
   computeDefaultMaxTokens,
+  getModelPriceTier,
   getModelSpeedFromStats,
   refitMaxTokensForModel,
 } from '../aiSettingsUtils';
-import type { ModelInfo } from '@bike4mind/common';
+import { ChatModels, type ModelInfo } from '@bike4mind/common';
+import { OpenAIBackend } from '@bike4mind/llm-adapters';
 
 describe('computeDefaultMaxTokens', () => {
   it('falls back to the catalog max_tokens when contextWindow is missing/0', () => {
@@ -169,5 +172,32 @@ describe('getModelSpeedFromStats', () => {
     expect(getModelSpeedFromStats('m', { m: 7000 })).toBe('medium');
     expect(getModelSpeedFromStats('m', { m: 14999 })).toBe('medium');
     expect(getModelSpeedFromStats('m', { m: 15000 })).toBe('slow');
+  });
+});
+
+describe('getModelPriceTier', () => {
+  // Real adapter prices, not copies: a price change that moves Terra out of the order its
+  // description claims, or across a chip threshold, should fail here and prompt a copy review.
+  it('agrees with the GPT-5.6 descriptions on the real catalog prices', async () => {
+    const models = await new OpenAIBackend('test-key').getModelInfo();
+    const byId = (id: ChatModels) => {
+      const model = models.find(m => m.id === id);
+      if (!model) throw new Error(`${id} missing from the OpenAI catalog`);
+      return model;
+    };
+    const firstTierAvg = (model: ModelInfo) => {
+      const [first] = Object.values(model.pricing ?? {});
+      return (first.input + first.output) / 2;
+    };
+    const sol = byId(ChatModels.GPT5_6_SOL);
+    const terra = byId(ChatModels.GPT5_6_TERRA);
+    const luna = byId(ChatModels.GPT5_6_LUNA);
+
+    expect(terra.description).toContain('priced between Sol and Luna');
+    expect(firstTierAvg(sol)).toBeGreaterThan(firstTierAvg(terra));
+    expect(firstTierAvg(terra)).toBeGreaterThan(firstTierAvg(luna));
+    expect(getModelPriceTier(sol).tier).toBe('High');
+    expect(getModelPriceTier(terra).tier).toBe('High');
+    expect(getModelPriceTier(luna).tier).toBe('Medium');
   });
 });
