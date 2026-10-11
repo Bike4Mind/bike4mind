@@ -149,6 +149,19 @@ describe('POST /api/subscriptions/subscribe — launch/availability gate', () =>
     expect(res.statusCode).toBe(200);
   });
 
+  it('pins the session to USD with Adaptive Pricing off, whatever the visitor location', async () => {
+    mockGetSettingsValue.mockResolvedValue(true);
+    const { req, res } = makeReq('price_open');
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).toMatchObject({
+      currency: 'usd',
+      adaptive_pricing: { enabled: false },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('fails closed when the flag setting resolves to a non-boolean-true value (=== true read)', async () => {
     // e.g. a plan mistakenly pointed at a numeric setting: 5 is truthy but not `true`.
     mockGetSettingsValue.mockResolvedValue(5 as unknown as boolean);
