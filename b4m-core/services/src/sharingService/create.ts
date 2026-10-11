@@ -209,8 +209,10 @@ export const createInvite = async (
       .map(u => u.email)
       .filter((email): email is string => Boolean(email));
     // A Project invite may name someone with no account yet by exact address: they register with
-    // that email and find the invite waiting (registration stores emails lowercased). Built the same
-    // whether or not the address belongs to an account, so the response reveals nothing new.
+    // that email and find the invite waiting. Stored lowercased; an SSO signup keeps the provider's
+    // casing, which is why accept.ts and refuseWholeInvite.ts match pending case-insensitively.
+    // Built the same whether or not the address belongs to an account, so the response reveals
+    // nothing new (toSharerInviteViews lowercases typed addresses for the same reason).
     const resolvedLower = new Set(resolvedEmails.map(email => email.toLowerCase()));
     const unregistered =
       type === InviteType.Project

@@ -11,7 +11,11 @@ export const selectPendingProjectInvites = (
   email: string | null | undefined
 ): IInviteDocumentWithDetails[] =>
   (invites ?? []).filter(
-    i => i.type === InviteType.Project && i.remaining > 0 && !!email && i.recipients?.pending?.includes(email)
+    i =>
+      i.type === InviteType.Project &&
+      i.remaining > 0 &&
+      !!email &&
+      !!i.recipients?.pending?.some(p => p.toLowerCase() === email.toLowerCase())
   );
 
 /**

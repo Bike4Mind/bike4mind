@@ -82,4 +82,9 @@ describe('PendingProjectInvites', () => {
     );
     expect(pending.map(i => i.id)).toEqual(['a']);
   });
+
+  it('matches the pending address case-insensitively, as the inbox query does', () => {
+    const pending = selectPendingProjectInvites([projectInvite()] as never, 'Me@Example.com');
+    expect(pending.map(i => i.id)).toEqual(['inv-1']);
+  });
 });
