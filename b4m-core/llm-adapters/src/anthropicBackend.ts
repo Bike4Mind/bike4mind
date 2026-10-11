@@ -37,7 +37,7 @@ import {
   stripAllToolBlocks,
   stripToolDependentMessages,
 } from './toolPairingUtils';
-import { getCachingAdapter, logCacheStats } from './caching/adapters';
+import { capCacheControlMarkers, getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
 import { toAnthropicContent } from './anthropicContent';
 import {
@@ -1133,6 +1133,7 @@ export class AnthropicBackend implements ICompletionBackend {
         cacheTTL: cacheStrategy.cacheTTL,
       });
     }
+    Object.assign(apiParams, capCacheControlMarkers(apiParams as unknown as Record<string, unknown>, this.logger));
 
     // The SDK refuses a non-streaming request whose max_tokens implies it could run
     // past its 10-minute ceiling, throwing before any HTTP call is made (see
