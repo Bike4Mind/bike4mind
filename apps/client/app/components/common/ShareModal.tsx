@@ -1,4 +1,4 @@
-import { useShareDocument } from '@client/app/hooks/data/invites';
+import { useCancelInvite, useShareDocument } from '@client/app/hooks/data/invites';
 import { useUserRevokeSharing } from '@client/app/hooks/data/user';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
@@ -17,7 +17,6 @@ import {
   FormHelperText,
   FormLabel,
   IconButton,
-  Input,
   Modal,
   ModalClose,
   Sheet,
@@ -124,6 +123,30 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
         ? 'notebook'
         : 'item';
   const displayName = isBulkSharing ? `${itemCount} ${itemType}${itemCount > 1 ? 's' : ''}` : name || itemType;
+
+  // Link sharing can only be switched off per document, and the cancel route covers notebooks and
+  // files (sharingService/cancel.ts), so bulk shares get no off switch here.
+  const canTurnOffLinks = !isBulkSharing && !!id && (type === InviteType.Session || type === InviteType.FabFile);
+  const [revokedLink, setRevokedLink] = useState('');
+  const cancelInvites = useCancelInvite({
+    onSuccess: () => {
+      setRevokedLink(generatedLink);
+      setGeneratedLink('');
+      toast.success(`Links to this ${itemType} no longer work`);
+    },
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+
+  const handleTurnOffLinks = () => {
+    confirm({
+      title: 'Turn off share links',
+      description:
+        `Every link to this ${itemType} stops working, along with invites that haven't been accepted yet. ` +
+        'People who already opened a link keep access; remove them under By Users.',
+      onOk: () => cancelInvites.mutate({ id: id!, type: type as InviteType.Session | InviteType.FabFile }),
+      onCancel: () => {},
+    });
+  };
 
   const revokeUserSharing = useUserRevokeSharing({
     onSuccess: () => toast.success("Successfully revoked user's sharing permission"),
@@ -403,10 +426,11 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
   useEffect(() => {
     if (tabIndex !== 1) return;
     // Only set individual link for single file sharing, not bulk sharing
-    if (!isBulkSharing && shareDocument.data && shareDocument.data.link) {
+    // revokedLink keeps a link that was just turned off from coming back on a tab switch.
+    if (!isBulkSharing && shareDocument.data && shareDocument.data.link && shareDocument.data.link !== revokedLink) {
       setGeneratedLink(shareDocument.data.link);
     }
-  }, [tabIndex, shareDocument.data, isBulkSharing]);
+  }, [tabIndex, shareDocument.data, isBulkSharing, revokedLink]);
 
   const labelSx = (theme: Theme) => ({
     color: theme.palette.text.primary,
@@ -635,32 +659,63 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
                 </Box>
               )}
 
-              <Box mt={'15px'} display={'flex'}>
-                {generatedLink ? (
-                  <>
-                    <Box flex={1} mr={'10px'}>
-                      <Input className="share-modal-generated-link" variant={'outlined'} value={generatedLink} />
-                    </Box>
-                    <Box mr={'10px'}>
-                      <IconButton
-                        className="share-modal-copy-button"
-                        variant={copied ? 'solid' : 'outlined'}
-                        color={copied ? 'success' : 'neutral'}
-                        onClick={() => handleCopyToClipboard(generatedLink)}
-                      >
-                        <ContentCopyIcon />
-                      </IconButton>
-                    </Box>
-                  </>
-                ) : (
-                  <Box flex={1} />
+              {tabIndex === 1 && (
+                <Typography level="body-xs" data-testid="share-modal-link-access-note" sx={{ mt: '10px' }}>
+                  Anyone with the link can open {isBulkSharing ? 'these items' : `this ${itemType}`} after signing in,
+                  and can share it on. Links don&apos;t expire.
+                </Typography>
+              )}
+
+              {generatedLink && (
+                <Box mt={'15px'} display={'flex'} gap={'10px'} alignItems={'flex-start'}>
+                  {/* Text rather than an Input, so the whole URL wraps into view on a narrow screen. */}
+                  <Typography
+                    className="share-modal-generated-link"
+                    data-testid="share-modal-generated-link"
+                    level="body-sm"
+                    sx={theme => ({
+                      flex: 1,
+                      minWidth: 0,
+                      overflowWrap: 'anywhere',
+                      userSelect: 'all',
+                      p: '6px 10px',
+                      border: `1px solid ${theme.palette.divider}`,
+                      borderRadius: '6px',
+                    })}
+                  >
+                    {generatedLink}
+                  </Typography>
+                  <IconButton
+                    className="share-modal-copy-button"
+                    data-testid="share-modal-copy-button"
+                    aria-label="Copy link"
+                    variant={copied ? 'solid' : 'outlined'}
+                    color={copied ? 'success' : 'neutral'}
+                    onClick={() => handleCopyToClipboard(generatedLink)}
+                  >
+                    <ContentCopyIcon />
+                  </IconButton>
+                </Box>
+              )}
+
+              <Box mt={'15px'} display={'flex'} justifyContent={'flex-end'} gap={'10px'}>
+                {tabIndex === 1 && canTurnOffLinks && (
+                  <Button
+                    data-testid="share-modal-turn-off-links-button"
+                    variant={'outlined'}
+                    color={'danger'}
+                    loading={cancelInvites.isPending}
+                    onClick={handleTurnOffLinks}
+                  >
+                    Turn off links
+                  </Button>
                 )}
                 <Button
                   className="share-modal-submit-button"
                   data-testid="share-modal-submit-button"
                   disabled={loading}
                   type={'submit'}
-                  sx={{ minWidth: '200px' }}
+                  sx={{ minWidth: { xs: 0, sm: '200px' }, flex: { xs: 1, sm: 'none' } }}
                   variant={'solid'}
                   color={'success'}
                 >
