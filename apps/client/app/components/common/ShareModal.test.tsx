@@ -53,13 +53,20 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const renderModal = (files?: IFabFileDocument[]) =>
+const renderModal = (files?: IFabFileDocument[], ownerId = 'u1') =>
   render(
     <TestWrapper>
       {files ? (
         <ShareDocumentModal files={files} type={InviteType.FabFile} open onClose={vi.fn()} />
       ) : (
-        <ShareDocumentModal id="notebook-1" name="My Notebook" type={InviteType.Session} open onClose={vi.fn()} />
+        <ShareDocumentModal
+          id="notebook-1"
+          name="My Notebook"
+          type={InviteType.Session}
+          ownerId={ownerId}
+          open
+          onClose={vi.fn()}
+        />
       )}
     </TestWrapper>
   );
@@ -122,6 +129,11 @@ describe('ShareModal - By Link tab', () => {
     expect(mocks.cancelInvite).not.toHaveBeenCalled();
     mocks.confirm.mock.calls[0][0].onOk();
     expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'notebook-1', type: InviteType.Session });
+  });
+
+  it('offers no off switch to a sharee, since the cancel route is owner-only', () => {
+    renderModal(undefined, 'someone-else');
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
   });
 
   it('offers no off switch for a bulk share', () => {

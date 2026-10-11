@@ -395,9 +395,10 @@ const SessionSidenavItem: FC<{
           name={formatSessionTitle(session.name)}
           type={InviteType.Session}
           users={session.users}
+          ownerId={session.userId}
         />
       ) : null,
-    [openShareModal, session.id, session.name, session.users]
+    [openShareModal, session.id, session.name, session.users, session.userId]
   );
 
   const boxStyles = useMemo(

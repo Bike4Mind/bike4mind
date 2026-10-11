@@ -89,6 +89,8 @@ interface IProps {
   type: InviteType;
   open: boolean;
   users?: IUserShare[];
+  /** The document owner's id; only the owner may turn share links off (sharingService/cancel.ts). */
+  ownerId?: string;
   onClose: () => void;
 
   // Bulk sharing props
@@ -96,7 +98,7 @@ interface IProps {
   sessions?: ISessionDocument[];
 }
 
-const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessions }: IProps) => {
+const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, files, sessions }: IProps) => {
   const [recipients, setRecipients] = useState<{ value: string[]; error?: string | null }>({ value: [] });
   const [currentInputValue, setCurrentInputValue] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -125,8 +127,14 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
   const displayName = isBulkSharing ? `${itemCount} ${itemType}${itemCount > 1 ? 's' : ''}` : name || itemType;
 
   // Link sharing can only be switched off per document, and the cancel route covers notebooks and
-  // files (sharingService/cancel.ts), so bulk shares get no off switch here.
-  const canTurnOffLinks = !isBulkSharing && !!id && (type === InviteType.Session || type === InviteType.FabFile);
+  // files for their owner only (sharingService/cancel.ts), so bulk shares and sharees who hold
+  // `share` get no off switch here.
+  const canTurnOffLinks =
+    !isBulkSharing &&
+    !!id &&
+    !!ownerId &&
+    ownerId === currentUser?.id &&
+    (type === InviteType.Session || type === InviteType.FabFile);
   const [revokedLink, setRevokedLink] = useState('');
   const cancelInvites = useCancelInvite({
     onSuccess: () => {
@@ -134,7 +142,14 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
       setGeneratedLink('');
       toast.success(`Links to this ${itemType} no longer work`);
     },
-    onError: error => toast.error(getErrorMessage(error)),
+    onError: error => {
+      // The owner check passed client-side, so a 404 here means the document has no invites yet.
+      if ((error as { response?: { status?: number } })?.response?.status === 404) {
+        toast.info(`There are no links to this ${itemType} to turn off`);
+        return;
+      }
+      toast.error(getErrorMessage(error));
+    },
   });
 
   const handleTurnOffLinks = () => {
