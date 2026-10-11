@@ -212,6 +212,107 @@ describe('stripSignupGateHtml', () => {
   });
 });
 
+// The brand card exactly as pages published before stripShareFooterCtaBeforeGate existed carry
+// it (text wordmark, default palette). Pinned so a markup change cannot silently strand them.
+const LEGACY_FOOTER_CARD = `<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">
+  <a href="https://acme.example/?utm_source=shared-artifact&utm_medium=share-footer&utm_campaign=publish&utm_content=artifact" target="_blank" rel="noopener noreferrer"
+     style="display:flex;align-items:center;gap:16px;max-width:600px;width:100%;padding:14px 18px;
+            border:1px solid rgba(255,255,255,.14);border-radius:14px;text-decoration:none;
+            background:#0d1830;box-shadow:0 6px 24px rgba(0,0,0,.25)">
+    <span style="flex:1;min-width:0">
+      <span style="display:block;font-size:20px;font-weight:800;color:#fff;letter-spacing:-.01em">Acme</span>
+      <span style="display:block;margin-top:7px;font-size:12.5px;color:#9fb3c8;line-height:1.4">
+        <span style="color:#84CC16;font-weight:700">\u2713</span> Create &amp; share AI artifacts like this \u2014 in seconds.
+      </span>
+${' '.repeat(6)}
+    </span>
+    <span style="flex:0 0 auto;padding:9px 15px;border-radius:10px;font-weight:700;font-size:13px;white-space:nowrap;
+                 background:#F26C1F;color:#fff">Try Acme \u2192</span>
+  </a>
+</div>`;
+
+describe('stripShareFooterCtaBeforeGate', () => {
+  const ACME = { NEXT_PUBLIC_WEBSITE_URL: 'https://acme.example', NEXT_PUBLIC_APP_NAME: 'Acme' };
+  const countCtas = (html: string) =>
+    (html.match(/utm_medium=share-footer/g) ?? []).length + (html.match(/id="b4m-gate-panel"/g) ?? []).length;
+
+  it('still emits the pinned legacy card bytes', async () => {
+    const build = await loadFooter(ACME);
+    expect(build({ source: 'artifact' })).toBe(LEGACY_FOOTER_CARD);
+  });
+
+  it('leaves exactly one sign-up CTA (the gate) on a freshly rendered artifact page', async () => {
+    vi.resetModules();
+    vi.unstubAllEnvs();
+    for (const [k, v] of Object.entries(ACME)) vi.stubEnv(k, v);
+    const { renderArtifactIndexHtml } = await import('@server/services/publish/renderArtifactHtml');
+    const { stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const page = renderArtifactIndexHtml('html', '<p>body</p>', 'T');
+    expect(countCtas(page)).toBe(2);
+
+    const stripped = stripShareFooterCtaBeforeGate(page);
+    expect(countCtas(stripped)).toBe(1);
+    expect(stripped).toContain('id="b4m-gate-panel"');
+    expect(stripped).toContain('<p>body</p>');
+    expect(stripped.endsWith('</body></html>')).toBe(true);
+  });
+
+  it('removes a legacy baked card that sits right before the gate', async () => {
+    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const page = `<html><body><p>content</p>${LEGACY_FOOTER_CARD}${gate.html}</body></html>`;
+    expect(stripShareFooterCtaBeforeGate(page)).toBe(`<html><body><p>content</p>${gate.html}</body></html>`);
+  });
+
+  it('is a no-op without a gate, so a full-document artifact keeps its only CTA', async () => {
+    const { stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const page = `<html><body><p>content</p>${LEGACY_FOOTER_CARD}</body></html>`;
+    expect(stripShareFooterCtaBeforeGate(page)).toBe(page);
+  });
+
+  it('removes the card when a pipeline left CRLF or whitespace around its close', async () => {
+    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const crlf = LEGACY_FOOTER_CARD.replace(/\n/g, '\r\n');
+    const page = `<html><body><p>content</p>${crlf}\r\n  ${gate.html}</body></html>`;
+    expect(stripShareFooterCtaBeforeGate(page)).toBe(`<html><body><p>content</p>${gate.html}</body></html>`);
+  });
+
+  it('strips only the card in front of the last (baked) gate when content quotes the marker', async () => {
+    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const quoted = `<p>${gate.html}</p>`;
+    const page = `<html><body>${quoted}${LEGACY_FOOTER_CARD}${gate.html}</body></html>`;
+    expect(stripShareFooterCtaBeforeGate(page)).toBe(`<html><body>${quoted}${gate.html}</body></html>`);
+  });
+
+  it('stays linear on a very large page with a far-away card lookalike', async () => {
+    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const open = LEGACY_FOOTER_CARD.slice(0, LEGACY_FOOTER_CARD.indexOf('\n'));
+    const page = `<html><body>${open}${'<div>x</div>'.repeat(500_000)}${gate.html}</body></html>`;
+    const started = performance.now();
+    expect(stripShareFooterCtaBeforeGate(page)).toBe(page);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  it('detects the baked footer card, but not a bare lookalike opening tag', async () => {
+    const { hasShareFooterCardHtml } = await import('./shareFooter');
+    const open = LEGACY_FOOTER_CARD.slice(0, LEGACY_FOOTER_CARD.indexOf('\n'));
+    expect(hasShareFooterCardHtml(`<html><body><p>x</p>${LEGACY_FOOTER_CARD}</body></html>`)).toBe(true);
+    expect(hasShareFooterCardHtml(`<html><body>${open}<a href="/elsewhere">x</a></div></body></html>`)).toBe(false);
+    expect(hasShareFooterCardHtml('<html><body><p>utm_medium=share-footer</p></body></html>')).toBe(false);
+  });
+
+  it('never removes artifact content that merely starts like the card', async () => {
+    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    // An author-written lookalike followed by more author content: the span is not the exact card.
+    const page = `<html><body>${LEGACY_FOOTER_CARD}<div><p>author</p></div>${gate.html}</body></html>`;
+    expect(stripShareFooterCtaBeforeGate(page)).toBe(page);
+  });
+});
+
 describe('pickSharedByName', () => {
   it('returns the display name', async () => {
     const { pickSharedByName } = await import('./shareFooter');

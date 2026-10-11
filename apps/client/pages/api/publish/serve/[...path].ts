@@ -47,8 +47,11 @@ import {
   buildShareFooterHtml,
   pickSharedByName,
   buildSignupGateHtml,
+  hasShareFooterCardHtml,
+  hasSignupGateHtml,
   replaceSignupGateHtml,
   shouldShowSignupGate,
+  stripShareFooterCtaBeforeGate,
   stripSignupGateHtml,
 } from '@client/app/utils/shareFooter';
 import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
@@ -749,14 +752,19 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
     });
   }
-  indexHtml = showSignupGate
-    ? replaceSignupGateHtml(indexHtml, {
-        starterCredits: await getOpenSignupStarterCredits(),
-        // A bundle can be served from the isolated usercontent origin, so /register is anchored to
-        // the app explicitly; the gate is only shown at the canonical /p path.
-        appOrigin: process.env.APP_URL,
-        returnTo: buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug),
-      })
+  // The gate is then the page's one sign-up CTA, so the brand cards that would compete with it
+  // (the footer card baked just above it, the wrapper bar's "Try" link) are dropped.
+  const signupGateShown = showSignupGate && hasSignupGateHtml(indexHtml);
+  indexHtml = signupGateShown
+    ? stripShareFooterCtaBeforeGate(
+        replaceSignupGateHtml(indexHtml, {
+          starterCredits: await getOpenSignupStarterCredits(),
+          // A bundle can be served from the isolated usercontent origin, so /register is anchored to
+          // the app explicitly; the gate is only shown at the canonical /p path.
+          appOrigin: process.env.APP_URL,
+          returnTo: buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug),
+        })
+      )
     : stripSignupGateHtml(indexHtml);
 
   if (isFormatRaw) {
@@ -991,7 +999,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     pillHref,
     barHref,
     pillHref || barHref ? getBrandName() : '',
-    exportHtmlHref
+    exportHtmlHref,
+    // For a sign-up prospect the bar's "Try" link would repeat a CTA the framed page already
+    // carries: the gate, or the footer card baked into a gate-less page (full HTML documents).
+    !signupGateShown && !(showSignupGate && hasShareFooterCardHtml(indexHtml))
   );
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1052,7 +1063,9 @@ function renderBundleWrapper(
   barHref = '',
   brandName = '',
   /** `?export=html` href for the "Save as HTML" affordance; '' hides it. */
-  exportHtmlHref = ''
+  exportHtmlHref = '',
+  /** False when the framed page carries its own CTA (the sign-up gate or the footer card). */
+  barCta = true
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
   // HTML attribute escape: inside a double-quoted attribute value only `&` and `"` are
@@ -1124,10 +1137,14 @@ function renderBundleWrapper(
     ? `\n<div class="b4m-bar">
   <span class="b4m-bar-l">Built with ${liveryBarMark(brandName)}${LIVERY_REG}</span>
   <span class="b4m-bar-r">${barPrint}${barExport}
-    <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>
+    <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>${
+      barCta
+        ? `
     <a class="b4m-bar-cta" href="${escapeHtml(
       barHref
-    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)}${LIVERY_REG} &rarr;</a>
+    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)}${LIVERY_REG} &rarr;</a>`
+        : ''
+    }
   </span>
 </div>`
     : '';

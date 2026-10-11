@@ -256,6 +256,59 @@ export function replaceSignupGateHtml(html: string, opts: SignupGateOptions = {}
   return html.slice(0, start) + buildSignupGateHtml(opts).html + html.slice(end);
 }
 
+// Exact opening tag of the brand card buildShareFooterHtml emits. Already-published pages carry
+// these bytes, so changing them strands stripShareFooterCtaBeforeGate on old content.
+const SHARE_FOOTER_CARD_OPEN =
+  '<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">';
+const SHARE_FOOTER_UTM = 'utm_medium=share-footer';
+
+// Tolerates CRLF or other whitespace a pipeline may have introduced around the card's close.
+function endsWithCardClose(card: string): boolean {
+  const trimmed = card.trimEnd();
+  return trimmed.endsWith('</div>') && trimmed.slice(0, -'</div>'.length).trimEnd().endsWith('</a>');
+}
+
+/** Whether the page carries a baked sign-up gate (see renderArtifactIndexHtml). */
+export function hasSignupGateHtml(html: string): boolean {
+  return html.includes(SIGNUP_GATE_MARKER);
+}
+
+/**
+ * Whether the page carries the brand footer card buildShareFooterHtml bakes in at publish time:
+ * the exact opening tag whose first child is the share-footer UTM link.
+ */
+export function hasShareFooterCardHtml(html: string): boolean {
+  for (let at = html.indexOf(SHARE_FOOTER_CARD_OPEN); at !== -1; at = html.indexOf(SHARE_FOOTER_CARD_OPEN, at + 1)) {
+    const tagStart = at + SHARE_FOOTER_CARD_OPEN.length;
+    const tagEnd = html.indexOf('>', tagStart);
+    if (tagEnd === -1) return false;
+    const anchorTag = html.slice(tagStart, tagEnd);
+    if (anchorTag.trimStart().startsWith('<a href="') && anchorTag.includes(SHARE_FOOTER_UTM)) return true;
+  }
+  return false;
+}
+
+/**
+ * Remove the brand footer card that renderArtifactIndexHtml bakes directly in front of the
+ * sign-up gate, so a viewer shown the gate gets one sign-up CTA rather than two (the
+ * reply/fabfile viewer does the same with `hideCta`). Only an exact card sitting immediately
+ * before the gate is removed, so it works on pages published before this existed and never
+ * touches the artifact's own content. No-op on a page without that pairing.
+ */
+export function stripShareFooterCtaBeforeGate(html: string): string {
+  const gateStart = html.lastIndexOf(SIGNUP_GATE_MARKER);
+  if (gateStart === -1) return html;
+  const cardStart = html.lastIndexOf(SHARE_FOOTER_CARD_OPEN, gateStart);
+  if (cardStart === -1) return html;
+  const card = html.slice(cardStart, gateStart);
+  const isExactCard =
+    endsWithCardClose(card) &&
+    card.indexOf('</div>') === card.lastIndexOf('</div>') &&
+    card.indexOf('</a>') === card.lastIndexOf('</a>') &&
+    card.includes(SHARE_FOOTER_UTM);
+  return isExactCard ? html.slice(0, cardStart) + html.slice(gateStart) : html;
+}
+
 /** Returns the footer as an HTML string ready to inject before `</body>`. */
 export function buildShareFooterHtml(opts: ShareFooterOptions = {}): string {
   // The footer is a brand lead-gen card (inlined brand wordmark + a CTA to the marketing
@@ -284,7 +337,7 @@ export function buildShareFooterHtml(opts: ShareFooterOptions = {}): string {
 
   // Self-contained navy card (inline styles only) so it renders consistently on
   // any host page, light or dark.
-  return `<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">
+  return `${SHARE_FOOTER_CARD_OPEN}
   <a href="${href}" target="_blank" rel="noopener noreferrer"
      style="display:flex;align-items:center;gap:16px;max-width:600px;width:100%;padding:14px 18px;
             border:1px solid rgba(255,255,255,.14);border-radius:14px;text-decoration:none;
