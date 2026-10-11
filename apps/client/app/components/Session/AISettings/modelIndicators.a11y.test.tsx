@@ -105,7 +105,7 @@ describe('model indicator tooltips on touch screens', () => {
 
     fireEvent.click(screen.getByTestId('model-indicator-high-cost'));
 
-    const input = Number(((3 / 1e6) * 1000 * CREDITS_PER_USD_COST).toPrecision(3)).toLocaleString('en-US');
-    expect(screen.getByRole('tooltip')).toHaveTextContent(`Premium cost model: ${input} credits per 1K input tokens`);
+    const input = (3 * CREDITS_PER_USD_COST).toLocaleString('en-US');
+    expect(screen.getByRole('tooltip')).toHaveTextContent(`Premium cost model: ${input} credits per 1M input tokens`);
   });
 });

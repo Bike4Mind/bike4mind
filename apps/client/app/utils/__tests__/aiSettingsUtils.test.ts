@@ -176,31 +176,36 @@ describe('getModelSpeedFromStats', () => {
 
 describe('getPriceTierTooltip', () => {
   const textModel = (pricing: ModelInfo['pricing']) => ({ type: 'text', pricing }) as ModelInfo;
-  // USD per 1M tokens -> credits per 1K tokens, at the rate settlement charges in expectation
-  const per1K = (usdPerMillion: number) => (usdPerMillion / 1000) * CREDITS_PER_USD_COST;
-  const shown = (credits: number) => Number(credits.toPrecision(3)).toLocaleString('en-US');
+  // Literal figures below assume the default rate; this fails first, and clearly, if it moves.
+  it('runs at the default 2,000 credits per USD', () => {
+    expect(CREDITS_PER_USD_COST).toBe(2000);
+  });
 
-  it('keeps fractional figures for cheap models instead of flooring them to 1 credit', () => {
-    const cheap = textModel({ 128000: { input: 0.075 / 1e6, output: 0.3 / 1e6 } });
-    const cheaper = textModel({ 128000: { input: 0.02 / 1e6, output: 0.1 / 1e6 } });
-
-    expect(per1K(0.3)).toBeLessThan(1);
-    expect(getModelCreditRates(cheap)).toEqual({ input: shown(per1K(0.075)), output: shown(per1K(0.3)) });
-    expect(getModelCreditRates(cheap)).not.toEqual(getModelCreditRates(cheaper));
-    expect(getPriceTierTooltip('Low', cheap)).toBe(
-      `Lower cost model: ${shown(per1K(0.075))} credits per 1K input tokens, ${shown(per1K(0.3))} per 1K output`
+  it('matches the pricing table for a cheap model (GPT-4.1 Nano: $0.10 / $0.40 per 1M)', () => {
+    const nano = textModel({ 1047576: { input: 0.1 / 1e6, output: 0.4 / 1e6 } });
+    expect(getModelCreditRates(nano)).toEqual({ input: '200', output: '800' });
+    expect(getPriceTierTooltip('Low', nano)).toBe(
+      'Lower cost model: 200 credits per 1M input tokens, 800 per 1M output'
     );
   });
 
-  it('prices a premium model at its base tier, which is what a normal-length prompt pays', () => {
+  it('keeps up to 2 decimals so very cheap models are not rounded together', () => {
+    const cheap = textModel({ 128000: { input: 0.01234 / 1e6, output: 0.0456 / 1e6 } });
+    const cheaper = textModel({ 128000: { input: 0.0123 / 1e6, output: 0.0456 / 1e6 } });
+
+    expect(getModelCreditRates(cheap)).toEqual({ input: '24.68', output: '91.2' });
+    expect(getModelCreditRates(cheaper)).toEqual({ input: '24.6', output: '91.2' });
+  });
+
+  it('prices a premium model at its base tier with thousands separators', () => {
     const premium = textModel({
       1000000: { input: 6 / 1e6, output: 22.5 / 1e6 },
       200000: { input: 3 / 1e6, output: 15 / 1e6 },
     });
 
-    expect(getModelCreditRates(premium)).toEqual({ input: shown(per1K(3)), output: shown(per1K(15)) });
+    expect(getModelCreditRates(premium)).toEqual({ input: '6,000', output: '30,000' });
     expect(getPriceTierTooltip('High', premium)).toBe(
-      `Premium cost model: ${shown(per1K(3))} credits per 1K input tokens, ${shown(per1K(15))} per 1K output`
+      'Premium cost model: 6,000 credits per 1M input tokens, 30,000 per 1M output'
     );
   });
 

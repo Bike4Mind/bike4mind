@@ -167,21 +167,21 @@ export const getModelSpeedTooltip = (speed: 'fast' | 'medium' | 'slow'): string 
   }
 };
 
-const creditFormat = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 3 });
+const creditFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 
 /**
- * Credits per 1K input and output tokens at the model's base pricing tier, or null when the
+ * Credits per 1M input and output tokens at the model's base pricing tier, or null when the
  * model is not a text model or has no price. Priced at CREDITS_PER_USD_COST, the rate settlement
- * charges in expectation (usdToCreditsStochastic); usdToCredits' 1-credit floor would flatten
- * every cheap model to the same figure. Prompt-cache discounts can make real turns cheaper.
+ * charges in expectation (usdToCreditsStochastic), not usdToCredits, whose round-up is for holds.
+ * Same unit as the Profile > Usage pricing table. Prompt-cache discounts can make real turns cheaper.
  */
 export const getModelCreditRates = (model: ModelInfo): { input: string; output: string } | null => {
   if (model.type !== 'text' || !model.pricing) return null;
   const tier = pricingTierForTokens(model, 0);
   const rates = tier === null ? undefined : model.pricing[tier];
   if (!rates || !(rates.input > 0 || rates.output > 0)) return null;
-  const per1K = (usdPerToken: number) => creditFormat.format(usdPerToken * 1000 * CREDITS_PER_USD_COST);
-  return { input: per1K(rates.input), output: per1K(rates.output) };
+  const per1M = (usdPerToken: number) => creditFormat.format(usdPerToken * 1_000_000 * CREDITS_PER_USD_COST);
+  return { input: per1M(rates.input), output: per1M(rates.output) };
 };
 
 // Model price tier tooltip text, with the credit figure when the model has a price
@@ -200,7 +200,7 @@ export const getPriceTierTooltip = (priceTier: string, model?: ModelInfo): strin
   })();
   const rates = model ? getModelCreditRates(model) : null;
   if (!rates) return tierText;
-  return `${tierText}: ${rates.input} credits per 1K input tokens, ${rates.output} per 1K output`;
+  return `${tierText}: ${rates.input} credits per 1M input tokens, ${rates.output} per 1M output`;
 };
 
 // Smallest default we ever hand a large-context model, so the headroom share below can only
