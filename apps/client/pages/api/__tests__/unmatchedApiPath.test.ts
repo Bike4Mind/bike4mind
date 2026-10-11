@@ -8,8 +8,8 @@ describe('/api/[...unmatchedApiPath]', () => {
     const { req, res } = createMocks(
       {
         method: method as 'GET',
-        url: '/api/does-not-exist/at-all',
-        query: { unmatchedApiPath: ['does-not-exist', 'at-all'] },
+        url: '/api/does-not-exist/at/all',
+        query: { unmatchedApiPath: ['does-not-exist', 'at', 'all'] },
         headers: { 'x-request-id': 'req-404-test' },
       },
       { eventEmitter: EventEmitter }

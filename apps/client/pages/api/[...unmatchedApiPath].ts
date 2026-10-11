@@ -9,7 +9,9 @@ import nc from 'next-connect';
  * SPA's optional catch-all (app/[[...slug]]/page.tsx) and an API caller gets `200 text/html`.
  * Every real route is more specific than this one, so Next.js tries them first; the
  * next.config.mjs rewrites (/p, /a, /embed, /.well-known) are afterFiles rewrites, which Next.js
- * applies before dynamic routes, so they still reach their handlers.
+ * applies before dynamic routes, so they still reach their handlers. Two-segment misses never get
+ * here: pages/api/[type]/[id] (the invite lookup) outranks this route and answers its own JSON 404.
+ * server/__tests__/apiCatchAllRouting.test.ts checks the precedence against the real route files.
  *
  * No auth and no DB connect: there is nothing to authorize, and a 404 must not cost a Mongo
  * round-trip. The body is the shared error envelope (errorHandler).
