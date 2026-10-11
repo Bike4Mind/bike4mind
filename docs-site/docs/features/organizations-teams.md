@@ -27,7 +27,7 @@ If the dialog says that Team pricing is unavailable, the price could not be load
 
 - **Price:** the price per seat is loaded live from the payment provider, so it is not written here. The dialog shows the monthly total for your chosen number of seats, and the Billing tab shows the price per seat per month.
 - **People included:** one seat is one person on the Team, and the owner counts as a seat. A Team of 4 seats has the owner plus up to 3 other people.
-- **Credit pool:** each seat adds a set amount of credits to the Team's shared pool when you subscribe, when you add seats, and at each renewal. The standard amount is 50,000 credits per seat. Because this amount is a Bike4Mind setting, treat the number shown on your Team's card as the source of truth.
+- **Credit pool:** each seat adds a set amount of credits to the Team's shared pool when you subscribe and at each renewal. When you add seats in the middle of a billing period, the new seats add a prorated share of that amount. The standard amount is 50,000 credits per seat, but it is a Bike4Mind setting and can change. The Team's card on the Teams page shows the credits currently in the pool.
 - **Who pays for the plan:** the Team owner, through the subscription.
 
 ## Who pays for usage
@@ -40,13 +40,13 @@ Usage is charged to whichever account you have selected in the account menu, not
 
 ## Add and manage members
 
-Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Owners and people with manage rights also see more tabs such as Groups, Usage, Analysis, Integrations and Settings. The **Billing** tab is visible to the owner only.
+Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner and the Team manager. The **Billing** tab is visible to the owner only.
 
 On the **Members** tab:
 
-- The heading shows how many seats are in use, for example "Members (3 / 10)".
-- Click **Add Member**, search for a person by name or email (type at least 3 characters), select them and add them. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
-- If every seat is taken, you see "You've reached your seat limit" and need to add seats before inviting more people.
+- The heading shows how many seats are in use, for example "Members (3 / 10)". Pending invites hold a seat until they are accepted or cancelled.
+- Only the Team owner (or the Team manager) can add and remove people. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
+- If every seat is taken, the owner sees "You've reached your seat limit" and needs to add seats before inviting more people.
 - Use the three-dot menu on a member to **Revoke Access**, or on a pending invite to **Cancel Invite**. Members can choose **Leave Team** for themselves.
 - The Team owner and appointed Team admins can cap monthly credit spending. The **Monthly credit limit per member** card sets a default (**Set limit** or **Change limit**), and **Set monthly limit** in a member's menu sets a limit for one person. With no limit, members can spend from the pool without a monthly cap.
 
@@ -55,7 +55,7 @@ On the **Members** tab:
 Each member shows a role label on the Members tab.
 
 - **Owner:** created the Team and holds the subscription.
-- **Admin**, **Editor** and **Viewer:** the access level given to a member. Viewer is the level new invites start with. People with Admin or Editor access can add members and revoke access.
+- **Admin**, **Editor** and **Viewer:** the access level shown on a member. Viewer is the level new invites start with. Adding and removing members is limited to the Team owner and the Team manager, whatever label a member carries.
 
 ## Billing tab (owner only)
 
@@ -64,7 +64,7 @@ The Billing tab shows **Billing & Subscription**:
 - Plan status: **Team Plan** with Active, Canceled or Payment issue, and the renewal or end date.
 - **Subscribe Now** if the Team has no subscription yet.
 - **Team Seats Usage**, for example "5 / 10 seats used", with the number of seats still available.
-- **Manage Seats** to change the number of seats. The dialog is called **Update Team Seats**, and it shows the price per seat per month and the new total. You cannot go below the number of people already on the Team, and the changes show up on your next billing cycle.
+- **Manage Seats** to change the number of seats. The dialog is called **Update Team Seats**, and it shows the price per seat per month and the new total. You cannot go below the number of people already on the Team (the owner counts) or below the minimum Team size, and the changes show up on your next billing cycle. While the Team has a payment issue, Manage Seats is hidden until the payment is fixed.
 - **Billing Portal** to update your payment method, view invoices and manage or cancel the subscription.
 
 If a payment fails, the Team shows **Payment Issue** and the Billing Portal is where you update your card.
