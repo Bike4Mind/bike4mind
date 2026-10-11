@@ -190,7 +190,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:agentProactiveMessageQueueDLQ',
     '1990fa893bed28bef2523e156f10d9e0a787552590a76489415b59814359c2a9'
   ),
-  gap('queue:infra/queues.ts:bobRunQueue', '37c4d892630d07dacf006244da2bb05fdda89e0353ec554b6e87cea11439e96c', [
+  gap('queue:infra/queues.ts:bobRunQueue', '3c9fe93942de06480eb4f2278bce85db5bd59a54d66d7c1f1f25cee1b5c5bdf5', [
+    'cloudwatch:PutMetricData',
     'execute-api:ManageConnections',
   ]),
   broker('queue:infra/queues.ts:bobRunQueueDLQ', '992ea82e88afb9edee954915d02a11a851268dc0059930f226609026a42b34aa'),
