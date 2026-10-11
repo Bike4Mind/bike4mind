@@ -49,6 +49,8 @@ export interface GetFabFileAdapter {
     adminSettings: IAdminSettingsRepository;
   };
   storage: {
+    // Response-only signing must not reuse or overwrite the shared server URL cache.
+    signedUrlCache?: 'bypass';
     generateSignedUrl: (path: string, expireInSeconds: number) => Promise<string | null>;
   };
 }
@@ -101,6 +103,12 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, stora
     return fabFile;
   }
 
+  const bypassCache = storage.signedUrlCache === 'bypass';
+  if (bypassCache) {
+    fabFile.fileUrl = undefined;
+    fabFile.fileUrlExpireAt = undefined;
+  }
+
   // True if the current URL is invalid (fetch throws or returns non-OK).
   const shouldGenerateNewUrl = async (url: string): Promise<boolean> => {
     try {
@@ -132,7 +140,9 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, stora
   // Read-triggered cache refresh: persist ONLY the regenerated URL fields. A
   // whole-document write here (this GET is reachable by a sharee) would revert an
   // owner's concurrent revocation, soft-delete or visibility change.
-  await db.fabFiles.update({ id: fabFile.id, fileUrl, fileUrlExpireAt }, { timestamps: false });
+  if (!bypassCache) {
+    await db.fabFiles.update({ id: fabFile.id, fileUrl, fileUrlExpireAt }, { timestamps: false });
+  }
 
   return fabFile;
 };

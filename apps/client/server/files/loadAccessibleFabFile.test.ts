@@ -85,11 +85,13 @@ describe('loadAccessibleFabFile browser response URLs', () => {
   it.each(['owner', 'lake'])('returns a browser-reachable URL only after %s access grants the file', async access => {
     const sign = async (
       _input: unknown,
-      adapter: { storage: { generateSignedUrl: (path: string, expiry: number) => Promise<string> } }
-    ) => ({
-      ...lakeFile,
-      fileUrl: await adapter.storage.generateSignedUrl('owned/report.txt', 600),
-    });
+      adapter: {
+        storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string> };
+      }
+    ) => {
+      expect(adapter.storage.signedUrlCache).toBe('bypass');
+      return { ...lakeFile, fileUrl: await adapter.storage.generateSignedUrl('owned/report.txt', 600) };
+    };
     if (access === 'owner')
       getFabFile.mockImplementation(async (_user: unknown, input: unknown, adapter: Parameters<typeof sign>[1]) =>
         sign(input, adapter)
