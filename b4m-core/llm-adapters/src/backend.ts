@@ -18,6 +18,7 @@ import {
 } from '@bike4mind/common';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
+import type { DowngradedToolChoice } from './forcedToolChoice';
 
 /** Maximum number of recursive tool calls to prevent infinite loops */
 export const DEFAULT_MAX_TOOL_CALLS = 10;
@@ -256,14 +257,20 @@ export interface ICompletionOptions {
       markDelivered: (markup: string) => void;
       flush: () => Promise<void>;
     };
+    /**
+     * A forced tool_choice the model cannot accept, downgraded to `auto` on the first turn and
+     * re-applied unchanged on every recursive turn (see forcedToolChoice.ts). Anthropic only.
+     * Internal - do not set manually.
+     */
+    downgradedToolChoice?: DowngradedToolChoice;
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;
   /**
    * Structured-output contract. When set to `{ type: 'json_schema', ... }`,
-   * native-mode providers (OpenAI) pass the schema through to the API; tool-mode
-   * providers (Anthropic) synthesize a single tool from the schema and force
-   * `tool_choice: { type: 'tool', name }`; best-effort providers (Bedrock, Gemini,
+   * native-mode providers (OpenAI, and Anthropic models without forced tool use) pass the
+   * schema through to the API; tool-mode providers (Anthropic) synthesize a single tool from
+   * the schema and force `tool_choice: { type: 'tool', name }`; best-effort providers (Bedrock, Gemini,
    * xAI, Ollama) inject a "respond with JSON matching this schema" instruction.
    * The selected mode is reported back via `CompletionInfo.responseFormatMode`
    * so callers can decide whether to post-validate.
@@ -357,7 +364,8 @@ export type CompletionInfo = {
   cacheCreationInputTokens?: number;
   /**
    * How the backend honored `responseFormat`:
-   * - 'native': provider's native structured-output API (OpenAI's response_format)
+   * - 'native': provider's native structured-output API (OpenAI's response_format,
+   *   Anthropic's output_config.format)
    * - 'tool_use': synthesized tool with forced tool_choice (Anthropic)
    * - 'best-effort': prompt-only instruction (Bedrock, Gemini, xAI, Ollama)
    * Surfaced to the caller via the `X-B4M-Response-Format-Mode` SSE field so

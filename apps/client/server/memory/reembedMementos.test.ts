@@ -11,6 +11,8 @@ let chain: Array<Record<string, unknown>> = [];
 let dek: Buffer | null = Buffer.alloc(32);
 let missingKey: string | undefined;
 const rewriteEmbedding = vi.fn(async () => 1);
+// The key lookup is the first step of building the embedding service, so it stands in for the build.
+const getEffectiveLLMApiKeys = vi.fn(async (): Promise<Record<string, string>> => ({}));
 
 vi.mock('@bike4mind/database', () => ({
   Memento: {
@@ -52,7 +54,9 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   resolveEmbeddingConfig: () => ({ config: {}, missing: missingKey }),
 }));
 
-vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) } }));
+vi.mock('@bike4mind/services', () => ({
+  apiKeyService: { getEffectiveLLMApiKeys: (...a: unknown[]) => getEffectiveLLMApiKeys(...(a as [])) },
+}));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 
 import { migrateLedgerVectorsForPrincipal, reembedMementosForUser } from './reembedMementos';
@@ -153,6 +157,8 @@ describe('migrateLedgerVectorsForPrincipal', () => {
     chain = [];
     dek = Buffer.alloc(32);
     missingKey = undefined;
+    getEffectiveLLMApiKeys.mockReset();
+    getEffectiveLLMApiKeys.mockResolvedValue({});
   });
 
   it('backfills a vectorless event on a lake chain, writing under the lake principal and owner', async () => {
@@ -259,6 +265,48 @@ describe('migrateLedgerVectorsForPrincipal', () => {
     const stats = await migrateLedgerVectorsForPrincipal(lake, { limit: 2 });
 
     expect(stats).toMatchObject({ backfilled: 2, stoppedAtLimit: false });
+  });
+
+  it('retries the build after a transient failure instead of treating the owner as keyless', async () => {
+    getEffectiveLLMApiKeys.mockRejectedValueOnce(new Error('connection reset'));
+    chain = [ev('h1'), ev('h2')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake);
+
+    expect(stats).toMatchObject({ backfilled: 1, embedderUnavailable: 1, noProviderKey: 0, providerCalls: 1 });
+    expect(generateEmbedding).toHaveBeenCalledWith('fact h2');
+    expect(stats.embedderError).toBe('connection reset');
+  });
+
+  it('caches a definitive missing key after one build attempt', async () => {
+    missingKey = 'openai';
+    chain = [ev('h1'), ev('h2'), ev('h3')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake);
+
+    expect(stats).toMatchObject({ noProviderKey: 3, embedderUnavailable: 0 });
+    expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a key-lookup failure even when it carries an auth-like status', async () => {
+    getEffectiveLLMApiKeys.mockRejectedValueOnce(Object.assign(new Error('unauthorized'), { status: 401 }));
+    chain = [ev('h1'), ev('h2')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake);
+
+    expect(stats).toMatchObject({ backfilled: 1, embedderUnavailable: 1, noProviderKey: 0 });
+    expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds repeated transient failures, then passes over the rest without spending budget', async () => {
+    getEffectiveLLMApiKeys.mockRejectedValue(new Error('timeout'));
+    chain = Array.from({ length: 5 }, (_, i) => ev(`h${i}`));
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { limit: 1 });
+
+    expect(stats).toMatchObject({ embedderUnavailable: 5, noProviderKey: 0, providerCalls: 0, stoppedAtLimit: false });
+    expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(2);
+    expect(stats.errors).toHaveLength(2);
   });
 
   it('counts a rewrite that matched nothing (e.g. shredded mid-run) as failed', async () => {

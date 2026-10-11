@@ -159,6 +159,19 @@ describe('SubscriptionModal', () => {
     expect(screen.getByText(/subscription_modal.credits_rollover/)).toBeInTheDocument();
   });
 
+  it('does not badge a lone plan as Most Popular on either tab', async () => {
+    teamPlanEnabled = true;
+    renderModal();
+
+    expect(screen.getByRole('button', { name: 'Subscribe' })).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();
+  });
+
   it('shows a delinquent plan as the current plan and lets the user cancel it', async () => {
     subscriptions = [subRow({ status: 'past_due' })];
 
