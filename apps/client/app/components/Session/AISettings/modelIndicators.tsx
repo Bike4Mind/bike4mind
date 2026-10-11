@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Tooltip, Typography } from '@mui/joy';
 import { useMediaQuery } from '@mui/system';
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
@@ -145,17 +145,28 @@ const TOUCH_TOOLTIP_MS = 3000;
 const useTapTooltip = () => {
   const noHover = useMediaQuery('(hover: none)');
   const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const timer = setTimeout(() => setOpen(false), TOUCH_TOOLTIP_MS);
-    return () => clearTimeout(timer);
+    // Joy only closes a controlled tooltip on blur or mouseleave, neither of which a tap
+    // elsewhere fires on this unfocusable anchor. The anchor's own tap toggles via onClick.
+    const closeOnTapAway = (event: PointerEvent) => {
+      if (!anchorRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnTapAway);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('pointerdown', closeOnTapAway);
+    };
   }, [open]);
 
   if (!noHover) return { tooltipProps: {}, anchorProps: {} };
   return {
     tooltipProps: { open, onClose: () => setOpen(false), disableTouchListener: true },
     anchorProps: {
+      ref: anchorRef,
       onClick: (event: React.MouseEvent) => {
         event.stopPropagation();
         setOpen(prev => !prev);
