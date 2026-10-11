@@ -115,30 +115,44 @@ describe('ProfilePage tab strip', () => {
     expect(screen.getByTestId('profile-close-btn')).toHaveAccessibleName('Close');
   });
 
-  // jsdom cannot evaluate media queries, so assert on the emotion-generated CSS text of each label.
+  // jsdom matches no min-width query, so getComputedStyle cannot see either breakpoint. Read each
+  // label's per-breakpoint display from the CSSOM instead of from emotion's CSS text.
   it('shows only the active tab label below sm, and every label from sm up', () => {
     searchValue = { tab: 'settings' };
     renderPage();
 
+    const { xs, sm } = appTheme.breakpoints.values;
+    const displayAt = (el: HTMLElement, minWidth: number) =>
+      Array.from(document.styleSheets)
+        .flatMap(sheet => Array.from(sheet.cssRules))
+        .filter((rule): rule is CSSMediaRule => rule instanceof CSSMediaRule)
+        .filter(rule => new RegExp(`min-width:\\s*${minWidth}px`).test(rule.conditionText))
+        .flatMap(rule => Array.from(rule.cssRules))
+        .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule && el.matches(rule.selectorText))
+        .map(rule => rule.style.display)
+        .filter(Boolean)
+        .at(-1);
     const labelOf = (tabTestId: string) => within(screen.getByTestId(tabTestId)).getByTestId('profile-tab-label');
-    const css = Array.from(document.querySelectorAll('style'))
-      .map(el => el.textContent ?? '')
-      .join('\n');
-    const rulesFor = (el: HTMLElement) => {
-      const cls = Array.from(el.classList).find(c => c.startsWith('css-')) ?? '';
-      return (css.match(new RegExp(`\\.${cls}[^{]*\\{[^}]*\\}`, 'g')) ?? []).join(' ');
-    };
+    const labels = screen.getAllByTestId('profile-tab-label');
 
-    const active = labelOf('settings-tab');
-    const inactive = labelOf('usage-tab');
-    expect(active).toHaveAttribute('data-active', 'true');
-    expect(active).toHaveTextContent('settings.title');
-    expect(inactive).toHaveAttribute('data-active', 'false');
-    expect(rulesFor(active)).not.toMatch(/display:\s*none/);
-    expect(rulesFor(inactive)).toMatch(/display:\s*none/);
-    // Rules emit mobile-first: xs (display:none) then the sm override (display:block, no max-width).
-    expect(rulesFor(inactive)).toMatch(/display:\s*none;[^}]*\}[^{]*\{display:\s*block;max-width:\s*none/);
-    expect(screen.getAllByTestId('profile-tab-label').filter(el => el.dataset.active === 'true')).toHaveLength(1);
+    expect(labelOf('settings-tab')).toHaveTextContent('settings.title');
+    expect(displayAt(labelOf('settings-tab'), xs)).toBe('block');
+    expect(displayAt(labelOf('usage-tab'), xs)).toBe('none');
+    expect(labels.filter(el => displayAt(el, xs) === 'block')).toHaveLength(1);
+    expect(labels.every(el => displayAt(el, sm) === 'block')).toBe(true);
+  });
+
+  it('scrolls a deep-linked tab into view in the overflowing phone strip', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      searchValue = { tab: 'integrations' };
+      renderPage();
+
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getByTestId('integrations-tab'));
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
   });
 
   it('treats the Profile tab as active when no tab is in the URL', () => {

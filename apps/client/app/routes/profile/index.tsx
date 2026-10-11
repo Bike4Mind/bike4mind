@@ -14,7 +14,7 @@ import PeopleIcon from '@mui/icons-material/People';
 import LinkIcon from '@mui/icons-material/Link';
 import ShareIcon from '@mui/icons-material/Share';
 import dynamic from 'next/dynamic';
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -81,8 +81,9 @@ const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {
 };
 
 /**
- * Tab text label: hidden on phones unless the tab is active, so the icon-only row still fits at
- * 390px while the current section is named. Truncates instead of widening the strip.
+ * Tab text label: hidden on phones unless the tab is active, so the current section is named
+ * while the other tabs stay icon-only. The phone cap fits the longest label (Live Artifacts,
+ * ~100px at 16px Libre Franklin) and only truncates a future, longer one.
  */
 const TabLabel = ({ active, children }: { active: boolean; children: React.ReactNode }) => (
   <Typography
@@ -91,7 +92,7 @@ const TabLabel = ({ active, children }: { active: boolean; children: React.React
     sx={{
       display: { xs: active ? 'block' : 'none', sm: 'block' },
       color: 'text.primary',
-      maxWidth: { xs: '72px', sm: 'none' },
+      maxWidth: { xs: '112px', sm: 'none' },
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
@@ -108,6 +109,7 @@ const ProfilePage = () => {
   const rawTab = (search as { tab?: string })?.tab;
   const rawSubtab = (search as { subtab?: string })?.subtab;
   const activeTab = rawTab || ProfileTab.Profile;
+  const tabListRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { data: friendRequests } = useGetFriendRequests(currentUser?.id);
   const { currentSession } = useSessions();
@@ -162,6 +164,14 @@ const ProfilePage = () => {
   const profileName = currentUser?.name || currentUser?.username;
   useDocumentTitle(profileName ? `${profileName}'s Profile` : 'Profile');
 
+  // On a phone the strip overflows and scrolls, so a deep-linked tab near the end would sit
+  // off-screen with its label. Optional call: jsdom has no scrollIntoView.
+  useEffect(() => {
+    tabListRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [activeTab, isAdmin, hasPublishedArtifacts]);
+
   const handleClose = () => {
     if (currentSession?.id) {
       navigate({ to: `/notebooks/${currentSession.id}` });
@@ -215,7 +225,7 @@ const ProfilePage = () => {
           });
         }}
       >
-        <TabList data-testid="profile-tablist" sx={profileTabListSx}>
+        <TabList ref={tabListRef} data-testid="profile-tablist" sx={profileTabListSx}>
           <PageTab
             data-testid="profile-tab"
             sx={{ borderBottomLeftRadius: '0' }}
