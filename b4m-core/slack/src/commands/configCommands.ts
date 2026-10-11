@@ -65,7 +65,7 @@ async function resolveChannelModelConfig(
  * Format a model ID into a human-readable display name.
  * Returns the ID itself if no friendly name is found.
  */
-function formatModelName(modelId: string): string {
+export function formatModelName(modelId: string): string {
   // Known model ID -> display name mappings
   const knownModels: Record<string, string> = {
     // SYSTEM_MODEL_DEFAULTS.modelId is global.anthropic.claude-sonnet-5 -> covers the Bedrock Sonnet 5 id
@@ -77,6 +77,7 @@ function formatModelName(modelId: string): string {
     'claude-sonnet-4-5': 'Claude Sonnet 4.5',
     'claude-opus-5': 'Claude Opus 5',
     'global.anthropic.claude-opus-5': 'Claude Opus 5',
+    'claude-opus-5-5': 'Claude Opus 5.5',
     'global.anthropic.claude-opus-5-5': 'Claude Opus 5.5',
     'global.anthropic.claude-fable-5': 'Claude Fable 5',
     'global.anthropic.claude-fable-5-1': 'Claude Fable 5.1',

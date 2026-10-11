@@ -692,7 +692,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-05-28',
         description:
-          "Anthropic's latest flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
+          "Anthropic's previous flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
         isSlowModel: true,
       },
       {
@@ -769,8 +769,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         thinkingStyle: 'adaptive',
+        // Global endpoint, first-party parity; cache hits are 0.05x input on Opus 5.5, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 },
+          1_000_000: { input: 4 / 1_000_000, output: 20 / 1_000_000, cache_read: 0.2 / 1_000_000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',

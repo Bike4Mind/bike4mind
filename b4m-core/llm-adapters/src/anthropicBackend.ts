@@ -712,7 +712,30 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         releaseDate: '2026-07-24',
         description:
-          "Anthropic's latest flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
+          "Anthropic's previous flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
+        isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_5_OPUS,
+        type: 'text',
+        name: 'Claude 5.5 Opus',
+        backend: ModelBackend.Anthropic,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          // Cache hits are 0.05x input on Opus 5.5, not the default 0.1x; the 5m cache write is the default 1.25x.
+          1_000_000: { input: 4 / 1_000_000, output: 20 / 1_000_000, cache_read: 0.2 / 1_000_000 }, // $4 / 1M Input tokens, $20 / 1M Output tokens
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description:
+          "Anthropic's latest flagship model. Claude 5.5 Opus delivers adaptive extended thinking, coding, and agentic capabilities at a lower price than Claude 5 Opus.",
         isSlowModel: true,
       },
     ];
