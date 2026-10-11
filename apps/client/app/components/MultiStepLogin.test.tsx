@@ -288,6 +288,18 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     }
   });
 
+  it('puts the numeric keypad and one-time-code hints on the code <input> itself', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+
+    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+
+    const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
+    expect(otcInput).toHaveAttribute('inputmode', 'numeric');
+    expect(otcInput).toHaveAttribute('autocomplete', 'one-time-code');
+  });
+
   it('does not advance to the username step when open registration is disabled', async () => {
     const user = userEvent.setup();
     mocks.verifyOTC.mockResolvedValueOnce({

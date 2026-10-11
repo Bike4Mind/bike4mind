@@ -852,7 +852,9 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     variant="outlined"
                     name="otc-code"
                     type="text"
-                    inputMode="numeric"
+                    // Joy's Input forwards autoComplete to the <input> but not inputMode (that lands on the
+                    // root div), so the numeric keypad hint has to go through the input slot.
+                    slotProps={{ input: { inputMode: 'numeric', pattern: '[0-9]*' } }}
                     placeholder="000000"
                     value={otcCode}
                     onChange={e => {
