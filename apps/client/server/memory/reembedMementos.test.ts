@@ -288,14 +288,14 @@ describe('migrateLedgerVectorsForPrincipal', () => {
     expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(1);
   });
 
-  it('treats a rejected credential (401) as definitive, so it is not retried', async () => {
-    getEffectiveLLMApiKeys.mockRejectedValue(Object.assign(new Error('unauthorized'), { status: 401 }));
+  it('retries a key-lookup failure even when it carries an auth-like status', async () => {
+    getEffectiveLLMApiKeys.mockRejectedValueOnce(Object.assign(new Error('unauthorized'), { status: 401 }));
     chain = [ev('h1'), ev('h2')];
 
     const stats = await migrateLedgerVectorsForPrincipal(lake);
 
-    expect(stats).toMatchObject({ noProviderKey: 2, embedderUnavailable: 0 });
-    expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(1);
+    expect(stats).toMatchObject({ backfilled: 1, embedderUnavailable: 1, noProviderKey: 0 });
+    expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(2);
   });
 
   it('bounds repeated transient failures, then passes over the rest without spending budget', async () => {

@@ -128,15 +128,9 @@ export async function reembedMementosForUser(
 }
 
 // A transient build failure (say a failed key lookup) is retried on the principal's next embed, up to
-// this many tries, before the rest of its walk is passed over. Only a definitive failure is final at once.
+// this many tries, before the rest of its walk is passed over. Only a missing credential is final at once:
+// the build makes no provider call, so a provider-side 401/403 can only surface at embed time.
 const MAX_EMBEDDER_BUILD_ATTEMPTS = 2;
-
-/** True when retrying the build cannot help: no credential at all, or one the provider rejected. */
-function isDefinitiveBuildFailure(err: unknown): boolean {
-  if (err instanceof MissingEmbeddingCredentialError) return true;
-  const status = typeof err === 'object' && err !== null && 'status' in err ? err.status : undefined;
-  return status === 401 || status === 403;
-}
 
 /**
  * Give one principal's LEDGER events a current-space vector: backfill events written without one, and
@@ -272,7 +266,7 @@ export async function migrateLedgerVectorsForPrincipal(
             buildAttempts += 1;
             stats.embedderError = err instanceof Error ? err.message : String(err);
             stats.errors.push(`owner ${ownerUserId}: ${stats.embedderError}`);
-            if (isDefinitiveBuildFailure(err)) unavailable = 'noProviderKey';
+            if (err instanceof MissingEmbeddingCredentialError) unavailable = 'noProviderKey';
             else if (buildAttempts >= MAX_EMBEDDER_BUILD_ATTEMPTS) unavailable = 'embedderUnavailable';
           }
         }
