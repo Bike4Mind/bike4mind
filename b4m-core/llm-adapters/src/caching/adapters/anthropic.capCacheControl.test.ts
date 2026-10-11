@@ -120,6 +120,42 @@ describe('capCacheControlMarkers', () => {
     ]);
   });
 
+  it('counts and strips markers nested inside a tool_result body', () => {
+    const params = {
+      system: [1, 2, 3].map(n => ({ type: 'text', text: `s${n}`, cache_control: CC })),
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'x', input: {} }] },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 't1',
+              content: [
+                { type: 'text', text: 'r1', cache_control: CC },
+                { type: 'text', text: 'r2' },
+              ],
+            },
+          ],
+        },
+        { role: 'assistant', content: [{ type: 'text', text: 'a2' }] },
+        { role: 'user', content: [{ type: 'text', text: 'u3', cache_control: CC }] },
+      ],
+    };
+    const snapshot = structuredClone(params);
+    const logger = makeLogger();
+
+    const capped = capCacheControlMarkers(params, logger as unknown as Logger);
+
+    const toolResult = (capped.messages as Array<{ content: Block[] }>)[1].content[0];
+    expect((toolResult.content as Block[])[0]).toEqual({ type: 'text', text: 'r1' });
+    expect(toolResult.tool_use_id).toBe('t1');
+    expect(markedPaths(capped)).toEqual(['system[0]', 'system[1]', 'system[2]', 'messages[3].content[0]']);
+    expect(logger.warn.mock.calls[0][0]).toContain('messages[1].content[0].content[0]');
+    expect(stripAll(capped)).toEqual(stripAll(snapshot));
+    expect(params).toEqual(snapshot);
+  });
+
   it('strips only the marker key and leaves untouched regions by reference', () => {
     const params = {
       system: [1, 2, 3, 4, 5].map(n => ({ type: 'text', text: `s${n}`, cache_control: CC, citations: null })),

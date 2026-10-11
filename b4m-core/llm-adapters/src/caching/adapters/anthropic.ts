@@ -37,23 +37,25 @@ interface MarkerCensus {
  * shareable-prefix breakpoint) - so this adapter's budget is whatever they left, not the full four.
  */
 function censusMarkers(params: Record<string, unknown>): MarkerCensus {
-  const tools = Array.isArray(params.tools) ? params.tools.filter(hasMarker).length : 0;
-  const system = Array.isArray(params.system) ? params.system.filter(hasMarker).length : 0;
-  let messages = 0;
-  if (Array.isArray(params.messages)) {
-    for (const message of params.messages) {
-      const content = (message as Record<string, unknown> | null)?.content;
-      if (Array.isArray(content)) messages += content.filter(hasMarker).length;
-    }
-  }
-  return { tools, system, messages, total: tools + system + messages };
+  const { tools, system, messages } = markerSites(params);
+  return {
+    tools: tools.length,
+    system: system.length,
+    messages: messages.length,
+    total: tools.length + system.length + messages.length,
+  };
 }
 
-/** One marked block: `index` is into tools/system, or into the content of `messages[message]`. */
+/**
+ * One marked block: `index` is into tools/system, or into the content of `messages[message]`.
+ * `nested` is set for a block inside that content block's own `content` (a `tool_result` body),
+ * which the provider counts toward the same four.
+ */
 interface MarkerSite {
   region: 'tools' | 'system' | 'messages';
   index: number;
   message?: number;
+  nested?: number;
 }
 
 function markerSites(params: Record<string, unknown>): Record<MarkerSite['region'], MarkerSite[]> {
@@ -65,6 +67,12 @@ function markerSites(params: Record<string, unknown>): Record<MarkerSite['region
       const content = (message as Record<string, unknown> | null)?.content;
       if (!Array.isArray(content)) return;
       content.forEach((block, index) => {
+        const inner = (block as Record<string, unknown> | null)?.content;
+        if (Array.isArray(inner)) {
+          inner.forEach((innerBlock, nested) => {
+            if (hasMarker(innerBlock)) messages.push({ region: 'messages', index, message: messageIndex, nested });
+          });
+        }
         if (hasMarker(block)) messages.push({ region: 'messages', index, message: messageIndex });
       });
     });
@@ -73,9 +81,9 @@ function markerSites(params: Record<string, unknown>): Record<MarkerSite['region
 }
 
 function describeSite(site: MarkerSite): string {
-  return site.region === 'messages'
-    ? `messages[${site.message}].content[${site.index}]`
-    : `${site.region}[${site.index}]`;
+  if (site.region !== 'messages') return `${site.region}[${site.index}]`;
+  const block = `messages[${site.message}].content[${site.index}]`;
+  return site.nested === undefined ? block : `${block}.content[${site.nested}]`;
 }
 
 function withoutMarker(block: unknown): unknown {
@@ -124,16 +132,25 @@ export function capCacheControlMarkers(params: Record<string, unknown>, logger?:
   const droppedMessages = dropped.filter(site => site.region === 'messages');
   if (droppedMessages.length > 0) {
     capped.messages = (params.messages as unknown[]).map((message, messageIndex) => {
-      const droppedHere = new Set(
-        droppedMessages.filter(site => site.message === messageIndex).map(site => site.index)
-      );
-      if (droppedHere.size === 0) return message;
+      const droppedHere = droppedMessages.filter(site => site.message === messageIndex);
+      if (droppedHere.length === 0) return message;
       const record = message as Record<string, unknown>;
       return {
         ...record,
-        content: (record.content as unknown[]).map((block, index) =>
-          droppedHere.has(index) ? withoutMarker(block) : block
-        ),
+        content: (record.content as unknown[]).map((block, index) => {
+          const atBlock = droppedHere.filter(site => site.index === index);
+          if (atBlock.length === 0) return block;
+          const nested = new Set(atBlock.flatMap(site => (site.nested === undefined ? [] : [site.nested])));
+          const stripped = atBlock.some(site => site.nested === undefined)
+            ? (withoutMarker(block) as Record<string, unknown>)
+            : { ...(block as Record<string, unknown>) };
+          if (nested.size > 0) {
+            stripped.content = (stripped.content as unknown[]).map((inner, innerIndex) =>
+              nested.has(innerIndex) ? withoutMarker(inner) : inner
+            );
+          }
+          return stripped;
+        }),
       };
     });
   }
@@ -268,7 +285,8 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     //    excess before send. That is a defect in whoever attached them, and the census names where
     //    they sit so the next occurrence is diagnosable rather than a bare ValidationException. This is
     //    the case the original incident hit and could not be accounted for from code reading, so
-    //    it is logged loudly rather than assumed impossible.
+    //    it is logged rather than assumed impossible. `warn`, not `error`: the request no longer
+    //    fails, and ERROR lines feed the LiveOps/Slack alerting (see anthropicBackend.ts).
     // Report the census, not only the exceptional paths. The incident this cap was written for
     // could not be explained from code reading - the known sources sum to four, not five - and a
     // request is only diagnosable while it is still in hand.
@@ -295,8 +313,8 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     if (outbound.total > MAX_CACHE_CONTROL_BLOCKS) {
       const message = `[PromptCache] request exceeds the ${MAX_CACHE_CONTROL_BLOCKS}-block cache_control limit on arrival (${outbound.total}); capCacheControlMarkers will strip the excess before send`;
       const detail = { inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
-      if (logger) logger.error(message, detail);
-      else console.error(message, JSON.stringify(detail));
+      if (logger) logger.warn(message, detail);
+      else console.warn(message, JSON.stringify(detail));
     } else if (dropped.length > 0) {
       const message = `[PromptCache] cache_control budget exhausted (limit ${MAX_CACHE_CONTROL_BLOCKS}); skipped breakpoints: ${dropped.join(', ')}`;
       const detail = { dropped, inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
