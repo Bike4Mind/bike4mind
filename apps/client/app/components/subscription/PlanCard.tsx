@@ -77,6 +77,7 @@ const PlanCard = ({
       >
         {isPopular && (
           <Box
+            data-testid="plan-card-popular-badge"
             sx={{
               bgcolor: 'primary.500',
               color: 'white',

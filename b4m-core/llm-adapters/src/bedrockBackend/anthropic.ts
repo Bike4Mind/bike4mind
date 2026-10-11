@@ -24,7 +24,7 @@ import {
 } from '../backend';
 import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
-import { getCachingAdapter } from '../caching/adapters';
+import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
@@ -1025,6 +1025,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         JSON.stringify({ model: modelId })
       );
     }
+
+    Object.assign(body, capCacheControlMarkers(body));
 
     // Log the actual body being sent (first 1000 chars)
     const bodyStr = JSON.stringify(body);
