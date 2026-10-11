@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   download: vi.fn(),
   getMetadata: vi.fn(),
   createFabFile: vi.fn(),
+  signUrl: vi.fn(),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -22,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(async () => 'https://s3.test/get') }),
+  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
   getGeneratedImageStorage: () => ({ download: h.download, getMetadata: h.getMetadata }),
 }));
 
@@ -162,5 +163,53 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
 
   it('requires files:write at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  });
+});
+
+describe('copied file signing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+    h.getMetadata.mockResolvedValue({ contentType: 'image/png' });
+    h.download.mockResolvedValue(Buffer.from('image-bytes'));
+    h.signUrl.mockResolvedValue('https://objects.example.invalid/get');
+  });
+
+  it('signs the clean response for the browser after creation', async () => {
+    h.createFabFile.mockResolvedValue({
+      id: 'f1',
+      filePath: 'owned/image.png',
+      mimeType: 'image/png',
+      moderationStatus: 'clean',
+    });
+    const { res } = makeRes();
+    await handler(req('me'), res);
+    expect(h.signUrl).toHaveBeenCalledWith('owned/image.png', 'get', { expiresIn: 3600, audience: 'browser' });
+  });
+
+  it('honors both private service signing modes', async () => {
+    h.createFabFile.mockImplementation(async (_user, _params, adapter) => {
+      await adapter.storage.generateSignedUrl('owned/file', 600, 'get');
+      await adapter.storage.generateSignedUrl('owned/file', 600, 'put');
+      return { id: 'f1' };
+    });
+    const { res } = makeRes();
+    await handler(req('me'), res);
+    expect(h.signUrl.mock.calls.map(call => call[1])).toEqual(['get', 'put']);
+    expect(h.signUrl.mock.calls.every(call => call[2].audience === undefined)).toBe(true);
+  });
+
+  it('withholds a pending image without signing', async () => {
+    h.createFabFile.mockResolvedValue({
+      id: 'f1',
+      filePath: 'owned/image.png',
+      mimeType: 'image/png',
+      moderationStatus: 'pending',
+    });
+    const { res, json } = makeRes();
+    await handler(req('me'), res);
+    expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
+    expect(h.signUrl).not.toHaveBeenCalled();
   });
 });

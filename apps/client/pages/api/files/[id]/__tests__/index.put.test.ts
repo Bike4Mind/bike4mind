@@ -4,6 +4,7 @@ import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { logEventSafe } from '@server/utils/analyticsLog';
 
 const h = vi.hoisted(() => ({
+  signUrl: vi.fn(),
   findUpdateAccessById: vi.fn(),
   update: vi.fn(),
   findByDatalakeTag: vi.fn(),
@@ -44,7 +45,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
 vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(), getMetadata: vi.fn() }),
+  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl, getMetadata: vi.fn() }),
 }));
 
 // Only `dataLakeRepository.findByDatalakeTag` and the fabFile persistence collaborators are
@@ -428,4 +429,24 @@ describe('PUT /api/files/[id] - scope gate', () => {
 
     expect(h.findUpdateAccessById).toHaveBeenCalled();
   });
+});
+
+it('returns a browser URL after an authorized edit without updating the private cache', async () => {
+  vi.clearAllMocks();
+  const saved = fabFile({
+    filePath: 'owned/notes.txt',
+    fileUrl: 'http://private.test/notes',
+    fileUrlExpireAt: new Date(Date.now() + 3600000),
+  });
+  h.findUpdateAccessById.mockResolvedValue(saved);
+  h.find.mockResolvedValue([]);
+  h.findByDatalakeTag.mockResolvedValue(null);
+  h.signUrl.mockResolvedValue('https://public.test/notes');
+  const { res, json } = makeRes();
+  await run({ fileName: 'renamed.txt' }, res);
+  expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/notes');
+  expect(saved.fileUrl).toBe('http://private.test/notes');
+  expect(h.update).toHaveBeenCalledTimes(1);
+  expect(h.update.mock.calls[0][0].fileUrl).toBeUndefined();
+  expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
 });

@@ -108,8 +108,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
                   throw error;
                 }
               },
-              generateSignedUrl: (filepath: string, expireInSeconds: number) =>
-                getFilesStorage().getSignedUrl(filepath, 'put', {
+              generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
+                getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                   expiresIn: expireInSeconds,
                 }),
             },
@@ -128,6 +128,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       if (result.filePath && isImageServeable(result)) {
         const presignedUrl = await getFilesStorage().getSignedUrl(result.filePath, 'get', {
           expiresIn: 3600,
+          audience: 'browser',
         });
 
         return res.json({

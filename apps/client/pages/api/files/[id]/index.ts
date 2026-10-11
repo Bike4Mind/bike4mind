@@ -1,3 +1,4 @@
+import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
 import { IFabFile, KnowledgeType } from '@bike4mind/common';
 import {
   dataLakeRepository,
@@ -93,7 +94,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       }
     );
 
-    return res.json(updatedFabFile);
+    return res.json(await signBrowserFileResponse(updatedFabFile));
   })
   /**
    * Delete FabFile by ID
