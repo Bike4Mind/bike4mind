@@ -443,6 +443,7 @@ describe('proxy configured object-store origin', () => {
     'https://objects.example.invalid;extra',
     'https://objects.example.invalid\n.other',
     'https://*.example.invalid',
+    'https://objects,example.invalid',
     'https://objects.example.invalid\u0001',
     'https://objects.example.invalid\u007f',
   ])('omits invalid configuration with a value-free diagnostic: %s', configured => {

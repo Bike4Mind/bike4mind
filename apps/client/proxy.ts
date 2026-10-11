@@ -35,7 +35,7 @@ function resolveObjectStoreOrigin(raw: string | undefined): string {
     }
     const url = new URL(configured);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported protocol');
-    if (/[\s;'"*\\]/.test(url.origin)) throw new Error('Invalid origin');
+    if (/[\s;,'"*\\]/.test(url.origin)) throw new Error('Invalid origin');
     return url.origin;
   } catch {
     console.warn('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
