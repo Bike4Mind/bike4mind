@@ -5,6 +5,7 @@ import { FC, useCallback, useState, useEffect } from 'react';
 import { useDetectScrollBottom } from '@client/app/hooks/useDetectScrollBottom';
 import ProjectCard from '@client/app/components/Project/Card';
 import ProjectCreateModal from '@client/app/components/Project/CreateModal';
+import PendingProjectInvites from '@client/app/components/Project/PendingInvites';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { ContextHelpButton } from '@client/app/components/help';
@@ -163,6 +164,7 @@ const ProjectsPage = () => {
         pb={PAGE_PADDING}
         onScroll={debounceScroll}
       >
+        <PendingProjectInvites />
         <ProjectSection
           title=""
           projects={flattenProjects}

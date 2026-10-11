@@ -31,8 +31,9 @@ vi.mock('@server/middlewares/baseApi', () => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    post: (fn: Handler) => {
-      mockRefs.postHandler = fn;
+    // The rate limiter rides ahead of the handler; the handler is always last.
+    post: (...fns: Handler[]) => {
+      mockRefs.postHandler = fns[fns.length - 1];
       return chain;
     },
   };
@@ -57,6 +58,9 @@ const PROJECT = oid();
 const TARGET_EMAIL = 'target.person@example.test';
 const FRIEND_EMAIL = 'friend.person@example.test';
 const GHOST_EMAIL = 'ghost@nowhere.test';
+// An SSO signup stores the provider's casing verbatim.
+const MIXED = oid();
+const MIXED_STORED_EMAIL = 'Mixed.Case@Example.test';
 
 interface InviteView {
   id: string;
@@ -86,6 +90,7 @@ beforeAll(async () => {
     user(TARGET, 'Target Person', TARGET_EMAIL),
     user(FRIEND, 'Friend Person', FRIEND_EMAIL),
     user(ADMIN, 'Admin', 'admin@example.test', true),
+    user(MIXED, 'Mixed Case', MIXED_STORED_EMAIL),
   ]);
   await Project.collection.insertOne({
     _id: PROJECT,
@@ -168,6 +173,16 @@ describe('project invite recipients (real mongod)', () => {
     expect(created.recipients.pending).toEqual([FRIEND_EMAIL]);
 
     expect(pendingOf(await list(inviter))).toEqual([FRIEND_EMAIL]);
+  });
+
+  it('echoes a typed address in the same form whether or not it has an account', async () => {
+    const registered = await invite(['mixed.case@example.test']);
+    const unregistered = await invite(['no.account@example.test']);
+
+    expect(registered.recipients.pending).toEqual(['mixed.case@example.test']);
+    expect(unregistered.recipients.pending).toEqual(['no.account@example.test']);
+    expect(JSON.stringify(registered)).not.toContain(MIXED_STORED_EMAIL);
+    expect(JSON.stringify(await list(inviter))).not.toContain(MIXED_STORED_EMAIL);
   });
 
   it('withholds a typed address from a co-sharer who did not type it', async () => {

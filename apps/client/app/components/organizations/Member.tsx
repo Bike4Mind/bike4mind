@@ -63,7 +63,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
 
       setModalSearch('');
       setSelectedUserIds([]);
-      toast.success(t('organizations.modals.members.invited', 'Member invited to organization'));
+      toast.success(t('organizations.modals.members.invited', 'Member invited to team'));
     },
     onError: err => {
       toast.error(err.message);
@@ -299,10 +299,10 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
           {canManageMembers &&
             (hasAvailableSeats ? (
               <GenericAddItemsModal
-                title={t('organizations.modals.members.title', 'Add Members to Organization')}
+                title={t('organizations.modals.members.title', 'Add Members to Team')}
                 subtitle={t(
                   'organizations.modals.members.subtitle',
-                  `Search for users to add to this organization (${availableSeats} seats available)`
+                  `Search for users to add to this team (${availableSeats} seats available)`
                 )}
                 buttonLabel={t('organizations.modals.members.button_label', 'Add Member')}
                 buttonIcon={<AddIcon />}

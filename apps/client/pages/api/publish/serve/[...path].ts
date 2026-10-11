@@ -658,6 +658,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       sharedBy: pickSharedByName(owner),
       signupGate: showSignupGate,
       starterCredits: showSignupGate ? await getOpenSignupStarterCredits() : 0,
+      signupReturnTo: selfPath,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -749,7 +750,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     });
   }
   indexHtml = showSignupGate
-    ? replaceSignupGateHtml(indexHtml, { starterCredits: await getOpenSignupStarterCredits() })
+    ? replaceSignupGateHtml(indexHtml, {
+        starterCredits: await getOpenSignupStarterCredits(),
+        // A bundle can be served from the isolated usercontent origin, so /register is anchored to
+        // the app explicitly; the gate is only shown at the canonical /p path.
+        appOrigin: process.env.APP_URL,
+        returnTo: buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug),
+      })
     : stripSignupGateHtml(indexHtml);
 
   if (isFormatRaw) {
@@ -1716,6 +1723,8 @@ function renderViewerPage(
     signupGate?: boolean;
     /** Starter-credit amount the sign-up card advertises; 0 renders no number. */
     starterCredits?: number;
+    /** Path the sign-up gate's /register link returns to. */
+    signupReturnTo?: string;
   }
 ): string {
   const {
@@ -1728,6 +1737,7 @@ function renderViewerPage(
     sharedBy,
     signupGate = false,
     starterCredits = 0,
+    signupReturnTo,
   } = opts;
   const body = replyBodyForExport(artifact);
   let contentHtml: string;
@@ -1807,7 +1817,7 @@ function renderViewerPage(
   // Sign-up prompt: shown to anonymous, non-share-link viewers of an open-public page only
   // (not standalone exports, share-link holders, or signed-in viewers - all of whom already
   // have full access, so there is nothing to invite them past). See shouldShowSignupGate.
-  const gate = signupGate && !standalone ? buildSignupGateHtml({ starterCredits }) : null;
+  const gate = signupGate && !standalone ? buildSignupGateHtml({ starterCredits, returnTo: signupReturnTo }) : null;
   const gateStyles = gate?.styles ?? '';
   const gateHtml = gate?.html ?? '';
 
