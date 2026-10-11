@@ -5,7 +5,6 @@
  * named tool. Shared by AnthropicBackend; the Bedrock Anthropic backend never sends tool_choice.
  */
 
-import { transformJSONSchema } from '@anthropic-ai/sdk/lib/transform-json-schema';
 import type {
   JSONOutputFormat,
   MessageCreateParamsBase,
@@ -118,19 +117,126 @@ export function isStrictCompatibleSchema(schema: unknown): boolean {
   return children.every(isStrictCompatibleSchema);
 }
 
-/**
- * `output_config.format` for a json_schema response_format. The SDK's transform closes every
- * object and moves unsupported constraints into descriptions, which is what the API requires;
- * a schema it cannot transform (no `type`) is sent as given and the API is the judge.
- */
-export function buildStructuredOutputFormat(schema: Record<string, unknown>): JSONOutputFormat {
-  let transformed: Record<string, unknown>;
-  try {
-    transformed = transformJSONSchema(schema);
-  } catch {
-    transformed = schema;
+const STRUCTURED_OUTPUT_KEPT_KEYWORDS = new Set(['type', 'description', 'title', 'enum', 'const', 'required']);
+
+const LOCAL_DEF_REF = /^#\/(?:\$defs|definitions)\/[^/]+$/;
+
+function convertEach(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const converted: Record<string, unknown> = {};
+  for (const [name, child] of Object.entries(value)) {
+    const node = toStructuredOutputNode(child);
+    if (!node) return null;
+    converted[name] = node;
   }
-  return { type: 'json_schema', schema: transformed };
+  return converted;
+}
+
+// Null for a node structured outputs cannot express: a boolean or typeless schema, a tuple `items`
+// array, a free-form object, or a $ref outside $defs/definitions.
+function toStructuredOutputNode(node: unknown): Record<string, unknown> | null {
+  if (!isRecord(node)) return null;
+  const out: Record<string, unknown> = {};
+  const moved: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'properties' || key === '$defs' || key === 'definitions') {
+      const converted = convertEach(value);
+      if (!converted) return null;
+      out[key] = converted;
+    } else if (key === 'items') {
+      const converted = toStructuredOutputNode(value);
+      if (!converted) return null;
+      out.items = converted;
+    } else if (key === 'anyOf' || key === 'oneOf' || key === 'allOf') {
+      if (!Array.isArray(value)) return null;
+      const variants = value.map(toStructuredOutputNode);
+      if (variants.some(variant => !variant)) return null;
+      out[key === 'allOf' ? 'allOf' : 'anyOf'] = variants;
+    } else if (key === '$ref') {
+      if (typeof value !== 'string' || !LOCAL_DEF_REF.test(value)) return null;
+      out.$ref = value;
+    } else if (key === 'additionalProperties') {
+      continue;
+    } else if (key === 'format') {
+      if (typeof value === 'string' && STRICT_STRING_FORMATS.has(value)) out.format = value;
+      else moved.format = value;
+    } else if (key === 'minItems') {
+      if (value === 0 || value === 1) out.minItems = value;
+      else moved.minItems = value;
+    } else if (STRUCTURED_OUTPUT_KEPT_KEYWORDS.has(key)) {
+      out[key] = value;
+    } else {
+      moved[key] = value;
+    }
+  }
+
+  if (!['type', 'enum', 'const', 'anyOf', 'allOf', '$ref'].some(key => key in out)) return null;
+
+  const types = Array.isArray(out.type) ? out.type : [out.type];
+  if (types.includes('object') || 'properties' in out) {
+    // Closing a property-less open object would force `{}`, so it cannot be expressed.
+    if (!('properties' in out) && node.additionalProperties !== false) return null;
+    out.properties ??= {};
+    out.additionalProperties = false;
+  }
+
+  if (Object.keys(moved).length > 0) {
+    const constraints = Object.entries(moved)
+      .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+      .join(', ');
+    out.description = (typeof out.description === 'string' ? `${out.description}\n\n` : '') + `{${constraints}}`;
+  }
+  return out;
+}
+
+function collectRefNames(node: unknown, names: Set<string>): void {
+  if (Array.isArray(node)) {
+    for (const child of node) collectRefNames(child, names);
+  } else if (isRecord(node)) {
+    for (const [key, value] of Object.entries(node)) {
+      if (key === '$ref' && typeof value === 'string') names.add(value.slice(value.lastIndexOf('/') + 1));
+      else collectRefNames(value, names);
+    }
+  }
+}
+
+// Structured outputs reject recursive schemas: a definition whose $ref chain leads back to itself.
+function hasRecursiveRef(schema: Record<string, unknown>): boolean {
+  const edges = new Map<string, Set<string>>();
+  for (const key of ['$defs', 'definitions'] as const) {
+    const defs = schema[key];
+    if (!isRecord(defs)) continue;
+    for (const [name, def] of Object.entries(defs)) {
+      const names = edges.get(name) ?? new Set<string>();
+      collectRefNames(def, names);
+      edges.set(name, names);
+    }
+  }
+  const finished = new Set<string>();
+  const visit = (name: string, path: Set<string>): boolean => {
+    if (path.has(name)) return true;
+    if (finished.has(name) || !edges.has(name)) return false;
+    path.add(name);
+    for (const next of edges.get(name) ?? []) if (visit(next, path)) return true;
+    path.delete(name);
+    finished.add(name);
+    return false;
+  };
+  return [...edges.keys()].some(name => visit(name, new Set()));
+}
+
+/**
+ * `output_config.format` for a json_schema response_format, or null when the schema needs something
+ * structured outputs reject (recursion, a free-form object, a typeless node) and the caller should
+ * fall back to the prompt instruction. Objects are closed with `additionalProperties: false`,
+ * unsupported constraints move into descriptions, and `enum` / `const` / `$defs` are kept (the SDK's
+ * transformJSONSchema drops the first two and dangles `definitions` refs). Never mutates `schema`.
+ */
+export function buildStructuredOutputFormat(schema: Record<string, unknown>): JSONOutputFormat | null {
+  const converted = toStructuredOutputNode(schema);
+  if (!converted || hasRecursiveRef(converted)) return null;
+  return { type: 'json_schema', schema: converted };
 }
 
 /** Whether any document block asks for citations, which the API refuses alongside output_config.format. */

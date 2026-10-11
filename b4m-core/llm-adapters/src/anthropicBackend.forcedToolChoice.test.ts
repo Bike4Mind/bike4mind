@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { ChatModels, supportsForcedToolChoice, type ModelInfo, type ResponseFormat } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from './backend';
-import { buildToolUseInstruction, isStrictCompatibleSchema } from './forcedToolChoice';
+import { buildStructuredOutputFormat, buildToolUseInstruction, isStrictCompatibleSchema } from './forcedToolChoice';
 
 type Params = Record<string, unknown> & {
   tools?: Array<Record<string, unknown>>;
@@ -168,19 +168,33 @@ describe('supportsForcedToolChoice', () => {
     expect(supportsForcedToolChoice(model)).toBe(false);
   });
 
-  it.each(['us.anthropic.claude-opus-5-5', 'eu.anthropic.claude-sonnet-5-5', 'anthropic.claude-fable-5-1'])(
-    'is false for the regional id %s',
-    model => {
-      expect(supportsForcedToolChoice(model)).toBe(false);
-    }
-  );
+  it.each([
+    'us.anthropic.claude-opus-5-5',
+    'eu.anthropic.claude-sonnet-5-5',
+    'anthropic.claude-fable-5-1',
+    'apac.anthropic.claude-sonnet-5-5',
+    'us-gov.anthropic.claude-fable-5-1',
+    'us.anthropic.claude-opus-5-5-v1:0',
+    'claude-opus-5-5-20261001',
+    'claude-opus-5-5[1m]',
+    'anthropic/claude-sonnet-5-5',
+  ])('is false for the id spelling %s', model => {
+    expect(supportsForcedToolChoice(model)).toBe(false);
+  });
 
-  it.each([...FORCED_MODELS, ChatModels.CLAUDE_5_SONNET_BEDROCK, ChatModels.CLAUDE_FABLE_5_BEDROCK, 'gpt-5'])(
-    'is true for %s',
-    model => {
-      expect(supportsForcedToolChoice(model)).toBe(true);
-    }
-  );
+  it.each([
+    ...FORCED_MODELS,
+    ChatModels.CLAUDE_5_SONNET_BEDROCK,
+    ChatModels.CLAUDE_FABLE_5_BEDROCK,
+    'gpt-5',
+    'claude-opus-5-50',
+    'claude-fable-5-10',
+    'claude-mythos-preview',
+    'claude-sonnet-5-introductory-pricing',
+    'xclaude-opus-5-5',
+  ])('is true for %s', model => {
+    expect(supportsForcedToolChoice(model)).toBe(true);
+  });
 });
 
 describe('AnthropicBackend json_schema on models without forced tool use', () => {
@@ -270,6 +284,119 @@ describe('AnthropicBackend json_schema on models without forced tool use', () =>
     expect(captured[0].output_config).toEqual({
       format: { type: 'json_schema', schema: SCHEMA },
       effort: 'high',
+    });
+  });
+
+  it('tags every streamed JSON chunk with the native mode', async () => {
+    const { backend } = buildBackend(() => textStream(JSON.stringify(RESULT)));
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_OPUS, { stream: true, responseFormat: RESPONSE_FORMAT }, out.cb);
+
+    const textFrames = out.calls.filter(c => c.text.some(t => typeof t === 'string' && t.length > 0));
+    expect(textFrames.length).toBeGreaterThan(1);
+    for (const frame of textFrames) expect(frame.info?.responseFormatMode).toBe('native');
+  });
+
+  it.each([
+    [
+      'a recursive $defs schema',
+      {
+        type: 'object',
+        properties: { root: { $ref: '#/$defs/node' } },
+        required: ['root'],
+        $defs: { node: { type: 'object', properties: { child: { $ref: '#/$defs/node' } } } },
+      },
+    ],
+    ['a root self-reference', { type: 'object', properties: { next: { $ref: '#' } } }],
+    ['a free-form object', { type: 'object', properties: { meta: { type: 'object' } } }],
+    ['a typeless node', { type: 'object', properties: { anything: {} } }],
+  ])('falls back to the prompt instruction for %s instead of a 400', async (_label, schema) => {
+    const { backend, captured } = buildBackend(() => textResponse(JSON.stringify(RESULT)));
+    const out = capture();
+    await run(
+      backend,
+      ChatModels.CLAUDE_5_5_OPUS,
+      { stream: false, responseFormat: { type: 'json_schema', json_schema: { name: 'n', schema } } },
+      out.cb
+    );
+
+    expectNoForcedChoice(captured[0]);
+    expect(captured[0]).not.toHaveProperty('output_config');
+    expect(systemText(captured[0].system)).toContain('Schema name: n');
+    expect(out.mode()).toBe('best-effort');
+  });
+});
+
+describe('buildStructuredOutputFormat', () => {
+  it('keeps enum, const and definitions refs that the SDK transform would drop or dangle', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['a', 'b'] },
+        version: { const: 2 },
+        choice: { enum: ['x', 'y'] },
+        owner: { $ref: '#/definitions/person' },
+      },
+      required: ['kind'],
+      definitions: { person: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+    };
+    const before = structuredClone(schema);
+
+    const format = buildStructuredOutputFormat(schema);
+
+    expect(schema).toEqual(before);
+    expect(format).toEqual({
+      type: 'json_schema',
+      schema: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['a', 'b'] },
+          version: { const: 2 },
+          choice: { enum: ['x', 'y'] },
+          owner: { $ref: '#/definitions/person' },
+        },
+        required: ['kind'],
+        definitions: {
+          person: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            required: ['name'],
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
+    });
+  });
+
+  it('turns oneOf into anyOf and moves unsupported constraints into the description', () => {
+    const format = buildStructuredOutputFormat({
+      type: 'object',
+      properties: {
+        n: { type: 'integer', minimum: 1, description: 'count' },
+        v: { oneOf: [{ type: 'string', pattern: '^a' }, { type: 'null' }] },
+        tags: { type: 'array', items: { type: 'string' }, minItems: 3 },
+      },
+      additionalProperties: false,
+    });
+
+    expect(format?.schema).toEqual({
+      type: 'object',
+      properties: {
+        n: { type: 'integer', description: 'count\n\n{minimum: 1}' },
+        v: { anyOf: [{ type: 'string', description: '{pattern: "^a"}' }, { type: 'null' }] },
+        tags: { type: 'array', items: { type: 'string' }, description: '{minItems: 3}' },
+      },
+      additionalProperties: false,
+    });
+  });
+
+  it('closes a nullable object type', () => {
+    const format = buildStructuredOutputFormat({ type: ['object', 'null'], properties: { a: { type: 'string' } } });
+    expect(format?.schema).toEqual({
+      type: ['object', 'null'],
+      properties: { a: { type: 'string' } },
+      additionalProperties: false,
     });
   });
 });

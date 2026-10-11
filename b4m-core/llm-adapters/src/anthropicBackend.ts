@@ -1054,20 +1054,34 @@ export class AnthropicBackend implements ICompletionBackend {
     const wantsJsonSchema = responseFormat?.type === 'json_schema' && !options.tools?.length;
     const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported;
     // A model without forced tool use gets native structured outputs instead of the synthesized tool,
-    // unless a document asks for citations (that pairing is a 400) - then the schema goes in the prompt.
-    const formatBlockedByCitations =
+    // unless a document asks for citations (that pairing is a 400) or the schema is one structured
+    // outputs reject - then the schema goes in the prompt.
+    const citationsBlockFormat =
       wantsJsonSchema && !forcedToolChoiceSupported && hasCitationsEnabled(apiParams.messages);
-    const usingResponseFormatNative = wantsJsonSchema && !forcedToolChoiceSupported && !formatBlockedByCitations;
+    const nativeFormat =
+      wantsJsonSchema && !forcedToolChoiceSupported && !citationsBlockFormat && responseFormat.type === 'json_schema'
+        ? buildStructuredOutputFormat(responseFormat.json_schema.schema)
+        : null;
+    const usingResponseFormatNative = nativeFormat !== null;
+    const usingResponseFormatPrompt = wantsJsonSchema && !forcedToolChoiceSupported && !usingResponseFormatNative;
     if (responseFormat) {
       this.logger.info(
         `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, nativeFormat=${usingResponseFormatNative}, callerTools=${options.tools?.length ?? 0}`
       );
     }
-    if (usingResponseFormatNative && responseFormat.type === 'json_schema') {
-      apiParams.output_config = { format: buildStructuredOutputFormat(responseFormat.json_schema.schema) };
+    if (usingResponseFormatPrompt && !citationsBlockFormat) {
+      this.logger.warn(
+        '[AnthropicBackend] json_schema not expressible as structured outputs; using prompt instruction',
+        {
+          model,
+        }
+      );
+    }
+    if (nativeFormat) {
+      apiParams.output_config = { format: nativeFormat };
     }
     const schemaInstruction =
-      formatBlockedByCitations && responseFormat ? buildJsonSchemaInstruction(responseFormat) : null;
+      usingResponseFormatPrompt && responseFormat ? buildJsonSchemaInstruction(responseFormat) : null;
     if (schemaInstruction) {
       apiParams.system = appendSystemText(apiParams.system, schemaInstruction);
     }
@@ -1493,7 +1507,10 @@ export class AnthropicBackend implements ICompletionBackend {
                       streamedText[event.index] = event.delta.text;
                       streamedRoundText += event.delta.text;
                       checkDegenerate(event.delta.text);
-                      await cb(streamedText, { toolsUsed: toolsUsed });
+                      await cb(streamedText, {
+                        toolsUsed: toolsUsed,
+                        ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+                      });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
                       // response_format=json_schema: stream the tool's
                       // input JSON deltas directly to the caller as text. This
@@ -1777,7 +1794,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   ),
                   ...(usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
                   ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
-                  ...(formatBlockedByCitations ? { responseFormatMode: 'best-effort' as const } : {}),
+                  ...(usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
                   ...(stopReason ? { stopReason } : {}),
                 });
               }
@@ -2333,7 +2350,7 @@ export class AnthropicBackend implements ICompletionBackend {
             : {}),
           ...(isTerminalTurn && usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
           ...(isTerminalTurn && usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
-          ...(isTerminalTurn && formatBlockedByCitations ? { responseFormatMode: 'best-effort' as const } : {}),
+          ...(isTerminalTurn && usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
         });
 
         // If there are tool calls, execute them and continue the conversation

@@ -492,9 +492,9 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.DEEPSEEK_V4_PRO,
 ]);
 
-// Matches the native, Bedrock (global./us./eu. prefixed) and catalog spellings alike, so a catalog-only
-// id for one of these families is covered without being listed in ChatModels first.
-const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|\.)claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?=$|[-:@])/;
+// Matches the native, Bedrock (any region prefix), gateway (`anthropic/`), context-suffixed (`[1m]`)
+// and catalog spellings alike, so a catalog-only id is covered without a ChatModels entry first.
+const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?=$|[-:@[])/;
 
 /**
  * Whether the model accepts forced tool use. Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
