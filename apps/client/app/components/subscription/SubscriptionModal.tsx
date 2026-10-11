@@ -35,6 +35,7 @@ import { useTranslation } from 'react-i18next';
 import SubscribeButton from '../Credits/SubscribeButton';
 import ManageSubscriptionButton from './ManageSubscriptionButton';
 import PlanCard from './PlanCard';
+import { isPopularPlan } from './isPopularPlan';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 
 function centsToDollars(cents: number | undefined) {
@@ -248,7 +249,7 @@ const SubscriptionModalContent = () => {
                   price={centsToDollars(priceMap?.[plan.priceId])}
                   interval={plan.interval}
                   features={plan.features}
-                  isPopular={plan.name === 'Professional'}
+                  isPopular={isPopularPlan(plan.name, availablePlans.length)}
                   isCurrentPlan={!!isCurrentPlan}
                   hasPaymentIssue={hasPaymentIssue}
                   currentPlanDetails={isCurrentPlan}
