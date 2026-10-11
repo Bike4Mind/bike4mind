@@ -71,7 +71,13 @@ export const PublicImageCapabilitiesSchema = z.object({
 export const PublicModelCreditsPer1MTokensSchema = z.object({
   input: z.number().describe('Credits per 1M input tokens.'),
   output: z.number().describe('Credits per 1M output tokens.'),
-  cached_input: z.number().describe('Credits per 1M input tokens served from the provider prompt cache.'),
+  cached_input: z
+    .number()
+    .nullable()
+    .describe(
+      'Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are ' +
+        'not billed separately, so they cost the `input` rate.'
+    ),
 });
 
 export const PublicModelSchema = z.object({

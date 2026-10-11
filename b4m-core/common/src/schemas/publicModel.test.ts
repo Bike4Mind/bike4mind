@@ -82,6 +82,37 @@ describe('toPublicModel', () => {
   });
 
   it.each([
+    ['Gemini', ModelBackend.Gemini, 'gemini-2.5-pro'],
+    ['xAI', ModelBackend.XAI, 'grok-4.5'],
+    ['a non-Claude Bedrock model', ModelBackend.Bedrock, 'moonshotai.kimi-k2-thinking'],
+  ])('publishes a null cached_input on %s, whose cache reads settle at the input rate', (_label, backend, id) => {
+    const projected = toPublicModel({
+      ...textModel,
+      id: id as ModelInfo['id'],
+      backend,
+      pricing: { 200_000: { input: 2 / 1_000_000, output: 6 / 1_000_000, cache_read: 0.5 / 1_000_000 } },
+    });
+
+    expect(projected.credits_per_1m_tokens).toEqual({
+      input: 2 * CREDITS_PER_USD_COST,
+      output: 6 * CREDITS_PER_USD_COST,
+      cached_input: null,
+    });
+    expect(PublicModelSchema.strict().safeParse(projected).success).toBe(true);
+  });
+
+  it('publishes cached_input for Claude on Bedrock, whose cache reads settle separately', () => {
+    const projected = toPublicModel({
+      ...textModel,
+      id: 'global.anthropic.claude-opus-5-5' as ModelInfo['id'],
+      backend: ModelBackend.Bedrock,
+      pricing: { 1_000_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 } },
+    });
+
+    expect(projected.credits_per_1m_tokens?.cached_input).toBe(0.5 * CREDITS_PER_USD_COST);
+  });
+
+  it.each([
     ['an empty pricing map', {}],
     ['an all-zero tier', { 128_000: { input: 0, output: 0 } }],
   ])('publishes null, not 0, for a text model with %s', (_label, pricing) => {

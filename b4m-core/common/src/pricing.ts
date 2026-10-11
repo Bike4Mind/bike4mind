@@ -1,4 +1,5 @@
-import { CACHE_READ_MULTIPLIER, pricingTierForTokens, type ModelInfo } from './models';
+import { CACHE_READ_MULTIPLIER, ModelBackend, pricingTierForTokens, type ModelInfo } from './models';
+import { stripBedrockRegionPrefix } from './modelCatalog';
 
 const DEFAULT_PRICE_MARGIN = 1.2;
 const DEFAULT_USD_TO_CREDITS_RATE = 0.0006;
@@ -230,9 +231,29 @@ export const usdPerTokenToCreditsPer1M = (usdPerToken: number, rate: number = CR
 export interface TextModelCreditsPer1M {
   input: number;
   output: number;
-  /** Rate for cache-read input tokens, by the same default multiplier getTextModelCost applies. */
-  cachedInput: number;
+  /**
+   * Rate for cache-read input tokens, by the same default multiplier getTextModelCost applies.
+   * Null where settlement never sees a cache read, so cached tokens bill at `input`.
+   */
+  cachedInput: number | null;
 }
+
+/**
+ * Backends whose adapters report cache reads apart from input (CompletionInfo.cacheReadInputTokens),
+ * the only way a cache read reaches getTextModelCost at its own rate. Gemini, xAI and Bedrock's
+ * non-Claude families report none, so their cached tokens settle at the full input rate. Must stay in
+ * sync with the adapters in @bike4mind/llm-adapters that set cacheReadInputTokens.
+ */
+const CACHE_READ_SETTLING_BACKENDS: ReadonlySet<string> = new Set([
+  ModelBackend.Anthropic,
+  ModelBackend.OpenAI,
+  ModelBackend.Kimi,
+  ModelBackend.DeepSeek,
+]);
+
+const settlesCacheReads = (model: ModelInfo): boolean =>
+  CACHE_READ_SETTLING_BACKENDS.has(model.backend) ||
+  (model.backend === ModelBackend.Bedrock && stripBedrockRegionPrefix(model.id).startsWith('anthropic.'));
 
 /**
  * A text model's base-tier rates in credits per 1M tokens, priced exactly as getTextModelCost
@@ -249,6 +270,8 @@ export function getTextModelCreditsPer1M(model: ModelInfo): TextModelCreditsPer1
   return {
     input: usdPerTokenToCreditsPer1M(tierPricing.input),
     output: usdPerTokenToCreditsPer1M(tierPricing.output),
-    cachedInput: usdPerTokenToCreditsPer1M(tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER),
+    cachedInput: settlesCacheReads(model)
+      ? usdPerTokenToCreditsPer1M(tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER)
+      : null,
   };
 }

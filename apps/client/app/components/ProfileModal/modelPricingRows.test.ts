@@ -52,6 +52,27 @@ describe('dedupePricingRows', () => {
     ]);
   });
 
+  it('keeps two Bedrock versions of a model apart', () => {
+    const rows = dedupePricingRows([
+      textModel('anthropic.claude-3-5-sonnet-20240620-v1:0', ModelBackend.Bedrock),
+      textModel('us.anthropic.claude-3-5-sonnet-20241022-v2:0', ModelBackend.Bedrock),
+    ]);
+
+    expect(rows).toHaveLength(2);
+  });
+
+  it('keeps twins billed at different prices, so neither price is hidden', () => {
+    const rows = dedupePricingRows([
+      textModel('gpt-4o', ModelBackend.OpenAI),
+      textModel('gpt-4o-2024-05-13', ModelBackend.OpenAI, {
+        pricing: { 128_000: { input: perM(5), output: perM(15) } },
+      }),
+      textModel('gpt-4o-2024-08-06', ModelBackend.OpenAI),
+    ]);
+
+    expect(rows.map(row => row.id)).toEqual(['gpt-4o', 'gpt-4o-2024-05-13']);
+  });
+
   it('keeps the first of two equally priced twins', () => {
     const rows = dedupePricingRows([
       textModel('gpt-4.1-2025-04-14', ModelBackend.OpenAI),

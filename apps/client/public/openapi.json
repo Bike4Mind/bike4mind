@@ -3207,8 +3207,11 @@
                       "description": "Credits per 1M output tokens."
                     },
                     "cached_input": {
-                      "type": "number",
-                      "description": "Credits per 1M input tokens served from the provider prompt cache."
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate."
                     }
                   },
                   "required": [
