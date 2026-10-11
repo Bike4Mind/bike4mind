@@ -55,7 +55,17 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
+import {
+  IUserApiKeyDocument,
+  ApiKeyScope,
+  getMeContract,
+  getCreditBalanceContract,
+  listModelsContract,
+  listFilesContract,
+  listProjectsContract,
+  listAgentsContract,
+  listDataLakesContract,
+} from '@bike4mind/common';
 import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
@@ -320,7 +330,9 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
                     <Chip
                       variant={selected ? 'solid' : 'outlined'}
                       color={selected ? 'primary' : 'neutral'}
+                      startDecorator={selected ? <CheckIcon sx={{ fontSize: 14 }} /> : undefined}
                       onClick={() => applyPreset(preset.id)}
+                      slotProps={{ action: { 'aria-pressed': selected } }}
                       data-testid={`api-key-preset-${preset.id}`}
                       sx={{ '--Chip-radius': '8px', py: 0.5, px: 1.25 }}
                     >
@@ -371,6 +383,12 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
                             color={selected ? (scope.isMutating ? 'warning' : 'success') : 'neutral'}
                             startDecorator={selected ? <CheckIcon sx={{ fontSize: 14 }} /> : undefined}
                             onClick={() => toggleScope(scope.value)}
+                            slotProps={{
+                              action: {
+                                'aria-pressed': selected,
+                                'aria-label': `${group.resourceLabel}: ${scope.actionLabel}`,
+                              },
+                            }}
                             data-testid={`api-key-scope-${scope.value}`}
                             className="project-api-keys-scope-checkbox"
                             sx={{ '--Chip-radius': '8px' }}
@@ -519,25 +537,43 @@ function OneTimeSecretField({ label, value, idPrefix }: OneTimeSecretFieldProps)
   );
 }
 
+// Contract-backed reads in preference order. The created-key dialog tests the key against the
+// first one its scopes open, so the snippet works for any key instead of 403ing a read-only one.
+const KEY_TEST_CONTRACTS = [
+  getMeContract,
+  getCreditBalanceContract,
+  listModelsContract,
+  listFilesContract,
+  listProjectsContract,
+  listAgentsContract,
+  listDataLakesContract,
+];
+
+/** The GET path a key with `scopes` can call to prove it works, or undefined when none of them fits. */
+export const keyTestPath = (scopes: readonly ApiKeyScope[]): string | undefined =>
+  KEY_TEST_CONTRACTS.find(contract => contract.scopes?.some(scope => scopes.includes(scope)))?.path;
+
 interface KeyCreatedModalProps {
   open: boolean;
   onClose: () => void;
   apiKey: string;
   /** Present only for a fresh create response; absent for a rotated key or a pre-feature key. */
   callbackSigningSecret?: string;
+  /** The key's scopes, which pick the endpoint the test snippet calls. */
+  scopes: readonly ApiKeyScope[];
 }
 
-function KeyCreatedModal({ open, onClose, apiKey, callbackSigningSecret }: KeyCreatedModalProps) {
+function KeyCreatedModal({ open, onClose, apiKey, callbackSigningSecret, scopes }: KeyCreatedModalProps) {
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
 
   // The key stays in its one-time copy field only; the snippet reads it from the shell.
-  const exampleCode = `export B4M_API_KEY="<paste your API key>"
-curl -X POST \\
-  -H "Authorization: Bearer $B4M_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{"message": "Hello! Can you help me with my project?"}' \\
-  ${window.location.origin}/api/chat`;
+  const testPath = keyTestPath(scopes);
+  const exampleCode =
+    testPath &&
+    `export B4M_API_KEY="<paste your API key>"
+curl -H "Authorization: Bearer $B4M_API_KEY" \\
+  ${window.location.origin}${testPath}`;
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-created-modal">
@@ -579,33 +615,35 @@ curl -X POST \\
           </>
         )}
 
-        <Alert
-          color="primary"
-          startDecorator={<InfoOutlinedIcon />}
-          sx={{ mb: 2 }}
-          className="project-api-keys-created-info"
-        >
-          <Stack spacing={1}>
-            <Typography level="body-sm">
-              <strong>Test your API key:</strong>
-            </Typography>
-            <Box
-              component="pre"
-              sx={{
-                p: 1,
-                bgcolor: isDarkMode ? 'neutral.900' : 'neutral.100',
-                borderRadius: 'sm',
-                fontSize: 'xs',
-                overflow: 'auto',
-                fontFamily: 'monospace',
-              }}
-              className="project-api-keys-documentation-code"
-              data-testid="api-key-created-snippet"
-            >
-              {exampleCode}
-            </Box>
-          </Stack>
-        </Alert>
+        {exampleCode && (
+          <Alert
+            color="primary"
+            startDecorator={<InfoOutlinedIcon />}
+            sx={{ mb: 2 }}
+            className="project-api-keys-created-info"
+          >
+            <Stack spacing={1}>
+              <Typography level="body-sm">
+                <strong>Test your API key:</strong>
+              </Typography>
+              <Box
+                component="pre"
+                sx={{
+                  p: 1,
+                  bgcolor: isDarkMode ? 'neutral.900' : 'neutral.100',
+                  borderRadius: 'sm',
+                  fontSize: 'xs',
+                  overflow: 'auto',
+                  fontFamily: 'monospace',
+                }}
+                className="project-api-keys-documentation-code"
+                data-testid="api-key-created-snippet"
+              >
+                {exampleCode}
+              </Box>
+            </Stack>
+          </Alert>
+        )}
 
         <Stack direction="row" spacing={1} justifyContent="flex-end" className="project-api-keys-created-actions">
           <Button variant="outlined" onClick={onClose} className="project-api-keys-created-cancel-button">
@@ -1863,12 +1901,14 @@ export default function UserApiKeysTab() {
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
   const [newlyCreatedSigningSecret, setNewlyCreatedSigningSecret] = useState<string | undefined>(undefined);
+  const [newlyCreatedScopes, setNewlyCreatedScopes] = useState<ApiKeyScope[]>([]);
   const [mainTab, setMainTab] = useState(0);
   // Off by default: revoked rows accumulate forever (scopes are write-once, so
   // every scope change mints a replacement and leaves one behind) and their
   // audit value is served by the toggle, not by permanent screen space.
   const [showRevoked, setShowRevoked] = useState(false);
   const [keyPendingDelete, setKeyPendingDelete] = useState<IUserApiKeyDocument | null>(null);
+  const [keyPendingRevoke, setKeyPendingRevoke] = useState<IUserApiKeyDocument | null>(null);
   const [signingSecretRotationPending, setSigningSecretRotationPending] = useState<IUserApiKeyDocument | null>(null);
   const [revealedSigningSecret, setRevealedSigningSecret] = useState<{ keyName: string; secret: string } | null>(null);
 
@@ -1876,13 +1916,20 @@ export default function UserApiKeysTab() {
     onSuccess: result => {
       setNewlyCreatedKey(result.key);
       setNewlyCreatedSigningSecret(undefined);
+      // Rotation keeps the key's scopes; the response omits them, so read them off the list.
+      setNewlyCreatedScopes(data?.find(key => key.id === result.id)?.scopes ?? []);
       setShowKeyCreatedModal(true);
     },
   });
 
   // With revoked rows hidden, revoking makes the row leave the list - so say so,
   // rather than leaving a silent disappearance as the only feedback.
-  const revokeMutation = useRevokeUserApiKey({ onSuccess: () => toast.success('API key revoked') });
+  const revokeMutation = useRevokeUserApiKey({
+    onSuccess: () => {
+      toast.success('API key revoked');
+      setKeyPendingRevoke(null);
+    },
+  });
 
   const deleteMutation = useDeleteUserApiKey({
     onSuccess: () => {
@@ -1901,6 +1948,7 @@ export default function UserApiKeysTab() {
   const handleNewKeySuccess = (result: CreateUserApiKeyResponse) => {
     setNewlyCreatedKey(result.key);
     setNewlyCreatedSigningSecret(result.callbackSigningSecret);
+    setNewlyCreatedScopes(result.scopes ?? []);
     setShowKeyCreatedModal(true);
   };
 
@@ -1945,7 +1993,7 @@ export default function UserApiKeysTab() {
     >
       <Tabs value={mainTab} onChange={(_, value) => setMainTab(value as number)}>
         <TabList sx={{ gap: '2px', mb: '20px', flexWrap: 'wrap' }}>
-          <StyledTab>My API Keys</StyledTab>
+          <StyledTab>My keys</StyledTab>
           <StyledTab>API Documentation</StyledTab>
         </TabList>
 
@@ -2145,9 +2193,10 @@ export default function UserApiKeysTab() {
                               size="sm"
                               variant="outlined"
                               color="danger"
-                              onClick={() => revokeMutation.mutate({ keyId: key.id, reason: 'Revoked by user' })}
-                              loading={revokeMutation.isPending}
+                              onClick={() => setKeyPendingRevoke(key)}
                               disabled={isRevoked(key)}
+                              aria-label={`Revoke ${key.name}`}
+                              data-testid={`api-key-revoke-${key.id}`}
                             >
                               <BlockIcon />
                             </IconButton>
@@ -2195,6 +2244,21 @@ export default function UserApiKeysTab() {
         onClose={() => setShowKeyCreatedModal(false)}
         apiKey={newlyCreatedKey}
         callbackSigningSecret={newlyCreatedSigningSecret}
+        scopes={newlyCreatedScopes}
+      />
+
+      <ConfirmationModal
+        open={keyPendingRevoke !== null}
+        onClose={() => setKeyPendingRevoke(null)}
+        onConfirm={() => {
+          if (keyPendingRevoke) revokeMutation.mutate({ keyId: keyPendingRevoke.id, reason: 'Revoked by user' });
+        }}
+        loading={revokeMutation.isPending}
+        title="Revoke API key"
+        description={`Revoke "${keyPendingRevoke?.name}"? Anything using it stops working immediately, and a revoked key cannot be restored.`}
+        confirmText="Revoke"
+        confirmColor="danger"
+        showWarningIcon
       />
 
       <ConfirmationModal

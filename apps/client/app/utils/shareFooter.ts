@@ -16,6 +16,7 @@ import { B4M_HORIZONTAL_LOGO_SVG, B4M_FAVICON_SVG } from '@client/app/utils/b4mL
 // Marketing-site URL sourced from config (empty when unconfigured).
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import { escapeAttr } from './htmlEscape';
+import { sanitizeRedirectTo } from './authRedirect';
 import type { PublishVisibility } from '@bike4mind/common';
 
 const SITE_URL = WEBSITE_URL;
@@ -85,18 +86,15 @@ function shareWordmarkHtml(): string {
  * never a share-link holder or a signed-in viewer, both of whom already have full access.
  * It sits in the normal page flow after the content, not over it: the content above it is
  * already fully delivered, so this invites the visitor to make their own rather than
- * pretending to withhold anything. Links to the marketing site signup flow when configured,
- * falling back to the app's own /register so it still renders on a self-hosted deployment.
+ * pretending to withhold anything. Links to the app's own /register carrying a `redirectTo`
+ * back to the artifact (see authRedirect.ts), in a new tab so a framed bundle's sandbox does
+ * not trap the signup page and the visitor keeps the artifact open.
  *
  * Pure inline CSS + an HTML checkbox-trick dismiss (no JS) so it passes the same
  * `script-src 'none'` CSP constraint as the share footer.
  */
 export function buildSignupGateHtml(opts: SignupGateOptions = {}): { styles: string; html: string } {
-  // Link to the marketing site when configured; fall back to the app's own signup page so the
-  // gate renders on self-hosted deployments (and in local dev) without a marketing URL.
-  const signupHref = SITE_URL
-    ? `${SITE_URL}/?utm_source=shared-artifact&utm_medium=signup-gate&utm_campaign=publish`
-    : '/register?utm_source=shared-artifact&utm_medium=signup-gate&utm_campaign=publish';
+  const signupHref = buildSignupHref(opts);
   const brandName = escapeAttr(getBrandName());
 
   // All gate CSS lives here so the PAGE template injects it into the existing <style> block --
@@ -168,7 +166,7 @@ export function buildSignupGateHtml(opts: SignupGateOptions = {}): { styles: str
     '</div>',
     '<div class="b4m-gate-right">',
     starterCreditsHtml(opts.starterCredits),
-    `<a href="${signupHref}" class="b4m-cta-btn">Create free account</a>`,
+    `<a href="${escapeAttr(signupHref)}" target="_blank" rel="noopener" class="b4m-cta-btn">Create free account</a>`,
     '<label for="b4m-gate-dismiss" class="b4m-dismiss-label">No thanks</label>',
     '</div>',
     '</div>',
@@ -187,6 +185,24 @@ export interface SignupGateOptions {
    * the serve handler re-renders the gate with the live value (replaceSignupGateHtml).
    */
   starterCredits?: number | null;
+  /** Same-origin path of the artifact, sent as /register's `redirectTo` so signup lands back on it. */
+  returnTo?: string;
+  /**
+   * App origin to anchor /register to. Needed where the gate renders inside a bundle that may be
+   * served from the isolated usercontent origin, where a root-relative link would miss the app.
+   */
+  appOrigin?: string;
+}
+
+/** The gate's signup URL: the app's /register, with a `redirectTo` when the artifact path is safe. */
+export function buildSignupHref({ returnTo, appOrigin }: SignupGateOptions = {}): string {
+  const params = new URLSearchParams();
+  const redirectTo = sanitizeRedirectTo(returnTo);
+  if (redirectTo) params.set('redirectTo', redirectTo);
+  params.set('utm_source', 'shared-artifact');
+  params.set('utm_medium', 'signup-gate');
+  params.set('utm_campaign', 'publish');
+  return `${appOrigin ?? ''}/register?${params.toString()}`;
 }
 
 function starterCreditsHtml(starterCredits: number | null | undefined): string {

@@ -469,9 +469,12 @@ const Register: React.FC = () => {
           sx={theme => ({
             maxWidth: '420px',
             width: '100%',
+            boxSizing: 'border-box',
             mx: 'auto',
             my: 'auto',
             py: '32px',
+            // disableGutters drops the side margins; a phone needs them back.
+            px: { xs: '16px', sm: 0 },
             backgroundColor: theme.palette.background.panel,
           })}
         >
@@ -584,13 +587,13 @@ const Register: React.FC = () => {
                 {/* eslint-disable-next-line react-hooks/refs -- react-hook-form's handleSubmit uses refs internally */}
                 <form className="register-form" data-testid="register-form" onSubmit={handleSubmit(onSubmit)}>
                   <Box sx={{ '& .MuiInput-root': { '--Input-minHeight': '40px' } }}>
-                    <Stack direction="row" spacing={2}>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                       <FormControl
                         className="register-username-control"
                         size="sm"
                         required
                         id="username"
-                        sx={{ width: '50%' }}
+                        sx={{ width: { xs: '100%', sm: '50%' } }}
                       >
                         <FormLabel
                           className="register-username-label"
@@ -629,7 +632,12 @@ const Register: React.FC = () => {
                           {serverUsernameError || (usernameShowError ? t('auth.fieldErrors.invalidUsername') : '')}
                         </Typography>
                       </FormControl>
-                      <FormControl className="register-email-control" size="sm" id="email" sx={{ width: '50%' }}>
+                      <FormControl
+                        className="register-email-control"
+                        size="sm"
+                        id="email"
+                        sx={{ width: { xs: '100%', sm: '50%' } }}
+                      >
                         <FormLabel className="register-email-label" id="email-label" sx={{ opacity: '0.5' }}>
                           {t('auth.email')}
                         </FormLabel>
@@ -812,7 +820,9 @@ const Register: React.FC = () => {
                   variant="outlined"
                   name="otc-code"
                   type="text"
-                  inputMode="numeric"
+                  // Joy's Input forwards autoComplete to the <input> but not inputMode (that lands on the
+                  // root div), so the numeric keypad hint has to go through the input slot.
+                  slotProps={{ input: { inputMode: 'numeric', pattern: '[0-9]*' } }}
                   placeholder="000000"
                   value={otcCode}
                   onChange={e => {

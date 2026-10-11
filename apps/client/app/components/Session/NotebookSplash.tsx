@@ -670,7 +670,7 @@ const NotebookSplash: React.FC = () => {
   }));
 
   const greeting = useMemo(() => {
-    return formatGreeting(getTimeOfDayGreeting(), currentUser?.name);
+    return formatGreeting(getTimeOfDayGreeting(), currentUser?.name, currentUser?.username);
   }, [currentUser]);
 
   // Handle card clicks - pre-fill the input

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Box, Button, IconButton, Sheet, Stack, Typography } from '@mui/joy';
+import { Box, Button, IconButton, Link, Sheet, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -9,6 +9,7 @@ import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import useChatActions from '@client/app/hooks/useChatActions';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { APP_NAME, getBrandName } from '@client/config/general';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCreditsLine } from './newUserWelcomeModel';
 
 const dismissKey = (userId: string) => `newUserWelcomeDismissed:${userId}`;
@@ -153,6 +154,16 @@ const NewUserWelcome = () => {
           </Button>
         ))}
       </Stack>
+      <Link
+        level="body-xs"
+        href={ExternalLinks.privacy}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-testid="new-user-welcome-privacy-link"
+        sx={{ alignSelf: 'flex-start', color: 'text.tertiary' }}
+      >
+        How your data is handled
+      </Link>
     </Sheet>
   );
 };

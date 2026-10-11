@@ -1,7 +1,7 @@
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CapabilityIndicators, MetricIndicators } from './modelIndicators';
@@ -32,5 +32,60 @@ describe('model indicator labels', () => {
       </CssVarsProvider>
     );
     expect(screen.queryByTestId('model-indicator-vision')).not.toBeInTheDocument();
+  });
+});
+
+// jsdom has no matchMedia; stub it so only the (hover: none) query matches, as on a phone.
+const stubNoHover = () => {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: query === '(hover: none)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  );
+};
+
+describe('model indicator tooltips on touch screens', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the tooltip on tap without letting the tap reach the card underneath', () => {
+    stubNoHover();
+    const onCardClick = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <div onClick={onCardClick}>
+          <CapabilityIndicators model={{ supportsVision: true } as ModelInfo} />
+        </div>
+      </CssVarsProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('model-indicator-vision'));
+
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Able to understand images');
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
+  it('leaves clicks alone where hover exists', () => {
+    const onCardClick = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <div onClick={onCardClick}>
+          <CapabilityIndicators model={{ supportsVision: true } as ModelInfo} />
+        </div>
+      </CssVarsProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('model-indicator-vision'));
+
+    expect(onCardClick).toHaveBeenCalledTimes(1);
   });
 });

@@ -158,7 +158,10 @@ describe.each([
       </TestWrapper>
     );
 
-    expect(screen.getByTestId('sidenav-item-menu-btn')).toBeInTheDocument();
+    const menuButton = screen.getByTestId('sidenav-item-menu-btn');
+    expect(menuButton).toBeInTheDocument();
+    // The list row's menu button is icon-only (the header row's carries the title as text).
+    if (location !== 'header') expect(menuButton).toHaveAttribute('aria-label', 'Chat options');
   });
 
   it('renders no menu and opens the session on click when read-only', () => {

@@ -105,6 +105,16 @@ describe('ProfilePage tab strip', () => {
     expect(screen.queryByTestId('published-tab')).not.toBeInTheDocument();
   });
 
+  // A phone hides each tab's text label and shows only the icon, so the tab needs its own name.
+  it('gives every tab and the close button an accessible name', () => {
+    renderPage();
+
+    for (const name of ['profile.title', 'community.title', 'settings.title', 'API Keys', 'Usage', 'Integrations']) {
+      expect(screen.getByRole('tab', { name })).toBeInTheDocument();
+    }
+    expect(screen.getByTestId('profile-close-btn')).toHaveAccessibleName('Close');
+  });
+
   it('shows the Security tab for admin users', () => {
     mockUser = { id: 'u1', name: 'Admin User', isAdmin: true };
     renderPage();

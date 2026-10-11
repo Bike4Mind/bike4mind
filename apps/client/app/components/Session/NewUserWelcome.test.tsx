@@ -101,4 +101,11 @@ describe('NewUserWelcome', () => {
     renderWelcome();
     expect(screen.queryByTestId('new-user-welcome')).not.toBeInTheDocument();
   });
+
+  it('links to the privacy page for data handling', () => {
+    renderWelcome();
+    const link = screen.getByTestId('new-user-welcome-privacy-link');
+    expect(link.getAttribute('href')).toMatch(/\/privacy$/);
+    expect(link.textContent).toBe('How your data is handled');
+  });
 });

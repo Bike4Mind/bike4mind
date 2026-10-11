@@ -97,12 +97,12 @@ describe('OrganizationUserCard monthly limit control', () => {
   });
 
   // The billing owner viewing their own row would satisfy canLeave, so this pins the `!isOwner` guard on it.
-  it('offers the owner no Leave Organization on their own row', async () => {
+  it('offers the owner no Leave Team on their own row', async () => {
     viewer.id = 'owner1';
     renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, [Permission.share]);
     openMenu();
     expect(await screen.findByText('Set monthly limit')).toBeTruthy();
-    expect(screen.queryByText('Leave Organization')).toBeNull();
+    expect(screen.queryByText('Leave Team')).toBeNull();
   });
 
   it('saves an override of 0 and can clear back to the org default', async () => {

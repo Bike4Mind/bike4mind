@@ -147,6 +147,31 @@ describe('replaceSignupGateHtml', () => {
   });
 });
 
+describe('buildSignupHref', () => {
+  it('points at the app register page with a redirectTo back to the artifact', async () => {
+    const { buildSignupHref } = await import('./shareFooter');
+    const href = new URL(buildSignupHref({ returnTo: '/p/r/abc', appOrigin: 'https://app.example.com' }));
+    expect(href.origin + href.pathname).toBe('https://app.example.com/register');
+    expect(href.searchParams.get('redirectTo')).toBe('/p/r/abc');
+  });
+
+  it('drops a returnTo that is not a same-origin relative path', async () => {
+    const { buildSignupHref } = await import('./shareFooter');
+    for (const returnTo of ['https://evil.example', '//evil.example', '/\\evil.example']) {
+      const href = buildSignupHref({ returnTo });
+      expect(href.startsWith('/register?')).toBe(true);
+      expect(href).not.toContain('redirectTo');
+    }
+  });
+
+  it('opens from the gate in a new tab so a sandboxed frame cannot trap it', async () => {
+    const { buildSignupGateHtml } = await import('./shareFooter');
+    const { html } = buildSignupGateHtml({ returnTo: '/p/r/abc' });
+    expect(html).toContain('href="/register?redirectTo=%2Fp%2Fr%2Fabc&amp;');
+    expect(html).toContain('target="_blank" rel="noopener"');
+  });
+});
+
 describe('shouldShowSignupGate', () => {
   it('shows only to an anonymous viewer of an open-public artifact', async () => {
     const { shouldShowSignupGate } = await import('./shareFooter');
