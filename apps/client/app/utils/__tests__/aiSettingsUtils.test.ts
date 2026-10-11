@@ -216,6 +216,22 @@ describe('getPriceTierTooltip', () => {
     expect(getPriceTierTooltip('Unknown')).toBe('Cost information unavailable');
   });
 
+  it('shows zero credits for a freeToRun model instead of falling back to the tier text', () => {
+    const local = { ...textModel({ 8192: { input: 0, output: 0 } }), freeToRun: true } as ModelInfo;
+    expect(getPriceTierTooltip('Low', local)).toBe('Lower cost model: 0 credits per 1M input tokens, 0 per 1M output');
+  });
+
+  it('falls back to the tier text when a rate is not a finite number', () => {
+    expect(getModelCreditRates(textModel({ 8192: { input: NaN, output: 1 / 1e6 } }))).toBeNull();
+    expect(getModelCreditRates(textModel({ 8192: { input: Infinity, output: 1 / 1e6 } }))).toBeNull();
+  });
+
+  it('pre-rounds to 4 decimals like getTextModelCreditsPer1M, so the tooltip and table agree', () => {
+    // 24.6849998 credits: 4 decimals first gives 24.685, which then shows as 24.69
+    const edge = textModel({ 8192: { input: 0.0123424999 / 1e6, output: 1 / 1e6 } });
+    expect(getModelCreditRates(edge)).toEqual({ input: '24.69', output: '2,000' });
+  });
+
   it('leaves image models on the tier text, since their pricing is not per token', () => {
     const image = { type: 'image', pricing: { 1: { input: 0.04, output: 0.04 } } } as unknown as ModelInfo;
     expect(getPriceTierTooltip('Medium', image)).toBe('Medium cost model');
