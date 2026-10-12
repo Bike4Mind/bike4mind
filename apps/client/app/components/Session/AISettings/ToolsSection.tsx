@@ -97,6 +97,13 @@ type McpServerOption = Pick<IMcpServerDocument, 'id' | 'enabled' | 'tools'> & { 
 type ToolGate = { reason: string } | null;
 const ToolGateContext = createContext<(toolId: B4MLLMTools) => ToolGate>(() => null);
 
+/**
+ * The session's `disabledTools`. Unlike a gate, a denied tool is hidden outright: the server
+ * never offers it whatever the toggle says, so showing the row would advertise a capability
+ * the session does not have.
+ */
+const DeniedToolsContext = createContext<ReadonlySet<string>>(new Set());
+
 interface ToolContainerProps extends PropsWithChildren {
   sx?: BoxProps['sx'];
   /**
@@ -104,13 +111,19 @@ interface ToolContainerProps extends PropsWithChildren {
    * key or by the current mode. When it is, the row is dimmed + made
    * non-interactive and wrapped in a tooltip explaining why. Omit for non-tool
    * rows (Thinking, Quest Master, MCP servers, etc.) which are never gated.
+   * A tool the session denies renders nothing at all.
    */
   toolId?: B4MLLMTools;
 }
 
 const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
   const getToolGate = useContext(ToolGateContext);
+  const deniedTools = useContext(DeniedToolsContext);
   const gate = toolId ? getToolGate(toolId) : null;
+
+  if (toolId && deniedTools.has(toolId)) {
+    return null;
+  }
 
   const content = (
     <Box
@@ -259,6 +272,8 @@ interface ToolsSectionProps {
    * Mobile takes this path regardless of the flag.
    */
   stackedHeader?: boolean;
+  /** The current session's `disabledTools`. Those rows are hidden and drop out of the tallies. */
+  disabledTools?: readonly string[];
 }
 
 const ToolsSection = ({
@@ -271,6 +286,7 @@ const ToolsSection = ({
   onClose,
   stackedHeader = false,
   readOnly = false,
+  disabledTools,
 }: ToolsSectionProps = {}) => {
   // Use props if provided, otherwise use context
   const contextTools = useLLM(state => state.tools);
@@ -320,6 +336,8 @@ const ToolsSection = ({
   const model = propModel ?? activeModel;
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = useMemo(() => modelInfoRepo?.find(m => m.id === model), [model, modelInfoRepo]);
+
+  const deniedTools = useMemo(() => new Set(disabledTools), [disabledTools]);
 
   const [deepResearchConfigOpen, setDeepResearchConfigOpen] = useState(false);
   const [imageGenModelSelectionOpen, setImageGenModelSelectionOpen] = useState(false);
@@ -539,7 +557,7 @@ const ToolsSection = ({
   // preference but renders off, so both the switches and the tallies below go
   // through this rather than the raw `tools`. Plain const, not a useMemo - the
   // early return above means hooks cannot be called from here down.
-  const displayTools = filterToolsForDisplay(tools, toolAvailability);
+  const displayTools = filterToolsForDisplay(tools, toolAvailability, disabledTools);
   // Enabled MCP servers (integrations) count toward the pinned tally like any other
   // tool. Agent-only ones (see AGENT_ONLY_MCP_SERVERS) are labeled per-row rather
   // than excluded here, so the number reflects everything the user has toggled on
@@ -558,6 +576,8 @@ const ToolsSection = ({
   // count a filtered-out tool in the Individual total.
   const funPinnedCount = displayTools.filter(t => FUN_NOVELTY_TOOLS.includes(t)).length;
   const individualToolsCount = displayTools.length - funPinnedCount;
+  // Every row under the header is hidden, so the header would be a toggle for an empty section.
+  const allFunToolsDenied = FUN_NOVELTY_TOOLS.every(tool => deniedTools.has(tool));
   const pinnedCount = individualToolsCount + enabledMcpServerCount + specialToolsCount;
 
   // One instance, placed differently per host: on the title row where the header stacks,
@@ -586,7 +606,7 @@ const ToolsSection = ({
   );
 
   return (
-    <>
+    <DeniedToolsContext.Provider value={deniedTools}>
       {/* Sticky header (dropdown only): title + help on the left, close on the right.
           Mirrors AgentsSection's header so the two dropdowns stay visually consistent.
           The -8px margins break out of the container's 8px padding (same convention as
@@ -757,6 +777,8 @@ const ToolsSection = ({
             gridTemplateColumns: `repeat(${columns}, 1fr)`,
             gap: columns,
             width: '100%',
+            // A denied tool's ToolContainer renders null; drop its empty Grid cell from the layout.
+            '& > :empty': { display: 'none' },
           }}
         >
           {/* Web Search */}
@@ -1487,7 +1509,7 @@ const ToolsSection = ({
             }
           }}
           sx={{
-            display: 'flex',
+            display: allFunToolsDenied ? 'none' : 'flex',
             alignItems: 'center',
             width: 'fit-content',
             cursor: 'pointer',
@@ -1526,6 +1548,7 @@ const ToolsSection = ({
               gridTemplateColumns: `repeat(${columns}, 1fr)`,
               gap: columns,
               width: '100%',
+              '& > :empty': { display: 'none' },
             }}
           >
             {/* Chess Engine */}
@@ -1699,7 +1722,7 @@ const ToolsSection = ({
         open={imageGenModelSelectionOpen}
         onClose={() => setImageGenModelSelectionOpen(false)}
       />
-    </>
+    </DeniedToolsContext.Provider>
   );
 };
 

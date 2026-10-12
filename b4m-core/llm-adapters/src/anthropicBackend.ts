@@ -398,7 +398,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_OPUS,
         type: 'text',
-        name: 'Claude 4 Opus',
+        name: 'Claude Opus 4',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 32000,
@@ -424,7 +424,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_1_OPUS,
         type: 'text',
-        name: 'Claude 4.1 Opus',
+        name: 'Claude Opus 4.1',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -446,7 +446,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_SONNET,
         type: 'text',
-        name: 'Claude 4 Sonnet',
+        name: 'Claude Sonnet 4',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -475,7 +475,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_SONNET,
         type: 'text',
-        name: 'Claude 4.5 Sonnet',
+        name: 'Claude Sonnet 4.5',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -500,7 +500,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_HAIKU,
         type: 'text',
-        name: 'Claude 4.5 Haiku',
+        name: 'Claude Haiku 4.5',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 64000,
@@ -521,7 +521,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_OPUS,
         type: 'text',
-        name: 'Claude 4.5 Opus',
+        name: 'Claude Opus 4.5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -544,7 +544,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_6_SONNET,
         type: 'text',
-        name: 'Claude 4.6 Sonnet',
+        name: 'Claude Sonnet 4.6',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -569,7 +569,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_SONNET,
         type: 'text',
-        name: 'Claude 5 Sonnet',
+        name: 'Claude Sonnet 5',
         backend: ModelBackend.Anthropic,
         contextWindow: 1_000_000,
         max_tokens: 128_000,
@@ -595,7 +595,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_6_OPUS,
         type: 'text',
-        name: 'Claude 4.6 Opus',
+        name: 'Claude Opus 4.6',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -618,7 +618,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_7_OPUS,
         type: 'text',
-        name: 'Claude 4.7 Opus',
+        name: 'Claude Opus 4.7',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -642,7 +642,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_8_OPUS,
         type: 'text',
-        name: 'Claude 4.8 Opus',
+        name: 'Claude Opus 4.8',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -695,7 +695,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_OPUS,
         type: 'text',
-        name: 'Claude 5 Opus',
+        name: 'Claude Opus 5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -718,7 +718,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_5_OPUS,
         type: 'text',
-        name: 'Claude 5.5 Opus',
+        name: 'Claude Opus 5.5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -741,7 +741,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_5_HAIKU,
         type: 'text',
-        name: 'Claude 5.5 Haiku',
+        name: 'Claude Haiku 5.5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -761,7 +761,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         releaseDate: '2026-10-07',
         description:
-          "Anthropic's fastest model. Claude 5.5 Haiku targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
+          "Anthropic's fastest model. Claude Haiku 5.5 targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
       },
     ];
   }

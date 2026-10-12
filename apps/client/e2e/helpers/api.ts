@@ -572,6 +572,28 @@ export async function apiUpdateDataLake(
   return response.status();
 }
 
+export interface ResearchConfigSummary {
+  id: string;
+  name: string;
+  model?: string;
+  maxResults: number;
+  maxProposals: number;
+  costCeilingMicroUsd: number;
+}
+
+export async function apiListResearchConfigs(
+  request: APIRequestContext,
+  token: string,
+  dataLakeId: string
+): Promise<ResearchConfigSummary[]> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/data-lakes/${dataLakeId}/research/configs`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok()) throw new Error(`List research configs failed: ${response.status()} ${await response.text()}`);
+  return ((await response.json()) as { data: ResearchConfigSummary[] }).data;
+}
+
 /**
  * Best-effort teardown for a created lake. Purges via the lifecycle: soft-delete (phase 1)
  * then irreversible cleanup (phase 2). The DELETE route only *archives* (reversible), which

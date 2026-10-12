@@ -10,10 +10,7 @@ import {
 } from '@mui/icons-material';
 import { CitableSource, CitableSourceType } from '@bike4mind/common';
 import { DATA_LAKE, PERSONAL_LIBRARY, SHARED_LIBRARY } from '@client/app/components/datalake/dataLakeBranding';
-import { useNavigate } from '@tanstack/react-router';
-import { useCitationInteraction } from './CitationInteractionContext';
-import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
-import { citedPassageOf } from '@client/app/components/Knowledge/citedPassage';
+import { useCitableSourceClick } from './useCitableSourceClick';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
 
 interface CitableSourcesProps {
@@ -153,7 +150,6 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
   onConflictTooltipChange,
 }) => {
   const [faviconError, setFaviconError] = useState(false);
-  const navigate = useNavigate();
   // Joy never fires onClose when an open tooltip unmounts (e.g. Show less after a tap on touch),
   // which would leave the partner outlined. The ref keeps the cleanup on the latest callback.
   const onConflictTooltipChangeRef = useRef(onConflictTooltipChange);
@@ -161,14 +157,7 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
     onConflictTooltipChangeRef.current = onConflictTooltipChange;
   });
   useEffect(() => () => onConflictTooltipChangeRef.current(false), []);
-  // Opt-in host overrides: when a surface provides onCitationClick (any source) or
-  // onInternalCitationClick (relative URLs only), the click is handled in-surface instead of
-  // navigating. onCitationClick wins when both are set. Default (no provider) keeps the existing
-  // navigation behavior.
-  const { onCitationClick, onInternalCitationClick } = useCitationInteraction();
-
-  // Detect internal (relative) vs external URLs
-  const isInternal = !!source.url && source.url.startsWith('/');
+  const { isInternal, renderAsButton, onClick: handleClick } = useCitableSourceClick(source);
 
   // Extract hostname for display if URL exists
   let hostname = '';
@@ -188,34 +177,6 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
       hostname = source.url || '';
     }
   }
-
-  // Host override wins for any clickable source (internal or external) - lets a
-  // surface present its own document view instead of navigating away.
-  const handleHostClick = onCitationClick
-    ? (e: React.MouseEvent) => {
-        e.preventDefault();
-        onCitationClick(source);
-      }
-    : undefined;
-
-  const navigateToInternal = () => {
-    // Hand the reader's destination the passage this chip cited, so the viewer can mark it
-    // instead of dropping them at the top of the document (#3038). Written on EVERY internal
-    // click, clearing on a chip that carries no passage: a leftover anchor from the previous
-    // citation would otherwise mark a stale extent in the newly-opened file.
-    setSessionLayout({ citedPassage: citedPassageOf(source) });
-    const url = new URL(source.url!, window.location.origin);
-    navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
-  };
-
-  const handleInternalClick = () => {
-    if (!onInternalCitationClick?.(source)) navigateToInternal();
-  };
-
-  const handleClick = handleHostClick ?? (isInternal ? handleInternalClick : undefined);
-
-  // When the host handles clicks, render as a button (no external navigation).
-  const renderAsButton = isInternal || !!handleHostClick;
 
   // For web_url type, show favicon; for other types, show type icon
   const showFavicon = source.type === 'web_url' && !isInternal && faviconUrl && !faviconError;

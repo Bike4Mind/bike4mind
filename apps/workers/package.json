@@ -31,6 +31,7 @@
     "archiver": "^7.0.0",
     "axios": "1.20.0",
     "dayjs": "^1.11.23",
+    "express": "^4.19.2",
     "mailparser": "^3.9.26",
     "mime-types": "^3.0.2",
     "mongodb": "^6.20.0",
@@ -38,7 +39,7 @@
     "p-limit": "^7.3.2",
     "sst": "4.17.1",
     "uuid": "^14.0.2",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@bike4mind/typescript-config": "workspace:*",
@@ -46,11 +47,12 @@
     "@octokit/rest": "^22.0.1",
     "@types/archiver": "^7.0.0",
     "@types/aws-lambda": "^8.10.162",
+    "@types/express": "^4.17.17",
     "@types/mailparser": "^3.4.6",
     "@types/mime-types": "^3.0.1",
     "@types/node": "^24.0.0",
     "@types/yauzl": "^3.4.0",
-    "mongodb-memory-server": "^11.2.0",
+    "mongodb-memory-server": "^11.3.0",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^6.1.1",
