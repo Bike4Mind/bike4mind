@@ -19,6 +19,14 @@ describe('estimateElevenLabsConversationalCost', () => {
     expect(transport.estimateCost(300)).toEqual({ voiceMinutesUpperBound: 5, creditsToReserve: usdToCredits(1) });
   });
 
+  it('shows a per-minute price that is exactly a fifth of the five-minute hold at the default rate', () => {
+    // The start control displays the 1-minute figure and the server holds the 5-minute one; each is
+    // rounded up separately, so a repricing that breaks this divisibility shows up here.
+    expect(estimateElevenLabsConversationalCost(60).creditsToReserve * 5).toBe(
+      estimateElevenLabsConversationalCost(300).creditsToReserve
+    );
+  });
+
   it('is what the transport reserves, at the default and at an overridden rate', () => {
     const transport = createElevenLabsConversationalTransport({ apiKey: 'k', agentId: 'a' });
     expect(transport.estimateCost(300)).toEqual(estimateElevenLabsConversationalCost(300));
