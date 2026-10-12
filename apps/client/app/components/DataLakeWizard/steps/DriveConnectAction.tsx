@@ -9,9 +9,10 @@ import {
   useLakeDriveCanManage,
   useDisconnectLakeDrive,
 } from '@client/app/hooks/data/googleDrive';
-import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
+import { describeDriveConnection, describeDriveSyncSchedule } from '@client/app/hooks/data/driveConnectionDisplay';
 import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
 import { getServerErrorField } from '@client/app/utils/error';
+import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
 
 /**
@@ -82,6 +83,16 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
             Re-sync
           </Button>
         )}
+        <Typography
+          level="body-xs"
+          sx={{ color: 'text.tertiary', flexBasis: '100%' }}
+          data-testid="drive-connection-last-synced"
+        >
+          {connection.lastPolledAt
+            ? `Last synced ${relativeTimeFormat(new Date(connection.lastPolledAt))}`
+            : 'Not synced yet'}
+          {` \u00b7 ${describeDriveSyncSchedule(connection.syncSchedule)}`}
+        </Typography>
         {connection.disconnecting && (
           <Typography level="body-xs" data-testid="drive-disconnecting-note" sx={{ flexBasis: '100%' }}>
             {connection.fileCount === 0

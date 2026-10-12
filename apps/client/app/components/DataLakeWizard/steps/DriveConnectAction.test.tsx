@@ -52,6 +52,8 @@ const connected = (over: Partial<LakeDriveConnection> = {}): LakeDriveConnection
   lastError: null,
   lastUsedAt: null,
   connectedAt: null,
+  lastPolledAt: null,
+  syncSchedule: { mode: 'manual' },
   fileCount: 3,
   disconnecting: false,
   disconnectStalled: false,
@@ -122,6 +124,35 @@ describe('DriveConnectAction', () => {
     wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('drive-connection-status')).toHaveTextContent('Connected');
     expect(screen.queryByTestId('drive-connection-last-error')).toBeNull();
+  });
+
+  it('shows when the lake last synced and that the poll keeps it current', () => {
+    h.connection.current = connected({
+      lastPolledAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      // lastUsedAt is the last Drive API call, which must not be passed off as the last sync.
+      lastUsedAt: new Date().toISOString(),
+      syncSchedule: { mode: 'automatic', intervalMs: 6 * 60 * 60 * 1000 },
+    });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    const line = screen.getByTestId('drive-connection-last-synced');
+    expect(line).toHaveTextContent(/Last synced 2 hours ago/);
+    expect(line).toHaveTextContent('Syncs automatically every 6 hours');
+  });
+
+  it('says Not synced yet and manual-only before any sync run has ended with the poll off', () => {
+    h.connection.current = connected({ lastPolledAt: null, syncSchedule: { mode: 'manual' } });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    const line = screen.getByTestId('drive-connection-last-synced');
+    expect(line).toHaveTextContent('Not synced yet');
+    expect(line).toHaveTextContent('Syncs only on a manual Re-sync');
+  });
+
+  it('reports the automatic sync as paused for a connection the poll skips', () => {
+    h.connection.current = connected({ status: 'needs_reconnect', syncSchedule: { mode: 'paused' } });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connection-last-synced')).toHaveTextContent('Automatic sync paused');
   });
 
   it('does NOT report a sync that stopped short as Connected (#2394)', () => {

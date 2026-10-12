@@ -102,3 +102,25 @@ export function describeDriveConnection(connection: DescribableDriveConnection):
     color: badge.color,
   };
 }
+
+/**
+ * Whether the scheduled re-sync poll keeps this connection current. Mirrors the server's
+ * syncScheduleOf (pages/api/data-lakes/[id]/drive-connection.ts), which derives it from the poll's
+ * admin flags and the connection's own state.
+ */
+export type DriveSyncSchedule = { mode: 'automatic'; intervalMs: number } | { mode: 'paused' } | { mode: 'manual' };
+
+const HOUR_MS = 60 * 60 * 1000;
+
+export function describeDriveSyncSchedule(schedule: DriveSyncSchedule): string {
+  switch (schedule.mode) {
+    case 'automatic': {
+      const hours = Math.max(1, Math.round(schedule.intervalMs / HOUR_MS));
+      return `Syncs automatically every ${hours === 1 ? 'hour' : `${hours} hours`}`;
+    }
+    case 'paused':
+      return 'Automatic sync paused';
+    case 'manual':
+      return 'Syncs only on a manual Re-sync';
+  }
+}
