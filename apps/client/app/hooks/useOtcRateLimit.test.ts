@@ -29,12 +29,22 @@ describe('useOtcRateLimit', () => {
     expect(result.current.secondsLeft).toBe(0);
   });
 
-  it.each([undefined, 0, -5, Number.NaN])('falls back to 60s when Retry-After is %s', retryAfterSeconds => {
+  it.each([undefined, -5, Number.NaN])('falls back to 60s when Retry-After is %s', retryAfterSeconds => {
     const { result } = renderHook(() => useOtcRateLimit());
     act(() => {
       result.current.handleError({ code: 'CLIENT_ERROR_429', retryAfterSeconds });
     });
     expect(result.current.secondsLeft).toBe(60);
+  });
+
+  it('does not lock when Retry-After is 0 (server says retry now)', () => {
+    const { result } = renderHook(() => useOtcRateLimit());
+    let handled = true;
+    act(() => {
+      handled = result.current.handleError({ code: 'CLIENT_ERROR_429', retryAfterSeconds: 0 });
+    });
+    expect(handled).toBe(false);
+    expect(result.current.secondsLeft).toBe(0);
   });
 
   it('caps an absurd Retry-After at one hour', () => {

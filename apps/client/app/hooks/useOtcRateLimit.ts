@@ -10,7 +10,7 @@ export interface OtcRateLimit {
   secondsLeft: number;
   /** Whole wait announced when the limit was hit; stays fixed so a live region is not re-read every tick. */
   initialSeconds: number;
-  /** Returns true when the error was a 429 and the countdown started. */
+  /** Returns true when the error was a 429 with a wait and the countdown started. */
   handleError: (error: unknown) => boolean;
   clear: () => void;
 }
@@ -54,6 +54,8 @@ export function useOtcRateLimit(): OtcRateLimit {
     (error: unknown): boolean => {
       const { code, retryAfterSeconds } = (error ?? {}) as OtcRateLimitError;
       if (code !== 'CLIENT_ERROR_429') return false;
+      // Retry-After: 0 means "retry now" (lost a concurrent-send race), so no lockout; the caller shows the server message.
+      if (retryAfterSeconds === 0) return false;
       const wait =
         typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0
           ? Math.min(Math.ceil(retryAfterSeconds), MAX_WAIT_SECONDS)

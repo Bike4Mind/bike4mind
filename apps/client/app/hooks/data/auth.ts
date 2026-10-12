@@ -91,9 +91,11 @@ export function useSendOTC() {
   });
 }
 
+// 0 is kept distinct from a missing header: the server sends it when a concurrent send superseded this one.
 function parseRetryAfter(header: unknown): number | undefined {
+  if (header === undefined || header === null || header === '') return undefined;
   const seconds = Number(header);
-  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
 }
 
 export function useVerifyOTC() {
