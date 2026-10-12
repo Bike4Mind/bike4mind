@@ -954,6 +954,9 @@ importers:
       dayjs:
         specifier: ^1.11.23
         version: 1.11.23
+      express:
+        specifier: ^4.19.2
+        version: 4.22.0
       mailparser:
         specifier: ^3.9.26
         version: 3.9.26
@@ -994,6 +997,9 @@ importers:
       '@types/aws-lambda':
         specifier: ^8.10.162
         version: 8.10.162
+      '@types/express':
+        specifier: ^4.17.17
+        version: 4.17.23
       '@types/mailparser':
         specifier: ^3.4.6
         version: 3.4.6

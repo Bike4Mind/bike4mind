@@ -6,7 +6,7 @@ import {
   ContinuationSchema,
   StartExecutionSchema,
   TaggedQueueMessageSchema,
-} from '../queueHandlers/agentExecutor.schemas';
+} from '@server/queueHandlers/agentExecutor.schemas';
 
 export const VISIBILITY_SECONDS = 960;
 export const EXECUTION_BUDGET_MS = 780_000;
