@@ -269,6 +269,35 @@ describe('baked gate detection', () => {
     expect(hasSignupGateHtml(page)).toBe(true);
     expect(stripSignupGateHtml(page)).toBe('<html><body><p>content</p></body></html>');
   });
+
+  // A full-HTML artifact that quotes the whole gate as the very last thing in its body is only
+  // protected by the share footer the renderer injects after it, so this pins both outcomes.
+  describe('a full-HTML artifact whose body ends with a quoted gate', () => {
+    async function renderAndStrip(env: Record<string, string>) {
+      vi.resetModules();
+      vi.unstubAllEnvs();
+      for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+      const { renderArtifactIndexHtml } = await import('@server/services/publish/renderArtifactHtml');
+      const { buildSignupGateHtml, stripSignupGateHtml } = await import('./shareFooter');
+      const page = renderArtifactIndexHtml(
+        'html',
+        `<html><body><p>docs</p>${buildSignupGateHtml().html}</body></html>`,
+        'T'
+      );
+      return { page, stripped: stripSignupGateHtml(page) };
+    }
+
+    it('keeps the quoted gate while the renderer injects the share footer after it', async () => {
+      const { page, stripped } = await renderAndStrip({ NEXT_PUBLIC_WEBSITE_URL: 'https://acme.example' });
+      expect(stripped).toBe(page);
+    });
+
+    it('loses the quoted gate when no marketing URL is configured (accepted limitation)', async () => {
+      const { page, stripped } = await renderAndStrip({ NEXT_PUBLIC_WEBSITE_URL: '' });
+      expect(stripped).not.toBe(page);
+      expect(stripped).toContain('<p>docs</p>');
+    });
+  });
 });
 
 // The brand card exactly as pages published before stripShareFooterCtaBeforeGate existed carry

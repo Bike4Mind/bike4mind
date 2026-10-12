@@ -254,6 +254,10 @@ function matchingDivCloseEnd(html: string, openAt: number): number {
  * checkbox and one balanced panel div, followed by nothing but the document's final
  * `</body></html>`. Matching the marker anywhere would let an artifact whose own content
  * contains the gate markup lose everything after it on serve.
+ *
+ * Known limit: a full-HTML artifact that ends its body with an exact copy of the gate is only
+ * rejected because renderArtifactIndexHtml injects the share footer after it; with no marketing
+ * URL configured nothing follows it and it is treated as baked.
  */
 function findBakedSignupGate(html: string): { start: number; end: number } | null {
   const end = html.lastIndexOf('</body>');
