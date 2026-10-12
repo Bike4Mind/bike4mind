@@ -92,14 +92,19 @@ export const resolveDecisionInput = async (
   caps: DecisionModelCapabilities
 ): Promise<ResolvedDecisionInput> => {
   if (typeof input === 'string') return input;
-  return Promise.all(
-    input.map(async (part, index): Promise<ResolvedDecisionInputPart> => {
-      if (part.type !== 'image') return part;
-      const param = `input[${index}]`;
-      const image = part.file_id
-        ? await loadFileImage(req, part.file_id, `${param}.file_id`)
-        : decodeDataUrl(part.image_url ?? '');
-      return { type: 'image', dataUrl: await toDownscaledDataUrl(image, caps, param, req.logger) };
-    })
-  );
+  // Sequential on purpose: MAX_IMAGE_PIXELS in imageResize budgets ONE resident bitmap (~240MB). Decoding the
+  // `maxImages` parts in parallel holds them all at once and runs the 2048 MB web function out of memory.
+  const resolved: ResolvedDecisionInputPart[] = [];
+  for (const [index, part] of input.entries()) {
+    if (part.type !== 'image') {
+      resolved.push(part);
+      continue;
+    }
+    const param = `input[${index}]`;
+    const image = part.file_id
+      ? await loadFileImage(req, part.file_id, `${param}.file_id`)
+      : decodeDataUrl(part.image_url ?? '');
+    resolved.push({ type: 'image', dataUrl: await toDownscaledDataUrl(image, caps, param, req.logger) });
+  }
+  return resolved;
 };

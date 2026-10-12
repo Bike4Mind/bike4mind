@@ -3,8 +3,9 @@ import { CreditHolderType, insufficientCreditsError, isZodError } from '@bike4mi
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { resolveKey, registeredModels, providerSpy, loadFile, download, recordUsage, reserve, refund, settle } =
+const { resolveKey, registeredModels, providerSpy, loadFile, download, recordUsage, reserve, refund, settle, resize } =
   vi.hoisted(() => ({
+    resize: vi.fn(),
     resolveKey: vi.fn(),
     registeredModels: { value: ['test-decisions', 'gpt-6-luna'] as string[] },
     providerSpy: vi.fn(),
@@ -78,7 +79,9 @@ vi.mock('@server/decisions/providers', async () => {
 });
 vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: (...a: unknown[]) => loadFile(...a) }));
 // Real resizing needs a decodable image; the dimension gate has its own tests.
-vi.mock('@bike4mind/utils/imageResize', () => ({ ensureImageWithinDimensionLimit: async (bytes: Buffer) => bytes }));
+vi.mock('@bike4mind/utils/imageResize', () => ({
+  ensureImageWithinDimensionLimit: (...a: unknown[]) => resize(...a),
+}));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ download: (...a: unknown[]) => download(...a) }),
 }));
@@ -126,6 +129,7 @@ describe('POST /api/v1/decisions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     registeredModels.value = ['test-decisions', 'gpt-6-luna'];
+    resize.mockImplementation(async (bytes: Buffer) => bytes);
     resolveKey.mockResolvedValue('test-key');
     recordUsage.mockResolvedValue(undefined);
     settle.mockImplementation(async (credits: number) => credits);
@@ -187,6 +191,22 @@ describe('POST /api/v1/decisions', () => {
 
   it('rejects an http(s) image URL at the schema', async () => {
     expect((await run({ input: [{ type: 'image', image_url: 'https://example.com/a.png' }] })).status).toBe(422);
+  });
+
+  it('decodes images one at a time, so a request never holds more than one bitmap', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    resize.mockImplementation(async (bytes: Buffer) => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      inFlight--;
+      return bytes;
+    });
+    const image = { type: 'image', image_url: `data:image/png;base64,${PNG_BYTES.toString('base64')}` };
+    const { status } = await run({ input: [image, { type: 'text', text: 'between' }, image, image] });
+    expect(status).toBe(200);
+    expect(resize).toHaveBeenCalledTimes(3);
+    expect(peak).toBe(1);
   });
 
   it('answers an id outside the catalog with 422 model_unavailable', async () => {
