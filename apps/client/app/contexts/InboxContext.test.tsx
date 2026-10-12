@@ -6,13 +6,18 @@ import { InboxProvider } from './InboxContext';
 
 type Callback = (type: string, data: unknown) => void;
 
-const mocks = vi.hoisted(() => ({
-  invalidateQueries: vi.fn(),
-  callbacks: {} as Record<string, Callback>,
-}));
+const mocks = vi.hoisted(() => {
+  const invalidateQueries = vi.fn();
+  return {
+    invalidateQueries,
+    // Stable across renders like the real QueryClient; a fresh object per call would rebuild the debounce.
+    queryClient: { invalidateQueries },
+    callbacks: {} as Record<string, Callback>,
+  };
+});
 
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ invalidateQueries: mocks.invalidateQueries }),
+  useQueryClient: () => mocks.queryClient,
 }));
 vi.mock('../components/inbox/Modal', () => ({ default: () => null }));
 vi.mock('./UserContext', () => ({
@@ -61,6 +66,40 @@ describe('InboxProvider invites subscription', () => {
     });
 
     expect(mocks.invalidateQueries).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps one debounce across re-renders, so a burst split by a re-render still gives one refetch', () => {
+    const { rerender } = render(<InboxProvider>{null}</InboxProvider>);
+    const firstCallback = mocks.callbacks.invites;
+
+    act(() => {
+      for (let i = 0; i < 12; i++) firstCallback('insert', { id: `invite-${i}` });
+    });
+    rerender(<InboxProvider>{null}</InboxProvider>);
+    const latestCallback = mocks.callbacks.invites;
+    act(() => {
+      for (let i = 12; i < 25; i++) latestCallback('insert', { id: `invite-${i}` });
+    });
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(latestCallback).toBe(firstCallback);
+    expect(mocks.invalidateQueries).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches while events are still arriving rather than waiting for the stream to go quiet', () => {
+    render(<InboxProvider>{null}</InboxProvider>);
+
+    // One event every 200 ms never lets the 250 ms trailing edge fire; only maxWait can.
+    for (let elapsed = 0; elapsed < 1500; elapsed += 200) {
+      act(() => {
+        mocks.callbacks.invites('insert', { id: `invite-${elapsed}` });
+        vi.advanceTimersByTime(200);
+      });
+    }
+
+    expect(mocks.invalidateQueries).toHaveBeenCalledTimes(1);
   });
 
   it('drops a pending refetch on unmount', () => {

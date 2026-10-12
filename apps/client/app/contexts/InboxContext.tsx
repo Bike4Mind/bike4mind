@@ -8,6 +8,9 @@ import { useUser } from './UserContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { updateAllQueryData, useSubscribeCollection } from '../utils/react-query';
 
+const INVITE_REFETCH_DEBOUNCE_MS = 250;
+const INVITE_REFETCH_MAX_WAIT_MS = 1000;
+
 interface InboxContextProps {
   inboxIndex: number;
   open: boolean;
@@ -49,8 +52,12 @@ export const InboxProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // Refetch rather than write the event's document: the subscription withholds `recipients` from
   // non-admins (server/websocket/dataSubscribeFieldLimits.ts), and the inbox filters on it.
   // Debounced because each (re)subscribe replays one event per invite in scope; a burst gets one refetch.
+  // maxWait keeps a steady stream of events from deferring the refetch indefinitely.
   const inviteCallback = useMemo(
-    () => debounce(() => queryClient.invalidateQueries({ queryKey: ['invites', 'inbox'] }), 250),
+    () =>
+      debounce(() => queryClient.invalidateQueries({ queryKey: ['invites', 'inbox'] }), INVITE_REFETCH_DEBOUNCE_MS, {
+        maxWait: INVITE_REFETCH_MAX_WAIT_MS,
+      }),
     [queryClient]
   );
 
