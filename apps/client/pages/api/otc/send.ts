@@ -2,32 +2,25 @@ import { pendingOtcTokenRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import {
+  OTC_LIMITS,
+  emailSubject,
+  ipSubject,
+  otcCounterLimit,
+  otcDistinctEmailsPerIpLimit,
+} from '@server/utils/otcLimits';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl } from '@server/utils/mailer/emailHelpers';
 import { Config, isE2EEnabled } from '@server/utils/config';
 import jwt from 'jsonwebtoken';
 
-/**
- * Minimum time between OTC emails to the same recipient. The per-IP rate limit
- * below caps a single IP, but without a per-recipient cap a rotating-IP botnet
- * could spam any inbox with sign-in codes. This cooldown is keyed on the
- * PendingOtcToken record (written for every /send regardless of account
- * existence), so it throttles uniformly and never reveals whether an account exists.
- */
-const OTC_SEND_COOLDOWN_MS = 30 * 1000;
-
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(
-    rateLimit({
-      // E2E (non-prod only - isE2EEnabled is hard-false on production) draws all sends
-      // from a single shared CI IP, so the per-IP cap is lifted there to let every
-      // OTC-requesting spec run to completion instead of racing a 429.
-      limit: () => (isE2EEnabled() ? Infinity : 5),
-      windowMs: 15 * 60 * 1000, // 5 sends per 15 min per IP
-    })
-  )
+  .use(otcCounterLimit({ bucket: 'send-ip-daily', ...OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'send-ip-total', ...OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'send-email', ...OTC_LIMITS.send.perEmail, subject: emailSubject }))
+  .use(otcCounterLimit({ bucket: 'send-email-daily', ...OTC_LIMITS.send.perEmailDaily, subject: emailSubject }))
+  .use(otcDistinctEmailsPerIpLimit())
   .post(async (req, res) => {
     const { email } = req.body;
 
@@ -43,7 +36,7 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({ error: 'Invalid email address' });
     }
 
-    // Atomic per-recipient cooldown (enumeration-safe - see OTC_SEND_COOLDOWN_MS).
+    // Atomic per-recipient cooldown (keyed on PendingOtcToken, written for every send, so it never reveals whether an account exists).
     // tryReserveSlot atomically claims a reservation slot for this email; if the
     // cooldown is still active, or a concurrent request already claimed it, it
     // returns allowed:false. This replaces the previous check-then-act (non-atomic)
@@ -53,7 +46,7 @@ const handler = baseApi({ auth: false })
     // reservation is confirmed below with confirmReservation, which still detects
     // (and rejects) a genuinely concurrent resend that would otherwise clobber
     // this one's nonce.
-    const cooldownMs = isE2EEnabled() ? 0 : OTC_SEND_COOLDOWN_MS;
+    const cooldownMs = isE2EEnabled() ? 0 : OTC_LIMITS.send.cooldownMs;
     const reservation = await pendingOtcTokenRepository.tryReserveSlot(normalizedEmail, cooldownMs);
     if (!reservation.allowed) {
       res.setHeader('Retry-After', String(reservation.retryAfterSeconds));

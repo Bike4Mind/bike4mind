@@ -26,7 +26,7 @@ import {
 } from '@server/organizations/notifySeatCeilingRaised';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { OTC_LIMITS, emailSubject, ipSubject, otcCounterLimit } from '@server/utils/otcLimits';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
 import { setRefreshCookie } from '@server/auth/refreshCookie';
@@ -54,12 +54,9 @@ const MAX_PENDING_OTC_ATTEMPTS = 5;
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(
-    rateLimit({
-      limit: 10,
-      windowMs: 15 * 60 * 1000,
-    })
-  )
+  .use(otcCounterLimit({ bucket: 'verify-ip', ...OTC_LIMITS.verify.perIp, subject: ipSubject }))
+  // Brute-force bound per address across every token; the per-token attempt cap alone resets with each new code.
+  .use(otcCounterLimit({ bucket: 'verify-email', ...OTC_LIMITS.verify.perEmail, subject: emailSubject }))
   .post(async (req, res) => {
     const { email, code, username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
 
