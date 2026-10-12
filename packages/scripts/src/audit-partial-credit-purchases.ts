@@ -8,17 +8,25 @@
  * the ungranted purchases Stripe backs. Refunded, disputed and unverifiable purchases are only
  * reported: resolve those by hand. Re-runs are safe; a repaired row is marked and skipped.
  *
+ * Run it only once the transactional purchase grant is live on the stage: against the old
+ * two-write grant, a webhook caught between its row and its increment reads as ungranted, and
+ * --apply would credit it alongside the increment that is about to land.
+ *
  * Flags:
+ *   --stamp-since <iso>    required: when the reliable purchase stamp reached this stage (deploy
+ *                          time of the change behind RELIABLE_PURCHASE_STAMP_MERGED_AT)
  *   --apply                write the repairs
- *   --report <path>        write every audited purchase to a JSON file
- *   --stamp-since <iso>    override the lastCreditsPurchasedAt cutoff derived from the data
+ *   --report <path>        write every audited purchase to a JSON file. It holds user and payment
+ *                          intent ids, so keep it outside the repo.
  *
  * Usage (inside an SST shell so the Mongo URI and Stripe key resolve):
- *   npx sst shell --stage <stage> pnpm --filter @bike4mind/scripts audit:partial-credit-purchases --report audit.json
- *   npx sst shell --stage <stage> pnpm --filter @bike4mind/scripts audit:partial-credit-purchases --apply --report audit.json
+ *   npx sst shell --stage <stage> pnpm --filter @bike4mind/scripts audit:partial-credit-purchases \
+ *     --stamp-since <iso> --report /tmp/audit.json [--apply]
  */
 
 import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { parseArgs } from 'node:util';
 import { connectDB } from '@bike4mind/database';
 import { Resource } from 'sst';
 import Stripe from 'stripe';
@@ -30,20 +38,23 @@ import {
   type PurchaseVerdict,
 } from './auditPartialCreditPurchases';
 
-function flagValue(name: string): string | undefined {
-  const index = process.argv.indexOf(name);
-  if (index === -1) return undefined;
-  const value = process.argv[index + 1];
-  if (!value || value.startsWith('--')) throw new Error(`${name} needs a value`);
-  return value;
-}
-
-function parseStampSince(): Date | undefined {
-  const raw = flagValue('--stamp-since');
-  if (raw === undefined) return undefined;
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) throw new Error(`--stamp-since is not a date: ${raw}`);
-  return date;
+// Strict: an unknown or malformed flag (say, --apply=true) fails instead of running as something else.
+function parseFlags() {
+  const { values } = parseArgs({
+    options: {
+      apply: { type: 'boolean', default: false },
+      report: { type: 'string' },
+      'stamp-since': { type: 'string' },
+    },
+    strict: true,
+  });
+  const rawStampSince = values['stamp-since'];
+  if (rawStampSince === undefined) throw new Error('--stamp-since <iso> is required');
+  const stampSince = new Date(rawStampSince);
+  if (Number.isNaN(stampSince.getTime())) throw new Error(`--stamp-since is not a date: ${rawStampSince}`);
+  // pnpm runs the script from the package directory; resolve against where the operator stood.
+  const reportPath = values.report && resolve(process.env.INIT_CWD ?? process.cwd(), values.report);
+  return { apply: values.apply, reportPath, stampSince };
 }
 
 function describe(purchase: AuditedPurchase): string {
@@ -56,9 +67,7 @@ function describe(purchase: AuditedPurchase): string {
 }
 
 async function main() {
-  const apply = process.argv.includes('--apply');
-  const reportPath = flagValue('--report');
-  const stampSince = parseStampSince();
+  const { apply, reportPath, stampSince } = parseFlags();
   const stage = Resource.App.stage;
 
   await connectDB((process.env.MONGODB_URI ?? Config.MONGODB_URI).replace('%STAGE%', stage));

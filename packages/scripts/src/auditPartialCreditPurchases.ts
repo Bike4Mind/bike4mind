@@ -15,6 +15,12 @@ import type Stripe from 'stripe';
  *   row means nothing incremented after it: proof of no grant. Newer proves nothing, because a
  *   later purchase or an admin credit raise (userService/adminUpdate.ts) also moves it.
  * Everything else is unverifiable and is listed for manual review, never repaired.
+ *
+ * The stamp only witnesses rows written once the purchase path set it reliably: the webhook did
+ * not stamp at all until it moved onto addCredits, and a credit-free admin save could revert the
+ * stamp until userService/adminUpdate.ts stopped writing it back. Admin raises stamped all along,
+ * so the earliest stamp in the data says nothing about purchases, and the cutoff must be the time
+ * that fix reached the stage, given by the operator and never earlier than its merge.
  */
 
 export type PurchaseVerdict = 'granted' | 'ungranted' | 'unverifiable' | 'backfilled';
@@ -24,7 +30,7 @@ export type PurchaseEvidence = {
   backfilledAt: Date | null;
   hasLot: boolean;
   lastCreditsPurchasedAt: Date | null;
-  /** From when this stage is known to write lastCreditsPurchasedAt; null when it never has. */
+  /** From when lastCreditsPurchasedAt is a reliable witness; null when it is none for this owner. */
   stampSince: Date | null;
 };
 
@@ -79,15 +85,17 @@ export type AuditOptions = {
   apply: boolean;
   /** Resolves to describePaymentIntentProblem's answer for the intent. */
   checkPaymentIntent: (paymentIntentId: string, credits: number) => Promise<string | null>;
-  /** Overrides the stamp cutoff derived from the data. */
-  stampSince?: Date;
+  /** When the reliable purchase stamp reached this stage; see the header. */
+  stampSince: Date;
   log?: (line: string) => void;
 };
 
 export type AuditResult = {
-  stampSince: Date | null;
   purchases: AuditedPurchase[];
 };
+
+/** Merge time of the adminUpdate.ts fix that made the purchase stamp trustworthy. */
+export const RELIABLE_PURCHASE_STAMP_MERGED_AT = new Date('2026-09-22T07:28:21Z');
 
 type PurchaseRow = {
   _id: { toString(): string };
@@ -98,19 +106,6 @@ type PurchaseRow = {
   createdAt: Date;
   metadata?: { balanceBackfilledAt?: Date } | null;
 };
-
-/**
- * The earliest surviving stamp is a moment by which the stage was already writing it. Later
- * purchases overwrite older stamps, so this can only land after the real rollout, which errs
- * toward "unverifiable" and never toward a false "ungranted".
- */
-async function deriveStampSince(): Promise<Date | null> {
-  const earliest = await User.findOne({ lastCreditsPurchasedAt: { $ne: null } })
-    .sort({ lastCreditsPurchasedAt: 1 })
-    .select({ lastCreditsPurchasedAt: 1 })
-    .lean();
-  return earliest?.lastCreditsPurchasedAt ?? null;
-}
 
 /**
  * Credits the balance and marks the row in one transaction, so a re-run (or a crash between the
@@ -155,8 +150,14 @@ async function repairPurchase(row: PurchaseRow): Promise<boolean> {
 
 export async function auditPartialCreditPurchases(options: AuditOptions): Promise<AuditResult> {
   const log = options.log ?? console.log;
-  const stampSince = options.stampSince ?? (await deriveStampSince());
-  log(`Purchase stamp cutoff: ${stampSince?.toISOString() ?? 'none (stage never wrote one)'}`);
+  const { stampSince } = options;
+  if (stampSince < RELIABLE_PURCHASE_STAMP_MERGED_AT) {
+    throw new Error(
+      `Stamp cutoff ${stampSince.toISOString()} predates the reliable purchase stamp ` +
+        `(${RELIABLE_PURCHASE_STAMP_MERGED_AT.toISOString()}); rows before it would read as ungranted.`
+    );
+  }
+  log(`Purchase stamp cutoff: ${stampSince.toISOString()}`);
 
   const stampByOwner = new Map<string, Date | null>();
   const stampOf = async (ownerId: string) => {
@@ -208,5 +209,5 @@ export async function auditPartialCreditPurchases(options: AuditOptions): Promis
     purchases.push(purchase);
   }
 
-  return { stampSince, purchases };
+  return { purchases };
 }

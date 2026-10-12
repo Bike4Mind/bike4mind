@@ -7,13 +7,14 @@ import {
   auditPartialCreditPurchases,
   classifyPurchase,
   describePaymentIntentProblem,
+  RELIABLE_PURCHASE_STAMP_MERGED_AT,
   type PurchaseEvidence,
 } from './auditPartialCreditPurchases';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-const STAMP_SINCE = new Date('2026-08-01T00:00:00Z');
-const AFTER = new Date('2026-09-01T00:00:00Z');
+const STAMP_SINCE = new Date('2026-10-01T00:00:00Z');
+const AFTER = new Date('2026-10-05T00:00:00Z');
 const BEFORE = new Date('2026-07-01T00:00:00Z');
 
 describe('classifyPurchase', () => {
@@ -127,8 +128,8 @@ describe('auditPartialCreditPurchases on a real replica set', () => {
     purchases.find(purchase => purchase.paymentIntentId === id)?.verdict;
 
   const seedScenario = async () => {
-    // The earliest surviving stamp is the derived cutoff.
-    await seedUser(STAMP_SINCE);
+    // An admin raise long ago: an early stamp that must not pass for a purchase witness.
+    await seedUser(new Date('2026-01-01T00:00:00Z'));
     const granted = await seedUser(AFTER);
     await seedPurchase(granted, 'pi_granted', AFTER);
     await CreditLot.create({
@@ -156,9 +157,13 @@ describe('auditPartialCreditPurchases on a real replica set', () => {
   it('classifies every purchase row and writes nothing on a dry run', async () => {
     const { stranded } = await seedScenario();
 
-    const result = await auditPartialCreditPurchases({ apply: false, checkPaymentIntent, log: silent });
+    const result = await auditPartialCreditPurchases({
+      apply: false,
+      stampSince: STAMP_SINCE,
+      checkPaymentIntent,
+      log: silent,
+    });
 
-    expect(result.stampSince).toEqual(STAMP_SINCE);
     expect(verdictOf(result.purchases, 'pi_granted')).toBe('granted');
     expect(verdictOf(result.purchases, 'pi_stranded')).toBe('ungranted');
     expect(verdictOf(result.purchases, 'pi_refunded')).toBe('ungranted');
@@ -170,8 +175,18 @@ describe('auditPartialCreditPurchases on a real replica set', () => {
   it('credits only the purchases Stripe backs, once, across re-runs', async () => {
     const { stranded, refunded } = await seedScenario();
 
-    const first = await auditPartialCreditPurchases({ apply: true, checkPaymentIntent, log: silent });
-    const second = await auditPartialCreditPurchases({ apply: true, checkPaymentIntent, log: silent });
+    const first = await auditPartialCreditPurchases({
+      apply: true,
+      stampSince: STAMP_SINCE,
+      checkPaymentIntent,
+      log: silent,
+    });
+    const second = await auditPartialCreditPurchases({
+      apply: true,
+      stampSince: STAMP_SINCE,
+      checkPaymentIntent,
+      log: silent,
+    });
 
     expect(first.purchases.find(purchase => purchase.paymentIntentId === 'pi_stranded')?.repaired).toBe(true);
     expect(await balanceOf(stranded)).toBe(600);
@@ -186,12 +201,45 @@ describe('auditPartialCreditPurchases on a real replica set', () => {
     const { stranded } = await seedScenario();
     await seedPurchase(new mongoose.Types.ObjectId().toString(), 'pi_orphan', AFTER);
 
-    const { purchases } = await auditPartialCreditPurchases({ apply: true, checkPaymentIntent, log: silent });
+    const { purchases } = await auditPartialCreditPurchases({
+      apply: true,
+      stampSince: STAMP_SINCE,
+      checkPaymentIntent,
+      log: silent,
+    });
 
     const orphan = purchases.find(purchase => purchase.paymentIntentId === 'pi_orphan');
     expect(orphan?.repaired).toBe(false);
     expect(orphan?.repairError).toMatch(/not found/);
     expect(await CreditTransaction.countDocuments({ 'metadata.balanceBackfilledAt': { $exists: true } })).toBe(1);
     expect(await balanceOf(stranded)).toBe(600);
+  });
+
+  it('never re-credits a purchase the pre-stamp path granted, whatever stamps exist elsewhere', async () => {
+    await seedScenario();
+    const inlineGranted = await seedUser(null);
+    await User.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(inlineGranted) },
+      { $set: { currentCredits: 600 } }
+    );
+    await seedPurchase(inlineGranted, 'pi_inline', BEFORE);
+
+    const { purchases } = await auditPartialCreditPurchases({
+      apply: true,
+      stampSince: STAMP_SINCE,
+      checkPaymentIntent,
+      log: silent,
+    });
+
+    expect(verdictOf(purchases, 'pi_inline')).toBe('unverifiable');
+    expect(await balanceOf(inlineGranted)).toBe(600);
+  });
+
+  it('refuses a cutoff earlier than the reliable stamp', async () => {
+    const tooEarly = new Date(RELIABLE_PURCHASE_STAMP_MERGED_AT.getTime() - 1);
+
+    await expect(
+      auditPartialCreditPurchases({ apply: false, stampSince: tooEarly, checkPaymentIntent, log: silent })
+    ).rejects.toThrow(/predates the reliable purchase stamp/);
   });
 });
