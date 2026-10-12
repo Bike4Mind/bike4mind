@@ -160,7 +160,7 @@ importers:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.111.0
-        version: 0.111.0(zod@4.4.3)
+        version: 0.111.0(zod@4.6.6)
       '@aws-sdk/client-apigatewaymanagementapi':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -288,8 +288,8 @@ importers:
         specifier: ^22.0.0
         version: 22.0.0
       '@hookform/resolvers':
-        specifier: ^5.4.0
-        version: 5.4.0(react-hook-form@7.81.0(react@19.2.7))
+        specifier: ^5.9.1
+        version: 5.9.1(@standard-schema/spec@1.1.0)(ajv@8.20.0)(react-hook-form@7.90.0(@types/react@19.2.17)(react@19.2.7))(zod@4.6.6)
       '@icons-pack/react-simple-icons':
         specifier: ^10.0.0
         version: 10.2.0(react@19.2.7)
@@ -319,7 +319,7 @@ importers:
         version: 1.29.3
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
-        version: 1.32.1(zod@4.4.3)
+        version: 1.32.1(zod@4.6.6)
       '@mui/icons-material':
         specifier: ^5.14.9
         version: 5.18.0(@mui/material@5.18.0(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/react@19.2.17)(react@19.2.7)
@@ -547,7 +547,7 @@ importers:
         version: 2.10.1(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(next@16.3.8(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.61.1)(@types/node@24.12.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       openai:
         specifier: ^6.46.0
-        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.4.3)
+        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.6.6)
       openid-client:
         specifier: ^6.8.8
         version: 6.8.8
@@ -606,8 +606,8 @@ importers:
         specifier: ^1.2.2
         version: 1.2.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react-hook-form:
-        specifier: ^7.81.0
-        version: 7.81.0(react@19.2.7)
+        specifier: ^7.90.0
+        version: 7.90.0(@types/react@19.2.17)(react@19.2.7)
       react-i18next:
         specifier: ^17.0.9
         version: 17.0.10(i18next@26.4.2(typescript@5.9.3))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(typescript@5.9.3)
@@ -696,11 +696,11 @@ importers:
         specifier: ^3.4.0
         version: 3.4.0
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
       zod-validation-error:
         specifier: ^5.0.0
-        version: 5.0.0(zod@4.4.3)
+        version: 5.0.0(zod@4.6.6)
       zustand:
         specifier: ^5.0.13
         version: 5.0.13(@types/react@19.2.17)(immer@11.1.18)(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7))
@@ -976,8 +976,8 @@ importers:
         specifier: ^14.0.2
         version: 14.0.2
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@bike4mind/typescript-config':
         specifier: workspace:*
@@ -1046,8 +1046,8 @@ importers:
         specifier: ^7.0.1
         version: 7.0.1
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -1083,8 +1083,8 @@ importers:
         specifier: ^2.0.0
         version: 2.0.0
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@tsconfig/node24':
         specifier: '*'
@@ -1120,12 +1120,12 @@ importers:
         specifier: ^1.11.23
         version: 1.11.23
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@asteasolutions/zod-to-openapi':
         specifier: ^9.1.0
-        version: 9.1.0(zod@4.4.3)
+        version: 9.1.0(zod@4.6.6)
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
@@ -1226,7 +1226,7 @@ importers:
         version: 3.0.2
       openai:
         specifier: ^6.46.0
-        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.4.3)
+        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.6.6)
       tiktoken:
         specifier: ^1.0.22
         version: 1.0.22
@@ -1240,8 +1240,8 @@ importers:
         specifier: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
         version: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@types/mime-types':
         specifier: ^3.0.1
@@ -1262,8 +1262,8 @@ importers:
   b4m-core/hearth:
     dependencies:
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       tsdown:
         specifier: ^0.22.3
@@ -1291,7 +1291,7 @@ importers:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.111.0
-        version: 0.111.0(zod@4.4.3)
+        version: 0.111.0(zod@4.6.6)
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -1306,7 +1306,7 @@ importers:
         version: link:../observability
       '@google/genai':
         specifier: ^1.46.0
-        version: 1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.4.3))
+        version: 1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.6))
       axios:
         specifier: 1.20.0
         version: 1.20.0
@@ -1318,7 +1318,7 @@ importers:
         version: 0.6.3
       openai:
         specifier: ^6.46.0
-        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.4.3)
+        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.6.6)
       undici:
         specifier: ^7.29.0
         version: 7.29.1
@@ -1346,13 +1346,13 @@ importers:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.111.0
-        version: 0.111.0(zod@4.4.3)
+        version: 0.111.0(zod@4.6.6)
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
-        version: 1.32.1(zod@4.4.3)
+        version: 1.32.1(zod@4.6.6)
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
@@ -1360,8 +1360,8 @@ importers:
         specifier: ^0.12.5
         version: 0.12.5
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@types/unzipper':
         specifier: ^0.10.11
@@ -1413,7 +1413,7 @@ importers:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.111.0
-        version: 0.111.0(zod@4.4.3)
+        version: 0.111.0(zod@4.6.6)
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -1461,7 +1461,7 @@ importers:
         version: 6.8.1
       '@google/genai':
         specifier: ^1.46.0
-        version: 1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.4.3))
+        version: 1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.6))
       '@joplin/turndown-plugin-gfm':
         specifier: ^1.0.67
         version: 1.0.67
@@ -1518,7 +1518,7 @@ importers:
         version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       openai:
         specifier: ^6.46.0
-        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.4.3)
+        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.6.6)
       p-limit:
         specifier: ^7.3.2
         version: 7.3.2
@@ -1541,11 +1541,11 @@ importers:
         specifier: ^3.4.0
         version: 3.4.0
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
       zod-validation-error:
         specifier: ^5.0.0
-        version: 5.0.0(zod@4.4.3)
+        version: 5.0.0(zod@4.6.6)
     devDependencies:
       '@types/disposable-email-domains':
         specifier: ^1.0.6
@@ -1707,7 +1707,7 @@ importers:
         version: 6.8.1
       '@google/genai':
         specifier: ^1.46.0
-        version: 1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.4.3))
+        version: 1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.6))
       '@types/aws-lambda':
         specifier: ^8.10.162
         version: 8.10.162
@@ -1746,7 +1746,7 @@ importers:
         version: 3.0.2
       openai:
         specifier: ^6.46.0
-        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.4.3)
+        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.6.6)
       tiktoken:
         specifier: ^1.0.22
         version: 1.0.22
@@ -1763,8 +1763,8 @@ importers:
         specifier: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
         version: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@types/lodash':
         specifier: ^4.17.24
@@ -1811,10 +1811,10 @@ importers:
     dependencies:
       '@agentclientprotocol/sdk':
         specifier: 1.2.1
-        version: 1.2.1(zod@4.4.3)
+        version: 1.2.1(zod@4.6.6)
       '@anthropic-ai/sdk':
         specifier: ^0.111.0
-        version: 0.111.0(zod@4.4.3)
+        version: 0.111.0(zod@4.6.6)
       '@aws-sdk/client-apigatewaymanagementapi':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -1847,7 +1847,7 @@ importers:
         version: 6.8.1
       '@google/genai':
         specifier: ^1.46.0
-        version: 1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.4.3))
+        version: 1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.6))
       '@joplin/turndown-plugin-gfm':
         specifier: ^1.0.67
         version: 1.0.67
@@ -1856,7 +1856,7 @@ importers:
         version: 1.29.3
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
-        version: 1.32.1(zod@4.4.3)
+        version: 1.32.1(zod@4.6.6)
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
@@ -1964,7 +1964,7 @@ importers:
         version: 11.0.4
       openai:
         specifier: ^6.46.0
-        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.4.3)
+        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.6.6)
       p-limit:
         specifier: ^7.3.2
         version: 7.3.2
@@ -2026,11 +2026,11 @@ importers:
         specifier: ^3.4.0
         version: 3.4.0
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
       zod-validation-error:
         specifier: ^5.0.0
-        version: 5.0.0(zod@4.4.3)
+        version: 5.0.0(zod@4.6.6)
       zustand:
         specifier: ^5.0.13
         version: 5.0.13(@types/react@19.2.17)(immer@11.1.18)(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7))
@@ -2176,8 +2176,8 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@25.9.6)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(canvas@3.2.1))(msw@2.15.0(@types/node@25.9.6)(typescript@5.9.3))(vite@8.3.0(@types/node@25.9.6)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
 
   packages/eslint-config:
     dependencies:
@@ -2195,7 +2195,7 @@ importers:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.111.0
-        version: 0.111.0(zod@4.4.3)
+        version: 0.111.0(zod@4.6.6)
       '@aws-sdk/client-lambda':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -2275,8 +2275,8 @@ importers:
         specifier: ^18.1.0
         version: 18.1.0
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@types/mailparser':
         specifier: ^3.4.6
@@ -3320,10 +3320,83 @@ packages:
     peerDependencies:
       hono: ^4.13.5
 
-  '@hookform/resolvers@5.4.0':
-    resolution: {integrity: sha512-EIsqr/t/qbinPIhGjMdtvutIN1Kk4uwbROE9/UQ93CAVGR7GkA7Y92+fX80OzXi/OB67jVFYwKGO1WzkxmkFZw==}
+  '@hookform/resolvers@5.9.1':
+    resolution: {integrity: sha512-7b7vsbraJxKgjVSA1Nur9tLwj539WGJUBLA7QNvXnFoT2pM5Z7G+6rlukk4B2/QrTZy6huRtH6wKeESPKuIr6w==}
     peerDependencies:
+      '@sinclair/typebox': '>=0.25.24'
+      '@standard-schema/spec': ^1.0.0
+      '@typeschema/main': '>=0.13.7'
+      '@vinejs/vine': ^2.0.0 || ^3.0.0 || ^4.0.0
+      ajv: ^8.12.0
+      ajv-errors: ^3.0.0
+      ajv-formats: ^2.1.1
+      arktype: ^2.0.0
+      ata-validator: ^1.2.0
+      class-transformer: '>=0.4.0'
+      class-validator: '>=0.12.0'
+      computed-types: ^1.0.0
+      effect: ^3.10.3
+      fluentvalidation-ts: ^3.0.0
+      fp-ts: ^2.7.0
+      io-ts: ^2.0.0
+      joi: ^17.0.0 || ^18.0.0
+      nope-validator: '>=0.12.0'
       react-hook-form: ^7.55.0
+      superstruct: '>=0.12.0'
+      typanion: ^3.3.2
+      valibot: '>=0.31.0 || ^1.0.0-beta.4 || ^1.0.0-rc'
+      vest: '>=6.0.0'
+      yup: ^1.0.0
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@sinclair/typebox':
+        optional: true
+      '@standard-schema/spec':
+        optional: true
+      '@typeschema/main':
+        optional: true
+      '@vinejs/vine':
+        optional: true
+      ajv:
+        optional: true
+      ajv-errors:
+        optional: true
+      ajv-formats:
+        optional: true
+      arktype:
+        optional: true
+      ata-validator:
+        optional: true
+      class-transformer:
+        optional: true
+      class-validator:
+        optional: true
+      computed-types:
+        optional: true
+      effect:
+        optional: true
+      fluentvalidation-ts:
+        optional: true
+      fp-ts:
+        optional: true
+      io-ts:
+        optional: true
+      joi:
+        optional: true
+      nope-validator:
+        optional: true
+      superstruct:
+        optional: true
+      typanion:
+        optional: true
+      valibot:
+        optional: true
+      vest:
+        optional: true
+      yup:
+        optional: true
+      zod:
+        optional: true
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -10713,11 +10786,15 @@ packages:
       react: '>=17.0.0'
       react-dom: '>=17.0.0'
 
-  react-hook-form@7.81.0:
-    resolution: {integrity: sha512-ocbmr2p5KBMoAfj4WCUvped33lVi1Kd5DuDUvQDnB6VEAacOjPI/jMbtDdbhco4y9ct4xUuCmMY0b/C9L0QHjw==}
+  react-hook-form@7.90.0:
+    resolution: {integrity: sha512-+NdG0FLzCPhFOp2NNxaUYLF9fyZhNjx9FTBBSYWF71/l6BBlmIc/j6xlp3DbaHWLJbIG7Zd8oznA19xJClU97w==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
+      '@types/react': '*'
       react: ^16.8.0 || ^17 || ^18 || ^19
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   react-i18next@17.0.10:
     resolution: {integrity: sha512-XneHftyYA774MJkkccSkZ5oKrUpCnXIPmxio3wemqrVzCRLWiGXOMbIzObrer03fNDEnm8g8R5yYls4HcE+esg==}
@@ -12598,8 +12675,8 @@ packages:
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+  zod@4.6.6:
+    resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
 
   zustand@5.0.13:
     resolution: {integrity: sha512-efI2tVaVQPqtOh114loML/Z80Y4NP3yc+Ff0fYiZJPauNeWZeIp/bRFD7I9bfmCOYBh/PHxlglQ9+wvlwnPikQ==}
@@ -12626,9 +12703,9 @@ snapshots:
 
   '@adobe/css-tools@4.5.0': {}
 
-  '@agentclientprotocol/sdk@1.2.1(zod@4.4.3)':
+  '@agentclientprotocol/sdk@1.2.1(zod@4.6.6)':
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.6
 
   '@alcalzone/ansi-tokenize@0.3.0':
     dependencies:
@@ -12640,12 +12717,12 @@ snapshots:
       package-manager-detector: 1.7.0
       tinyexec: 1.3.1
 
-  '@anthropic-ai/sdk@0.111.0(zod@4.4.3)':
+  '@anthropic-ai/sdk@0.111.0(zod@4.6.6)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
     optionalDependencies:
-      zod: 4.4.3
+      zod: 4.6.6
 
   '@asamuzakjp/css-color@5.1.11':
     dependencies:
@@ -12667,10 +12744,10 @@ snapshots:
 
   '@asamuzakjp/nwsapi@2.3.9': {}
 
-  '@asteasolutions/zod-to-openapi@9.1.0(zod@4.4.3)':
+  '@asteasolutions/zod-to-openapi@9.1.0(zod@4.6.6)':
     dependencies:
       openapi3-ts: 4.6.0
-      zod: 4.4.3
+      zod: 4.6.6
 
   '@aws-crypto/sha256-browser@5.2.0':
     dependencies:
@@ -14214,14 +14291,14 @@ snapshots:
 
   '@floating-ui/utils@0.2.11': {}
 
-  '@google/genai@1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.4.3))':
+  '@google/genai@1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.6))':
     dependencies:
       google-auth-library: 10.9.0
       p-retry: 4.6.2
       protobufjs: 7.6.5
       ws: 8.21.0
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.32.1(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.6)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -14245,10 +14322,14 @@ snapshots:
     dependencies:
       hono: 4.13.12
 
-  '@hookform/resolvers@5.4.0(react-hook-form@7.81.0(react@19.2.7))':
+  '@hookform/resolvers@5.9.1(@standard-schema/spec@1.1.0)(ajv@8.20.0)(react-hook-form@7.90.0(@types/react@19.2.17)(react@19.2.7))(zod@4.6.6)':
     dependencies:
       '@standard-schema/utils': 0.3.0
-      react-hook-form: 7.81.0(react@19.2.7)
+      react-hook-form: 7.90.0(@types/react@19.2.17)(react@19.2.7)
+    optionalDependencies:
+      '@standard-schema/spec': 1.1.0
+      ajv: 8.20.0
+      zod: 4.6.6
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -15170,7 +15251,7 @@ snapshots:
 
   '@mixmark-io/domino@2.2.0': {}
 
-  '@modelcontextprotocol/sdk@1.32.1(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.32.1(zod@4.6.6)':
     dependencies:
       '@hono/node-server': 2.0.11(hono@4.13.12)
       ajv: 8.20.0
@@ -15187,8 +15268,8 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.4.3
-      zod-to-json-schema: 3.25.1(zod@4.4.3)
+      zod: 4.6.6
+      zod-to-json-schema: 3.25.1(zod@4.6.6)
     transitivePeerDependencies:
       - supports-color
 
@@ -16588,7 +16669,7 @@ snapshots:
       jiti: 2.7.0
       magic-string: 0.30.21
       prettier: 3.9.6
-      zod: 4.4.3
+      zod: 4.6.6
     transitivePeerDependencies:
       - supports-color
 
@@ -19388,8 +19469,8 @@ snapshots:
       '@babel/parser': 7.29.2
       eslint: 9.39.2(jiti@2.7.0)
       hermes-parser: 0.25.1
-      zod: 4.4.3
-      zod-validation-error: 4.0.2(zod@4.4.3)
+      zod: 4.6.6
+      zod-validation-error: 4.0.2(zod@4.6.6)
     transitivePeerDependencies:
       - supports-color
 
@@ -22183,19 +22264,19 @@ snapshots:
       powershell-utils: 0.2.1
       wsl-utils: 1.0.0
 
-  openai@6.47.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.4.3):
+  openai@6.47.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.6.6):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.63
       '@smithy/signature-v4': 5.7.3
       ws: 8.21.3
-      zod: 4.4.3
+      zod: 4.6.6
 
-  openai@6.47.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.4.3):
+  openai@6.47.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.6.6):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.83
       '@smithy/signature-v4': 5.7.3
       ws: 8.21.3
-      zod: 4.4.3
+      zod: 4.6.6
 
   openapi3-ts@4.6.0:
     dependencies:
@@ -22676,9 +22757,11 @@ snapshots:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
 
-  react-hook-form@7.81.0(react@19.2.7):
+  react-hook-form@7.90.0(@types/react@19.2.17)(react@19.2.7):
     dependencies:
       react: 19.2.7
+    optionalDependencies:
+      '@types/react': 19.2.17
 
   react-i18next@17.0.10(i18next@26.4.2(typescript@5.9.3))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(typescript@5.9.3):
     dependencies:
@@ -24930,23 +25013,23 @@ snapshots:
     dependencies:
       zod: 3.25.76
 
-  zod-to-json-schema@3.25.1(zod@4.4.3):
+  zod-to-json-schema@3.25.1(zod@4.6.6):
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.6
 
-  zod-validation-error@4.0.2(zod@4.4.3):
+  zod-validation-error@4.0.2(zod@4.6.6):
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.6
 
-  zod-validation-error@5.0.0(zod@4.4.3):
+  zod-validation-error@5.0.0(zod@4.6.6):
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.6
 
   zod@3.25.76: {}
 
   zod@4.3.6: {}
 
-  zod@4.4.3: {}
+  zod@4.6.6: {}
 
   zustand@5.0.13(@types/react@19.2.17)(immer@11.1.18)(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7)):
     optionalDependencies:

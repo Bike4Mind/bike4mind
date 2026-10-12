@@ -18,6 +18,9 @@ export type GoogleDriveConnectionAuthMode = 'oauth' | 'service_account';
  */
 export type GoogleDriveConnectionStatus = 'connected' | 'syncing' | 'needs_reconnect' | 'credential_error';
 
+/** The states an ingest run may leave its connection in when it ends its own claim (releaseSyncClaim). */
+export type GoogleDriveReleaseStatus = Extract<GoogleDriveConnectionStatus, 'connected' | 'needs_reconnect'>;
+
 /**
  * Google Drive connection: binds a single Drive folder to a single data lake so the folder's
  * contents are ingested and kept in sync. Usually organization-owned (described below); a PERSONAL
@@ -430,12 +433,15 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * that already lost the claim cannot release the NEW owner's - which would flip a live ingest back
    * to 'connected' and let a poll start a competing walk. Losing that race returns null and is not an
    * error; the new owner releases when it finishes. `lastError` is required and nullable because both
-   * exits share this method: a string records the failure, null heals.
+   * exits share this method: a string records the failure, null heals. `status` defaults to
+   * 'connected'; a run that found the connected folder itself gone (un-shared / trashed) passes
+   * 'needs_reconnect' instead, so the poll stops re-walking it until the user re-picks the folder.
    */
   releaseSyncClaim(
     id: string,
     expectedToken: string,
-    lastError: string | null
+    lastError: string | null,
+    status?: GoogleDriveReleaseStatus
   ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
