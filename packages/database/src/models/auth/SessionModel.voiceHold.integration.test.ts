@@ -18,12 +18,18 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await Session.deleteMany({});
+  // Raw collection: Session.deleteMany is a soft delete, which would leak rows between tests.
+  await Session.collection.deleteMany({});
 });
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60 * 1000);
 
-async function seed(name: string, voiceReservedCredits: number | null, voiceSessionStartedAt: Date | null) {
+async function seed(
+  name: string,
+  voiceReservedCredits: number | null,
+  voiceSessionStartedAt: Date | null,
+  extra: { voiceProviderConversationIds?: string[]; deletedAt?: Date } = {}
+) {
   const now = new Date();
   const doc = await Session.create({
     name,
@@ -32,6 +38,7 @@ async function seed(name: string, voiceReservedCredits: number | null, voiceSess
     lastUpdated: now,
     voiceReservedCredits,
     voiceSessionStartedAt,
+    ...extra,
   });
   return doc.id as string;
 }
@@ -87,5 +94,49 @@ describe('sessionRepository voice holds', () => {
     // The hold is live again, so a second restore (standing in for a newer call's hold) must not overwrite it.
     expect(await sessionRepository.restoreVoiceHold(id, 999, minutesAgo(1))).toBe(false);
     expect(await Session.findById(id).lean()).toMatchObject({ voiceReservedCredits: 100 });
+  });
+
+  describe('a notebook deleted mid-call', () => {
+    const IDS = ['conv_a', 'conv_b'];
+
+    it('still surfaces its stale hold, with the provider conversation ids', async () => {
+      const id = await seed('deleted', 100, minutesAgo(60), {
+        voiceProviderConversationIds: IDS,
+        deletedAt: new Date(),
+      });
+
+      const holds = await sessionRepository.findStaleVoiceHolds(minutesAgo(30), 10);
+
+      expect(holds).toHaveLength(1);
+      expect(holds[0]).toMatchObject({ id, voiceReservedCredits: 100, voiceProviderConversationIds: IDS });
+    });
+
+    it('can be claimed, which clears the provider ids, and restored with them', async () => {
+      const startedAt = minutesAgo(60);
+      const id = await seed('deleted', 100, startedAt, { voiceProviderConversationIds: IDS, deletedAt: new Date() });
+
+      expect(await sessionRepository.claimVoiceHold(id, startedAt)).toBe(true);
+      expect(await Session.findById(id).setOptions({ includeDeleted: true }).lean()).toMatchObject({
+        voiceReservedCredits: null,
+        voiceSessionStartedAt: null,
+        voiceProviderConversationIds: [],
+      });
+
+      expect(await sessionRepository.restoreVoiceHold(id, 100, startedAt, IDS)).toBe(true);
+      expect(await Session.findById(id).setOptions({ includeDeleted: true }).lean()).toMatchObject({
+        voiceReservedCredits: 100,
+        voiceSessionStartedAt: startedAt,
+        voiceProviderConversationIds: IDS,
+      });
+    });
+  });
+
+  it('clears the provider ids when a live session hold is claimed', async () => {
+    const startedAt = minutesAgo(60);
+    const id = await seed('call', 100, startedAt, { voiceProviderConversationIds: ['conv_a'] });
+
+    await sessionRepository.claimVoiceHold(id, startedAt);
+
+    expect(await Session.findById(id).lean()).toMatchObject({ voiceProviderConversationIds: [] });
   });
 });

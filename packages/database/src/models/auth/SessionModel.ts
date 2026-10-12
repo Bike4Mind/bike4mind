@@ -672,11 +672,13 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   async claimVoiceHold(sessionId: string, startedAt: Date) {
     // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
     // end, sweep or settlement frame wins, and a newer call's hold is never touched.
-    const claimed = await this.sessionModel.findOneAndUpdate(
-      { _id: sessionId, voiceSessionStartedAt: startedAt },
-      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null, voiceProviderConversationIds: [] } },
-      { projection: { _id: 1 }, includeDeleted: true }
-    );
+    const claimed = await this.sessionModel
+      .findOneAndUpdate(
+        { _id: sessionId, voiceSessionStartedAt: startedAt },
+        { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null, voiceProviderConversationIds: [] } },
+        { projection: { _id: 1 } }
+      )
+      .setOptions({ includeDeleted: true });
     return claimed != null;
   }
 
@@ -687,11 +689,12 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     voiceProviderConversationIds: string[] = []
   ) {
     // Only while no newer call has started a hold on the session.
-    const { modifiedCount } = await this.sessionModel.updateOne(
-      { _id: sessionId, voiceSessionStartedAt: null },
-      { $set: { voiceReservedCredits, voiceSessionStartedAt: startedAt, voiceProviderConversationIds } },
-      { includeDeleted: true }
-    );
+    const { modifiedCount } = await this.sessionModel
+      .updateOne(
+        { _id: sessionId, voiceSessionStartedAt: null },
+        { $set: { voiceReservedCredits, voiceSessionStartedAt: startedAt, voiceProviderConversationIds } }
+      )
+      .setOptions({ includeDeleted: true });
     return modifiedCount === 1;
   }
 

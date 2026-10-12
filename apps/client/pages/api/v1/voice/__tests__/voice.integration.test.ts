@@ -9,7 +9,7 @@
  * without `ai:generate` is a 403 before any credit hold, and each error maps to the
  * CONVENTIONS.md status table.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 
@@ -141,6 +141,7 @@ import legacyVoicesHandler from '../../../voice/v2/voices';
 import legacySessionsHandler from '../../../voice/v2/sessions';
 import legacyEndHandler from '../../../voice/v2/sessions/[id]/end';
 import legacyAgentsHandler from '../../../voice/v2/agents';
+import { creditsForElapsed } from '@server/voice/voiceSessionLimits';
 import {
   ApiKeyScope,
   CreateVoiceSessionResponseSchema,
@@ -165,7 +166,7 @@ function fire(
     method?: RequestMethod;
     url: string;
     apiKey?: string | null;
-    body?: Record<string, unknown>;
+    body?: Record<string, unknown> | string;
     query?: Record<string, string>;
   }
 ) {
@@ -487,7 +488,7 @@ describe('POST /api/v1/voice/sessions', () => {
 });
 
 describe('POST /api/v1/voice/sessions/{id}/end', () => {
-  const fireEnd = (opts: { apiKey?: string | null; id?: string; body?: Record<string, unknown> } = {}) => {
+  const fireEnd = (opts: { apiKey?: string | null; id?: string; body?: Record<string, unknown> | string } = {}) => {
     const id = opts.id ?? SESSION_ID;
     return fire(endHandler, { url: `/api/v1/voice/sessions/${id}/end`, query: { id }, body: {}, ...opts });
   };
@@ -558,5 +559,91 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['undefined', undefined],
+    ['an empty string (text/plain)', ''],
+  ])('accepts a request with no body (%s) and settles the hold', async (_label, body) => {
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: new Date(Date.now() - 1000),
+    });
+    const { res, run } = fireEnd({ body });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).toHaveBeenCalledTimes(1);
+    expect(mocks.incrementCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('looks the session up including soft-deleted ones so a deleted notebook cannot strand the hold', async () => {
+    const { run } = fireEnd();
+    await run();
+    expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1', { includeDeleted: true });
+  });
+
+  describe('with provider conversation ids on the hold', () => {
+    const heldSession = () => ({
+      id: SESSION_ID,
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: new Date(Date.now() - 1000),
+      voiceProviderConversationIds: ['conv_123'],
+    });
+    const providerReplies = (status: number, json?: unknown) =>
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(json ?? {}), { status }));
+
+    beforeEach(() => {
+      mocks.findByIdAndUserId.mockResolvedValue(heldSession());
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('bills the duration the provider recorded, not the wall clock', async () => {
+      const lookup = providerReplies(200, { status: 'done', metadata: { call_duration_secs: 60 } });
+      const { res, run } = fireEnd();
+      await run();
+      expect(lookup).toHaveBeenCalledWith(
+        'https://api.elevenlabs.io/v1/convai/conversations/conv_123',
+        expect.objectContaining({ headers: { 'xi-api-key': 'xi-server-key' } })
+      );
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({
+        elapsedSeconds: 60,
+        refunded: RESERVED_CREDITS - creditsForElapsed(RESERVED_CREDITS, 60),
+      });
+      expect(mocks.incrementCredits).toHaveBeenCalledWith(
+        'user-1',
+        RESERVED_CREDITS - creditsForElapsed(RESERVED_CREDITS, 60)
+      );
+    });
+
+    it('returns 409 and settles nothing while the provider still has the call open', async () => {
+      providerReplies(200, { status: 'in-progress', metadata: { call_duration_secs: 5 } });
+      const { res, run } = fireEnd();
+      await run();
+      expect(res._getStatusCode()).toBe(409);
+      expect(mocks.claimVoiceHold).not.toHaveBeenCalled();
+      expect(mocks.incrementCredits).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 and settles nothing while the provider has not recorded the call yet', async () => {
+      providerReplies(404);
+      const { res, run } = fireEnd();
+      await run();
+      expect(res._getStatusCode()).toBe(409);
+      expect(mocks.claimVoiceHold).not.toHaveBeenCalled();
+      expect(mocks.incrementCredits).not.toHaveBeenCalled();
+    });
+
+    it('returns 502 and settles nothing when the provider usage cannot be verified', async () => {
+      providerReplies(503);
+      const { res, run } = fireEnd();
+      await run();
+      expect(res._getStatusCode()).toBe(502);
+      expect(mocks.claimVoiceHold).not.toHaveBeenCalled();
+      expect(mocks.incrementCredits).not.toHaveBeenCalled();
+    });
   });
 });

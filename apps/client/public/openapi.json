@@ -6895,19 +6895,6 @@
           "elapsedSeconds": 95
         }
       },
-      "endVoiceSessionRequest": {
-        "type": "object",
-        "properties": {
-          "failedToConnect": {
-            "type": "boolean",
-            "description": "The transport never connected after the reservation was made."
-          },
-          "verifyProviderUsage": {
-            "type": "boolean",
-            "description": "Set on a delayed retry to bill recorded provider duration."
-          }
-        }
-      },
       "listWhatsNewResponse200": {
         "type": "object",
         "properties": {
@@ -21878,7 +21865,7 @@
       "post": {
         "operationId": "endVoiceSession",
         "summary": "End a voice session",
-        "description": "Reconciles the credit reservation taken by `POST /api/v1/voice/sessions` down to the actual call duration and refunds the difference. A failed connection or delayed retry can request provider-verified duration instead of billing time spent offline. Call it when the conversation ends. Idempotent: once the hold is cleared, a repeat call refunds nothing and reports `alreadyReconciled: true`. Only the session owner can end a call. `POST /api/voice/v2/sessions/{id}/end` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Reconciles the credit reservation taken by `POST /api/v1/voice/sessions` down to the actual call duration and refunds the difference. For an ElevenLabs call the duration is the provider-recorded call time, so a transport that never connected costs nothing and time spent offline is not billed. Call it after the conversation has ended: while the provider still reports the call as open the endpoint answers `409` and settles nothing, so retry after hanging up. Idempotent: once the hold is cleared, a repeat call refunds nothing and reports `alreadyReconciled: true`. Only the session owner can end a call. `POST /api/voice/v2/sessions/{id}/end` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "Voice"
         ],
@@ -21903,16 +21890,6 @@
             "in": "path"
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/endVoiceSessionRequest"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "The reservation is reconciled.",
@@ -22082,6 +22059,60 @@
               }
             }
           },
+          "409": {
+            "description": "The provider still reports the call as open, or has not recorded it yet; nothing was settled. Retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Request failed validation.",
             "content": {
@@ -22137,7 +22168,7 @@
             }
           },
           "502": {
-            "description": "The provider could not confirm conversation usage; retry settlement later.",
+            "description": "The provider could not confirm conversation usage; nothing was settled. Retry later.",
             "content": {
               "application/json": {
                 "schema": {
@@ -22198,17 +22229,17 @@
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\nundefined\nB4M_REQUEST_BODY"
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
           },
           {
             "lang": "JavaScript",
             "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify(undefined),\n});"
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
           },
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json=None,\n)"
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }

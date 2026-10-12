@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { AxiosError, type AxiosResponse } from 'axios';
 import type { DisconnectionDetails } from '@elevenlabs/client';
 
 // Mocks
@@ -28,6 +29,16 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   },
 }));
 
+const axiosFailure = (status: number) =>
+  new AxiosError('request failed', 'ERR_BAD_RESPONSE', undefined, undefined, { status } as AxiosResponse);
+// An axios error with no response is how a dropped connection reaches the settlement queue.
+const networkFailure = () => new AxiosError('Network Error', 'ERR_NETWORK');
+
+const userState = vi.hoisted(() => ({ currentUser: { id: 'user-1' } as { id: string } | null }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: { getState: () => userState },
+}));
+
 import { useConversationalVoiceStore } from './useConversationalVoice';
 
 const stopTrack = vi.fn();
@@ -52,6 +63,7 @@ const onDisconnect = (details: DisconnectionDetails) => capturedOptions?.onDisco
 
 describe('useConversationalVoice — auto-reconnect', () => {
   beforeEach(() => {
+    userState.currentUser = { id: 'user-1' };
     vi.useFakeTimers();
     capturedOptions = null;
     startSessionMock.mockClear();
@@ -130,7 +142,7 @@ describe('useConversationalVoice — auto-reconnect', () => {
     // Budget exhausted - the next drop ends the call and reconciles credits.
     drop();
     expect(useConversationalVoiceStore.getState().phase).toBe('ended');
-    expect(endCalls().length).toBeGreaterThanOrEqual(1);
+    expect(endCalls()).toHaveLength(1);
   });
 
   it('reconciles the credit hold when reconnect bootstraps keep failing', async () => {
@@ -138,7 +150,7 @@ describe('useConversationalVoice — auto-reconnect', () => {
     onConnect();
     let offline = true;
     apiPost.mockImplementation((url: string) =>
-      url === '/api/voice/v2/sessions' || offline ? Promise.reject(new Error('offline')) : Promise.resolve({ data: {} })
+      url === '/api/voice/v2/sessions' || offline ? Promise.reject(networkFailure()) : Promise.resolve({ data: {} })
     );
 
     onDisconnect({ reason: 'error', message: 'drop', context: new Event('close') });
@@ -147,14 +159,13 @@ describe('useConversationalVoice — auto-reconnect', () => {
     expect(useConversationalVoiceStore.getState().phase).toBe('error');
     expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
 
-    const firstSettlement = endCalls()[0][1];
     offline = false;
     window.dispatchEvent(new Event('online'));
     await vi.advanceTimersByTimeAsync(0);
 
     expect(endCalls()).toHaveLength(2);
-    expect(firstSettlement).toMatchObject({ verifyProviderUsage: false });
-    expect(endCalls()[1][1]).toMatchObject({ verifyProviderUsage: true, failedToConnect: false });
+    // The server measures the call itself; the client sends no usage claims.
+    expect(endCalls().map(call => call.length)).toEqual([1, 1]);
   });
 
   it('does not start another call on the same session while its hold is unsettled', async () => {
@@ -162,7 +173,7 @@ describe('useConversationalVoice — auto-reconnect', () => {
     onConnect();
     let settlementOffline = true;
     apiPost.mockImplementation((url: string) => {
-      if (String(url).endsWith('/end') && settlementOffline) return Promise.reject(new Error('offline'));
+      if (String(url).endsWith('/end') && settlementOffline) return Promise.reject(networkFailure());
       if (url === '/api/voice/v2/sessions') return Promise.resolve({ data: BOOTSTRAP });
       return Promise.resolve({ data: {} });
     });
@@ -181,6 +192,7 @@ describe('useConversationalVoice — auto-reconnect', () => {
 
 describe('useConversationalVoice - credit hold on a failed start', () => {
   beforeEach(() => {
+    userState.currentUser = { id: 'user-1' };
     startSessionMock.mockClear();
     stopTrack.mockClear();
     getUserMedia.mockReset();
@@ -225,7 +237,7 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
 
     expect(useConversationalVoiceStore.getState().phase).toBe('error');
     expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
-    expect(endCalls()[0][1]).toMatchObject({ failedToConnect: true });
+    expect(endCalls()[0]).toHaveLength(1);
   });
 
   it('does not reserve credits when ended during the microphone probe', async () => {
@@ -247,5 +259,162 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
     expect(stopTrack).toHaveBeenCalledOnce();
     expect(sessionCalls()).toHaveLength(0);
     expect(useConversationalVoiceStore.getState().phase).toBe('ended');
+  });
+});
+
+describe('useConversationalVoice - settlement retry queue', () => {
+  const PENDING_KEY = 'voice-pending-settlements';
+  const END_URL = '/api/voice/v2/sessions/s1/end';
+
+  const endCalls = () => apiPost.mock.calls.filter(([url]) => String(url).endsWith('/end'));
+  const loadStore = async () => (await import('./useConversationalVoice')).useConversationalVoiceStore;
+
+  // Resolves the end-of-call settlement to `outcome` on every attempt.
+  const settlementRespondsWith = (outcome: () => Promise<unknown>) =>
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions' ? Promise.resolve({ data: BOOTSTRAP }) : outcome()
+    );
+
+  const connectedCall = async () => {
+    const store = await loadStore();
+    await store.getState().start({ sessionId: 's1' });
+    onConnect();
+    return store;
+  };
+
+  beforeEach(() => {
+    // The pending-settlement queue is read from sessionStorage when the module loads.
+    vi.resetModules();
+    sessionStorage.clear();
+    userState.currentUser = { id: 'user-1' };
+    vi.useFakeTimers();
+    capturedOptions = null;
+    startSessionMock.mockClear();
+    endSessionMock.mockClear();
+    getUserMedia.mockReset();
+    getUserMedia.mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] });
+    apiPost.mockReset();
+    settlementRespondsWith(() => Promise.resolve({ data: {} }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    sessionStorage.clear();
+  });
+
+  it.each([404, 403])('drops the settlement on a final %i and never retries it', async status => {
+    settlementRespondsWith(() => Promise.reject(axiosFailure(status)));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const store = await connectedCall();
+
+    await store.getState().end();
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+
+    expect(endCalls()).toHaveLength(1);
+    expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
+  });
+
+  it('retries a 503 until the settlement succeeds, then forgets it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    settlementRespondsWith(() => Promise.reject(axiosFailure(503)));
+    const store = await connectedCall();
+
+    await store.getState().end();
+    expect(endCalls()).toHaveLength(1);
+    expect(JSON.parse(sessionStorage.getItem(PENDING_KEY) ?? '[]')).toEqual([
+      { sessionId: 's1', userId: 'user-1', attempts: 1 },
+    ]);
+
+    settlementRespondsWith(() => Promise.resolve({ data: {} }));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(endCalls()).toHaveLength(2);
+    expect(endCalls().map(([url]) => url)).toEqual([END_URL, END_URL]);
+    expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
+  });
+
+  it('retries a 409 (provider still has the call open)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    settlementRespondsWith(() => Promise.reject(axiosFailure(409)));
+    const store = await connectedCall();
+
+    await store.getState().end();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(endCalls().length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('stops retrying after 20 attempts and leaves the rest to the server sweep', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    settlementRespondsWith(() => Promise.reject(axiosFailure(503)));
+    const store = await connectedCall();
+
+    await store.getState().end();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    expect(endCalls()).toHaveLength(20);
+    expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
+  });
+
+  it('never sends a settlement persisted by another user', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    sessionStorage.setItem(
+      PENDING_KEY,
+      JSON.stringify([{ sessionId: 'other-s', userId: 'someone-else', attempts: 0 }])
+    );
+    await loadStore();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
+  });
+
+  it("replays the signed-in user's own persisted settlement", async () => {
+    sessionStorage.setItem(PENDING_KEY, JSON.stringify([{ sessionId: 's1', userId: 'user-1', attempts: 0 }]));
+    await loadStore();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(endCalls().map(([url]) => url)).toEqual([END_URL]);
+    expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
+  });
+
+  it('settles the bootstrapped session when the call is ended while /sessions is still in flight', async () => {
+    let resolveBootstrap: (value: { data: typeof BOOTSTRAP }) => void = () => {
+      throw new Error('Bootstrap was not requested');
+    };
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions'
+        ? new Promise(resolve => {
+            resolveBootstrap = resolve;
+          })
+        : Promise.resolve({ data: {} })
+    );
+    const store = await loadStore();
+
+    const starting = store.getState().start({});
+    await vi.advanceTimersByTimeAsync(0);
+    await store.getState().end();
+    expect(endCalls()).toHaveLength(0);
+
+    resolveBootstrap({ data: BOOTSTRAP });
+    await starting;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(endCalls().map(([url]) => url)).toEqual([END_URL]);
+    expect(startSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('does nothing, and queues nothing, when no user is signed in to settle the hold', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const store = await connectedCall();
+    userState.currentUser = null;
+
+    await store.getState().end();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(endCalls()).toHaveLength(0);
+    expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
   });
 });

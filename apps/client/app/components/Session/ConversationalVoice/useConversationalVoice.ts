@@ -140,6 +140,8 @@ function scheduleSettlementRetry(): void {
     settlementRetryTimer = null;
     void drainPendingSettlements();
   }, settlementRetryDelayMs);
+  // Back off after scheduling, so the first retry waits the initial delay.
+  settlementRetryDelayMs = Math.min(settlementRetryDelayMs * 2, MAX_SETTLEMENT_RETRY_MS);
 }
 
 // Network failures, 5xx (provider unverifiable) and 409 (the provider still has the call open)
@@ -179,7 +181,6 @@ async function drainPendingSettlements(): Promise<void> {
         }
         persistPendingSettlements();
         console.error('Voice credit settlement failed; retrying', err);
-        settlementRetryDelayMs = Math.min(settlementRetryDelayMs * 2, MAX_SETTLEMENT_RETRY_MS);
       }
     }
   } finally {

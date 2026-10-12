@@ -1,15 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { findStaleVoiceHolds, claimVoiceHold, restoreVoiceHold, findTurns, incrementCredits, connectDB } = vi.hoisted(
-  () => ({
-    findStaleVoiceHolds: vi.fn(),
-    claimVoiceHold: vi.fn(),
-    restoreVoiceHold: vi.fn(),
-    findTurns: vi.fn(),
-    incrementCredits: vi.fn(),
-    connectDB: vi.fn(async () => undefined),
-  })
-);
+const {
+  findStaleVoiceHolds,
+  claimVoiceHold,
+  restoreVoiceHold,
+  findTurns,
+  incrementCredits,
+  connectDB,
+  measureVoiceCallSeconds,
+} = vi.hoisted(() => ({
+  measureVoiceCallSeconds: vi.fn(),
+  findStaleVoiceHolds: vi.fn(),
+  claimVoiceHold: vi.fn(),
+  restoreVoiceHold: vi.fn(),
+  findTurns: vi.fn(),
+  incrementCredits: vi.fn(),
+  connectDB: vi.fn(async () => undefined),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   connectDB,
@@ -24,6 +31,7 @@ vi.mock('@bike4mind/observability', () => ({
     error() {}
   },
 }));
+vi.mock('@server/voice/measureVoiceCall', () => ({ measureVoiceCallSeconds }));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
@@ -134,8 +142,61 @@ describe('voiceHoldSweep', () => {
 
     const result = await runVoiceHoldSweep(NOW);
 
-    expect(restoreVoiceHold).toHaveBeenCalledWith('a', RESERVED, STARTED);
+    expect(restoreVoiceHold).toHaveBeenCalledWith('a', RESERVED, STARTED, []);
     expect(result).toMatchObject({ settled: 0, failed: 1 });
+  });
+
+  describe('holds with provider conversation ids', () => {
+    const providerHold = (id: string) => ({ ...hold(id), voiceProviderConversationIds: ['conv_1'] });
+
+    it('bills the provider-recorded duration rather than the session turns', async () => {
+      findStaleVoiceHolds.mockResolvedValue([providerHold('a')]);
+      measureVoiceCallSeconds.mockResolvedValue({
+        kind: 'measured',
+        elapsedSeconds: MAX_SESSION_SECONDS / 4,
+        source: 'provider',
+      });
+      findTurns.mockResolvedValue([turnAt(MAX_SESSION_SECONDS / 2)]);
+
+      await runVoiceHoldSweep(NOW);
+
+      expect(measureVoiceCallSeconds).toHaveBeenCalledWith(providerHold('a'), NOW);
+      expect(findTurns).not.toHaveBeenCalled();
+      expect(incrementCredits).toHaveBeenCalledWith('user-a', (RESERVED * 3) / 4);
+    });
+
+    it.each([
+      ['unverifiable', { kind: 'unverifiable', reason: 'HTTP 503' }],
+      ['live', { kind: 'live' }],
+    ])('falls back to the turn evidence and still settles when the measurement is %s', async (_kind, measurement) => {
+      findStaleVoiceHolds.mockResolvedValue([providerHold('a')]);
+      measureVoiceCallSeconds.mockResolvedValue(measurement);
+      findTurns.mockResolvedValue([turnAt(MAX_SESSION_SECONDS / 2)]);
+
+      const result = await runVoiceHoldSweep(NOW);
+
+      expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED / 2);
+      expect(result).toMatchObject({ settled: 1, failed: 0 });
+    });
+
+    it('restores the provider ids with the hold when the refund fails', async () => {
+      findStaleVoiceHolds.mockResolvedValue([providerHold('a')]);
+      measureVoiceCallSeconds.mockResolvedValue({ kind: 'measured', elapsedSeconds: 0, source: 'provider' });
+      incrementCredits.mockRejectedValueOnce(new Error('db blip'));
+
+      await runVoiceHoldSweep(NOW);
+
+      expect(restoreVoiceHold).toHaveBeenCalledWith('a', RESERVED, STARTED, ['conv_1']);
+    });
+  });
+
+  it('never asks the provider about a hold with no conversation ids', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a'), { ...hold('b'), voiceProviderConversationIds: [] }]);
+
+    await runVoiceHoldSweep(NOW);
+
+    expect(measureVoiceCallSeconds).not.toHaveBeenCalled();
+    expect(findTurns).toHaveBeenCalledTimes(2);
   });
 
   it('connects to the stage database before sweeping', async () => {

@@ -53,7 +53,16 @@ describe('settleVoiceHold', () => {
     incrementCredits.mockRejectedValue(failure);
 
     await expect(settleVoiceHold(HOLD, 0)).rejects.toBe(failure);
-    expect(restoreVoiceHold).toHaveBeenCalledWith('s1', 600, STARTED);
+    expect(restoreVoiceHold).toHaveBeenCalledWith('s1', 600, STARTED, []);
+  });
+
+  it('restores the hold with its provider conversation ids so a retry can still verify usage', async () => {
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+
+    await expect(settleVoiceHold({ ...HOLD, voiceProviderConversationIds: ['conv_a', 'conv_b'] }, 0)).rejects.toThrow(
+      'db blip'
+    );
+    expect(restoreVoiceHold).toHaveBeenCalledWith('s1', 600, STARTED, ['conv_a', 'conv_b']);
   });
 
   it('surfaces both errors when the hold cannot be restored either', async () => {
