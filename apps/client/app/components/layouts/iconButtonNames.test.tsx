@@ -3,9 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { Modal, ModalClose, ModalDialog } from '@mui/joy';
-import { getThemeConfig } from '@client/app/utils/themes';
+import AppTheme from '@client/app/utils/themes/AppTheme';
 
 /**
  * An IconButton has no text, so a screen reader announces it as just "button" unless it carries
@@ -95,17 +94,17 @@ describe('icon button accessible names', () => {
     expect(isNamedTag('<IconButton {...props} onClick={go}>')).toBe(true);
   });
 
-  it('names the shared dialog close control through the theme', () => {
-    const appTheme = extendTheme({ ...getThemeConfig() });
+  it('names the shared dialog close control through the real AppTheme provider', () => {
     render(
-      <CssVarsProvider theme={appTheme}>
+      <AppTheme>
         <Modal open>
           <ModalDialog>
-            <ModalClose />
+            <ModalClose data-testid="dialog-close-btn" />
           </ModalDialog>
         </Modal>
-      </CssVarsProvider>
+      </AppTheme>
     );
+    expect(screen.getByTestId('dialog-close-btn')).toHaveAccessibleName('Close');
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
   });
 });

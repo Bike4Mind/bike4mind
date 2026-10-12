@@ -373,12 +373,6 @@ export const branding = {
  * Component overrides for global styling
  */
 export const components = {
-  // ModalClose is an icon-only button; without a default every dialog's close control is unnamed.
-  JoyModalClose: {
-    defaultProps: {
-      'aria-label': 'Close',
-    },
-  },
   JoyButton: {
     styleOverrides: {
       root: {
