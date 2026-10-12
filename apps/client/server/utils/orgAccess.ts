@@ -4,12 +4,13 @@
  * Shared utility for verifying user access to organization resources.
  * Used by org-scoped API endpoints (webhooks, GitHub connection, etc.)
  *
- * Four tiers, widest last. State which one you mean at every call site; picking the wrong one
+ * Five tiers, widest last. State which one you mean at every call site; picking the wrong one
  * either leaks across a tenant boundary or breaks a members' screen:
- * - `verifyOrgOwner`      - owner only
- * - `verifyOrgAccess`     - owner or manager
- * - `verifyOrgAdminRead`  - owner, manager or appointed admin (reads only)
- * - `verifyOrgMembership` - any member (shareable ACL)
+ * - `verifyOrgOwner`           - owner only
+ * - `verifyOrgAccess`          - owner or manager
+ * - `verifyOrgAdminRead`       - owner, manager or appointed admin (reads only)
+ * - `verifyOrgMemberOrManager` - any member, or the manager without a membership row (reads only)
+ * - `verifyOrgMembership`      - any member (shareable ACL)
  *
  * Security:
  * - Returns NotFoundError for both missing and unauthorized (prevents enumeration)
@@ -172,6 +173,33 @@ export async function verifyOrgMembership(user: IUserDocument, orgId: string) {
 
   const org = await organizationRepository.shareable.findAccessibleById(user, orgId);
   if (!org) {
+    throw new NotFoundError('Organization not found');
+  }
+  return org;
+}
+
+/**
+ * Read-tier sibling of `verifyOrgMembership` that also admits the Team manager (and a platform
+ * admin) without a membership row, for status surfaces a manager sees beside the roster they
+ * administer, such as the Team's plan. Same answer as `organizationService.get`, so the two cannot
+ * disagree about who may open a Team. Never use it to guard a write.
+ *
+ * The membership lookup runs first, so the common member path stays a single query; the manager
+ * fallback costs one more only for callers the shareable ACL rejected. Non-oracular: a missing org
+ * and an unrelated caller both answer NotFoundError.
+ */
+export async function verifyOrgMemberOrManager(user: IUserDocument, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  const member = await organizationRepository.shareable.findAccessibleById(user, orgId);
+  if (member) {
+    return member;
+  }
+
+  const org = await organizationRepository.findById(orgId);
+  if (!org || !canManageOrg(user, org)) {
     throw new NotFoundError('Organization not found');
   }
   return org;

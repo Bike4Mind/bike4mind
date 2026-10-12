@@ -6,8 +6,8 @@ import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 /**
  * GET /api/subscriptions/Organization/:ownerId previously resolved the caller-supplied ownerId
  * with a bare organizationRepository.findById, handing any authenticated caller any
- * organization's active subscriptions. It now resolves through the member or manager access gates,
- * which answer NotFoundError identically for a missing org and one the caller may not read.
+ * organization's active subscriptions. It now resolves through verifyOrgMemberOrManager, which
+ * answers NotFoundError identically for a missing org and one the caller may not read.
  *
  * It also read active-only, so an org whose subscription went past_due got [] and lost the Stripe
  * portal. It now reads the non-terminal lookup; the assertions below pin that, because a revert to
@@ -27,9 +27,8 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const verifyOrgMembership = vi.hoisted(() => vi.fn());
-const verifyOrgAccess = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgMembership, verifyOrgAccess }));
+const verifyOrgMemberOrManager = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/orgAccess', () => ({ verifyOrgMemberOrManager }));
 
 // A regression to the bare repository lookup would make the gate assertions below silently
 // vacuous - the mocked gate simply would not be reached - so the old path is mocked to throw.
@@ -58,72 +57,54 @@ function mocks(user: unknown, query: Record<string, unknown>) {
   return { req, res };
 }
 
-describe('GET /api/subscriptions/Organization/:ownerId - member and manager gates', () => {
+describe('GET /api/subscriptions/Organization/:ownerId - member and manager gate', () => {
   beforeEach(() => {
-    verifyOrgMembership.mockReset();
-    verifyOrgAccess.mockReset();
+    verifyOrgMemberOrManager.mockReset();
     findNonTerminalSubscriptionsByOwner.mockReset();
     findActiveSubscriptionsByOwner.mockClear();
   });
 
-  it('resolves the organization through verifyOrgMembership, not a bare repository lookup', async () => {
-    verifyOrgMembership.mockResolvedValueOnce({ id: 'org1' });
+  it('resolves the organization through verifyOrgMemberOrManager, not a bare repository lookup', async () => {
+    verifyOrgMemberOrManager.mockResolvedValueOnce({ id: 'org1' });
     findNonTerminalSubscriptionsByOwner.mockResolvedValueOnce([]);
 
     const { req, res } = mocks({ id: 'u1' }, { ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1' });
     await mockRefs.getHandler!(req, res);
 
-    expect(verifyOrgMembership).toHaveBeenCalledTimes(1);
-    expect(verifyOrgAccess).not.toHaveBeenCalled();
+    expect(verifyOrgMemberOrManager).toHaveBeenCalledTimes(1);
     expect(repositoryFindById).not.toHaveBeenCalled();
   });
 
-  it('calls verifyOrgMembership with the caller-supplied ownerId', async () => {
-    verifyOrgMembership.mockResolvedValueOnce({ id: 'org1' });
+  it('calls the gate with the caller-supplied ownerId', async () => {
+    verifyOrgMemberOrManager.mockResolvedValueOnce({ id: 'org1' });
     findNonTerminalSubscriptionsByOwner.mockResolvedValueOnce([]);
 
     const { req, res } = mocks({ id: 'u1' }, { ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1' });
     await mockRefs.getHandler!(req, res);
 
-    expect(verifyOrgMembership).toHaveBeenCalledWith(req.user, 'org1');
+    expect(verifyOrgMemberOrManager).toHaveBeenCalledWith(req.user, 'org1');
   });
 
-  it('returns the plan to a manager without a membership row', async () => {
-    verifyOrgMembership.mockRejectedValueOnce(new NotFoundError('Organization not found'));
-    verifyOrgAccess.mockResolvedValueOnce({ id: 'org1' });
-    const subscriptions = [{ ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1', status: 'active' }];
-    findNonTerminalSubscriptionsByOwner.mockResolvedValueOnce(subscriptions);
-
-    const { req, res } = mocks({ id: 'manager1' }, { ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1' });
-    await mockRefs.getHandler!(req, res);
-
-    expect(verifyOrgAccess).toHaveBeenCalledWith(req.user, 'org1');
-    expect(res._getJSONData()).toEqual(subscriptions);
-  });
-
-  it('never looks up subscriptions when both access gates reject', async () => {
-    verifyOrgMembership.mockRejectedValueOnce(new NotFoundError('Organization not found'));
-    verifyOrgAccess.mockRejectedValueOnce(new NotFoundError('Organization not found'));
+  it('never looks up subscriptions when the gate rejects', async () => {
+    verifyOrgMemberOrManager.mockRejectedValueOnce(new NotFoundError('Organization not found'));
 
     const { req, res } = mocks({ id: 'u1' }, { ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1' });
     await expect(mockRefs.getHandler!(req, res)).rejects.toBeInstanceOf(NotFoundError);
 
-    expect(verifyOrgAccess).toHaveBeenCalledWith(req.user, 'org1');
     expect(findNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
   });
 
-  it('preserves invalid organization ID errors without trying the manager gate', async () => {
-    verifyOrgMembership.mockRejectedValueOnce(new BadRequestError('Invalid organization ID'));
+  it('preserves invalid organization ID errors', async () => {
+    verifyOrgMemberOrManager.mockRejectedValueOnce(new BadRequestError('Invalid organization ID'));
 
     const { req, res } = mocks({ id: 'u1' }, { ownerType: SubscriptionOwnerType.Organization, ownerId: 'invalid' });
     await expect(mockRefs.getHandler!(req, res)).rejects.toBeInstanceOf(BadRequestError);
 
-    expect(verifyOrgAccess).not.toHaveBeenCalled();
     expect(findNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
   });
 
   it('returns the subscriptions for that owner on success', async () => {
-    verifyOrgMembership.mockResolvedValueOnce({ id: 'org1' });
+    verifyOrgMemberOrManager.mockResolvedValueOnce({ id: 'org1' });
     const subscriptions = [{ ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1', status: 'active' }];
     findNonTerminalSubscriptionsByOwner.mockResolvedValueOnce(subscriptions);
 
@@ -135,7 +116,7 @@ describe('GET /api/subscriptions/Organization/:ownerId - member and manager gate
   });
 
   it('returns a delinquent row instead of hiding it, so the org keeps its billing portal', async () => {
-    verifyOrgMembership.mockResolvedValueOnce({ id: 'org1' });
+    verifyOrgMemberOrManager.mockResolvedValueOnce({ id: 'org1' });
     const delinquent = [{ ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1', status: 'past_due' }];
     findNonTerminalSubscriptionsByOwner.mockResolvedValueOnce(delinquent);
 

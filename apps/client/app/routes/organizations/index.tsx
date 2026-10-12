@@ -49,7 +49,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
   const { currentSeats } = useOrganizationSeats(organization.id);
 
   const isOwner = organization.userId === currentUser?.id;
-  const isManager = organization.managerId === currentUser?.id && !isOwner;
+  const isManager = !!currentUser && organization.managerId === currentUser.id && !isOwner;
 
   return (
     <Card variant="outlined" sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined }}>

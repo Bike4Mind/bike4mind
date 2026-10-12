@@ -25,6 +25,7 @@ import {
   verifyOrgAdminRead,
   verifyOrgOwner,
   verifyOrgMembership,
+  verifyOrgMemberOrManager,
   resolveBillingOrgId,
 } from '../orgAccess';
 
@@ -276,6 +277,61 @@ describe('verifyOrgMembership', () => {
     await expect(verifyOrgMembership(asUser({ id: STRANGER, groups: [], isAdmin: true }), ORG)).rejects.toBeInstanceOf(
       NotFoundError
     );
+  });
+});
+
+describe('verifyOrgMemberOrManager', () => {
+  const asCaller = (id: string, isAdmin = false) => asUser({ id, groups: [], isAdmin });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindById.mockResolvedValue(org);
+    mockFindAccessibleById.mockResolvedValue(null);
+  });
+
+  it.each([
+    { orgId: 'not-an-object-id', why: 'malformed string' },
+    { orgId: '', why: 'empty string' },
+  ])('rejects an invalid org id without touching the DB: $why', async ({ orgId }) => {
+    await expect(verifyOrgMemberOrManager(asCaller(STRANGER), orgId)).rejects.toBeInstanceOf(BadRequestError);
+    expect(mockFindAccessibleById).not.toHaveBeenCalled();
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('grants a member through the shareable ACL with a single lookup', async () => {
+    mockFindAccessibleById.mockResolvedValue(org);
+    await expect(verifyOrgMemberOrManager(asCaller(STRANGER), ORG)).resolves.toBe(org);
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('grants the manager who has no membership row', async () => {
+    await expect(verifyOrgMemberOrManager(asCaller(MANAGER), ORG)).resolves.toBe(org);
+    expect(mockFindById).toHaveBeenCalledWith(ORG);
+  });
+
+  it('grants a platform admin who is not a member', async () => {
+    await expect(verifyOrgMemberOrManager(asCaller(STRANGER, true), ORG)).resolves.toBe(org);
+  });
+
+  // Appointed admins hold no read tier here: they reach the roster through their users[] row, which
+  // the shareable ACL already covers, and verifyOrgAdminRead is the tier that admits them by id.
+  it('404s a non-member non-manager, including an appointed admin without a membership row', async () => {
+    await expect(verifyOrgMemberOrManager(asCaller(STRANGER), ORG)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(verifyOrgMemberOrManager(asCaller(APPOINTED_ADMIN), ORG)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('404s a missing org identically to an inaccessible one', async () => {
+    const inaccessible = await verifyOrgMemberOrManager(asCaller(STRANGER), ORG).catch((e: Error) => e);
+    mockFindById.mockResolvedValue(null);
+    const missing = await verifyOrgMemberOrManager(asCaller(MANAGER), OTHER_ORG).catch((e: Error) => e);
+
+    expect((inaccessible as Error).constructor).toBe((missing as Error).constructor);
+    expect((inaccessible as Error).message).toBe((missing as Error).message);
+  });
+
+  it('does not let an empty managerId match an empty caller id', async () => {
+    mockFindById.mockResolvedValue({ ...org, managerId: '' });
+    await expect(verifyOrgMemberOrManager(asCaller(''), ORG)).rejects.toBeInstanceOf(NotFoundError);
   });
 });
 
