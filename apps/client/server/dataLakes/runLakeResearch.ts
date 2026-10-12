@@ -28,6 +28,10 @@ import { lakeConfigAuditDb } from './lakeConfigAuditDb';
  * scheduler (v2) becomes the thing that enqueues a run.
  */
 
+const LOGGED_SEARCH_HOSTS = 10;
+
+const hostnameOf = (url: string): string => (URL.canParse(url) ? new URL(url).hostname : url);
+
 /** What the loop reports back, so the handler can log a one-line outcome. */
 export interface ResearchRunOutcome {
   /** False when the run row was not claimable - an SQS redelivery of work already done. */
@@ -282,7 +286,20 @@ export async function runLakeResearch(
 
     const ports: dataLakeResearchService.ResearchRunPorts = {
       search: async (query, maxResults, recencyDays) => {
-        const { results: hits } = await searchWithHedge(provider, backup, query, maxResults, { recencyDays });
+        const { results: hits, servedBy } = await searchWithHedge(provider, backup, query, maxResults, {
+          recencyDays,
+        });
+        // Hostnames too: a run that proposes nothing stores no provenance, so off-topic hits are
+        // otherwise invisible after the fact.
+        logger.log('[lakeResearch] search', {
+          runId,
+          provider: servedBy.name,
+          query,
+          maxResults,
+          recencyDays,
+          hits: hits.length,
+          hosts: hits.slice(0, LOGGED_SEARCH_HOSTS).map(hit => hostnameOf(hit.url)),
+        });
         return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));
       },
       judge: candidate =>

@@ -370,6 +370,20 @@ function setSerpApiGeoTargeting(searchParams: URLSearchParams, options?: WebSear
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
+// An allowlist, not a copy minus api_key: the key rides in the query string, so logging the URL or
+// the raw params would leak it, and a deny-list would miss any secret param added later.
+const SERPAPI_LOGGED_PARAMS = ['q', 'num', 'tbs', 'location', 'gl'] as const;
+
+/** The log-safe subset of a SerpAPI request, so an off-topic result set can be traced to what was sent. */
+function summarizeSerpApiRequest(url: URL): Record<string, string> {
+  const summary: Record<string, string> = {};
+  for (const key of SERPAPI_LOGGED_PARAMS) {
+    const value = url.searchParams.get(key);
+    if (value !== null) summary[key] = value;
+  }
+  return summary;
+}
+
 /**
  * One SerpAPI organic-search attempt, bounded by SERPAPI_ATTEMPT_TIMEOUT_MS. Never throws -
  * failures (timeout, network error, non-OK response) come back as a tagged result so
@@ -379,10 +393,12 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SERPAPI_ATTEMPT_TIMEOUT_MS);
   const startedAt = Date.now();
+  const request = summarizeSerpApiRequest(url);
   try {
     const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
     Logger.globalInstance.log('📡 WebSearch Tool: SerpAPI response', {
       attempt,
+      request,
       status: response.status,
       elapsedMs: Date.now() - startedAt,
     });
@@ -396,6 +412,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
       errorText,
       endpoint: url.origin,
       attempt,
+      request,
     });
     return {
       ok: false,
@@ -411,6 +428,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     const retryable = timedOut || error instanceof TypeError;
     Logger.globalInstance.error('❌ WebSearch Tool: SerpAPI request failed:', {
       attempt,
+      request,
       timedOut,
       elapsedMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
@@ -804,7 +822,13 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
           return [];
         }
         const data: unknown = await response.json();
-        return parseSearxngResults(data, limit);
+        const results = parseSearxngResults(data, limit);
+        Logger.globalInstance.log('WebSearch Tool: SearXNG response', {
+          status: response.status,
+          request: { q: query, ...(bucket && { time_range: bucket }), limit },
+          hits: results.length,
+        });
+        return results;
       } catch (error) {
         Logger.globalInstance.error('❌ WebSearch Tool: SearXNG request failed:', error);
         if (!options?.throwOnError) return [];

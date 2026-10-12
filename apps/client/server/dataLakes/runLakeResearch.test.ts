@@ -472,6 +472,33 @@ describe('runLakeResearch', () => {
       expect(hits()).toEqual([{ title: 'Lead', url: 'https://lead.example', snippet: 's' }]);
     });
 
+    it('logs the query, serving provider, levers, hit count and hostnames for the run', async () => {
+      const backup = {
+        name: 'searxng',
+        search: vi.fn(async () => [
+          { title: 'A', url: 'https://arxiv.org/abs/1', snippet: 's' },
+          { title: 'B', url: 'https://www.ieee.org/x', snippet: 's' },
+        ]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([timedOutLead(), backup]);
+      searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect((logger as unknown as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+        '[lakeResearch] search',
+        {
+          runId: 'run-1',
+          provider: 'searxng',
+          query: 'q',
+          maxResults: 5,
+          recencyDays: 30,
+          hits: 2,
+          hosts: ['arxiv.org', 'www.ieee.org'],
+        }
+      );
+    });
+
     it('fails the run naming both providers when both fail', async () => {
       const backup = {
         name: 'searxng',
