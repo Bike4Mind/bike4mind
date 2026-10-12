@@ -23,6 +23,26 @@ function originVerified(request: NextRequest, secret: string): boolean {
   return diff === 0;
 }
 
+function resolveObjectStoreOrigin(raw: string | undefined): string {
+  const configured = raw?.trim();
+  if (!configured) return '';
+  try {
+    if (
+      /[\s;]/.test(configured) ||
+      [...configured].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+    ) {
+      throw new Error('Invalid endpoint');
+    }
+    const url = new URL(configured);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported protocol');
+    if (/[\s;,'"*\\]/.test(url.origin)) throw new Error('Invalid origin');
+    return url.origin;
+  } catch {
+    console.warn('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
+    return '';
+  }
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const rawUrl = request.url;
@@ -165,17 +185,19 @@ export function proxy(request: NextRequest) {
   // and connect-src because the service worker's image runtime cache re-fetches <img> loads, and a
   // fetch from the worker is checked against connect-src.
   const mapTileHost = ' https://tile.openstreetmap.org';
+  const objectStoreOrigin = resolveObjectStoreOrigin(process.env.S3_PRESIGN_ENDPOINT);
+  const objectStoreHost = objectStoreOrigin ? ` ${objectStoreOrigin}` : '';
 
   const cspHeader = `
     default-src 'self';
     script-src ${scriptSrcPolicy}${pyodideHost};
     style-src ${styleSrcPolicy};
-    img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost};
+    img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost}${objectStoreHost};
     font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com data:;
-    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://assets.mailerlite.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${mapTileHost};
+    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://assets.mailerlite.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${mapTileHost}${objectStoreHost};
     frame-src 'self' blob: https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
-    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com;
+    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com${objectStoreHost};
     base-uri 'self';
     frame-ancestors 'self';
     form-action 'self';

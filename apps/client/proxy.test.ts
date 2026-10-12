@@ -392,3 +392,71 @@ describe('proxy origin verification', () => {
     expect(response.forwardedRequestHeaders).toBeUndefined();
   });
 });
+
+describe('proxy configured object-store origin', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const policy = () => proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy')!;
+  const directives = (csp: string) =>
+    Object.fromEntries(
+      csp
+        .split(';')
+        .filter(part => part.trim())
+        .map(part => {
+          const [name, ...sources] = part.trim().split(/\s+/);
+          return [name, sources];
+        })
+    );
+
+  it.each([
+    [' http://127.0.0.1:19000/ ', 'http://127.0.0.1:19000'],
+    ['https://objects.example.invalid/prefix?value=1#fragment', 'https://objects.example.invalid'],
+    ['https://user:fixture@objects.example.invalid:443/path', 'https://objects.example.invalid'],
+  ])('adds only the normalized object-store origin for %s', (configured, origin) => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const baseline = directives(policy());
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', configured);
+    const actual = directives(policy());
+    expect(Object.keys(actual)).toEqual(Object.keys(baseline));
+    for (const [name, sources] of Object.entries(baseline)) {
+      expect(actual[name]).toEqual(
+        ['connect-src', 'img-src', 'media-src'].includes(name) ? [...sources, origin] : sources
+      );
+    }
+  });
+
+  it('keeps the complete default policy unchanged when unset or blank', () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', undefined);
+    const baseline = policy();
+    for (const blank of ['', '   ']) {
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', blank);
+      expect(policy()).toBe(baseline);
+    }
+  });
+
+  it.each([
+    'not-a-url',
+    'ftp://objects.example.invalid',
+    'https://objects.example.invalid;extra',
+    'https://objects.example.invalid\n.other',
+    'https://*.example.invalid',
+    'https://objects,example.invalid',
+    'https://objects.example.invalid\u0001',
+    'https://objects.example.invalid\u007f',
+  ])('omits invalid configuration with a value-free diagnostic: %s', configured => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const baseline = policy();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', configured);
+    expect(policy()).toBe(baseline);
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
+  });
+
+  it.each(['/api/files', '/p/example', '/embed/chat'])('preserves policy exclusions for %s', path => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
+    expect(proxy(makeRequest(`https://app.example.invalid${path}`)).headers.get('Content-Security-Policy')).toBeNull();
+  });
+});
