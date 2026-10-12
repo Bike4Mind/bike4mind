@@ -252,38 +252,57 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   // A reconnect leaves the original reservation record untouched so end-reconciliation
   // measures the full call duration, not just the post-reconnect segment.
   const { providerConversationId } = createResult;
-  let holdTracksCall = reuseHold && !providerConversationId;
-  if (reuseHold && providerConversationId) {
-    if (!session.voiceSessionStartedAt) throw new Error('reused voice hold has no start time');
+  if (reuseHold && providerConversationId && session.voiceSessionStartedAt) {
     // Appended atomically, not read-modify-written around the provider round trip above: two
     // overlapping reconnects would otherwise drop one id, and its call time would go unbilled.
-    holdTracksCall = await sessionRepository.appendVoiceProviderConversationId(
+    const appended = await sessionRepository.appendVoiceProviderConversationId(
       session.id,
       new Date(session.voiceSessionStartedAt),
       providerConversationId
     );
-    if (!holdTracksCall) {
-      // An end or the sweep settled the hold after this request read it. Without a fresh hold
-      // the reconnected call would run unreserved and unbilled.
+    if (!appended) {
+      // An end or the sweep settled the hold after this request read it (or a concurrent request
+      // already replaced it). Without a hold the reconnected call would run unreserved and unbilled.
       req.logger.warn('[voice-v2/sessions] hold settled during reconnect; taking a fresh hold', {
         sessionId: session.id,
         providerConversationId,
       });
       if (enforceCredits) {
         if ((req.user?.currentCredits ?? 0) < reservedCredits) {
-          req.logger.warn(
-            '[voice-v2/sessions] insufficient credits for a fresh hold; abandoning provisioned provider session',
-            { sessionId: session.id, providerConversationId }
-          );
           throw insufficientCreditsError(
             `Insufficient credits for voice session (requires ~${reservedCredits} credits)`
           );
         }
         await userRepository.incrementCredits(req.user.id, -reservedCredits);
       }
+      // Conditional on no live hold, so a concurrent reconnect's fresh hold is never overwritten
+      // (which would orphan its reservation).
+      const tookFreshHold = await sessionRepository.restoreVoiceHold(
+        session.id,
+        enforceCredits ? reservedCredits : 0,
+        new Date(),
+        [providerConversationId]
+      );
+      if (!tookFreshHold) {
+        if (enforceCredits) await userRepository.incrementCredits(req.user.id, reservedCredits);
+        const winner = await sessionRepository.findByIdAndUserId(session.id, req.user.id);
+        const recorded =
+          !!winner?.voiceSessionStartedAt &&
+          (await sessionRepository.appendVoiceProviderConversationId(
+            session.id,
+            new Date(winner.voiceSessionStartedAt),
+            providerConversationId
+          ));
+        if (!recorded) {
+          req.logger.error('[voice-v2/sessions] could not record the reconnected call on any hold', {
+            sessionId: session.id,
+            providerConversationId,
+          });
+        }
+      }
     }
   }
-  if (!holdTracksCall) {
+  if (!reuseHold) {
     await sessionRepository.update({
       id: session.id,
       voiceProviderConversationIds: providerConversationId ? [providerConversationId] : [],

@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   sessionUpdate: vi.fn(),
   claimVoiceHold: vi.fn(),
   appendVoiceProviderConversationId: vi.fn(),
+  restoreVoiceHold: vi.fn(),
   findByIdAndUserId: vi.fn(),
   incrementCredits: vi.fn(),
   getSession: vi.fn(),
@@ -116,6 +117,7 @@ vi.mock('@bike4mind/database', async orig => {
       findByIdAndUserId: (...a: unknown[]) => mocks.findByIdAndUserId(...a),
       claimVoiceHold: (...a: unknown[]) => mocks.claimVoiceHold(...a),
       appendVoiceProviderConversationId: (...a: unknown[]) => mocks.appendVoiceProviderConversationId(...a),
+      restoreVoiceHold: (...a: unknown[]) => mocks.restoreVoiceHold(...a),
     },
     userRepository: {
       ...(actual.userRepository as object),
@@ -218,6 +220,7 @@ beforeEach(() => {
   mocks.incrementCredits.mockResolvedValue(undefined);
   mocks.claimVoiceHold.mockResolvedValue(true);
   mocks.appendVoiceProviderConversationId.mockResolvedValue(true);
+  mocks.restoreVoiceHold.mockResolvedValue(true);
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
   mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
@@ -459,13 +462,47 @@ describe('POST /api/v1/voice/sessions', () => {
       const { res, run } = fireReconnect();
       await run();
       expect(res._getStatusCode()).toBe(200);
+      expect(mocks.incrementCredits).toHaveBeenCalledTimes(1);
       expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', -RESERVED_CREDITS);
-      expect(mocks.sessionUpdate).toHaveBeenCalledWith({
-        id: SESSION_ID,
-        voiceProviderConversationIds: ['conv_123'],
-        voiceReservedCredits: RESERVED_CREDITS,
-        voiceSessionStartedAt: expect.any(Date),
+      expect(mocks.restoreVoiceHold).toHaveBeenCalledWith(SESSION_ID, RESERVED_CREDITS, expect.any(Date), ['conv_123']);
+      expect(mocks.sessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('nets a single deduction when concurrent reconnects both miss the settled hold', async () => {
+      // The conditional hold write admits one winner; the loser refunds and joins the winner's hold.
+      const winnerStartedAt = new Date('2026-10-12T10:05:00.000Z');
+      let held = false;
+      let deducted = 0;
+      const ids: string[] = [];
+      mocks.findByIdAndUserId.mockImplementation(async () =>
+        held ? { ...heldSession(ids), voiceSessionStartedAt: winnerStartedAt } : heldSession(['conv_previous'])
+      );
+      mocks.incrementCredits.mockImplementation(async (_id: string, delta: number) => {
+        deducted -= delta;
       });
+      mocks.restoreVoiceHold.mockImplementation(async (_id: string, _credits: number, _at: Date, conv: string[]) => {
+        if (held) return false;
+        held = true;
+        ids.push(...conv);
+        return true;
+      });
+      mocks.appendVoiceProviderConversationId.mockImplementation(async (_id: string, at: Date, conv: string) => {
+        if (at.getTime() !== winnerStartedAt.getTime()) return false;
+        if (!ids.includes(conv)) ids.push(conv);
+        return true;
+      });
+      const nextIds = ['conv_first', 'conv_second'];
+      mocks.createTransportSession.mockImplementation(async () => ({ providerConversationId: nextIds.shift() }));
+
+      const first = fireReconnect();
+      const second = fireReconnect();
+      await Promise.all([first.run(), second.run()]);
+
+      expect(first.res._getStatusCode()).toBe(200);
+      expect(second.res._getStatusCode()).toBe(200);
+      expect(deducted).toBe(RESERVED_CREDITS);
+      expect([...ids].sort()).toEqual(['conv_first', 'conv_second']);
+      expect(mocks.sessionUpdate).not.toHaveBeenCalled();
     });
 
     it('refuses the reconnect when a fresh hold is needed but the caller cannot cover it', async () => {

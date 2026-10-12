@@ -65,7 +65,7 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
   const settlement = await settleVoiceHold(hold, elapsedSeconds);
   if (!settlement.settled) {
     if (settlement.reason === 'conversation-added') {
-      throw new ConflictError('The voice call was reconnected while settling; end it and retry');
+      throw new ConflictError('The voice call was reconnected while settling; retry after the call ends');
     }
     // A concurrent end or the stale-hold sweep settled it first.
     return res.status(200).json({ refunded: 0, alreadyReconciled: true });

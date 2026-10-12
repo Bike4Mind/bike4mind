@@ -184,7 +184,8 @@ export const endVoiceSessionContract = defineEndpoint({
     },
     409: {
       description:
-        'The provider still reports the call as open, or has not recorded it yet; nothing was settled. Retry shortly.',
+        'The provider still reports the call as open, has not recorded it yet, or a reconnect added a conversation ' +
+        'while the call was being settled; nothing was settled. Retry shortly.',
       schema: ApiErrorSchema,
     },
     502: {
