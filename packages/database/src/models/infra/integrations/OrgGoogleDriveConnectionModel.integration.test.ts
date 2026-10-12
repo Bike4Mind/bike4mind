@@ -84,6 +84,26 @@ describe('OrgGoogleDriveConnectionModel - credential handling', () => {
     expect(withCreds?.oauthRefreshToken).toBe('enc-new');
   });
 
+  it('updateCredential recovers a connection parked in needs_reconnect so it can be claimed again', async () => {
+    const created = await OrgGoogleDriveConnection.create({ ...base, oauthRefreshToken: 'enc-old' });
+    const claim = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    expect(claim).not.toBeNull();
+    await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, claim!, 'folder gone', 'needs_reconnect');
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('needs_reconnect');
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBeNull();
+
+    const updated = await orgGoogleDriveConnectionRepository.updateCredential(
+      created.id,
+      org('org-1'),
+      'enc-new',
+      'user-2'
+    );
+
+    expect(updated?.status).toBe('connected');
+    expect(updated?.lastError ?? null).toBeNull();
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).not.toBeNull();
+  });
+
   it('updateCredential writes the credential but does NOT heal a syncing connection (no claim flip)', async () => {
     // A Re-sync issued while an ingest is in flight must not flip 'syncing' -> 'connected', or
     // claimForSync would let the re-triggered run claim on top of the live one (duplicate ingest).

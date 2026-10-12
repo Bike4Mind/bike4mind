@@ -43,8 +43,8 @@ import {
   isDriveInvalidCursorError,
   isFolder,
   probeConnectedFolder,
+  UNREACHABLE_FOLDER_MESSAGES,
   type ConnectedFolderReachability,
-  type UnreachableFolderReason,
   type DriveChange,
   type DriveFile,
 } from '@server/integrations/google/drive/driveClient';
@@ -118,16 +118,6 @@ const rateLimitBackoffSeconds = () =>
 // self-host worker, any non-Lambda host). Keeps the guard active by default rather than silently
 // absent. Mirrors extractLakeMemory's DEFAULT_RUN_BUDGET_MS, against the same 10-minute ceiling.
 const DEFAULT_RUN_BUDGET_MS = 9 * 60_000;
-
-// The lastError shown on the "Needs reconnect" chip. Drive answers 404 (not 403) for a folder the
-// credential can no longer see, so not_found covers "un-shared from you" as well as "deleted".
-const UNREACHABLE_FOLDER_MESSAGES: Record<UnreachableFolderReason, string> = {
-  not_found:
-    'The connected Google Drive folder was not found. It may have been deleted, or it is no longer shared with the account that connected it. Re-share it, then re-sync.',
-  forbidden:
-    'Google Drive denied access to the connected folder. It is no longer shared with the account that connected it. Re-share it, then re-sync.',
-  trashed: 'The connected Google Drive folder is in the trash. Restore it in Google Drive, then re-sync.',
-};
 
 // Hard ceiling on how many slices ONE ingest chain runs before it stops re-enqueuing itself, so a
 // pathological folder cannot turn one sync into an unbounded run of invocations. Coverage is not lost
@@ -736,12 +726,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       });
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       // This run still holds the claim (set above), so the release is guarded like any other exit.
-      await orgGoogleDriveConnectionRepository.releaseSyncClaim(
+      const parked = await orgGoogleDriveConnectionRepository.releaseSyncClaim(
         connectionId,
         ingestClaimToken,
         UNREACHABLE_FOLDER_MESSAGES[folderReachability.reason],
         'needs_reconnect'
       );
+      if (!parked) {
+        logger.warn('[driveLakeIngest] claim was taken away before parking; leaving the new owner alone', {
+          connectionId,
+        });
+      }
       return;
     }
 

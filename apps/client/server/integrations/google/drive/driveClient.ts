@@ -166,19 +166,32 @@ export function isDriveNotFoundError(e: unknown): boolean {
   return false;
 }
 
-/**
- * Is this error Drive refusing access (a 403) rather than throttling us? Drive sends quota
- * exhaustion as a 403 too, so the rate-limit shape is excluded: a throttle misread as a permission
- * denial would tell a user their folder is gone when it is only busy.
- */
-export function isDriveForbiddenError(e: unknown): boolean {
-  if (typeof e !== 'object' || e === null || isDriveRateLimitError(e)) return false;
+// The 403 reasons Drive gives for a credential that may not touch one specific file. Allow-listed
+// rather than "any non-throttle 403": project-wide 403s (dailyLimitExceeded, accessNotConfigured,
+// domainPolicy) are not about the folder, and reading them as "un-shared" would park every
+// connection that polls during a platform outage.
+const DRIVE_FILE_ACCESS_DENIED_REASONS = new Set(['insufficientFilePermissions', 'appNotAuthorizedToFile']);
+
+/** Is this error Drive refusing this credential access to one specific file (a per-file 403)? */
+export function isDriveFileAccessDeniedError(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
   const err = e as Record<string, unknown>;
   const response = err.response as Record<string, unknown> | undefined;
-  for (const raw of [err.code, err.status, response?.status]) {
-    if ((typeof raw === 'string' ? Number(raw) : raw) === 403) return true;
-  }
-  return false;
+  const data = response?.data as { error?: { errors?: unknown } } | undefined;
+
+  const is403 = [err.code, err.status, response?.status].some(
+    raw => (typeof raw === 'string' ? Number(raw) : raw) === 403
+  );
+  if (!is403) return false;
+
+  return [err.errors, data?.error?.errors].some(
+    list =>
+      Array.isArray(list) &&
+      list.some(detail => {
+        const reason = (detail as { reason?: unknown } | null)?.reason;
+        return typeof reason === 'string' && DRIVE_FILE_ACCESS_DENIED_REASONS.has(reason);
+      })
+  );
 }
 
 // Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches. The
@@ -263,6 +276,17 @@ export type UnreachableFolderReason = 'not_found' | 'forbidden' | 'trashed';
 
 export type ConnectedFolderReachability = { reachable: true } | { reachable: false; reason: UnreachableFolderReason };
 
+// The lastError shown on the "Needs reconnect" chip. Drive answers 404 (not 403) for a folder the
+// credential can no longer see, so not_found covers "un-shared" as well as "deleted". A deleted folder
+// cannot be re-picked: the lake is bound to that folder id, so the way out is disconnect + reconnect.
+export const UNREACHABLE_FOLDER_MESSAGES: Record<UnreachableFolderReason, string> = {
+  not_found:
+    'The connected Google Drive folder was not found. If it is no longer shared with the account that connected it, re-share it and re-sync. If it was deleted, disconnect it and connect another folder.',
+  forbidden:
+    'Google Drive denied access to the connected folder. It is no longer shared with the account that connected it. Re-share it, then re-sync.',
+  trashed: 'The connected Google Drive folder is in the trash. Restore it in Google Drive, then re-sync.',
+};
+
 /**
  * Is a connection's root folder still there for the connection's own credential? Unlike
  * getFolderAccess this THROWS on anything that is not a definite answer (a throttle, a 5xx, a network
@@ -284,7 +308,7 @@ export async function probeConnectedFolder(
     return res.data.trashed ? { reachable: false, reason: 'trashed' } : { reachable: true };
   } catch (e) {
     if (isDriveNotFoundError(e)) return { reachable: false, reason: 'not_found' };
-    if (isDriveForbiddenError(e)) return { reachable: false, reason: 'forbidden' };
+    if (isDriveFileAccessDeniedError(e)) return { reachable: false, reason: 'forbidden' };
     throw e;
   }
 }

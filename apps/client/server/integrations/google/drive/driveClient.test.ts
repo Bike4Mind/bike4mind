@@ -11,8 +11,9 @@ import {
   getStartPageToken,
   isDriveInvalidCursorError,
   getFileParents,
-  isDriveForbiddenError,
+  isDriveFileAccessDeniedError,
   probeConnectedFolder,
+  UNREACHABLE_FOLDER_MESSAGES,
 } from './driveClient';
 
 /** The shape googleapis hands back for a throttle - a 429, or a 403 whose reason is a quota. */
@@ -486,24 +487,44 @@ describe('getFileParents', () => {
   });
 });
 
-describe('isDriveForbiddenError', () => {
+describe('isDriveFileAccessDeniedError', () => {
+  const denied = (reason: string) => ({ code: 403, errors: [{ reason }] });
+
+  it.each(['insufficientFilePermissions', 'appNotAuthorizedToFile'])('recognizes a 403 with reason %s', reason => {
+    expect(isDriveFileAccessDeniedError(denied(reason))).toBe(true);
+  });
+
   it.each([
-    ['numeric code', { code: 403 }],
-    ['string code', { code: '403' }],
-    ['response.status', { response: { status: 403 } }],
-  ])('recognizes a 403 by %s', (_label, err) => {
-    expect(isDriveForbiddenError(err)).toBe(true);
+    ['err.errors', { code: 403, errors: [{ reason: 'insufficientFilePermissions' }] }],
+    ['response.data.error.errors', throttle(403, 'insufficientFilePermissions')],
+    ['a string code', { code: '403', errors: [{ reason: 'insufficientFilePermissions' }] }],
+    [
+      'response.status',
+      { response: { status: 403, data: { error: { errors: [{ reason: 'appNotAuthorizedToFile' }] } } } },
+    ],
+  ])('reads the reason off %s', (_label, err) => {
+    expect(isDriveFileAccessDeniedError(err)).toBe(true);
   });
 
-  it('does not treat a 403 with a rate-limit reason as a permission denial', () => {
-    expect(isDriveForbiddenError(throttle(403, 'rateLimitExceeded'))).toBe(false);
+  it.each([
+    ['no reason', { code: 403 }],
+    ['an empty errors list', { code: 403, errors: [] }],
+    ['dailyLimitExceeded', denied('dailyLimitExceeded')],
+    ['accessNotConfigured', denied('accessNotConfigured')],
+    ['domainPolicy', denied('domainPolicy')],
+    ['rateLimitExceeded', throttle(403, 'rateLimitExceeded')],
+  ])('is false for a 403 with %s', (_label, err) => {
+    expect(isDriveFileAccessDeniedError(err)).toBe(false);
   });
 
-  it('is false for a 404 and for non-objects', () => {
-    expect(isDriveForbiddenError({ code: 404 })).toBe(false);
-    expect(isDriveForbiddenError('403')).toBe(false);
-    expect(isDriveForbiddenError(null)).toBe(false);
-    expect(isDriveForbiddenError(undefined)).toBe(false);
+  it('is false for a permission reason on a non-403, and for non-objects', () => {
+    expect(isDriveFileAccessDeniedError({ code: 404, errors: [{ reason: 'insufficientFilePermissions' }] })).toBe(
+      false
+    );
+    expect(isDriveFileAccessDeniedError({ code: 404 })).toBe(false);
+    expect(isDriveFileAccessDeniedError('403')).toBe(false);
+    expect(isDriveFileAccessDeniedError(null)).toBe(false);
+    expect(isDriveFileAccessDeniedError(undefined)).toBe(false);
   });
 });
 
@@ -534,8 +555,8 @@ describe('probeConnectedFolder', () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
-  it('maps a non-throttle 403 to forbidden', async () => {
-    const get = vi.fn().mockRejectedValue(throttle(403, 'forbidden'));
+  it('maps a per-file 403 (insufficientFilePermissions) to forbidden', async () => {
+    const get = vi.fn().mockRejectedValue(throttle(403, 'insufficientFilePermissions'));
     expect(await probeConnectedFolder(driveWithGet(get), 'FOLDER_X')).toEqual({
       reachable: false,
       reason: 'forbidden',
@@ -556,6 +577,16 @@ describe('probeConnectedFolder', () => {
     await expect(settleThroughBackoff(probeConnectedFolder(driveWithGet(get), 'FOLDER_X'))).rejects.toBe(err);
   });
 
+  it.each([
+    ['dailyLimitExceeded', throttle(403, 'dailyLimitExceeded')],
+    ['accessNotConfigured', throttle(403, 'accessNotConfigured')],
+    ['no reason', Object.assign(new Error('Forbidden'), { code: 403, response: { status: 403 } })],
+  ])('throws a project-wide 403 (%s) rather than reporting the folder gone', async (_label, err) => {
+    const get = vi.fn().mockRejectedValue(err);
+    await expect(probeConnectedFolder(driveWithGet(get), 'FOLDER_X')).rejects.toBe(err);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it('throws a persistent 500', async () => {
     vi.useFakeTimers();
     const err = Object.assign(new Error('Backend Error'), { code: 500 });
@@ -567,5 +598,11 @@ describe('probeConnectedFolder', () => {
     const get = vi.fn();
     await expect(probeConnectedFolder(driveWithGet(get), "x' in parents")).rejects.toThrow('Invalid Drive folder id');
     expect(get).not.toHaveBeenCalled();
+  });
+});
+
+describe('UNREACHABLE_FOLDER_MESSAGES', () => {
+  it.each(['not_found', 'forbidden', 'trashed'] as const)('has a user-facing message for %s', reason => {
+    expect(UNREACHABLE_FOLDER_MESSAGES[reason].length).toBeGreaterThan(0);
   });
 });

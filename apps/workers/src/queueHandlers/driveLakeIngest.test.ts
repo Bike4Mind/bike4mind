@@ -2397,6 +2397,19 @@ describe('driveLakeIngest consumer', () => {
       expect(h.walkFolder).not.toHaveBeenCalled();
     });
 
+    it('logs and returns when the claim was taken away before the park landed', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'not_found' });
+      h.releaseSyncClaim.mockResolvedValue(null);
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[driveLakeIngest] claim was taken away before parking; leaving the new owner alone',
+        { connectionId: 'conn1' }
+      );
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
     it('settles the adopted batch of a continuation whose folder has gone', async () => {
       h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'not_found' });
       h.batchFindById.mockResolvedValue({
