@@ -26,6 +26,8 @@ interface ToolsButtonProps {
   enabledMcpServers: string[] | null;
   availableMcpServers: string[];
   setTools: (tools: B4MLLMTools[]) => void;
+  /** The current session's `disabledTools`, hidden from the panel. */
+  disabledTools?: readonly string[];
 }
 
 const ToolsButton: FC<ToolsButtonProps> = ({
@@ -41,6 +43,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
   enabledMcpServers,
   availableMcpServers,
   setTools,
+  disabledTools,
 }) => {
   const [open, setOpen] = useState(false);
   const [isDeepResearchModalOpen, setIsDeepResearchModalOpen] = useState(false);
@@ -85,6 +88,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     // 500px of panel leaves the description a narrow column beside the toggle, where it wraps
     // to four lines. The settings dialog has the width for the side-by-side layout.
     stackedHeader: true,
+    disabledTools,
   };
 
   if (isMobile) {

@@ -422,6 +422,45 @@ describe('ToolsSection save-to-data-lake flag gating', () => {
   });
 });
 
+/**
+ * `session.disabledTools` is a server-enforced denylist (resolveDeniedTools in ChatCompletionProcess):
+ * the model is never offered a denied tool whatever the toggle says, so its row must not render.
+ */
+describe('ToolsSection session-denied tools', () => {
+  const pinnedTally = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll('.tools-collapsible-title')).find(el =>
+      el.textContent?.startsWith('Individual tools')
+    )?.textContent;
+
+  it('hides the row of a denied tool', () => {
+    const { container, queryByTestId } = render(<ToolsSection disabledTools={['image_generation']} />, {
+      wrapper: Wrapper,
+    });
+    expect(queryByTestId('tool-row-image_generation')).toBeNull();
+    expect(queryByTestId('tool-toggle-image-generation')).toBeNull();
+    // Its Grid cell is left empty, which the grid's `:empty` rule drops from the layout.
+    expect(container.querySelector('.tool-item-image-generation')?.childElementCount).toBe(0);
+  });
+
+  it('keeps every other row', () => {
+    const { queryByTestId } = render(<ToolsSection disabledTools={['image_generation']} />, { wrapper: Wrapper });
+    expect(queryByTestId('tool-row-web_search')).toBeTruthy();
+    expect(queryByTestId('tool-row-music_generation')).toBeTruthy();
+  });
+
+  it('drops a denied tool from the pinned tally', () => {
+    mocks.state.tools = ['image_generation', 'web_search'];
+    const { container } = render(<ToolsSection disabledTools={['image_generation']} />, { wrapper: Wrapper });
+    expect(pinnedTally(container)).toBe('Individual tools (1 pinned)');
+  });
+
+  // Control: with no session there is no denylist, and nothing changes.
+  it('renders the row when nothing is denied', () => {
+    const { queryByTestId } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(queryByTestId('tool-row-image_generation')).toBeTruthy();
+  });
+});
+
 // LOCK-STEP with computeToolAvailability in pages/api/settings/serverConfig.ts: web_search and
 // deep_research now resolve through the SearXNG/Firecrawl providers, so their disabled-tooltips must
 // name those alternatives (not just Serper/Firecrawl keys).

@@ -105,10 +105,12 @@ const AISettings: FC<AISettingsProps> = ({
 
   const primaryTools = ['web_search', 'web_fetch', 'image_generation'] as const;
   // Indicators must agree with the Tools picker: a tool whose key is missing renders
-  // off there, so it must not show an icon or feed the "+N" badge here either. The
-  // raw `tools` still goes to ToolsButton below - that array is what handleToggleTool
-  // reads and rewrites, so filtering it would drop preferences on the next toggle.
-  const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability);
+  // off there, and one the session denies is not listed at all, so neither may show an
+  // icon or feed the "+N" badge here. The raw `tools` still goes to ToolsButton below -
+  // that array is what handleToggleTool reads and rewrites, so filtering it would drop
+  // preferences on the next toggle.
+  const disabledTools = currentSession?.disabledTools;
+  const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability, disabledTools);
   const activePrimaryTools = primaryTools.filter(tool => displayTools.includes(tool));
   const isThinkingActive = thinking?.enabled ?? false;
   // Integrations that actually reach this turn. "Only tools I pick" withholds every
@@ -207,6 +209,7 @@ const AISettings: FC<AISettingsProps> = ({
           enabledMcpServers={activeMcpServers}
           availableMcpServers={availableMcpServers}
           setTools={newTools => setLLM({ tools: newTools })}
+          disabledTools={disabledTools}
         />
 
         {/* Agents */}
@@ -252,7 +255,7 @@ const AISettings: FC<AISettingsProps> = ({
         {isImageTemplatesEnabled && isImageModel(model) && <ImageTemplateControls />}
 
         {/* Prompt Builder (guided prompt construction; generation models only) */}
-        {isPromptBuilderEnabled && isImageGenerationModel(model) && (
+        {isPromptBuilderEnabled && isImageGenerationModel(model) && !disabledTools?.includes('image_generation') && (
           <Tooltip title={showPromptBuilderHint ? 'New: build image prompts here' : 'Prompt Builder'}>
             <Badge
               size="sm"
@@ -321,6 +324,7 @@ const AISettings: FC<AISettingsProps> = ({
         setStream={setStream}
         voiceOver={voiceOver || false}
         onRollDice={onRollDice}
+        disabledTools={disabledTools}
       />
 
       {isPromptBuilderEnabled && <PromptBuilderModal />}
