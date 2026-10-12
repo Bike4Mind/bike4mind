@@ -406,6 +406,7 @@ interface SelectedModelDetailsProps {
   ImageModels: typeof ImageModels;
   tools: B4MLLMTools[];
   onRollDice: () => void;
+  disabledTools?: readonly string[];
   isMobile: boolean;
   max_tokens: number;
   temperature: number;
@@ -435,6 +436,8 @@ interface AdvancedAIModalProps {
   setStream: (enabled: boolean) => void;
   voiceOver: boolean;
   onRollDice: () => void;
+  /** The current session's `disabledTools`, hidden from the Tools section. */
+  disabledTools?: readonly string[];
 }
 
 const ResetButton: React.FC<{
@@ -634,6 +637,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   ImageModels,
   tools,
   onRollDice,
+  disabledTools,
   isMobile,
   max_tokens,
   temperature,
@@ -881,6 +885,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               onRollDice={onRollDice}
               columns={isMobile ? 1 : 2}
               readOnly={readOnly}
+              disabledTools={disabledTools}
             />
           </Box>
           <Divider
@@ -1534,6 +1539,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   setStream,
   voiceOver,
   onRollDice,
+  disabledTools,
 }) => {
   const theme = useTheme();
   const mode = theme.palette.mode;
@@ -2298,6 +2304,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 ImageModels={ImageModels}
                 tools={tools}
                 onRollDice={onRollDice}
+                disabledTools={disabledTools}
                 isMobile={isMobile}
                 max_tokens={safeMaxTokens}
                 temperature={safeTemperature}

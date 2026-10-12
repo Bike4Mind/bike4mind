@@ -324,6 +324,13 @@ export const isToolKeyMissing = (toolName: B4MLLMTools, availability: ToolAvaila
   availability?.[toolName] === false;
 
 /**
+ * Whether the session's `disabledTools` denylist withholds `toolName`. Exact-id match, like
+ * `resolveDeniedTools` on the server. Undefined (no session yet) denies nothing.
+ */
+export const isToolDenied = (toolName: string, deniedTools: readonly string[] | undefined): boolean =>
+  deniedTools?.includes(toolName) ?? false;
+
+/**
  * The user's enabled tools minus the ones whose key is missing, for DISPLAY and
  * interaction gating only.
  *
@@ -332,14 +339,20 @@ export const isToolKeyMissing = (toolName: B4MLLMTools, availability: ToolAvaila
  * preference (toggle state, "N pinned" tallies, composer indicators) has to combine it
  * with availability, or a greyed-out row reads as enabled.
  *
+ * `deniedTools` is the session's `disabledTools`: the server never offers those
+ * (resolveDeniedTools in ChatCompletionProcess), so their rows are hidden and they must
+ * not read as on anywhere else either.
+ *
  * NOT for building a send payload: the stored preference is still forwarded to the
  * model on purpose (see `resolveTools` in useLLMSettingsAssembly), and dropping a tool
  * here would silently diverge the request from what the user chose.
  */
 export const filterToolsForDisplay = (
   enabledTools: readonly B4MLLMTools[],
-  availability: ToolAvailability | undefined
-): B4MLLMTools[] => enabledTools.filter(tool => !isToolKeyMissing(tool, availability));
+  availability: ToolAvailability | undefined,
+  deniedTools?: readonly string[]
+): B4MLLMTools[] =>
+  enabledTools.filter(tool => !isToolKeyMissing(tool, availability) && !isToolDenied(tool, deniedTools));
 
 export const getToolInfo = (toolName: PublicTools): ToolInfo | undefined => {
   return TOOL_MAPPING[toolName];

@@ -17,6 +17,7 @@ const MOVED = [
   { from: 'apps/client/server/cron', to: 'apps/workers/src/cron' },
   { from: 'apps/client/server/jobs', to: 'apps/workers/src/jobs' },
   { from: 'apps/client/server/emailIngestion', to: 'apps/workers/src/emailIngestion' },
+  { from: 'apps/client/server/agentExecutor', to: 'apps/workers/src/agentExecutor' },
 ] as const;
 
 /**

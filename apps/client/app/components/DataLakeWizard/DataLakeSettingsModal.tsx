@@ -244,7 +244,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const startResearchRun = useStartDataLakeResearchRun(lake?.id ?? '');
   // Shown to a manager even with no configuration: this tab is where one is CREATED.
   const showResearchTab = !!lake?.canManage && !researchConfigs.isForbidden;
-  const { data: modelCatalog } = useModelInfo();
+  const { data: modelCatalog, isLoading: modelsLoading } = useModelInfo();
   const researchModelOptions = useMemo(() => researchJudgeModelOptions(modelCatalog ?? []), [modelCatalog]);
   const researchDefaultModel = useMemo(() => researchDefaultModelLabel(modelCatalog ?? []), [modelCatalog]);
   const confirm = useConfirmation();
@@ -937,6 +937,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                       error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
                       pendingProposals={researchConfigs.pendingProposals}
                       modelOptions={researchModelOptions}
+                      modelsLoading={modelsLoading}
                       defaultModelLabel={researchDefaultModel}
                       isCreating={createResearchConfig.isPending}
                       savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}
