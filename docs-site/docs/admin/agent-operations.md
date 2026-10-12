@@ -79,8 +79,8 @@ The following models are available for system prompt generation:
 
 | Model | Label |
 |-------|-------|
-| claude-opus-4-20250514 | Claude 4 Opus (Recommended) |
-| claude-sonnet-4-20250514 | Claude 4 Sonnet |
+| claude-opus-4-20250514 | Claude Opus 4 (Recommended) |
+| claude-sonnet-4-20250514 | Claude Sonnet 4 |
 | claude-3-7-sonnet-20250219 | Claude 3.7 Sonnet (Fast) |
 | o3-2025-04-16 | OpenAI O3 (Reasoning) |
 | gpt-4.1-2025-04-14 | GPT-4.1 (Latest) |
@@ -106,7 +106,7 @@ After repair, the page automatically reloads to display the corrected data. The 
 - **Version Before Changing** -- Always create a new meta-prompt version rather than editing the active one, so you can revert if needed
 - **Use the Default Template as a Starting Point** -- The built-in PromptCrafter template is well-tested; customize it incrementally
 - **Set Appropriate Rate Limits** -- A rate limit of 60 seconds prevents excessive API calls while still allowing prompt regeneration when agent metadata changes
-- **Choose the Right Model** -- Higher-capability models (Claude 4 Opus, O3) produce richer system prompts but cost more; balance quality with budget
+- **Choose the Right Model** -- Higher-capability models (Claude Opus 4, O3) produce richer system prompts but cost more; balance quality with budget
 - **Monitor Generation Count** -- The total generations counter helps track usage and costs over time
 - **Repair When Issues Arise** -- If agents appear to have missing or incorrect system prompts, run a database repair before investigating further
 

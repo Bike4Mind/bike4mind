@@ -18,8 +18,8 @@ const editFabFileSchema = z.object({
       end: z.number(),
     })
     .optional(),
-  preserveFormatting: z.boolean().optional().prefault(true),
-  applyImmediately: z.boolean().optional().prefault(false),
+  preserveFormatting: z.boolean().prefault(true),
+  applyImmediately: z.boolean().prefault(false),
 });
 
 type EditFabFileParameters = z.infer<typeof editFabFileSchema>;

@@ -163,9 +163,6 @@ export const emailParserQueueSubscription = emailIngestionQueue.subscribe(
       generatedImagesBucket,
       websocketApi,
     ],
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -312,9 +309,6 @@ const emailAnalyzerQueueSubscription = emailAnalysisQueue.subscribe(
     memory: '512 MB',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket],
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

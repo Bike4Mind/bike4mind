@@ -106,6 +106,28 @@ describe('AnthropicBedrockBackend current inference profiles', () => {
     expect(model?.pricing[1_000_000]?.cache_read).toBe(0.2 / 1_000_000);
   });
 
+  it('lists Haiku 5.5 as an adaptive Bedrock model priced by prompt length ($0.10/$0.50, then $0.50/$2.50 over 100K)', async () => {
+    const model = (await backend.getModelInfo()).find(
+      candidate => candidate.id === ChatModels.CLAUDE_5_5_HAIKU_BEDROCK
+    );
+
+    expect(model).toMatchObject({ backend: 'bedrock', can_think: true, thinkingStyle: 'adaptive' });
+    expect(model?.pricing[100_000]).toEqual({ input: 0.1 / 1_000_000, output: 0.5 / 1_000_000 });
+    expect(model?.pricing[1_000_000]).toEqual({ input: 0.5 / 1_000_000, output: 2.5 / 1_000_000 });
+  });
+
+  it('omits sampling parameters for Haiku 5.5', () => {
+    const body = JSON.parse(
+      backend.getPayload(ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, [{ role: 'user', content: 'Hello' }], {
+        temperature: 0.2,
+        topP: 0.8,
+      }).body
+    ) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty('temperature');
+    expect(body).not.toHaveProperty('top_p');
+  });
+
   it.each(profiles)('omits sampling parameters for %s', (id, _input, _output) => {
     const body = JSON.parse(
       backend.getPayload(id, [{ role: 'user', content: 'Hello' }], { temperature: 0.2, topP: 0.8 }).body

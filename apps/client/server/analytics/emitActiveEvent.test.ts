@@ -363,6 +363,35 @@ describe('emitProductEvent', () => {
     for (const call of warnSpy.mock.calls) expect(JSON.stringify(call)).not.toContain(WIDGETS_KEY);
   });
 
+  it.each([503, 500])('warns for a purchase ingest %s response without failing the caller', async status => {
+    resetConfig();
+    mockFetch.mockResolvedValue({ status });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true })
+    ).resolves.toBeUndefined();
+
+    expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] ingest server error', {
+      status,
+      productId: 'widgets',
+    });
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(WIDGETS_KEY);
+  });
+
+  it('warns for a purchase network failure without failing the caller', async () => {
+    resetConfig();
+    mockFetch.mockRejectedValue(new Error('network failure'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true })
+    ).resolves.toBeUndefined();
+
+    expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] ingest request failed', { productId: 'widgets' });
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(WIDGETS_KEY);
+  });
+
   it('leaves the host emitters on the host product and key', async () => {
     resetConfig();
     await emitActiveEvent({ pseudoUserId: 'p', sessionId: 's', userType: 'free' });

@@ -216,6 +216,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-6',
     'gpt-5',
   ],
+  'claude-haiku-5-5': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'claude-opus-5-5': [
     'claude-opus-5',
     'claude-opus-4-8',
@@ -268,6 +269,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-5-20250929',
     'gpt-5',
   ],
+  'global.anthropic.claude-haiku-5-5': ['claude-haiku-5-5', 'claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'global.anthropic.claude-sonnet-5-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],

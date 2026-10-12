@@ -104,7 +104,6 @@ if (isMonitoredStage) {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-      logging: { retention: '3 days' },
     },
     {
       transform: {
