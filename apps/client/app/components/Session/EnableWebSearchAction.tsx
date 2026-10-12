@@ -13,17 +13,18 @@ import { replyReportsNoWebSearch } from '@client/app/utils/webSearchUnavailable'
  * Under a reply that says it had no search tool, offers the same switch as Tools > Web Search.
  * Hidden once Web Search is on, and when the deployment has no search key (the switch is disabled
  * there too, see ToolsSection), and for models without tool support (ToolsSection clears the tool list
- * for them, so the switch would do nothing).
+ * for them, so the switch would do nothing). Fast mode sends no tools at all (resolveTools in
+ * useLLMSettingsAssembly), so there the click also switches Tools to Smart.
  */
 const EnableWebSearchAction: FC<{ reply: string }> = ({ reply }) => {
-  const [tools, setLLM, model] = useLLM(useShallow(s => [s.tools, s.setLLM, s.model]));
+  const [tools, toolMode, setLLM, model] = useLLM(useShallow(s => [s.tools, s.toolMode, s.setLLM, s.model]));
   const { data: config } = useConfig();
   const { data: modelInfo } = useModelInfo();
   const supportsTools = !!modelInfo?.find(m => m.id === model)?.supportsTools;
 
   if (
     !supportsTools ||
-    tools.includes('web_search') ||
+    (toolMode !== 'fast' && tools.includes('web_search')) ||
     isToolKeyMissing('web_search', config?.toolAvailability) ||
     !replyReportsNoWebSearch(reply)
   ) {
@@ -31,7 +32,10 @@ const EnableWebSearchAction: FC<{ reply: string }> = ({ reply }) => {
   }
 
   const enable = () => {
-    setLLM({ tools: [...tools, 'web_search'] });
+    setLLM({
+      toolMode: 'smart',
+      tools: tools.includes('web_search') ? tools : [...tools, 'web_search'],
+    });
     toast.success('Web Search is on. Send your question again to search the web.');
   };
 
