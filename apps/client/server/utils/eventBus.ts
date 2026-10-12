@@ -228,7 +228,7 @@ export const SpiderEvents = {
       userId: z.string(),
       totalNotebooks: z.number(),
       operations: z.array(z.enum(['messageCount', 'curation', 'summarize', 'tags', 'embeddings'])),
-      dryRun: z.boolean().optional().prefault(false),
+      dryRun: z.boolean().prefault(false),
     })
   ),
   Progress: event(

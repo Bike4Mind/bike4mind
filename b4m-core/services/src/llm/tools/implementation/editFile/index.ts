@@ -18,12 +18,8 @@ const editFileSchema = z.object({
     })
     .optional()
     .describe('Optional selection range to edit within the file'),
-  preserveFormatting: z
-    .boolean()
-    .optional()
-    .prefault(true)
-    .describe('Whether to preserve the original formatting style'),
-  returnDiff: z.boolean().optional().prefault(true).describe('Whether to return a diff of the changes'),
+  preserveFormatting: z.boolean().prefault(true).describe('Whether to preserve the original formatting style'),
+  returnDiff: z.boolean().prefault(true).describe('Whether to return a diff of the changes'),
 });
 
 type EditFileParams = z.infer<typeof editFileSchema>;

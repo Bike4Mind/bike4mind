@@ -15,7 +15,7 @@ const s3Client = new S3Client();
 
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),
-  expiresIn: z.number().optional().prefault(3600), // Default to 1 hour
+  expiresIn: z.number().prefault(3600), // Default to 1 hour
 });
 
 /** Minimal shape a FabFile lookup needs to expose for the moderation + ownership gates below. */

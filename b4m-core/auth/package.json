@@ -86,7 +86,7 @@
     "jsonwebtoken": "^9.0.3",
     "qrcode": "^1.5.4",
     "speakeasy": "^2.0.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@tsconfig/node24": "*",

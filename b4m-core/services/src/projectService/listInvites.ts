@@ -4,9 +4,9 @@ import { z } from 'zod';
 
 export const listProjectInvitesParamsSchema = z.object({
   id: z.string(),
-  statuses: z.string().optional().prefault(''),
-  limit: z.coerce.number().optional().prefault(10),
-  page: z.coerce.number().optional().prefault(1),
+  statuses: z.string().prefault(''),
+  limit: z.coerce.number().prefault(10),
+  page: z.coerce.number().prefault(1),
 });
 
 type ListProjectInvitesParameters = z.infer<typeof listProjectInvitesParamsSchema>;

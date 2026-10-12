@@ -1082,9 +1082,9 @@ export enum ServerStatusEnum {
 
 // Logo Settings Schema
 export const LogoSettingsSchema = z.object({
-  customLogoUrl: z.string().optional().prefault(''),
-  customDarkLogoUrl: z.string().optional().prefault(''),
-  useBothLogos: z.boolean().optional().prefault(false),
+  customLogoUrl: z.string().prefault(''),
+  customDarkLogoUrl: z.string().prefault(''),
+  useBothLogos: z.boolean().prefault(false),
 });
 
 export type LogoSettings = z.infer<typeof LogoSettingsSchema>;

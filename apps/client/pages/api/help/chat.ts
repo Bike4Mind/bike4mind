@@ -25,7 +25,6 @@ const HelpChatSchema = z.object({
       })
     )
     .max(20)
-    .optional()
     .prefault([]),
   currentHelpSlug: z
     .string()

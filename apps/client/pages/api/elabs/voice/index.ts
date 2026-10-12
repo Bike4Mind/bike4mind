@@ -28,8 +28,8 @@ const handler = baseApi()
       const validatedBody = z
         .object({
           keySpec: z.string().min(6),
-          description: z.string().optional().prefault(''),
-          isActive: z.boolean().optional().prefault(true),
+          description: z.string().prefault(''),
+          isActive: z.boolean().prefault(true),
         })
         .parse(req.body);
 

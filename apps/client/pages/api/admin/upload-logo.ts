@@ -19,8 +19,8 @@ import { z } from 'zod';
 
 // Extended schema to support dark mode logo uploads
 const AdminLogoUploadInput = FileGeneratePresignedUrlRequestInput.extend({
-  isDarkMode: z.boolean().optional().prefault(false),
-  useBothLogos: z.boolean().optional().prefault(false),
+  isDarkMode: z.boolean().prefault(false),
+  useBothLogos: z.boolean().prefault(false),
 });
 
 async function getLogoSettings(session?: any): Promise<LogoSettings> {
