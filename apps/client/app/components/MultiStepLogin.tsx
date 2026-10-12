@@ -209,7 +209,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(trimmedEmail)) {
-      setEmailError(t('no_valid_emails_error'));
+      setEmailError(t('auth.fieldErrors.invalidEmail'));
       return;
     }
 

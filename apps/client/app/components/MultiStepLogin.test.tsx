@@ -443,6 +443,7 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
 
     const alert = await screen.findByTestId('login-email-error');
     expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveTextContent('auth.fieldErrors.invalidEmail');
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input.getAttribute('aria-describedby')).toContain(alert.id);
   });
