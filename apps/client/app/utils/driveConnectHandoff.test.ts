@@ -38,7 +38,7 @@ afterEach(() => {
   sessionStorage.clear();
   vi.restoreAllMocks();
   takeDrivePickerResume();
-  takeDriveLakeResyncResume(undefined, '');
+  takeDriveLakeResyncResume();
 });
 
 describe('driveConnectHandoff', () => {
@@ -144,21 +144,20 @@ describe('driveConnectHandoff', () => {
     expect(takeDrivePickerResume('user-1', T0 + 1)).toBe(false);
   });
 
-  it('hands out the lake re-sync signal once, to the user and lake it was raised for', () => {
+  it('hands out the lake re-sync signal once, naming the lake, to the user it was raised for', () => {
     requestDriveLakeResyncResume('user-1', 'lake-1', T0);
-    expect(takeDriveLakeResyncResume('user-1', 'lake-1', T0 + 1)).toBe(true);
-    expect(takeDriveLakeResyncResume('user-1', 'lake-1', T0 + 1)).toBe(false);
+    expect(takeDriveLakeResyncResume('user-1', T0 + 1)).toBe('lake-1');
+    expect(takeDriveLakeResyncResume('user-1', T0 + 1)).toBeNull();
   });
 
   it.each([
-    ['another user', 'user-2', 'lake-1', T0 + 1],
-    ['another lake', 'user-1', 'lake-2', T0 + 1],
-    ['no signed-in user', undefined, 'lake-1', T0 + 1],
-    ['a signal past its TTL', 'user-1', 'lake-1', T0 + DRIVE_PICKER_RESUME_TTL_MS + 1],
-  ])('refuses and clears the lake re-sync signal for %s', (_label, userId, dataLakeId, now) => {
+    ['another user', 'user-2', T0 + 1],
+    ['no signed-in user', undefined, T0 + 1],
+    ['a signal past its TTL', 'user-1', T0 + DRIVE_PICKER_RESUME_TTL_MS + 1],
+  ])('refuses and clears the lake re-sync signal for %s', (_label, userId, now) => {
     requestDriveLakeResyncResume('user-1', 'lake-1', T0);
-    expect(takeDriveLakeResyncResume(userId, dataLakeId, now)).toBe(false);
-    expect(takeDriveLakeResyncResume('user-1', 'lake-1', T0 + 1)).toBe(false);
+    expect(takeDriveLakeResyncResume(userId, now)).toBeNull();
+    expect(takeDriveLakeResyncResume('user-1', T0 + 1)).toBeNull();
   });
 
   it('keeps the re-sync flag through a rebind to a retry', () => {

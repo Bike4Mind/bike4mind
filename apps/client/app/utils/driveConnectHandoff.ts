@@ -171,9 +171,9 @@ export function takeDrivePickerResume(userId?: string, now = Date.now()): boolea
 }
 
 /**
- * One-shot signal from the callback to DriveConnectAction to re-run the Re-sync/Reconnect that sent
- * the user to consent, once the manager reopens on that lake. Same binding and expiry as the picker
- * resume above, plus the lake, so it can never sync a different lake.
+ * One-shot signal from the callback to DriveLakeResyncResume to re-run the Re-sync/Reconnect that
+ * sent the user to consent, once the manager reopens on that lake. Same user binding and expiry as
+ * the picker resume above. Cleared on read: it has exactly one consumer.
  */
 let driveLakeResyncResume: { userId: string; dataLakeId: string; at: number } | null = null;
 
@@ -181,10 +181,11 @@ export function requestDriveLakeResyncResume(userId: string, dataLakeId: string,
   driveLakeResyncResume = { userId, dataLakeId, at: now };
 }
 
-export function takeDriveLakeResyncResume(userId: string | undefined, dataLakeId: string, now = Date.now()): boolean {
+/** The lake to re-sync, or null when there is no live signal for this user. */
+export function takeDriveLakeResyncResume(userId?: string, now = Date.now()): string | null {
   const pending = driveLakeResyncResume;
   driveLakeResyncResume = null;
-  if (!pending || !userId || pending.userId !== userId || pending.dataLakeId !== dataLakeId) return false;
+  if (!pending || !userId || pending.userId !== userId) return null;
   const age = now - pending.at;
-  return age >= 0 && age <= DRIVE_PICKER_RESUME_TTL_MS;
+  return age >= 0 && age <= DRIVE_PICKER_RESUME_TTL_MS ? pending.dataLakeId : null;
 }

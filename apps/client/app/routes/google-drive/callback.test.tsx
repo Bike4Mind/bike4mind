@@ -72,7 +72,7 @@ beforeEach(() => {
   h.orgId = 'org-1';
   sessionStorage.clear();
   takeDrivePickerResume();
-  takeDriveLakeResyncResume(undefined, '');
+  takeDriveLakeResyncResume();
   useDataLakeWizardStore.getState().resetWizard();
   useDataLakeWizardStore.getState().closeManager();
 });
@@ -313,7 +313,7 @@ describe('GoogleDriveCallbackPage', () => {
       expect(store.managerLakeId).toBe('lake-7');
       expect(store.isOpen).toBe(false);
       expect(takeDrivePickerResume('user-1')).toBe(false);
-      expect(takeDriveLakeResyncResume('user-1', 'lake-7')).toBe(false);
+      expect(takeDriveLakeResyncResume('user-1')).toBeNull();
       expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
     });
 
@@ -324,7 +324,7 @@ describe('GoogleDriveCallbackPage', () => {
       render(<GoogleDriveCallbackPage />);
 
       await waitFor(() => expect(useDataLakeWizardStore.getState().managerLakeId).toBe('lake-7'));
-      expect(takeDriveLakeResyncResume('user-1', 'lake-7')).toBe(true);
+      expect(takeDriveLakeResyncResume('user-1')).toBe('lake-7');
     });
 
     it('does not reopen the lake when the connect failed', async () => {

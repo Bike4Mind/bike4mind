@@ -26,10 +26,6 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 }));
 vi.mock('react-google-drive-picker', () => ({ default: () => [h.openPicker] }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: vi.fn() } }));
-vi.mock('@client/app/contexts/UserContext', () => {
-  const state = { currentUser: { id: 'user-1' } };
-  return { useUser: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state }) };
-});
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: h.toastError } }));
 vi.mock('@client/app/hooks/data/useDriveFolderPicker', async importOriginal => {
   const actual = await importOriginal<typeof import('@client/app/hooks/data/useDriveFolderPicker')>();
@@ -43,7 +39,6 @@ vi.mock('@client/app/hooks/data/useDriveFolderPicker', async importOriginal => {
 });
 
 import DriveConnectAction from './DriveConnectAction';
-import { requestDriveLakeResyncResume } from '@client/app/utils/driveConnectHandoff';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
@@ -263,30 +258,5 @@ describe('DriveConnectAction', () => {
 
     expect(screen.getByTestId('drive-reconnect-btn')).toHaveTextContent('Reconnect Google Drive');
     expect(screen.queryByTestId('drive-resync-btn')).toBeNull();
-  });
-
-  it('finishes the Re-sync on return from the consent it sent the user to', async () => {
-    h.connection.current = connected();
-    h.get.mockResolvedValue({ data: { accessToken: 'tok' } });
-    requestDriveLakeResyncResume('user-1', 'lake1');
-    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
-
-    await waitFor(() => expect(h.connectMutate).toHaveBeenCalledTimes(1));
-    expect(h.connectMutate.mock.calls[0][0]).toEqual({
-      dataLakeId: 'lake1',
-      driveFolderId: 'FOLDER',
-      folderName: 'Docs',
-    });
-  });
-
-  it('ignores a resume raised for another lake', async () => {
-    h.connection.current = connected();
-    h.get.mockResolvedValue({ data: { accessToken: 'tok' } });
-    requestDriveLakeResyncResume('user-1', 'other-lake');
-    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
-
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(h.get).not.toHaveBeenCalled();
-    expect(h.connectMutate).not.toHaveBeenCalled();
   });
 });

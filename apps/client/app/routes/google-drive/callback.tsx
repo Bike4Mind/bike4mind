@@ -78,8 +78,9 @@ const resumeDriveConnect = (oauthState: string) => {
   const handoff = consumeDriveConnectHandoff({ ...owner, oauthState });
   if (!handoff) return;
   if (handoff.kind === 'lake') {
-    useDataLakeWizardStore.getState().openManager('mine', handoff.dataLakeId);
+    // Raised before the open: the manager panel mounts on it and takes the signal on mount.
     if (handoff.resync) requestDriveLakeResyncResume(owner.userId, handoff.dataLakeId);
+    useDataLakeWizardStore.getState().openManager('mine', handoff.dataLakeId);
     return;
   }
   useDataLakeWizardStore.getState().openWizard();

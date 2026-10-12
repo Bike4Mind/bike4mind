@@ -3,7 +3,7 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import SyncIcon from '@mui/icons-material/Sync';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import LinkIcon from '@mui/icons-material/Link';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { toast } from 'sonner';
 import {
   useLakeDriveConnection,
@@ -12,8 +12,6 @@ import {
 } from '@client/app/hooks/data/googleDrive';
 import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
 import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
-import { useUser } from '@client/app/contexts/UserContext';
-import { takeDriveLakeResyncResume } from '@client/app/utils/driveConnectHandoff';
 import { getServerErrorField } from '@client/app/utils/error';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
 
@@ -34,18 +32,9 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   const { openFolderPicker, resync, reconnect, isPicking, isCheckingGrant, isConnecting } = useLakeDriveFolderConnect(
     lake.id
   );
-  const userId = useUser(state => state.currentUser?.id);
 
   const lakeId = lake.id;
   const canResync = canManage && !!connection && !connection.disconnecting;
-
-  // Back from the consent a Re-sync/Reconnect sent the user to: finish that sync, once.
-  useEffect(() => {
-    if (!canResync || !connection) return;
-    if (!takeDriveLakeResyncResume(userId, lakeId)) return;
-    void resync({ driveFolderId: connection.driveFolderId, folderName: connection.folderName ?? undefined });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on the first render that can act, not per refetch
-  }, [canResync, userId, lakeId]);
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="drive-connection-loading" />;

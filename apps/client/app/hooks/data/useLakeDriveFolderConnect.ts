@@ -16,7 +16,9 @@ import { getServerErrorField } from '@client/app/utils/error';
  *   to consent by the picker (see useDriveFolderPicker); the handoff saved for that attempt lets the
  *   Drive callback route reopen this lake in the manager, where they pick the folder.
  * - `resync`: re-sync the folder the lake is already bound to - no picker. The grant is checked first,
- *   and a dead one goes through consent and syncs on return (takeDriveLakeResyncResume).
+ *   and one that no longer refreshes goes through consent and syncs on return (DriveLakeResyncResume).
+ *   A grant revoked while its cached access token is still in date passes the check; drive-sync then
+ *   reports the folder unreadable.
  * - `reconnect`: always through consent, then the same re-sync. For a connection in credential_error,
  *   where only a fresh grant helps: drive-sync copies it onto the connection and clears the error.
  */

@@ -315,7 +315,8 @@ function isTerminalDriveGrantError(e: unknown): boolean {
   return e instanceof BadRequestError || isInvalidGrantError(e);
 }
 
-function isInvalidGrantError(e: unknown): boolean {
+/** A revoked/expired Google grant: only a fresh consent fixes it. */
+export function isInvalidGrantError(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
   // google-auth-library surfaces a revoked/expired grant as a GaxiosError whose body is the OAuth error.
   const response: unknown = 'response' in e ? e.response : undefined;
