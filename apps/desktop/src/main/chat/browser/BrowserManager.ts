@@ -94,6 +94,10 @@ class ElectronPage implements BrowserPage {
   /** Where the view sits when it is not in the pane. Also the page's keep-alive; see above. */
   private readonly host: BrowserWindow;
   private readonly view: WebContentsView;
+  // Held from construction: Electron clears `view.webContents` once the contents are destroyed,
+  // and 'destroyed' handlers and late tool calls still run after that.
+  private readonly webContents: WebContents;
+  readonly contentsId: number;
   private parent: BaseWindow;
   private readonly events: string[] = [];
   private lastStatus: number | undefined;
@@ -128,6 +132,8 @@ class ElectronPage implements BrowserPage {
     this.view.setBounds({ x: 0, y: 0, ...VIEWPORT });
 
     const contents = this.view.webContents;
+    this.webContents = contents;
+    this.contentsId = contents.id;
     contents.setAudioMuted(true);
     // A popup would be a window nobody can see; open it in this page instead.
     contents.setWindowOpenHandler(({ url }) => {
@@ -171,10 +177,6 @@ class ElectronPage implements BrowserPage {
     contents.on('destroyed', () => this.onClosed());
   }
 
-  get contentsId(): number {
-    return this.view.webContents.id;
-  }
-
   /** Say why nothing arrived, and tell the pane: a silent failure is a blank pane with no reason. */
   fail(reason: string): void {
     this.lastError = reason;
@@ -187,13 +189,13 @@ class ElectronPage implements BrowserPage {
   }
 
   private get contents(): WebContents {
-    if (this.view.webContents.isDestroyed()) throw new Error('The browser was closed.');
-    return this.view.webContents;
+    if (this.webContents.isDestroyed()) throw new Error('The browser was closed.');
+    return this.webContents;
   }
 
   /** Whether this page is worth putting on screen. One that has been nowhere is not. */
   get showable(): boolean {
-    return !this.view.webContents.isDestroyed() && hasContent(this.currentUrl());
+    return !this.webContents.isDestroyed() && hasContent(this.currentUrl());
   }
 
   /** Put the view in the app window at the pane's bounds, which are window-relative and in DIP. */
@@ -209,19 +211,19 @@ class ElectronPage implements BrowserPage {
   }
 
   private moveTo(next: BaseWindow): void {
-    if (this.parent === next || this.view.webContents.isDestroyed()) return;
+    if (this.parent === next || this.webContents.isDestroyed()) return;
     if (!this.parent.isDestroyed()) this.parent.contentView.removeChildView(this.view);
     next.contentView.addChildView(this.view);
     this.parent = next;
   }
 
   currentUrl(): string {
-    return this.view.webContents.isDestroyed() ? '' : this.view.webContents.getURL();
+    return this.webContents.isDestroyed() ? '' : this.webContents.getURL();
   }
 
   /** What the pane's url bar draws. A destroyed page has nothing to say and no controls to offer. */
   state(): BrowserPaneState {
-    const contents = this.view.webContents;
+    const contents = this.webContents;
     if (contents.isDestroyed()) {
       return { url: '', canGoBack: false, canGoForward: false, loading: false, error: this.lastError };
     }
@@ -268,7 +270,7 @@ class ElectronPage implements BrowserPage {
   }
 
   stop(): void {
-    if (!this.view.webContents.isDestroyed()) this.view.webContents.stop();
+    if (!this.webContents.isDestroyed()) this.webContents.stop();
   }
 
   /**
@@ -371,9 +373,9 @@ class ElectronPage implements BrowserPage {
   async settle(timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (this.view.webContents.isDestroyed()) return;
+      if (this.webContents.isDestroyed()) return;
       const quiet = this.inflight === 0 && Date.now() - this.lastNetworkAt >= QUIET_MS;
-      if (!this.view.webContents.isLoading() && quiet) return;
+      if (!this.webContents.isLoading() && quiet) return;
       await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
@@ -382,7 +384,7 @@ class ElectronPage implements BrowserPage {
     // Out of the app window first: destroying a view that is still a child of it would tear a
     // hole in the pane the renderer is drawing around.
     this.park();
-    if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
+    if (!this.webContents.isDestroyed()) this.webContents.close();
     if (!this.host.isDestroyed()) this.host.destroy();
   }
 }

@@ -12,6 +12,7 @@ const contents = vi.hoisted(() => {
     url: '',
     loadingMainFrame: false,
     stops: 0,
+    nextId: 0,
     load: (_url: string): Promise<void> => Promise.resolve(),
     script: (): Promise<unknown> => Promise.resolve(null),
     capture: (): Promise<unknown> => Promise.resolve({ isEmpty: () => true }),
@@ -23,39 +24,58 @@ const contents = vi.hoisted(() => {
 });
 
 vi.mock('electron', () => {
-  const webContents = {
-    id: 1,
-    on: (event: string, handler: (...args: unknown[]) => void) => {
-      contents.handlers.set(event, [...(contents.handlers.get(event) ?? []), handler]);
-    },
-    isDestroyed: () => false,
-    getURL: () => contents.url,
-    getTitle: () => 'Title',
-    isLoading: () => contents.loadingMainFrame,
-    isLoadingMainFrame: () => contents.loadingMainFrame,
-    loadURL: (url: string) => contents.load(url),
-    executeJavaScript: () => contents.script(),
-    capturePage: () => contents.capture(),
-    stop: () => {
-      contents.stops += 1;
-      contents.loadingMainFrame = false;
-      contents.emit('did-stop-loading');
-    },
-    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-    setAudioMuted: () => undefined,
-    setWindowOpenHandler: () => undefined,
-    close: () => undefined,
+  type Handler = (...args: unknown[]) => void;
+  /**
+   * Each view gets its own contents. Destroying them clears `view.webContents` BEFORE 'destroyed'
+   * is emitted, which is the order Electron uses.
+   */
+  const makeContents = (view: { webContents?: unknown }) => {
+    const own = new Map<string, Handler[]>();
+    let destroyed = false;
+    const destroy = () => {
+      if (destroyed) return;
+      destroyed = true;
+      view.webContents = undefined;
+      for (const handler of own.get('destroyed') ?? []) handler();
+    };
+    return {
+      id: ++contents.nextId,
+      on: (event: string, handler: Handler) => {
+        contents.handlers.set(event, [...(contents.handlers.get(event) ?? []), handler]);
+        own.set(event, [...(own.get(event) ?? []), handler]);
+      },
+      isDestroyed: () => destroyed,
+      getURL: () => contents.url,
+      getTitle: () => 'Title',
+      isLoading: () => contents.loadingMainFrame,
+      isLoadingMainFrame: () => contents.loadingMainFrame,
+      loadURL: (url: string) => contents.load(url),
+      executeJavaScript: () => contents.script(),
+      capturePage: () => contents.capture(),
+      stop: () => {
+        contents.stops += 1;
+        contents.loadingMainFrame = false;
+        contents.emit('did-stop-loading');
+      },
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      setAudioMuted: () => undefined,
+      setWindowOpenHandler: () => undefined,
+      close: destroy,
+      destroy,
+    };
   };
-  const contentView = { addChildView: () => undefined, removeChildView: () => undefined };
   return {
     BrowserWindow: class {
-      contentView = contentView;
-      isDestroyed = () => false;
-      destroy = () => undefined;
+      private destroyed = false;
+      contentView = { addChildView: () => undefined, removeChildView: () => undefined };
+      isDestroyed = () => this.destroyed;
+      destroy = () => {
+        this.destroyed = true;
+      };
       on = () => undefined;
     },
     WebContentsView: class {
-      webContents = webContents;
+      webContents: ReturnType<typeof makeContents> | undefined = makeContents(this);
       setBounds = () => undefined;
     },
     session: {
@@ -79,7 +99,8 @@ vi.mock('./cookies/CookieImporter', () => ({
   },
 }));
 
-const { BrowserManager } = await import('./BrowserManager');
+const { BrowserWindow } = await import('electron');
+const { BrowserManager, NO_PAGE } = await import('./BrowserManager');
 
 const never = <T>() => new Promise<T>(() => undefined);
 
@@ -204,5 +225,59 @@ describe('BrowserManager page deadlines', () => {
     const capturing = expect(page.screenshot()).rejects.toThrow(/did not paint a frame to capture within 15 seconds/);
     await vi.advanceTimersByTimeAsync(15_000);
     await capturing;
+  });
+});
+
+describe('BrowserManager closing pages', () => {
+  type Manager = InstanceType<typeof BrowserManager>;
+  type Internals = { pages: Map<string, unknown>; byContents: Map<number, unknown>; pane: unknown };
+  const internals = (manager: Manager) => manager as unknown as Internals;
+  const bounds = { x: 0, y: 0, width: 600, height: 400 };
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.url = 'http://localhost:3080/';
+  });
+
+  const open = (manager: Manager, sessionId: string) => manager.context(sessionId, async () => undefined).page();
+
+  it('forgets a deleted page whose view lost its contents before destroyed fired', async () => {
+    const manager = new BrowserManager();
+    const window = new BrowserWindow();
+    manager.setPane(window, 'a', bounds);
+
+    await expect(manager.closeSession('a')).resolves.toBeUndefined();
+
+    expect(internals(manager).pages.size).toBe(0);
+    expect(internals(manager).byContents.size).toBe(0);
+    expect(internals(manager).pane).toBeUndefined();
+  });
+
+  it('deletes several notebooks at once, including the one on screen, and keeps the rest', async () => {
+    const manager = new BrowserManager();
+    const window = new BrowserWindow();
+    for (const id of ['a', 'b', 'c', 'd']) await open(manager, id);
+    manager.setPane(window, 'b', bounds);
+
+    await Promise.all(['a', 'b', 'c', 'a'].map(id => manager.closeSession(id)));
+
+    const { pages, byContents, pane } = internals(manager);
+    expect([...pages.keys()]).toEqual(['d']);
+    expect([...byContents.values()]).toEqual([pages.get('d')]);
+    expect(pane).toBeUndefined();
+  });
+
+  it('answers a tool still holding a page whose contents are gone, without throwing', async () => {
+    const manager = new BrowserManager();
+    const page = await open(manager, 'a');
+    await manager.closeSession('a');
+
+    expect(page.currentUrl()).toBe('');
+    expect(() => page.stop()).not.toThrow();
+    await expect(page.settle(1_000)).resolves.toBeUndefined();
+    await expect(page.navigate('http://localhost:3080/')).rejects.toThrow('The browser was closed.');
+    await expect(page.close()).resolves.toBeUndefined();
+    expect(manager.setPane(new BrowserWindow(), 'a', null)).toEqual(NO_PAGE);
+    expect(() => manager.closeAll()).not.toThrow();
   });
 });

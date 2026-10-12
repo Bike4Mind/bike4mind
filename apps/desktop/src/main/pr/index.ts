@@ -53,15 +53,17 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
 
   ipcMain.handle(IPC_CHANNELS.prWatch, (event, sessionId: unknown) => {
     const sender = event.sender;
+    // Read now: a destroyed WebContents may no longer answer for its own id.
+    const senderId = sender.id;
     // A window that goes away must stop counting as one showing its conversation.
-    if (!watchedSenders.has(sender.id)) {
-      watchedSenders.add(sender.id);
+    if (!watchedSenders.has(senderId)) {
+      watchedSenders.add(senderId);
       sender.once('destroyed', () => {
-        watchedSenders.delete(sender.id);
-        monitor.unwatch(sender.id);
+        watchedSenders.delete(senderId);
+        monitor.unwatch(senderId);
       });
     }
-    return monitor.watch(sender.id, typeof sessionId === 'string' ? sessionId : null);
+    return monitor.watch(senderId, typeof sessionId === 'string' ? sessionId : null);
   });
   ipcMain.handle(IPC_CHANNELS.prGetSummaries, () => monitor.summaries());
   ipcMain.handle(IPC_CHANNELS.prBind, (_event, sessionId: unknown, url: unknown) =>
