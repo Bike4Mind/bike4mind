@@ -219,6 +219,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     populateMessageCounts: vi.fn(),
     countByUserId: vi.fn(),
     countActiveVoiceSessionsByUserId: vi.fn(),
+    addVoiceBilledCredits: vi.fn(),
     findStaleVoiceHolds: vi.fn(),
     claimVoiceHold: vi.fn(),
     restoreVoiceHold: vi.fn(),

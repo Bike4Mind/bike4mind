@@ -23,8 +23,19 @@ vi.mock('@bike4mind/observability', () => ({
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
-import { handler, runVoiceHoldSweep, VOICE_HOLD_STALE_AFTER_MS, VOICE_HOLD_SWEEP_LIMIT } from './voiceHoldSweep';
-import { creditsForElapsed, MAX_SESSION_SECONDS, realtimeCreditsFloor } from '@server/voice/voiceSessionLimits';
+import {
+  handler,
+  REALTIME_VOICE_HOLD_STALE_AFTER_MS,
+  runVoiceHoldSweep,
+  VOICE_HOLD_STALE_AFTER_MS,
+  VOICE_HOLD_SWEEP_LIMIT,
+} from './voiceHoldSweep';
+import {
+  creditsForElapsed,
+  MAX_SESSION_SECONDS,
+  REALTIME_VOICE_HOLD_SECONDS,
+  realtimeCreditsFloor,
+} from '@server/voice/voiceSessionLimits';
 
 const NOW = new Date('2026-10-11T12:00:00Z');
 const STARTED = new Date(NOW.getTime() - 60 * 60 * 1000);
@@ -34,7 +45,7 @@ const hold = (
   id: string,
   voiceConnectedAt: Date | null = null,
   voiceLastActivityAt: Date | null = null,
-  voiceBillingMode: 'connected_time' | 'realtime' | null = 'connected_time'
+  realtime = false
 ) => ({
   id,
   userId: `user-${id}`,
@@ -42,23 +53,25 @@ const hold = (
   voiceSessionStartedAt: STARTED,
   voiceConnectedAt,
   voiceLastActivityAt,
-  voiceBillingMode,
+  realtime,
 });
 
 describe('voiceHoldSweep', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findStaleVoiceHolds.mockResolvedValue([]);
-    claimVoiceHold.mockResolvedValue(true);
+    claimVoiceHold.mockResolvedValue({ billedCredits: null });
     restoreVoiceHold.mockResolvedValue(true);
   });
 
   it('only asks for holds older than the longest call plus the safety margin, bounded per run', async () => {
     await runVoiceHoldSweep(NOW);
 
-    const [startedBefore, limit] = findStaleVoiceHolds.mock.calls[0];
+    const [startedBefore, realtimeStartedBefore, limit] = findStaleVoiceHolds.mock.calls[0];
     expect(NOW.getTime() - startedBefore.getTime()).toBe(VOICE_HOLD_STALE_AFTER_MS);
     expect(VOICE_HOLD_STALE_AFTER_MS).toBeGreaterThan(MAX_SESSION_SECONDS * 1000);
+    expect(NOW.getTime() - realtimeStartedBefore.getTime()).toBe(REALTIME_VOICE_HOLD_STALE_AFTER_MS);
+    expect(REALTIME_VOICE_HOLD_STALE_AFTER_MS).toBeGreaterThan(REALTIME_VOICE_HOLD_SECONDS * 1000);
     expect(limit).toBe(VOICE_HOLD_SWEEP_LIMIT);
   });
 
@@ -102,7 +115,7 @@ describe('voiceHoldSweep', () => {
 
   it('moves no credits for a hold another settler claimed first', async () => {
     findStaleVoiceHolds.mockResolvedValue([hold('a')]);
-    claimVoiceHold.mockResolvedValue(false);
+    claimVoiceHold.mockResolvedValue(null);
 
     const result = await runVoiceHoldSweep(NOW);
 
@@ -122,8 +135,9 @@ describe('voiceHoldSweep', () => {
   });
 
   it('charges an abandoned realtime hold the open-time floor up to the last frame the server saw', async () => {
-    // No usage frame ever settled it; transcript frames kept arriving for 20 minutes.
-    findStaleVoiceHolds.mockResolvedValue([hold('a', at(3), at(20 * 60), 'realtime')]);
+    // No closing frame ever settled it; frames kept arriving for 20 minutes.
+    findStaleVoiceHolds.mockResolvedValue([hold('a', at(3), at(20 * 60), true)]);
+    claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
 
     await runVoiceHoldSweep(NOW);
 
@@ -132,8 +146,19 @@ describe('voiceHoldSweep', () => {
     expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED - floor);
   });
 
+  it('keeps what an abandoned realtime hold billed when that is more than its floor', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a', at(3), at(60), true)]);
+    claimVoiceHold.mockResolvedValue({ billedCredits: 300 });
+
+    await runVoiceHoldSweep(NOW);
+
+    expect(realtimeCreditsFloor(RESERVED, 60)).toBeLessThan(300);
+    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED - 300);
+  });
+
   it('refunds a realtime hold the server never saw a frame for', async () => {
-    findStaleVoiceHolds.mockResolvedValue([hold('a', null, null, 'realtime')]);
+    findStaleVoiceHolds.mockResolvedValue([hold('a', null, null, true)]);
+    claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
 
     await runVoiceHoldSweep(NOW);
 

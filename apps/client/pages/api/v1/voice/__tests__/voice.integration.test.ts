@@ -208,7 +208,7 @@ beforeEach(() => {
   mocks.countActiveVoiceSessions.mockResolvedValue(0);
   mocks.sessionUpdate.mockResolvedValue(undefined);
   mocks.incrementCredits.mockResolvedValue(undefined);
-  mocks.claimVoiceHold.mockResolvedValue(true);
+  mocks.claimVoiceHold.mockResolvedValue({ billedCredits: null });
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
   mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
@@ -413,6 +413,28 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1');
   });
 
+  it('settles an earlier call left open before a fresh connect overwrites its hold', async () => {
+    const startedAt = new Date(Date.now() - 20 * 60 * 1000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      userId: 'user-1',
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+      // Last seen alive a minute after it connected: the earlier call keeps that minute.
+      voiceConnectedAt: startedAt,
+      voiceLastActivityAt: new Date(startedAt.getTime() + 60 * 1000),
+    });
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
+    expect(mocks.incrementCredits.mock.calls).toEqual([
+      ['user-1', RESERVED_CREDITS - Math.ceil(RESERVED_CREDITS / 5)],
+      ['user-1', -RESERVED_CREDITS],
+    ]);
+  });
+
   it('creates a session when no sessionId is sent', async () => {
     const { res, run } = fireSessions({ body: { reasoningModelId: 'claude-sonnet-4-6' } });
     await run();
@@ -566,7 +588,7 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
       voiceReservedCredits: RESERVED_CREDITS,
       voiceSessionStartedAt: new Date(Date.now() - 1000),
     });
-    mocks.claimVoiceHold.mockResolvedValue(false);
+    mocks.claimVoiceHold.mockResolvedValue(null);
     const { res, run } = fireEnd();
     await run();
     expect(res._getStatusCode()).toBe(200);

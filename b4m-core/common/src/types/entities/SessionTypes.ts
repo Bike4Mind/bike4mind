@@ -856,23 +856,21 @@ export interface ISession {
    */
   voiceConnectedAt?: Date | null;
 
-  /** Latest sign of life from the open voice call (client heartbeat or provider turn). */
+  /** Latest sign of life from the open voice call (client heartbeat, provider turn or transcript frame). */
   voiceLastActivityAt?: Date | null;
 
   /**
-   * How the open hold is billed: `connected_time` (ElevenLabs calls) or `realtime` (OpenAI realtime
-   * calls, billed on usage with a time floor). Null on holds opened before it was recorded.
+   * Credits billed so far against the open realtime voice hold, one response at a time.
+   * Set to 0 when a realtime hold opens and removed when it closes; absent for other holds.
    */
-  voiceBillingMode?: VoiceBillingMode | null;
+  voiceBilledCredits?: number;
 }
-
-export type VoiceBillingMode = 'connected_time' | 'realtime';
 
 /** The per-call state a claimed voice hold carries, restored with it if its settlement fails. */
 export interface VoiceHoldMarkers {
   voiceConnectedAt?: Date | null;
   voiceLastActivityAt?: Date | null;
-  voiceBillingMode?: VoiceBillingMode | null;
+  voiceBilledCredits?: number | null;
 }
 
 ///////////
@@ -1164,11 +1162,19 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   countActiveVoiceSessionsByUserId: (userId: string) => Promise<number>;
 
   /**
-   * Oldest-first sessions whose voice credit hold was reserved before `startedBefore` and never
-   * settled, at most `limit` of them.
+   * Add `credits` to the billed total of the voice hold that started at `startedAt`. Resolves the
+   * total billed before this charge, or null when that hold is no longer open.
+   */
+  addVoiceBilledCredits: (sessionId: string, startedAt: Date, credits: number) => Promise<number | null>;
+
+  /**
+   * Oldest-first sessions whose voice credit hold was reserved before `startedBefore` (or, for a
+   * realtime hold, before `realtimeStartedBefore`) and never settled, at most `limit` of them.
+   * `realtime` marks a hold billed per response (it carries `voiceBilledCredits`).
    */
   findStaleVoiceHolds: (
     startedBefore: Date,
+    realtimeStartedBefore: Date,
     limit: number
   ) => Promise<
     Array<{
@@ -1178,7 +1184,7 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
       voiceSessionStartedAt: Date;
       voiceConnectedAt: Date | null;
       voiceLastActivityAt: Date | null;
-      voiceBillingMode: VoiceBillingMode | null;
+      realtime: boolean;
     }>
   >;
 
@@ -1189,10 +1195,11 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   recordVoiceActivity: (sessionId: string, at: Date) => Promise<void>;
 
   /**
-   * Atomically clear the voice hold that started at `startedAt`. Resolves true for the single
-   * caller that cleared it, false when it was already settled or replaced by a newer call.
+   * Atomically clear the voice hold that started at `startedAt`. Resolves, for the single caller
+   * that cleared it, what realtime responses had billed against it (null for a hold never billed per
+   * response); null when it was already settled or replaced by a newer call.
    */
-  claimVoiceHold: (sessionId: string, startedAt: Date) => Promise<boolean>;
+  claimVoiceHold: (sessionId: string, startedAt: Date) => Promise<{ billedCredits: number | null } | null>;
 
   /**
    * Put back a hold claimed by `claimVoiceHold` whose refund then failed, with its per-call
@@ -1201,7 +1208,7 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    */
   restoreVoiceHold: (
     sessionId: string,
-    voiceReservedCredits: number | null,
+    voiceReservedCredits: number,
     startedAt: Date,
     markers?: VoiceHoldMarkers
   ) => Promise<boolean>;

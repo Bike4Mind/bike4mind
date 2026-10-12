@@ -278,7 +278,8 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     voiceSessionStartedAt: { type: Date, required: false, default: null },
     voiceConnectedAt: { type: Date, required: false, default: null },
     voiceLastActivityAt: { type: Date, required: false, default: null },
-    voiceBillingMode: { type: String, enum: ['connected_time', 'realtime', null], required: false, default: null },
+    // No default: $inc needs the field absent or numeric, never null.
+    voiceBilledCredits: { type: Number, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -651,17 +652,32 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     });
   }
 
-  async findStaleVoiceHolds(startedBefore: Date, limit: number) {
+  async addVoiceBilledCredits(sessionId: string, startedAt: Date, credits: number) {
+    const before = await this.sessionModel.findOneAndUpdate(
+      { _id: sessionId, voiceSessionStartedAt: startedAt },
+      { $inc: { voiceBilledCredits: credits } },
+      { new: false, projection: { voiceBilledCredits: 1 } }
+    );
+    return before ? (before.voiceBilledCredits ?? 0) : null;
+  }
+
+  async findStaleVoiceHolds(startedBefore: Date, realtimeStartedBefore: Date, limit: number) {
     const sessions = await this.sessionModel
       .find(
-        { voiceSessionStartedAt: { $lt: startedBefore }, voiceReservedCredits: { $gt: 0 } },
+        {
+          voiceReservedCredits: { $gt: 0 },
+          $or: [
+            { voiceBilledCredits: { $exists: false }, voiceSessionStartedAt: { $lt: startedBefore } },
+            { voiceBilledCredits: { $exists: true }, voiceSessionStartedAt: { $lt: realtimeStartedBefore } },
+          ],
+        },
         {
           userId: 1,
           voiceReservedCredits: 1,
           voiceSessionStartedAt: 1,
           voiceConnectedAt: 1,
           voiceLastActivityAt: 1,
-          voiceBillingMode: 1,
+          voiceBilledCredits: 1,
         }
       )
       .sort({ voiceSessionStartedAt: 1 })
@@ -674,7 +690,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
       voiceConnectedAt: s.voiceConnectedAt ?? null,
       voiceLastActivityAt: s.voiceLastActivityAt ?? null,
-      voiceBillingMode: s.voiceBillingMode ?? null,
+      realtime: s.voiceBilledCredits != null,
     }));
   }
 
@@ -686,8 +702,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
 
   async claimVoiceHold(sessionId: string, startedAt: Date) {
     // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
-    // end, sweep or settlement frame wins, and a newer call's hold is never touched.
-    const claimed = await this.sessionModel.findOneAndUpdate(
+    // end, sweep or settlement frame wins, and a newer call's hold is never touched. The
+    // pre-update billed total includes every response frame that charged the hold before it.
+    const before = await this.sessionModel.findOneAndUpdate(
       { _id: sessionId, voiceSessionStartedAt: startedAt },
       {
         $set: {
@@ -695,17 +712,17 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceSessionStartedAt: null,
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
-          voiceBillingMode: null,
         },
+        $unset: { voiceBilledCredits: '' },
       },
-      { projection: { _id: 1 } }
+      { new: false, projection: { voiceBilledCredits: 1 } }
     );
-    return claimed != null;
+    return before ? { billedCredits: before.voiceBilledCredits ?? null } : null;
   }
 
   async restoreVoiceHold(
     sessionId: string,
-    voiceReservedCredits: number | null,
+    voiceReservedCredits: number,
     startedAt: Date,
     markers: VoiceHoldMarkers = {}
   ) {
@@ -718,7 +735,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceSessionStartedAt: startedAt,
           voiceConnectedAt: markers.voiceConnectedAt ?? null,
           voiceLastActivityAt: markers.voiceLastActivityAt ?? null,
-          voiceBillingMode: markers.voiceBillingMode ?? null,
+          ...(markers.voiceBilledCredits != null ? { voiceBilledCredits: markers.voiceBilledCredits } : {}),
         },
       }
     );

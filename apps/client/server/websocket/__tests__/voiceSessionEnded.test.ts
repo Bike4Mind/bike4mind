@@ -6,14 +6,14 @@ const mocks = vi.hoisted(() => ({
   incrementCredits: vi.fn(),
   claimVoiceHold: vi.fn(),
   getSession: vi.fn(),
-  subtractCredits: vi.fn(),
+  createTransaction: vi.fn(),
   recordUsageEvent: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   Connection: { findOne: mocks.connectionFindOne },
-  creditTransactionRepository: {},
+  creditTransactionRepository: { createTransaction: mocks.createTransaction },
   modelPriceRepository: { rowsInForce: vi.fn(async () => []) },
   sessionRepository: { claimVoiceHold: mocks.claimVoiceHold },
   usageEventRepository: { record: mocks.recordUsageEvent },
@@ -21,7 +21,6 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: { getSession: mocks.getSession },
-  creditService: { subtractCredits: mocks.subtractCredits },
 }));
 vi.mock('@bike4mind/common', () => ({
   ApiKeyScope: { AI_CHAT: 'ai:chat' },
@@ -47,7 +46,8 @@ vi.mock('@server/websocket/utils', () => ({
 
 import { func } from '../voiceSessionEnded';
 
-const STARTED = new Date('2026-10-11T12:00:00Z');
+// Just opened, so the connected-time floor stays below this frame's usage.
+const STARTED = new Date(Date.now() - 1000);
 const usage = {
   textInputTokens: 0,
   audioInputTokens: 0,
@@ -75,8 +75,14 @@ describe('voiceSessionEnded hold claim', () => {
     vi.useFakeTimers({ now: new Date(STARTED.getTime() + 60_000) });
     mocks.connectionFindOne.mockResolvedValue({ userId: 'user-1' });
     mocks.userFindById.mockResolvedValue({ id: 'user-1' });
-    mocks.getSession.mockResolvedValue({ id: 'session-1', voiceReservedCredits: 100, voiceSessionStartedAt: STARTED });
-    mocks.claimVoiceHold.mockResolvedValue(true);
+    mocks.getSession.mockResolvedValue({
+      id: 'session-1',
+      userId: 'user-1',
+      voiceReservedCredits: 100,
+      voiceSessionStartedAt: STARTED,
+    });
+    mocks.claimVoiceHold.mockResolvedValue({ billedCredits: null });
+    mocks.createTransaction.mockResolvedValue({});
     mocks.recordUsageEvent.mockResolvedValue(undefined);
   });
 
@@ -89,23 +95,28 @@ describe('voiceSessionEnded hold claim', () => {
 
     expect(mocks.claimVoiceHold).toHaveBeenCalledWith('session-1', STARTED);
     expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', 60);
-    expect(mocks.subtractCredits).toHaveBeenCalledTimes(1);
+    expect(mocks.createTransaction).toHaveBeenCalledTimes(1);
     expect(mocks.claimVoiceHold.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.incrementCredits.mock.invocationCallOrder[0]
     );
   });
 
   it('moves no credits and records nothing when another settler claimed the hold first', async () => {
-    mocks.claimVoiceHold.mockResolvedValue(false);
+    mocks.claimVoiceHold.mockResolvedValue(null);
 
     expect(await settle()).toEqual({ statusCode: 200 });
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
-    expect(mocks.subtractCredits).not.toHaveBeenCalled();
+    expect(mocks.createTransaction).not.toHaveBeenCalled();
     expect(mocks.recordUsageEvent).not.toHaveBeenCalled();
   });
 
   it('never reaches the claim for a session with no live hold', async () => {
-    mocks.getSession.mockResolvedValue({ id: 'session-1', voiceReservedCredits: null, voiceSessionStartedAt: null });
+    mocks.getSession.mockResolvedValue({
+      id: 'session-1',
+      userId: 'user-1',
+      voiceReservedCredits: null,
+      voiceSessionStartedAt: null,
+    });
 
     await settle();
 
@@ -119,6 +130,9 @@ describe('voiceSessionEnded hold claim', () => {
     await settle();
 
     expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', 50);
-    expect(mocks.subtractCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 50 }), expect.anything());
+    expect(mocks.createTransaction).toHaveBeenCalledWith(
+      'realtime_voice_usage',
+      expect.objectContaining({ credits: -50 })
+    );
   });
 });

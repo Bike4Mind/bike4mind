@@ -169,9 +169,9 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
   // Holds the latest reconnect() so the pc state handlers can invoke it without
   // creating a connect()/reconnect() dependency cycle.
   const reconnectRef = useRef<(() => void) | null>(null);
-  // The credit hold reserved by the last bootstrap, until a voice_session_ended frame
-  // settles it. A terminal teardown that finds one still set settles it at zero usage,
-  // so a call that never produced a response does not keep the whole hold.
+  // The credit hold the last bootstrap opened. Each response is billed against it by id and it
+  // stays open across responses and reconnects; a terminal teardown closes it, which refunds
+  // whatever the call did not use.
   const unsettledHoldRef = useRef<{ sessionId: string; model: string; userId: string } | null>(null);
   // Bumped by every terminal teardown. A connect compares it across its awaits (the mic
   // permission prompt, the bootstrap) to notice that End or an unmount ran meanwhile and
@@ -695,8 +695,9 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
                 model,
                 usage: usageData,
                 userId,
+                // Bills this response once, against the open hold.
+                ...(serverEvent.response?.id ? { responseId: serverEvent.response.id } : {}),
               });
-              unsettledHoldRef.current = null;
             }
 
             if (waitingForResponseDoneRef.current) {

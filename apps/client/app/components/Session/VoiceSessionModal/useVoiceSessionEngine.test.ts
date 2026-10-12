@@ -358,30 +358,62 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
   });
 
-  it('does not send a zero settlement once a response has settled the hold', async () => {
+  const responseDone = (id: string, audioOutputTokens: number) => ({
+    type: 'response.done',
+    response: {
+      id,
+      usage: {
+        input_token_details: {
+          audio_tokens: 1,
+          text_tokens: 0,
+          cached_tokens_details: { audio_tokens: 0, text_tokens: 0 },
+        },
+        output_token_details: { audio_tokens: audioOutputTokens, text_tokens: 0 },
+      },
+    },
+  });
+
+  it('bills each response by its id and closes the hold once when the call ends', async () => {
     const view = await connectAndConnected();
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-1', 10));
+      latestDc().__emitMessage(responseDone('resp-2', 20));
+    });
     act(() => {
       view.result.current.endSession();
     });
     act(() => {
-      latestDc().__emitMessage({
-        type: 'response.done',
-        response: {
-          usage: {
-            input_token_details: {
-              audio_tokens: 5,
-              text_tokens: 1,
-              cached_tokens_details: { audio_tokens: 0, text_tokens: 0 },
-            },
-            output_token_details: { audio_tokens: 7, text_tokens: 2 },
-          },
-        },
-      });
+      latestDc().__emitMessage(responseDone('resp-3', 5));
     });
 
     const frames = settlementFrames();
-    expect(frames).toHaveLength(1);
-    expect(frames[0].usage).toMatchObject({ audioInputTokens: 5, audioOutputTokens: 7 });
+    expect(frames.map(f => f.responseId)).toEqual(['resp-1', 'resp-2', 'resp-3', undefined]);
+    expect(frames[1].usage).toMatchObject({ audioOutputTokens: 20 });
+    // The closing frame carries no usage of its own; every response was billed by id.
+    expect(frames[3]).toMatchObject({ sessionId: 's1', usage: { audioOutputTokens: 0, audioInputTokens: 0 } });
+  });
+
+  it('keeps the hold open across a reconnect and closes it only when the call ends', async () => {
+    const view = await connectAndConnected();
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-1', 10));
+      latestPc().__emit('connectionstatechange', 'failed');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    act(() => {
+      latestDc().__emitMessage({ type: 'session.created' });
+    });
+    expect(settlementFrames().filter(f => !f.responseId)).toHaveLength(0);
+
+    act(() => {
+      view.result.current.endSession();
+    });
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-2', 5));
+    });
+    expect(settlementFrames().filter(f => !f.responseId)).toHaveLength(1);
   });
 
   it('stops every track of the microphone probe so the mic indicator goes off', async () => {

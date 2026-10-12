@@ -18,7 +18,7 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 
-import { settleVoiceHold, VOICE_HOLD_SETTLED_LOG } from './settleVoiceHold';
+import { lastSeenAt, settlePriorVoiceHold, settleVoiceHold, VOICE_HOLD_SETTLED_LOG } from './settleVoiceHold';
 import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS, realtimeCreditsFloor } from './voiceSessionLimits';
 
 const STARTED = new Date('2026-10-11T12:00:00Z');
@@ -28,18 +28,15 @@ const HOLD = { id: 's1', userId: 'u1', voiceReservedCredits: 600, voiceSessionSt
 describe('settleVoiceHold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    claimVoiceHold.mockResolvedValue(true);
+    claimVoiceHold.mockResolvedValue({ billedCredits: null });
     restoreVoiceHold.mockResolvedValue(true);
+    incrementCredits.mockResolvedValue(undefined);
   });
 
   it('bills connected time from the connect, not from the hold start, and refunds the rest', async () => {
     const connected = { ...HOLD, voiceConnectedAt: at(30) };
 
-    const result = await settleVoiceHold(
-      connected,
-      { kind: 'connected-time', endedAt: at(30 + MAX_SESSION_SECONDS / 3) },
-      'end'
-    );
+    const result = await settleVoiceHold(connected, at(30 + MAX_SESSION_SECONDS / 3), 'end');
 
     expect(result).toEqual({ settled: true, connected: true, chargedCredits: 200, refundedCredits: 400 });
     expect(claimVoiceHold).toHaveBeenCalledWith('s1', STARTED);
@@ -48,7 +45,7 @@ describe('settleVoiceHold', () => {
   });
 
   it('charges nothing for a call that never connected', async () => {
-    const result = await settleVoiceHold(HOLD, { kind: 'connected-time', endedAt: at(MAX_SESSION_SECONDS) }, 'end');
+    const result = await settleVoiceHold(HOLD, at(MAX_SESSION_SECONDS), 'end');
 
     expect(result).toEqual({ settled: true, connected: false, chargedCredits: 0, refundedCredits: 600 });
     expect(incrementCredits).toHaveBeenCalledWith('u1', 600);
@@ -57,61 +54,48 @@ describe('settleVoiceHold', () => {
   it('charges the whole hold, and refunds nothing, past the longest call', async () => {
     const connected = { ...HOLD, voiceConnectedAt: at(0) };
 
-    const result = await settleVoiceHold(
-      connected,
-      { kind: 'connected-time', endedAt: at(MAX_SESSION_SECONDS * 3) },
-      'sweep'
-    );
+    const result = await settleVoiceHold(connected, at(MAX_SESSION_SECONDS * 3), 'sweep');
 
     expect(result).toMatchObject({ chargedCredits: 600, refundedCredits: 0 });
     expect(incrementCredits).not.toHaveBeenCalled();
   });
 
-  it('bills reported realtime usage, charging what runs past the hold', async () => {
-    const result = await settleVoiceHold(
-      HOLD,
-      { kind: 'realtime', reportedCredits: 650, openUntil: at(60) },
-      'realtime-frame'
-    );
+  it('keeps what realtime responses already drew from the hold, even with no open time', async () => {
+    claimVoiceHold.mockResolvedValue({ billedCredits: 250 });
 
-    expect(result).toEqual({ settled: true, connected: true, chargedCredits: 650, refundedCredits: 0 });
-    expect(incrementCredits).toHaveBeenCalledWith('u1', -50);
+    const result = await settleVoiceHold(HOLD, STARTED, 'sweep');
+
+    expect(result).toEqual({ settled: true, connected: true, chargedCredits: 250, refundedCredits: 350 });
   });
 
-  it('never settles realtime usage below the open-time floor, so a zero-usage frame still pays', async () => {
+  it('never settles a realtime hold below its open-time floor, so a silent call still pays', async () => {
+    claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
     const openFor = REALTIME_VOICE_HOLD_SECONDS / 2;
 
-    const result = await settleVoiceHold(
-      HOLD,
-      { kind: 'realtime', reportedCredits: 0, openUntil: at(openFor) },
-      'realtime-frame'
-    );
+    const result = await settleVoiceHold(HOLD, at(openFor), 'sweep');
 
     expect(result).toMatchObject({ chargedCredits: realtimeCreditsFloor(600, openFor), refundedCredits: 300 });
   });
 
-  it('charges realtime usage straight from the balance when nothing was reserved', async () => {
-    await settleVoiceHold(
-      { ...HOLD, voiceReservedCredits: null },
-      { kind: 'realtime', reportedCredits: 40, openUntil: at(1) },
-      'realtime-frame'
-    );
+  it('refunds nothing on a realtime hold whose responses billed past it', async () => {
+    claimVoiceHold.mockResolvedValue({ billedCredits: 900 });
 
-    expect(incrementCredits).toHaveBeenCalledWith('u1', -40);
+    const result = await settleVoiceHold(HOLD, at(60), 'sweep');
+
+    expect(result).toMatchObject({ chargedCredits: 600, refundedCredits: 0 });
+    expect(incrementCredits).not.toHaveBeenCalled();
   });
 
   it('moves no credits when another settler claimed the hold first', async () => {
-    claimVoiceHold.mockResolvedValue(false);
+    claimVoiceHold.mockResolvedValue(null);
 
-    expect(await settleVoiceHold(HOLD, { kind: 'connected-time', endedAt: at(10) }, 'sweep')).toEqual({
-      settled: false,
-    });
+    expect(await settleVoiceHold(HOLD, at(10), 'sweep')).toEqual({ settled: false });
     expect(incrementCredits).not.toHaveBeenCalled();
     expect(logInfo).not.toHaveBeenCalled();
   });
 
   it('writes one aggregatable line per settlement', async () => {
-    await settleVoiceHold({ ...HOLD, voiceConnectedAt: at(0) }, { kind: 'connected-time', endedAt: at(60) }, 'sweep');
+    await settleVoiceHold({ ...HOLD, voiceConnectedAt: at(0) }, at(60), 'sweep');
 
     expect(logInfo).toHaveBeenCalledTimes(1);
     expect(logInfo).toHaveBeenCalledWith(VOICE_HOLD_SETTLED_LOG, {
@@ -125,44 +109,74 @@ describe('settleVoiceHold', () => {
     });
   });
 
-  it('restores the hold with its markers and rethrows when moving the credits fails', async () => {
+  it('restores the hold with its markers and rethrows when crediting back fails', async () => {
     const failure = new Error('db blip');
     incrementCredits.mockRejectedValue(failure);
-    const connected = {
-      ...HOLD,
-      voiceConnectedAt: at(5),
-      voiceLastActivityAt: at(50),
-      voiceBillingMode: 'connected_time' as const,
-    };
+    const connected = { ...HOLD, voiceConnectedAt: at(5), voiceLastActivityAt: at(50) };
 
-    await expect(settleVoiceHold(connected, { kind: 'connected-time', endedAt: at(50) }, 'sweep')).rejects.toBe(
-      failure
-    );
+    await expect(settleVoiceHold(connected, at(50), 'sweep')).rejects.toBe(failure);
     expect(restoreVoiceHold).toHaveBeenCalledWith('s1', 600, STARTED, {
       voiceConnectedAt: at(5),
       voiceLastActivityAt: at(50),
-      voiceBillingMode: 'connected_time',
+      voiceBilledCredits: null,
     });
     expect(logInfo).not.toHaveBeenCalled();
+  });
+
+  it('restores the billed total along with a realtime hold whose refund failed', async () => {
+    claimVoiceHold.mockResolvedValue({ billedCredits: 250 });
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+
+    await expect(settleVoiceHold(HOLD, STARTED, 'sweep')).rejects.toThrow('db blip');
+    expect(restoreVoiceHold).toHaveBeenCalledWith(
+      's1',
+      600,
+      STARTED,
+      expect.objectContaining({ voiceBilledCredits: 250 })
+    );
   });
 
   it('surfaces both errors when the hold cannot be restored either', async () => {
     incrementCredits.mockRejectedValue(new Error('db blip'));
     restoreVoiceHold.mockRejectedValue(new Error('still down'));
 
-    await expect(settleVoiceHold(HOLD, { kind: 'connected-time', endedAt: at(0) }, 'end')).rejects.toBeInstanceOf(
-      AggregateError
-    );
+    await expect(settleVoiceHold(HOLD, at(0), 'end')).rejects.toBeInstanceOf(AggregateError);
   });
 
-  it('leaves the hold alone when no credits move', async () => {
-    await settleVoiceHold(
-      { ...HOLD, voiceConnectedAt: at(0) },
-      { kind: 'connected-time', endedAt: at(MAX_SESSION_SECONDS) },
-      'end'
-    );
+  it('leaves the hold alone when there is nothing to refund', async () => {
+    await settleVoiceHold({ ...HOLD, voiceConnectedAt: at(0) }, at(MAX_SESSION_SECONDS), 'end');
 
     expect(incrementCredits).not.toHaveBeenCalled();
     expect(restoreVoiceHold).not.toHaveBeenCalled();
+  });
+});
+
+describe('lastSeenAt', () => {
+  it('prefers the last activity, then the connect, then the hold start', () => {
+    expect(lastSeenAt({ ...HOLD, voiceConnectedAt: at(5), voiceLastActivityAt: at(90) })).toEqual(at(90));
+    expect(lastSeenAt({ ...HOLD, voiceConnectedAt: at(5) })).toEqual(at(5));
+    expect(lastSeenAt(HOLD)).toEqual(STARTED);
+  });
+});
+
+describe('settlePriorVoiceHold', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    claimVoiceHold.mockResolvedValue({ billedCredits: null });
+    incrementCredits.mockResolvedValue(undefined);
+  });
+
+  it('settles an open hold up to when its call was last seen', async () => {
+    const result = await settlePriorVoiceHold({ ...HOLD, voiceConnectedAt: at(0), voiceLastActivityAt: at(60) });
+
+    expect(result).toMatchObject({ settled: true, chargedCredits: 120, refundedCredits: 480 });
+    expect(logInfo).toHaveBeenCalledWith(VOICE_HOLD_SETTLED_LOG, expect.objectContaining({ source: 'bootstrap' }));
+  });
+
+  it('does nothing on a session with no open hold', async () => {
+    expect(await settlePriorVoiceHold({ id: 's1', userId: 'u1', voiceReservedCredits: null })).toEqual({
+      settled: false,
+    });
+    expect(claimVoiceHold).not.toHaveBeenCalled();
   });
 });

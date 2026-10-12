@@ -11,6 +11,8 @@ const mockIncrementCredits = vi.fn();
 const mockPost = vi.fn();
 const mockGetEffectiveApiKey = vi.fn();
 const mockCreateSession = vi.fn();
+const mockGetSession = vi.fn();
+const mockClaimVoiceHold = vi.fn();
 
 vi.mock('axios', () => ({
   default: {
@@ -23,7 +25,11 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   agentRepository: {},
   apiKeyRepository: {},
-  sessionRepository: { countActiveVoiceSessionsByUserId: async () => 0, update: vi.fn() },
+  sessionRepository: {
+    countActiveVoiceSessionsByUserId: async () => 0,
+    update: vi.fn(),
+    claimVoiceHold: (...a: unknown[]) => mockClaimVoiceHold(...a),
+  },
   projectRepository: {},
   fabFileRepository: {},
   userRepository: { incrementCredits: (...a: unknown[]) => mockIncrementCredits(...a) },
@@ -32,7 +38,10 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => mockGetEffectiveApiKey(...a) },
-  sessionService: { createSession: (...a: unknown[]) => mockCreateSession(...a), getSession: vi.fn() },
+  sessionService: {
+    createSession: (...a: unknown[]) => mockCreateSession(...a),
+    getSession: (...a: unknown[]) => mockGetSession(...a),
+  },
 }));
 
 vi.mock('@bike4mind/utils', async importOriginal => {
@@ -53,8 +62,8 @@ import errorHandler from '@server/middlewares/errorHandler';
 import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
 
 /** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
-async function callRoute() {
-  const { req, res } = createMocks({ method: 'POST', body: {} });
+async function callRoute(body: Record<string, unknown> = {}) {
+  const { req, res } = createMocks({ method: 'POST', body });
   const logger = { warn: vi.fn(), error: vi.fn() };
   (req as any).user = { id: 'user-1', currentCredits: 1_000_000 };
   (req as any).logger = logger;
@@ -72,6 +81,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetEffectiveApiKey.mockResolvedValue('sk-test');
   mockCreateSession.mockResolvedValue({ id: 'session-1' });
+  mockPost.mockResolvedValue({ data: { value: 'ek-test' } });
   // The web server is a Lambda: console.error lines carry the ERROR prefix the log monitor alerts on,
   // so the handled-failure paths must stay off it as well as off req.logger.error.
   consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -140,5 +150,51 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
     expect(mockPost).not.toHaveBeenCalled();
     expect(mockIncrementCredits).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/ai/voice-sessions on an existing notebook', () => {
+  it('opens no credit hold on a notebook the caller does not own', async () => {
+    mockGetSession.mockResolvedValueOnce({ id: 'session-1', userId: 'someone-else' });
+
+    const { res } = await callRoute({ sessionId: 'session-1' });
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockIncrementCredits).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/ai/voice-sessions over an open hold', () => {
+  const priorStartedAt = new Date('2026-01-01T00:00:00Z');
+  const openHoldSession = {
+    id: 'session-1',
+    userId: 'user-1',
+    voiceReservedCredits: 100,
+    voiceSessionStartedAt: priorStartedAt,
+    voiceBilledCredits: 30,
+  };
+
+  it('settles the earlier call before a fresh call overwrites its hold', async () => {
+    mockGetSession.mockResolvedValueOnce(openHoldSession);
+    mockClaimVoiceHold.mockResolvedValueOnce({ billedCredits: 30 });
+
+    const { res } = await callRoute({ sessionId: 'session-1' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockClaimVoiceHold).toHaveBeenCalledWith('session-1', priorStartedAt);
+    // The earlier call keeps what its responses billed and gets the rest back, then the new hold is taken.
+    expect(mockIncrementCredits.mock.calls[0]).toEqual(['user-1', 70]);
+    expect(mockIncrementCredits.mock.calls[1][1]).toBeLessThan(0);
+  });
+
+  it('leaves the hold alone on a reconnect, which reuses it', async () => {
+    mockGetSession.mockResolvedValueOnce(openHoldSession);
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockClaimVoiceHold).not.toHaveBeenCalled();
+    expect(mockIncrementCredits).not.toHaveBeenCalled();
   });
 });

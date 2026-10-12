@@ -43,7 +43,7 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
       voiceConnectedAt: session.voiceConnectedAt ?? null,
     },
     // Ending the call is itself the call's last activity.
-    { kind: 'connected-time', endedAt: new Date() },
+    new Date(),
     'end'
   );
   // A concurrent end or the stale-hold sweep settled it first.
