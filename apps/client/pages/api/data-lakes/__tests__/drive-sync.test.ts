@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
   getValidUserDriveAccessToken: vi.fn(),
   createDriveClient: vi.fn(),
   getFolderAccess: vi.fn(),
+  probeConnectedFolder: vi.fn(),
+  connUpdateHealth: vi.fn(),
   ghConnFindByDataLakeIdAny: vi.fn(),
   gatedFlags: [] as string[],
 }));
@@ -49,7 +51,12 @@ vi.mock('@server/integrations/google/drive/common', () => ({
 // Keep isValidDriveFolderId real (the folder-id validation runs for real); mock only the Drive calls.
 vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
-  return { ...actual, createDriveClient: h.createDriveClient, getFolderAccess: h.getFolderAccess };
+  return {
+    ...actual,
+    createDriveClient: h.createDriveClient,
+    getFolderAccess: h.getFolderAccess,
+    probeConnectedFolder: h.probeConnectedFolder,
+  };
 });
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
 vi.mock('@server/security/secretEncryption', () => ({ isEncrypted: h.isEncrypted }));
@@ -80,6 +87,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
       create: h.connCreate,
       updateCredential: h.connUpdateCredential,
       release: h.connRelease,
+      updateHealth: h.connUpdateHealth,
     },
   };
 });
@@ -111,6 +119,8 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.connCreate.mockResolvedValue({ id: 'conn1' });
     h.connUpdateCredential.mockResolvedValue({ id: 'conn1' });
     h.connRelease.mockResolvedValue(true);
+    h.connUpdateHealth.mockResolvedValue(undefined);
+    h.probeConnectedFolder.mockResolvedValue({ reachable: true });
     h.getValidUserDriveAccessToken.mockResolvedValue('user-access-token');
     h.createDriveClient.mockReturnValue({});
     h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: true, canRead: true });
@@ -147,9 +157,76 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
       /do not have access/i
     );
-    expect(h.connFindByDriveFolderId).not.toHaveBeenCalled();
     expect(h.connCreate).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  describe('a re-sync of a folder that has gone', () => {
+    const connection = (overrides: Record<string, unknown> = {}) => ({
+      id: 'conn1',
+      targetDataLakeId: 'lake1',
+      connectedBy: 'u1',
+      status: 'connected',
+      ...overrides,
+    });
+    const resync = async (req = makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID })) => {
+      const { res } = makeRes();
+      await expect(run(req, res)).rejects.toThrow(/do not have access/i);
+    };
+
+    beforeEach(() => {
+      h.getFolderAccess.mockResolvedValue({ ok: true, exists: false, isFolder: false, canRead: false });
+      h.connFindByDriveFolderId.mockResolvedValue(connection());
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'not_found' });
+    });
+
+    it("parks the caller's own connected connection in needs_reconnect and still refuses", async () => {
+      await resync();
+      expect(h.probeConnectedFolder).toHaveBeenCalledWith(expect.anything(), FOLDER_ID);
+      expect(h.connUpdateHealth).toHaveBeenCalledWith('conn1', {
+        status: 'needs_reconnect',
+        lastError: expect.any(String),
+      });
+      expect(h.connCreate).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another user connected it', { connectedBy: 'someone-else' }],
+      ['it targets a different lake', { targetDataLakeId: 'lake2' }],
+      ['it is mid-sync', { status: 'syncing' }],
+      ['a disconnect is requested', { disconnectRequestedAt: new Date() }],
+    ])('leaves the connection alone when %s', async (_label, overrides) => {
+      h.connFindByDriveFolderId.mockResolvedValue(connection(overrides));
+      await resync();
+      expect(h.connUpdateHealth).not.toHaveBeenCalled();
+    });
+
+    it('does not probe a connection it will not park', async () => {
+      h.connFindByDriveFolderId.mockResolvedValue(connection({ connectedBy: 'someone-else' }));
+      await resync();
+      expect(h.probeConnectedFolder).not.toHaveBeenCalled();
+    });
+
+    it('leaves the connection alone when the probe cannot reach a verdict, and logs it', async () => {
+      h.probeConnectedFolder.mockRejectedValue(new Error('Backend Error'));
+      const req = makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID });
+      await resync(req);
+      expect(h.connUpdateHealth).not.toHaveBeenCalled();
+      expect((req as { logger: { warn: unknown } }).logger.warn).toHaveBeenCalled();
+    });
+
+    it('leaves the connection alone when the folder is still reachable for the connector', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: true });
+      await resync();
+      expect(h.connUpdateHealth).not.toHaveBeenCalled();
+    });
+
+    it('still refuses when no connection exists for the folder', async () => {
+      h.connFindByDriveFolderId.mockResolvedValue(null);
+      await resync();
+      expect(h.probeConnectedFolder).not.toHaveBeenCalled();
+      expect(h.connUpdateHealth).not.toHaveBeenCalled();
+    });
   });
 
   it('tells the user Drive is throttling us rather than that they lost access to their folder', async () => {

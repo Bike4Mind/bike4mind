@@ -1,5 +1,6 @@
 import {
   CompletionApiUsageTransaction,
+  DecisionUsageTransaction,
   GenericCreditDeductTransaction,
   ICreditHolder,
   ICreditHolderMethods,
@@ -56,6 +57,7 @@ export const SubtractCreditsSchema = z.discriminatedUnion('type', [
   ImageEditUsageTransaction.omit({ createdAt: true, updatedAt: true }),
   ToolUsageTransaction.omit({ createdAt: true, updatedAt: true }),
   CompletionApiUsageTransaction.omit({ createdAt: true, updatedAt: true }),
+  DecisionUsageTransaction.omit({ createdAt: true, updatedAt: true }),
   SpeechToTextUsageTransaction.omit({ createdAt: true, updatedAt: true }),
   TextToSpeechUsageTransaction.omit({ createdAt: true, updatedAt: true }),
   SoundEffectsUsageTransaction.omit({ createdAt: true, updatedAt: true }),
@@ -120,6 +122,19 @@ export async function subtractCredits(
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
       description: description || 'Completion API usage',
+      metadata,
+      source,
+      model: params.model,
+      apiKeyId: params.apiKeyId, // Optional - present for API key auth, undefined for JWT
+      inputTokens: params.inputTokens,
+      outputTokens: params.outputTokens,
+    });
+  } else if (type === 'decision_usage') {
+    await db.creditTransactions.createTransaction('decision_usage', {
+      ownerId,
+      ownerType,
+      credits: -Math.abs(credits), // Negative for usage
+      description: description || 'Decision',
       metadata,
       source,
       model: params.model,

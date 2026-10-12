@@ -31,9 +31,6 @@ eventBus.subscribe(
         resources: ['*'],
       },
     ],
-    logging: {
-      retention: '3 days',
-    },
     vpc: lambdaVpc,
   },
   {

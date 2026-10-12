@@ -46,7 +46,6 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     imageProcessor,
     agentContinuationQueue,
   ],
-  logging: { retention: '3 days' as const },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
