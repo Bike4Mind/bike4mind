@@ -4,12 +4,14 @@ import { createMocks } from 'node-mocks-http';
 type Handler = (req: unknown, res: unknown) => unknown;
 const mocks = vi.hoisted(() => ({
   getHandler: null as Handler | null,
+  baseApiOptions: undefined as unknown,
   find: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
+  baseApi: (options: unknown) => ({
     get: (handler: Handler) => {
+      mocks.baseApiOptions = options;
       mocks.getHandler = handler;
       return handler;
     },
@@ -32,6 +34,10 @@ describe('GET /api/organizations/managed', () => {
         billingContact: 'owner@example.test',
       },
     ]);
+  });
+
+  it('accepts only JWT auth', () => {
+    expect(mocks.baseApiOptions).toEqual({ auth: 'jwtOnly' });
   });
 
   it('takes the manager identity from auth and strips owner-only data', async () => {
