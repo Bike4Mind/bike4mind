@@ -53,7 +53,35 @@ vi.mock('@server/managers/inviteManager', async importOriginal => {
   return { ...actual, getInviteDetails };
 });
 
+import { NotFoundError } from '@bike4mind/common';
 import '@pages/api/[type]/[id]/index';
+
+describe('GET /api/[type]/[id] - unknown type segment', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each(['foo', 'constructor', 'Files'])(
+    'throws the shared NotFoundError for /api/%s/:id without touching invites',
+    async type => {
+      const { req, res } = createMocks({ method: 'GET', query: { type, id: VALID_ID } });
+      (req as any).user = { id: 'u1', email: 'me@x.com' };
+
+      await expect(mockRefs.getHandler!(req, res)).rejects.toBeInstanceOf(NotFoundError);
+      expect(resolveRedeemableInvite).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['files', 'groups', 'tools', 'Project'])('still looks up the invite for /api/%s/:id', async type => {
+    resolveRedeemableInvite.mockResolvedValue(null);
+
+    const { req, res } = createMocks({ method: 'GET', query: { type, id: VALID_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(resolveRedeemableInvite).toHaveBeenCalledWith(VALID_ID, expect.anything());
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData()).toEqual({ message: 'Invite Not Found' });
+  });
+});
 
 describe('GET /api/[type]/[id] - authorization gate', () => {
   beforeEach(() => vi.clearAllMocks());

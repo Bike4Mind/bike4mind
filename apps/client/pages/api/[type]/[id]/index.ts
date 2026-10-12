@@ -1,10 +1,12 @@
 // GET /api/:type/:id - Retrieves a single invitation by its redemption key
 
+import { NotFoundError } from '@bike4mind/common';
 import { inviteRepository } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { canViewInvite, getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { resolveInviteType } from '@server/utils/inviteRouteType';
 
 interface IParams {
   type?: string;
@@ -13,6 +15,12 @@ interface IParams {
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, IParams>(async (req, res) => {
+    // This route is also the de facto match for every two-segment /api/* miss, so a segment that
+    // names no invite type gets the same envelope 404 as pages/api/[...unmatchedApiPath].
+    if (!resolveInviteType(req.query.type)) {
+      throw new NotFoundError('No API route matches this path');
+    }
+
     // Response depends on who asks, so a shared CDN cache must never store it.
     res.setHeader('Cache-Control', 'private, no-store');
 

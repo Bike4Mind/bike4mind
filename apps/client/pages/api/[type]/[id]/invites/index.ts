@@ -18,6 +18,7 @@ import {
 } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
+import { resolveInviteType } from '@server/utils/inviteRouteType';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -29,32 +30,6 @@ interface IParams {
   type?: string;
   id?: string;
 }
-
-// Map URL path types to InviteType enum values
-const URL_PATH_TO_INVITE_TYPE = {
-  files: InviteType.FabFile,
-  sessions: InviteType.Session,
-  projects: InviteType.Project,
-  groups: InviteType.Group,
-  organizations: InviteType.Organization,
-  tools: InviteType.Tool,
-};
-
-/**
- * The :type segment historically meant different things per verb here: GET/POST were called with
- * the lowercase alias (`/api/projects/...`) while DELETE was called with the InviteType value
- * itself (`/api/Project/...`). Both forms are accepted on every verb so the same document has one
- * address regardless of the method; existing callers of either shape keep working. Returns
- * undefined for anything that is neither, which each handler turns into a 400.
- */
-const resolveInviteType = (segment: string | undefined): InviteType | undefined => {
-  if (!segment) return undefined;
-  // hasOwn, or a segment like 'constructor' resolves to an inherited value instead of undefined.
-  if (Object.hasOwn(URL_PATH_TO_INVITE_TYPE, segment)) {
-    return URL_PATH_TO_INVITE_TYPE[segment as keyof typeof URL_PATH_TO_INVITE_TYPE];
-  }
-  return Object.values(InviteType).find(value => value === segment);
-};
 
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
