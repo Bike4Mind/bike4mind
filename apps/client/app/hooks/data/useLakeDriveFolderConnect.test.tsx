@@ -15,6 +15,11 @@ const h = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: { googleClientId: 'gcid' } }) }));
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useConnectDriveFolderToLake: () => ({ mutate: h.connectMutate, isPending: false }),
+  startGoogleDriveConnect: async (onBeforeRedirect?: (authUrl: string) => void) => {
+    const { data } = await h.post('/api/google-drive/connect');
+    onBeforeRedirect?.(data.authUrl);
+    window.location.href = data.authUrl;
+  },
 }));
 vi.mock('react-google-drive-picker', () => ({ default: () => [h.openPicker] }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post } }));
@@ -118,6 +123,69 @@ describe('useLakeDriveFolderConnect', () => {
 
       expect(window.location.href).toBe('https://accounts.google.com/o/oauth2/auth?state=s1');
       expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+    }
+  });
+
+  describe('resync', () => {
+    const stored = { driveFolderId: 'F1', folderName: 'Docs' };
+
+    it('re-syncs the stored folder with a live grant, without the picker', async () => {
+      h.get.mockResolvedValue({ data: { accessToken: 'tok' } });
+      const { result } = renderHook(() => useLakeDriveFolderConnect('lake1'));
+
+      await act(() => result.current.resync(stored));
+
+      expect(h.get).toHaveBeenCalledWith('/api/google-drive/token');
+      expect(h.connectMutate).toHaveBeenCalledWith({ dataLakeId: 'lake1', ...stored }, expect.any(Object));
+      expect(h.openPicker).not.toHaveBeenCalled();
+      expect(result.current.isCheckingGrant).toBe(false);
+    });
+
+    it('sends a dead grant through consent with a handoff that re-syncs on return', async () => {
+      const realLocation = window.location;
+      Object.defineProperty(window, 'location', { configurable: true, value: { href: '' } });
+      h.get.mockResolvedValue({ data: { authUrl: 'https://accounts.google.com/o/oauth2/auth?state=s2' } });
+      try {
+        const { result } = renderHook(() => useLakeDriveFolderConnect('lake1'));
+        await act(() => result.current.resync(stored));
+
+        expect(window.location.href).toBe('https://accounts.google.com/o/oauth2/auth?state=s2');
+        expect(h.connectMutate).not.toHaveBeenCalled();
+        expect(
+          consumeDriveConnectHandoff({ userId: 'user-1', organizationId: 'org-1', oauthState: 's2' })
+        ).toMatchObject({ kind: 'lake', dataLakeId: 'lake1', resync: true });
+      } finally {
+        Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+      }
+    });
+
+    it('toasts and does not sync when the token check fails', async () => {
+      h.get.mockRejectedValue({ response: { status: 503 } });
+      const { result } = renderHook(() => useLakeDriveFolderConnect('lake1'));
+
+      await act(() => result.current.resync(stored));
+
+      expect(h.toastError).toHaveBeenCalledWith('Could not reach Google Drive. Please try again.');
+      expect(h.connectMutate).not.toHaveBeenCalled();
+      expect(result.current.isCheckingGrant).toBe(false);
+    });
+  });
+
+  it('reconnect always goes through consent, with a handoff that re-syncs on return', async () => {
+    const realLocation = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { href: '' } });
+    h.post.mockResolvedValue({ data: { authUrl: 'https://accounts.google.com/o/oauth2/auth?state=s3' } });
+    try {
+      const { result } = renderHook(() => useLakeDriveFolderConnect('lake1'));
+      await act(() => result.current.reconnect());
+
+      expect(h.get).not.toHaveBeenCalled();
+      expect(window.location.href).toBe('https://accounts.google.com/o/oauth2/auth?state=s3');
+      expect(consumeDriveConnectHandoff({ userId: 'user-1', organizationId: 'org-1', oauthState: 's3' })).toMatchObject(
+        { kind: 'lake', dataLakeId: 'lake1', resync: true }
+      );
     } finally {
       Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
     }

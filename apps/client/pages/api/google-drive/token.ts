@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { User } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import dayjs from 'dayjs';
-import { getAuthUrl, refreshAccessToken } from '@server/integrations/google/drive/common';
+import { getAuthUrl, isInvalidGrantError, refreshAccessToken } from '@server/integrations/google/drive/common';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 
 /**
@@ -54,6 +54,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
       );
       return res.json({ accessToken: credentials.access_token });
     } catch (error) {
+      // Only a dead grant earns a consent redirect; a Google 5xx or network blip is retryable, and
+      // sending the user through consent for it would not help.
+      if (!(error instanceof BadRequestError) && !isInvalidGrantError(error)) throw error;
       const authUrl = getAuthUrl(res, userId);
       return res.json({ authUrl });
     }
