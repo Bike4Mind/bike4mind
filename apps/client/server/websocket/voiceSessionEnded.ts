@@ -230,7 +230,19 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       }
     }
     if (actualCredits > 0) {
-      await recordUsage(actualCredits);
+      // Deterministic per hold, so an operator replaying this row after a failure cannot add it twice.
+      try {
+        await recordUsage(actualCredits, `realtime-voice-close:${sessionId}:${startedAt.toISOString()}`);
+      } catch (ledgerError) {
+        logger.error('voiceSessionEnded: balance settled but the closing ledger row was not written', {
+          sessionId,
+          userId: user.id,
+          startedAt: startedAt.toISOString(),
+          actualCredits,
+          delta,
+        });
+        throw ledgerError;
+      }
     }
   }
 

@@ -298,6 +298,32 @@ describe('voiceSessionEnded realtime billing', () => {
     expect(charged()).toBe(35);
   });
 
+  it('logs the ids and amounts and rethrows when the closing ledger row fails after the refund', async () => {
+    const startedAt = state.session.voiceSessionStartedAt as Date;
+    await send(30, 'resp-1');
+    state.failTransaction = true;
+
+    await expect(send(5)).rejects.toThrow('mongo blip');
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('closing ledger row'), {
+      sessionId: 's1',
+      userId: 'u1',
+      startedAt: startedAt.toISOString(),
+      actualCredits: 5,
+      delta: HOLD - 30 - 5,
+    });
+  });
+
+  it('keys the closing ledger row on the hold, so a replayed row is not added twice', async () => {
+    const startedAt = state.session.voiceSessionStartedAt as Date;
+
+    await send(5);
+
+    expect(state.transactions.map(t => t.transactionId)).toEqual([
+      `realtime-voice-close:s1:${startedAt.toISOString()}`,
+    ]);
+  });
+
   it('logs the lost refund when a newer hold blocks restoring the one whose settlement failed', async () => {
     const startedAt = state.session.voiceSessionStartedAt as Date;
     await send(30, 'resp-1');
