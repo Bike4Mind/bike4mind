@@ -71,7 +71,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import { func } from './voiceSessionEnded';
-import { shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { realtimeCreditsFloor, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 
 const HOLD = 100;
 const STARTING_BALANCE = 1000;
@@ -152,10 +152,10 @@ describe('voiceSessionEnded realtime billing', () => {
 
   it('still bills a response whose frame arrives after the call was closed', async () => {
     await send(0);
-    expect(charged()).toBe(0);
+    const atClose = charged();
 
     await send(40, 'resp-late');
-    expect(charged()).toBe(40);
+    expect(charged()).toBe(atClose + 40);
   });
 
   it('settles an older client, which sends one frame per response without an id, on its first frame', async () => {
@@ -177,5 +177,38 @@ describe('voiceSessionEnded realtime billing', () => {
       expect.any(String),
       expect.objectContaining({ action: 'voice_credits_exhausted' })
     );
+  });
+
+  it('charges a zero-usage frame sent mid-call at least the time the call has been open', async () => {
+    const openFor = 30 * 60;
+    state.session.voiceSessionStartedAt = new Date(Date.now() - openFor * 1000);
+    await send(10, 'resp-1');
+
+    // A modified client reports nothing and asks to close the hold.
+    await send(0);
+
+    const floor = realtimeCreditsFloor(HOLD, openFor);
+    expect(floor).toBeGreaterThan(10);
+    expect(charged()).toBeGreaterThanOrEqual(floor);
+    expect(state.transactions.reduce((sum, t) => sum - t.credits, 0)).toBe(charged());
+  });
+
+  it('leaves no hold for a call that keeps going after a zero-usage close', async () => {
+    state.session.voiceSessionStartedAt = new Date(Date.now() - 30 * 60 * 1000);
+    await send(0);
+    const atClose = charged();
+
+    // A reconnect must reserve afresh, and further responses are charged from the balance.
+    expect(shouldReuseVoiceHold(true, state.session)).toBe(false);
+    await send(25, 'resp-after-close');
+    expect(charged()).toBe(atClose + 25);
+  });
+
+  it('never lets reported usage settle a call below its open time', async () => {
+    state.session.voiceSessionStartedAt = new Date(Date.now() - 45 * 60 * 1000);
+
+    await send(1);
+
+    expect(charged()).toBe(realtimeCreditsFloor(HOLD, 45 * 60));
   });
 });

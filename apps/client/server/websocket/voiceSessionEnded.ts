@@ -8,7 +8,13 @@ import {
   VoiceSessionEndedAction,
   computeRealtimeVoiceUsd,
 } from '@bike4mind/common';
-import { getSettingsMap, getSettingsValue, NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
+import {
+  getSettingsMap,
+  getSettingsValue,
+  NotFoundError,
+  usdToCredits,
+  usdToCreditsStochastic,
+} from '@bike4mind/utils';
 import {
   adminSettingsRepository,
   Connection,
@@ -20,6 +26,7 @@ import {
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
+import { REALTIME_VOICE_RESERVE_USD, realtimeCreditsFloor } from '@server/voice/voiceSessionLimits';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const { userId, sessionId, model, usage, responseId } = VoiceSessionEndedAction.parse(JSON.parse(event.body ?? ''));
@@ -141,6 +148,23 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         durationMinutes: Math.round((Date.now() - startedAt.getTime()) / 60000),
       });
       actualCredits = Math.min(actualCredits, capped);
+    }
+
+    // Client-reported usage can only raise the settlement: a call never settles below the hold's
+    // own rate for the time it has been open by the server's clock, so a zero-usage frame sent
+    // mid-call still pays for that call.
+    const elapsedSeconds = Math.floor((Date.now() - startedAt.getTime()) / 1000);
+    const floor = realtimeCreditsFloor(
+      session.voiceReservedCredits ?? usdToCredits(REALTIME_VOICE_RESERVE_USD),
+      elapsedSeconds
+    );
+    if (closed.billedCredits + actualCredits < floor) {
+      logger.info(`voiceSessionEnded: session ${sessionId} settled at its connected-time floor`, {
+        reportedCredits: closed.billedCredits + actualCredits,
+        floor,
+        elapsedSeconds,
+      });
+      actualCredits = floor - closed.billedCredits;
     }
 
     if (actualCredits > 0) {
