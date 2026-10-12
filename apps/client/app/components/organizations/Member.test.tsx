@@ -74,6 +74,7 @@ describe('OrganizationMembers credit budget control', () => {
     mocks.viewer = undefined;
     mocks.members = [];
     mocks.pending = [];
+    mocks.seats = { maxSeats: 0, currentSeats: 0, availableSeats: 0 };
   });
 
   it('is offered to an appointed admin who holds a read-only users[] row', () => {
