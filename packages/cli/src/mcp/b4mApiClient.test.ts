@@ -669,6 +669,16 @@ describe('mapApiError', () => {
     expect(mapApiError(sdkError(400, { error: 'Query is required' }), 'http://x')).toBe('Query is required');
   });
 
+  it('maps an SDK 404 without the JSON envelope (route missing) to a server-too-old hint', () => {
+    const msg = mapApiError(sdkError(404, '<!DOCTYPE html><title>404</title>'), 'http://x');
+    expect(msg).toContain('predates this CLI');
+    expect(msg).toContain('http://x');
+  });
+
+  it('keeps the server message for an SDK 404 that carries the JSON envelope (resource missing)', () => {
+    expect(mapApiError(sdkError(404, { error: 'Session not found' }), 'http://x')).toBe('Session not found');
+  });
+
   it('maps 401 to a re-auth hint', () => {
     expect(mapApiError(axiosError(401), 'http://x')).toContain('authentication failed');
   });

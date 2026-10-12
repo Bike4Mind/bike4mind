@@ -498,6 +498,11 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     const base = "API key forbidden: check the key's scopes and account access";
     return scope ? `${base} (recommended scope: ${scope})` : base;
   }
+  // SDK calls hit /api/v1 routes; a missing resource there answers with the JSON error envelope,
+  // so a 404 without one means the route itself is missing - a server older than this CLI.
+  if (status === 404 && error instanceof B4mApiError && !extractServerMessage(data)) {
+    return `the Bike4Mind server at ${baseURL} does not have this API route; it likely predates this CLI (upgrade the server or use an older CLI)`;
+  }
   if (status === 429) {
     const retryAfterSeconds = apiErrorRetryAfterSeconds(error);
     const serverMsg = extractServerMessage(data);
