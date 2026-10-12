@@ -86,6 +86,14 @@ describe('useGearsNavSignal', () => {
     expect(signal()).toMatchObject({ startHere: true, startHereCredits: 6500 });
   });
 
+  it('leaves a done-but-unclaimed Getting Started gear out of the credits, and counts it as claimable', () => {
+    withGears([
+      gear('projects', 'destination', { credits: 1000, unlocked: true, claimable: true }),
+      gear('published', 'destination', { credits: 5000 }),
+    ]);
+    expect(signal()).toEqual({ startHere: true, startHereCredits: 5000, claimableCount: 1 });
+  });
+
   it('shows no Start here credits once the account is too old for the tag', () => {
     signedUpDaysAgo(31);
     withGears([gear('published', 'destination', { credits: 5000 })]);
