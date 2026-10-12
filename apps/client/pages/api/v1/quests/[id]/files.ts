@@ -22,6 +22,7 @@ import { toPublicFile } from '@server/files/toPublicFile';
 
 const handler = nextRouteForContract(listQuestFilesContract, {
   // Part of the chat-reply poll, like GET /api/v1/quests/{id}: don't let polling burn the daily quota.
+  // No perUserRateLimit either, deliberately, matching that route.
   exemptReadsFromDailyRateLimit: true,
 }).get(async (req, res) => {
   const { id } = req.validatedParams;
