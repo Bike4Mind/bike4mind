@@ -2,16 +2,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Middleware is stripped so the handler body runs directly (same pattern as verify.test.ts).
+// The middleware passed to .use() is recorded so the limiter wiring can be asserted on its own.
+const wiring = vi.hoisted(() => ({ uses: [] as any[] }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: any = { use: () => chain, post: (fn: any) => fn };
+    const chain: any = {
+      use: (mw: any) => {
+        wiring.uses.push(mw);
+        return chain;
+      },
+      post: (fn: any) => fn,
+    };
     return chain;
   },
 }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
 vi.mock('@server/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-pending-token' } }));
@@ -24,7 +31,12 @@ vi.mock('@server/utils/config', () => ({
 
 const mockTryReserveSlot = vi.fn();
 const mockConfirmReservation = vi.fn();
+const mockTryIncrement = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: (...a: any[]) => mockTryIncrement(...a),
+    deleteByKey: vi.fn(),
+  },
   pendingOtcTokenRepository: {
     tryReserveSlot: (...a: any[]) => mockTryReserveSlot(...a),
     confirmReservation: (...a: any[]) => mockConfirmReservation(...a),
@@ -37,6 +49,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import handler from '@pages/api/otc/send';
+import { OTC_LIMITS } from '@server/utils/otcLimits';
 
 const EMAIL = 'someone@example.com';
 
@@ -45,6 +58,59 @@ function makeReqRes(email: string = EMAIL) {
   (req as any).body = { email };
   return { req, res };
 }
+
+// Runs every recorded middleware in order, as baseApi would before the route handler.
+async function runMiddleware(req: any, res: any) {
+  for (const mw of wiring.uses) {
+    await new Promise<void>((resolve, reject) => mw(req, res, (err?: unknown) => (err ? reject(err) : resolve())));
+  }
+}
+
+describe('/api/otc/send limiter wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsE2EEnabled.mockReturnValue(false);
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+  });
+
+  it('counts every send against the per-email, per-IP and distinct-email-per-IP limits', async () => {
+    const { req, res } = makeReqRes();
+    await runMiddleware(req, res);
+
+    const emailKey = /^otc-limit:send-email:[0-9a-f]{32}$/;
+    const emailDailyKey = /^otc-limit:send-email-daily:[0-9a-f]{32}$/;
+    const { perEmail, perEmailDaily, perIpTotal, perIpDaily, perIpDistinctEmails } = OTC_LIMITS.send;
+    expect(mockTryIncrement).toHaveBeenCalledWith(expect.stringMatching(emailKey), perEmail.limit, perEmail.windowMs);
+    expect(mockTryIncrement).toHaveBeenCalledWith(
+      expect.stringMatching(emailDailyKey),
+      perEmailDaily.limit,
+      perEmailDaily.windowMs
+    );
+    expect(mockTryIncrement).toHaveBeenCalledWith(
+      expect.stringMatching(/^otc-limit:send-ip-total:/),
+      perIpTotal.limit,
+      perIpTotal.windowMs
+    );
+    expect(mockTryIncrement).toHaveBeenCalledWith(
+      expect.stringMatching(/^otc-limit:send-ip-daily:/),
+      perIpDaily.limit,
+      perIpDaily.windowMs
+    );
+    expect(mockTryIncrement).toHaveBeenCalledWith(
+      expect.stringMatching(/^otc-limit:ip-distinct:/),
+      perIpDistinctEmails.limit,
+      perIpDistinctEmails.windowMs
+    );
+  });
+
+  it('refuses with a 429 error and Retry-After once a limit is spent', async () => {
+    mockTryIncrement.mockResolvedValue({ success: false, count: 5, expiresAt: new Date(Date.now() + 60_000) });
+    const { req, res } = makeReqRes();
+
+    await expect(runMiddleware(req, res)).rejects.toMatchObject({ statusCode: 429 });
+    expect(res.getHeader('Retry-After')).toBeDefined();
+  });
+});
 
 describe('/api/otc/send', () => {
   beforeEach(() => {

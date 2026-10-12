@@ -6,16 +6,23 @@ import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 // Middleware is stripped so the handler body runs directly (same pattern as the
 // email/verify suite). baseApi().use(...).use(...).post(fn) must chain and hand back
 // the raw handler.
+// The middleware passed to .use() is recorded so the limiter wiring can be asserted on its own.
+const wiring = vi.hoisted(() => ({ uses: [] as any[] }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: any = { use: () => chain, post: (fn: any) => fn };
+    const chain: any = {
+      use: (mw: any) => {
+        wiring.uses.push(mw);
+        return chain;
+      },
+      post: (fn: any) => fn,
+    };
     return chain;
   },
 }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
@@ -28,7 +35,7 @@ vi.mock('@server/analytics/funnel', () => ({
   emitFunnelEvent: (...a: any[]) => mockEmitFunnelEvent(...a),
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { createAccessToken: () => ({ accessToken: 'a', refreshToken: 'r' }) },
 }));
@@ -50,7 +57,9 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 
 const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
+const mockTryIncrement = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: (...a: any[]) => mockTryIncrement(...a) },
   adminSettingsRepository: { findBySettingName: vi.fn() },
   registrationInviteRepository: {},
   subscriberRepository: {},
@@ -78,6 +87,7 @@ vi.mock('@bike4mind/services', () => ({
 import { authSessionService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
+import { OTC_LIMITS } from '@server/utils/otcLimits';
 
 // bike4mind.com is seeded as an internal-staff domain in vitest.setup.ts, so the real
 // registry confers optihashi:pro -> its signup-credit total for this address.
@@ -116,6 +126,33 @@ function makeReqRes(email = DOMAIN_EMAIL) {
 
 const domainGrantCall = () =>
   mockAddCredits.mock.calls.find(([p]) => p.transactionId === 'domain-grant-credits:user-1');
+
+// Runs every recorded middleware in order, as baseApi would before the route handler.
+async function runMiddleware(req: any, res: any) {
+  for (const mw of wiring.uses) {
+    await new Promise<void>((resolve, reject) => mw(req, res, (err?: unknown) => (err ? reject(err) : resolve())));
+  }
+}
+
+describe('/api/otc/verify limiter wiring', () => {
+  it('counts every attempt per email across tokens and per IP', async () => {
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await runMiddleware(req, res);
+
+    const { perEmail, perIp } = OTC_LIMITS.verify;
+    expect(mockTryIncrement).toHaveBeenCalledWith(
+      expect.stringMatching(/^otc-limit:verify-email:[0-9a-f]{32}$/),
+      perEmail.limit,
+      perEmail.windowMs
+    );
+    expect(mockTryIncrement).toHaveBeenCalledWith(
+      expect.stringMatching(/^otc-limit:verify-ip:/),
+      perIp.limit,
+      perIp.windowMs
+    );
+  });
+});
 
 describe('/api/otc/verify — domain-grant signup credits (Register now flow)', () => {
   beforeEach(() => {
