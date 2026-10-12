@@ -97,4 +97,28 @@ describe('computeBurnStats', () => {
     });
     expect(stats.usageTrend).toBe('increasing');
   });
+
+  it('reports flat usage as stable over a 7-day window', () => {
+    const usage = Array.from({ length: 14 }, (_, i) => ({ credits: -5, createdAt: daysAgo(0.25 + i * 0.5) }));
+    const stats = computeBurnStats({ usage, periodDays: 7, now: NOW, balance: 1000 });
+    expect(stats.usageTrend).toBe('stable');
+  });
+
+  it('counts a spring-forward week as 7 days so the projection is not withheld', () => {
+    const originalTz = process.env.TZ;
+    process.env.TZ = 'America/New_York';
+    try {
+      const now = new Date(2026, 2, 9, 12);
+      const stats = computeBurnStats({
+        usage: [{ credits: -70, createdAt: new Date(2026, 2, 8, 12) }],
+        periodDays: 7,
+        now,
+        balance: 700,
+      });
+      expect(stats.daysRemaining).not.toBeNull();
+    } finally {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
+  });
 });

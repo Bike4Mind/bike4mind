@@ -201,7 +201,7 @@ export function deriveTitle(markdown: string): string {
     .find(Boolean);
   if (firstLine) {
     const cleaned = truncateAtWord(
-      stripInlineMarkdown(firstLine.replace(/^#+\s*/, '')).replace(/^[*_>-]+\s*/, ''),
+      stripInlineMarkdown(firstLine.slice(0, TITLE_MAX * 4).replace(/^#+\s*/, '')).replace(/^[*_>-]+\s*/, ''),
       TITLE_MAX
     );
     if (cleaned) return cleaned;

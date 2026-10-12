@@ -1,5 +1,5 @@
 // Private-use delimiter for parked code spans; cannot occur in a title that came from chat text.
-const CODE_SPAN_MARK = '';
+const CODE_SPAN_MARK = '\uE000';
 
 /**
  * A reply-derived title without its inline markdown markers ("Recap: *Tides*" -> "Recap: Tides").

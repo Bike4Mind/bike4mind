@@ -161,14 +161,18 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
     },
   });
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     const name = newProjectName.trim();
     if (!name) return;
-    createProject.mutate({
-      name,
-      description: '',
-      ...(dataType === 'file' ? { fileIds: [dataId] } : { sessionIds: [dataId] }),
-    });
+    if (dataType === 'file') {
+      createProject.mutate({ name, description: '', fileIds: [dataId] });
+      return;
+    }
+    const project = await createProject.mutateAsync({ name, description: '' }).catch(() => undefined);
+    if (project) {
+      setIsLoading(true);
+      addSessionMutation.mutate({ projectId: project.id, sessionIds: [dataId] });
+    }
   };
 
   const handleAdd = async () => {

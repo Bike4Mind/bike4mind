@@ -4,8 +4,6 @@ import dayjs from 'dayjs';
 // on a single busy day, so "Days remaining" is withheld rather than shown.
 export const MIN_DAYS_FOR_PROJECTION = 7;
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 interface Usage {
   credits: number;
   createdAt: Date | string;
@@ -42,7 +40,7 @@ export function computeBurnStats({
   const created = accountCreatedAt ? dayjs(accountCreatedAt) : undefined;
   const start = created?.isValid() && created.isAfter(periodStart) ? created : periodStart;
   // Fractional days, floored at one, so a few hours of history is averaged as one day.
-  const observedDays = Math.max(1, end.diff(start) / MS_PER_DAY);
+  const observedDays = Math.max(1, end.diff(start, 'day', true));
 
   const stats: BurnStats = { burnRate: 0, usageTrend: 'stable', daysRemaining: null, observedDays };
   if (usage.length === 0) return stats;
@@ -52,7 +50,7 @@ export function computeBurnStats({
 
   // Compare the first half of the observed window to the second, with a 10% threshold.
   if (observedDays >= 6) {
-    const midPoint = start.add(observedDays / 2, 'day');
+    const midPoint = start.add(end.diff(start) / 2, 'millisecond');
     const firstHalfUsage = usage
       .filter(t => dayjs(t.createdAt).isBefore(midPoint))
       .reduce((sum, t) => sum + Math.abs(t.credits), 0);

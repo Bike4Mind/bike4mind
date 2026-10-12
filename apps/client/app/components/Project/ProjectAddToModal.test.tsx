@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   projects: [] as Array<{ id: string; name: string }>,
   searchEnabled: [] as Array<boolean | undefined>,
   createMutate: vi.fn(),
+  createMutateAsync: vi.fn(),
+  addSessionsMutate: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/projects', () => ({
@@ -19,8 +21,8 @@ vi.mock('@client/app/hooks/data/projects', () => ({
     };
   },
   useAddFilesToProject: () => ({ mutate: vi.fn() }),
-  useAddSessionsToProject: () => ({ mutate: vi.fn() }),
-  useCreateProject: () => ({ mutate: mocks.createMutate, isPending: false }),
+  useAddSessionsToProject: () => ({ mutate: mocks.addSessionsMutate }),
+  useCreateProject: () => ({ mutate: mocks.createMutate, mutateAsync: mocks.createMutateAsync, isPending: false }),
 }));
 
 import { ProjectAddToModal } from './ProjectAddToModal';
@@ -35,16 +37,22 @@ describe('ProjectAddToModal', () => {
     mocks.projects = [];
     mocks.searchEnabled = [];
     mocks.createMutate.mockReset();
+    mocks.createMutateAsync.mockReset();
+    mocks.addSessionsMutate.mockReset();
   });
 
-  it('offers to create a project, with the notebook in it, when the user has none', () => {
+  it('offers to create a project, with the notebook in it, when the user has none', async () => {
+    mocks.createMutateAsync.mockResolvedValue({ id: 'new-project' });
     render(<ProjectAddToModal open setOpen={vi.fn()} dataId="session-1" dataType="session" />, { wrapper: Wrapper });
 
     expect(screen.getByTestId('project-add-to-modal-empty')).toHaveTextContent('No projects yet');
     fireEvent.change(screen.getByTestId('project-add-to-modal-name-input'), { target: { value: '  Campaign  ' } });
     fireEvent.click(screen.getByTestId('project-add-to-modal-create-btn'));
 
-    expect(mocks.createMutate).toHaveBeenCalledWith({ name: 'Campaign', description: '', sessionIds: ['session-1'] });
+    await waitFor(() =>
+      expect(mocks.addSessionsMutate).toHaveBeenCalledWith({ projectId: 'new-project', sessionIds: ['session-1'] })
+    );
+    expect(mocks.createMutateAsync).toHaveBeenCalledWith({ name: 'Campaign', description: '' });
   });
 
   it('keeps the create button disabled until a name is typed', () => {
