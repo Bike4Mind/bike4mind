@@ -40,6 +40,17 @@ export function claimSessionForReporting(sessionId: string): boolean {
   }
 }
 
+/** Give a claim back after a failed lookup so a reload can report it; no-op if storage is unavailable. */
+export function releaseSessionClaim(sessionId: string): void {
+  try {
+    const raw = window.sessionStorage.getItem(REPORTED_SESSIONS_KEY);
+    const reported: string[] = raw ? JSON.parse(raw) : [];
+    window.sessionStorage.setItem(REPORTED_SESSIONS_KEY, JSON.stringify(reported.filter(id => id !== sessionId)));
+  } catch {
+    // Best-effort, like the claim.
+  }
+}
+
 const StripeCheckoutSuccessHandler = () => {
   const queryClient = useQueryClient();
 

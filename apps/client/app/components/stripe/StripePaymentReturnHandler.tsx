@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { trackPurchaseConversion } from '@client/app/utils/purchaseConversion';
-import { claimSessionForReporting } from './StripeCheckoutSuccessHandler';
+import { claimSessionForReporting, releaseSessionClaim } from './StripeCheckoutSuccessHandler';
 
 /**
  * Reports a completed credit purchase to analytics when Stripe returns the customer.
@@ -29,11 +29,11 @@ export const PAYMENT_RETURN_PARAMS = ['payment_intent', 'payment_intent_client_s
 export function reportCreditPurchaseConversion(paymentIntentId: string): void {
   if (!paymentIntentId.startsWith('pi_') || !claimSessionForReporting(paymentIntentId)) return;
   // Not awaited and never surfaced, as for subscriptions: analytics must not
-  // delay or interrupt the customer.
+  // delay or interrupt the customer. A failed lookup releases the claim so a retry can report.
   api
     .get('/api/stripe/payment-intent', { params: { id: paymentIntentId } })
     .then(response => trackPurchaseConversion(response.data))
-    .catch(() => {});
+    .catch(() => releaseSessionClaim(paymentIntentId));
 }
 
 const StripePaymentReturnHandler = () => {

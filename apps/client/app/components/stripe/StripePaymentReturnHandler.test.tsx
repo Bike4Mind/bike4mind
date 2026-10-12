@@ -93,4 +93,28 @@ describe('StripePaymentReturnHandler', () => {
     await waitFor(() => expect(mockGet).toHaveBeenCalledOnce());
     expect(mockTrackPurchaseConversion).not.toHaveBeenCalled();
   });
+
+  it('releases the claim when the lookup fails, so a reload reports the payment once', async () => {
+    mockGet.mockRejectedValueOnce(new Error('503'));
+    returnTo(STRIPE_RETURN).unmount();
+    await waitFor(() => expect(mockGet).toHaveBeenCalledOnce());
+    await waitFor(() => expect(window.sessionStorage.getItem('b4m-reported-checkout-sessions')).toBe('[]'));
+    expect(mockTrackPurchaseConversion).not.toHaveBeenCalled();
+
+    returnTo(STRIPE_RETURN).unmount();
+    await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledExactlyOnceWith(FACTS));
+
+    returnTo(STRIPE_RETURN);
+    expect(mockGet).toHaveBeenCalledTimes(2);
+    expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
+  });
+
+  it('lets the in-page path retry after a failed lookup too', async () => {
+    mockGet.mockRejectedValueOnce(new Error('503'));
+    reportCreditPurchaseConversion('pi_test_1');
+    await waitFor(() => expect(window.sessionStorage.getItem('b4m-reported-checkout-sessions')).toBe('[]'));
+
+    reportCreditPurchaseConversion('pi_test_1');
+    await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledExactlyOnceWith(FACTS));
+  });
 });
