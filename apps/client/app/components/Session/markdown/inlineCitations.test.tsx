@@ -3,10 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import ReactMarkdown from 'react-markdown';
-import remarkMath from 'remark-math';
 import type { CitableSource } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { remarkGfmNoSingleTilde } from '@client/app/utils/remarkPlugins';
+import { assistantReplyRemarkPlugins } from '@client/app/utils/remarkPlugins';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { CitationInteractionProvider } from '../CitationInteractionContext';
 import {
@@ -47,14 +46,14 @@ const webCitable: CitableSource = {
   metadata: { citationIndex: 1 },
 };
 
-// Mirrors the reply renderer's plugin order in PromptReplies, so GFM autolinks and math nodes
+// The production plugin combination from PromptReplies, so GFM, math and line-break nodes
 // reach the citation pass the same way they do in a real reply.
 const Reply = ({ content, citables }: { content: string; citables: readonly CitableSource[] }) => (
   <CssVarsProvider theme={appTheme}>
     <ReplyCitablesContext.Provider value={citables}>
       <ReactMarkdown
         components={{ [CITATION_MARKER_TAG]: CitationMarker }}
-        remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }], remarkCitationMarkers]}
+        remarkPlugins={[...assistantReplyRemarkPlugins, remarkCitationMarkers]}
       >
         {content}
       </ReactMarkdown>
@@ -183,6 +182,17 @@ describe('inline citation markers in a reply', () => {
     );
     expect(markerLinks().map(link => link.textContent)).toEqual(['1', '2']);
     expect(container).toHaveTextContent('Both agree [1, 2].');
+  });
+
+  it('links markers at a line end and keeps the line break between them', () => {
+    const { container } = render(
+      <Reply content={'Fact one [1]\nFact two [2]'} citables={[lakeCitable('a', 1), lakeCitable('b', 2)]} />
+    );
+    expect(markerLinks().map(link => link.textContent)).toEqual(['1', '2']);
+    const html = container.innerHTML;
+    expect(container.querySelectorAll('br')).toHaveLength(1);
+    expect(html.indexOf('<br')).toBeGreaterThan(html.indexOf('Fact one'));
+    expect(html.indexOf('<br')).toBeLessThan(html.indexOf('Fact two'));
   });
 
   it('leaves dangling and non-citation brackets as plain text', () => {
