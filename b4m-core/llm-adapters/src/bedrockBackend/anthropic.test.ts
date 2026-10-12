@@ -116,9 +116,12 @@ describe('AnthropicBedrockBackend current inference profiles', () => {
     expect(model?.pricing[1_000_000]).toEqual({ input: 0.5 / 1_000_000, output: 2.5 / 1_000_000 });
   });
 
-  it.each([ChatModels.CLAUDE_5_5_HAIKU_BEDROCK])('omits sampling parameters for %s', id => {
+  it('omits sampling parameters for Haiku 5.5', () => {
     const body = JSON.parse(
-      backend.getPayload(id, [{ role: 'user', content: 'Hello' }], { temperature: 0.2, topP: 0.8 }).body
+      backend.getPayload(ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, [{ role: 'user', content: 'Hello' }], {
+        temperature: 0.2,
+        topP: 0.8,
+      }).body
     ) as Record<string, unknown>;
 
     expect(body).not.toHaveProperty('temperature');
