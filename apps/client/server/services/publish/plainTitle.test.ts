@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripInlineMarkdown } from './plainTitle';
+import { displayReplyTitle, stripInlineMarkdown } from './plainTitle';
 
 describe('stripInlineMarkdown', () => {
   it.each([
@@ -18,5 +18,20 @@ describe('stripInlineMarkdown', () => {
 
   it.each(['snake_case_name stays', '5 * 3 = 15', 'Price: 2 * 4 * 6'])('leaves %j alone', input => {
     expect(stripInlineMarkdown(input)).toBe(input);
+  });
+});
+
+describe('displayReplyTitle', () => {
+  it('strips a title cut from the first line before the write path stripped markers', () => {
+    expect(displayReplyTitle('Recap: *Tides*', '# Recap: *Tides*\n\nbody')).toBe('Recap: Tides');
+  });
+
+  it('keeps a caller-supplied title verbatim', () => {
+    expect(displayReplyTitle('*Draft* v2', 'Some reply body')).toBe('*Draft* v2');
+  });
+
+  it('keeps an embedded artifact name verbatim', () => {
+    const body = '<artifact identifier="a" type="text/html" title="my_tool_v2"><p>x</p></artifact>';
+    expect(displayReplyTitle('my_tool_v2', body)).toBe('my_tool_v2');
   });
 });

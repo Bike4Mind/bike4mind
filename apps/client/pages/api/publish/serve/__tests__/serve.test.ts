@@ -716,9 +716,12 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     expect(data).not.toContain('<title>&lt;artifact');
   });
 
-  it('strips markdown markers from a stored reply title', async () => {
+  it('strips markdown markers from a reply title derived before the write path stripped them', async () => {
     mockArtifactFindOne.mockReturnValue(
-      htmlReply({ title: 'Session 1 Recap: *Tides of the Drowned Crown*', renderedBody: 'Recap body' })
+      htmlReply({
+        title: 'Session 1 Recap: *Tides of the Drowned Crown*',
+        renderedBody: '## Session 1 Recap: *Tides of the Drowned Crown*\n\nRecap body',
+      })
     );
     const { res, promise } = run(['r', 'rhtml']);
     await promise;
@@ -726,6 +729,27 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     const data = res._getData() as string;
     expect(data).toContain('<title>Session 1 Recap: Tides of the Drowned Crown</title>');
     expect(data).not.toContain('*Tides');
+  });
+
+  it('keeps a caller-supplied reply title verbatim', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({ title: '*Draft* v2', renderedBody: 'Recap body', description: undefined })
+    );
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>*Draft* v2</title>');
+  });
+
+  it('keeps an embedded artifact name verbatim when the viewer falls back to it', async () => {
+    const named = HTML_ARTIFACT.replace('title="Tip Calculator"', 'title="tip_calc_v2 *beta*"');
+    mockArtifactFindOne.mockReturnValue(htmlReply({ title: '', renderedBody: named }));
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>tip_calc_v2 *beta*</title>');
   });
 
   it('serves the ?a= sub-document as a sandboxed HTML doc that runs the artifact JS in isolation', async () => {
