@@ -324,6 +324,13 @@ export const isToolKeyMissing = (toolName: B4MLLMTools, availability: ToolAvaila
   availability?.[toolName] === false;
 
 /**
+ * Whether the session's `disabledTools` denylist withholds `toolName`. Exact-id match, like
+ * `resolveDeniedTools` on the server. Undefined (no session yet) denies nothing.
+ */
+export const isToolDenied = (toolName: string, deniedTools: readonly string[] | undefined): boolean =>
+  deniedTools?.includes(toolName) ?? false;
+
+/**
  * The user's enabled tools minus the ones whose key is missing, for DISPLAY and
  * interaction gating only.
  *
@@ -344,7 +351,8 @@ export const filterToolsForDisplay = (
   enabledTools: readonly B4MLLMTools[],
   availability: ToolAvailability | undefined,
   deniedTools?: readonly string[]
-): B4MLLMTools[] => enabledTools.filter(tool => !isToolKeyMissing(tool, availability) && !deniedTools?.includes(tool));
+): B4MLLMTools[] =>
+  enabledTools.filter(tool => !isToolKeyMissing(tool, availability) && !isToolDenied(tool, deniedTools));
 
 export const getToolInfo = (toolName: PublicTools): ToolInfo | undefined => {
   return TOOL_MAPPING[toolName];

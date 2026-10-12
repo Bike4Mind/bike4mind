@@ -721,6 +721,7 @@ export function useSendMessage({
       supportsTools: !!currentModelInfo?.supportsTools,
       toolsOverride: options?.toolsOverride,
       skipAutoOffers,
+      deniedTools: currentSession?.disabledTools,
     });
     if (refused) {
       setSubmitting(false);

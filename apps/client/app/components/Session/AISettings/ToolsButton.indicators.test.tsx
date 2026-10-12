@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../../utils/themes';
@@ -18,7 +18,14 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 // Reassigned per test so one module mock can serve both a tool-capable and a tool-less catalog.
 let modelRepo: Array<{ id: string; name: string; supportsTools?: boolean }> = [];
 
-vi.mock('./ToolsSection', () => ({ default: () => <div data-testid="tools-section" /> }));
+// Props of every ToolsSection mount, so a test can assert what each host (dropdown, mobile modal) forwards.
+const toolsSectionMounts: Array<Record<string, unknown>> = [];
+vi.mock('./ToolsSection', () => ({
+  default: (props: Record<string, unknown>) => {
+    toolsSectionMounts.push(props);
+    return <div data-testid="tools-section" />;
+  },
+}));
 // The named exports are re-declared because the real module's consumers (ToolsSection,
 // AdvancedAISettings) import them at module scope - a `default`-only factory makes those
 // imports undefined and the component throws before rendering anything.
@@ -51,6 +58,7 @@ const baseProps = {
 
 describe('ToolsButton active-tool indicators', () => {
   beforeEach(() => {
+    toolsSectionMounts.length = 0;
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: false,
       media: query,
@@ -114,5 +122,57 @@ describe('ToolsButton active-tool indicators', () => {
       </TestWrapper>
     );
     expect(screen.getByTestId('tool-indicators')).toBeInTheDocument();
+  });
+});
+
+describe('ToolsButton session-denied tools', () => {
+  beforeEach(() => {
+    toolsSectionMounts.length = 0;
+    modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  const lastMount = () => toolsSectionMounts[toolsSectionMounts.length - 1];
+
+  it('hands the denylist to the ToolsSection in the desktop dropdown', () => {
+    render(
+      <TestWrapper>
+        <ToolsButton {...baseProps} model="gpt-4o" disabledTools={['dice_roll']} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('session-tools-dropdown-toggle'));
+    expect(screen.getByTestId('tools-section')).toBeInTheDocument();
+    expect(lastMount().disabledTools).toEqual(['dice_roll']);
+  });
+
+  it('hands the denylist to the ToolsSection in the mobile modal', () => {
+    render(
+      <TestWrapper>
+        <ToolsButton {...baseProps} isMobile model="gpt-4o" disabledTools={['dice_roll']} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('session-tools-dropdown-toggle'));
+    expect(screen.getByTestId('tools-section')).toBeInTheDocument();
+    expect(lastMount().disabledTools).toEqual(['dice_roll']);
+  });
+
+  // Control: no session means no denylist, in either host.
+  it('passes no denylist when the session has none', () => {
+    render(
+      <TestWrapper>
+        <ToolsButton {...baseProps} isMobile model="gpt-4o" />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('session-tools-dropdown-toggle'));
+    expect(lastMount().disabledTools).toBeUndefined();
   });
 });

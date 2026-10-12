@@ -8,7 +8,7 @@ import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useConfig } from '@client/app/hooks/data/settings';
-import { filterToolsForDisplay } from '@client/app/utils/toolMapping';
+import { filterToolsForDisplay, isToolDenied } from '@client/app/utils/toolMapping';
 import { useIsMobile, useIsTablet } from '@client/app/hooks/useIsMobile';
 import { Casino as CasinoIcon, Tag as TagIcon } from '@mui/icons-material';
 import { useShallow } from 'zustand/react/shallow';
@@ -112,6 +112,7 @@ const AISettings: FC<AISettingsProps> = ({
   const disabledTools = currentSession?.disabledTools;
   const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability, disabledTools);
   const activePrimaryTools = primaryTools.filter(tool => displayTools.includes(tool));
+  const isImageGenerationDenied = isToolDenied('image_generation', disabledTools);
   const isThinkingActive = thinking?.enabled ?? false;
   // Integrations that actually reach this turn. "Only tools I pick" withholds every
   // non-agent-only MCP tool server-side (`offerOnlyNamedTools` in sharedToolBuilder), so
@@ -255,7 +256,7 @@ const AISettings: FC<AISettingsProps> = ({
         {isImageTemplatesEnabled && isImageModel(model) && <ImageTemplateControls />}
 
         {/* Prompt Builder (guided prompt construction; generation models only) */}
-        {isPromptBuilderEnabled && isImageGenerationModel(model) && !disabledTools?.includes('image_generation') && (
+        {isPromptBuilderEnabled && isImageGenerationModel(model) && !isImageGenerationDenied && (
           <Tooltip title={showPromptBuilderHint ? 'New: build image prompts here' : 'Prompt Builder'}>
             <Badge
               size="sm"

@@ -34,9 +34,10 @@ const mocks = vi.hoisted(() => {
   useLLM.setState = vi.fn();
   const toolAvailability = { value: undefined as Record<string, boolean> | undefined };
   const toolsButtonProps = { value: null as Record<string, unknown> | null };
+  const modalProps = { value: null as Record<string, unknown> | null };
   const mcpServers = { value: [] as Array<{ name: string; enabled: boolean }> };
   const adminFeatureFlags = { value: {} as Record<string, boolean> };
-  return { state, useLLM, toolAvailability, toolsButtonProps, mcpServers, adminFeatureFlags };
+  return { state, useLLM, toolAvailability, toolsButtonProps, modalProps, mcpServers, adminFeatureFlags };
 });
 
 vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: mocks.useLLM }));
@@ -70,7 +71,12 @@ vi.mock('./PromptBuilder/usePromptBuilderFirstRun', () => ({
   usePromptBuilderFirstRun: () => ({ showHint: false, markSeen: vi.fn() }),
 }));
 vi.mock('./AISettings/InspectableSettingsButton', () => ({ default: () => null }));
-vi.mock('./AISettings/AdvancedAIModal', () => ({ AdvancedAIModal: () => null }));
+vi.mock('./AISettings/AdvancedAIModal', () => ({
+  AdvancedAIModal: (props: Record<string, unknown>) => {
+    mocks.modalProps.value = props;
+    return null;
+  },
+}));
 vi.mock('./AISettings/AgentsButton', () => ({ default: () => null }));
 vi.mock('./AISettings/BriefcaseButton', () => ({ default: () => null }));
 vi.mock('./AISettings/ResearchModeIndicator', () => ({ default: () => null }));
@@ -129,6 +135,7 @@ beforeEach(() => {
   mocks.state.tools = [];
   mocks.toolAvailability.value = undefined;
   mocks.toolsButtonProps.value = null;
+  mocks.modalProps.value = null;
   mocks.mcpServers.value = [];
   mocks.state.enabledMcpServers = null;
   mocks.state.skipAutoOffers = false;
@@ -284,5 +291,21 @@ describe('AdvancedAISettings toolbar buttons vs session-denied tools', () => {
     mocks.state.tools = ['dice_roll'];
     const { container } = renderSettings(null);
     expect(container.querySelector('[data-testid="CasinoIcon"]')).toBeTruthy();
+  });
+});
+
+describe('AdvancedAISettings modal vs session-denied tools', () => {
+  const sessionDenying = (...disabledTools: string[]) => ({ disabledTools }) as unknown as ISessionDocument;
+
+  it('hands the session denylist to AdvancedAIModal', () => {
+    renderSettings(sessionDenying('dice_roll'));
+    expect(mocks.modalProps.value).not.toBeNull();
+    expect(mocks.modalProps.value?.disabledTools).toEqual(['dice_roll']);
+  });
+
+  it('hands it no denylist without a session', () => {
+    renderSettings(null);
+    expect(mocks.modalProps.value).not.toBeNull();
+    expect(mocks.modalProps.value?.disabledTools).toBeUndefined();
   });
 });

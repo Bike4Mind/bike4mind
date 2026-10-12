@@ -576,6 +576,8 @@ const ToolsSection = ({
   // count a filtered-out tool in the Individual total.
   const funPinnedCount = displayTools.filter(t => FUN_NOVELTY_TOOLS.includes(t)).length;
   const individualToolsCount = displayTools.length - funPinnedCount;
+  // Every row under the header is hidden, so the header would be a toggle for an empty section.
+  const allFunToolsDenied = FUN_NOVELTY_TOOLS.every(tool => deniedTools.has(tool));
   const pinnedCount = individualToolsCount + enabledMcpServerCount + specialToolsCount;
 
   // One instance, placed differently per host: on the title row where the header stacks,
@@ -1507,7 +1509,7 @@ const ToolsSection = ({
             }
           }}
           sx={{
-            display: 'flex',
+            display: allFunToolsDenied ? 'none' : 'flex',
             alignItems: 'center',
             width: 'fit-content',
             cursor: 'pointer',

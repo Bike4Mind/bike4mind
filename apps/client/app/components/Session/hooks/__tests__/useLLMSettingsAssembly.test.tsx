@@ -101,6 +101,48 @@ describe('useLLMSettingsAssembly › resolveTools', () => {
     expect(toastInfo).toHaveBeenCalledWith('Smart tools: fetch a URL');
   });
 
+  describe('Smart mode with session-denied tools', () => {
+    const recommend = () => {
+      llmState.toolMode = 'smart';
+      llmState.tools = ['web_search'] as B4MLLMTools[];
+      recommendToolsMock.mockReturnValue([
+        { tool: 'dice_roll', reason: 'roll some dice' },
+        { tool: 'web_fetch', reason: 'fetch a URL' },
+      ]);
+      mergeToolsMock.mockReturnValue(['web_search', 'dice_roll', 'web_fetch'] as B4MLLMTools[]);
+    };
+
+    it('does not name a denied tool in the toast', () => {
+      recommend();
+      render().current.resolveTools({ prompt: 'x', supportsTools: true, deniedTools: ['dice_roll'] });
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+      expect(toastInfo).toHaveBeenCalledWith('Smart tools: fetch a URL');
+    });
+
+    it('does not toast at all when the only new recommendation is denied', () => {
+      llmState.toolMode = 'smart';
+      llmState.tools = ['web_search'] as B4MLLMTools[];
+      recommendToolsMock.mockReturnValue([{ tool: 'dice_roll', reason: 'roll some dice' }]);
+      mergeToolsMock.mockReturnValue(['web_search', 'dice_roll'] as B4MLLMTools[]);
+      render().current.resolveTools({ prompt: 'x', supportsTools: true, deniedTools: ['dice_roll'] });
+      expect(toastInfo).not.toHaveBeenCalled();
+    });
+
+    // The server denylist is the gate; the client payload is deliberately left alone.
+    it('still sends the denied tool in effectiveTools', () => {
+      recommend();
+      const result = render().current.resolveTools({ prompt: 'x', supportsTools: true, deniedTools: ['dice_roll'] });
+      expect(result.effectiveTools).toEqual(['web_search', 'dice_roll', 'web_fetch']);
+    });
+
+    // Control: without a denylist the same recommendations are all named.
+    it('names every recommendation when no denylist is given', () => {
+      recommend();
+      render().current.resolveTools({ prompt: 'x', supportsTools: true });
+      expect(toastInfo).toHaveBeenCalledWith('Smart tools: roll some dice, fetch a URL');
+    });
+  });
+
   it('Smart mode does not toast when nothing new was auto-selected', () => {
     llmState.toolMode = 'smart';
     llmState.tools = ['web_search'] as B4MLLMTools[];
