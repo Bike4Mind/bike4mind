@@ -105,7 +105,7 @@ const shareUpdateRow = (userId: string) => ({
 });
 
 // Each control must match the server predicate behind its own endpoint: invites (Add Member, Cancel Invite)
-// gate on isOrgOwnerOrCurrentAdmin, Revoke Access on canAdministerOrganization.
+// gate on isOrgMember then isOrgOwnerOrCurrentAdmin, Revoke Access on canAdministerOrganization.
 describe('OrganizationMembers roster controls', () => {
   beforeEach(() => {
     mocks.viewer = { id: 'viewer', isAdmin: false };
@@ -156,6 +156,29 @@ describe('OrganizationMembers roster controls', () => {
     expectControls({ invite: false, revoke: false });
   });
 
+  // The appointment route could persist an admin row with no permissions; isOrgMember rejects it
+  // before the invite routes reach the admin check.
+  it('gives an appointed admin whose users[] row confers no membership nothing', () => {
+    renderMembers(
+      buildOrg({
+        adminUserIds: ['viewer'],
+        users: [{ userId: 'viewer', permissions: [] }] as unknown as IOrganizationDocument['users'],
+      })
+    );
+    expectControls({ invite: false, revoke: false });
+    expect(screen.queryByTestId('organization-members-seats-card')).toBeNull();
+  });
+
+  it('gives an appointed admin whose users[] row has no permissions field nothing', () => {
+    renderMembers(
+      buildOrg({
+        adminUserIds: ['viewer'],
+        users: [{ userId: 'viewer' }] as unknown as IOrganizationDocument['users'],
+      })
+    );
+    expectControls({ invite: false, revoke: false });
+  });
+
   it('does not treat an empty managerId as matching an empty viewer id', () => {
     mocks.viewer = { id: '', isAdmin: false };
     renderMembers(buildOrg({ managerId: '' }));
@@ -185,6 +208,13 @@ describe('OrganizationMembers roster controls', () => {
     renderMembers(buildOrg({ users: [shareUpdateRow('viewer')] as IOrganizationDocument['users'] }));
     expect(screen.queryByTestId('organization-members-add-no-seats-btn')).toBeNull();
     expect(screen.queryByTestId('organization-members-seats-card')).toBeNull();
+  });
+
+  it('shows the seat card, but no Add Member button, to a manager without an admin row', () => {
+    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    renderMembers(buildOrg({ managerId: 'viewer' }));
+    expect(screen.getByTestId('organization-members-seats-card')).toBeTruthy();
+    expect(screen.queryByTestId('organization-members-add-no-seats-btn')).toBeNull();
   });
 
   it('shows the no-seats Add Member button to the owner', () => {

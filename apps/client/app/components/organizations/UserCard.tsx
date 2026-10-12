@@ -26,7 +26,7 @@ interface OrganizationUserCardProps {
     permissions: Permission[];
     creditUsage: MemberCreditUsage | null;
   };
-  /** Viewer may cancel a pending invite (`isOrgOwnerOrCurrentAdmin`, the invite routes' gate). */
+  /** Viewer may cancel a pending invite (`isOrgMember` and `isOrgOwnerOrCurrentAdmin`, the invite routes' gates). */
   canInviteMembers: boolean;
   /** Viewer may revoke a member (`canAdministerOrganization`, the DELETE member route's gate). */
   canRevokeMembers: boolean;
@@ -172,11 +172,16 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
                   }),
               })
             }
+            data-testid="organization-user-card-cancel-invite"
           >
             Cancel Invite
           </MenuItem>
         )}
-        {!isOwner && canRevoke && <MenuItem onClick={() => handleRemoveMember(user.id)}>Revoke Access</MenuItem>}
+        {!isOwner && canRevoke && (
+          <MenuItem onClick={() => handleRemoveMember(user.id)} data-testid="organization-user-card-revoke-access">
+            Revoke Access
+          </MenuItem>
+        )}
         {!isOwner && canLeave && <MenuItem onClick={handleLeaveOrganization}>Leave Team</MenuItem>}
       </Menu>
     </Dropdown>

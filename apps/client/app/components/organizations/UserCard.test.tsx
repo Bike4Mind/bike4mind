@@ -94,8 +94,8 @@ describe('OrganizationUserCard monthly limit control', () => {
     renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, true);
     openMenu();
     expect(await screen.findByText('Set monthly limit')).toBeTruthy();
-    expect(screen.queryByText('Revoke Access')).toBeNull();
-    expect(screen.queryByText('Cancel Invite')).toBeNull();
+    expect(screen.queryByTestId('organization-user-card-revoke-access')).toBeNull();
+    expect(screen.queryByTestId('organization-user-card-cancel-invite')).toBeNull();
     fireEvent.click(screen.getByTestId('organization-user-card-set-limit'));
     expect(screen.getByTestId('credit-limit-modal')).toBeTruthy();
   });
@@ -140,7 +140,7 @@ describe('OrganizationUserCard roster actions', () => {
   it('offers Revoke Access on the revoke flag alone', async () => {
     renderCard(accepted(), false, { invite: false, revoke: true });
     openMenu();
-    expect(await screen.findByText('Revoke Access')).toBeTruthy();
+    expect(await screen.findByTestId('organization-user-card-revoke-access')).toBeTruthy();
   });
 
   it('withholds Revoke Access from a viewer who may only invite', () => {
@@ -151,7 +151,7 @@ describe('OrganizationUserCard roster actions', () => {
   it('offers Cancel Invite on the invite flag alone', async () => {
     renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
     openMenu();
-    expect(await screen.findByText('Cancel Invite')).toBeTruthy();
+    expect(await screen.findByTestId('organization-user-card-cancel-invite')).toBeTruthy();
   });
 
   it('withholds Cancel Invite from a viewer who may only revoke', () => {

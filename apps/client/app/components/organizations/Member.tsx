@@ -3,6 +3,7 @@ import {
   canManageMemberCreditBudgets,
   InviteType,
   IOrganizationDocument,
+  isOrgMember,
   isOrgOwnerOrCurrentAdmin,
   IUserDocument,
   Permission,
@@ -114,8 +115,10 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
 
   // Each roster control mirrors the server predicate behind its own endpoint. The two sets differ:
   // a manager may revoke but not invite, an appointed admin may invite but not revoke.
-  // Invites (create + cancel) gate on isOrgOwnerOrCurrentAdmin in sharingService.
-  const canInviteMembers = !!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+  // Invites (create + cancel) gate on isOrgMember, then isOrgOwnerOrCurrentAdmin, in sharingService;
+  // an appointed admin whose users[] row lacks read/write fails the first check.
+  const canInviteMembers =
+    !!currentUser && isOrgMember(currentUser, organization) && isOrgOwnerOrCurrentAdmin(currentUser, organization);
   // DELETE /members/:userId gates on canAdministerOrganization in organizationService.revokeAccess.
   const canRevokeMembers = !!currentUser && canAdministerOrganization(currentUser, organization);
 
@@ -192,8 +195,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         height: '100%',
       }}
     >
-      {/* Seats Management Section */}
-      {canInviteMembers && (
+      {/* Seats Management Section: read-only, shown to anyone who can change the roster */}
+      {(canInviteMembers || canRevokeMembers) && (
         <Card
           className="organization-members-seats-card"
           data-testid="organization-members-seats-card"

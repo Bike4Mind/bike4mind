@@ -131,13 +131,15 @@ export type AdministrableOrg = { userId: string; managerId?: string | null };
  * every ordinary member satisfied it and could therefore enroll arbitrary accounts.
  *
  * NOT the same set as `isOrgOwnerOrCurrentAdmin`: a manager passes this but not that, an appointed
- * admin passes that but not this. Invites (and cancelling them) gate on that one, so the client
- * must ask each control's own server predicate rather than one "can manage" flag.
+ * admin passes that but not this. Invites (and cancelling them) gate on that one, behind an
+ * `isOrgMember` check, so the client must ask each control's own server predicate rather than
+ * one "can manage" flag.
  *
  * `userId` and `managerId` are declared `String` on the organization schema, so a strict
  * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
- * (b4m-core/services), `canManageOrg` in apps/client/server/utils/orgAccess.ts, and the client's
- * Members tab (components/organizations/Member.tsx).
+ * (b4m-core/services), the addUser route (apps/client/pages/api/organizations/[id]/addUser.ts),
+ * `canManageOrg` in apps/client/server/utils/orgAccess.ts, and the client's Members tab
+ * (components/organizations/Member.tsx).
  */
 export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
   if (actor.isAdmin) return true;
