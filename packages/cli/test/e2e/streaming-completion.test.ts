@@ -96,9 +96,15 @@ describe('streaming completion (real ServerLlmBackend + real ReActAgent)', () =>
   });
 
   it('surfaces an empty completion as an error instead of a blank turn', async () => {
-    // Every attempt ends the stream with no content - the old WS path would have
-    // silently delivered a blank turn; the shared core retries then surfaces.
-    const llm = makeSseBackend([stream => stream.end()]);
+    // Every attempt completes ([DONE]) with no content - the old WS path would have
+    // silently delivered a blank turn; the shared core retries then surfaces. [DONE]
+    // matters: without it the SDK reports a truncated stream instead.
+    const llm = makeSseBackend([
+      stream => {
+        stream.write('data: [DONE]\n\n');
+        stream.end();
+      },
+    ]);
     await expect(makeAgent(llm).run('hi', { parallelExecution: false })).rejects.toThrow(
       /without producing any content/i
     );
