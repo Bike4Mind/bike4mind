@@ -4,7 +4,11 @@ import { IOrganizationDocument, IUserDocument, WithId } from '@bike4mind/common'
 import { NotFoundError } from '@bike4mind/utils';
 
 describe('organizationService - get', () => {
-  let mockAdapters: any;
+  const repository = {
+    findById: vi.fn(),
+    shareable: { findAccessibleById: vi.fn() },
+  };
+  const mockAdapters = { db: { organizations: repository } } as unknown as Parameters<typeof get>[2];
 
   const mockOrganization: WithId<IOrganizationDocument> = {
     id: 'org1',
@@ -24,25 +28,14 @@ describe('organizationService - get', () => {
     updatedAt: new Date('2023-01-01'),
   };
 
-  // Create a base mock repository with all required methods
-  const createMockRepository = () => ({
-    findById: vi.fn(),
-    shareable: {
-      findAccessibleById: vi.fn(),
-    },
-  });
-
   beforeEach(() => {
-    mockAdapters = {
-      db: {
-        organizations: createMockRepository(),
-      },
-    };
+    repository.findById.mockReset();
+    repository.shareable.findAccessibleById.mockReset();
   });
 
   it('should return an organization when found as admin', async () => {
-    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(null);
-    mockAdapters.db.organizations.findById.mockResolvedValue(mockOrganization);
+    repository.shareable.findAccessibleById.mockResolvedValue(null);
+    repository.findById.mockResolvedValue(mockOrganization);
 
     const mockAdminUser: Partial<IUserDocument> = {
       id: 'admin1',
@@ -52,13 +45,13 @@ describe('organizationService - get', () => {
     const result = await get(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
     expect(result).toEqual(mockOrganization);
-    expect(mockAdapters.db.organizations.shareable.findAccessibleById).toHaveBeenCalledWith(mockAdminUser, 'org1');
-    expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org1');
+    expect(repository.shareable.findAccessibleById).toHaveBeenCalledWith(mockAdminUser, 'org1');
+    expect(repository.findById).toHaveBeenCalledWith('org1');
   });
 
   it('should throw NotFoundError when organization does not exist', async () => {
-    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(null);
-    mockAdapters.db.organizations.findById.mockResolvedValue(null);
+    repository.shareable.findAccessibleById.mockResolvedValue(null);
+    repository.findById.mockResolvedValue(null);
 
     const mockAdminUser: Partial<IUserDocument> = {
       id: 'admin1',
@@ -68,15 +61,12 @@ describe('organizationService - get', () => {
     await expect(get(mockAdminUser as IUserDocument, { id: 'nonexistent' }, mockAdapters)).rejects.toThrow(
       NotFoundError
     );
-    expect(mockAdapters.db.organizations.shareable.findAccessibleById).toHaveBeenCalledWith(
-      mockAdminUser,
-      'nonexistent'
-    );
-    expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('nonexistent');
+    expect(repository.shareable.findAccessibleById).toHaveBeenCalledWith(mockAdminUser, 'nonexistent');
+    expect(repository.findById).toHaveBeenCalledWith('nonexistent');
   });
 
   it('should allow access for a user who belongs to the organization', async () => {
-    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(mockOrganization);
+    repository.shareable.findAccessibleById.mockResolvedValue(mockOrganization);
 
     // Create a mock user who belongs to the organization
     const mockUser: Partial<IUserDocument> = {
@@ -87,13 +77,23 @@ describe('organizationService - get', () => {
     const result = await get(mockUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
     expect(result).toEqual(mockOrganization);
-    expect(mockAdapters.db.organizations.shareable.findAccessibleById).toHaveBeenCalledWith(mockUser, 'org1');
-    expect(mockAdapters.db.organizations.findById).not.toHaveBeenCalled();
+    expect(repository.shareable.findAccessibleById).toHaveBeenCalledWith(mockUser, 'org1');
+    expect(repository.findById).not.toHaveBeenCalled();
+  });
+
+  it('admits an appointed manager without a membership row', async () => {
+    const organization = { ...mockOrganization, managerId: 'manager1', users: [] };
+    const manager = { id: 'manager1', isAdmin: false } as IUserDocument;
+    repository.shareable.findAccessibleById.mockResolvedValue(null);
+    repository.findById.mockResolvedValue(organization);
+
+    await expect(get(manager, { id: 'org1' }, mockAdapters)).resolves.toEqual(organization);
+    expect(repository.findById).toHaveBeenCalledWith('org1');
   });
 
   it('should throw NotFoundError for a user who does not belong to the organization', async () => {
-    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(null);
-    mockAdapters.db.organizations.findById.mockResolvedValue(mockOrganization);
+    repository.shareable.findAccessibleById.mockResolvedValue(null);
+    repository.findById.mockResolvedValue(mockOrganization);
 
     // Create a mock user who does not belong to the organization
     const mockUser: Partial<IUserDocument> = {
@@ -102,7 +102,7 @@ describe('organizationService - get', () => {
     };
 
     await expect(get(mockUser as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(NotFoundError);
-    expect(mockAdapters.db.organizations.shareable.findAccessibleById).toHaveBeenCalledWith(mockUser, 'org1');
-    expect(mockAdapters.db.organizations.findById).not.toHaveBeenCalled();
+    expect(repository.shareable.findAccessibleById).toHaveBeenCalledWith(mockUser, 'org1');
+    expect(repository.findById).toHaveBeenCalledWith('org1');
   });
 });

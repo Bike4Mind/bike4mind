@@ -13,9 +13,9 @@ import type { IOrganization } from '../types/entities/OrganizationTypes';
  *   server-side billing uses the repository directly.
  * - `billingContact` is kept only for the org OWNER or a site admin.
  * - Everything else (name/description/seats/systemPrompt/userDetails/currentCredits/
- *   model config/logo) is preserved: the single-org GET is already access-gated to
- *   org members, and the list route scopes non-admins to their own orgs, so those
- *   fields never cross a tenant boundary.
+ *   model config/logo) is preserved: the single-org GET is access-gated to members
+ *   and roster administrators, and the list routes scope non-admins to their own
+ *   memberships or manager appointments, so those fields never cross a tenant boundary.
  *
  * Callers pass a hydrated Mongoose doc (normalized via toJSON here) or a plain object.
  */
