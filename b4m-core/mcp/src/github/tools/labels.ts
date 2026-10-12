@@ -219,8 +219,8 @@ export function registerLabelTools(server: McpServer) {
     {
       owner: ownerSchema,
       repo: repoSchema,
-      per_page: z.number().optional().prefault(100).describe('Results per page (max 100)'),
-      page: z.number().optional().prefault(1).describe('Page number'),
+      per_page: z.number().prefault(100).describe('Results per page (max 100)'),
+      page: z.number().prefault(1).describe('Page number'),
     },
     async ({ owner, repo, per_page, page }) => {
       try {

@@ -21,16 +21,15 @@ const shareTokenBodySchema = z.object({
  *          `regenerate: true` rotates, revoking EVERY outstanding link in one write;
  *          `additional: true` mints another link alongside the live ones.
  *   DELETE [?id=<entryId>] - revoke. With an id, revokes that one link; without one,
- *          revokes every live link (what the pre-#3255 single-link callers expect).
+ *          revokes every live link (what single-link callers expect).
  *
  * Share links are served `no-store`, so no CDN invalidation is needed on rotate/
  * revoke. The token value is never logged.
  *
- * #3255 step 3: `shareTokens[]` is now the source of truth and the race arbiter - every
- * precondition below pins an entry's liveness, not the legacy scalar. `shareToken` /
- * `shareTokenUpdatedAt` are still WRITTEN, mirrored to the newest live entry, so a
- * rollback to a build that reads the scalar still serves a link. Retiring them is a
- * follow-up, not this change. Do not read them here - use `liveShareTokens()`.
+ * `shareTokens[]` is the only representation of a share link and the race arbiter: every
+ * precondition below pins an entry's liveness. `shareTokenUpdatedAt` is a GET response field
+ * only, derived from the newest live entry's `createdAt` (a documented field with external
+ * consumers).
  */
 
 /** Ceiling on live links per artifact. Not a security boundary (the owner can revoke and
@@ -41,8 +40,6 @@ const MAX_LIVE_SHARE_LINKS = 20;
 interface ShareTokenArtifactLean {
   publicId: string;
   ownerId: string;
-  shareToken?: string;
-  shareTokenUpdatedAt?: Date | null;
   shareTokens?: PublishedArtifactShareToken[];
   visibility?: string;
   accessGate?: unknown;
@@ -70,11 +67,9 @@ async function loadOwnedArtifact(req: Request, res: Response): Promise<ShareToke
   return artifact;
 }
 
-/** One live link as the owner surface renders it. `id` is null only for a row the backfill
- *  has not reached, whose single link exists as the legacy scalar and so has no entry handle
- *  to revoke by - such a link is still revocable through the id-less DELETE. */
+/** One live link as the owner surface renders it. `id` is the entry `_id` the owner revokes by. */
 interface ShareLinkView {
-  id: string | null;
+  id: string;
   shareToken: string;
   shareUrl: string;
   createdAt: Date | null;
@@ -84,7 +79,7 @@ interface ShareLinkView {
 
 function toShareLinkView(entry: PublishedArtifactShareToken): ShareLinkView {
   return {
-    id: entry._id ? String(entry._id) : null,
+    id: String(entry._id),
     shareToken: entry.token!,
     shareUrl: `/a/${entry.token}`,
     createdAt: entry.createdAt ?? null,
@@ -93,15 +88,13 @@ function toShareLinkView(entry: PublishedArtifactShareToken): ShareLinkView {
   };
 }
 
-/** The live links, in `liveShareTokens` order (a legacy scalar-only link first, then the
- *  array entries oldest-first as they were appended). */
+/** The live links, oldest-first as they were appended (`liveShareTokens` order). */
 function liveLinkViews(artifact: ShareTokenArtifactLean): ShareLinkView[] {
   return liveShareTokens(artifact).map(toShareLinkView);
 }
 
-/** The link the single-link response fields describe: the newest live one. Everything a
- *  pre-#3255 caller reads (`shareToken`, `shareUrl`, `hasShareToken`) is derived from this,
- *  which is also what the mirrored scalar holds. */
+/** The link the single-link response fields (`shareToken`, `shareUrl`, `hasShareToken`,
+ *  `shareTokenUpdatedAt`) describe: the newest live one. */
 function newestLive(links: ShareLinkView[]): ShareLinkView | undefined {
   return links[links.length - 1];
 }
@@ -110,10 +103,12 @@ function newestLive(links: ShareLinkView[]): ShareLinkView | undefined {
  *  Mirrors `liveShareTokens`'s `!entry.revokedAt`. */
 const IS_LIVE = { $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] };
 
-/** Pipeline stages that stamp `revokedAt` on every live entry matching `target`, then
- *  re-derive the mirrored scalar from whatever is still live. Shared by both revoke paths so
- *  the mirror cannot drift between them: `shareToken` ends as the newest surviving token, or
- *  is removed outright when the last link goes. */
+/**
+ * Pipeline stages that stamp `revokedAt` on every live entry matching `target`.
+ *
+ * Shared by revoke-by-id and revoke-everything, which differ only in `target`, so they cannot
+ * disagree about what "live" means. Stamped rather than pulled - see the call sites for why.
+ */
 function revokeStages(target: Record<string, unknown>, now: Date): Record<string, unknown>[] {
   return [
     {
@@ -129,29 +124,6 @@ function revokeStages(target: Record<string, unknown>, now: Date): Record<string
         },
       },
     },
-    {
-      // Its own stage because it reads the $map's output: a single $set sees the pre-update
-      // document for every path it references.
-      $set: {
-        __live: {
-          $filter: {
-            input: '$shareTokens',
-            as: 'entry',
-            cond: { $and: [IS_LIVE, { $eq: [{ $type: '$$entry.token' }, 'string'] }] },
-          },
-        },
-      },
-    },
-    {
-      $set: {
-        shareToken: { $ifNull: [{ $last: '$__live.token' }, '$$REMOVE'] },
-        // Derived from the SAME survivor as the token, not carried over: after revoking the
-        // newest of several links the scalar moves to an older one, and a carried-over
-        // timestamp would then describe the link that was just revoked.
-        shareTokenUpdatedAt: { $ifNull: [{ $last: '$__live.createdAt' }, null] },
-      },
-    },
-    { $unset: '__live' },
   ];
 }
 
@@ -174,7 +146,8 @@ const handler = baseApi()
       hasShareToken: Boolean(newest),
       shareToken: newest?.shareToken ?? null,
       shareUrl: newest?.shareUrl ?? null,
-      shareTokenUpdatedAt: artifact.shareTokenUpdatedAt ?? null,
+      // Derived from the newest live entry; null with nothing live.
+      shareTokenUpdatedAt: newest?.createdAt ?? null,
       shareLinks,
     });
   })
@@ -210,31 +183,18 @@ const handler = baseApi()
     }
 
     // Mint, rotate or add under a compare-and-set so two racing POSTs cannot hand a caller a
-    // link that loses the write race (which would 404). The precondition pins the ARRAY's
-    // liveness, not the legacy scalar (#3255 step 3): "token absent" for a mint is "no live
-    // entry", and a rotate pins the exact entry it rotates away from, so only one racer's
-    // write lands. `additional` deliberately has no such precondition - adding a link is not
-    // idempotent by intent, and the limit above is its only guard.
+    // link that loses the write race (which would 404). A mint requires "no live entry" and a
+    // rotate pins the exact entry it rotates away from, so only one racer's write lands.
+    // `additional` has no precondition: adding a link is not idempotent by intent, and the
+    // limit above is its only guard.
     // (256-bit tokens, so a partial-unique-index collision is negligible.)
     const candidate = generateShareToken();
     const rotatingFrom = regenerate ? newestLive(live) : undefined;
-    // A live link the backfill never mirrored: it exists only as the scalar, which this write
-    // is about to overwrite with the new token. `additional` means "keep what is live and add
-    // one", so the legacy link is folded into the array in the SAME write rather than being
-    // silently killed - every other path here already tolerates such a row, and this makes it
-    // self-healing. Its precondition pins the scalar, so a racer that rotated it away first
-    // cannot have the entry resurrected underneath them.
-    const strandedLegacy = additional ? live.find(link => link.id === null) : undefined;
     const precondition = additional
-      ? strandedLegacy
-        ? { shareToken: strandedLegacy.shareToken }
-        : {}
-      : rotatingFrom?.id
+      ? {}
+      : rotatingFrom
         ? { shareTokens: { $elemMatch: { _id: new Types.ObjectId(rotatingFrom.id), revokedAt: null } } }
-        : rotatingFrom
-          ? // Pre-backfill row: its only link is the scalar, so that is the one thing to pin.
-            { shareToken: rotatingFrom.shareToken }
-          : { shareTokens: { $not: { $elemMatch: { revokedAt: null } } }, shareToken: { $exists: false } };
+        : { shareTokens: { $not: { $elemMatch: { revokedAt: null } } } };
     const now = new Date();
     const entryId = new Types.ObjectId();
     const won = await PublishedArtifact.findOneAndUpdate(
@@ -253,8 +213,6 @@ const handler = baseApi()
       [
         {
           $set: {
-            shareToken: candidate,
-            shareTokenUpdatedAt: now,
             shareTokens: {
               $concatArrays: [
                 regenerate
@@ -266,22 +224,6 @@ const handler = baseApi()
                       },
                     }
                   : { $ifNull: ['$shareTokens', []] },
-                // The stranded legacy link, mirrored into the array before the new entry so it
-                // keeps resolving through shareTokenFilter once the scalar moves on. Its
-                // createdAt is the closest truth the row carries, the same choice the backfill
-                // migration made.
-                strandedLegacy
-                  ? [
-                      {
-                        _id: new Types.ObjectId(),
-                        token: strandedLegacy.shareToken,
-                        createdAt: artifact.shareTokenUpdatedAt ?? now,
-                        revokedAt: null,
-                        viewCount: 0,
-                        lastViewedAt: null,
-                      },
-                    ]
-                  : [],
                 [{ _id: entryId, token: candidate, createdAt: now, revokedAt: null, viewCount: 0, lastViewedAt: null }],
               ],
             },
@@ -305,11 +247,11 @@ const handler = baseApi()
 
     // Lost the race: a concurrent request already minted/rotated. Return what persisted.
     const current = await PublishedArtifact.findOne({ publicId: artifact.publicId, deletedAt: null })
-      .select('shareToken shareTokens')
+      .select('shareTokens')
       .lean<ShareTokenArtifactLean>();
     const persisted = current ? liveLinkViews(current) : [];
     const newest = newestLive(persisted);
-    // Tokens, not ids: legacy links have a null id.
+    // Compared by token: it is what a holder possesses.
     const before = new Set(live.map(l => l.shareToken));
     if (regenerate && persisted.some(l => before.has(l.shareToken))) {
       return res
@@ -337,9 +279,8 @@ const handler = baseApi()
       return res.status(400).json({ error: 'Invalid share link id' });
     }
     const live = liveLinkViews(artifact);
-    // Resolve the target BEFORE writing. A pipeline that matched nothing would still fall
-    // through to the mirror-rebuild stages and, on a pre-backfill row, unset the scalar - so
-    // an unknown id would revoke the very link it did not name.
+    // Resolve the target BEFORE writing, so an unknown id is a 404 rather than a write that
+    // matches no entry and reports success.
     const target = id ? live.find(link => link.id === id) : undefined;
     if (id && !target) {
       return res.status(404).json({ error: 'No live share link with that id' });
@@ -364,8 +305,7 @@ const handler = baseApi()
 
     if (revoking.length) {
       // Stamped rather than pulled, so each token stays claimed in the unique index (a revoked
-      // link can never be re-minted) and its view count survives. The mirrored scalar is
-      // re-derived from the survivors in the same write.
+      // link can never be re-minted) and its view count survives.
       //
       // The survivor requirement has to be part of the FILTER, not just the in-memory check
       // above: that check reads the `loadOwnedArtifact` snapshot, so two concurrent
@@ -376,11 +316,11 @@ const handler = baseApi()
       // artifact keeps the cheap unconditional filter.
       const pinSurvivor = gateNeedsALink && !!target;
       const survivorPin = pinSurvivor
-        ? { shareTokens: { $elemMatch: { _id: { $ne: new Types.ObjectId(target!.id!) }, revokedAt: null } } }
+        ? { shareTokens: { $elemMatch: { _id: { $ne: new Types.ObjectId(target!.id) }, revokedAt: null } } }
         : {};
       const result = await PublishedArtifact.updateOne(
         { publicId: artifact.publicId, deletedAt: null, ...survivorPin },
-        revokeStages(target ? { $eq: ['$$entry._id', new Types.ObjectId(target.id!)] } : { $literal: true }, new Date())
+        revokeStages(target ? { $eq: ['$$entry._id', new Types.ObjectId(target.id)] } : { $literal: true }, new Date())
       );
       // Lost that race: the siblings this revoke was counting on are gone, so it would now be
       // dropping the last link. Same refusal as the snapshot check, for the same reason.

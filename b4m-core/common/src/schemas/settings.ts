@@ -478,6 +478,8 @@ export const SettingKeySchema = z.enum([
   'voiceSessionVadType',
   'voiceSessionVadEagerness',
 
+  'OrgFeedbackSummaryModel',
+
   // EMAIL ANALYSIS SETTINGS
   'EnableEmailAnalysis',
   'EmailAnalysisModel',
@@ -1085,9 +1087,9 @@ export enum ServerStatusEnum {
 
 // Logo Settings Schema
 export const LogoSettingsSchema = z.object({
-  customLogoUrl: z.string().optional().prefault(''),
-  customDarkLogoUrl: z.string().optional().prefault(''),
-  useBothLogos: z.boolean().optional().prefault(false),
+  customLogoUrl: z.string().prefault(''),
+  customDarkLogoUrl: z.string().prefault(''),
+  useBothLogos: z.boolean().prefault(false),
 });
 
 export type LogoSettings = z.infer<typeof LogoSettingsSchema>;
@@ -4390,6 +4392,15 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 10,
     schema: RapidReplySettingsSchema,
+  }),
+  OrgFeedbackSummaryModel: makeStringSetting({
+    key: 'OrgFeedbackSummaryModel',
+    name: 'Organization Feedback Summary Model',
+    defaultValue: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
+    description: 'The AI model used for organization feedback summaries. The selected provider must be configured.',
+    options: CHAT_MODELS,
+    category: 'AI',
+    order: 199,
   }),
   EnableEmailAnalysis: makeBooleanSetting({
     key: 'EnableEmailAnalysis',

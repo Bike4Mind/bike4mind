@@ -10,7 +10,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { apiKeyService, dataLakeResearchService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
-import { resolveWebSearchProviders, searchWithHedge } from '@bike4mind/services/llm';
+import { resolveWebSearchProviders, safeHostname, searchWithHedge } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -27,6 +27,8 @@ import { lakeConfigAuditDb } from './lakeConfigAuditDb';
  * environment-shaped is here, which is also why this is the only file that has to change when a
  * scheduler (v2) becomes the thing that enqueues a run.
  */
+
+const LOGGED_SEARCH_HOSTS = 10;
 
 /** What the loop reports back, so the handler can log a one-line outcome. */
 export interface ResearchRunOutcome {
@@ -282,7 +284,31 @@ export async function runLakeResearch(
 
     const ports: dataLakeResearchService.ResearchRunPorts = {
       search: async (query, maxResults, recencyDays) => {
-        const { results: hits } = await searchWithHedge(provider, backup, query, maxResults, { recencyDays });
+        let outcome: Awaited<ReturnType<typeof searchWithHedge>>;
+        try {
+          outcome = await searchWithHedge(provider, backup, query, maxResults, { recencyDays });
+        } catch (error) {
+          logger.error('[lakeResearch] search failed', {
+            runId,
+            query,
+            maxResults,
+            recencyDays,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+        const { results: hits, servedBy } = outcome;
+        // Hostnames too: a run that proposes nothing stores no provenance, so off-topic hits are
+        // otherwise invisible after the fact.
+        logger.log('[lakeResearch] search', {
+          runId,
+          provider: servedBy.name,
+          query,
+          maxResults,
+          recencyDays,
+          hits: hits.length,
+          hosts: hits.slice(0, LOGGED_SEARCH_HOSTS).map(hit => safeHostname(hit.url)),
+        });
         return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));
       },
       judge: candidate =>
