@@ -99,7 +99,7 @@ const SideNavHeader = () => {
 
         <Tooltip title="Collapse Sidebar">
           <IconButton
-            aria-label="Collapse sidebar"
+            aria-label={t('a11y.collapse_sidebar', 'Collapse sidebar')}
             className="notebook-sidenav-header-toggle-button"
             sx={{ width: '36px', height: '36px', borderRadius: '8px' }}
             variant={'outlined'}

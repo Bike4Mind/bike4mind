@@ -12,7 +12,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * a name. This scans the app shell (layout, sidebar, composer) and Profile, the screens every user
  * passes through, and fails on any IconButton without aria-label, aria-labelledby or title.
  * A parent Tooltip is not enough: it names the button only while the tooltip is not open, and
- * not at all when a Badge or Box sits in between. A spread is trusted to carry the name.
+ * not at all when a Badge or Box sits in between. A top-level spread is trusted to carry the name;
+ * an empty label or one that only appears inside a nested prop such as sx does not count.
  */
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SCANNED = [
@@ -22,7 +23,21 @@ const SCANNED = [
   'components/ProfileModal/ProfileDetailTabContent.tsx',
   'routes/profile',
 ];
-const NAMED = /\baria-label(?:ledby)?=|\btitle=|\{\.\.\./;
+const NAMED_LABEL = /\b(?:aria-label|title)=(?:"[^"]+"|\{(?!\s*(?:''|""|``|undefined|null|false)?\s*\}))/;
+const NAMED_BY = /\baria-labelledby=(?:"[^"]+"|\{(?!\s*(?:''|""|undefined|null|false)?\s*\}))/;
+const SPREAD = /\s\{\.\.\./;
+
+/** Whether an opening tag's own props (not those nested in sx, slotProps and the like) name it. */
+const isNamedTag = (tag: string) => {
+  let depth = 0;
+  let own = '';
+  for (const ch of tag) {
+    if (ch === '{') depth++;
+    if (depth <= 1) own += ch;
+    if (ch === '}') depth--;
+  }
+  return NAMED_LABEL.test(own) || NAMED_BY.test(own) || SPREAD.test(own);
+};
 
 const sourceFiles = (rel: string): string[] => {
   const full = path.join(APP_DIR, rel);
@@ -61,10 +76,23 @@ describe('icon button accessible names', () => {
   it('names every IconButton in the app shell and Profile', () => {
     const unnamed = files.flatMap(file =>
       iconButtonTags(fs.readFileSync(file, 'utf8'))
-        .filter(({ tag }) => !NAMED.test(tag))
+        .filter(({ tag }) => !isNamedTag(tag))
         .map(({ line }) => `${path.relative(APP_DIR, file)}:${line}`)
     );
     expect(unnamed).toEqual([]);
+  });
+
+  it('rejects tags that only look named, so the scan cannot be bypassed trivially', () => {
+    expect(isNamedTag('<IconButton onClick={go}>')).toBe(false);
+    expect(isNamedTag('<IconButton aria-label="" onClick={go}>')).toBe(false);
+    expect(isNamedTag("<IconButton aria-label={''} onClick={go}>")).toBe(false);
+    expect(isNamedTag('<IconButton aria-label={undefined} onClick={go}>')).toBe(false);
+    expect(isNamedTag('<IconButton sx={{ title="x", aria-label="x" }} onClick={go}>')).toBe(false);
+    expect(isNamedTag('<IconButton sx={{...base}} onClick={go}>')).toBe(false);
+    expect(isNamedTag('<IconButton aria-label="Close" onClick={go}>')).toBe(true);
+    expect(isNamedTag("<IconButton aria-label={t('a', 'A')} onClick={go}>")).toBe(true);
+    expect(isNamedTag('<IconButton title="Close" onClick={go}>')).toBe(true);
+    expect(isNamedTag('<IconButton {...props} onClick={go}>')).toBe(true);
   });
 
   it('names the shared dialog close control through the theme', () => {

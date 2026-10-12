@@ -1030,7 +1030,7 @@ ai_response = response.json()`,
                     {codeExamples.curl.listSessions}
                   </Box>
                   <IconButton
-                    aria-label="Copy code"
+                    aria-label="Copy curl list sessions example"
                     size="sm"
                     variant="outlined"
                     sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1072,7 +1072,7 @@ ai_response = response.json()`,
                     {codeExamples.curl.createSession}
                   </Box>
                   <IconButton
-                    aria-label="Copy code"
+                    aria-label="Copy curl create session example"
                     size="sm"
                     variant="outlined"
                     sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1113,7 +1113,7 @@ ai_response = response.json()`,
                     {codeExamples.curl.aiChatSimple}
                   </Box>
                   <IconButton
-                    aria-label="Copy code"
+                    aria-label="Copy curl ai chat simple example"
                     size="sm"
                     variant="outlined"
                     sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1381,7 +1381,7 @@ ai_response = response.json()`,
                           {codeExamples.curl.listSessions}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy curl list sessions example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1422,7 +1422,7 @@ ai_response = response.json()`,
                           {codeExamples.curl.aiChatSimple}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy curl ai chat simple example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1487,7 +1487,7 @@ ai_response = response.json()`,
                           {codeExamples.curl.aiChatSync}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy curl ai chat sync example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1540,7 +1540,7 @@ ai_response = response.json()`,
                           {codeExamples.curl.questStatus}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy curl quest status example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1597,7 +1597,7 @@ ai_response = response.json()`,
                           {codeExamples.javascript.listSessions}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy javascript list sessions example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1638,7 +1638,7 @@ ai_response = response.json()`,
                           {codeExamples.javascript.aiChatSimple}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy javascript ai chat simple example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1679,7 +1679,7 @@ ai_response = response.json()`,
                           {codeExamples.javascript.aiChatSync}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy javascript ai chat sync example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1720,7 +1720,7 @@ ai_response = response.json()`,
                           {codeExamples.javascript.questStatus}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy javascript quest status example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1765,7 +1765,7 @@ ai_response = response.json()`,
                           {codeExamples.python.listSessions}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy python list sessions example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1806,7 +1806,7 @@ ai_response = response.json()`,
                           {codeExamples.python.aiChatSimple}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy python ai chat simple example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1847,7 +1847,7 @@ ai_response = response.json()`,
                           {codeExamples.python.aiChatSync}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy python ai chat sync example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}
@@ -1888,7 +1888,7 @@ ai_response = response.json()`,
                           {codeExamples.python.questStatus}
                         </Box>
                         <IconButton
-                          aria-label="Copy code"
+                          aria-label="Copy python quest status example"
                           size="sm"
                           variant="outlined"
                           sx={{ position: 'absolute', top: 8, right: 8 }}

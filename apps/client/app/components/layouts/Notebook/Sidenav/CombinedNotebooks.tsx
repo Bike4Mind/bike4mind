@@ -533,7 +533,7 @@ const CombinedNotebooks = () => {
                 }}
               >
                 <IconButton
-                  aria-label="Advanced search and actions"
+                  aria-label={t('a11y.advanced_search', 'Advanced search and actions')}
                   data-testid="advanced-search-btn"
                   variant="outlined"
                   color="neutral"
