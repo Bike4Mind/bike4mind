@@ -783,7 +783,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
         type: 'text',
-        name: 'Claude 5.5 Haiku',
+        name: 'Claude Haiku 5.5',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -802,7 +802,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsTools: true,
         releaseDate: '2026-10-07',
         description:
-          "Anthropic's Claude 5.5 Haiku via AWS Bedrock, built for high-volume, latency-sensitive work, with adaptive thinking and a 1M-token context window.",
+          "Anthropic's Claude Haiku 5.5 via AWS Bedrock, built for high-volume, latency-sensitive work, with adaptive thinking and a 1M-token context window.",
       },
     ];
   }

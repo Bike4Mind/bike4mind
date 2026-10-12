@@ -741,7 +741,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_5_HAIKU,
         type: 'text',
-        name: 'Claude 5.5 Haiku',
+        name: 'Claude Haiku 5.5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -761,7 +761,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         releaseDate: '2026-10-07',
         description:
-          "Anthropic's fastest model. Claude 5.5 Haiku targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
+          "Anthropic's fastest model. Claude Haiku 5.5 targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
       },
     ];
   }
