@@ -51,6 +51,19 @@ describe('sendOTC', () => {
     await expect(sendOTC({ email: 'not-an-email' }, adapters)).rejects.toThrow();
   });
 
+  // The per-address verify budget relies on this: findByEmail's collation folds these variants onto
+  // the plain address, so issuing a token for one would give it a separate guess budget.
+  it.each([
+    ['zero-width space', 'vic\u200btim@example.com'],
+    ['zero-width joiner', 'victim\u200d@example.com'],
+    ['fullwidth letter', 'vic\uff54im@example.com'],
+  ])('issues no code for an address with a %s', async (_label, email) => {
+    const { adapters, mocks } = makeAdapters();
+    await expect(sendOTC({ email }, adapters)).rejects.toThrow();
+    expect(mocks.sendOTCEmail).not.toHaveBeenCalled();
+    expect(mocks.signPendingToken).not.toHaveBeenCalled();
+  });
+
   it('signs pending token with correct payload shape including jti', async () => {
     const { adapters, mocks } = makeAdapters();
     await sendOTC({ email: 'test@example.com' }, adapters);

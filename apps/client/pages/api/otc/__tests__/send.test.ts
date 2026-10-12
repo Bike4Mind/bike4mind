@@ -81,6 +81,7 @@ vi.mock('@bike4mind/services', () => ({
 
 import handler from '@pages/api/otc/send';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
+import { EmailEvents } from '@server/utils/eventBus';
 
 const EMAIL = 'someone@example.com';
 
@@ -278,6 +279,20 @@ describe('/api/otc/send per-email budget', () => {
 
     expect((await post(VICTIM, VICTIM_IP))._getStatusCode()).toBe(200);
     expect(mockReleaseReservation).not.toHaveBeenCalled();
+  });
+
+  // The exact-address verify budget (see OTC_VERIFY_EMAIL_BUDGETS) depends on this refusal.
+  it('issues no code for an address with a zero-width character', async () => {
+    const { userService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+    mockSendOTC.mockImplementation((params, adapters) => userService.sendOTC(params, adapters));
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt, previousCreatedAt: null });
+    const { req, res } = makeReqRes('vic\u200btim@gmail.com', VICTIM_IP);
+
+    await expect(handler(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+
+    expect(EmailEvents.Send.publish).not.toHaveBeenCalled();
+    expect(mockConfirmReservation).not.toHaveBeenCalled();
+    expect(res._isEndCalled()).toBe(false);
   });
 
   it('refunds the budget when dispatch fails', async () => {

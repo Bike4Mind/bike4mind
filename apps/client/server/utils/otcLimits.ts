@@ -152,6 +152,9 @@ export const OTC_SEND_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
 // Keyed on the exact token address, not the folded inbox: each alias has its own nonce and account,
 // so folding adds no brute-force protection and would let wrong guesses on alias tokens an attacker
 // requested lock the owner out of verifying a correct code.
+// Safe only because sendOTC's ASCII-only email validation issues no token for an address that
+// userRepository.findByEmail's strength-2 collation would match to another account (zero-width or
+// fullwidth variants); a looser validator would give each such variant its own verify budget.
 export const OTC_VERIFY_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
   { bucket: 'verify-email', ...OTC_LIMITS.verify.perEmail, subject: email => email },
 ];
