@@ -100,6 +100,7 @@ vi.mock('./useVoiceKeepAlive', () => ({
 }));
 
 import { useVoiceSessionEngine } from './useVoiceSessionEngine';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useVoiceSessionStore } from './voiceSessionStore';
 import { toast } from 'sonner';
 
@@ -426,13 +427,51 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
   });
 
   it('settles the hold when the tab is closed mid-call, which runs no React teardown', async () => {
-    await connectAndConnected();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    useAccessToken.setState({ accessToken: 'tok' });
+    try {
+      await connectAndConnected();
 
-    act(() => {
-      window.dispatchEvent(new Event('pagehide'));
-    });
+      act(() => {
+        window.dispatchEvent(new Event('pagehide'));
+      });
 
-    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+      expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+      // The frame can be dropped as the page unloads; a keepalive end request is the backstop.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/voice/v2/sessions/s1/end',
+        expect.objectContaining({
+          method: 'POST',
+          keepalive: true,
+          headers: expect.objectContaining({ Authorization: 'Bearer tok' }),
+        })
+      );
+
+      // A second pagehide (e.g. after a bfcache restore) has no hold left to end.
+      act(() => {
+        window.dispatchEvent(new Event('pagehide'));
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      useAccessToken.setState({ accessToken: null });
+    }
+  });
+
+  it('sends no end request on pagehide when no hold is open', () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+      act(() => {
+        window.dispatchEvent(new Event('pagehide'));
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('settles an unsettled hold on unmount, and a failing socket does not break teardown', async () => {
