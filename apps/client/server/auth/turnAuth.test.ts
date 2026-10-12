@@ -9,6 +9,10 @@ describe('requestTurnAuth', () => {
   it('marks a request without a key as a signed-in session', () => {
     expect(requestTurnAuth({})).toEqual({ authOrigin: 'session' });
   });
+
+  it('refuses a key credential with an empty key id rather than reading it as a session', () => {
+    expect(() => requestTurnAuth({ apiKeyInfo: { keyId: '' } })).toThrow(/key id/);
+  });
 });
 
 describe('executionTurnAuth', () => {

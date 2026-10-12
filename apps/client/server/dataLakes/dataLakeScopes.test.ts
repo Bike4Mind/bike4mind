@@ -187,10 +187,8 @@ describe('credentialExecutionFields', () => {
     });
   });
 
-  it('omits the key id when the credential has none', () => {
-    expect(credentialExecutionFields({ keyId: '', scopes: [ApiKeyScope.DATALAKE_WRITE] })).toEqual({
-      authOrigin: 'session',
-    });
+  it('refuses a credential with no key id rather than recording a session run', () => {
+    expect(() => credentialExecutionFields({ keyId: '', scopes: [ApiKeyScope.DATALAKE_WRITE] })).toThrow(/key id/);
   });
 
   it('marks a JWT/browser caller as a session', () => {

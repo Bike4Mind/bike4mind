@@ -12,8 +12,10 @@ export type TurnAuth = { authOrigin: Extract<AuthOrigin, 'session' | 'apiKey'>; 
  * its origin itself.
  */
 export function requestTurnAuth(req: { apiKeyInfo?: Pick<ApiKeyInfo, 'keyId'> }): TurnAuth {
-  const apiKeyId = req.apiKeyInfo?.keyId;
-  return apiKeyId ? { authOrigin: 'apiKey', apiKeyId } : { authOrigin: 'session' };
+  if (!req.apiKeyInfo) return { authOrigin: 'session' };
+  // Keyed on the credential's presence, not its id: a key turn must never read as a session.
+  if (!req.apiKeyInfo.keyId) throw new Error('API key credential has no key id');
+  return { authOrigin: 'apiKey', apiKeyId: req.apiKeyInfo.keyId };
 }
 
 /**

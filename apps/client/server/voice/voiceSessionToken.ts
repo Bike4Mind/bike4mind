@@ -23,7 +23,7 @@ export const VoiceSessionContextSchema = z
     reasoningModelId: z.string().min(1),
     // How the minting request was authenticated; the proxy forwards it to the turn's tools
     // (ToolContext.authOrigin). Optional on the wire only for a token minted before the claim existed
-    // (see the transform); signing requires it.
+    // (see the transform); signVoiceSessionToken takes the transform's output type, which requires it.
     authOrigin: AuthOriginSchema.optional(),
     // The `b4m_live_` key that minted the token, when one did, forwarded as ToolContext.apiKeyId.
     apiKeyId: z.string().min(1).optional(),
