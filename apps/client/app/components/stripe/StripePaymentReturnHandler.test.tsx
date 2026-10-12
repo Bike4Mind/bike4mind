@@ -9,7 +9,7 @@ const { mockGet, mockTrackPurchaseConversion } = vi.hoisted(() => ({
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mockGet } }));
 vi.mock('@client/app/utils/purchaseConversion', () => ({ trackPurchaseConversion: mockTrackPurchaseConversion }));
 
-import StripePaymentReturnHandler from './StripePaymentReturnHandler';
+import StripePaymentReturnHandler, { reportCreditPurchaseConversion } from './StripePaymentReturnHandler';
 
 const FACTS = {
   transactionId: 'pi_test_1',
@@ -49,6 +49,14 @@ describe('StripePaymentReturnHandler', () => {
     expect(window.location.pathname).toBe('/settings/credits');
     expect(window.location.search).toBe('?tab=billing');
     expect(window.location.hash).toBe('#top');
+  });
+
+  it('reports an in-page success once, even if the same payment also comes back through a redirect', async () => {
+    reportCreditPurchaseConversion('pi_test_1');
+    returnTo(STRIPE_RETURN);
+
+    await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+    expect(mockGet).toHaveBeenCalledOnce();
   });
 
   it('reports a payment once, even if the return URL is loaded again', async () => {

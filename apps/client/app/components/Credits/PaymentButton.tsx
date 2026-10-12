@@ -78,7 +78,13 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
   const handleClose = useCallback(() => {
     const paymentIntentId = paymentIntentIdRef.current;
     const lastOutcome = lastOutcomeRef.current;
-    if (paymentIntentId && lastOutcome !== 'succeeded' && lastOutcome !== 'processing') {
+    // requires_action is pending on the customer's side (e.g. bank instructions), not abandoned.
+    if (
+      paymentIntentId &&
+      lastOutcome !== 'succeeded' &&
+      lastOutcome !== 'processing' &&
+      lastOutcome !== 'requires_action'
+    ) {
       logEvent({
         type: CreditPurchaseEvents.PAYMENT_ABANDONED,
         metadata: { paymentIntentId, ...(lastOutcome && { lastOutcome }) },

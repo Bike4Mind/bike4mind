@@ -108,6 +108,18 @@ describe('PaymentButton funnel events', () => {
     });
   });
 
+  it('does not record an abandonment when the payment is waiting on a customer action', async () => {
+    confirmResult = { outcome: 'requires_action' };
+    renderButton();
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    await userEvent.click(await screen.findByTestId('payment-modal-confirm-btn'));
+    await userEvent.click(screen.getByTestId('payment-modal-close-btn'));
+
+    expect(loggedTypes()).toContain(CreditPurchaseEvents.PAYMENT_CONFIRM_RESULT);
+    expect(loggedTypes()).not.toContain(CreditPurchaseEvents.PAYMENT_ABANDONED);
+  });
+
   it('records a failed start with its HTTP status', async () => {
     apiPost.mockRejectedValue(
       new AxiosError('Forbidden', 'ERR_BAD_REQUEST', undefined, undefined, {

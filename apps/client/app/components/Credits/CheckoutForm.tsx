@@ -2,6 +2,7 @@ import { FC, useCallback, useEffect, useRef, useState } from 'react';
 import { PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { Button } from '@mui/joy';
 import type { CreditPurchaseConfirmOutcome } from '@bike4mind/common';
+import { reportCreditPurchaseConversion } from '@client/app/components/stripe/StripePaymentReturnHandler';
 
 export interface ConfirmResult {
   outcome: CreditPurchaseConfirmOutcome;
@@ -15,6 +16,10 @@ interface ICheckoutFormProps {
   onPayment: () => void;
   onConfirmResult?: (result: ConfirmResult) => void;
 }
+
+// Some methods (bank transfer instructions, microdeposit verification) finish outside this form,
+// so a requires_action confirm without an error is pending, not failed.
+const PENDING_ACTION_MESSAGE = 'Your payment needs one more step. Follow the instructions from your payment provider.';
 
 function toOutcome(status: string | undefined): CreditPurchaseConfirmOutcome {
   return status === 'succeeded' || status === 'processing' || status === 'requires_action' ? status : 'unknown';
@@ -51,6 +56,9 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
         case 'processing':
           setMessage('Your payment is processing.');
           setIsSettled(true);
+          break;
+        case 'requires_action':
+          setMessage(PENDING_ACTION_MESSAGE);
           break;
         case 'requires_payment_method':
           setMessage('');
@@ -99,8 +107,13 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
           setMessage('Payment succeeded!');
           setIsSettled(true);
           notifyPaid();
+          // A card success no longer redirects, so StripePaymentReturnHandler never sees it.
+          reportCreditPurchaseConversion(paymentIntent.id);
         } else if (paymentIntent?.status === 'processing') {
           setMessage('Your payment is processing.');
+          setIsSettled(true);
+        } else if (paymentIntent?.status === 'requires_action') {
+          setMessage(PENDING_ACTION_MESSAGE);
           setIsSettled(true);
         } else {
           setMessage('Something went wrong.');
