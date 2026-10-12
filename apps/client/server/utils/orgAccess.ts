@@ -17,7 +17,7 @@
  */
 
 import { organizationRepository } from '@bike4mind/database/infra';
-import type { IUserDocument } from '@bike4mind/common';
+import { canAdministerOrganization, type AdministrableOrg, type IUserDocument } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from './resolveActiveOrg';
@@ -26,10 +26,10 @@ import type { Request } from 'express';
 /**
  * The one owner / manager / platform-admin predicate behind `verifyOrgAccess` (the write gate) and
  * `verifyOrgAdminRead`'s `canManage`, so the read tier's answer cannot drift from what the write
- * routes accept.
+ * routes accept. Delegates to the common predicate the roster services also use.
  */
-function canManageOrg(user: { id: string; isAdmin: boolean }, org: { userId?: string; managerId?: string | null }) {
-  return user.isAdmin || org.userId === user.id || org.managerId === user.id;
+function canManageOrg(user: { id: string; isAdmin: boolean }, org: AdministrableOrg) {
+  return canAdministerOrganization(user, org);
 }
 
 /**

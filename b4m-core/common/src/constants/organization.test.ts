@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canManageMemberCreditBudgets, isOrgOwnerOrCurrentAdmin } from './organization';
+import { canAdministerOrganization, canManageMemberCreditBudgets, isOrgOwnerOrCurrentAdmin } from './organization';
 
 describe('isOrgOwnerOrCurrentAdmin', () => {
   const org = {
@@ -43,5 +43,62 @@ describe('isOrgOwnerOrCurrentAdmin', () => {
       isOrgOwnerOrCurrentAdmin({ id: 'org-admin-id' }, { userId: 'owner-id', adminUserIds: ['org-admin-id'] })
     ).toBe(false);
     expect(isOrgOwnerOrCurrentAdmin({ id: 'org-admin-id' }, { userId: 'owner-id', users: null })).toBe(false);
+  });
+});
+
+describe('canAdministerOrganization', () => {
+  const org = { userId: 'owner-id', managerId: 'manager-id' };
+
+  it('admits the billing owner', () => {
+    expect(canAdministerOrganization({ id: 'owner-id' }, org)).toBe(true);
+  });
+
+  it('admits the appointed manager', () => {
+    expect(canAdministerOrganization({ id: 'manager-id' }, org)).toBe(true);
+  });
+
+  it('admits a platform admin who is neither', () => {
+    expect(canAdministerOrganization({ id: 'someone-else', isAdmin: true }, org)).toBe(true);
+  });
+
+  // The finding this predicate exists for: roster administration used to gate on the membership
+  // ACL, which every ordinary member satisfies.
+  it('refuses a plain member', () => {
+    expect(canAdministerOrganization({ id: 'member-id' }, org)).toBe(false);
+  });
+
+  it('refuses a stranger', () => {
+    expect(canAdministerOrganization({ id: 'nobody' }, org)).toBe(false);
+  });
+
+  // A null managerId must not match a caller whose id is somehow also nullish - fail closed on a
+  // blank identity rather than admitting on `undefined === undefined`.
+  it('does not admit on a null managerId', () => {
+    expect(
+      canAdministerOrganization({ id: undefined as unknown as string }, { userId: 'owner-id', managerId: null })
+    ).toBe(false);
+  });
+
+  it('refuses a non-owner when the org has no managerId', () => {
+    expect(canAdministerOrganization({ id: 'manager-id' }, { userId: 'owner-id' })).toBe(false);
+  });
+
+  it('does not admit on an empty-string managerId', () => {
+    expect(canAdministerOrganization({ id: '' }, { userId: 'owner-id', managerId: '' })).toBe(false);
+  });
+
+  it('refuses an explicit isAdmin false or null', () => {
+    expect(canAdministerOrganization({ id: 'member-id', isAdmin: false }, org)).toBe(false);
+    expect(canAdministerOrganization({ id: 'member-id', isAdmin: null }, org)).toBe(false);
+  });
+
+  // The two authority predicates answer different questions: a manager may revoke but not invite,
+  // an appointed admin may invite but not revoke.
+  it('splits from isOrgOwnerOrCurrentAdmin on manager vs appointed admin', () => {
+    const roster = { ...org, adminUserIds: ['org-admin-id'], users: [{ userId: 'org-admin-id' }] };
+    expect(canAdministerOrganization({ id: 'manager-id' }, roster)).toBe(true);
+    expect(isOrgOwnerOrCurrentAdmin({ id: 'manager-id' }, roster)).toBe(false);
+    expect(canAdministerOrganization({ id: 'org-admin-id' }, roster)).toBe(false);
+    expect(isOrgOwnerOrCurrentAdmin({ id: 'org-admin-id' }, roster)).toBe(true);
   });
 });
