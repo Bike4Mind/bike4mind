@@ -5,7 +5,7 @@ import type { ToolContext } from '../base/types';
 const { mockCreateFabFile } = vi.hoisted(() => ({ mockCreateFabFile: vi.fn() }));
 vi.mock('../../../fabFileService/create', () => ({ createFabFile: mockCreateFabFile }));
 
-import { persistGeneratedFileAsFabFile } from './persistGeneratedFile';
+import { persistGeneratedFileAsFabFile, saveGeneratedAssetFromTool } from './persistGeneratedFile';
 
 function makeContext(over: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -56,5 +56,34 @@ describe('persistGeneratedFileAsFabFile', () => {
 
     await expect(persistGeneratedFileAsFabFile(context, audio)).resolves.toBeUndefined();
     expect(context.logger.error).toHaveBeenCalled();
+  });
+});
+
+describe('saveGeneratedAssetFromTool', () => {
+  const generation = { generator: 'speech' as const, provider: 'openai', modelId: 'tts-1', prompt: 'hello' };
+  const asset = { bytes: Buffer.from('x'), contentType: 'audio/mpeg', generation };
+
+  beforeEach(() => {
+    mockCreateFabFile.mockReset();
+    mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'speech.mp3', filePath: 'generated-audio/f1.mp3' });
+  });
+
+  it('links the asset to its notebook alongside the generation provenance', async () => {
+    const result = await saveGeneratedAssetFromTool(makeContext(), asset);
+
+    expect(result).toMatchObject({ saved: true, fileId: 'f1' });
+    const [userId, , adapters] = mockCreateFabFile.mock.calls[0];
+    expect(userId).toBe('u1');
+    expect(adapters.provenance).toEqual({
+      sourceType: FabFileSourceType.TOOL_GENERATED,
+      sourceMetadata: { sessionId: 's1', questId: 'q1', generation },
+    });
+  });
+
+  it('skips the save when the harness supplies no file adapters', async () => {
+    const context = makeContext({ db: {} as ToolContext['db'] });
+
+    await expect(saveGeneratedAssetFromTool(context, asset)).resolves.toEqual({ saved: false, reason: 'error' });
+    expect(mockCreateFabFile).not.toHaveBeenCalled();
   });
 });

@@ -33,7 +33,7 @@ const KEY_PREFIX: Record<Modality, string> = {
   image: 'generated',
 };
 
-/** File-name label and tag per generator; tags are user-facing, so hyphenated like the rest. */
+/** File-name label and tag per generator (`generated` plus this one); hyphenated like the other user-facing tags. */
 const LABEL: Record<GeneratedAssetGenerator, string> = {
   music: 'music',
   speech: 'speech',
@@ -43,6 +43,9 @@ const LABEL: Record<GeneratedAssetGenerator, string> = {
 };
 
 const PROMPT_SNIPPET_CHARS = 40;
+
+// sourceMetadata rides every metadata-only file listing, so a long TTS script or lyric sheet is not stored whole.
+const MAX_STORED_TEXT_CHARS = 2_000;
 
 // createFabFile reports the storage quota and the per-file cap only through BadRequestError messages.
 const SKIP_REASON_PATTERNS: ReadonlyArray<[RegExp, GeneratedAssetSaveSkippedReason]> = [
@@ -83,9 +86,9 @@ export type SaveGeneratedAssetDeps = {
  * typed provenance in `sourceMetadata.generation`. Every generator goes through here, so quota, size cap,
  * moderation and tagging are the same for all of them.
  *
- * Never throws for an ordinary save failure: the output was already produced and billed, so the caller still
- * delivers it and reports the returned reason. Idempotent per `generation.jobId`: a job step that runs twice
- * gets the first file back rather than a duplicate.
+ * A failed write never throws: the output was already produced and billed, so the caller still delivers it and
+ * reports the returned reason. An abort and a failed job-dedup lookup do reject, so a job step retries.
+ * Idempotent per `generation.jobId`: a job step that runs twice gets the first file back rather than a duplicate.
  */
 export async function saveGeneratedAsset(
   params: SaveGeneratedAssetParams,
@@ -137,7 +140,7 @@ export async function saveGeneratedAsset(
           sourceMetadata: {
             ...(params.sessionId && { sessionId: params.sessionId }),
             ...(params.questId && { questId: params.questId }),
-            generation,
+            generation: storedGeneration(generation),
           },
         },
         // The extension map keeps media containers closed to user uploads (no .mp4), and the type here is the
@@ -160,6 +163,14 @@ export async function saveGeneratedAsset(
     }
     return { saved: false, reason };
   }
+}
+
+function storedGeneration(generation: GeneratedAssetMetadata): GeneratedAssetMetadata {
+  return {
+    ...generation,
+    prompt: generation.prompt.slice(0, MAX_STORED_TEXT_CHARS),
+    ...(generation.lyrics !== undefined && { lyrics: generation.lyrics.slice(0, MAX_STORED_TEXT_CHARS) }),
+  };
 }
 
 function savedResult(file: IFabFileDocument, s3Key: string): SaveGeneratedAssetResult {

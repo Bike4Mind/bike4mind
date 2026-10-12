@@ -602,7 +602,6 @@ const GeneralSettingsTab = () => {
         </Grid>
       </SectionContainer>
 
-      {/* Files Section */}
       <SectionContainer title="Danger zone">
         <Box
           data-testid="settings-danger-zone"

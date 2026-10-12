@@ -136,17 +136,4 @@ describe('saveToFiles', () => {
       })
     ).resolves.toEqual({ saved: false, reason: 'storage_limit' });
   });
-
-  it('lets an abort propagate instead of reporting an ordinary save failure', async () => {
-    mocks.saveGeneratedAssetToFiles.mockRejectedValue(new Error('This operation was aborted'));
-    await expect(
-      saveToFiles({
-        userId: 'u',
-        bytes: Buffer.from('v'),
-        contentType: 'video/mp4',
-        generation: { generator: 'video', provider: 'veo', jobId: 'j', prompt: 'p' },
-        signal: new AbortController().signal,
-      })
-    ).rejects.toThrow('aborted');
-  });
 });

@@ -38,7 +38,7 @@ describe('saveGeneratedAsset', () => {
     findOne.mockResolvedValue(null);
   });
 
-  it('saves with typed provenance, modality tags and claim-first MIME', async () => {
+  it('saves with typed provenance, generator tags and claim-first MIME', async () => {
     const result = await saveGeneratedAsset(params({ sessionId: 's1', questId: 'q1' }), deps);
 
     expect(result).toEqual({
@@ -68,6 +68,15 @@ describe('saveGeneratedAsset', () => {
       sourceMetadata: { sessionId: 's1', questId: 'q1', generation: music },
     });
     expect(findOne).not.toHaveBeenCalled();
+  });
+
+  it('caps the stored prompt and lyrics', async () => {
+    const long = 'x'.repeat(5_000);
+    await saveGeneratedAsset(params({ generation: { ...music, prompt: long, lyrics: long } }), deps);
+
+    const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
+    expect(generation.prompt).toHaveLength(2_000);
+    expect(generation.lyrics).toHaveLength(2_000);
   });
 
   it('omits the notebook link when there is no session', async () => {
