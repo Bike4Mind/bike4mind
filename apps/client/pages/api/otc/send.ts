@@ -67,6 +67,12 @@ const handler = baseApi({ auth: false })
     // sends to aliases of one inbox can all pass the read above; this atomic spend is the real bound.
     const budget = await reserveOtcEmailBudget(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
     if ('retryAfter' in budget) {
+      // No code goes out, so hand the cooldown slot back rather than start one for the owner.
+      await pendingOtcTokenRepository.releaseReservation(
+        normalizedEmail,
+        reservation.reservedAt,
+        reservation.previousCreatedAt
+      );
       res.setHeader('Retry-After', String(budget.retryAfter));
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }

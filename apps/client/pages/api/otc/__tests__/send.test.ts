@@ -31,6 +31,7 @@ vi.mock('@server/utils/config', () => ({
 
 const mockTryReserveSlot = vi.fn();
 const mockConfirmReservation = vi.fn();
+const mockReleaseReservation = vi.fn();
 // In-memory stand-in for the cache counters (one fixed window, never expiring within a test).
 const cache = vi.hoisted(() => {
   const counts = new Map<string, number>();
@@ -69,6 +70,7 @@ vi.mock('@bike4mind/database', () => ({
   pendingOtcTokenRepository: {
     tryReserveSlot: (...a: any[]) => mockTryReserveSlot(...a),
     confirmReservation: (...a: any[]) => mockConfirmReservation(...a),
+    releaseReservation: (...a: any[]) => mockReleaseReservation(...a),
   },
 }));
 
@@ -255,6 +257,27 @@ describe('/api/otc/send per-email budget', () => {
     expect(refused).toHaveLength(8 - perEmailPerIp.limit);
     expect(refused.every(r => r.getHeader('Retry-After') !== undefined)).toBe(true);
     expect(cache.counts.get(inboxKey)).toBe(perEmailPerIp.limit);
+  });
+
+  it('releases the cooldown slot when the atomic budget reserve refuses after the read passed', async () => {
+    cache.state.blindPeek = true;
+    const previousCreatedAt = new Date('2025-12-31T23:59:00.000Z');
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt, previousCreatedAt });
+    cache.counts.set(sourceKey(ATTACKER_IP), OTC_LIMITS.send.perEmailPerIp.limit);
+
+    const res = await post(VICTIM, ATTACKER_IP);
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(res.getHeader('Retry-After')).toBeDefined();
+    expect(mockReleaseReservation).toHaveBeenCalledWith(VICTIM, reservedAt, previousCreatedAt);
+    expect(mockSendOTC).not.toHaveBeenCalled();
+  });
+
+  it('keeps the cooldown slot once a code is dispatched', async () => {
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt, previousCreatedAt: null });
+
+    expect((await post(VICTIM, VICTIM_IP))._getStatusCode()).toBe(200);
+    expect(mockReleaseReservation).not.toHaveBeenCalled();
   });
 
   it('refunds the budget when dispatch fails', async () => {
