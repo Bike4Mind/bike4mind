@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { displayReplyTitle, stripInlineMarkdown } from './plainTitle';
+import { displayReplyTitle, displayReplyTitleFromLine, replyFirstLine, stripInlineMarkdown } from './plainTitle';
 
 describe('stripInlineMarkdown', () => {
   it.each([
@@ -33,5 +33,13 @@ describe('displayReplyTitle', () => {
   it('keeps an embedded artifact name verbatim', () => {
     const body = '<artifact identifier="a" type="text/html" title="my_tool_v2"><p>x</p></artifact>';
     expect(displayReplyTitle('my_tool_v2', body)).toBe('my_tool_v2');
+  });
+
+  it('gives the same result from a precomputed first line as from the body', () => {
+    const body = '# Recap: *Tides*\n\nbody';
+    expect(displayReplyTitleFromLine('Recap: *Tides*', replyFirstLine(body))).toBe(
+      displayReplyTitle('Recap: *Tides*', body)
+    );
+    expect(displayReplyTitleFromLine('*Draft* v2', undefined)).toBe('*Draft* v2');
   });
 });

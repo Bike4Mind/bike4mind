@@ -33,7 +33,7 @@ import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
 import { requestHasGateProof } from '@server/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
-import { displayReplyTitle } from '@server/services/publish/plainTitle';
+import { displayReplyTitleFromLine, replyFirstLine } from '@server/services/publish/plainTitle';
 import {
   buildBundleScriptSrc,
   escapeHtml,
@@ -208,9 +208,16 @@ const APP_HOST_SRC = PUBLISH_HOST ? `https://${PUBLISH_HOST}` : '';
 const SHARED_FALLBACK_TITLE = process.env.APP_NAME ? `Shared from ${process.env.APP_NAME}` : 'Shared';
 // Reply rows saved before deriveTitle stripped markers still carry them, so strip those on read (see
 // displayReplyTitle). Explicit reply titles and fabfile/bundle names are left verbatim.
+// The first line is memoized per artifact object (one per request) so share meta, viewer and export
+// parse the reply body at most once between them.
+const firstLineCache = new WeakMap<object, string | undefined>();
+const cachedReplyFirstLine = (artifact: { renderedBody?: string }): string | undefined => {
+  if (!firstLineCache.has(artifact)) firstLineCache.set(artifact, replyFirstLine(artifact.renderedBody ?? ''));
+  return firstLineCache.get(artifact);
+};
 const plainTitle = (title: string, artifact: { source: { kind: string }; renderedBody?: string }): string =>
   artifact.source.kind === 'reply'
-    ? displayReplyTitle(title, artifact.renderedBody ?? '') || SHARED_FALLBACK_TITLE
+    ? displayReplyTitleFromLine(title, cachedReplyFirstLine(artifact)) || SHARED_FALLBACK_TITLE
     : title;
 const withAppHost = (base: string) => (APP_HOST_SRC ? `${base} ${APP_HOST_SRC}` : base);
 const ASSET_CSP = [

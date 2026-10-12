@@ -59,7 +59,11 @@ export function replyFirstLine(markdown: string): string | undefined {
  * to equal that cut.
  */
 export function displayReplyTitle(storedTitle: string, markdown: string): string {
-  const line = replyFirstLine(markdown);
+  return displayReplyTitleFromLine(storedTitle, replyFirstLine(markdown));
+}
+
+/** displayReplyTitle for a caller that already holds `replyFirstLine(markdown)`, so the body is parsed once. */
+export function displayReplyTitleFromLine(storedTitle: string, line: string | undefined): string {
   if (!line) return storedTitle;
   const legacyDerived = truncateAtWord(
     line
