@@ -378,7 +378,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       await invokeWebhookWithEvent(event);
 
       expect(mockFindByStripeCustomerId).not.toHaveBeenCalled();
-      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(mockGrantCreditPurchase).not.toHaveBeenCalled();
     });
 
     describe('credit to the source product', () => {
