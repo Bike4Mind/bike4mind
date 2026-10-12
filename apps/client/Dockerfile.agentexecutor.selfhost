@@ -32,7 +32,8 @@ COPY . .
 
 # 4) Build the client's upstream @bike4mind/* packages (incl. @bike4mind/resource, the shim
 #    the alias hook redirects to). `^...` builds the client's deps without the Next.js app.
-RUN pnpm turbo build --filter=@bike4mind/client^... --filter=@bike4mind/workers^...
+#    Workers' @bike4mind/* deps are a subset of the client's, so they need no filter of their own.
+RUN pnpm turbo build --filter=@bike4mind/client^...
 
 ENV NODE_ENV=production
 ENV B4M_SELF_HOST=true
