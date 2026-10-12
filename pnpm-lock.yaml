@@ -2271,6 +2271,9 @@ importers:
       sst:
         specifier: 4.17.1
         version: 4.17.1
+      stripe:
+        specifier: ^22.6.2
+        version: 22.6.2(@types/node@25.9.6)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -23920,6 +23923,10 @@ snapshots:
   stripe@22.6.2(@types/node@24.12.3):
     optionalDependencies:
       '@types/node': 24.12.3
+
+  stripe@22.6.2(@types/node@25.9.6):
+    optionalDependencies:
+      '@types/node': 25.9.6
 
   strtok3@10.3.5:
     dependencies:

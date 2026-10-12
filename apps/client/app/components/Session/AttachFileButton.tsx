@@ -105,6 +105,16 @@ const AttachFileButton = ({
   const [currentView, setCurrentView] = useState<'main' | 'other-apps'>('main');
   const [isOpen, setIsOpen] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  // A file can land while the menu is open without going through one of its items (the native
+  // picker, drag and drop), so a new attachment closes the menu instead of leaving it over the composer.
+  const [seenFilesCount, setSeenFilesCount] = useState(totalFilesCount);
+  if (totalFilesCount !== seenFilesCount) {
+    setSeenFilesCount(totalFilesCount);
+    if ((totalFilesCount ?? 0) > (seenFilesCount ?? 0)) {
+      setIsOpen(false);
+      setCurrentView('main');
+    }
+  }
 
   const connectGoogleDrive = useConnectGoogleDrive();
   const isMobile = useIsMobile();

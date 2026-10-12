@@ -1,8 +1,13 @@
 import { isObjectIdOrHexString } from 'mongoose';
-import { IAdminSettingsRepository, IDataLakeRepository, IScopedSettingsRepository } from '@bike4mind/common';
+import {
+  IAdminSettingsRepository,
+  IDataLakeRepository,
+  IScopedSettingsRepository,
+  shouldHaltConvergence,
+  WorkOrigin,
+} from '@bike4mind/common';
 import { scopedSettingsService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
-import { shouldHaltConvergence, WorkOrigin } from '@server/queueHandlers/convergenceProvenance';
 
 /**
  * The platform/lake-scoped convergence pause switch. Exported so a caller that resolves the flag

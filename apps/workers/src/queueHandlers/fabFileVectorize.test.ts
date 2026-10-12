@@ -117,7 +117,7 @@ vi.mock('@bike4mind/services', () => ({
   },
   scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
 }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
@@ -140,8 +140,8 @@ vi.mock('@bike4mind/common', async () => {
     // Real enum, not a stub: the sourceType gate around the Slack notification claim compares
     // against this directly, so a fake value here would make every test pass for the wrong reason.
     FabFileSourceType: actual.FabFileSourceType,
-    // Pulled from the real module rather than retyped, for the provenance vocabulary
-    // convergenceProvenance.ts re-exports from common:
+    // Pulled from the real module rather than retyped, for the provenance vocabulary the handler
+    // imports straight from common:
     // the payload schema's fail-soft `origin` and the halt rule are exactly what the kill-switch
     // tests below exercise, so a stub here would make them assert against themselves.
     WORK_ORIGINS: actual.WORK_ORIGINS,
@@ -184,7 +184,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
 import { dispatch } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;

@@ -14,7 +14,7 @@ vi.mock('@bike4mind/services', () => ({
 
 import { scopedSettingsService } from '@bike4mind/services';
 import { isConvergenceHalted } from './convergenceKillSwitch';
-import { provenancePayloadShape, shouldHaltConvergence, CONVERGENCE_ORIGIN } from './convergenceProvenance';
+import { provenancePayloadShape, shouldHaltConvergence, CONVERGENCE_ORIGIN } from '@bike4mind/common';
 
 const resolveScopedSetting = vi.mocked(scopedSettingsService.resolveScopedSetting);
 const scopeForLake = vi.mocked(scopedSettingsService.scopeForLake);

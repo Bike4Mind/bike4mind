@@ -1,3 +1,4 @@
+import { MAX_VIDEO_OUTPUT_BYTES } from '@bike4mind/common';
 import { z } from 'zod';
 import {
   ProviderOutputUnavailableError,
@@ -87,5 +88,5 @@ export const fetchGeminiOutput = async (
   }
   if (response.status === 404 || response.status === 410) throw new ProviderOutputUnavailableError(response.status);
   if (!response.ok) throw new Error(`${prefix}_download_http_${response.status}`);
-  return readBoundedResponse(response);
+  return readBoundedResponse(response, MAX_VIDEO_OUTPUT_BYTES);
 };

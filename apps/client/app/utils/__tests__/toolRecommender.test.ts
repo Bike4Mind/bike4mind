@@ -24,6 +24,13 @@ describe('recommendTools', () => {
       expect(result.map(r => r.tool)).toContain('web_search');
     });
 
+    it.each([
+      "Use web search: what is today's top AI headline? Cite URLs",
+      'do an internet search for the current mortgage rates',
+    ])('triggers on an explicit web search ask: %s', prompt => {
+      expect(recommendTools(prompt).map(r => r.tool)).toContain('web_search');
+    });
+
     it('triggers on "what happened"', () => {
       const result = recommendTools('what happened in the stock market today?');
       expect(result.map(r => r.tool)).toContain('web_search');

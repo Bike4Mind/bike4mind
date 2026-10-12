@@ -174,7 +174,7 @@ vi.mock('@server/integrations/google/drive/driveContent', async () => {
     isUnderRoot: h.isUnderRoot,
   };
 });
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));

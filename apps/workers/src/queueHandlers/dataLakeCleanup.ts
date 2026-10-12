@@ -23,22 +23,8 @@ import { releaseGitHubLakeConnectionForLake } from '@server/integrations/github/
 import { createKeyProvider } from '@server/memory/factCipher';
 import { getFilesStorage } from '@server/utils/storage';
 import { BadRequestError } from '@bike4mind/utils';
-import { z, ZodError } from 'zod';
-
-const CleanupPayload = z.object({
-  dataLakeId: z.string(),
-  // administeredOrgIds rides along so the async re-check keeps the org-manageable rung the request
-  // path used (optional for back-compat with any message enqueued before this field existed).
-  actor: z.object({
-    userId: z.string(),
-    isAdmin: z.boolean(),
-    administeredOrgIds: z.array(z.string()).optional(),
-  }),
-  // The claim the lifecycle route accepted this message under, so a guard refusal releases only
-  // that claim. Optional for messages enqueued before this field existed.
-  purgeClaimId: z.string().optional(),
-});
-export type DataLakeCleanupMessage = z.input<typeof CleanupPayload>;
+import { ZodError } from 'zod';
+import { CleanupPayload } from '@server/dataLakes/dataLakeCleanupPayload';
 
 /**
  * Background consumer for the phase-2 data-lake hard-delete sweep, offloaded off the request path
@@ -86,7 +72,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             searchIndex: FabFileChunkSearchIndex,
           })
         : undefined,
-      // Crypto-shred the lake's memory profile as part of the purge (#1440) - destroy the DEK and mark
+      // Crypto-shred the lake's memory profile as part of the purge - destroy the DEK and mark
       // the ledger shredded, so a deleted lake leaves no readable belief ledger behind.
       //
       // LOG IT. This is a data-retention operation, and until it logged, a successful shred and a

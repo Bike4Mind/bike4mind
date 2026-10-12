@@ -49,7 +49,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
 
 import { createLakeIngestRetirer, ingestLakeFile } from './lakeIngestShared';
 
