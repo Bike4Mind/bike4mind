@@ -1,12 +1,13 @@
 import type { MusicGenerationRequest, ValidatedMusicRequest } from './request';
 import type { MusicDurationCapability, MusicModelCapabilities } from './types';
 
+// Public 422 errorCode values once the music routes ship; named like VIDEO_VALIDATION_ERROR_CODES.
 export const MUSIC_VALIDATION_ERROR_CODES = [
-  'lyrics_not_supported',
+  'unsupported_duration',
+  'unsupported_lyrics',
+  'unsupported_vocals',
   'lyrics_with_instrumental',
   'lyrics_too_long',
-  'vocals_not_supported',
-  'duration_out_of_range',
 ] as const;
 export type MusicValidationErrorCode = (typeof MUSIC_VALIDATION_ERROR_CODES)[number];
 
@@ -33,11 +34,14 @@ export const validateMusicRequest = (
 ): MusicValidationResult => {
   const instrumental = request.instrumental ?? caps.vocals === 'never';
   if (!instrumental && caps.vocals === 'never') {
-    return fail('vocals_not_supported', `${caps.displayName} generates instrumental music only`);
+    return fail('unsupported_vocals', `${caps.displayName} generates instrumental music only`);
   }
   if (request.lyrics !== undefined) {
+    // An instrumental-only model rejects lyrics as unsupported, not as a combination the caller never asked for.
+    if (!caps.lyrics || caps.vocals === 'never') {
+      return fail('unsupported_lyrics', `${caps.displayName} does not accept custom lyrics`);
+    }
     if (instrumental) return fail('lyrics_with_instrumental', 'lyrics cannot be combined with instrumental');
-    if (!caps.lyrics) return fail('lyrics_not_supported', `${caps.displayName} does not accept custom lyrics`);
     if (request.lyrics.length > caps.lyrics.maxChars) {
       return fail(
         'lyrics_too_long',
@@ -45,14 +49,14 @@ export const validateMusicRequest = (
       );
     }
     const { maxLineChars } = caps.lyrics;
-    if (maxLineChars !== undefined && request.lyrics.split('\n').some(line => line.length > maxLineChars)) {
+    if (maxLineChars !== undefined && request.lyrics.split(/\r?\n/).some(line => line.length > maxLineChars)) {
       return fail('lyrics_too_long', `${caps.displayName} accepts at most ${maxLineChars} characters per lyric line`);
     }
   }
   const durationSeconds = resolveDuration(request.durationSeconds, caps.duration);
   if (durationSeconds === null) {
     return fail(
-      'duration_out_of_range',
+      'unsupported_duration',
       `duration ${request.durationSeconds}s is not supported by ${caps.displayName} (${describeDuration(caps.duration)})`
     );
   }

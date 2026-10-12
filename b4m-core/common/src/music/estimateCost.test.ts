@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { usdToCredits } from '../pricing';
-import { billedMusicRequest, estimateMusicCostCredits, estimateMusicCostUsd } from './estimateCost';
+import { billedMusicSeconds, estimateMusicCostCredits, estimateMusicCostUsd } from './estimateCost';
 import type { MusicModelCapabilities } from './types';
 
 const withPricing = (pricing: MusicModelCapabilities['pricing']): MusicModelCapabilities => ({
@@ -34,20 +34,20 @@ describe('estimateMusicCost', () => {
   });
 });
 
-describe('billedMusicRequest', () => {
+describe('billedMusicSeconds', () => {
   const request = { durationSeconds: 60 };
 
   it('bills the reported length when shorter than requested', () => {
-    expect(billedMusicRequest(request, 57.5)).toEqual({ durationSeconds: 57.5 });
+    expect(billedMusicSeconds(request, 57.5)).toBe(57.5);
   });
 
   it('never bills past the requested length (the hold)', () => {
-    expect(billedMusicRequest(request, 61)).toEqual({ durationSeconds: 60 });
+    expect(billedMusicSeconds(request, 61)).toBe(60);
   });
 
   it('falls back to the requested length without a usable report', () => {
-    expect(billedMusicRequest(request, undefined)).toBe(request);
-    expect(billedMusicRequest(request, 0)).toBe(request);
-    expect(billedMusicRequest(request, Number.NaN)).toBe(request);
+    expect(billedMusicSeconds(request, undefined)).toBe(60);
+    expect(billedMusicSeconds(request, 0)).toBe(60);
+    expect(billedMusicSeconds(request, Number.NaN)).toBe(60);
   });
 });

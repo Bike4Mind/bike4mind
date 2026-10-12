@@ -19,7 +19,7 @@ const ELEVENLABS_MUSIC_USD_PER_SECOND = 0.15 / 60;
 const ELEVENLABS_MUSIC_DURATION = { control: 'exact', min: 3, max: 300, default: 60 } as const;
 
 export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> = {
-  // Deterministic, free, registered only when ENABLE_TEST_MUSIC_PROVIDER=true (never in production).
+  // Deterministic and free; the test provider will be registered only behind a non-production flag, as test-video is.
   'test-music': {
     provider: 'test',
     displayName: 'Test music (non-production)',

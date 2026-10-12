@@ -336,6 +336,8 @@ const AdminSettingsTab: React.FC = () => {
           'logoSettings',
           // Per-model video toggles are rendered by <AdminVideoModelsSetting />
           'videoGeneration',
+          // Per-model music toggles get their own card with the music job path; an object setting has no generic editor
+          'musicGeneration',
           // Ordered model list is rendered by <AdminRecommendedModelsSetting />
           'recommendedModelIds',
           'RapidReplySettings',

@@ -12,10 +12,10 @@ export const estimateMusicCostCredits = (caps: MusicModelCapabilities, request: 
   usdToCredits(estimateMusicCostUsd(caps, request));
 
 /**
- * The request a finished track is billed on. A per-second model bills the provider-reported length, capped at what
- * was requested so the charge never exceeds the hold; without a report it bills the requested length.
+ * Seconds a finished track is billed on (may be fractional): the provider-reported length, capped at the requested
+ * one so the charge never exceeds the hold. Without a usable report it is the requested length.
  */
-export const billedMusicRequest = <T extends Billable>(request: T, reportedDurationSeconds: number | undefined): T =>
-  reportedDurationSeconds === undefined || !(reportedDurationSeconds > 0)
-    ? request
-    : { ...request, durationSeconds: Math.min(reportedDurationSeconds, request.durationSeconds) };
+export const billedMusicSeconds = (request: Billable, reportedDurationSeconds: number | undefined): number =>
+  reportedDurationSeconds !== undefined && reportedDurationSeconds > 0
+    ? Math.min(reportedDurationSeconds, request.durationSeconds)
+    : request.durationSeconds;
