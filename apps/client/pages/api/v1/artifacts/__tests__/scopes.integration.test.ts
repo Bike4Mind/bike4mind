@@ -43,6 +43,7 @@ vi.mock('@bike4mind/services', async orig => {
       validateUserApiKey: (...a: unknown[]) => mockValidate(...a),
     },
     artifactService: {
+      ...(actual.artifactService as object),
       get: (...a: unknown[]) => mockGet(...a),
       create: (...a: unknown[]) => mockCreate(...a),
       update: (...a: unknown[]) => mockUpdate(...a),
