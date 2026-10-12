@@ -45,7 +45,7 @@ const EnableWebSearchAction: FC<{ reply: string }> = ({ reply }) => {
       sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mt: 1 }}
     >
       <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-        Web Search is off for this chat.
+        Web Search is off.
       </Typography>
       <Button
         size="sm"
