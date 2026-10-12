@@ -5,6 +5,12 @@ const { claimVoiceHold, restoreVoiceHold, incrementCredits } = vi.hoisted(() => 
   restoreVoiceHold: vi.fn(),
   incrementCredits: vi.fn(),
 }));
+const logError = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/observability', () => ({
+  Logger: class {
+    error = logError;
+  },
+}));
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: { claimVoiceHold, restoreVoiceHold },
   userRepository: { incrementCredits },
@@ -55,6 +61,26 @@ describe('settleVoiceHold', () => {
 
     await expect(settleVoiceHold(HOLD, 0)).rejects.toBe(failure);
     expect(restoreVoiceHold).toHaveBeenCalledWith('s1', 600, STARTED, null);
+  });
+
+  it('logs the lost refund when a newer hold blocks restoring this one', async () => {
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+    restoreVoiceHold.mockResolvedValue(false);
+
+    await expect(settleVoiceHold(HOLD, 0)).rejects.toThrow('db blip');
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('newer hold blocks restoring'), {
+      sessionId: 's1',
+      userId: 'u1',
+      startedAt: STARTED.toISOString(),
+      refund: 600,
+    });
+  });
+
+  it('logs nothing when the hold is restored for a retry', async () => {
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+
+    await expect(settleVoiceHold(HOLD, 0)).rejects.toThrow('db blip');
+    expect(logError).not.toHaveBeenCalled();
   });
 
   it('keeps what realtime responses already drew from the hold, even with no call time evidenced', async () => {

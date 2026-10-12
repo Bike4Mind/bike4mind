@@ -208,7 +208,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       try {
         await userRepository.incrementCredits(user.id, delta);
       } catch (creditError) {
-        await sessionRepository
+        const restored = await sessionRepository
           .restoreVoiceHold(session.id, reserved, startedAt, claimed.billedCredits)
           .catch(restoreError => {
             throw new AggregateError(
@@ -216,6 +216,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
               `voice hold ${sessionId}: settlement failed and the hold could not be restored`
             );
           });
+        // A newer call already holds the session, so no retry can settle this hold.
+        if (!restored) {
+          logger.error('voiceSessionEnded: settlement failed and a newer hold blocks restoring this one', {
+            sessionId,
+            userId: user.id,
+            startedAt: startedAt.toISOString(),
+            actualCredits,
+            delta,
+          });
+        }
         throw creditError;
       }
     }

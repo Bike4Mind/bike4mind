@@ -1,10 +1,13 @@
 import { questRepository, sessionRepository, userRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import {
   creditsForElapsed,
   MAX_SESSION_SECONDS,
   REALTIME_VOICE_HOLD_SECONDS,
   realtimeCreditsFloor,
 } from './voiceSessionLimits';
+
+const logger = new Logger({ metadata: { service: 'settleVoiceHold' } });
 
 export type VoiceHold = {
   id: string;
@@ -66,7 +69,7 @@ export async function settleVoiceHold(hold: VoiceHold, elapsedSeconds: number): 
     try {
       await userRepository.incrementCredits(hold.userId, refund);
     } catch (creditError) {
-      await sessionRepository
+      const restored = await sessionRepository
         .restoreVoiceHold(hold.id, hold.voiceReservedCredits, hold.voiceSessionStartedAt, billedCredits)
         .catch(restoreError => {
           throw new AggregateError(
@@ -74,6 +77,16 @@ export async function settleVoiceHold(hold: VoiceHold, elapsedSeconds: number): 
             `voice hold ${hold.id}: refund failed and the hold could not be restored`
           );
         });
+      // A newer call already holds the session, so no retry can settle this hold: the refund is
+      // owed by hand.
+      if (!restored) {
+        logger.error('[settleVoiceHold] refund failed and a newer hold blocks restoring this one', {
+          sessionId: hold.id,
+          userId: hold.userId,
+          startedAt: hold.voiceSessionStartedAt.toISOString(),
+          refund,
+        });
+      }
       throw creditError;
     }
   }

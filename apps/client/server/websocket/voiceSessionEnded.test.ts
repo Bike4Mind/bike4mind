@@ -17,6 +17,8 @@ const state = vi.hoisted(() => ({
   beforeClaim: null as null | (() => void),
   failIncrement: false,
   failTransaction: false,
+  // A newer call's hold that takes the session the moment a settlement's refund fails.
+  newerHoldOnFailure: null as null | Date,
 }));
 
 const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
@@ -50,7 +52,10 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findById: async () => ({ id: 'u1', currentCredits: state.balance }),
     incrementCredits: async (_id: string, delta: number) => {
-      if (state.failIncrement) throw new Error('mongo blip');
+      if (state.failIncrement) {
+        if (state.newerHoldOnFailure) state.session.voiceSessionStartedAt = state.newerHoldOnFailure;
+        throw new Error('mongo blip');
+      }
       state.balance += delta;
     },
   },
@@ -142,6 +147,7 @@ describe('voiceSessionEnded realtime billing', () => {
     state.beforeClaim = null;
     state.failIncrement = false;
     state.failTransaction = false;
+    state.newerHoldOnFailure = null;
     sendToClient.mockClear();
     logger.error.mockClear();
   });
@@ -290,6 +296,21 @@ describe('voiceSessionEnded realtime billing', () => {
 
     expect(state.session.voiceSessionStartedAt).toBeNull();
     expect(charged()).toBe(35);
+  });
+
+  it('logs the lost refund when a newer hold blocks restoring the one whose settlement failed', async () => {
+    const startedAt = state.session.voiceSessionStartedAt as Date;
+    await send(30, 'resp-1');
+    state.failIncrement = true;
+    state.newerHoldOnFailure = new Date();
+
+    await expect(send(0)).rejects.toThrow('mongo blip');
+
+    expect(state.session.voiceSessionStartedAt).toBe(state.newerHoldOnFailure);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('newer hold blocks restoring'),
+      expect.objectContaining({ sessionId: 's1', userId: 'u1', startedAt: startedAt.toISOString() })
+    );
   });
 
   it('undoes the ledger row and billed total when a response debit fails, so a retry bills it once', async () => {
