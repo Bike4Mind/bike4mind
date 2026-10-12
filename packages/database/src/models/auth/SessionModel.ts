@@ -275,6 +275,8 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     },
     voiceReservedCredits: { type: Number, required: false, default: null },
     voiceSessionStartedAt: { type: Date, required: false, default: null },
+    // No default: $inc needs the field absent or numeric, never null.
+    voiceBilledCredits: { type: Number, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -645,6 +647,25 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       userId,
       voiceSessionStartedAt: { $gte: sixtyMinutesAgo },
     });
+  }
+
+  async addVoiceBilledCredits(sessionId: string, startedAt: Date, credits: number) {
+    const before = await this.sessionModel.findOneAndUpdate(
+      { _id: sessionId, voiceSessionStartedAt: startedAt },
+      { $inc: { voiceBilledCredits: credits } },
+      { new: false, projection: { voiceBilledCredits: 1 } }
+    );
+    return before ? (before.voiceBilledCredits ?? 0) : null;
+  }
+
+  async closeVoiceHold(sessionId: string, startedAt: Date) {
+    // Matching on startedAt makes the close one-shot per hold and never touches a newer call's hold.
+    const before = await this.sessionModel.findOneAndUpdate(
+      { _id: sessionId, voiceSessionStartedAt: startedAt },
+      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null }, $unset: { voiceBilledCredits: '' } },
+      { new: false, projection: { voiceBilledCredits: 1 } }
+    );
+    return before ? { billedCredits: before.voiceBilledCredits ?? 0 } : null;
   }
 
   async findSessionIdsByUserId(userId: string) {

@@ -845,6 +845,12 @@ export interface ISession {
    * Used to enforce the 60-minute hard cap.
    */
   voiceSessionStartedAt?: Date | null;
+
+  /**
+   * Credits billed so far against the open realtime voice hold, one response at a time.
+   * Set to 0 when a realtime hold opens and removed when it closes; absent for other holds.
+   */
+  voiceBilledCredits?: number;
 }
 
 ///////////
@@ -1134,4 +1140,16 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The count of active voice sessions
    */
   countActiveVoiceSessionsByUserId: (userId: string) => Promise<number>;
+
+  /**
+   * Add `credits` to the billed total of the voice hold that started at `startedAt`. Resolves the
+   * total billed before this charge, or null when that hold is no longer open.
+   */
+  addVoiceBilledCredits: (sessionId: string, startedAt: Date, credits: number) => Promise<number | null>;
+
+  /**
+   * Atomically close the voice hold that started at `startedAt`. Resolves what was billed against
+   * it for the single caller that closed it, or null when it was already closed or replaced.
+   */
+  closeVoiceHold: (sessionId: string, startedAt: Date) => Promise<{ billedCredits: number } | null>;
 }

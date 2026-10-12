@@ -75,8 +75,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: 'u1', currentCredits: 100 }, refreshUser: vi.fn() }),
 }));
 
+const sendJsonMessage = vi.fn();
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ sendJsonMessage: vi.fn(), subscribeToAction: () => () => {} }),
+  useWebsocket: () => ({ sendJsonMessage, subscribeToAction: () => () => {} }),
 }));
 
 vi.mock('@client/app/hooks/data/settings', () => ({
@@ -126,6 +127,7 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     (toast.error as ReturnType<typeof vi.fn>).mockClear();
     apiPost.mockReset();
     apiPost.mockResolvedValue(VOICE_SESSION_RESPONSE);
+    sendJsonMessage.mockClear();
     useVoiceSessionStore.getState().reset();
     // jsdom doesn't implement these - keep the audio-element teardown quiet.
     HTMLMediaElement.prototype.pause = vi.fn();
@@ -280,5 +282,65 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     });
 
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  const billingFrames = () =>
+    sendJsonMessage.mock.calls.map(([frame]) => frame).filter(frame => frame.action === 'voice_session_ended');
+  const responseDone = (id: string, audioOutputTokens: number) => ({
+    type: 'response.done',
+    response: {
+      id,
+      usage: {
+        input_token_details: {
+          audio_tokens: 1,
+          text_tokens: 0,
+          cached_tokens_details: { audio_tokens: 0, text_tokens: 0 },
+        },
+        output_token_details: { audio_tokens: audioOutputTokens, text_tokens: 0 },
+      },
+    },
+  });
+
+  it('bills each response by its id and closes the hold once when the call ends', async () => {
+    const view = await connectAndConnected();
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-1', 10));
+      latestDc().__emitMessage(responseDone('resp-2', 20));
+    });
+    act(() => {
+      view.result.current.endSession();
+    });
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-3', 5));
+    });
+
+    const frames = billingFrames();
+    expect(frames.map(f => f.responseId)).toEqual(['resp-1', 'resp-2', 'resp-3', undefined]);
+    expect(frames[1].usage).toMatchObject({ audioOutputTokens: 20 });
+    // The closing frame carries no usage of its own; every response was billed by id.
+    expect(frames[3]).toMatchObject({ sessionId: 's1', usage: { audioOutputTokens: 0, audioInputTokens: 0 } });
+  });
+
+  it('keeps the hold open across a reconnect and closes it only when the call ends', async () => {
+    const view = await connectAndConnected();
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-1', 10));
+      latestPc().__emit('connectionstatechange', 'failed');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    act(() => {
+      latestDc().__emitMessage({ type: 'session.created' });
+    });
+    expect(billingFrames().filter(f => !f.responseId)).toHaveLength(0);
+
+    act(() => {
+      view.result.current.endSession();
+    });
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-2', 5));
+    });
+    expect(billingFrames().filter(f => !f.responseId)).toHaveLength(1);
   });
 });

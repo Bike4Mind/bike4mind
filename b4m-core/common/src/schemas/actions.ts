@@ -125,11 +125,17 @@ export const CliToolRequestAction = z.object({
 });
 export type ICliToolRequestAction = z.infer<typeof CliToolRequestAction>;
 
+/**
+ * Realtime voice billing frame. With `responseId` it bills one response (exactly once per id) and
+ * leaves the call's credit hold open; without it, it bills `usage` and closes the hold, refunding
+ * what the call did not use. Older clients send only the latter, once per response.
+ */
 export const VoiceSessionEndedAction = z.object({
   action: z.literal('voice_session_ended'),
   userId: z.string(),
   model: z.string(),
   sessionId: z.string(),
+  responseId: z.string().min(1).max(200).optional(),
   usage: z.object({
     audioInputTokens: z.number().min(0),
     audioCachedInputTokens: z.number().min(0),

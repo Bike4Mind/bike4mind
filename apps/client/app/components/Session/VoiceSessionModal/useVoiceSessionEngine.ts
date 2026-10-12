@@ -44,6 +44,15 @@ let pendingVoiceConnect: PendingVoiceConnect | null = null;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000];
 
+const ZERO_VOICE_USAGE = {
+  audioInputTokens: 0,
+  audioCachedInputTokens: 0,
+  audioOutputTokens: 0,
+  textInputTokens: 0,
+  textCachedInputTokens: 0,
+  textOutputTokens: 0,
+};
+
 export interface UseVoiceSessionEngineOptions {
   sessionId?: string;
   autoConnect?: boolean;
@@ -135,6 +144,16 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
   // Holds the latest reconnect() so the pc state handlers can invoke it without
   // creating a connect()/reconnect() dependency cycle.
   const reconnectRef = useRef<(() => void) | null>(null);
+  // The credit hold the last bootstrap opened. Each response is billed against it by id and it
+  // stays open across responses and reconnects; a terminal teardown closes it, which refunds
+  // whatever the call did not use.
+  const unsettledHoldRef = useRef<{ sessionId: string; model: string; userId: string } | null>(null);
+  // Read through a ref so handleDisconnectFromRealtime stays referentially stable: the
+  // unmount cleanup effect depends on it and would otherwise tear down a live call.
+  const sendJsonMessageRef = useRef(sendJsonMessage);
+  useEffect(() => {
+    sendJsonMessageRef.current = sendJsonMessage;
+  }, [sendJsonMessage]);
   // Derived state
   const isActive = connectionStatus !== 'disconnected';
   const activeSessionId = sessionId || createdSessionId;
@@ -338,6 +357,13 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
     setAssistantStream(null);
   }, []);
 
+  const settleUnsettledHold = useCallback(() => {
+    const hold = unsettledHoldRef.current;
+    if (!hold) return;
+    unsettledHoldRef.current = null;
+    sendJsonMessageRef.current({ action: 'voice_session_ended', ...hold, usage: ZERO_VOICE_USAGE });
+  }, []);
+
   // WebRTC disconnect (terminal)
   const handleDisconnectFromRealtime = useCallback(() => {
     // Cancel any in-flight reconnect - this is a real teardown, not a blip.
@@ -348,8 +374,9 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
     reconnectAttemptsRef.current = 0;
 
     releaseRealtimeResources();
+    settleUnsettledHold();
     setConnectionStatus('disconnected');
-  }, [releaseRealtimeResources, setConnectionStatus]);
+  }, [releaseRealtimeResources, settleUnsettledHold, setConnectionStatus]);
 
   // Session end completion
   const completeSessionEnd = useCallback(() => {
@@ -406,6 +433,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
         resolvedSessionId = pending.sessionId;
         model = pending.model;
         connectedSessionIdRef.current = resolvedSessionId;
+        unsettledHoldRef.current = { sessionId: resolvedSessionId, model, userId: currentUser.id };
         if (pending.voice && pending.voice !== selectedVoice) {
           setSelectedVoice(pending.voice);
         }
@@ -442,6 +470,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
         connectedSessionIdRef.current = resolvedSessionId;
         model = data.model;
         ephemeralKey = data.ephemeralKey;
+        unsettledHoldRef.current = { sessionId: resolvedSessionId, model, userId: currentUser.id };
 
         if (data.voice && data.voice !== selectedVoice) {
           setSelectedVoice(data.voice);
@@ -608,6 +637,8 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
                 model,
                 usage: usageData,
                 userId: currentUser.id,
+                // Bills this response once, against the open hold.
+                ...(serverEvent.response?.id ? { responseId: serverEvent.response.id } : {}),
               });
             }
 

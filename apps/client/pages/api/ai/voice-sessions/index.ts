@@ -399,6 +399,8 @@ When you get the tool result back, summarize it conversationally for voice.`;
       id: session.id,
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
       voiceSessionStartedAt,
+      // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
+      voiceBilledCredits: 0,
     });
   }
 

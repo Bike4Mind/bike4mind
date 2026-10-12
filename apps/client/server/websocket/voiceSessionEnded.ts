@@ -18,11 +18,11 @@ import {
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
-import { sessionService, creditService } from '@bike4mind/services';
+import { sessionService } from '@bike4mind/services';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
-  const { userId, sessionId, model, usage } = VoiceSessionEndedAction.parse(JSON.parse(event.body ?? ''));
+  const { userId, sessionId, model, usage, responseId } = VoiceSessionEndedAction.parse(JSON.parse(event.body ?? ''));
 
   // Verify the claimed userId matches the authenticated connection owner.
   // withWebSocketContext does not inject the authenticated user - the connectionId
@@ -64,13 +64,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     return { statusCode: 200 };
   }
 
-  // Idempotency guard: voiceSessionStartedAt is set at session start and cleared here on first
-  // successful processing. If null, the session either never had voice or was already reconciled.
-  if (!session.voiceSessionStartedAt) {
-    logger.warn(`voiceSessionEnded: session ${sessionId} has no active voice session - ignoring (possible replay)`);
-    return { statusCode: 200 };
-  }
-
   // Rates come from the versioned price catalog (reprices reach voice as data
   // rows); the adapter literal is the fail-safe when the catalog is unreachable.
   let priceRows: IModelPrice[] = [];
@@ -84,93 +77,105 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Single stochastic draw per settlement (pricing.ts policy); the old
   // per-component ceil overcharged up to ~6 credits per session.
   let actualCredits: number = usdToCreditsStochastic(totalUsd);
+  // Credits still reserved for this call after this frame: an open hold is not exhaustion.
+  let holdLeft = 0;
 
-  const { voiceReservedCredits, voiceSessionStartedAt } = session;
+  const recordUsage = (credits: number, transactionId?: string) =>
+    creditTransactionRepository.createTransaction('realtime_voice_usage', {
+      ownerId: user.id,
+      ownerType: CreditHolderType.User,
+      credits: -Math.abs(credits),
+      description: 'Voice usage',
+      model,
+      sessionId,
+      ...(transactionId ? { transactionId } : {}),
+    });
 
-  // 60-min hard cap: clamp actual cost to reserved amount if session ran over
-  if (voiceSessionStartedAt && voiceReservedCredits != null) {
-    const sessionDurationMs = Date.now() - new Date(voiceSessionStartedAt).getTime();
+  if (responseId) {
+    // One response of a live call. The transaction id makes a replayed frame a no-op; the hold
+    // stays open, so later responses and a reconnect (which reuses a live hold) keep drawing on it.
+    const recorded = await recordUsage(actualCredits, `realtime-voice:${sessionId}:${responseId}`);
+    if (!recorded) {
+      logger.warn(`voiceSessionEnded: response ${responseId} on session ${sessionId} already billed - ignoring`);
+      return { statusCode: 200 };
+    }
+    const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
+    const billedBefore = startedAt
+      ? await sessionRepository.addVoiceBilledCredits(session.id, startedAt, actualCredits)
+      : null;
+    // Only the part past the hold leaves the balance now; the hold already covers the rest. With the
+    // hold already closed (a close frame that overtook this one) the whole response is charged.
+    const fromBalance =
+      billedBefore === null
+        ? actualCredits
+        : Math.max(0, billedBefore + actualCredits - (session.voiceReservedCredits ?? 0)) -
+          Math.max(0, billedBefore - (session.voiceReservedCredits ?? 0));
+    if (fromBalance > 0) {
+      await userRepository.incrementCredits(user.id, -fromBalance);
+    }
+    if (billedBefore !== null) {
+      holdLeft = Math.max(0, (session.voiceReservedCredits ?? 0) - billedBefore - actualCredits);
+    }
+  } else {
+    // The call is over: bill this frame's usage and refund what the hold did not cover. Older
+    // clients send exactly one of these per call, so this is also their whole settlement.
+    if (!session.voiceSessionStartedAt) {
+      logger.warn(`voiceSessionEnded: session ${sessionId} has no active voice session - ignoring (possible replay)`);
+      return { statusCode: 200 };
+    }
+    const startedAt = new Date(session.voiceSessionStartedAt);
+    const closed = await sessionRepository.closeVoiceHold(session.id, startedAt);
+    if (!closed) {
+      logger.warn(`voiceSessionEnded: session ${sessionId} hold already closed - ignoring`);
+      return { statusCode: 200 };
+    }
+    const reserved = session.voiceReservedCredits ?? 0;
+
+    // 60-min hard cap: a call that ran over pays at most what is left of its hold
     const SIXTY_MIN_MS = 60 * 60 * 1000;
-    if (sessionDurationMs > SIXTY_MIN_MS) {
+    if (Date.now() - startedAt.getTime() > SIXTY_MIN_MS && session.voiceReservedCredits != null) {
+      const capped = Math.max(0, reserved - closed.billedCredits);
       logger.warn(`Voice session ${sessionId} exceeded 60-min cap - clamping credits`, {
         actualCredits,
-        voiceReservedCredits,
-        durationMinutes: Math.round(sessionDurationMs / 60000),
+        voiceReservedCredits: reserved,
+        durationMinutes: Math.round((Date.now() - startedAt.getTime()) / 60000),
       });
-      actualCredits = Math.min(actualCredits, voiceReservedCredits);
+      actualCredits = Math.min(actualCredits, capped);
     }
-  }
 
-  if (voiceReservedCredits != null) {
-    // Reservation pattern: balance already decremented at session start.
-    // Reconcile: refund overage or charge underage via delta.
-    const delta = voiceReservedCredits - actualCredits;
+    if (actualCredits > 0) {
+      await recordUsage(actualCredits);
+    }
+    // Already taken: the hold, plus anything billed past it. Owed: everything billed plus this frame.
+    const delta = Math.max(0, reserved - closed.billedCredits) - actualCredits;
     if (delta !== 0) {
       await userRepository.incrementCredits(user.id, delta);
     }
-    // Create audit transaction for actual cost
-    await creditService.subtractCredits(
-      {
-        ownerId: user.id,
-        ownerType: CreditHolderType.User,
-        credits: actualCredits,
-        type: 'realtime_voice_usage',
-        model,
-        sessionId,
-      },
-      {
-        db: { creditTransactions: creditTransactionRepository },
-        creditHolderMethods: userRepository,
-        skipBalanceUpdate: true,
-        currentCreditHolder: user,
-      }
-    );
-  } else {
-    // No reservation (enforceCredits was off at session start) - deduct normally
-    await creditService.subtractCredits(
-      {
-        ownerId: user.id,
-        ownerType: CreditHolderType.User,
-        credits: actualCredits,
-        type: 'realtime_voice_usage',
-        model,
-        sessionId,
-      },
-      {
-        db: { creditTransactions: creditTransactionRepository },
-        creditHolderMethods: userRepository,
-      }
-    );
   }
 
   // Dual-write usage event: analytics only, never billing.
-  usageEventRepository
-    .record({
-      requestId: sessionId,
-      userId: user.id,
-      ownerId: user.id,
-      ownerType: CreditHolderType.User,
-      sessionId,
-      feature: 'voice',
-      provider: 'openai',
-      model,
-      inputTokens: usage.textInputTokens + usage.audioInputTokens,
-      outputTokens: usage.textOutputTokens + usage.audioOutputTokens,
-      cachedInputTokens: usage.textCachedInputTokens + usage.audioCachedInputTokens,
-      cacheWriteTokens: 0,
-      costUsd: totalUsd,
-      creditsCharged: actualCredits,
-      status: 'ok',
-      latencyMs: Date.now() - new Date(session.voiceSessionStartedAt).getTime(),
-    })
-    .catch(err => logger.warn('Failed to record usage event', err));
-
-  // Clear voice reservation fields on session
-  await sessionRepository.update({
-    id: sessionId,
-    voiceReservedCredits: null,
-    voiceSessionStartedAt: null,
-  });
+  if (actualCredits > 0 || responseId) {
+    usageEventRepository
+      .record({
+        requestId: responseId ?? sessionId,
+        userId: user.id,
+        ownerId: user.id,
+        ownerType: CreditHolderType.User,
+        sessionId,
+        feature: 'voice',
+        provider: 'openai',
+        model,
+        inputTokens: usage.textInputTokens + usage.audioInputTokens,
+        outputTokens: usage.textOutputTokens + usage.audioOutputTokens,
+        cachedInputTokens: usage.textCachedInputTokens + usage.audioCachedInputTokens,
+        cacheWriteTokens: 0,
+        costUsd: totalUsd,
+        creditsCharged: actualCredits,
+        status: 'ok',
+        latencyMs: session.voiceSessionStartedAt ? Date.now() - new Date(session.voiceSessionStartedAt).getTime() : 0,
+      })
+      .catch(err => logger.warn('Failed to record usage event', err));
+  }
 
   const credits = actualCredits;
 
@@ -180,7 +185,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   if (enforceCredits) {
     const updatedUser = await userRepository.findById(userId);
-    if (updatedUser && (updatedUser.currentCredits ?? 0) <= 0) {
+    if (updatedUser && (updatedUser.currentCredits ?? 0) <= 0 && holdLeft <= 0) {
       const { domainName, stage } = event.requestContext;
       const endpoint = `https://${domainName}/${stage}`;
       try {
