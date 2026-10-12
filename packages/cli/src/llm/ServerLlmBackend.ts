@@ -69,9 +69,10 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
 
   /**
    * Open a single SSE attempt: make the streaming request, then yield decoded
-   * events until `[DONE]` / stream end (returns) or a wire failure (throws). A
-   * server-sent `error` event is surfaced as a throw so the core can classify
-   * it; a transient socket drop throws its raw error so the retry policy sees it.
+   * events until `[DONE]` (returns) or a wire failure, including a stream that
+   * ends without `[DONE]` (throws). A server-sent `error` event is surfaced as a
+   * throw so the core can classify it; a transient socket drop throws its raw
+   * error so the retry policy sees it.
    */
   open(req: CompletionRequest, signal?: AbortSignal): AsyncIterable<StreamEvent> {
     return this.streamCompletion(req, signal);
@@ -121,8 +122,7 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
 
         yield parsed;
       }
-      // Stream closed. If we never saw [DONE] and accumulated nothing, the core's
-      // empty-completion handling retries; if we accumulated content, it delivers.
+      // A close without [DONE] makes the SDK throw; the retry policy treats that as a transient drop.
       streamLogger.streamComplete(loggedText);
     } catch (error) {
       // Abort / cancel is graceful - end the stream, don't surface an error; the core
