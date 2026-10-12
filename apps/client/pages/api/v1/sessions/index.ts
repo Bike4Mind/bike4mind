@@ -184,7 +184,7 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
         (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       // The attachment door's lake arms, so a supplied lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
-        (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
+        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(
           req.user,
           req.logger
         )(),

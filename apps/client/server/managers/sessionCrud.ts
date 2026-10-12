@@ -151,7 +151,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
       (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, { logger }),
     // The attachment door's lake arms, so a supplied lake file passes the access check.
     resolveAttachmentLakeAccess: async () =>
-      (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
+      (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(
         user,
         logger
       )(),

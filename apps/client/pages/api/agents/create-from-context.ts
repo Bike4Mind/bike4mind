@@ -20,7 +20,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { isValidObjectId } from '@server/utils/objectId';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { apiKeyService } from '@bike4mind/services';
-import { createAttachmentLakeAccess } from '@server/queueHandlers/agentExecutor.attachmentLakeAccess';
+import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import { v4 as uuidv4 } from 'uuid';
 
 interface CreateFromContextRequest {

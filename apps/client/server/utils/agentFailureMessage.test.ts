@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
+import { toUserFacingFailureMessage } from './agentFailureMessage';
 
 describe('toUserFacingFailureMessage', () => {
   it('classifies billing/quota failures (402 / payment / credit)', () => {

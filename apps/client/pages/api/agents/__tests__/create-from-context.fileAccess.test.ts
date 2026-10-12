@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   projectRepository: {},
 }));
 
-vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: h.createAttachmentLakeAccess,
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: vi.fn(), getLlmByModel: vi.fn() }));

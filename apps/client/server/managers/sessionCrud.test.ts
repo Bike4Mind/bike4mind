@@ -108,7 +108,7 @@ vi.mock('@bike4mind/observability', () => ({
   Logger: { log: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: createAttachmentLakeAccessSpy,
 }));
 

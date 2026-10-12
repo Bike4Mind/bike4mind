@@ -180,7 +180,7 @@ export async function resolveRetrievalLakeScopeForUser(
      * flag. Pass `false` to opt a caller OUT of the privileged static-registry widening below.
      * Two callers do. The list-label route (resolveLakeListRetrievalScope, via the request wrapper
      * above) labels what chat searches, and chat never gets this widening. The attachment door
-     * (agentExecutor.attachmentLakeAccess) does too: that widening escalates registry reach from passages
+     * (attachmentLakeAccess) does too: that widening escalates registry reach from passages
      * (semantic-search) to whole inlined documents, and the chat attachment door structurally
      * cannot follow it (`b4m-core/services` cannot import `@server/*`), so inheriting it here
      * would ship the two attachment doors disagreeing for exactly the caller class most likely

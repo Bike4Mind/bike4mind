@@ -14,7 +14,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
+import { createAttachmentLakeAccess } from './attachmentLakeAccess';
 
 const MEMBERSHIP = {
   kind: 'owned' as const,

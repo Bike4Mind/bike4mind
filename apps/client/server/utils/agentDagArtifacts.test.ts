@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
+import { collectDagChildArtifactBlocks } from './agentDagArtifacts';
 
 const artifact = (id: string, body = 'x') =>
   `<artifact identifier="${id}" type="text/html" title="${id}">${body}</artifact>`;
