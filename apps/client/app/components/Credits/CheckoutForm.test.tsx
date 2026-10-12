@@ -60,6 +60,17 @@ describe('CheckoutForm', () => {
     expect(onPayment).toHaveBeenCalledTimes(1);
   });
 
+  it('locks the pay button once the payment succeeds so a second confirm cannot overwrite the result', async () => {
+    confirmPayment.mockResolvedValue({ paymentIntent: { status: 'succeeded' } });
+    renderForm();
+
+    await userEvent.click(screen.getByTestId('checkout-submit-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('checkout-submit-btn')).toHaveProperty('disabled', true));
+    expect(screen.getByText('Payment succeeded!')).toBeTruthy();
+    expect(confirmPayment).toHaveBeenCalledTimes(1);
+  });
+
   it('reports the Stripe error codes but never the error message', async () => {
     confirmPayment.mockResolvedValue({
       error: { type: 'card_error', code: 'card_declined', decline_code: 'insufficient_funds', message: 'Declined' },

@@ -25,6 +25,9 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
   const elements = useElements();
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Once the intent has succeeded or is processing, a second confirm only returns an
+  // unexpected-state error, which would replace the success message and trace as a failure.
+  const [isSettled, setIsSettled] = useState(false);
   // Callers pass an inline onPayment, so the status effect below re-runs on every parent render;
   // without this an in-page success would re-announce itself each time.
   const paidRef = useRef(false);
@@ -42,10 +45,12 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
       switch (paymentIntent?.status) {
         case 'succeeded':
           setMessage('Payment succeeded!');
+          setIsSettled(true);
           notifyPaid();
           break;
         case 'processing':
           setMessage('Your payment is processing.');
+          setIsSettled(true);
           break;
         case 'requires_payment_method':
           setMessage('');
@@ -92,9 +97,11 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
         onConfirmResult?.({ outcome: toOutcome(paymentIntent?.status) });
         if (paymentIntent?.status === 'succeeded') {
           setMessage('Payment succeeded!');
+          setIsSettled(true);
           notifyPaid();
         } else if (paymentIntent?.status === 'processing') {
           setMessage('Your payment is processing.');
+          setIsSettled(true);
         } else {
           setMessage('Something went wrong.');
         }
@@ -111,7 +118,7 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
       <Button
         className="checkout-submit-button"
         data-testid="checkout-submit-btn"
-        disabled={isLoading || !stripe || !elements}
+        disabled={isLoading || isSettled || !stripe || !elements}
         id="submit"
         onClick={handleSubmit}
         sx={{ mt: 2, mb: 2 }}
