@@ -9,8 +9,8 @@ import { pseudonymizeUserId } from './pseudonymize';
 // config. It sends the conversions another product can be credited with: `signup`, when an account
 // is created, and `purchase`, when that account later pays (a subscription invoice or a credit
 // pack). Both pick the credited product from a self-reported `utm.source` and say so on the event
-// (see ATTRIBUTION); crediting a purchase that way was a deliberate product decision, not an
-// accident of reuse.
+// (see ATTRIBUTION). docs-site/docs/security/telemetry-data-classification.md describes both
+// streams and must stay in sync with what this module sends.
 
 /**
  * A UUID that is the same every time for the same parts, so a retried request sends the same
@@ -120,16 +120,18 @@ export type PurchaseCreditUser = {
 };
 
 /**
- * Tell each product a paying user came through that they paid: the stage after signup in that
- * product's funnel. Same crediting rule and the same `attribution: 'self-reported'` marker as the
- * signup emit above, so a product's purchases line up with its signups.
+ * Tell each product a paying user came through that they paid. Same crediting rule and the same
+ * `attribution: 'self-reported'` marker as the signup emit above, so a product's purchases line up
+ * with its signups. Overwatch's funnel has no purchase stage yet (its stages are visits, signups
+ * and snapshot-based new subscribers), so these land as raw events only.
  *
  * The touches come from the user record (`user.acquisition`, written with consent at signup), not
  * from cookies or from checkout metadata: a purchase is confirmed by a Stripe webhook that has no
  * browser, a credit-pack payment intent carries no attribution metadata at all, and reading the
  * signup touches keeps the purchase on the same product its signup was credited to. A user with no
  * stored acquisition (they declined consent, or signed up before touches were stored) credits
- * nothing.
+ * nothing. A later consent withdrawal does not stop it: the webhook has no browser to ask, and the
+ * server keeps no per-user consent state, so stored touches keep crediting purchases.
  *
  * Only money actually collected counts: a zero amount (a trial, a fully discounted or
  * balance-paid invoice) sends nothing, and refunds are never sent. Synthetic users are skipped.
