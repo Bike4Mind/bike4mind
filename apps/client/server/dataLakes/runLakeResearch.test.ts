@@ -525,6 +525,30 @@ describe('runLakeResearch', () => {
       expect(hosts[0]).toBe('h0.example');
     });
 
+    it('logs the query and rethrows when every provider fails', async () => {
+      const failing = (message: string) => ({
+        name: 'p',
+        search: vi.fn(async () => {
+          throw new Error(message);
+        }),
+      });
+      h.resolveWebSearchProviders.mockResolvedValue([failing('lead down'), failing('backup down')]);
+      searchOnce();
+
+      await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/Web search failed on both providers/);
+
+      expect((logger as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalledWith(
+        '[lakeResearch] search failed',
+        expect.objectContaining({
+          runId: 'run-1',
+          query: 'q',
+          maxResults: 5,
+          recencyDays: 30,
+          error: expect.stringMatching(/Web search failed on both providers/),
+        })
+      );
+    });
+
     it('fails the run naming both providers when both fail', async () => {
       const backup = {
         name: 'searxng',

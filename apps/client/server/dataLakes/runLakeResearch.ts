@@ -284,9 +284,20 @@ export async function runLakeResearch(
 
     const ports: dataLakeResearchService.ResearchRunPorts = {
       search: async (query, maxResults, recencyDays) => {
-        const { results: hits, servedBy } = await searchWithHedge(provider, backup, query, maxResults, {
-          recencyDays,
-        });
+        let outcome: Awaited<ReturnType<typeof searchWithHedge>>;
+        try {
+          outcome = await searchWithHedge(provider, backup, query, maxResults, { recencyDays });
+        } catch (error) {
+          logger.error('[lakeResearch] search failed', {
+            runId,
+            query,
+            maxResults,
+            recencyDays,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+        const { results: hits, servedBy } = outcome;
         // Hostnames too: a run that proposes nothing stores no provenance, so off-topic hits are
         // otherwise invisible after the fact.
         logger.log('[lakeResearch] search', {
