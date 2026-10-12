@@ -204,6 +204,32 @@ describe('/api/otc/verify per-email budget', () => {
     expect(mockTryIncrement).toHaveBeenCalledWith(budgetKey, perEmail.limit, perEmail.windowMs);
   });
 
+  it('charges the exact token address, so alias tokens cannot drain the owner', async () => {
+    const alias = 'nobody+x@example.com';
+    const { req, res } = makeReqRes(alias);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    const { perEmail } = OTC_LIMITS.verify;
+    expect(mockTryIncrement).toHaveBeenCalledWith(
+      `otc-limit:verify-email:${otcEmailKey(alias)}`,
+      perEmail.limit,
+      perEmail.windowMs
+    );
+    expect(mockTryIncrement).not.toHaveBeenCalledWith(budgetKey, expect.anything(), expect.anything());
+  });
+
+  it('does not spend the budget on a correct code', async () => {
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue(null);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.username = undefined;
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockTryIncrement).not.toHaveBeenCalled();
+  });
+
   it('refuses with 429 and Retry-After before evaluating a guess once the budget is spent', async () => {
     mockTryAdd.mockImplementation(async (_key, _amount, limit) => ({
       success: true,

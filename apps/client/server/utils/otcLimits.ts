@@ -149,8 +149,11 @@ export const OTC_SEND_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
   { bucket: 'send-email-ip-daily', ...OTC_LIMITS.send.perEmailPerIpDaily, subject: inboxFromSource },
   { bucket: 'send-email', ...OTC_LIMITS.send.perEmail, subject: inbox },
 ];
+// Keyed on the exact token address, not the folded inbox: each alias has its own nonce and account,
+// so folding adds no brute-force protection and would let wrong guesses on alias tokens an attacker
+// requested lock the owner out of verifying a correct code.
 export const OTC_VERIFY_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
-  { bucket: 'verify-email', ...OTC_LIMITS.verify.perEmail, subject: inbox },
+  { bucket: 'verify-email', ...OTC_LIMITS.verify.perEmail, subject: email => email },
 ];
 
 const budgetKey = ({ bucket, subject }: OtcEmailBudget, email: string, ip: string) =>

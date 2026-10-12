@@ -140,6 +140,16 @@ describe('per-email budgets', () => {
     );
   });
 
+  it('keys the verify budget on the exact address, not the folded inbox', async () => {
+    await chargeOtcEmailBudget('victim+x@gmail.com', '203.0.113.7', OTC_VERIFY_EMAIL_BUDGETS);
+
+    expect(mocks.tryIncrement).toHaveBeenCalledWith(
+      `otc-limit:verify-email:${otcEmailKey('victim+x@gmail.com')}`,
+      OTC_LIMITS.verify.perEmail.limit,
+      OTC_LIMITS.verify.perEmail.windowMs
+    );
+  });
+
   it('folds plus-tags on any domain but keeps dots significant outside Gmail', () => {
     expect(otcLimitMailbox('first.last+tag@example.com')).toBe('first.last@example.com');
     expect(otcLimitMailbox('first.last@example.com')).not.toBe(otcLimitMailbox('firstlast@example.com'));
