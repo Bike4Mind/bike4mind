@@ -188,7 +188,7 @@ describe('inline citation markers in a reply', () => {
     const { container } = render(
       <Reply content={'Fact one [1]\nFact two [2]'} citables={[lakeCitable('a', 1), lakeCitable('b', 2)]} />
     );
-    expect(markerLinks().map(link => link.textContent)).toEqual(['1', '2']);
+    expect(markerLinks().map(link => link.textContent)).toEqual(['[1]', '[2]']);
     const html = container.innerHTML;
     expect(container.querySelectorAll('br')).toHaveLength(1);
     expect(html.indexOf('<br')).toBeGreaterThan(html.indexOf('Fact one'));
