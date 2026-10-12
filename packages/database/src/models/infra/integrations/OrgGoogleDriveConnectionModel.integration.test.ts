@@ -365,6 +365,28 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     expect(released?.lastError).toBeNull();
   });
 
+  it('releaseSyncClaim parks the connection in needs_reconnect and drops it from the poll scan', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    const claimToken = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(
+      created.id,
+      claimToken!,
+      'folder gone',
+      'needs_reconnect'
+    );
+    expect(released?.status).toBe('needs_reconnect');
+
+    const stored = await OrgGoogleDriveConnection.findById(created.id);
+    expect(stored?.status).toBe('needs_reconnect');
+    expect(stored?.lastError).toBe('folder gone');
+    expect(stored?.ingestClaimToken).toBeUndefined();
+    expect(stored?.activeIngestBatchId).toBeUndefined();
+
+    const due = await orgGoogleDriveConnectionRepository.findDueForPoll(new Date(Date.now() + 60 * 60 * 1000), 10);
+    expect(due.map(d => d.id)).not.toContain(created.id);
+  });
+
   it('releaseSyncClaim is guarded: it never clobbers a terminal status set under the claim', async () => {
     const created = await OrgGoogleDriveConnection.create(base);
     const claimToken = await orgGoogleDriveConnectionRepository.claimForSync(created.id);

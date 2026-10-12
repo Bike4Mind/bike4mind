@@ -166,6 +166,21 @@ export function isDriveNotFoundError(e: unknown): boolean {
   return false;
 }
 
+/**
+ * Is this error Drive refusing access (a 403) rather than throttling us? Drive sends quota
+ * exhaustion as a 403 too, so the rate-limit shape is excluded: a throttle misread as a permission
+ * denial would tell a user their folder is gone when it is only busy.
+ */
+export function isDriveForbiddenError(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null || isDriveRateLimitError(e)) return false;
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  for (const raw of [err.code, err.status, response?.status]) {
+    if ((typeof raw === 'string' ? Number(raw) : raw) === 403) return true;
+  }
+  return false;
+}
+
 // Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches. The
 // length bound (real ids are ~33-44 chars) stops ~1MB of legal characters being interpolated into
 // the `q` string and sent outbound. Validate before interpolating so a crafted id can't break out.
@@ -241,6 +256,36 @@ export async function getFolderAccess(drive: drive_v3.Drive, folderId: string): 
       return { ok: false, reason: 'rate_limited', detail: e instanceof Error ? e.message : String(e) };
     }
     return { ok: true, exists: false, isFolder: false, canRead: false };
+  }
+}
+
+export type UnreachableFolderReason = 'not_found' | 'forbidden' | 'trashed';
+
+export type ConnectedFolderReachability = { reachable: true } | { reachable: false; reason: UnreachableFolderReason };
+
+/**
+ * Is a connection's root folder still there for the connection's own credential? Unlike
+ * getFolderAccess this THROWS on anything that is not a definite answer (a throttle, a 5xx, a network
+ * blip), because a `reachable: false` here parks the connection in needs_reconnect and stops it
+ * polling - a transient failure must never be read as "the folder is gone".
+ *
+ * A trashed folder still answers files.get for its owner, and listing its children excludes trashed
+ * items silently, so `trashed` is read explicitly rather than inferred from an empty walk.
+ */
+export async function probeConnectedFolder(
+  drive: drive_v3.Drive,
+  folderId: string
+): Promise<ConnectedFolderReachability> {
+  if (!isValidDriveFolderId(folderId)) throw new Error(`Invalid Drive folder id: ${folderId}`);
+  try {
+    const res = await withDriveRetry('files.get(connected folder)', () =>
+      drive.files.get({ fileId: folderId, fields: 'id, trashed', supportsAllDrives: true })
+    );
+    return res.data.trashed ? { reachable: false, reason: 'trashed' } : { reachable: true };
+  } catch (e) {
+    if (isDriveNotFoundError(e)) return { reachable: false, reason: 'not_found' };
+    if (isDriveForbiddenError(e)) return { reachable: false, reason: 'forbidden' };
+    throw e;
   }
 }
 
