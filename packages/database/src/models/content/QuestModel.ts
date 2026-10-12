@@ -1456,6 +1456,55 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return docs.map(doc => doc._id.toString());
   }
 
+  /**
+   * Atomically move exhausted dispatched callbacks to `failed`. Two disjoint cases:
+   * - Redispatch limit reached: stale but still within the horizon, retries used up.
+   * - Horizon passed: older than the maximum re-send window regardless of retry count.
+   * Concurrent sweeps are safe: each updateMany is gated on `state: 'dispatched'`, so
+   * only one writer flips any given callback and the second finds nothing to modify.
+   * Returns counts by failure reason for separate metrics.
+   */
+  async failExhaustedCallbacks(opts: {
+    staleBefore: Date;
+    horizonBefore: Date;
+    maxRedispatches: number;
+  }): Promise<{ redispatchLimitReached: number; horizonPassed: number }> {
+    const now = new Date();
+    const [limitResult, horizonResult] = await Promise.all([
+      this.model.updateMany(
+        {
+          'callback.state': 'dispatched',
+          'callback.dispatchedAt': { $lt: opts.staleBefore, $gte: opts.horizonBefore },
+          'callback.redispatchCount': { $gte: opts.maxRedispatches },
+        },
+        {
+          $set: {
+            'callback.state': 'failed',
+            'callback.completedAt': now,
+            'callback.lastError': 'redispatch limit reached',
+          },
+        }
+      ),
+      this.model.updateMany(
+        {
+          'callback.state': 'dispatched',
+          'callback.dispatchedAt': { $lt: opts.horizonBefore },
+        },
+        {
+          $set: {
+            'callback.state': 'failed',
+            'callback.completedAt': now,
+            'callback.lastError': 'redispatch horizon passed',
+          },
+        }
+      ),
+    ]);
+    return {
+      redispatchLimitReached: limitResult.modifiedCount,
+      horizonPassed: horizonResult.modifiedCount,
+    };
+  }
+
   // Returns the most recent quest in the session that has no reply yet, or
   // null if every quest already has one (or none exist).
   async findLatestUnrepliedMessage(sessionId: string) {
