@@ -268,6 +268,7 @@ export const SettingKeySchema = z.enum([
   'voyageApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
+  'PerplexityApiKey',
   'EnableDeepResearch',
   'EnableDeepResearchDefault',
   'EnableKnowledgeBaseSearch',
@@ -4249,6 +4250,14 @@ export const settingsMap = {
     description:
       'Base URL for a self-hosted Firecrawl instance (e.g. http://firecrawl:3002). Leave blank to use the hosted Firecrawl cloud with the API key above.',
     defaultValue: '',
+    category: 'AI',
+  }),
+  PerplexityApiKey: makeStringSetting({
+    key: 'PerplexityApiKey',
+    name: 'Perplexity API Key',
+    description: 'The API key for Perplexity AI search service',
+    defaultValue: '',
+    isSensitive: true,
     category: 'AI',
   }),
   EnableDeepResearch: makeBooleanSetting({
