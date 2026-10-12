@@ -249,7 +249,7 @@ describe('fetchUpstreamFeed with a JSON Feed document', () => {
   });
 
   it('orders newest first, honours the limit and skips undated items', async () => {
-    mockSafeFetch.mockResolvedValue(
+    mockSafeFetch.mockImplementation(async () =>
       json(
         jsonFeed([
           item('old', '2026-09-01T00:00:00.000Z'),
@@ -261,7 +261,77 @@ describe('fetchUpstreamFeed with a JSON Feed document', () => {
     );
     const page = await fetchOnce({ limit: 2 });
     expect(page?.data.map(note => note.id)).toEqual(['new', 'mid']);
-    expect(page?.next_cursor).toBeNull();
+    expect(page?.next_cursor).toEqual(expect.any(String));
+    const next = await fetchOnce({ limit: 2, cursor: page?.next_cursor ?? undefined });
+    expect(next?.data.map(note => note.id)).toEqual(['old']);
+    expect(next?.next_cursor).toBeNull();
+  });
+
+  it('pages through equal dates without repeating an item when a new one appears', async () => {
+    mockSafeFetch.mockResolvedValueOnce(
+      json(
+        jsonFeed([
+          item('c', '2026-10-09T00:00:00.000Z'),
+          item('b', '2026-10-09T00:00:00.000Z'),
+          item('a', '2026-10-09T00:00:00.000Z'),
+        ])
+      )
+    );
+    const first = await fetchOnce({ limit: 2 });
+    expect(first?.data.map(note => note.id)).toEqual(['a', 'b']);
+    mockSafeFetch.mockResolvedValueOnce(
+      json(
+        jsonFeed([
+          item('c', '2026-10-09T00:00:00.000Z'),
+          item('b', '2026-10-09T00:00:00.000Z'),
+          item('a', '2026-10-09T00:00:00.000Z'),
+          item('new', '2026-10-10T00:00:00.000Z'),
+        ])
+      )
+    );
+    const second = await fetchOnce({ limit: 2, cursor: first?.next_cursor ?? undefined });
+    expect(second?.data.map(note => note.id)).toEqual(['c']);
+    expect(second?.next_cursor).toBeNull();
+  });
+
+  it('uses the same case-sensitive id order for sorting and cursor continuation', async () => {
+    mockSafeFetch.mockImplementation(async () =>
+      json(
+        jsonFeed([
+          item('a', '2026-10-09T00:00:00.000Z'),
+          item('B', '2026-10-09T00:00:00.000Z'),
+          item('A', '2026-10-09T00:00:00.000Z'),
+        ])
+      )
+    );
+    const first = await fetchOnce({ limit: 2 });
+    expect(first?.data.map(note => note.id)).toEqual(['A', 'B']);
+    const second = await fetchOnce({ limit: 2, cursor: first?.next_cursor ?? undefined });
+    expect(second?.data.map(note => note.id)).toEqual(['a']);
+  });
+
+  it('uses summary when content_text is blank', async () => {
+    mockSafeFetch.mockResolvedValue(
+      json(jsonFeed([{ ...item('a', '2026-10-09T00:00:00.000Z'), content_text: '  ', summary: 'Important details' }]))
+    );
+    expect((await fetchOnce())?.data[0].summary).toBe('Important details');
+  });
+
+  it("rejects a redirect to this deployment's own API route", async () => {
+    mockSafeFetch.mockImplementation(
+      async (
+        _url: string,
+        _init: RequestInit,
+        options: {
+          assertRedirectAllowed: (target: URL) => void;
+        }
+      ) => {
+        options.assertRedirectAllowed(new URL('https://app.self.example.com/api/v1/whats-new'));
+        return json(jsonFeed([]));
+      }
+    );
+    expect(await fetchOnce()).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('fetch failed'), expect.anything());
   });
 
   it('still rejects a body that is neither shape', async () => {
