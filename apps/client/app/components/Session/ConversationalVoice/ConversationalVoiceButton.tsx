@@ -1,10 +1,13 @@
 import { Box, CircularProgress, IconButton, Tooltip, Typography } from '@mui/joy';
 import { CallEnd, GraphicEq } from '@mui/icons-material';
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { estimateElevenLabsConversationalCost } from '@bike4mind/voice';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useUser } from '@client/app/contexts/UserContext';
+import CreditsModal from '@client/app/components/subscription/CreditsModal';
+import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { useConversationalVoiceStore } from './useConversationalVoice';
 
@@ -12,6 +15,9 @@ import { useConversationalVoiceStore } from './useConversationalVoice';
 // so the hint cannot drift from what a call costs.
 const CREDITS_PER_MINUTE = estimateElevenLabsConversationalCost(60).creditsToReserve;
 export const VOICE_COST_HINT = `About ${CREDITS_PER_MINUTE.toLocaleString('en-US')} credits/min, billed by the second`;
+// The up-front hold POST /api/voice/v2/sessions takes (unused credits are refunded on end).
+const HOLD_CREDITS = estimateElevenLabsConversationalCost(MAX_SESSION_SECONDS).creditsToReserve;
+export const VOICE_HOLD_HINT = `Needs ${HOLD_CREDITS.toLocaleString('en-US')} credits to start; unused credits are refunded`;
 const START_LABEL = 'Voice (v2 \u2014 any model)';
 
 export interface ConversationalVoiceButtonProps {
@@ -40,6 +46,12 @@ const ConversationalVoiceButton: React.FC<ConversationalVoiceButtonProps> = ({
   const start = useConversationalVoiceStore(s => s.start);
   const end = useConversationalVoiceStore(s => s.end);
   const costHintId = useId();
+  const enforceCredits = !!useGetSettingsValue('enforceCredits');
+  const { currentUser } = useUser();
+  const [creditsOpen, setCreditsOpen] = useState(false);
+  // The server charges the personal balance, so compare against that, not the selected account.
+  const needsCredits = enforceCredits && (currentUser?.currentCredits ?? 0) < HOLD_CREDITS;
+  const hint = needsCredits ? VOICE_HOLD_HINT : VOICE_COST_HINT;
 
   // No modal to surface errors in - show them as a toast (once per error).
   const lastErrorRef = useRef<string | null>(null);
@@ -61,6 +73,8 @@ const ConversationalVoiceButton: React.FC<ConversationalVoiceButtonProps> = ({
   const handleClick = () => {
     if (isActive) {
       void end();
+    } else if (needsCredits) {
+      setCreditsOpen(true);
     } else {
       void start({
         sessionId: currentSessionId ?? undefined,
@@ -79,29 +93,32 @@ const ConversationalVoiceButton: React.FC<ConversationalVoiceButtonProps> = ({
     <Box>
       {START_LABEL}
       <Typography level="body-xs" textColor="inherit" data-testid="conversational-voice-cost-hint">
-        {VOICE_COST_HINT}
+        {hint}
       </Typography>
     </Box>
   );
 
   return (
-    <Tooltip title={isReconnecting ? 'Reconnecting\u2026' : isActive ? 'End voice call' : idleTitle} placement="top">
-      <IconButton
-        size="sm"
-        variant={isActive ? 'solid' : 'outlined'}
-        color={isActive ? 'danger' : 'neutral'}
-        onClick={handleClick}
-        data-testid="conversational-voice-btn"
-        {...(isActive ? {} : { 'aria-label': START_LABEL, 'aria-describedby': costHintId })}
-      >
-        {isBusy ? <CircularProgress size="sm" /> : isActive ? <CallEnd /> : <GraphicEq />}
-        {!isActive && (
-          <Box component="span" id={costHintId} sx={visuallyHidden}>
-            {VOICE_COST_HINT}
-          </Box>
-        )}
-      </IconButton>
-    </Tooltip>
+    <>
+      <Tooltip title={isReconnecting ? 'Reconnecting\u2026' : isActive ? 'End voice call' : idleTitle} placement="top">
+        <IconButton
+          size="sm"
+          variant={isActive ? 'solid' : 'outlined'}
+          color={isActive ? 'danger' : 'neutral'}
+          onClick={handleClick}
+          data-testid="conversational-voice-btn"
+          {...(isActive ? {} : { 'aria-label': START_LABEL, 'aria-describedby': costHintId })}
+        >
+          {isBusy ? <CircularProgress size="sm" /> : isActive ? <CallEnd /> : <GraphicEq />}
+          {!isActive && (
+            <Box component="span" id={costHintId} sx={visuallyHidden}>
+              {hint}
+            </Box>
+          )}
+        </IconButton>
+      </Tooltip>
+      <CreditsModal open={creditsOpen} onClose={() => setCreditsOpen(false)} />
+    </>
   );
 };
 
