@@ -38,6 +38,7 @@ const {
   mockFindByVersion,
   mockFindContent,
   mockLatestContent,
+  mockCanRead,
   mockCanUpdateSession,
   baseApiOptions,
 } = vi.hoisted(() => ({
@@ -51,6 +52,7 @@ const {
   mockFindByVersion: vi.fn(),
   mockFindContent: vi.fn(),
   mockLatestContent: vi.fn(),
+  mockCanRead: vi.fn(),
   mockCanUpdateSession: vi.fn(),
   baseApiOptions: [] as { allowedMethods?: string[]; exemptReadsFromDailyRateLimit?: boolean }[],
 }));
@@ -87,7 +89,13 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@bike4mind/services', () => ({
-  artifactService: { get: mockGet, create: mockCreate, update: mockUpdate, delete: mockDelete },
+  artifactService: {
+    get: mockGet,
+    create: mockCreate,
+    update: mockUpdate,
+    delete: mockDelete,
+    canUserReadArtifact: mockCanRead,
+  },
   projectService: { get: mockProjectGet },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -161,6 +169,7 @@ beforeEach(() => {
   mockFindByVersion.mockResolvedValue({ version: 1, contentId: 'c1', createdAt: new Date('2026-10-01T12:00:00Z') });
   mockFindContent.mockResolvedValue({ content: 'graph TD; A-->B' });
   mockLatestContent.mockResolvedValue({ content: 'graph TD; A-->B' });
+  mockCanRead.mockReturnValue(true);
   mockCanUpdateSession.mockResolvedValue({ id: 's1' });
   mockProjectGet.mockResolvedValue({ id: 'p1' });
 });
@@ -353,19 +362,43 @@ describe('PATCH /api/v1/artifacts/{id}', () => {
     expect(mockLatestContent).not.toHaveBeenCalled();
   });
 
+  it('answers the latest stored content to a caller who can read the artifact', async () => {
+    const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { title: 'Renamed' } });
+
+    await call(byId, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ content: 'graph TD; A-->B' });
+    expect(mockCanRead).toHaveBeenCalledWith('u1', expect.objectContaining({ id: ARTIFACT_ID }));
+    expect(mockLatestContent).toHaveBeenCalledWith(ARTIFACT_ID);
+  });
+
   // update admits permissions.canWrite but get only canRead, so a read-gated re-read would 404 a
-  // write that already committed.
-  it('answers 200 with the updated artifact for a write-only sharee, without a read-gated re-read', async () => {
+  // write that already committed, and an ungated content load would leak what the caller cannot GET.
+  it('answers 200 with content null for a write-only sharee that sent no content', async () => {
     mockGet.mockRejectedValue(new UnauthorizedError('Access denied'));
+    mockCanRead.mockReturnValue(false);
     mockUpdate.mockResolvedValue({ artifact: artifactDoc({ title: 'Renamed', userId: 'owner' }) });
     const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { title: 'Renamed' } });
 
     await call(byId, req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({ title: 'Renamed', content: 'graph TD; A-->B' });
-    expect(mockLatestContent).toHaveBeenCalledWith(ARTIFACT_ID);
+    expect(res._getJSONData()).toMatchObject({ title: 'Renamed', content: null });
+    expect(mockLatestContent).not.toHaveBeenCalled();
     expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it('echoes the sent content to a write-only sharee', async () => {
+    mockCanRead.mockReturnValue(false);
+    mockUpdate.mockResolvedValue({ artifact: artifactDoc({ userId: 'owner' }) });
+    const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { content: 'new' } });
+
+    await call(byId, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ content: 'new' });
+    expect(mockLatestContent).not.toHaveBeenCalled();
   });
 
   it('answers 404 for a read-only sharee', async () => {

@@ -65,6 +65,11 @@ export const get = async (userId: string, parameters: GetArtifactParameters, ada
   return result;
 };
 
+/** The read rule `get` enforces, for callers that hold an artifact without going through `get`. */
+export function canUserReadArtifact(userId: string, artifact: unknown): boolean {
+  return canUserAccessArtifact(userId, artifact, 'read');
+}
+
 /**
  * Check if user can access artifact based on permissions and visibility
  */

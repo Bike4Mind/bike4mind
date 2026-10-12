@@ -55,8 +55,13 @@ const updateRoute = nextRouteForContract(updateArtifactContract, {
 
   // Answer from the update, not a read-gated re-read: a write-only sharee may PATCH but not GET, and
   // must not get a 404 for a write that committed. Sent content is the current content whether or
-  // not it changed (an unchanged hash writes no new row); otherwise load the latest row directly.
-  const current = content ?? (await artifactContentRepository.findLatestContent(artifact.id))?.content ?? null;
+  // not it changed (an unchanged hash writes no new row); otherwise load the latest row, but only for a
+  // caller who passes get's read rule, so a write-only sharee gets content: null.
+  const current =
+    content ??
+    (artifactService.canUserReadArtifact(req.user.id, artifact)
+      ? ((await artifactContentRepository.findLatestContent(artifact.id))?.content ?? null)
+      : null);
   res.setHeader('Cache-Control', 'private, no-store');
   return res.json(toPublicArtifact(artifact, current));
 });

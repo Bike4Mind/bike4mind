@@ -7365,7 +7365,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "The current version's content. `null` in a list; fetch the artifact by id for it."
+                  "description": "The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content."
                 }
               },
               "required": [
@@ -7513,7 +7513,7 @@
               "string",
               "null"
             ],
-            "description": "The current version's content. `null` in a list; fetch the artifact by id for it."
+            "description": "The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content."
           }
         },
         "required": [
@@ -7711,7 +7711,7 @@
               "string",
               "null"
             ],
-            "description": "The current version's content. `null` in a list; fetch the artifact by id for it."
+            "description": "The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content."
           }
         },
         "required": [
@@ -7841,7 +7841,7 @@
               "string",
               "null"
             ],
-            "description": "The current version's content. `null` in a list; fetch the artifact by id for it."
+            "description": "The current version's content. `null` in a list (fetch the artifact by id for it), and in an update response to a caller who may edit the artifact but not read it, unless that update sent content."
           }
         },
         "required": [

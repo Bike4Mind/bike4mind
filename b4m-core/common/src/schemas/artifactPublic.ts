@@ -44,7 +44,10 @@ export const ArtifactResourceSchema = z.object({
   content: z
     .string()
     .nullable()
-    .describe("The current version's content. `null` in a list; fetch the artifact by id for it."),
+    .describe(
+      "The current version's content. `null` in a list (fetch the artifact by id for it), and in an update " +
+        'response to a caller who may edit the artifact but not read it, unless that update sent content.'
+    ),
 });
 export type ArtifactResource = z.infer<typeof ArtifactResourceSchema>;
 
