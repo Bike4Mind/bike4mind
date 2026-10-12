@@ -21,6 +21,10 @@ export const operations = {
     method: 'POST',
     path: '/api/ai/v1/completions',
   },
+  createDecision: {
+    method: 'POST',
+    path: '/api/v1/decisions',
+  },
   createEmbeddings: {
     method: 'POST',
     path: '/api/v1/embeddings',
@@ -136,6 +140,10 @@ export const operations = {
   listDataLakes: {
     method: 'GET',
     path: '/api/v1/data-lakes',
+  },
+  listDecisionModels: {
+    method: 'GET',
+    path: '/api/v1/decision-models',
   },
   listFiles: {
     method: 'GET',
