@@ -241,21 +241,28 @@ describe('otcDistinctEmailsPerIpLimit', () => {
     mocks.isE2EEnabled.mockReturnValue(false);
   });
 
+  const pairKey = `otc-limit:ip-email-seen:203.0.113.7:${otcEmailKey('a@b.co')}`;
+  const seenCount = (count: number) => ({ success: true, count, expiresAt: new Date(Date.now() + 60_000) });
+
   it('does not spend a slot on a repeat of an (IP, email) pair', async () => {
-    mocks.tryIncrement.mockResolvedValueOnce(denied());
+    mocks.tryAdd.mockResolvedValue(seenCount(1));
     const next = vi.fn();
     await otcDistinctEmailsPerIpLimit()(makeReq('a@b.co'), makeRes(), next);
 
-    expect(mocks.tryIncrement).toHaveBeenCalledTimes(1);
+    expect(mocks.tryAdd).toHaveBeenCalledWith(pairKey, 0, 1, OTC_LIMITS.send.perIpDistinctEmails.windowMs);
+    expect(mocks.tryIncrement).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledWith();
   });
 
-  it('takes a slot for a new email and allows it while under the limit', async () => {
+  it('takes a slot for a new email, then marks the pair seen', async () => {
+    mocks.tryAdd.mockResolvedValue(seenCount(0));
     mocks.tryIncrement.mockResolvedValue(allowed);
     const next = vi.fn();
     await otcDistinctEmailsPerIpLimit()(makeReq('a@b.co'), makeRes(), next);
 
-    expect(mocks.tryIncrement).toHaveBeenLastCalledWith(
+    expect(mocks.tryIncrement.mock.calls.map(([key]) => key)).toEqual(['otc-limit:ip-distinct:203.0.113.7', pairKey]);
+    expect(mocks.tryIncrement).toHaveBeenNthCalledWith(
+      1,
       'otc-limit:ip-distinct:203.0.113.7',
       OTC_LIMITS.send.perIpDistinctEmails.limit,
       OTC_LIMITS.send.perIpDistinctEmails.windowMs
@@ -263,14 +270,16 @@ describe('otcDistinctEmailsPerIpLimit', () => {
     expect(next).toHaveBeenCalledWith();
   });
 
-  it('refuses a new email past the distinct limit with Retry-After and releases the pair marker', async () => {
-    mocks.tryIncrement.mockResolvedValueOnce(allowed).mockResolvedValueOnce(denied());
+  it('refuses a new email past the distinct limit with Retry-After and leaves no pair marker', async () => {
+    mocks.tryAdd.mockResolvedValue(seenCount(0));
+    mocks.tryIncrement.mockResolvedValueOnce(denied());
     const res = makeRes();
     const next = vi.fn();
     await otcDistinctEmailsPerIpLimit()(makeReq('a@b.co'), res, next);
 
     expect(next.mock.calls[0][0]).toBeInstanceOf(TooManyRequestsError);
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', 90);
-    expect(mocks.deleteByKey).toHaveBeenCalledWith(`otc-limit:ip-email-seen:203.0.113.7:${otcEmailKey('a@b.co')}`);
+    expect(mocks.tryIncrement).toHaveBeenCalledTimes(1);
+    expect(mocks.tryIncrement).not.toHaveBeenCalledWith(pairKey, expect.anything(), expect.anything());
   });
 });

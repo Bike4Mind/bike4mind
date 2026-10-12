@@ -242,14 +242,17 @@ export const otcDistinctEmailsPerIpLimit = (): RequestHandler => async (req, res
   const ip = otcIpBucket(getClientIp(req));
   const pairKey = `otc-limit:ip-email-seen:${ip}:${otcEmailKey(otcLimitMailbox(email))}`;
 
-  const seen = await cacheRepository.tryIncrementWithinLimitFixedWindow(pairKey, 1, windowMs);
-  if (!seen.success) return next();
+  // Slot before marker: a marker only ever follows a granted slot, so a concurrent duplicate of a
+  // refused pair cannot ride its marker past the cap. Racing first sightings may both take a slot.
+  const seen = await cacheRepository.tryAddWithinLimitFixedWindow(pairKey, 0, 1, windowMs);
+  if (seen.count >= 1) return next();
 
   const slot = await cacheRepository.tryIncrementWithinLimitFixedWindow(`otc-limit:ip-distinct:${ip}`, limit, windowMs);
-  if (slot.success) return next();
+  if (slot.success) {
+    await cacheRepository.tryIncrementWithinLimitFixedWindow(pairKey, 1, windowMs);
+    return next();
+  }
 
-  // Release the marker so a retry of the refused email is still counted as a new pair.
-  await cacheRepository.deleteByKey(pairKey);
   const seconds = retryAfterSeconds(slot.expiresAt, windowMs);
   res.setHeader('Retry-After', seconds);
   return next(new TooManyRequestsError(`Rate limit exceeded. Try again in ${seconds} seconds.`));
