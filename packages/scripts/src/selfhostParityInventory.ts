@@ -578,6 +578,31 @@ function declarationHandlers(raw: RawDeclaration, expanded: ts.Node[]): string[]
   return [...new Set([...expanded.flatMap(handlerRefs), ...inline])].sort();
 }
 
+/**
+ * The imported definition an identifier hashes as. `obj.key` on an imported object literal hashes
+ * only that key's entry, so adding a sibling key (e.g. a new secret) does not invalidate every reader.
+ */
+function importedReference(index: InfraIndex, identifier: ts.Identifier): ts.Node | undefined {
+  const definition = index.importedDefinition(identifier);
+  const access = identifier.parent;
+  if (
+    !definition ||
+    !ts.isVariableDeclaration(definition) ||
+    !definition.initializer ||
+    !ts.isPropertyAccessExpression(access) ||
+    access.expression !== identifier
+  )
+    return definition;
+  const value = unwrap(definition.initializer);
+  if (!ts.isObjectLiteralExpression(value)) return definition;
+  const entry = value.properties.find(
+    element =>
+      (ts.isPropertyAssignment(element) || ts.isShorthandPropertyAssignment(element)) &&
+      propertyName(element) === access.name.text
+  );
+  return entry ?? definition;
+}
+
 function fingerprintDeclaration(
   index: InfraIndex,
   nodes: ts.Node[],
@@ -592,7 +617,7 @@ function fingerprintDeclaration(
   const imported: ts.Node[] = [];
   for (const node of [...expanded, ...dependencies, ...gates.map(guard => guard.expression), ...gateDefinitions])
     for (const identifier of parityReferences(node)) {
-      const definition = index.importedDefinition(identifier);
+      const definition = importedReference(index, identifier);
       if (definition && !imported.includes(definition)) imported.push(definition);
     }
   const fingerprint = hash(

@@ -136,7 +136,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '00d4555f6a208289054c958832d6ba88f17730777584e46aebae9a13911d8b81',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
-  gap('function:infra/database.ts:DatabaseCleaner', 'f6dc0134ccf4af572a8306865e68bd82db97af1331a800568f21a8328ab07a9d'),
+  gap('function:infra/database.ts:DatabaseCleaner', 'ab828f690cdda6172736a412bcd33e138f35f0525c8306dc0c6a1c31e12b07b2'),
   gap(
     'function:infra/database.ts:DatabaseMigrator',
     '94c62e5d883f7ac55c0511ee15c65554e70c65643b03a79fc8bacfea429dc40d'
@@ -144,12 +144,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('function:infra/database.ts:DatabaseSeeder', '39abf2cb71b6bf3384a77095b6fc9b7d82846b5e0211ee0b0b127d86f1a60780', [
     'ssm:GetParameter',
   ]),
-  gap('function:infra/dataSyncer.ts:DataSyncer', 'b901af6f10918a932278e76a5fb0508e0ce077786e2e150217490f89e1c8d60d'),
+  gap('function:infra/dataSyncer.ts:DataSyncer', '6b34c84dc682604d934700c4c8156e0127c4779ea369a3de7a3d02649fae6b9b'),
   gap(
     'function:infra/imageProcessor.ts:ImageProcessor',
     'fc070157ff094faed771c3a654e70809a48471a932d5624cc4006c83d6b6350a'
   ),
-  gap('function:infra/mcp.ts:mcpHandler', 'd3ab7c500264d79f4494f4ae531b6808a7bd05c83dd3a485cf546a7b55bfd83c'),
+  gap('function:infra/mcp.ts:mcpHandler', 'e3bfed090995364d360c725c2215d1295cff7f6e64722943495293d1899b6334'),
   gap(
     'logSubscription:infra/logMonitor.ts:createLogSubscriptions()',
     '235e9ebbdccd1202b354d558a713998832b152cf9093cb995f23e12e2c091997',
@@ -592,7 +592,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
-    'b50ead869f0fe792d6abe5bd35349ffaa04db67db840c8cdbfae752d795b045a'
+    'ee5e561d5e093f20865aaaf04031d5d2bacc15d51df52b80ef817abac8f36723'
   ),
   wired(
     'schedule:infra/cron.ts:agentExecutionAbandonedSweep',
@@ -791,7 +791,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),
   gap(
     'service:infra/subscriberFanout.ts:subscriberFanoutV2',
-    'd38867342e876cb3145e5dbe8dfa6e647654f88b12826e84223b3f21993d9018'
+    '02cdd6b4926dc3c12f7ecff7a1975b25750d24d10b5e84b4f007f6a38a44092f'
   ),
   gap(
     'sesRule:infra/emailIngestion.ts:emailReceiptRule',
@@ -799,7 +799,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    '97541025cd100b13ebd8f318d3a73c269e057908613e40c1c39e6d80cbc5118b'
+    '72c73c3b941630cbb9ce8a14ce9cb58cfe634edb348042fe981bf64c1668e64c'
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',
@@ -807,15 +807,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
-    '9502bcce5d74dfcccd166039e20c58b560017f70d6ad6c3797d916e900bda4a3'
+    '4a94d420bc77dfef23c15ac8f1525ed923d651749c86aae9fb7e52ad2c267b18'
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafAlarmSlackHandlerSubscription',
-    '7fb1915bc69fd97d736127e782c76fcbe9e35c2750dcbef597b0f91b0be99293',
+    'f12eafd92daf91c7f1df0593fd5f6545bfd4fe8e50b77a0a50ad6e791665a18d',
     ['lambda:InvokeFunction']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafOobAlarmTopicEmailSub',
-    '5a7e93ff6c0812bc44e2cee5621497d44a9040c708a6ffd6398caa1edbe0197b'
+    '773e060944d0c679ae3ac61c166a94850695a68936544361eb597a35f3470a3a'
   ),
 ];

@@ -523,6 +523,19 @@ describe('fingerprint scope', () => {
     expect(fingerprint(constants, cron.replace("B: '1'", "B: '1', NEW_KEY: 'x'"))).toBe(fingerprint(constants));
   });
 
+  it('hashes only the accessed entry of an imported object constant', () => {
+    const secrets = "export const secrets = { A: new sst.Secret('A', 'x'), B: new sst.Secret('B', 'x') };";
+    const reader = (key: string) =>
+      `import {secrets} from './secrets'; new sst.aws.Cron('daily', {schedule:'rate(1 day)', function:{handler:'apps/workers/daily.handler', link:[secrets.${key}]}});`;
+    const print = (secretsText: string, key: string) =>
+      discoverParityInventory({ 'infra/secrets.ts': secretsText, 'infra/test.ts': reader(key) })[0].fingerprint;
+    const editedB = secrets.replace("'B', 'x'", "'B', 'y'");
+    const added = secrets.replace(' };', ", C: new sst.Secret('C', 'x') };");
+    expect(print(editedB, 'A')).toBe(print(secrets, 'A'));
+    expect(print(added, 'A')).toBe(print(secrets, 'A'));
+    expect(print(editedB, 'B')).not.toBe(print(secrets, 'B'));
+  });
+
   it('still detects a changed referenced schedule, stage or in-place handler', () => {
     const base = fingerprint(constants);
     expect(fingerprint(constants.replace('1 day', '2 days'))).not.toBe(base);
