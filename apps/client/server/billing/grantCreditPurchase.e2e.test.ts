@@ -5,7 +5,7 @@ import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { CreditLot, CreditTransaction, User, userRepository } from '@bike4mind/database';
+import { CreditLot, CreditTransaction, User, creditLotRepository, userRepository } from '@bike4mind/database';
 import { grantCreditPurchase, type CreditPurchaseGrant } from './grantCreditPurchase';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -132,6 +132,20 @@ describe('grantCreditPurchase on a real replica set', () => {
     expect(await balanceOf(user.id)).toBe(600);
     expect(await ledgerRows()).toBe(1);
     expect(await lots()).toBe(1);
+  });
+
+  it('still grants when stamping the pack lot fails after the commit', async () => {
+    const user = await seedBuyer();
+    vi.spyOn(creditLotRepository, 'create').mockRejectedValueOnce(new Error('lot write failed'));
+
+    expect(await grantCreditPurchase(grantFor(user.id))).toBe('granted');
+
+    expect(await balanceOf(user.id)).toBe(600);
+    expect(await ledgerRows()).toBe(1);
+    expect(await lots()).toBe(0);
+    // The redelivery acknowledges without re-stamping: the missing lot is left to the daily sweep.
+    expect(await grantCreditPurchase(grantFor(user.id))).toBe('already_granted');
+    expect(await lots()).toBe(0);
   });
 
   it('grants concurrent deliveries of the same intent exactly once', async () => {

@@ -3,7 +3,7 @@ import { creditLotRepository, creditTransactionRepository, userRepository, withT
 import type { Logger } from '@bike4mind/observability';
 import { creditService } from '@bike4mind/services';
 
-export interface CreditPurchaseGrant {
+export type CreditPurchaseGrant = {
   userId: string;
   paymentIntentId: string;
   credits: number;
@@ -12,7 +12,7 @@ export interface CreditPurchaseGrant {
   packageId?: string;
   environment?: string;
   paymentMethod?: string;
-}
+};
 
 export type CreditPurchaseGrantResult = 'granted' | 'already_granted';
 
