@@ -205,9 +205,10 @@ async function redispatchStaleCallbacks(nowMs: number): Promise<number> {
 }
 
 /**
- * Terminally fail dispatched callbacks that the sweep will never retry: those that have exhausted
- * their redispatch allowance or aged past the redispatch horizon. Moves them to `failed` so callers
- * learn delivery gave up and the callbackState_dispatchedAt partial index stays clean.
+ * Fail dispatched callbacks that the sweep will never retry: those that have exhausted their
+ * redispatch allowance or aged past the redispatch horizon. Moves them to `failed` so the
+ * callbackState_dispatchedAt partial index stays clean. Not terminal: recordCallbackAttempt still
+ * accepts `failed`, so a late delivery or DLQ replay can settle it afterwards.
  */
 async function failExhaustedCallbacks(
   nowMs: number
