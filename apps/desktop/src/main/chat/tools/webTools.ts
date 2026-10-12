@@ -155,7 +155,9 @@ export const webSearch: ToolDefinition = {
           key: webSearchCacheKey(query, numResults),
           signal: context.signal,
           send,
-          cacheable: answer => !NOT_CONFIGURED.test(answer.trim()),
+          // Matches the server's own cache, which skips an empty answer: a provider that fails soft
+          // returns one, and a retry of the same query should reach the provider again.
+          cacheable: answer => parseWebSearchResults(answer).length > 0,
           onQueued: () => context.report?.progress('Waiting for another web search to finish...'),
           onStarted: () => context.report?.progress('Searching the web...'),
         });

@@ -194,6 +194,20 @@ describe('web_search limits', () => {
     expect(second.search).toHaveBeenCalledTimes(1);
   });
 
+  it('does not keep an answer with no results, so the same query reaches the provider again', async () => {
+    const limiter = new WebSearchLimiter();
+    await webSearch.run(
+      { query: 'q' },
+      limited(
+        limiter,
+        vi.fn(async () => 'No results found from web search.')
+      ).ctx
+    );
+    const second = limited(limiter);
+    await webSearch.run({ query: 'q' }, second.ctx);
+    expect(second.search).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a queued search as waiting, then as searching', async () => {
     let release!: () => void;
     const held = new Promise<string>(resolve => {
