@@ -12,7 +12,7 @@ import { CitationInteractionProvider } from '../CitationInteractionContext';
 import {
   CITATION_MARKER_TAG,
   CitationMarker,
-  hasCitationMarkers,
+  citationMarkersLinkable,
   ReplyCitablesContext,
   remarkCitationMarkers,
   resolveCitationMarker,
@@ -63,26 +63,32 @@ const Reply = ({ content, citables }: { content: string; citables: readonly Cita
 
 const markerLinks = () => screen.queryAllByTestId('citation-marker-link');
 
-describe('resolveCitationMarker', () => {
-  it('resolves [N] to citables[N-1] only when that citable is stamped with N', () => {
-    const citables = [lakeCitable('a', 1), lakeCitable('b', 2), lakeCitable('tool-hit')];
-    expect(resolveCitationMarker(citables, 2)?.id).toBe('b');
-    // A knowledge-tool citable is appended unstamped: a marker that lands on it is not a citation.
-    expect(resolveCitationMarker(citables, 3)).toBeUndefined();
-    expect(resolveCitationMarker(citables, 0)).toBeUndefined();
-    expect(resolveCitationMarker(citables, 4)).toBeUndefined();
+describe('citationMarkersLinkable', () => {
+  it('holds only when every citable carries the stamp of its own position', () => {
+    expect(citationMarkersLinkable([lakeCitable('a', 1), lakeCitable('b', 2)])).toBe(true);
+    expect(citationMarkersLinkable([])).toBe(false);
+    // Named style: nothing is stamped.
+    expect(citationMarkersLinkable([lakeCitable('a'), lakeCitable('b')])).toBe(false);
+    // A stamp that does not match its position.
+    expect(citationMarkersLinkable([lakeCitable('a', 2)])).toBe(false);
   });
 
-  it('rejects a stamp that does not match the position', () => {
-    expect(resolveCitationMarker([lakeCitable('a', 2)], 1)).toBeUndefined();
+  it('does not hold on a turn where a tool appended sources after the numbered prefix', () => {
+    // The tool numbers its own results 1., 2., so a [1] on this turn may mean the tool's result 1.
+    expect(citationMarkersLinkable([lakeCitable('a', 1), lakeCitable('b', 2), lakeCitable('tool-hit')])).toBe(false);
   });
 });
 
-describe('hasCitationMarkers', () => {
-  it('is on only once a citable carries a marker stamp', () => {
-    expect(hasCitationMarkers([])).toBe(false);
-    expect(hasCitationMarkers([lakeCitable('tool-hit'), webCitable])).toBe(true);
-    expect(hasCitationMarkers([lakeCitable('tool-hit')])).toBe(false);
+describe('resolveCitationMarker', () => {
+  it('resolves [N] to citables[N-1] on a linkable turn, and nothing out of range', () => {
+    const citables = [lakeCitable('a', 1), lakeCitable('b', 2)];
+    expect(resolveCitationMarker(citables, 2)?.id).toBe('b');
+    expect(resolveCitationMarker(citables, 0)).toBeUndefined();
+    expect(resolveCitationMarker(citables, 3)).toBeUndefined();
+  });
+
+  it('resolves nothing on a mixed forced-retrieval and tool turn', () => {
+    expect(resolveCitationMarker([lakeCitable('a', 1), lakeCitable('tool-hit')], 1)).toBeUndefined();
   });
 });
 
@@ -139,15 +145,20 @@ describe('inline citation markers in a reply', () => {
     expect(container).toHaveTextContent('Both agree [1, 2].');
   });
 
-  it('leaves unstamped, dangling and non-citation brackets as plain text', () => {
+  it('leaves dangling and non-citation brackets as plain text', () => {
     const { container } = render(
       <Reply
-        content="Tool hit [2], dangling [3], a year [2016], and zero [0]."
-        citables={[lakeCitable('a', 1), lakeCitable('tool-hit')]}
+        content="Dangling [3], a year [2016], and zero [0]."
+        citables={[lakeCitable('a', 1), lakeCitable('b', 2)]}
       />
     );
     expect(markerLinks()).toHaveLength(0);
-    expect(container).toHaveTextContent('Tool hit [2], dangling [3], a year [2016], and zero [0].');
+    expect(container).toHaveTextContent('Dangling [3], a year [2016], and zero [0].');
+  });
+
+  it('leaves every marker plain on a turn where a tool appended sources', () => {
+    render(<Reply content="Forced [1] and searched [2]." citables={[lakeCitable('a', 1), lakeCitable('tool-hit')]} />);
+    expect(markerLinks()).toHaveLength(0);
   });
 
   it('never links inside code spans, code blocks or an existing link', () => {

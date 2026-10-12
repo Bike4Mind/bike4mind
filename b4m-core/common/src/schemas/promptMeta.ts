@@ -343,8 +343,8 @@ export const CitableSourceSchema = z.object({
       conflictsWith: z.array(z.string()).optional(),
       /**
        * The N of the inline `[N]` marker this source answers to. Stamped only on the index-aligned
-       * forced-retrieval prefix of an indexed-style session, so the client links a marker only when
-       * `citables[N-1]` carries it and leaves knowledge-tool and named-style citables unlinked.
+       * forced-retrieval prefix of an indexed-style session; the client links a reply's markers only
+       * when every citable carries its own position's stamp (citationMarkersLinkable).
        */
       citationIndex: z.number().int().positive().optional(),
       /** Chip label origin (CitableSourceOrigin); a writer that stamps the wrong shape should fail here. */

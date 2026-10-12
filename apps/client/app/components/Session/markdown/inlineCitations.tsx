@@ -2,13 +2,8 @@ import { ComponentProps, createContext, FC, ReactNode, useContext } from 'react'
 import type { ExtraProps } from 'react-markdown';
 import type { Parent, Root, RootContent, Text } from 'mdast';
 import { Link } from '@mui/joy';
-import type { CitableSource } from '@bike4mind/common';
+import { findCitationMarkers, type CitableSource, type CitationMarkerMatch } from '@bike4mind/common';
 import { useCitableSourceClick } from '../useCitableSourceClick';
-
-// One- or two-digit markers, alone or comma-listed, so `[2016]` is never a citation. Must stay in
-// sync with the lake RAG eval's marker regex (b4m-core/services/src/llm/evals/lakeRag/grade.ts).
-const CITATION_MARKER = /\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g;
-const MARKER_NUMBER = /\d{1,2}/g;
 
 /** `<cite>` because markdown never produces one, so the override cannot catch anything else. */
 export const CITATION_MARKER_TAG = 'cite';
@@ -26,30 +21,31 @@ const markerText = (value: string, index: number): Text => ({
 });
 
 /** A single `[N]` keeps its brackets inside the marker for a bigger target; a list marks each N. */
-const markersIn = (marker: string, numbers: string): Text[] => {
-  const indices = [...numbers.matchAll(MARKER_NUMBER)];
-  if (indices.length === 1) return [markerText(marker, Number(numbers))];
+const markersIn = ({ text, numbers }: CitationMarkerMatch): Text[] => {
+  if (numbers.length === 1) return [markerText(text, numbers[0].value)];
 
-  const pieces: Text[] = [plainText('[')];
+  const pieces: Text[] = [];
   let cursor = 0;
-  for (const { 0: digits, index: start } of indices) {
-    if (start > cursor) pieces.push(plainText(numbers.slice(cursor, start)));
-    pieces.push(markerText(digits, Number(digits)));
-    cursor = start + digits.length;
+  for (const { value, digits, offset } of numbers) {
+    pieces.push(plainText(text.slice(cursor, offset)));
+    pieces.push(markerText(digits, value));
+    cursor = offset + digits.length;
   }
-  pieces.push(plainText(']'));
+  pieces.push(plainText(text.slice(cursor)));
   return pieces;
 };
 
 const splitCitationMarkers = (node: Text): Text[] => {
+  const markers = findCitationMarkers(node.value);
+  if (markers.length === 0) return [node];
+
   const pieces: Text[] = [];
   let cursor = 0;
-  for (const { 0: marker, 1: numbers, index: start } of node.value.matchAll(CITATION_MARKER)) {
-    if (start > cursor) pieces.push(plainText(node.value.slice(cursor, start)));
-    pieces.push(...markersIn(marker, numbers));
-    cursor = start + marker.length;
+  for (const marker of markers) {
+    if (marker.start > cursor) pieces.push(plainText(node.value.slice(cursor, marker.start)));
+    pieces.push(...markersIn(marker));
+    cursor = marker.start + marker.text.length;
   }
-  if (cursor === 0) return [node];
   if (cursor < node.value.length) pieces.push(plainText(node.value.slice(cursor)));
   return pieces;
 };
@@ -74,18 +70,17 @@ export const remarkCitationMarkers = () => (tree: Root) => markCitations(tree);
 export const ReplyCitablesContext = createContext<readonly CitableSource[]>([]);
 
 /**
- * `[N]` answers to `citables[N-1]` only when that citable was stamped with N: the server stamps
- * just the index-aligned forced-retrieval prefix of an indexed-style session, so knowledge-tool
- * and named-style citables never resolve.
+ * Whether this reply's `[N]` markers can be trusted to mean `citables[N-1]`: every citable must
+ * carry the stamp of its own position. The server stamps only the forced-retrieval prefix of an
+ * indexed-style session, so a named-style reply never qualifies, and neither does a turn where a
+ * knowledge or web tool appended sources: those tools number their results `1.`, `2.` too, so a
+ * `[1]` there may mean a tool result rather than forced source 1.
  */
-export const resolveCitationMarker = (citables: readonly CitableSource[], index: number): CitableSource | undefined => {
-  const source = citables[index - 1];
-  return source?.metadata?.citationIndex === index ? source : undefined;
-};
+export const citationMarkersLinkable = (citables: readonly CitableSource[]): boolean =>
+  citables.length > 0 && citables.every((source, position) => source.metadata?.citationIndex === position + 1);
 
-/** Whether any citable can answer to a marker, i.e. whether the reply needs the marker pass at all. */
-export const hasCitationMarkers = (citables: readonly CitableSource[]): boolean =>
-  citables.some(source => typeof source.metadata?.citationIndex === 'number');
+export const resolveCitationMarker = (citables: readonly CitableSource[], index: number): CitableSource | undefined =>
+  citationMarkersLinkable(citables) ? citables[index - 1] : undefined;
 
 const CitationMarkerLink: FC<{ source: CitableSource; index: number; children: ReactNode }> = ({
   source,

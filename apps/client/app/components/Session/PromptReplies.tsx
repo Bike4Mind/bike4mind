@@ -20,7 +20,7 @@ import { createMarkdownComponents } from './markdown/markdownComponents';
 import {
   CITATION_MARKER_TAG,
   CitationMarker,
-  hasCitationMarkers,
+  citationMarkersLinkable,
   ReplyCitablesContext,
   remarkCitationMarkers,
 } from './markdown/inlineCitations';
@@ -1313,9 +1313,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
-  // Off until a stamped citable lands, so a reply that can never link a marker keeps its `[N]` as
-  // ordinary text (search highlighting matches across it) rather than one element per marker.
-  const linksCitationMarkers = hasCitationMarkers(promptMeta?.citables ?? NO_CITABLES);
+  // Off unless the markers can link, so any other reply keeps its `[N]` as ordinary text (search
+  // highlighting matches across it) rather than one element per marker.
+  const linksCitationMarkers = citationMarkersLinkable(promptMeta?.citables ?? NO_CITABLES);
   const replyRemarkPlugins = useMemo(
     (): ReactMarkdownOptions['remarkPlugins'] => [
       remarkGfmNoSingleTilde,
