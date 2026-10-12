@@ -284,9 +284,9 @@ const AISettings: FC<AISettingsProps> = ({
 
         {!isTablet && (
           <>
-            {/* Dice Roll Icon. Raw `tools` on purpose: dice_roll needs no API key, so
-                it has no toolAvailability entry and can never be key-gated. */}
-            {tools.includes('dice_roll') && (
+            {/* Dice Roll Icon. displayTools, not raw `tools`: dice_roll needs no API key, so only
+                a session denylist can filter it out, and then the panel hides its row too. */}
+            {displayTools.includes('dice_roll') && (
               <Tooltip title="Roll Dice">
                 <IconButton
                   variant={'outlined'}

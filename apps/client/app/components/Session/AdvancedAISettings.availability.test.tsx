@@ -35,7 +35,8 @@ const mocks = vi.hoisted(() => {
   const toolAvailability = { value: undefined as Record<string, boolean> | undefined };
   const toolsButtonProps = { value: null as Record<string, unknown> | null };
   const mcpServers = { value: [] as Array<{ name: string; enabled: boolean }> };
-  return { state, useLLM, toolAvailability, toolsButtonProps, mcpServers };
+  const adminFeatureFlags = { value: {} as Record<string, boolean> };
+  return { state, useLLM, toolAvailability, toolsButtonProps, mcpServers, adminFeatureFlags };
 });
 
 vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: mocks.useLLM }));
@@ -54,7 +55,10 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false, useIsTablet: () => false }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
-  useFeatureEnabled: () => ({ isFeatureEnabled: () => false, isAdminFeatureEnabled: () => false }),
+  useFeatureEnabled: () => ({
+    isFeatureEnabled: () => false,
+    isAdminFeatureEnabled: (feature: string) => mocks.adminFeatureFlags.value[feature] ?? false,
+  }),
 }));
 vi.mock('./AISettings/useHydrateModelFromSession', () => ({ useHydrateModelFromSession: () => {} }));
 vi.mock('./AISettings/useAdvancedAISettingsStore', () => ({
@@ -86,6 +90,19 @@ const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
+const renderSettings = (currentSession: ISessionDocument | null = null) =>
+  render(
+    <AdvancedAISettings
+      stream={false}
+      setStream={vi.fn()}
+      spokenWords={0}
+      setSpokenWords={vi.fn()}
+      onRollDice={vi.fn()}
+      currentSession={currentSession}
+    />,
+    { wrapper: Wrapper }
+  );
+
 const renderIndicators = (currentSession: ISessionDocument | null = null) => {
   render(
     <AdvancedAISettings
@@ -115,6 +132,8 @@ beforeEach(() => {
   mocks.mcpServers.value = [];
   mocks.state.enabledMcpServers = null;
   mocks.state.skipAutoOffers = false;
+  mocks.state.model = 'gpt-4o';
+  mocks.adminFeatureFlags.value = {};
 });
 
 describe('AdvancedAISettings tool indicators vs availability', () => {
@@ -232,5 +251,38 @@ describe('AdvancedAISettings indicators vs session-denied tools', () => {
     const indicators = renderIndicators(null);
     expect(indicators.activePrimaryTools).toEqual(['web_search', 'image_generation']);
     expect(indicators.disabledTools).toBeUndefined();
+  });
+});
+
+describe('AdvancedAISettings toolbar buttons vs session-denied tools', () => {
+  const sessionDenying = (...disabledTools: string[]) => ({ disabledTools }) as unknown as ISessionDocument;
+  const withPromptBuilder = () => {
+    mocks.adminFeatureFlags.value = { EnablePromptBuilder: true };
+    mocks.state.model = 'gpt-image-1';
+  };
+
+  it('hides the Prompt Builder button when image_generation is denied', () => {
+    withPromptBuilder();
+    const { queryByTestId } = renderSettings(sessionDenying('image_generation'));
+    expect(queryByTestId('prompt-builder-open-btn')).toBeNull();
+  });
+
+  // Control: proves the button renders under these mocks, so the test above is not vacuous.
+  it('shows the Prompt Builder button when nothing is denied', () => {
+    withPromptBuilder();
+    const { queryByTestId } = renderSettings(null);
+    expect(queryByTestId('prompt-builder-open-btn')).toBeTruthy();
+  });
+
+  it('hides the dice icon when dice_roll is denied', () => {
+    mocks.state.tools = ['dice_roll'];
+    const { container } = renderSettings(sessionDenying('dice_roll'));
+    expect(container.querySelector('[data-testid="CasinoIcon"]')).toBeNull();
+  });
+
+  it('shows the dice icon when nothing is denied', () => {
+    mocks.state.tools = ['dice_roll'];
+    const { container } = renderSettings(null);
+    expect(container.querySelector('[data-testid="CasinoIcon"]')).toBeTruthy();
   });
 });
