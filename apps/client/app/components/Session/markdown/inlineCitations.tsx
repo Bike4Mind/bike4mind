@@ -79,6 +79,10 @@ export const ReplyCitablesContext = createContext<readonly CitableSource[]>([]);
 export const citationMarkersLinkable = (citables: readonly CitableSource[]): boolean =>
   citables.length > 0 && citables.every((source, position) => source.metadata?.citationIndex === position + 1);
 
+/** Linking waits for the finished reply: a tool citable merging mid-stream would pull the links back out. */
+export const shouldLinkCitationMarkers = (citables: readonly CitableSource[], completed: boolean): boolean =>
+  completed && citationMarkersLinkable(citables);
+
 export const resolveCitationMarker = (citables: readonly CitableSource[], index: number): CitableSource | undefined =>
   citationMarkersLinkable(citables) ? citables[index - 1] : undefined;
 
