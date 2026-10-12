@@ -194,7 +194,12 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     >
       {/* Seats Management Section */}
       {canInviteMembers && (
-        <Card className="organization-members-seats-card" variant="outlined" sx={{ mx: { xs: 0, sm: '20px' } }}>
+        <Card
+          className="organization-members-seats-card"
+          data-testid="organization-members-seats-card"
+          variant="outlined"
+          sx={{ mx: { xs: 0, sm: '20px' } }}
+        >
           <Stack spacing={2} p={2}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
               <Typography className="organization-members-seats-title" level="title-sm">
@@ -333,6 +338,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
             ) : (
               <Button
                 className="organization-members-add-button"
+                data-testid="organization-members-add-no-seats-btn"
                 size="sm"
                 variant="outlined"
                 color="danger"

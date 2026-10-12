@@ -17,7 +17,9 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({ useCancelInvite: () => ({ mutateAsync: vi.fn() }) }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.fn() }));
-vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: viewer.id } }) }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { id: viewer.id, isAdmin: false } }),
+}));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: () => '' }));
@@ -32,7 +34,12 @@ const member = (id: string, creditUsage: MemberCreditUsage | null, status: 'acce
     creditUsage: MemberCreditUsage | null;
   };
 
-const renderCard = (user: ReturnType<typeof member>, canManageCreditBudgets: boolean, canManageRoster = false) =>
+type Roster = { invite: boolean; revoke: boolean };
+const renderCard = (
+  user: ReturnType<typeof member>,
+  canManageCreditBudgets: boolean,
+  roster: boolean | Roster = false
+) =>
   render(
     ((children: ReactNode) => (
       <QueryClientProvider client={new QueryClient()}>
@@ -42,8 +49,8 @@ const renderCard = (user: ReturnType<typeof member>, canManageCreditBudgets: boo
       <OrganizationUserCard
         organization={org}
         user={user}
-        canInviteMembers={canManageRoster}
-        canRevokeMembers={canManageRoster}
+        canInviteMembers={typeof roster === 'boolean' ? roster : roster.invite}
+        canRevokeMembers={typeof roster === 'boolean' ? roster : roster.revoke}
         canManageCreditBudgets={canManageCreditBudgets}
       />
     )
@@ -119,5 +126,43 @@ describe('OrganizationUserCard monthly limit control', () => {
     await waitFor(() =>
       expect(setOverride).toHaveBeenLastCalledWith({ organizationId: 'org1', userId: 'a', maxCredits: null })
     );
+  });
+});
+
+// Revoke Access and Cancel Invite hit endpoints with different server gates, so each follows its own flag.
+describe('OrganizationUserCard roster actions', () => {
+  beforeEach(() => {
+    viewer.id = 'viewer';
+  });
+
+  const accepted = () => member('a', { tracked: true, used: 0, cap: 500, isOverride: false });
+
+  it('offers Revoke Access on the revoke flag alone', async () => {
+    renderCard(accepted(), false, { invite: false, revoke: true });
+    openMenu();
+    expect(await screen.findByText('Revoke Access')).toBeTruthy();
+  });
+
+  it('withholds Revoke Access from a viewer who may only invite', () => {
+    renderCard(accepted(), false, { invite: true, revoke: false });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+
+  it('offers Cancel Invite on the invite flag alone', async () => {
+    renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
+    openMenu();
+    expect(await screen.findByText('Cancel Invite')).toBeTruthy();
+  });
+
+  it('withholds Cancel Invite from a viewer who may only revoke', () => {
+    renderCard(member('p', null, 'pending'), false, { invite: false, revoke: true });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+
+  it('offers a share/update member neither action', () => {
+    renderCard(accepted(), false, { invite: false, revoke: false });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+    renderCard(member('p', null, 'pending'), false, { invite: false, revoke: false });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
 });
