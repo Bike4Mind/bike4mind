@@ -2,10 +2,7 @@ import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGrantSubscription } from '@client/app/hooks/data/subscriptions';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import {
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
-} from '@client/lib/subscriptions/constants';
+import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import {
   Modal,
   ModalDialog,
@@ -34,9 +31,13 @@ interface GrantSubscriptionModalProps {
 }
 
 const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, open, onClose }) => {
+  const { minSeats, maxSeats } = useTeamSeatLimits();
+  const creditsPerSeat = useTeamCreditsPerSeat();
   const [subscriptionType, setSubscriptionType] = useState<'individual' | 'team'>('individual');
   const [priceId, setPriceId] = useState<string>('');
-  const [seats, setSeats] = useState(ORGANIZATION_SUBSCRIPTION_MIN_SEATS);
+  // Clamped on read: the initial pick is taken before the seat settings load (see CreateTeamModal).
+  const [requestedSeats, setSeats] = useState(minSeats);
+  const seats = Math.min(Math.max(requestedSeats, minSeats), maxSeats);
   const [organizationName, setOrganizationName] = useState('');
   const [durationMonths, setDurationMonths] = useState(1);
   const [billingOwnerId, setBillingOwnerId] = useState<string | null>(null);
@@ -81,7 +82,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
   const resetForm = () => {
     setSubscriptionType('individual');
     setPriceId('');
-    setSeats(ORGANIZATION_SUBSCRIPTION_MIN_SEATS);
+    setSeats(minSeats);
     setOrganizationName('');
     setDurationMonths(1);
     setBillingOwnerId(null);
@@ -94,16 +95,13 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
   };
 
   const selectedPlan = availableIndividualPlans.find(plan => plan.priceId === priceId);
-  const isFormValid =
-    subscriptionType === 'individual'
-      ? !!priceId
-      : !!organizationName.trim() && seats >= ORGANIZATION_SUBSCRIPTION_MIN_SEATS;
+  const isFormValid = subscriptionType === 'individual' ? !!priceId : !!organizationName.trim() && seats >= minSeats;
 
   const calculateCredits = () => {
     if (subscriptionType === 'individual' && selectedPlan) {
       return selectedPlan.credits * durationMonths;
     } else if (subscriptionType === 'team') {
-      return seats * 50000 * durationMonths; // ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT
+      return seats * creditsPerSeat * durationMonths;
     }
     return 0;
   };
@@ -204,8 +202,8 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
                   <IconButton
                     variant="soft"
                     color="neutral"
-                    disabled={seats <= ORGANIZATION_SUBSCRIPTION_MIN_SEATS}
-                    onClick={() => setSeats(prev => Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, prev - 1))}
+                    disabled={seats <= minSeats}
+                    onClick={() => setSeats(Math.max(minSeats, seats - 1))}
                   >
                     <RemoveIcon />
                   </IconButton>
@@ -215,14 +213,14 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
                   <IconButton
                     variant="soft"
                     color="neutral"
-                    disabled={seats >= ORGANIZATION_SUBSCRIPTION_MAX_SEATS}
-                    onClick={() => setSeats(prev => Math.min(ORGANIZATION_SUBSCRIPTION_MAX_SEATS, prev + 1))}
+                    disabled={seats >= maxSeats}
+                    onClick={() => setSeats(Math.min(maxSeats, seats + 1))}
                   >
                     <AddIcon />
                   </IconButton>
                 </Box>
                 <Typography level="body-sm" color="neutral">
-                  Min: {ORGANIZATION_SUBSCRIPTION_MIN_SEATS}, Max: {ORGANIZATION_SUBSCRIPTION_MAX_SEATS}
+                  Min: {minSeats}, Max: {maxSeats}
                 </Typography>
               </FormControl>
             </>

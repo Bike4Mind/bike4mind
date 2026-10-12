@@ -59,7 +59,7 @@ vi.mock('../hooks/useAccessibleModels', () => ({
   }),
 }));
 vi.mock('./AdminSettingsContext', () => ({
-  useAdminSettings: () => ({ getSetting: () => TEXT.id, isLoading: false }),
+  useAdminSettings: () => ({ getSetting: () => TEXT.id, isLoading: false, authedSettingsLoaded: true, error: null }),
 }));
 
 import { LLMProvider, useLLM } from './LLMContext';

@@ -17,6 +17,7 @@ import DefaultMetaTags from '@client/app/components/DefaultMetaTags';
 import ConfirmationModal from '@client/app/components/ConfirmationModal';
 import WebsocketReactQueryInvalidateListener from '@client/app/components/WebsocketReactQueryInvalidateListener';
 import VideoGenerationUpdatesListener from '@client/app/components/VideoGenerationUpdatesListener';
+import CreditBalanceSyncListener from '@client/app/components/CreditBalanceSyncListener';
 import AgentExecutionSubscriber from '@client/app/components/AgentExecutionSubscriber';
 import StripeCheckoutSuccessHandler from '@client/app/components/stripe/StripeCheckoutSuccessHandler';
 import { Toaster } from 'sonner';
@@ -188,7 +189,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
       {mounted && <CookieConsentBanner />}
       <TranslationProvider>
         <DefaultMetaTags />
-        <main>
+        <div>
           {/* WebsocketConfigProvider fetches WebSocket URL at runtime from serverConfig. */}
           {/* Kept outside UserProvider to preserve SSR compatibility — the security */}
           {/* improvement is at the API layer (serverConfig now requires auth). Pre-auth, */}
@@ -197,6 +198,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
           <WebsocketConfigProvider>
             <WebsocketReactQueryInvalidateListener />
             <VideoGenerationUpdatesListener />
+            <CreditBalanceSyncListener />
             <AgentExecutionSubscriber />
             <Suspense fallback={null}>
               <StripeCheckoutSuccessHandler />
@@ -209,7 +211,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
               </ServerStatusProvider>
             </UserProvider>
           </WebsocketConfigProvider>
-        </main>
+        </div>
       </TranslationProvider>
       {/* Lazy load DevTools only when explicitly enabled */}
       {process.env.NEXT_PUBLIC_ENABLE_DEVTOOLS === 'true' && (

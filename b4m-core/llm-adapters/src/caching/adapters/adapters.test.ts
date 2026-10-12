@@ -443,10 +443,11 @@ describe('AnthropicCachingAdapter', () => {
 
     /**
      * The case the original incident hit: the request arrives already over the ceiling, so there
-     * is nothing to subtract and the provider will reject it regardless. The adapter must not add
-     * to it, and must say so loudly - a bare ValidationException gave no way to find the source.
+     * is nothing to subtract (capCacheControlMarkers strips the excess before send). The adapter
+     * must not add to it, and must say so - a bare ValidationException gave no way to find the
+     * source. A warning, not an error: the turn no longer fails, and ERROR lines page.
      */
-    it('reports an error, and adds nothing, when the request is already over the cap on arrival', () => {
+    it('warns, and adds nothing, when the request is already over the cap on arrival', () => {
       const logger = { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() };
       const marker = { type: 'ephemeral' };
       const result = adapter.applyCaching(
@@ -467,8 +468,9 @@ describe('AnthropicCachingAdapter', () => {
 
       // Five arrived; the adapter adds none of its three.
       expect(countMarkers(result)).toBe(5);
-      expect(logger.error).toHaveBeenCalledTimes(1);
-      const [message, detail] = logger.error.mock.calls[0];
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      const [message, detail] = logger.warn.mock.calls[0];
       expect(message).toContain('exceeds');
       const census = detail as { inbound: { system: number; tools: number }; outbound: { total: number } };
       expect(census.inbound.system).toBe(4);

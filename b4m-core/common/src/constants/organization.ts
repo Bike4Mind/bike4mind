@@ -1,6 +1,10 @@
 /**
  * Organization seat-limit policy - the floor and ceiling every seat change is bound by.
  *
+ * These are the DEFAULTS of the admin settings `teamPlanMinSeats` / `teamPlanMaxSeats` /
+ * `teamPlanCreditsPerSeat` (Admin -> Growth & Pricing). Enforcement sites read the settings via
+ * `resolveTeamPlanSettings` (common/utils/teamPlanSettings) and fall back to these.
+ *
  * Lives in common (not the app's subscriptions constants) because the ceiling has to be
  * enforced in the persistence layer too: `OrganizationModel.addMemberRaisingSeats` clamps
  * the auto-raise against MAX, and packages/database cannot import from apps/client. The app
@@ -17,6 +21,16 @@ export const ORGANIZATION_SUBSCRIPTION_MIN_SEATS = 4;
  * `setSeats` value can satisfy (#1424).
  */
 export const ORGANIZATION_SUBSCRIPTION_MAX_SEATS = 100;
+
+/** Credits granted per paid team seat each billing cycle. */
+export const ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT = 50000;
+
+/**
+ * Absolute rail on the admin-tunable seat settings (`teamPlanMinSeats` / `teamPlanMaxSeats`): an
+ * operator can move the floor and ceiling, but not past this. The constants above are the
+ * settings' defaults and the fallback wherever no setting can be read.
+ */
+export const TEAM_PLAN_SEATS_HARD_LIMIT = 10_000;
 
 /**
  * The org `users[]` ACL permission values that CONSTITUTE membership - the single definition every

@@ -28,9 +28,7 @@ import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
  *   configured provider stands in (see synthesizeTts) and the response reports the
  *   substitution via { provider, fallbackFrom } / the X-B4M-Tts-Provider* headers.
  *
- * Mirrors the multi-vendor image API (aiImageService). The legacy
- * /api/ai/text-to-speech and /api/elabs/text-to-speech routes remain as thin
- * adapters over the same aiVoiceService abstraction.
+ * Mirrors the multi-vendor image API (aiImageService).
  *
  * Auth mode and request validation come from synthesizeSpeechContract (the same
  * source of truth that drives the OpenAPI spec), so `req.validated` is the parsed,

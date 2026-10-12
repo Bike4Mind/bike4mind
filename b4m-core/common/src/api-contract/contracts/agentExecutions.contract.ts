@@ -46,7 +46,7 @@ export const startAgentExecutionContract = defineEndpoint({
   request: AgentExecutionStartRequestSchema,
   requestExample: { session_id: '<sessionId>', message: 'Audit this data set and summarize what stands out.' },
   // Served by baseApi (via nextRouteForContract), so apiKeyRateLimit sets the windowed
-  // X-RateLimit-* headers on every API-key-authenticated response.
+  // X-RateLimit-* headers on API-key responses (not the injected 401/403; CONVENTIONS.md section 6).
   emitsRateLimitHeaders: true,
   responses: {
     202: {

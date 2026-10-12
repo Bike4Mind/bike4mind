@@ -25,7 +25,8 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
-import { mapperDeps, perUserRateLimit } from '@server/videoGenerations/routeDeps';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
+import { mapperDeps } from '@server/videoGenerations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const CURSOR_SCOPE = 'v1.video-generations';

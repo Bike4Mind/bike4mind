@@ -239,6 +239,43 @@ describe('buildOpenApiDocument', () => {
     expect(new Set(publishedHeaders)).toEqual(new Set(expectedHeaders));
     const describedHeaders = [...doc.info.description.matchAll(/`(X-RateLimit-[A-Za-z-]+)`/g)].map(m => m[1]);
     expect(new Set(describedHeaders)).toEqual(new Set(expectedHeaders));
+    // 401/403 and the streaming completions endpoint carry no rate-limit headers.
+    const rateLimitsStart = doc.info.description.indexOf('## Rate limits');
+    const rateLimitsEnd = doc.info.description.indexOf('## Credits');
+    expect(rateLimitsStart).toBeGreaterThanOrEqual(0);
+    expect(rateLimitsEnd).toBeGreaterThan(rateLimitsStart);
+    expect(doc.info.description.slice(rateLimitsStart, rateLimitsEnd)).not.toMatch(/every response/i);
+  });
+
+  it('names the poll target of every operation that answers 202 in the Async jobs section', () => {
+    const description: string = doc.info.description;
+    const asyncStart = description.indexOf('## Async jobs');
+    const asyncEnd = description.indexOf('## Versioning');
+    // A renamed heading would make indexOf return -1 and slice() silently return a
+    // truncated tail; the assertions below would then check the wrong text.
+    expect(asyncStart).toBeGreaterThanOrEqual(0);
+    expect(asyncEnd).toBeGreaterThan(asyncStart);
+    const asyncJobs = description.slice(asyncStart, asyncEnd);
+    const queued = Object.entries(doc.paths as Record<string, Record<string, { responses?: object }>>)
+      .filter(([, item]) => Object.values(item).some(op => op.responses && '202' in op.responses))
+      .map(([path]) => path);
+    expect(queued.length).toBeGreaterThan(0);
+    for (const path of queued) {
+      expect(asyncJobs).toContain(`GET ${path}/{id}`);
+    }
+  });
+
+  it('states the shared 400-vs-422 split and the provider_rejected note in the Errors section', () => {
+    const description: string = doc.info.description;
+    const errorsStart = description.indexOf('## Errors');
+    const errorsEnd = description.indexOf('## Async jobs');
+    expect(errorsStart).toBeGreaterThanOrEqual(0);
+    expect(errorsEnd).toBeGreaterThan(errorsStart);
+    const errors = description.slice(errorsStart, errorsEnd);
+    expect(errors).toContain('malformed JSON body is `400`');
+    expect(errors).toContain('fails schema validation is `422`');
+    expect(errors).toContain('`errorCode: "provider_rejected"`');
+    expect(errors).toContain('your API key itself was accepted');
   });
 
   it('gives every tag used by an operation a top-level description', () => {

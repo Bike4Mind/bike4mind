@@ -149,6 +149,19 @@ describe('POST /api/subscriptions/subscribe — launch/availability gate', () =>
     expect(res.statusCode).toBe(200);
   });
 
+  it('pins the session to USD with Adaptive Pricing off, whatever the visitor location', async () => {
+    mockGetSettingsValue.mockResolvedValue(true);
+    const { req, res } = makeReq('price_open');
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).toMatchObject({
+      currency: 'usd',
+      adaptive_pricing: { enabled: false },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('fails closed when the flag setting resolves to a non-boolean-true value (=== true read)', async () => {
     // e.g. a plan mistakenly pointed at a numeric setting: 5 is truthy but not `true`.
     mockGetSettingsValue.mockResolvedValue(5 as unknown as boolean);
@@ -164,6 +177,43 @@ describe('POST /api/subscriptions/subscribe — launch/availability gate', () =>
     await (handler as HandlerFn)(req, res);
 
     expect(mockGetSettingsValue).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('POST /api/subscriptions/subscribe - configured plan validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindUserSubByPrice.mockResolvedValue(null);
+    mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing' });
+    mockPricesRetrieve.mockResolvedValue({ id: 'price_other', active: true });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it('rejects a price id that is not a configured plan with a 400, before any lookup or Stripe call', async () => {
+    // Stripe would happily retrieve this price, so the configured-plan check is the only guard.
+    const { req, res } = makeReq('price_other');
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: BadRequestError,
+      statusCode: HttpStatus.BadRequest,
+      message: 'Unknown plan',
+    });
+
+    expect(mockGetSettingsValue).not.toHaveBeenCalled();
+    expect(mockFindUserSubByPrice).not.toHaveBeenCalled();
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockPricesRetrieve).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a configured plan id', async () => {
+    const { req, res } = makeReq('price_open');
+
+    await (handler as HandlerFn)(req, res);
+
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
   });
@@ -338,5 +388,45 @@ describe('POST /api/subscriptions/subscribe - acquisition touches', () => {
       'stage',
       'userId',
     ]);
+  });
+
+  it('falls back to the touches stored on the buyer at signup when the browser carries none', async () => {
+    const { req, res } = makeReq('price_open', CALLBACK_URL, {
+      acquisition: {
+        firstTouch: { source: 'reddit', campaign: 'launch' },
+        signupMethod: 'otc',
+        capturedAt: new Date(),
+      },
+    });
+    req.body.attributionConsent = true;
+    await (handler as HandlerFn)(req, res);
+    expect(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata).toMatchObject({
+      acq_first_source: 'reddit',
+      acq_first_campaign: 'launch',
+    });
+  });
+
+  it('never uses the stored touches without consent', async () => {
+    const { req, res } = makeReq('price_open', CALLBACK_URL, {
+      acquisition: { firstTouch: { source: 'reddit' }, signupMethod: 'otc', capturedAt: new Date() },
+    });
+    await (handler as HandlerFn)(req, res);
+    expect(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata.acq_first_source).toBeUndefined();
+  });
+
+  it('records which surface started the checkout', async () => {
+    const { req, res } = makeReq('price_open');
+    req.body.surface = 'out_of_credits_notice';
+    await (handler as HandlerFn)(req, res);
+    expect(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata.checkout_surface).toBe(
+      'out_of_credits_notice'
+    );
+  });
+
+  it('rejects a malformed surface id', async () => {
+    const { req, res } = makeReq('price_open');
+    req.body.surface = 'Not A Surface!';
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
 });

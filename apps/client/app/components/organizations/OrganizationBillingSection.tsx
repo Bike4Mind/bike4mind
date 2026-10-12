@@ -5,11 +5,8 @@ import {
   useSubscribeTeamPlan,
   useUpdateSubscriptionSeats,
 } from '@client/app/hooks/data/subscriptions';
-import {
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
-} from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import {
   SubscriptionOwnerType,
   ISubscription,
@@ -65,14 +62,15 @@ const SubscriptionModal = ({
   subscription?: ISubscription;
   pricePerSeat: number;
 }) => {
+  const { minSeats: planMinSeats, maxSeats: planMaxSeats } = useTeamSeatLimits();
   // Clamp the floor at the ceiling so an over-cap org can still be set down to the max (#1424) -
   // mirrors the server validateSeatChange clamp; otherwise the decrement gate never lets it recover.
-  const minimumSeats = Math.min(
-    Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1),
-    ORGANIZATION_SUBSCRIPTION_MAX_SEATS
-  );
+  const minimumSeats = Math.min(Math.max(planMinSeats, organization.users.length + 1), planMaxSeats);
   // Initialize with current seats if it's an existing subscription, otherwise use minimum seats
-  const [seats, setSeats] = useState(subscription ? organization.seats : minimumSeats);
+  const [requestedSeats, setSeats] = useState(subscription ? organization.seats : minimumSeats);
+  // Clamped on read: the initial pick can predate the seat settings loading, or sit outside a range an
+  // admin has since changed, and update-seats/subscribe reject anything outside it.
+  const seats = Math.min(Math.max(requestedSeats, minimumSeats), planMaxSeats);
   const updateSeats = useUpdateSubscriptionSeats();
 
   // Update seats when organization.seats changes
@@ -106,18 +104,18 @@ const SubscriptionModal = ({
   };
 
   const handleIncreaseSeats = () => {
-    setSeats(prev => (prev < ORGANIZATION_SUBSCRIPTION_MAX_SEATS ? prev + 1 : prev));
+    setSeats(Math.min(seats + 1, planMaxSeats));
   };
 
   const handleDecreaseSeats = () => {
-    setSeats(prev => (prev > minimumSeats ? prev - 1 : prev));
+    setSeats(Math.max(seats - 1, minimumSeats));
   };
 
   // Calculate if we're decreasing seats from current allocation
   const isDecreasingSeats = subscription && seats < organization.seats;
 
   // Add warning message for max seats
-  const isAtMaxSeats = seats >= ORGANIZATION_SUBSCRIPTION_MAX_SEATS;
+  const isAtMaxSeats = seats >= planMaxSeats;
 
   const renderPrice = (price: number) => {
     return `$${price}`;
@@ -253,17 +251,17 @@ const SubscriptionModal = ({
 
           {isAtMaxSeats && (
             <Typography level="body-sm" mt={2} color="warning">
-              Maximum number of seats ({ORGANIZATION_SUBSCRIPTION_MAX_SEATS}) reached.
+              Maximum number of seats ({planMaxSeats}) reached.
             </Typography>
           )}
 
           <Typography level="body-sm" mt={2} color="warning">
-            {organization.users.length + 1 > ORGANIZATION_SUBSCRIPTION_MIN_SEATS ? (
+            {organization.users.length + 1 > planMinSeats ? (
               `Minimum seats required: ${organization.users.length + 1} (current team size)`
             ) : (
               <>
-                Minimum seats required: {ORGANIZATION_SUBSCRIPTION_MIN_SEATS}
-                {organization.users.length + 1 < ORGANIZATION_SUBSCRIPTION_MIN_SEATS && (
+                Minimum seats required: {planMinSeats}
+                {organization.users.length + 1 < planMinSeats && (
                   <Typography component="span" sx={{ display: 'block' }} color="neutral">
                     Your team currently has {organization.users.length + 1}{' '}
                     {organization.users.length === 0 ? 'member' : 'members'}

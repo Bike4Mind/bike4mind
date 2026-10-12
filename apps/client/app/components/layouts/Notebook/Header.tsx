@@ -41,6 +41,7 @@ const NotebookHeader = () => {
 
   return (
     <Sheet
+      component="header"
       className="notebook-header-container"
       sx={{
         display: { xs: 'flex', sm: 'none' },
@@ -59,6 +60,9 @@ const NotebookHeader = () => {
     >
       <IconButton
         className="notebook-header-menu-button"
+        data-testid="notebook-header-menu-btn"
+        aria-label={openSideNav ? 'Close menu' : 'Open menu'}
+        aria-expanded={openSideNav}
         variant="outlined"
         color="neutral"
         size="sm"

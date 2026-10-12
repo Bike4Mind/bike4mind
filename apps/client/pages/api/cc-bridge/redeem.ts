@@ -10,6 +10,7 @@ import { userApiKeyService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { CcBridgeDeviceLabelSchema } from '@server/utils/ccBridgeDeviceLabel';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 
@@ -36,7 +37,7 @@ function trustedClientIp(req: {
 
 const RedeemRequestSchema = z.object({
   pairingToken: z.string().min(16).max(200),
-  deviceLabel: z.string().min(1).max(100),
+  deviceLabel: CcBridgeDeviceLabelSchema,
   platform: z.string().max(50).optional(),
   bridgeVersion: z.string().max(30).optional(),
 });

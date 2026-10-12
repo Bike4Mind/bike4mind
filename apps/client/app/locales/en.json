@@ -153,10 +153,15 @@
       },
       "members": {
         "title": "Add Members to Project",
-        "subtitle": "Search and select users to add to your project",
+        "subtitle": "Invite people to collaborate on this project",
         "button_label": "Add Members",
-        "search_placeholder": "Search users",
-        "no_members": "Try searching for a user."
+        "search_placeholder": "Enter your teammate's full email address",
+        "no_members": "Enter your teammate's full email address to find or invite them.",
+        "no_results": "No one matches that. Enter their full email address to invite them.",
+        "invite_by_email": "Invite {{email}} by email",
+        "invite_sent": "Invitation sent to {{email}}",
+        "add_members_one": "Add {{count}} member",
+        "add_members_other": "Add {{count}} members"
       },
       "sessions": {
         "title": "Add Notebook to a Project",
@@ -340,7 +345,7 @@
     "model_pricing": "Model Pricing",
     "text_models": "Text Models",
     "image_models": "Image Models",
-    "pricing_per_1k_tokens": "Pricing shown in credits per 1,000 tokens",
+    "pricing_per_1m_tokens": "Pricing shown in credits per 1,000,000 tokens",
     "pricing_per_generation": "Pricing shown in credits per image generation",
     "model_name": "Model Name",
     "price_tier": "Price Tier",
@@ -591,7 +596,7 @@
   "subscription_modal": {
     "title": "Subscription",
     "description": "Access every major AI model through one unified interface. Run advanced models like Deepseek R1 privately.",
-    "no_free_tier": "NO FREE TIER - FOCUSED ON PROFESSIONALS.",
+    "starter_credits": "Every account starts with free credits; subscribe for a monthly allowance.",
     "credits_rollover": "Unused credits roll over for 3 months.",
     "monthly_billing": "Monthly Billing",
     "annual_billing": "Annual Billing",
