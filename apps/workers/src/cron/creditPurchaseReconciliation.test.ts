@@ -171,6 +171,7 @@ describe('creditPurchaseReconciliation cron', () => {
       const message = mockPostMessageToSlack.mock.calls[0][0] as string;
       expect(message).toContain('pi_1 (transaction recorded but balance never credited)');
       expect(message).toContain('admin credit adjustment');
+      expect(message).not.toContain('clears this alert');
       expect(message).not.toContain('No purchase transaction:');
       expect(mockEmitMetric).toHaveBeenCalledWith(
         'Lumina5/CreditPurchases',

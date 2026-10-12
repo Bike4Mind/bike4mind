@@ -123,8 +123,8 @@ function formatAlert(stage: string, result: CreditPurchaseReconciliationResult):
     ...(result.ungranted.some(p => p.reason === 'balance_not_applied')
       ? [
           'Balance never credited: verify in Stripe, then add the credits with an admin credit adjustment. Do not ' +
-            're-grant the purchase (the row exists, so a redelivery will not grant); the adjustment stamps ' +
-            'lastCreditsPurchasedAt, which clears this alert.',
+            're-grant the purchase (the row exists, so a redelivery will not grant). The adjustment is not a ' +
+            'purchase, so this alert repeats until the intent leaves the lookback window.',
         ]
       : []),
   ].join('\n');
