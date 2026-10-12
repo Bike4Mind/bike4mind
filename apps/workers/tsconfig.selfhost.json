@@ -1,5 +1,6 @@
 {
-  // Runtime-only: the self-host `worker` service passes this to tsx (compose.selfhost.yaml). tsx
+  // Runtime-only: the self-host `worker` and `agentexecutor` services pass this to tsx
+  // (compose.selfhost.yaml, Dockerfile.agentexecutor.selfhost). tsx
   // applies compilerOptions only to files its tsconfig includes, so without the ../client glob the
   // bridged client files would transpile with no tsconfig (sloppy mode, not strict). Typecheck keeps
   // using tsconfig.json.
