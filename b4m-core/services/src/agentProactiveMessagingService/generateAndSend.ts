@@ -148,6 +148,8 @@ export async function generateAndSendProactiveMessage({
           quests: db.quests,
           sessions: { findAllByIds: db.sessions.findAllByIds.bind(db.sessions) },
         },
+        // The agent speaks first, on a schedule - no user request authenticated this turn.
+        authOrigin: 'internal',
       },
       storage,
       imageGenerateStorage,

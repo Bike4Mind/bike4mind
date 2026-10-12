@@ -40,3 +40,4 @@ export * from './imageApi';
 export * from './videoGenerations';
 export * from './voiceApi';
 export * from './generationCallback';
+export * from './authOrigin';

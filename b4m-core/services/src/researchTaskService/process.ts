@@ -545,6 +545,8 @@ const processDeepResearch = async (
     const toolContext: ToolContext = {
       userId: user.id,
       user: user,
+      // Runs off the research-task queue, after whatever request created the task.
+      authOrigin: 'internal',
       db: adapters.db,
       storage: {
         upload: adapters.storage.upload,

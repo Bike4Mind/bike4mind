@@ -116,6 +116,13 @@ describe('createDeepAgentToolMaterializer', () => {
     expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe('test-secret');
   });
 
+  it('marks the tool deps as internal-origin with no api key', async () => {
+    await materialize()(['dice_roll'], 'owner-1');
+    const toolDeps = buildSharedToolsSpy.mock.calls[0]?.[0] as { authOrigin?: string; apiKeyId?: string };
+    expect(toolDeps.authOrigin).toBe('internal');
+    expect(toolDeps.apiKeyId).toBeUndefined();
+  });
+
   it('wires the owner lookup edit_image needs for generated-image keys', async () => {
     // Without it the resolver fails closed, so owners are refused with only a logged warning.
     await materialize()(['edit_image'], 'owner-1');

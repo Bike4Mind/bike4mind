@@ -90,6 +90,8 @@ export async function triggerImageGeneration(params: TriggerImageGenerationParam
       organizationId: (user as Record<string, unknown>).organizationId?.toString(),
     },
     userId,
+    // A Slack-linked user, not a B4M session or a b4m_live_ key (see ToolContext.authOrigin).
+    authOrigin: 'internal',
   });
 
   if (quest) {

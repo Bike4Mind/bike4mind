@@ -272,6 +272,8 @@ export class WorkflowStepHandler {
           organizationId: user.organizationId,
         },
         userId: user.id,
+        // A Slack-linked user, not a B4M session or a b4m_live_ key (see ToolContext.authOrigin).
+        authOrigin: 'internal',
       });
     } catch (error) {
       // Don't fail the workflow if AI trigger fails - just log it

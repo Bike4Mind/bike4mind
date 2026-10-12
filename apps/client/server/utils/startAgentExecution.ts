@@ -23,7 +23,7 @@ import {
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { apiKeyExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
+import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,
@@ -103,10 +103,12 @@ export type StartAgentExecutionInput = {
    */
   enabledToolsAreAmbient?: boolean;
   /**
-   * The authenticating API key (`req.apiKeyInfo`), never a request body. The persisted
-   * `scopeDeniedTools` and `apiKeyId` are both derived from it here so a door cannot forward one without the other.
+   * The authenticating API key (`req.apiKeyInfo`), never a request body; `undefined` for a signed-in
+   * session. Required as a property so each door states it. The persisted `authOrigin`,
+   * `scopeDeniedTools` and `apiKeyId` are all derived from it here so a door cannot forward one
+   * without the others.
    */
-  apiKeyInfo?: ApiKeyCredential;
+  apiKeyInfo: ApiKeyCredential | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
   sessionFabFileIds?: string[];
@@ -294,7 +296,7 @@ export async function startAgentExecution(
     // A headless caller's explicit tool list is the approval; it must not be second-guessed by a
     // stale interactive-session denial (deny is checked first in classifyToolPermission).
     deniedTools: isHeadlessConnection(input.connectionId) ? [] : (remembered?.deniedTools ?? []),
-    ...apiKeyExecutionFields(input.apiKeyInfo),
+    ...credentialExecutionFields(input.apiKeyInfo),
     iterationBilling: [],
     totalCreditsUsed: 0,
     lambdaInvocationCount: 1,

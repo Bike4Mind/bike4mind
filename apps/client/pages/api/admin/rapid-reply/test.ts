@@ -4,6 +4,7 @@ import { adminSettingsRepository } from '@bike4mind/database/infra';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ChatCompletionProcess, featureNames, ChatCompletionFeature } from '@bike4mind/services/llm';
 import { baseApi } from '@server/middlewares/baseApi';
+import { requestTurnAuth } from '@server/auth/turnAuth';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
@@ -195,6 +196,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         enableAgents: false, // Keep disabled for testing
         tools: ['deep_research' as const], // Add research tool to force complex classification
         queryComplexity: 'complex' as const, // Force complex classification
+        // The route also accepts an admin-scoped key, so the turn's auth comes from the request.
+        ...requestTurnAuth(req),
         // Optional schema fields - declared for QuestStartBodySchema type conformance
         dashboardParams: undefined,
         questMaster: undefined,

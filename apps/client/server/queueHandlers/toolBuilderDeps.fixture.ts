@@ -75,6 +75,7 @@ export function makeToolBuilderDeps(overrides: Partial<ToolBuilderDeps> = {}): T
     storage: fakeStorage,
     imageGenerateStorage: fakeStorage,
     llm: fakeLlm,
+    authOrigin: 'session',
     ...overrides,
   };
 }

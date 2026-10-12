@@ -64,7 +64,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
   it('rejects a caller who is neither the owner nor a sharee, before touching models or quests', async () => {
     const invoke = makeInvoke();
-    await expect(invoke.invoke({ body, userId: ATTACKER_ID })).rejects.toThrow(/access/i);
+    await expect(invoke.invoke({ body, userId: ATTACKER_ID, authOrigin: 'session' })).rejects.toThrow(/access/i);
 
     expect(mockedGetAvailableModels).not.toHaveBeenCalled();
     expect(mockDb.quests.create).not.toHaveBeenCalled();
@@ -75,12 +75,12 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     const invoke = makeInvoke();
     // getAvailableModels resolves [] -> "Invalid model" is the downstream sentinel that
     // proves this request cleared the access check (a rejected caller never gets here).
-    await expect(invoke.invoke({ body, userId: OWNER_ID })).rejects.toThrow(/Invalid model/);
+    await expect(invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'session' })).rejects.toThrow(/Invalid model/);
   });
 
   it('rejects a read-only sharee, who must not drive a completion that writes to the notebook', async () => {
     const invoke = makeInvoke();
-    await expect(invoke.invoke({ body, userId: SHAREE_ID })).rejects.toThrow(/access/i);
+    await expect(invoke.invoke({ body, userId: SHAREE_ID, authOrigin: 'session' })).rejects.toThrow(/access/i);
 
     expect(mockedGetAvailableModels).not.toHaveBeenCalled();
     expect(mockDb.quests.create).not.toHaveBeenCalled();
@@ -89,7 +89,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
   it('lets a sharee holding update past the access check', async () => {
     const invoke = makeInvoke();
-    await expect(invoke.invoke({ body, userId: EDITOR_ID })).rejects.toThrow(/Invalid model/);
+    await expect(invoke.invoke({ body, userId: EDITOR_ID, authOrigin: 'session' })).rejects.toThrow(/Invalid model/);
   });
 
   // questStartParams - NOT the parsed request - is what dispatchQuest ships to the async worker, so
@@ -108,6 +108,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     await invoke.invoke({
       body: { ...body, skipAutoOffers: true, promptMode: 'raw' as const },
       userId: OWNER_ID,
+      authOrigin: 'session',
     });
 
     expect((invoke as any).questStartParams).toEqual(
@@ -124,7 +125,11 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
 
     const invoke = makeInvoke();
-    await invoke.invoke({ body: { ...body, deniedTools: ['create_data_lake'] }, userId: OWNER_ID });
+    await invoke.invoke({
+      body: { ...body, deniedTools: ['create_data_lake'] },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
 
     expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ deniedTools: ['create_data_lake'] }));
   });
@@ -137,9 +142,34 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
 
     const invoke = makeInvoke();
-    await invoke.invoke({ body, userId: OWNER_ID, apiKeyId: 'key1' });
+    await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key1' });
 
-    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ apiKeyId: 'key1' }));
+    expect((invoke as any).questStartParams).toEqual(
+      expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key1' })
+    );
+  });
+  // The positive signal a session-only tool checks; dropped here, the async worker would see none.
+  it('carries the server-set authOrigin onto questStartParams', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'internal' });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ authOrigin: 'internal' }));
+    expect((invoke as any).questStartParams.apiKeyId).toBeUndefined();
+  });
+  it.each([
+    ['a key turn without its key id', { authOrigin: 'apiKey' as const }],
+    ['a key id on a session turn', { authOrigin: 'session' as const, apiKeyId: 'key1' }],
+    ['a key id on an internal turn', { authOrigin: 'internal' as const, apiKeyId: 'key1' }],
+  ])('rejects %s before creating the quest', async (_label, auth) => {
+    const invoke = makeInvoke();
+    await expect(invoke.invoke({ body, userId: OWNER_ID, ...auth })).rejects.toThrow(/authOrigin/);
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
   });
 });
 
@@ -201,9 +231,9 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
     mockedGetAvailableModels.mockResolvedValue([modelInfo('whisper-1', 'speech-to-text')] as any);
 
     const invoke = makeInvoke();
-    await expect(invoke.invoke({ body: bodyFor('whisper-1'), userId: OWNER_ID })).rejects.toThrow(
-      /cannot run a chat completion/
-    );
+    await expect(
+      invoke.invoke({ body: bodyFor('whisper-1'), userId: OWNER_ID, authOrigin: 'session' })
+    ).rejects.toThrow(/cannot run a chat completion/);
 
     expect(mockDb.sessions.update).not.toHaveBeenCalled();
     expect(mockDb.quests.create).not.toHaveBeenCalled();
@@ -216,7 +246,7 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
     mockedGetAvailableModels.mockResolvedValue([modelInfo('some-model', type)] as any);
 
     const invoke = makeInvoke();
-    await invoke.invoke({ body: bodyFor('some-model'), userId: OWNER_ID });
+    await invoke.invoke({ body: bodyFor('some-model'), userId: OWNER_ID, authOrigin: 'session' });
 
     expect(mockDb.quests.create).toHaveBeenCalledWith(
       expect.objectContaining({ promptMeta: expect.objectContaining({ model: expect.objectContaining({ type }) }) })
@@ -232,7 +262,7 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
     mockedGetAvailableModels.mockResolvedValue([typeless] as any);
 
     const invoke = makeInvoke();
-    await invoke.invoke({ body: bodyFor('mystery-model'), userId: OWNER_ID });
+    await invoke.invoke({ body: bodyFor('mystery-model'), userId: OWNER_ID, authOrigin: 'session' });
 
     expect(mockDb.quests.create).toHaveBeenCalled();
     expect((invoke as any).questStartParams?.promptMeta?.model?.type).toBeUndefined();

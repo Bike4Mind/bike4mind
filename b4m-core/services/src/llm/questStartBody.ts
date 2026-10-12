@@ -21,6 +21,7 @@ import {
   GenerateImageToolCallSchema,
   AudioGenerationToolCallSchema,
   PROMPT_TEXT_MAX,
+  AuthOriginSchema,
 } from '@bike4mind/common';
 
 export const QuestStartBodySchema = z.object({
@@ -44,6 +45,13 @@ export const QuestStartBodySchema = z.object({
   skipReplyChoices: z.boolean().optional(),
   /** See ChatCompletionInvokeParamsSchema.deniedTools - must stay in sync with it. */
   deniedTools: z.array(z.string()).optional(),
+  /**
+   * How the turn was authenticated (see ToolContext.authOrigin). Like `apiKeyId`, server-set through
+   * invoke()'s own argument, never a client body. Required on the parsed type so a door that builds
+   * this body fails typecheck without it; the default only covers a message queued before the field
+   * existed, and fails closed to `internal`.
+   */
+  authOrigin: AuthOriginSchema.default('internal'),
   /**
    * The `b4m_live_` key that authenticated the turn (see ToolContext.apiKeyId). Deliberately NOT
    * on ChatCompletionInvokeParamsSchema: that schema parses client bodies, so it reaches here only

@@ -73,6 +73,7 @@ vi.mock('../di/registry', () => ({
     },
     chatCompletionDefaults: {
       defaultChatCompletionOptions: {},
+      getSharedTokenizer: vi.fn(),
     },
   }),
 }));
@@ -448,6 +449,12 @@ describe('GlobalShortcutHandlers', () => {
     it('should return empty response on valid submission', async () => {
       const result = await handleQuickAskSubmission(basePayload, 'xoxb-token');
       expect(result).toEqual({});
+    });
+
+    it('invokes the completion as an internal-origin caller', async () => {
+      await handleQuickAskSubmission(basePayload, 'xoxb-token');
+      await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalled());
+      expect(mockInvoke).toHaveBeenCalledWith(expect.objectContaining({ authOrigin: 'internal' }));
     });
 
     it('should return error when userId is missing from metadata', async () => {

@@ -314,6 +314,8 @@ async function buildEmbedServerTools(args: {
       scopedSettings: scopedSettingsRepository,
     },
     entitlementKeys: [],
+    // An anonymous widget visitor, running as the embed's owner: neither their session nor a b4m_live_ key.
+    authOrigin: 'internal',
     kbScope: { fileIds: kbFileIds },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

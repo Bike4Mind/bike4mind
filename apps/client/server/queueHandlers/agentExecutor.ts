@@ -70,6 +70,7 @@ import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { executionTurnAuth } from '@server/auth/turnAuth';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@server/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -1310,7 +1311,7 @@ async function processExecution(
           // parent belongs to. Distinct from `questId` above, which means different things per
           // dispatch lineage and must never be read as a Quest id (#1867).
           linkedQuestId: execution.linkedQuestId,
-          ...(execution.apiKeyId && { apiKeyId: execution.apiKeyId }),
+          ...executionTurnAuth(execution),
           ...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),
           query: info.task,
           model: info.model,
@@ -1553,7 +1554,7 @@ async function processExecution(
         questId: execution.questId,
         // See baseFields above - inherited so DAG-node audit rows link to the parent's turn.
         linkedQuestId: execution.linkedQuestId,
-        apiKeyId: execution.apiKeyId,
+        ...executionTurnAuth(execution),
         scopeDeniedTools: execution.scopeDeniedTools,
         spawnedByExecutionId: executionId,
         enableArtifacts: callerEnableArtifacts,
@@ -1609,8 +1610,8 @@ async function processExecution(
       logger,
       // The run's active account, already membership-checked at start; lake-creating tools scope to it.
       organizationId: execution.organizationId,
-      // Attributes a lake write a tool drives to the key that started the run, as on the chat doors.
-      apiKeyId: execution.apiKeyId,
+      // How the run was started; the key also attributes a lake write a tool drives, as on the chat doors.
+      ...executionTurnAuth(execution),
       // Generic retrieval exclusion (opt-in per session) - thread it here so the agent's
       // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
       // (an excluded file leaks + gets cited). Session is resolved above at execution start.
@@ -3447,7 +3448,7 @@ async function processSubagentDispatch(
       user: user as IUserDocument,
       logger,
       organizationId: child.organizationId,
-      apiKeyId: child.apiKeyId,
+      ...executionTurnAuth(child),
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
       // parent toolbelt). Session is resolved above from the child's sessionId.
       retrievalFilter: toRetrievalFilter(session),

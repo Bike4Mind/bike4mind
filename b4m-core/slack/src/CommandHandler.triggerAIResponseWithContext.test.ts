@@ -95,6 +95,16 @@ describe('triggerAIResponseWithContext', () => {
     expect(result).toBe(`${'x'.repeat(300)}...`);
   });
 
+  it('runs the turn as an internal-origin caller with no api key', async () => {
+    invoke.mockResolvedValue({ id: 'quest-1' });
+    findQuestById.mockResolvedValue({ type: 'done', replies: ['ok'] });
+
+    await makeHandler().triggerAIResponseWithContext('session-1', 'hi', '', undefined, [], undefined, false);
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ authOrigin: 'internal' }));
+    expect(invoke.mock.calls[0][0]).not.toHaveProperty('apiKeyId');
+  });
+
   it('surfaces an HTTPError message thrown before/during invoke()', async () => {
     invoke.mockRejectedValue(new BadRequestError('Invalid model: "gpt-nope" is not available'));
 

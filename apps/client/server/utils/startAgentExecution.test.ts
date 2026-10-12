@@ -325,6 +325,17 @@ describe('startAgentExecution', () => {
     expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('apiKeyId');
   });
 
+  it('persists how the run was authenticated, so its tools and child runs see it', async () => {
+    await startAgentExecution(
+      input({ userId: 'keyed', apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      logger
+    );
+    await startAgentExecution(input({ userId: 'session', apiKeyInfo: undefined }), logger);
+
+    expect(mockCreateExecution.mock.calls[0][0].authOrigin).toBe('apiKey');
+    expect(mockCreateExecution.mock.calls[1][0].authOrigin).toBe('session');
+  });
+
   it('ignores the dispatch payload on an interactive run, which can approve per-tool instead', async () => {
     await startAgentExecution(
       input({ userId: 'interactive-run', connectionId: 'real-ws-conn', enabledTools: ['web_search'] }),
