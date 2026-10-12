@@ -45,8 +45,7 @@ import ImageDisplay from './ImageDisplay';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
-import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
-import remarkMath from 'remark-math';
+import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import rehypeKatex from 'rehype-katex';
 import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
@@ -82,6 +81,7 @@ import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/a
 import NavigationButtons from './NavigationButtons';
 import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
+import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
@@ -1317,8 +1317,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const linksCitationMarkers = shouldLinkCitationMarkers(promptMeta?.citables ?? NO_CITABLES, !!completed);
   const replyRemarkPlugins = useMemo(
     (): ReactMarkdownOptions['remarkPlugins'] => [
-      remarkGfmNoSingleTilde,
-      [remarkMath, { singleDollarTextMath: false }],
+      ...assistantReplyRemarkPlugins,
       ...(linksCitationMarkers ? [remarkCitationMarkers] : []),
     ],
     [linksCitationMarkers]
@@ -1864,6 +1863,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                     )}
 
                     {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
+                    {completed && <EnableWebSearchAction reply={cleanReply} />}
                     {replyActions}
                   </Typography>
                 </Box>
