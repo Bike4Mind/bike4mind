@@ -62,8 +62,24 @@ describe('NotebookLayout landmarks', () => {
     expect(screen.getAllByRole('heading', { level: 1 }).map(el => el.textContent)).toEqual(['Projects']);
   });
 
-  it('moves focus left on body to the heading after a route change', () => {
+  it('leaves focus on body at first load so keyboard users start at the sidebar', () => {
     renderLayout();
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('moves focus left on body to the heading after a route change', () => {
+    const view = renderLayout();
+    h.pathname = '/skills';
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <NotebookLayout>
+          <p>page body</p>
+        </NotebookLayout>
+      </CssVarsProvider>
+    );
     expect(document.activeElement).toBe(document.body);
     act(() => {
       vi.advanceTimersToNextFrame();
@@ -72,7 +88,15 @@ describe('NotebookLayout landmarks', () => {
   });
 
   it('leaves focus alone when the screen already focused a control', () => {
-    renderLayout(<input aria-label="composer" autoFocus />);
+    const view = renderLayout(<input aria-label="composer" autoFocus />);
+    h.pathname = '/skills';
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <NotebookLayout>
+          <input aria-label="composer" autoFocus />
+        </NotebookLayout>
+      </CssVarsProvider>
+    );
     act(() => {
       vi.advanceTimersToNextFrame();
     });

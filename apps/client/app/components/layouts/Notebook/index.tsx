@@ -102,7 +102,11 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
   // A route change that unmounts the focused control (an account menu item, a dialog's opener)
   // drops focus to <body>, sending keyboard and screen reader users back to the top of the page.
   // Land them on the new screen's heading instead; a screen that focuses its own control wins.
+  // Skipped on first load: focusing main there would start keyboard users past the sidebar.
+  const lastPathnameRef = useRef(pathname);
   useEffect(() => {
+    if (lastPathnameRef.current === pathname) return;
+    lastPathnameRef.current = pathname;
     const frame = requestAnimationFrame(() => {
       if (document.activeElement && document.activeElement !== document.body) return;
       const target = mainRef.current?.querySelector<HTMLElement>('h1') ?? mainRef.current;

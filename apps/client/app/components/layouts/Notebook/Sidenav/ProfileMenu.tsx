@@ -171,6 +171,7 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
         : (theme.palette.credits?.accountOption.backgroundColor ?? theme.palette.background.level1),
       transition: 'background 0.15s',
       ...(!selected && { '&:hover': { background: theme.palette.notebooklist.hoverBg } }),
+      '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
     })}
   >
     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
