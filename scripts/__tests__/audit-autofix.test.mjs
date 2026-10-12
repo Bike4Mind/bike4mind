@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { computeOverrideFixes, patchedFloor } from '../audit-autofix.mjs';
+import { computeOverrideFixes, patchedFloor, renderSkippedLines } from '../audit-autofix.mjs';
 
 const ALLOWLIST = new Set(['GHSA-known-1111-1111']);
 
@@ -70,6 +70,57 @@ describe('computeOverrideFixes', () => {
       {}
     );
     expect(result.overrides).toEqual({ 'some-pkg@<2.1.0': '^2.1.0' });
+  });
+
+  it('leaves a floor that would move an installed copy across a major to a human', () => {
+    const cases = [
+      // Two installed majors: the floor above the newest would drag 1.2.0 to ^2.1.3.
+      { patched_versions: '>=1.2.5 <2.0.0 || >=2.1.3', findings: [{ version: '1.2.0' }, { version: '2.0.5' }] },
+      // Patched only on the next major.
+      { patched_versions: '>=2.1.3', findings: [{ version: '1.9.0' }] },
+      // On 0.x a minor bump is a major bump for a caret range.
+      { patched_versions: '>=0.36.0', findings: [{ version: '0.35.4' }] },
+    ];
+    for (const c of cases) {
+      const result = computeOverrideFixes(report(advisory(c)), ALLOWLIST, {});
+      expect(result.changed).toBe(false);
+      expect(result.overrides).toEqual({});
+      expect(result.skipped[0].reason).toMatch(/move across a major/);
+    }
+  });
+
+  it('leaves a floor that does not cover an installed copy to a human', () => {
+    // Backport-only patch: 1.2.5 never touches the vulnerable 2.0.5 copy.
+    const backport = advisory({ patched_versions: '>=1.2.5 <2.0.0', findings: [{ version: '2.0.5' }] });
+    expect(computeOverrideFixes(report(backport), ALLOWLIST, {}).skipped[0].reason).toMatch(
+      /not below the patched floor/
+    );
+    const prerelease = advisory({ findings: [{ version: '1.11.0-rc.1' }] });
+    expect(computeOverrideFixes(report(prerelease), ALLOWLIST, {}).skipped[0].reason).toMatch(/not a plain version/);
+  });
+
+  it('checks the installed copies of every advisory against the highest floor', () => {
+    const result = computeOverrideFixes(
+      report(
+        advisory({ patched_versions: '>=1.11.0', findings: [{ version: '1.10.0' }] }),
+        advisory({
+          github_advisory_id: 'GHSA-new-cccc-cccc',
+          patched_versions: '>=2.0.1',
+          findings: [{ version: '2.0.0' }],
+        })
+      ),
+      ALLOWLIST,
+      {}
+    );
+    expect(result.changed).toBe(false);
+    expect(result.skipped.map(s => s.ghsa)).toEqual(['GHSA-new-aaaa-aaaa', 'GHSA-new-cccc-cccc']);
+  });
+
+  it('renders one parseable line per skipped advisory', () => {
+    const result = computeOverrideFixes(report(advisory({ patched_versions: '<0.0.0' })), ALLOWLIST, {});
+    expect(renderSkippedLines(result.skipped)).toEqual([
+      'GHSA-new-aaaa-aaaa | some-pkg | high | no usable patched version (`<0.0.0`): allowlist or replace',
+    ]);
   });
 
   it('(6) reports no change when nothing fails', () => {
@@ -151,6 +202,7 @@ describe('main (CLI)', () => {
         ...process.env,
         PACKAGES_JSON_REPORT_PATH: path.join(dir, 'report.json'),
         AUTOFIX_SUMMARY_PATH: path.join(dir, 'summary.md'),
+        AUTOFIX_SKIPPED_PATH: path.join(dir, 'skipped.txt'),
         GITHUB_OUTPUT: out,
       },
       encoding: 'utf8',
@@ -159,6 +211,7 @@ describe('main (CLI)', () => {
       status: res.status,
       output: fs.readFileSync(out, 'utf8'),
       summary: fs.readFileSync(path.join(dir, 'summary.md'), 'utf8'),
+      skipped: fs.readFileSync(path.join(dir, 'skipped.txt'), 'utf8'),
     };
   };
 
@@ -168,6 +221,8 @@ describe('main (CLI)', () => {
     const res = run(report());
     expect(res.status).toBe(0);
     expect(res.output).toBe('changed=false\n');
+    // Written even when empty: an empty file means "nothing skipped", a missing one "unknown".
+    expect(res.skipped).toBe('');
     expect(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).toBe(original);
   });
 
@@ -181,5 +236,12 @@ describe('main (CLI)', () => {
     });
     expect(res.summary).toMatch(/GHSA-new-aaaa-aaaa/);
     expect(res.summary).toMatch(/CONTRIBUTING\.md#fixing-a-dependency-advisory/);
+  });
+
+  it('writes the skipped advisories file', () => {
+    fs.writeFileSync(path.join(dir, 'package.json'), '{\n  "name": "x"\n}\n');
+    const res = run(report(advisory({ patched_versions: '<0.0.0' })));
+    expect(res.status).toBe(0);
+    expect(res.skipped).toMatch(/^GHSA-new-aaaa-aaaa \| some-pkg \| high \| no usable patched version/);
   });
 });

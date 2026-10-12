@@ -160,6 +160,7 @@ jobs:
         env:
           PACKAGES_JSON_REPORT_PATH: audit-report.json
           AUTOFIX_SUMMARY_PATH: ${{ runner.temp }}/autofix-summary.md
+          AUTOFIX_SKIPPED_PATH: ${{ runner.temp }}/autofix-skipped.txt
         run: node scripts/audit-autofix.mjs
 
       - name: Update lockfile and re-check
@@ -198,6 +199,8 @@ jobs:
         with:
           client-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
 
       # Rebuilt from the current main on every failing run, so the bot branch
       # never conflicts. A push happens only when the fix content changed.
@@ -248,21 +251,16 @@ jobs:
           AUTOFIX_CHANGED: ${{ steps.autofix.outputs.changed }}
           AUTOFIX_FIXED: ${{ steps.recheck.outputs.fixed }}
           AUTOFIX_PR_URL: ${{ steps.autofix-pr.outputs.url }}
+          AUTOFIX_SKIPPED_PATH: ${{ runner.temp }}/autofix-skipped.txt
         with:
           script: |
             const fs = require('fs');
+            const { planIssueBody, MARKER } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/audit-issue.mjs`);
             const { owner, repo } = context.repo;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
             const playbookUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/blob/main/CONTRIBUTING.md#fixing-a-dependency-advisory`;
-            const crypto = require('crypto');
-            const marker = '<!-- dependency-audit-main -->';
             const failed = process.env.GATE_EXIT_CODE === '2';
             const output = fs.existsSync('gate-output.txt') ? fs.readFileSync('gate-output.txt', 'utf8').trim() : '';
-            // Hash only the "[SEVERITY] pkg: GHSA" lines so a reworded message doesn't count as a change.
-            const advisoryLines = output.split('\n').filter(l => /^\s*\[[A-Z]+\] /.test(l)).map(l => l.trim()).sort();
-            const findingsHash = crypto.createHash('sha256').update(advisoryLines.join('\n')).digest('hex').slice(0, 16);
-            const hashMarker = `<!-- dependency-audit-findings:${findingsHash} -->`;
-            const hashMarkerRe = /<!-- dependency-audit-findings:[0-9a-f]+ -->/;
 
             const existing = await github.rest.issues.listForRepo({
               owner,
@@ -271,53 +269,63 @@ jobs:
               labels: 'security',
               per_page: 100,
             });
-            const found = existing.data.find(i => i.body && i.body.includes(marker));
+            const found = existing.data.find(i => i.body && i.body.includes(MARKER));
 
             let autofix;
             if (process.env.AUTOFIX_PR_URL) {
               autofix = `**Auto-fix PR:** ${process.env.AUTOFIX_PR_URL}`;
               if (process.env.AUTOFIX_FIXED !== 'true') autofix += ' (does not fix everything; see its description)';
             } else if (process.env.AUTOFIX_OUTCOME === 'success' && process.env.AUTOFIX_CHANGED === 'false') {
-              autofix = '**Auto-fix:** nothing could be fixed automatically; see the run log.';
+              autofix = '**Auto-fix:** nothing could be fixed automatically.';
             } else {
               autofix = '**Auto-fix:** the auto-fix PR could not be created; see the run log.';
             }
 
             if (failed) {
-              const findings = ['```', output, '```'].join('\n');
+              // Skip data counts only from a step that finished; otherwise it is unknown.
+              const skippedPath = process.env.AUTOFIX_SKIPPED_PATH;
+              const skippedText =
+                process.env.AUTOFIX_OUTCOME === 'success' && fs.existsSync(skippedPath)
+                  ? fs.readFileSync(skippedPath, 'utf8')
+                  : null;
+              const plan = planIssueBody({
+                existingBody: found ? found.body : null,
+                gateOutput: output,
+                skippedText,
+                autofix,
+                runUrl,
+                playbookUrl,
+              });
               if (found) {
-                // Comment only when the finding set changed, so a red main doesn't notify every run.
-                if (found.body.includes(hashMarker)) return;
-                await github.rest.issues.createComment({
-                  owner,
-                  repo,
-                  issue_number: found.number,
-                  body: [`Still failing as of ${runUrl}, with a changed set of advisories:`, '', findings, '', autofix].join('\n'),
-                });
-                const body = hashMarkerRe.test(found.body)
-                  ? found.body.replace(hashMarkerRe, hashMarker)
-                  : found.body.replace(marker, `${marker}\n${hashMarker}`);
-                await github.rest.issues.update({ owner, repo, issue_number: found.number, body });
+                // The body is refreshed every run (no notification); a comment is posted
+                // only when the advisories or skip reasons changed, so a red main doesn't
+                // notify every run.
+                if (plan.changed) {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: found.number,
+                    body: [
+                      `Still failing as of ${runUrl}, with a changed set of advisories or skip reasons:`,
+                      '',
+                      '```',
+                      output,
+                      '```',
+                      '',
+                      autofix,
+                    ].join('\n'),
+                  });
+                }
+                if (plan.body !== found.body) {
+                  await github.rest.issues.update({ owner, repo, issue_number: found.number, body: plan.body });
+                }
               } else {
                 const created = await github.rest.issues.create({
                   owner,
                   repo,
                   title: 'Dependency audit: high/critical advisories on main',
                   labels: ['security', 'dependencies'],
-                  body: [
-                    marker,
-                    hashMarker,
-                    '',
-                    'The scheduled dependency audit found high/critical advisories on `main` that are not in `scripts/audit-allowlist.json`.',
-                    '',
-                    findings,
-                    '',
-                    autofix,
-                    `**Run:** ${runUrl}`,
-                    `**Fix steps:** ${playbookUrl}`,
-                    '',
-                    '_This issue is updated by `.github/workflows/audit-gate.yml` and closed automatically once main is clean._',
-                  ].join('\n'),
+                  body: plan.body,
                 });
                 core.setOutput('created', 'true');
                 core.setOutput('url', created.data.html_url);

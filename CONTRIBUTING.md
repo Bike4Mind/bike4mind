@@ -294,6 +294,8 @@ To fix a failing gate (or the tracking issue):
 
 When the scheduled audit finds advisories on `main`, it also opens an auto-fix PR from the `ci/dependency-audit-autofix` branch that applies steps 1 and 2. A human reviews its lockfile diff and merges it; prefer that PR over writing the same bump by hand.
 
+The auto-fix only raises a floor within the installed major. Anything else (a major bump, no patched release, a range or line override) is listed in the tracking issue between `<!-- dependency-audit-skipped -->` markers, one `GHSA | package | severity | reason` line each. An empty block means nothing was skipped; a missing block means the run could not tell.
+
 ### Preview deploys
 
 Preview environments (`pr<N>.preview.bike4mind.com`) are created **on demand by maintainers** through an internal deploy pipeline — there is no label or comment command on this repo that triggers one. Every PR still runs the full CI suite (typecheck, lint, tests). When a maintainer wants to exercise your change in a live environment, they trigger a preview and a bot comment with the URL appears on the PR; previews are torn down automatically when the PR closes or after 3 days without a redeploy. The required **Deploy** check stays green either way — the absence of a preview is expected, not a failure.

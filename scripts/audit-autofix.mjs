@@ -8,7 +8,8 @@
 // patched range, an exact pin) is listed for a human instead of guessed.
 //
 // Usage: PACKAGES_JSON_REPORT_PATH=report.json AUTOFIX_SUMMARY_PATH=summary.md node scripts/audit-autofix.mjs
-// Writes `changed=true|false` to $GITHUB_OUTPUT when set.
+// Writes `changed=true|false` to $GITHUB_OUTPUT, and the skipped advisories to
+// $AUTOFIX_SKIPPED_PATH, when set.
 
 import fs from 'fs/promises';
 import path from 'path';
@@ -47,6 +48,24 @@ export function patchedFloor(patchedVersions, installedVersions = []) {
   return floors.find(f => compareVersions(f, highest) > 0) ?? null;
 }
 
+// The semver line a caret range stays on: the major, or `0.minor` below 1.0.0.
+function semverLine(v) {
+  const [major, minor] = v.match(VERSION).slice(1).map(Number);
+  return major === 0 ? `0.${minor}` : `${major}`;
+}
+
+// Why a floor cannot be applied for these installed versions, or null when it can.
+// A `name@<X: ^X` floor fixes a version only if that version is below X and on
+// X's semver line; anything else is a cross-major move or a no-op.
+function floorProblem(floor, installed) {
+  for (const v of installed) {
+    if (!VERSION.test(String(v))) return `installed \`${v}\` is not a plain version`;
+    if (compareVersions(v, floor) >= 0) return `installed \`${v}\` is not below the patched floor \`${floor}\``;
+    if (semverLine(v) !== semverLine(floor)) return `installed \`${v}\` would move across a major to \`^${floor}\``;
+  }
+  return null;
+}
+
 // Splits an override key into package name and selector range (`@scope/x@<1.0.0`).
 function parseOverrideKey(key) {
   const at = key.lastIndexOf('@');
@@ -80,15 +99,21 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}) {
       skipped.push({ ...a, reason: `no usable patched version (\`${adv.patched_versions}\`): allowlist or replace` });
       continue;
     }
-    const t = targets.get(a.pkg) || { floor, advisories: [] };
+    const t = targets.get(a.pkg) || { floor, advisories: [], installed: [] };
     if (compareVersions(floor, t.floor) > 0) t.floor = floor;
     t.advisories.push(a);
+    t.installed.push(...installed);
     targets.set(a.pkg, t);
   }
 
   let entries = Object.entries(currentOverrides);
   const fixes = [];
-  for (const [pkg, { floor, advisories }] of targets) {
+  for (const [pkg, { floor, advisories, installed }] of targets) {
+    const problem = floorProblem(floor, installed);
+    if (problem) {
+      for (const a of advisories) skipped.push({ ...a, reason: `${problem} (needs a human)` });
+      continue;
+    }
     const ownKeys = entries.map(([k]) => k).filter(k => parseOverrideKey(k).name === pkg);
     if (ownKeys.some(k => parseOverrideKey(k).range === null)) {
       for (const a of advisories)
@@ -137,6 +162,12 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}) {
   return { overrides: Object.fromEntries(entries), fixes, skipped, changed: fixes.length > 0 };
 }
 
+// One `GHSA | package | severity | reason` line per skipped advisory, the input
+// for the tracking issue's skipped block (scripts/audit-issue.mjs).
+export function renderSkippedLines(skipped) {
+  return skipped.map(s => `${s.ghsa} | ${s.pkg} | ${s.severity} | ${s.reason.replace(/\s+/g, ' ')}`);
+}
+
 function renderSummary({ fixes, skipped }, shapeNote) {
   const lines = [
     'Raises `pnpm.overrides` past high/critical advisories found by the scheduled dependency audit of `main`.',
@@ -160,6 +191,7 @@ function renderSummary({ fixes, skipped }, shapeNote) {
 async function main() {
   const reportPath = process.env.PACKAGES_JSON_REPORT_PATH || 'audit-report.json';
   const summaryPath = process.env.AUTOFIX_SUMMARY_PATH || 'autofix-summary.md';
+  const skippedPath = process.env.AUTOFIX_SKIPPED_PATH;
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const pkgPath = path.join(scriptDir, '..', 'package.json');
 
@@ -176,6 +208,10 @@ async function main() {
   if (result.changed) {
     pkg.pnpm = { ...pkg.pnpm, overrides: result.overrides };
     await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+  }
+  if (skippedPath) {
+    const lines = renderSkippedLines(result.skipped);
+    await fs.writeFile(skippedPath, lines.map(l => l + '\n').join(''));
   }
   const summary = renderSummary(result, shapeNote);
   await fs.writeFile(summaryPath, summary);
