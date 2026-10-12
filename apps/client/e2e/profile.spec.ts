@@ -163,6 +163,8 @@ test.describe('Profile - Agent connect', () => {
   });
 });
 
+// Relies on this spec user having no claimable gear: anything here that unlocks one
+// (e.g. creating an API key) swaps the Start here tag for Claim and breaks this test.
 test.describe('Sidenav - Gears', () => {
   test('new account sees the Getting Started reward on the Gears row', async ({ page, basePage }) => {
     const statusResponse = page.waitForResponse(r => r.url().includes('/api/gears/status') && r.ok());
@@ -178,7 +180,7 @@ test.describe('Sidenav - Gears', () => {
       .reduce((sum, g) => sum + g.credits, 0);
 
     const tag = page.getByTestId('sidenav-gears-start-here');
-    await expect(tag).toHaveText(/^Start here, \+[\d,]+ credits?$/, { timeout: TIMEOUTS.VISIBLE });
+    await expect(tag).toHaveText(/^Start here, \+[\d.,\s\u00a0\u202f]+ credits?$/, { timeout: TIMEOUTS.VISIBLE });
     const shown = Number((await tag.textContent())!.replace(/\D/g, ''));
     expect(shown).toBeGreaterThan(0);
     expect(shown).toBeLessThanOrEqual(undoneCredits);
