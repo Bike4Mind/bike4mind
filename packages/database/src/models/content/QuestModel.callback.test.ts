@@ -495,6 +495,7 @@ describe('stale dispatched callbacks', () => {
       const cb = await questRepository.findCallbackById(id);
       expect(cb!.state).toBe('failed');
       expect(cb!.lastError).toBe('redispatch horizon passed');
+      expect(cb!.completedAt).toBeInstanceOf(Date);
     });
 
     it('does not touch a stale callback that still has redispatches remaining', async () => {
