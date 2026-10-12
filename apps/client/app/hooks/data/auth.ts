@@ -93,8 +93,9 @@ export function useSendOTC() {
 
 // 0 is kept distinct from a missing header: the server sends it when a concurrent send superseded this one.
 function parseRetryAfter(header: unknown): number | undefined {
-  if (header === undefined || header === null || header === '') return undefined;
-  const seconds = Number(header);
+  const text = header === undefined || header === null ? '' : String(header).trim();
+  if (text === '') return undefined;
+  const seconds = Number(text);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
 }
 
@@ -112,6 +113,7 @@ export function useVerifyOTC() {
             // Preserve the re-issued pending token (rotated nonce) so the caller can retry
             // with it; dropping it here strands the user on a valid code (see LoginError).
             pendingToken: error.response.data.pendingToken,
+            retryAfterSeconds: parseRetryAfter(error.response.headers?.['retry-after']),
           };
         }
         throw {

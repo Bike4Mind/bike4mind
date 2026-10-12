@@ -33,6 +33,8 @@ describe('useSendOTC - Retry-After parsing on 429', () => {
     ['', undefined],
     ['12', 12],
     [12, 12],
+    ['   ', undefined],
+    [' 7 ', 7],
     ['abc', undefined],
     ['-5', undefined],
   ])('maps Retry-After %j to retryAfterSeconds %j', async (header, expected) => {
