@@ -17,6 +17,7 @@ const READY_AFTER_MS = 4_000;
  * "[reject]" fails submit definitively, "[blocked]" is a policy block, "[fail]" a non-retryable failure.
  */
 export class TestVideoProvider implements VideoProvider {
+  readonly mode = 'async' as const;
   readonly id = 'test' as const;
   readonly models = ['test-video'] as const;
 

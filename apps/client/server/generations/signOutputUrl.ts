@@ -2,12 +2,12 @@ import { isImageServeable } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import { isValidObjectId } from '@server/utils/objectId';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
-import type { SignOutputUrl } from './toPublicVideoGeneration';
+import type { SignOutputUrl } from './signedOutput';
 
 // Only these statuses can still turn 'clean'; 'blocked' (or a missing status) never will.
 const isAwaitingScan = (status: string | null | undefined): boolean => status === 'pending' || status === 'scanning';
 
-// Must match where videoJobHandler's store step put the bytes (VideoJobOutput.location).
+// Must match where each job handler's store step put the bytes (e.g. VideoJobOutput.location).
 // A Files copy is created 'pending' and only cleared by the async S3 objectCreated scan, so a job can read as
 // succeeded before its file is serveable: sign it only once the FabFile passes the shared moderation gate.
 // 'generated' output has no FabFile to gate (the Files save failed), so it is served like a generated image.
