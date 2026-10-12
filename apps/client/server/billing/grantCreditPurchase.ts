@@ -29,37 +29,46 @@ export async function grantCreditPurchase(
   grant: CreditPurchaseGrant,
   logger?: Logger
 ): Promise<CreditPurchaseGrantResult> {
-  const result = await withTransaction(
-    async (): Promise<CreditPurchaseGrantResult> => {
-      // Read before writing: a concurrent delivery that committed first shows up here on the
-      // transient-error retry. Left to addCredits, the insert would hit the duplicate key,
-      // which aborts the transaction on every retry.
-      if (await creditTransactionRepository.findByPaymentIntentId(grant.paymentIntentId)) {
-        return 'already_granted';
-      }
-      await creditService.addCredits(
-        {
-          type: 'purchase',
-          ownerId: grant.userId,
-          ownerType: CreditHolderType.User,
-          amount: grant.amount,
-          credits: grant.credits,
-          status: CreditPurchaseStatus.Completed,
-          stripePaymentIntentId: grant.paymentIntentId,
-          packageId: grant.packageId,
-          metadata: {
-            environment: grant.environment,
-            paymentMethod: grant.paymentMethod,
+  let result: CreditPurchaseGrantResult;
+  try {
+    result = await withTransaction(
+      async (): Promise<CreditPurchaseGrantResult> => {
+        // Read before writing: a concurrent delivery that committed first shows up here on the
+        // transient-error retry. Left to addCredits, the insert would hit the duplicate key,
+        // which aborts the transaction on every retry.
+        if (await creditTransactionRepository.findByPaymentIntentId(grant.paymentIntentId)) {
+          return 'already_granted';
+        }
+        await creditService.addCredits(
+          {
+            type: 'purchase',
+            ownerId: grant.userId,
+            ownerType: CreditHolderType.User,
+            amount: grant.amount,
+            credits: grant.credits,
+            status: CreditPurchaseStatus.Completed,
+            stripePaymentIntentId: grant.paymentIntentId,
+            packageId: grant.packageId,
+            metadata: {
+              environment: grant.environment,
+              paymentMethod: grant.paymentMethod,
+            },
           },
-        },
-        { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
-      );
-      return 'granted';
-    },
-    // Explicit rather than inherited from the cluster defaults: the committed row is the webhook's
-    // "credits landed" signal, so it must not be readable before it is durable.
-    { logger, readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } }
-  );
+          { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
+        );
+        return 'granted';
+      },
+      // Explicit rather than inherited from the cluster defaults: the committed row is the webhook's
+      // "credits landed" signal, so it must not be readable before it is durable.
+      { logger, readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } }
+    );
+  } catch (err) {
+    // A duplicate on the payment intent means another delivery's transaction committed the row,
+    // and with it the balance. Any other error, including another duplicate key, must still fail.
+    const dup = err as { code?: number; keyPattern?: Record<string, number> } | null;
+    if (dup?.code === 11000 && dup.keyPattern?.stripePaymentIntentId === 1) return 'already_granted';
+    throw err;
+  }
 
   // The pack lot stays outside the transaction: stamping is best-effort and swallows its own
   // errors, but a failed write inside a transaction aborts it and would fail the grant with it.
