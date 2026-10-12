@@ -993,6 +993,8 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
       const hold = unsettledHoldRef.current;
       settleUnsettledHold();
       if (!hold) return;
+      // A keepalive fetch cannot run the 401 refresh, so an expired token makes this /end a 401; if
+      // the WebSocket frame is dropped too, the stale-hold sweep reclaims the hold as for a crash.
       const token = useAccessToken.getState().accessToken;
       try {
         void fetch(`/api/voice/v2/sessions/${encodeURIComponent(hold.sessionId)}/end`, {
