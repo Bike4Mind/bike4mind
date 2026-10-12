@@ -76,10 +76,10 @@ export function lockfileVersions(lockText) {
   return versions;
 }
 
-// Why a floor cannot be applied, or null when it can. A `name@<X: ^X` override
-// rewrites every dependent whose declared range reaches below X, not only the
-// vulnerable copies, so each installed copy below X must be on X's semver line,
-// and each vulnerable copy must be below X or the floor fixes nothing.
+// Why a floor cannot be applied, or null when it can. pnpm applies `name@<X: ^X`
+// to every dependent whose declared range intersects `<X`, and the lockfile does
+// not record declared ranges, so every installed copy, above or below X, must be
+// on X's semver line. Each vulnerable copy must be below X or the floor fixes nothing.
 function floorProblem(floor, vulnerable, installed) {
   if (vulnerable.length === 0 && installed.length === 0) return 'no installed version found';
   for (const v of vulnerable) {
@@ -88,8 +88,7 @@ function floorProblem(floor, vulnerable, installed) {
   }
   for (const v of [...vulnerable, ...installed]) {
     if (!VERSION.test(String(v))) return `installed \`${v}\` is not a plain version`;
-    if (compareVersions(v, floor) < 0 && semverLine(v) !== semverLine(floor))
-      return `installed \`${v}\` would move across a major to \`^${floor}\``;
+    if (semverLine(v) !== semverLine(floor)) return `installed \`${v}\` would move across a major to \`^${floor}\``;
   }
   return null;
 }

@@ -127,9 +127,13 @@ describe('computeOverrideFixes', () => {
     const result = computeOverrideFixes(report(scoped), ALLOWLIST, {}, withOlder);
     expect(result.changed).toBe(false);
     expect(result.skipped[0].reason).toMatch(/`1\.9\.0` would move across a major/);
-    // A copy above the floor is not matched by `<2.3.1`, so it does not block the fix.
+    // A dependent declaring `*` or `>=2.0.0` that locked 3.1.0 also intersects `<2.3.1`.
     const withNewer = new Map([['some-pkg', ['2.2.0', '3.1.0']]]);
-    expect(computeOverrideFixes(report(scoped), ALLOWLIST, {}, withNewer).overrides).toEqual({
+    const newer = computeOverrideFixes(report(scoped), ALLOWLIST, {}, withNewer);
+    expect(newer.changed).toBe(false);
+    expect(newer.skipped[0].reason).toMatch(/`3\.1\.0` would move across a major/);
+    const sameLine = new Map([['some-pkg', ['2.0.4', '2.2.0', '2.9.0']]]);
+    expect(computeOverrideFixes(report(scoped), ALLOWLIST, {}, sameLine).overrides).toEqual({
       'some-pkg@<2.3.1': '^2.3.1',
     });
   });
@@ -291,6 +295,18 @@ describe('main (CLI)', () => {
     });
     expect(res.summary).toMatch(/GHSA-new-aaaa-aaaa/);
     expect(res.summary).toMatch(/CONTRIBUTING\.md#fixing-a-dependency-advisory/);
+  });
+
+  it('reads every locked copy from pnpm-lock.yaml', () => {
+    fs.writeFileSync(
+      path.join(dir, 'pnpm-lock.yaml'),
+      "lockfileVersion: '9.0'\npackages:\n  some-pkg@0.9.0:\n  some-pkg@1.10.0:\n"
+    );
+    fs.writeFileSync(path.join(dir, 'package.json'), '{\n  "name": "x"\n}\n');
+    const res = run(report(advisory()));
+    expect(res.status).toBe(0);
+    expect(res.output).toBe('changed=false\n');
+    expect(res.skipped).toMatch(/`0\.9\.0` would move across a major/);
   });
 
   it('writes the skipped advisories file', () => {
