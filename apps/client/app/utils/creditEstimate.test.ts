@@ -31,6 +31,12 @@ describe('typicalAnswerCredits', () => {
     expect(typicalAnswerCredits(SONNET_55)).toBeCloseTo(expected);
   });
 
+  it('returns null for a free-to-run model, so no estimate quotes infinite answers', () => {
+    const free = { ...model(ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'Free', 0, 0), freeToRun: true } as ModelInfo;
+
+    expect(typicalAnswerCredits(free)).toBeNull();
+  });
+
   it('returns null for an unpriced model rather than calling it free', () => {
     expect(typicalAnswerCredits({ ...SONNET_55, pricing: undefined } as unknown as ModelInfo)).toBeNull();
   });
@@ -47,6 +53,12 @@ describe('pickAnswerCostReference', () => {
     expect(pickAnswerCostReference([OPUS, SONNET_5])?.modelName).toBe('Claude 5 Sonnet');
   });
 
+  it('falls back to the native Sonnet entry when no Bedrock one is listed', () => {
+    const native = model(ChatModels.CLAUDE_5_SONNET, 'Claude 5 Sonnet (native)', 3, 15);
+
+    expect(pickAnswerCostReference([OPUS, native])?.modelName).toBe('Claude 5 Sonnet (native)');
+  });
+
   it('gives no reference when no mid-tier model is priced', () => {
     expect(pickAnswerCostReference([OPUS])).toBeNull();
   });
@@ -58,6 +70,12 @@ describe('estimateAnswerCount', () => {
     [10_000, 54, 180],
     [5_000, 54, 92],
     [1_000_000, 54, 18_000],
+    // Boundaries of the two-significant-figure rounding: exact below 100, floored from 100 up.
+    [99, 1, 99],
+    [100, 1, 100],
+    [101, 1, 100],
+    [999, 1, 990],
+    [1_000, 1, 1_000],
   ])('%d credits at %d per answer is about %d answers, rounded down', (credits, perAnswer, expected) => {
     expect(estimateAnswerCount(credits, perAnswer)).toBe(expected);
   });

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { formatAnswerCost, formatCreditAmount, formatCreditBalance } from './formatCredits';
+import { formatAnswerCost, formatCreditAmount, formatCreditBalance, purchaseCreditsAriaLabel } from './formatCredits';
+
+describe('purchaseCreditsAriaLabel', () => {
+  it('names the pack by its grouped credit count and dollar price', () => {
+    expect(purchaseCreditsAriaLabel(50_000, 30)).toBe('Purchase 50,000 credits for $30');
+  });
+});
 
 describe('formatCreditAmount', () => {
   afterEach(() => vi.restoreAllMocks());

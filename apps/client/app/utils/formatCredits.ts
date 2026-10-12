@@ -6,6 +6,10 @@ const plural = (n: number) => (n === 1 ? 'credit' : 'credits');
  */
 export const formatCreditAmount = (credits: number): string => credits.toLocaleString('en-US');
 
+/** Screen-reader name for a one-time credit pack button, shared by both credits dialogs. */
+export const purchaseCreditsAriaLabel = (credits: number, priceDollars: number): string =>
+  `Purchase ${formatCreditAmount(credits)} credits for $${priceDollars}`;
+
 // Below this, `compact` still shows every digit: abbreviating 9,903 to "9.9K" hid single-answer spends.
 const COMPACT_FROM = 100_000;
 

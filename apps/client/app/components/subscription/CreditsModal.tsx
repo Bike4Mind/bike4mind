@@ -4,7 +4,7 @@ import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
 import dayjs from 'dayjs';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import PaymentButton from '../Credits/PaymentButton';
-import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { formatCreditAmount, purchaseCreditsAriaLabel } from '@client/app/utils/formatCredits';
 import { TransactionType } from '@client/lib/credits/types';
 import { FC, useCallback } from 'react';
 import { toast } from 'sonner';
@@ -282,7 +282,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () 
               <PaymentButton
                 transactionType={TransactionType.Package}
                 packageId={pkg.id}
-                ariaLabel={`Purchase ${formatCreditAmount(pkg.credits)} credits for $${pkg.price}`}
+                ariaLabel={purchaseCreditsAriaLabel(pkg.credits, pkg.price)}
                 onPayment={() => handlePaymentComplete(pkg.credits)}
               />
             </Box>

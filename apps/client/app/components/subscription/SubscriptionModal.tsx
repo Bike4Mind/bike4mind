@@ -40,6 +40,9 @@ import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
 // Bullets, credits and copy come from the shared plan table so this modal and the server-side plan
 // map cannot drift; only the price id is re-picked by runtime stage below.
 const PROFESSIONAL_PLAN = SUBSCRIPTION_PLANS.find(plan => plan.name === 'Professional');
+if (!PROFESSIONAL_PLAN) {
+  throw new Error("SubscriptionModal: no 'Professional' entry in SUBSCRIPTION_PLANS (userSubscriptions/constants)");
+}
 
 function centsToDollars(cents: number | undefined) {
   if (cents === undefined) return 0;
@@ -116,20 +119,17 @@ const SubscriptionModalContent = () => {
 
   // Build subscription plans based on runtime stage
   const subscriptionPlans: SubscriptionPlanDetail[] = useMemo(
-    () =>
-      PROFESSIONAL_PLAN
-        ? [
-            {
-              ...PROFESSIONAL_PLAN,
-              // Account-tied Stripe price from NEXT_PUBLIC_* env vars (no brand fallback). Same env
-              // contract as PROFESSIONAL_PRICE_ID in userSubscriptions/constants; selected by runtime
-              // stage here to match the rest of this modal.
-              priceId: isTestMode
-                ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
-                : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? ''),
-            },
-          ]
-        : [],
+    () => [
+      {
+        ...PROFESSIONAL_PLAN,
+        // Account-tied Stripe price from NEXT_PUBLIC_* env vars (no brand fallback). Same env
+        // contract as PROFESSIONAL_PRICE_ID in userSubscriptions/constants; selected by runtime
+        // stage here to match the rest of this modal.
+        priceId: isTestMode
+          ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
+          : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? ''),
+      },
+    ],
     [isTestMode]
   );
 

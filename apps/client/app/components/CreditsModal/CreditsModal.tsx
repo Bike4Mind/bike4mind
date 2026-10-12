@@ -1,6 +1,6 @@
 import PaymentButton from '@client/app/components/Credits/PaymentButton';
 import SubscribeButton from '@client/app/components/Credits/SubscribeButton';
-import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { formatCreditAmount, purchaseCreditsAriaLabel } from '@client/app/utils/formatCredits';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
@@ -172,7 +172,7 @@ const CreditsModal = () => {
                       <PaymentButton
                         transactionType={TransactionType.Package}
                         packageId={pkg.id}
-                        ariaLabel={`Purchase ${formatCreditAmount(pkg.credits)} credits for $${pkg.price}`}
+                        ariaLabel={purchaseCreditsAriaLabel(pkg.credits, pkg.price)}
                         onPayment={() => handlePaymentComplete(pkg.credits)}
                       />
                     </Card>
