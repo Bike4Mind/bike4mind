@@ -14,6 +14,11 @@ describe('estimateElevenLabsConversationalCost', () => {
     });
   });
 
+  it('keeps the hold sized as before: five minutes at $0.20/min through usdToCredits', () => {
+    const transport = createElevenLabsConversationalTransport({ apiKey: 'k', agentId: 'a' });
+    expect(transport.estimateCost(300)).toEqual({ voiceMinutesUpperBound: 5, creditsToReserve: usdToCredits(1) });
+  });
+
   it('is what the transport reserves, at the default and at an overridden rate', () => {
     const transport = createElevenLabsConversationalTransport({ apiKey: 'k', agentId: 'a' });
     expect(transport.estimateCost(300)).toEqual(estimateElevenLabsConversationalCost(300));
