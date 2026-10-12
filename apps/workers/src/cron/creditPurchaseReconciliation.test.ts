@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockFindByPaymentIntentId = vi.fn();
+const mockFindUserById = vi.fn();
 const mockConnectDB = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   connectDB: (...args: unknown[]) => mockConnectDB(...args),
   creditTransactionRepository: {
     findByPaymentIntentId: (...args: unknown[]) => mockFindByPaymentIntentId(...args),
+  },
+  userRepository: {
+    findById: (...args: unknown[]) => mockFindUserById(...args),
   },
 }));
 
@@ -72,7 +76,13 @@ describe('creditPurchaseReconciliation cron', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsStripeConfigured.mockReturnValue(true);
-    mockFindByPaymentIntentId.mockResolvedValue({ id: 'tx_1' });
+    mockFindByPaymentIntentId.mockResolvedValue({
+      id: 'tx_1',
+      ownerId: 'user_1',
+      ownerType: 'User',
+      createdAt: new Date(NOW.getTime() - 3600_000),
+    });
+    mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: new Date(NOW.getTime() - 3600_000 + 50) });
   });
 
   it('lists only the lookback window, minus the webhook grace period', async () => {
@@ -99,6 +109,7 @@ describe('creditPurchaseReconciliation cron', () => {
     expect(result.ungranted).toEqual([
       {
         paymentIntentId: 'pi_missing',
+        reason: 'no_transaction',
         userId: 'user_1',
         amount: 1000,
         currency: 'usd',
@@ -122,6 +133,104 @@ describe('creditPurchaseReconciliation cron', () => {
       expect.stringContaining('no grant'),
       expect.objectContaining({ paymentIntentId: 'pi_missing' })
     );
+  });
+
+  describe('purchase transaction exists', () => {
+    const TX_CREATED_AT = new Date('2026-10-11T06:00:05Z');
+    const purchaseRow = (overrides: Record<string, unknown> = {}) => ({
+      id: 'tx_1',
+      ownerId: 'user_1',
+      ownerType: 'User',
+      createdAt: TX_CREATED_AT,
+      ...overrides,
+    });
+
+    beforeEach(() => {
+      mockList.mockResolvedValue({ data: [intent('pi_1')], has_more: false });
+      mockFindByPaymentIntentId.mockResolvedValue(purchaseRow());
+    });
+
+    it('treats the purchase as granted when the balance increment stamped the owner after the row', async () => {
+      mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: new Date(TX_CREATED_AT.getTime() + 20) });
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(mockFindUserById).toHaveBeenCalledWith('user_1');
+      expect(result.ungranted).toEqual([]);
+      expect(mockPostMessageToSlack).not.toHaveBeenCalled();
+    });
+
+    it('flags a row whose balance increment never ran (owner stamp older than the row)', async () => {
+      mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: new Date('2026-09-01T00:00:00Z') });
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(result.ungranted).toEqual([
+        expect.objectContaining({ paymentIntentId: 'pi_1', reason: 'balance_not_applied' }),
+      ]);
+      const message = mockPostMessageToSlack.mock.calls[0][0] as string;
+      expect(message).toContain('pi_1 (transaction recorded but balance never credited)');
+      expect(message).toContain('admin credit adjustment');
+      expect(message).not.toContain('No purchase transaction:');
+      expect(mockEmitMetric).toHaveBeenCalledWith(
+        'Lumina5/CreditPurchases',
+        'UngrantedPurchases',
+        1,
+        { Stage: 'test' },
+        'Count'
+      );
+    });
+
+    it('tolerates clock skew between the row and the owner stamp', async () => {
+      mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: new Date(TX_CREATED_AT.getTime() - 30_000) });
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(result.ungranted).toEqual([]);
+    });
+
+    it('flags a row when the owner was never stamped by any purchase', async () => {
+      mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: null });
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(result.ungranted.map(p => p.reason)).toEqual(['balance_not_applied']);
+    });
+
+    it('flags a row whose owner no longer exists', async () => {
+      mockFindUserById.mockResolvedValue(null);
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(result.ungranted.map(p => p.reason)).toEqual(['balance_not_applied']);
+    });
+
+    it('skips the balance check for non-user owners', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(purchaseRow({ ownerType: 'Organization' }));
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(mockFindUserById).not.toHaveBeenCalled();
+      expect(result.ungranted).toEqual([]);
+    });
+
+    it('reports both kinds of failure in one alert, labelled by reason', async () => {
+      mockList.mockResolvedValue({ data: [intent('pi_no_row'), intent('pi_no_balance')], has_more: false });
+      mockFindByPaymentIntentId.mockImplementation(async (id: string) => (id === 'pi_no_row' ? null : purchaseRow()));
+      mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: null });
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(result.ungranted.map(p => [p.paymentIntentId, p.reason])).toEqual([
+        ['pi_no_row', 'no_transaction'],
+        ['pi_no_balance', 'balance_not_applied'],
+      ]);
+      const message = mockPostMessageToSlack.mock.calls[0][0] as string;
+      expect(message).toContain('pi_no_row (no purchase transaction)');
+      expect(message).toContain('pi_no_balance (transaction recorded but balance never credited)');
+      expect(message).toContain('No purchase transaction: verify in Stripe');
+      expect(message).toContain('Balance never credited: verify in Stripe');
+    });
   });
 
   it('ignores intents that are not succeeded credit purchases for this stage', async () => {

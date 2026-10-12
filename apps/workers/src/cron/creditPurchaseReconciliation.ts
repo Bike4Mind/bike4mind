@@ -6,6 +6,13 @@
  * by pages/api/stripe/start-payment.ts) and matches each against the purchase CreditTransaction the
  * payment_intent.succeeded webhook records under stripePaymentIntentId.
  *
+ * A row alone does not prove the credits landed: addCredits commits the row before the balance
+ * $inc. apps/client/server/billing/grantCreditPurchase.ts now wraps both in one transaction, but rows
+ * written before that, or by any purchase grant that bypasses it, can hold no balance behind them.
+ * The $inc stamps the user's lastCreditsPurchasedAt in the same update, so a stamp older than the
+ * row (beyond clock-skew tolerance) means the increment never ran. A later purchase or admin grant
+ * overwrites the stamp, so this can miss a failed increment; it is tuned not to flag an applied one.
+ *
  * Read-only against Stripe and the ledger: it never grants, so a rerun only repeats the alert, and
  * an unresolved purchase is reported on every run whose window still covers it.
  *
@@ -21,7 +28,8 @@ import { Context } from 'aws-lambda';
 import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { connectDB, creditTransactionRepository } from '@bike4mind/database';
+import { CreditHolderType } from '@bike4mind/common';
+import { connectDB, creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { isStripeConfigured, stripe } from '@server/integrations/stripe/stripe';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { emitMetric } from '@server/utils/cloudwatch';
@@ -37,6 +45,8 @@ export const GRACE_MS = 30 * 60 * 1000;
 const PAGE_SIZE = 100;
 export const MAX_PAGES = 20;
 const MAX_ALERT_LINES = 20;
+// Row createdAt and lastCreditsPurchasedAt come from different hosts' clocks.
+export const CLOCK_SKEW_TOLERANCE_MS = 60 * 1000;
 
 // Derived rather than imported: the stripe package is a dependency of apps/client, not of workers.
 type PaymentIntent = Awaited<ReturnType<typeof stripe.paymentIntents.list>>['data'][number];
@@ -48,8 +58,11 @@ const contextToLogs = (context: Context) => ({
   stage: Resource.App.stage,
 });
 
+export type UngrantedReason = 'no_transaction' | 'balance_not_applied';
+
 export interface UngrantedPurchase {
   paymentIntentId: string;
+  reason: UngrantedReason;
   userId?: string;
   /** Minor units (cents). */
   amount: number;
@@ -71,22 +84,49 @@ function isStageCreditPurchase(intent: PaymentIntent, stage: string): boolean {
   );
 }
 
+const REASON_LABELS: Record<UngrantedReason, string> = {
+  no_transaction: 'no purchase transaction',
+  balance_not_applied: 'transaction recorded but balance never credited',
+};
+
+// The webhook only grants purchases to users, so other owner types are not balance-checked.
+async function findUngrantedReason(intentId: string): Promise<UngrantedReason | null> {
+  const tx = await creditTransactionRepository.findByPaymentIntentId(intentId);
+  if (!tx) return 'no_transaction';
+  if (tx.ownerType !== CreditHolderType.User) return null;
+  const owner = await userRepository.findById(tx.ownerId);
+  const appliedAt = owner?.lastCreditsPurchasedAt;
+  const applied = appliedAt && appliedAt.getTime() >= tx.createdAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
+  return applied ? null : 'balance_not_applied';
+}
+
 function formatAlert(stage: string, result: CreditPurchaseReconciliationResult): string {
   const lines = result.ungranted
     .slice(0, MAX_ALERT_LINES)
     .map(
       p =>
-        `- ${p.paymentIntentId}: $${(p.amount / 100).toFixed(2)} ${p.currency.toUpperCase()}, ${p.credits} credits, ` +
+        `- ${p.paymentIntentId} (${REASON_LABELS[p.reason]}): $${(p.amount / 100).toFixed(2)} ${p.currency.toUpperCase()}, ${p.credits} credits, ` +
         `user ${p.userId ?? 'unknown'}, paid ${p.createdAt}`
     );
   const more = result.ungranted.length - lines.length;
   return [
     `:warning: *Credit purchases paid but not granted* (${stage}): ${result.ungranted.length} of ${result.checked} ` +
-      `succeeded intent(s) have no purchase transaction.`,
+      `succeeded intent(s) have no credits behind them.`,
     ...lines,
     ...(more > 0 ? [`...and ${more} more (see the CreditPurchaseReconciliation logs).`] : []),
     ...(result.truncated ? ['Scan truncated at the page cap; older intents in the window were not checked.'] : []),
-    'Verify in Stripe, then grant manually. The webhook logs each intent under [CreditPurchase].',
+    ...(result.ungranted.some(p => p.reason === 'no_transaction')
+      ? [
+          'No purchase transaction: verify in Stripe, then grant manually. The webhook logs each intent under [CreditPurchase].',
+        ]
+      : []),
+    ...(result.ungranted.some(p => p.reason === 'balance_not_applied')
+      ? [
+          'Balance never credited: verify in Stripe, then add the credits with an admin credit adjustment. Do not ' +
+            're-grant the purchase (the row exists, so a redelivery will not grant); the adjustment stamps ' +
+            'lastCreditsPurchasedAt, which clears this alert.',
+        ]
+      : []),
   ].join('\n');
 }
 
@@ -117,9 +157,11 @@ export async function runCreditPurchaseReconciliation(
     for (const intent of data) {
       if (!isStageCreditPurchase(intent, stage)) continue;
       result.checked++;
-      if (await creditTransactionRepository.findByPaymentIntentId(intent.id)) continue;
+      const reason = await findUngrantedReason(intent.id);
+      if (!reason) continue;
       result.ungranted.push({
         paymentIntentId: intent.id,
+        reason,
         userId: intent.metadata?.userId,
         amount: intent.amount,
         currency: intent.currency,
