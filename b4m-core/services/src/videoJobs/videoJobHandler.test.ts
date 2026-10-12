@@ -5,7 +5,7 @@ import {
   ProviderSubmitError,
   TestVideoProvider,
   ProviderOutputUnavailableError,
-  VideoOutputTooLargeError,
+  ProviderOutputTooLargeError,
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
 import { Logger } from '@bike4mind/observability';
@@ -538,7 +538,7 @@ describe('video job end to end with the test provider', () => {
       providers: createVideoProviderRegistry([
         stubProvider({
           fetchOutput: async () => {
-            throw new VideoOutputTooLargeError(300 * 1024 * 1024);
+            throw new ProviderOutputTooLargeError(300 * 1024 * 1024);
           },
         }),
       ]),

@@ -3,7 +3,7 @@ import type { ValidatedVideoRequest, VideoModelId, VideoProviderId } from '@bike
 import { Logger } from '@bike4mind/observability';
 import { describeVideoProviderConformance } from '../conformance';
 import { createVideoProviderRegistry } from '../registry';
-import { readBoundedResponse, VideoOutputTooLargeError, type VideoProvider } from '../types';
+import { readBoundedResponse, ProviderOutputTooLargeError, type VideoProvider } from '../types';
 import { TestVideoProvider } from './TestVideoProvider';
 
 const START = new Date('2026-10-06T00:00:00Z');
@@ -101,11 +101,13 @@ describe('createVideoProviderRegistry', () => {
 describe('readBoundedResponse', () => {
   it('rejects early on an oversized content-length', async () => {
     const response = new Response('x', { headers: { 'content-length': String(10) } });
-    await expect(readBoundedResponse(response, 5)).rejects.toBeInstanceOf(VideoOutputTooLargeError);
+    await expect(readBoundedResponse(response, 5)).rejects.toBeInstanceOf(ProviderOutputTooLargeError);
   });
 
   it('rejects while streaming when no content-length is sent', async () => {
-    await expect(readBoundedResponse(new Response('0123456789'), 5)).rejects.toBeInstanceOf(VideoOutputTooLargeError);
+    await expect(readBoundedResponse(new Response('0123456789'), 5)).rejects.toBeInstanceOf(
+      ProviderOutputTooLargeError
+    );
   });
 
   it('returns the bytes under the cap', async () => {
