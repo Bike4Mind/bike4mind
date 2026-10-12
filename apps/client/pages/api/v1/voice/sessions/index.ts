@@ -253,7 +253,8 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   // measures the full call duration, not just the post-reconnect segment.
   const { providerConversationId } = createResult;
   let holdTracksCall = reuseHold && !providerConversationId;
-  if (reuseHold && providerConversationId && session.voiceSessionStartedAt) {
+  if (reuseHold && providerConversationId) {
+    if (!session.voiceSessionStartedAt) throw new Error('reused voice hold has no start time');
     // Appended atomically, not read-modify-written around the provider round trip above: two
     // overlapping reconnects would otherwise drop one id, and its call time would go unbilled.
     holdTracksCall = await sessionRepository.appendVoiceProviderConversationId(
