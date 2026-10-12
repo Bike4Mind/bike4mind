@@ -3,7 +3,8 @@
 # Permanent legitimate exceptions to the contract gate.
 # These are v1 routes that are NOT API handlers and therefore do not use
 # nextRouteForContract: they serve static content (the OpenAPI spec and the
-# Scalar UI) with no auth, no user data, and no DB access.
+# Scalar UI) or the shared 404 for unmatched paths, with no auth, no user
+# data, and no DB access.
 #
 # Rules:
 #   - Do NOT add real API handlers here. Every handler under pages/api/v1
@@ -13,3 +14,4 @@
 apps/client/pages/api/v1/docs.ts
 apps/client/pages/api/v1/openapi.deployment.json.ts
 apps/client/pages/api/v1/openapi.json.ts
+apps/client/pages/api/v1/[...unmatchedV1Path].ts

@@ -24,6 +24,7 @@ export {
   deleteFileContract,
 } from './contracts/files.contract';
 export { createEmbeddingsContract } from './contracts/embeddings.contract';
+export { createDecisionContract, listDecisionModelsContract } from './contracts/decisions.contract';
 export { getQuestContract } from './contracts/quest.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
