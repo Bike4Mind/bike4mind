@@ -1232,12 +1232,39 @@ For an independent package using the current application and worker entrypoints,
 
 ### Background capability inventory guard
 
-The scripts unit suite checks hosted queue, schedule and event declarations against
-`packages/scripts/src/selfhostParityPolicy.ts`. The guard parses source without running
-SST. New or changed declarations, stale policy entries and changed mapped local
-registrations require review. Mapped imports must resolve; boot-path checks are syntactic
-inside `main` and registered callbacks, not proof that runtime gates are enabled. It includes disabled/conditional schedules, shared function
-targets and dead-letter infrastructure; a DLQ is not another application workflow.
+The scripts unit suite checks hosted background triggers against
+`packages/scripts/src/selfhostParityPolicy.ts`. It is a static wiring guard: it parses
+source without running SST, and proves nothing about runtime behaviour. New or changed
+declarations, stale policy entries and changed mapped local registrations require review.
+Mapped imports must resolve; boot-path checks are syntactic inside `main` and registered
+callbacks, not proof that runtime gates are enabled. It includes disabled/conditional
+schedules, shared function targets and dead-letter infrastructure; a DLQ is not another
+application workflow.
+
+Covered shapes (inventory kind in brackets):
+
+- `sst.aws.Queue` and `aws.sqs.Queue` with their `subscribe()` consumers (`queue`)
+- `sst.aws.Cron`, including shared Function `job` targets (`schedule`)
+- `sst.aws.Bus` `subscribe()` / `subscribeQueue()` (`event`)
+- bucket `notify()` notifications to a Function or queue (`notification`)
+- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`)
+- `aws.ses.ReceiptRule` (`sesRule`)
+- `aws.cloudwatch.LogSubscriptionFilter` (`logSubscription`)
+- `aws.sns.TopicSubscription` and `sst.aws.SnsTopic` `subscribe()` (`snsSubscription`)
+- standalone `sst.aws.Function` that no covered trigger targets and that has no `url` (`function`)
+- `sst.aws.Service` (`service`)
+
+A Function that a covered trigger delivers to is inventoried under that trigger. A declaration
+built inside a named factory with a computed name (for example one log subscription per log
+group) is identified by its factory site; computed queue and schedule names fail, because
+local registrations are matched by that name.
+
+Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
+reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
+(HTTP Functions, web/router/WebSocket surfaces, topics and buses whose subscriptions are
+covered, alarms, dashboards, IAM policies, deploy-time invocations, network and WAF plumbing,
+and infrastructure contributed by private overlays). A constructor that is neither covered nor
+listed fails the guard.
 
 Run the focused guard with:
 
@@ -1248,15 +1275,26 @@ pnpm --filter @bike4mind/scripts exec vitest run src/selfhostParityInventory.tes
 A failing guard reports the declaration identity, current declaration/local fingerprint
 and changed AWS signals. Inspect the corresponding infra declaration, referenced cadence
 and stage gates, selected registration/route and its imports before updating the policy.
-Copy the reported fingerprint only after that review; retain a concrete tracked gap or
-reviewed wiring mapping. Do not automatically regenerate the policy to clear CI.
+Copy the reported fingerprint only after that review; keep the gap linked to its capability's
+roadmap epic, or a reviewed wiring mapping. Do not automatically regenerate the policy to
+clear CI. Fingerprints follow referenced handler, job, schedule, stage, link and permission
+inputs but not environment, logging, VPC or sizing option values, so adding a key to a shared
+environment constant does not invalidate every entry.
 
 Review each changed record before updating its fingerprint. `portable` means checked
-registration or routing only; required resource/provider configuration and outcome proof
-remain separate. `pending` retains a tracked gap or capability decision. The infrastructure
-records excluded as separate workflows still require the associated consumer's broker
-configuration and recovery proof. Existing pending records remain under the queue and
-schedule roadmap trackers.
+registration or routing only: it proves the mapped local symbol exists and is reachable from
+`main`, not that it is behaviourally equivalent to the hosted handler. Required
+resource/provider configuration and outcome proof remain separate. `pending` is a gap or
+capability decision linked to a shared roadmap epic (one for schedules, one for every other
+kind), not a per-gap issue. A
+`pending` queue or schedule that a self-host file now registers under the hosted name is
+reported as `Gap now has local wiring - review`. The infrastructure records excluded as
+separate workflows still require the associated consumer's broker configuration and recovery
+proof.
+
+A hosted handler whose source file is missing fails the guard by name and path. The only
+accepted absence is a handler generated from a private overlay into the gitignored
+`apps/client/server/premium-generated/` directory.
 
 AWS signals cover known exclusive hosted permissions and direct handler SDK imports.
 They are review flags, not proof that AWS is required: a configured provider or portable
