@@ -23,6 +23,7 @@ import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.g
 import { openExternalLinkByKey } from '@client/app/utils/externalLinks';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import { greenAlpha } from '@client/app/utils/themes/colors';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -223,7 +224,7 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
           '--Icon-color': theme.palette.text.tertiary,
         })}
       >
-        {credits.toLocaleString()}
+        {formatCreditAmount(credits)}
       </Chip>
     )}
   </Box>
