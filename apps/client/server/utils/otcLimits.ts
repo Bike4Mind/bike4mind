@@ -210,9 +210,14 @@ export async function reserveOtcEmailBudget(
   ip: string,
   budgets: readonly OtcEmailBudget[]
 ): Promise<{ retryAfter: number } | { refund: () => Promise<void> }> {
-  const taken: string[] = [];
+  const taken: { key: string; expiresAt: Date }[] = [];
+  // A unit taken in a window that has since rolled over is already gone; decrementing the new
+  // window would hand back another caller's unit.
   const refund = async () => {
-    for (const key of taken) await cacheRepository.decrementCounter(key);
+    const now = Date.now();
+    for (const { key, expiresAt } of taken) {
+      if (expiresAt.getTime() > now) await cacheRepository.decrementCounter(key);
+    }
   };
   if (isE2EEnabled()) return { refund };
   for (const budget of budgets) {
@@ -226,7 +231,7 @@ export async function reserveOtcEmailBudget(
       await refund();
       return { retryAfter: retryAfterSeconds(expiresAt, budget.windowMs) };
     }
-    taken.push(key);
+    taken.push({ key, expiresAt });
   }
   return { refund };
 }

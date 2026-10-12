@@ -195,6 +195,27 @@ describe('per-email budgets', () => {
     expect(mocks.decrementCounter).toHaveBeenCalledTimes(OTC_SEND_EMAIL_BUDGETS.length);
   });
 
+  it("skips the refund for a window that rolled over, so it never returns another caller's unit", async () => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00.000Z') });
+    try {
+      const dailyKey = `otc-limit:send-email-ip-daily:${otcEmailKey('a@b.co|203.0.113.7')}`;
+      mocks.tryIncrement.mockImplementation(async key => ({
+        success: true,
+        count: 1,
+        expiresAt: new Date(Date.now() + (key === dailyKey ? 60 * 60_000 : 1_000)),
+      }));
+      const result = await reserveOtcEmailBudget('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS);
+      if (!('refund' in result)) throw new Error('expected a reservation');
+
+      vi.advanceTimersByTime(2_000);
+      await result.refund();
+
+      expect(mocks.decrementCounter.mock.calls.map(([key]) => key)).toEqual([dailyKey]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('neither checks nor charges in E2E', async () => {
     mocks.isE2EEnabled.mockReturnValue(true);
     await expect(otcEmailBudgetRetryAfter('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS)).resolves.toBeUndefined();
