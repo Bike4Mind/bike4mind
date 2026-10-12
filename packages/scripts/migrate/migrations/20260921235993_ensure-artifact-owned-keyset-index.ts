@@ -12,9 +12,9 @@ import { type MigrationFile } from './index';
  * prod runs DocumentDB, where an index build takes a foreground collection lock, and left to autoIndex
  * it would build on whichever Lambda's cold boot touches artifacts first after deploy.
  *
- * Idempotent: createIndexes is a no-op for indexes that already exist. It builds every index the
- * schema declares, so it also backfills any of this model's other declared indexes an environment
- * happens to be missing.
+ * Builds only this index, not Artifact.createIndexes(): that would also build any other declared index
+ * an environment lacks (the text index included) under the same lock. Idempotent: createIndex is a
+ * no-op when an identical index already exists.
  *
  * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001) to keep that
  * migration's id the highest on disk - its own test asserts that invariant.
@@ -24,7 +24,7 @@ const migration: MigrationFile = {
   name: 'ensure artifact owned keyset index',
 
   up: async () => {
-    await Artifact.createIndexes();
+    await Artifact.collection.createIndex({ userId: 1, deletedAt: 1, _id: 1 });
   },
 
   down: async () => {
