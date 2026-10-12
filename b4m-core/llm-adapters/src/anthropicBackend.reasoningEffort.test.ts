@@ -116,6 +116,18 @@ describe('AnthropicBackend reasoningEffort', () => {
     expect(request.output_config).toBeUndefined();
   });
 
+  it('keeps adaptive thinking off under the forced response_format tool', async () => {
+    const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+      reasoningEffort: 'low',
+      maxTokens: 2000,
+      responseFormat: jsonSchemaFormat,
+    });
+
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.thinking).toBeUndefined();
+    expect(request.output_config).toBeUndefined();
+  });
+
   it('still honours `none` under the forced response_format tool', async () => {
     const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
       reasoningEffort: 'none',
@@ -124,6 +136,7 @@ describe('AnthropicBackend reasoningEffort', () => {
     });
 
     expect(request.thinking).toEqual({ type: 'disabled' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
   });
 
   it('keeps the native structured-output format when adding effort on a model without forced tool use', async () => {
