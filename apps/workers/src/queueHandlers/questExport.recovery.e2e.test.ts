@@ -35,7 +35,8 @@ vi.mock('@server/utils/storage', () => ({
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.progress }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) } }));
-vi.mock('@bike4mind/llm-adapters', () => ({
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: h.models,
   getLlmByModel: () => ({ complete: h.complete }),
 }));
