@@ -64,7 +64,7 @@ export function computeBurnStats({
     else if (changePercent < -10) stats.usageTrend = 'decreasing';
   }
 
-  if (stats.burnRate > 0 && balance && observedDays >= MIN_DAYS_FOR_PROJECTION) {
+  if (stats.burnRate > 0 && balance !== undefined && balance > 0 && observedDays >= MIN_DAYS_FOR_PROJECTION) {
     stats.daysRemaining = Math.floor(balance / stats.burnRate);
   }
   return stats;

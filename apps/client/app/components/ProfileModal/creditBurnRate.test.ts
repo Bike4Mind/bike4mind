@@ -73,6 +73,18 @@ describe('computeBurnStats', () => {
     ).toBeNull();
   });
 
+  it('withholds the projection for an overdrawn balance instead of reporting negative days', () => {
+    const stats = computeBurnStats({
+      usage: [{ credits: -50, createdAt: daysAgo(3) }],
+      periodDays: 30,
+      now: NOW,
+      accountCreatedAt: daysAgo(20),
+      balance: -40,
+    });
+    expect(stats.burnRate).toBeGreaterThan(0);
+    expect(stats.daysRemaining).toBeNull();
+  });
+
   it('flags a rising trend when the second half of the window spends more', () => {
     const stats = computeBurnStats({
       usage: [
