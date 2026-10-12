@@ -305,6 +305,21 @@ describe('ImageEditService.process model dispatch', () => {
       expect(editSpy).toHaveBeenCalledTimes(2);
     });
 
+    it('holds the primary image plus each unique reference as input images', async () => {
+      const plain = await runBilled({});
+      const withRefs = await runBilled({ referenceImageFabFileIds: ['a', 'a', 'b'] });
+
+      expect(plain.creditsUsed).toBe(
+        estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, { model: gptImage.id, inputImageCount: 1 })
+          .requiredCredits
+      );
+      expect(withRefs.creditsUsed).toBe(
+        estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, { model: gptImage.id, inputImageCount: 3 })
+          .requiredCredits
+      );
+      expect(withRefs.creditsUsed).toBeGreaterThan(plain.creditsUsed as number);
+    });
+
     it('does not offer the provider an image count it would render and we would discard', async () => {
       await runBilled({ n: 5 });
 
@@ -346,7 +361,15 @@ describe('ImageEditService.process model dispatch', () => {
       expect(quest.status).toBe('done');
       expect(deductCreditsWithOrgSupport).toHaveBeenCalledTimes(1);
       expect(record).toHaveBeenCalledWith(
-        expect.objectContaining({ requestId: 'quest1', feature: 'image_edit', creditsCharged: 68 })
+        expect.objectContaining({
+          requestId: 'quest1',
+          feature: 'image_edit',
+          // The rendered image plus the primary image sent as input.
+          creditsCharged: estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, {
+            model: gptImage.id,
+            inputImageCount: 1,
+          }).requiredCredits,
+        })
       );
       expect(landed).toBe(true);
     });

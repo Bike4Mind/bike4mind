@@ -4,7 +4,9 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import SubscriptionModal from './SubscriptionModal';
 
 /**
@@ -21,8 +23,11 @@ process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD = PRICE_ID;
 const cancelMutate = vi.fn();
 const subscribeMutate = vi.fn();
 const changeMutate = vi.fn();
+const portalMutate = vi.fn();
+const USER_ID = 'user_1';
 
 let subscriptions: IUserSubscription[] = [];
+let teamPlanEnabled = false;
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptions: () => ({ data: subscriptions, isPending: false }),
@@ -32,12 +37,24 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 }));
 
 vi.mock('@client/app/hooks/data/stripe', () => ({
-  useGetSubscriptionPlans: () => ({ data: [{ id: PRICE_ID, active: true, unit_amount: 1500 }], isPending: false }),
-  useStripePortal: () => ({ mutate: vi.fn(), isPending: false }),
+  useGetSubscriptionPlans: () => ({
+    data: [
+      { id: PRICE_ID, active: true, unit_amount: 1500 },
+      { id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, active: true, unit_amount: 3000 },
+    ],
+    isPending: false,
+  }),
+  useStripePortal: () => ({ mutate: (...args: unknown[]) => portalMutate(...args), isPending: false }),
 }));
 
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { id: USER_ID } }),
+}));
+
+let settingValues: Record<string, unknown> = {};
+
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: () => false,
+  useGetSettingsValue: (key: string) => (key === 'enableTeamPlan' ? teamPlanEnabled : (settingValues[key] ?? false)),
   useConfig: () => ({ data: { seedStageName: 'production' } }),
 }));
 
@@ -46,7 +63,9 @@ vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, opts?: { credits?: string }) => (opts?.credits ? `${key}:${opts.credits}` : key),
+  }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -73,12 +92,84 @@ const renderModal = () =>
     </TestWrapper>
   );
 
+describe('SubscriptionModal - Team tab', () => {
+  beforeEach(() => {
+    subscriptions = [];
+  });
+
+  it('keeps the Business tab disabled while the team plan is switched off', () => {
+    teamPlanEnabled = false;
+    renderModal();
+
+    expect(screen.getByRole('tab', { name: 'subscription_modal.business' })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('quotes the minimum-seat Team price from Stripe once the team plan is on', async () => {
+    teamPlanEnabled = true;
+    renderModal();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+
+    // 4 seats x $30 from the mocked Stripe price, not a hardcoded figure.
+    expect(screen.getByText(/\$120\.00/)).toBeInTheDocument();
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+  });
+
+  it('quotes seats, price and pool size from the admin team plan settings', async () => {
+    teamPlanEnabled = true;
+    settingValues = { teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
+    renderModal();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+
+    expect(screen.getByText(/\$60\.00/)).toBeInTheDocument();
+    expect(screen.getByText('2 team member accounts included')).toBeInTheDocument();
+    expect(screen.getByText('subscription_modal.credits_per_month:2,000')).toBeInTheDocument();
+    settingValues = {};
+  });
+});
+
 describe('SubscriptionModal', () => {
   beforeEach(() => {
     subscriptions = [];
+    teamPlanEnabled = false;
+    settingValues = {};
     cancelMutate.mockReset();
     subscribeMutate.mockReset();
     changeMutate.mockReset();
+    portalMutate.mockReset();
+    sessionStorage.clear();
+  });
+
+  it('says every account starts with free credits rather than claiming there is no free tier', () => {
+    settingValues = { defaultFreeCredits: 5000 };
+    renderModal();
+
+    expect(screen.getByTestId('subscription-modal-starter-credits')).toHaveTextContent(
+      'subscription_modal.starter_credits'
+    );
+    expect(screen.queryByText(/no_free_tier/)).not.toBeInTheDocument();
+  });
+
+  it('makes no starter-credits claim when sign-ups are granted nothing', () => {
+    settingValues = { defaultFreeCredits: 0 };
+    renderModal();
+
+    expect(screen.queryByTestId('subscription-modal-starter-credits')).not.toBeInTheDocument();
+    expect(screen.getByText(/subscription_modal.credits_rollover/)).toBeInTheDocument();
+  });
+
+  it('does not badge a lone plan as Most Popular on either tab', async () => {
+    teamPlanEnabled = true;
+    renderModal();
+
+    expect(screen.getByRole('button', { name: 'Subscribe' })).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();
   });
 
   it('shows a delinquent plan as the current plan and lets the user cancel it', async () => {
@@ -136,5 +227,76 @@ describe('SubscriptionModal', () => {
 
     expect(screen.queryByText('subscriptions.payment_issue')).not.toBeInTheDocument();
     expect(screen.getByText('subscription_modal.subscription_renewal')).toBeInTheDocument();
+  });
+
+  describe('Manage Subscription', () => {
+    const manageButton = () => screen.queryByTestId('plan-card-manage-subscription-btn');
+
+    it('opens the Stripe portal for an active subscriber and returns them to the page they left', async () => {
+      subscriptions = [subRow({ status: 'active' })];
+      window.history.replaceState({}, '', '/notebooks?view=grid');
+
+      renderModal();
+
+      const button = manageButton();
+      expect(button).toHaveTextContent('profile.manage_subscription');
+      expect(button).toHaveClass('MuiButton-variantOutlined');
+
+      await userEvent.setup({ delay: null }).click(button!);
+
+      expect(portalMutate).toHaveBeenCalledWith(
+        { ownerType: SubscriptionOwnerType.User, ownerId: USER_ID },
+        expect.objectContaining({ onSuccess: expect.any(Function) })
+      );
+      // The return key is written only once the portal session exists, never on click.
+      expect(sessionStorage.getItem('__stripe_return')).toBeNull();
+      portalMutate.mock.calls[0][1].onSuccess();
+      expect(sessionStorage.getItem('__stripe_return')).toBe('/notebooks?view=grid');
+    });
+
+    it('makes Manage the primary action for a delinquent subscriber and keeps Cancel', () => {
+      subscriptions = [subRow({ status: 'past_due' })];
+
+      renderModal();
+
+      expect(screen.getByText('subscriptions.payment_issue')).toBeInTheDocument();
+      expect(manageButton()).toHaveClass('MuiButton-variantSolid');
+      expect(screen.getByRole('button', { name: 'Cancel Subscription' })).toHaveClass('MuiButton-variantOutlined');
+    });
+
+    it('stays available on a plan that is canceled but not yet ended, so the user can resume it', () => {
+      subscriptions = [subRow({ status: 'active', canceledAt: new Date('2026-01-15T00:00:00Z') })];
+
+      renderModal();
+
+      expect(manageButton()).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Subscription ends on/ })).toBeDisabled();
+    });
+
+    it('is not offered to a non-subscriber', () => {
+      subscriptions = [];
+
+      renderModal();
+
+      expect(manageButton()).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
+    });
+
+    it('is not offered on a plan card the user does not hold', () => {
+      subscriptions = [subRow({ status: 'active', priceId: 'price_legacy' })];
+
+      renderModal();
+
+      expect(manageButton()).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Change Subscription' })).toBeEnabled();
+    });
+
+    it('is not offered on an admin-granted plan, which the portal refuses', () => {
+      subscriptions = [subRow({ subscriptionId: 'admin_grant_x', source: SubscriptionSource.AdminGrant })];
+
+      renderModal();
+
+      expect(manageButton()).not.toBeInTheDocument();
+    });
   });
 });

@@ -99,6 +99,11 @@ vi.mock('@server/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: (...args: unknown[]) => mockVoidOpenSubscriptionInvoices(...args),
 }));
 
+const mockGrantCreditPurchase = vi.fn();
+vi.mock('@server/billing/grantCreditPurchase', () => ({
+  grantCreditPurchase: (...args: unknown[]) => mockGrantCreditPurchase(...args),
+}));
+
 const mockEmitMetric = vi.fn();
 vi.mock('@server/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
@@ -222,6 +227,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockUpdateTransactionStatus.mockResolvedValue(undefined);
     mockStampCreditLot.mockResolvedValue(undefined);
     mockAddCredits.mockResolvedValue(undefined);
+    mockGrantCreditPurchase.mockResolvedValue('granted');
     mockClawbackCreditLotsByStripeRef.mockResolvedValue(undefined);
     mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
   });
@@ -243,26 +249,42 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       },
     };
 
-    it('grants credits through the atomic credit ledger keyed on the payment intent', async () => {
+    it('grants credits through the transactional purchase grant keyed on the payment intent', async () => {
       mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
 
-      await invokeWebhookWithEvent(packEvent);
+      const { res } = await invokeWebhookWithEvent(packEvent);
 
-      // The purchase path now delegates to creditService.addCredits, which records the
-      // transaction, atomically increments the balance, and stamps the pack lot - keyed
-      // idempotently on stripePaymentIntentId. No whole-document balance overwrite.
-      expect(mockAddCredits).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'purchase',
-          ownerId: 'user123',
+      expect(mockGrantCreditPurchase).toHaveBeenCalledWith(
+        {
+          userId: 'user123',
+          paymentIntentId: 'pi_pack',
           credits: 500,
           amount: 999,
-          stripePaymentIntentId: 'pi_pack',
           packageId: 'pkg_1',
-        }),
+          environment: 'test',
+          paymentMethod: 'card',
+        },
         expect.anything()
       );
+      expect(mockAddCredits).not.toHaveBeenCalled();
       expect(mockUserUpdate).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('acknowledges a redelivery whose grant already committed', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      mockGrantCreditPurchase.mockResolvedValue('already_granted');
+
+      const { res } = await invokeWebhookWithEvent(packEvent);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('fails the delivery so Stripe retries when the grant rolls back', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      mockGrantCreditPurchase.mockRejectedValue(new Error('balance write failed'));
+
+      await expect(invokeWebhookWithEvent(packEvent)).rejects.toThrow('balance write failed');
     });
   });
 

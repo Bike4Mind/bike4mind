@@ -1,7 +1,6 @@
 import { Alert, Box, Typography } from '@mui/joy';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
-import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
-import { SubscribeButton, SessionCreditsButton } from './SessionCreditsButtons';
+import { CreditOfferActions } from './CreditOfferActions';
 
 interface InsufficientCreditsNoticeProps {
   /** Plain-language, server-authored explanation (includes the credit numbers). */
@@ -13,16 +12,10 @@ interface InsufficientCreditsNoticeProps {
  * dead-end raw error text. Shown by ReplyContainer when a quest's
  * `errorCode === 'insufficient_credits'`.
  *
- * The remediation CTAs (Subscribe + Add Credits, mirroring the SessionWarnings
- * out-of-credits banner) are only shown when the active account can actually buy
- * credits. Org accounts can't self-purchase - CreditsModal hides packages for them
- * via the same `canPurchaseCredits` check - so for orgs we suppress the dead-end
- * buttons and let the server-authored message point them at their administrator.
+ * The actions come from CreditOfferActions, shared with the SessionWarnings banners: Pro
+ * and a credit pack for personal accounts, Ask your admin for org members.
  */
 export const InsufficientCreditsNotice = ({ message }: InsufficientCreditsNoticeProps) => {
-  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
-  const canPurchaseCredits = !selectedAccount || selectedAccount.personal;
-
   return (
     <Alert
       data-testid="insufficient-credits-notice"
@@ -51,12 +44,9 @@ export const InsufficientCreditsNotice = ({ message }: InsufficientCreditsNotice
         >
           {message}
         </Typography>
-        {canPurchaseCredits && (
-          <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }} data-testid="insufficient-credits-actions">
-            <SessionCreditsButton />
-            <SubscribeButton />
-          </Box>
-        )}
+        <Box sx={{ flexShrink: 0 }} data-testid="insufficient-credits-actions">
+          <CreditOfferActions moment="out" />
+        </Box>
       </Box>
     </Alert>
   );

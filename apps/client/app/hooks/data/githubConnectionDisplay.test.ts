@@ -38,6 +38,29 @@ describe('describeGitHubConnection', () => {
     expect(color).toBe('danger');
   });
 
+  it('separates access lost from a plain sync failure, since a re-sync alone cannot fix it', () => {
+    const { label, title, color } = describeGitHubConnection(
+      conn({ status: 'access_lost', lastError: 'The App can no longer read this repository.' })
+    );
+    expect(label).toBe('Access lost');
+    expect(title).toBe(
+      'GitHub repository acme/docs: the App can no longer read it - The App can no longer read this repository.. Fix access on GitHub, then re-sync.'
+    );
+    expect(color).toBe('danger');
+  });
+
+  it('reads an archived lake whose access was lost as paused, so no repair is urged on a paused lake', () => {
+    expect(describeGitHubConnection(conn({ enabled: false, status: 'access_lost' }))).toMatchObject({
+      label: 'Paused',
+    });
+  });
+
+  it('reads a disconnecting connection that lost access as Disconnecting, not as needing a repair', () => {
+    expect(
+      describeGitHubConnection(conn({ enabled: false, status: 'access_lost', disconnecting: true }))
+    ).toMatchObject({ label: 'Disconnecting' });
+  });
+
   it('reads an archived lake whose last sync failed as paused, not as re-syncable', () => {
     expect(describeGitHubConnection(conn({ enabled: false, status: 'error' }))).toMatchObject({ label: 'Paused' });
   });

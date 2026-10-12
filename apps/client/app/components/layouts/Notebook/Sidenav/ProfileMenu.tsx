@@ -7,8 +7,7 @@ import { UiNavigationEvents } from '@bike4mind/common';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import InboxBadge from '@client/app/components/inbox/Badge';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
-import CreditsModal from '@client/app/components/subscription/CreditsModal';
-import SubscriptionModal from '@client/app/components/subscription/SubscriptionModal';
+import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
 import { useInbox } from '@client/app/contexts/InboxContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
@@ -221,8 +220,7 @@ const ProfileMenu = () => {
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [isCreditsModalOpen, setIsCreditsModalOpen] = useState(false);
-  const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
+  const { openView: openBillingView } = useBillingView();
 
   const closeAll = () => {
     setOpen(false);
@@ -371,7 +369,7 @@ const ProfileMenu = () => {
               label={t('credits.title', 'Credits')}
               onClick={() => {
                 logEvent.mutate({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
-                setIsCreditsModalOpen(true);
+                openBillingView('credits');
                 setOpen(false);
               }}
             />
@@ -382,7 +380,7 @@ const ProfileMenu = () => {
               icon={<MonetizationOnIcon sx={{ fontSize: '18px' }} />}
               label={t('subscriptions.title', 'Subscriptions')}
               onClick={() => {
-                setIsSubscriptionModalOpen(true);
+                openBillingView('plans');
                 setOpen(false);
               }}
             />
@@ -700,9 +698,6 @@ const ProfileMenu = () => {
           <KeyboardArrowDownIcon sx={{ fontSize: '20px', color: 'text.tertiary' }} />
         )}
       </Box>
-
-      <CreditsModal open={isCreditsModalOpen} onClose={() => setIsCreditsModalOpen(false)} />
-      <SubscriptionModal open={isSubscriptionModalOpen} onClose={() => setIsSubscriptionModalOpen(false)} />
     </Box>
   );
 };

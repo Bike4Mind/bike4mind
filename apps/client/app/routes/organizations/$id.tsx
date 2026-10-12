@@ -129,7 +129,7 @@ const OrganizationPage: FC = () => {
     canViewBilling,
   });
 
-  useDocumentTitle(organization?.name, ' | Organization');
+  useDocumentTitle(organization?.name, ' | Team');
 
   return isLoading || !organization ? (
     <Box display="flex" justifyContent="center" alignItems="center" height="100%" width="100%">
@@ -310,7 +310,7 @@ const OrganizationPage: FC = () => {
                 </TabPanel>
                 <TabPanel value={OrganizationTabs.Settings}>
                   <Typography level="title-lg" startDecorator={<SettingsOutlinedIcon />} sx={{ mb: 3 }}>
-                    Organization Settings
+                    Team Settings
                   </Typography>
                   <OrganizationSettingsSection organization={organization} />
                 </TabPanel>
@@ -362,7 +362,7 @@ const OrganizationHeader: FC<{
                 size="sm"
                 onClick={onSettingsClick}
               >
-                Organization Settings
+                Team Settings
               </Button>
             )}
           </Stack>
@@ -408,7 +408,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
   return (
     <Stack spacing={3}>
       <Typography level="title-lg" startDecorator={<BusinessOutlinedIcon />}>
-        Organization Overview
+        Team Overview
       </Typography>
 
       {/* First row - Key metrics */}

@@ -7,6 +7,7 @@ import {
   resolveEntitlements,
   EMBED_WHITELABEL_ENTITLEMENT_KEY,
   PRICE_ENTITLEMENTS,
+  __registryRows,
 } from '@client/lib/entitlements/registry';
 
 const { mockUserFind, mockSubs, mockPartnerKeys } = vi.hoisted(() => ({
@@ -331,6 +332,37 @@ describe('GET /api/admin/users/:userId/entitlements', () => {
     await promise;
     const rows = res._getJSONData().entitlements.filter((r: { key: string }) => r.key === key);
     expect(rows).toHaveLength(1);
+  });
+
+  it('reports an implied key as held with an implied source naming the implying key', async () => {
+    for (const row of __registryRows.impliedRows) {
+      mockPartnerKeys.mockResolvedValue(new Set([row.ifHeld]));
+      mockUserFind.mockResolvedValue({
+        id: 'u1',
+        tags: [],
+        isAdmin: false,
+        email: 'person@partner.example',
+        emailVerified: true,
+      });
+      const { res, promise } = run({ user: ADMIN });
+      await promise;
+      const rows: { key: string; held: boolean; sources: { type: string; detail: string }[] }[] =
+        res._getJSONData().entitlements;
+      for (const key of row.alsoGrant) {
+        const implied = rows.find(r => r.key === key);
+        expect(implied?.held).toBe(true);
+        expect(implied?.sources).toEqual([{ type: 'implied', detail: row.ifHeld }]);
+      }
+    }
+  });
+
+  it('does not report an implied source from a bypass alone', async () => {
+    mockUserFind.mockResolvedValue({ id: 'u1', tags: [], isAdmin: true, email: null, emailVerified: false });
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+    for (const row of res._getJSONData().entitlements) {
+      expect(row.sources.some((s: { type: string }) => s.type === 'implied')).toBe(false);
+    }
   });
 
   it('surfaces an active subscription as a subscription source', async () => {

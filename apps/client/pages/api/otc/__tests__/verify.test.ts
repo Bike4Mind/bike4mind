@@ -21,6 +21,12 @@ const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
 }));
+const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
+const mockEmitFunnelEvent = vi.fn().mockResolvedValue(true);
+vi.mock('@server/analytics/funnel', () => ({
+  recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
+  emitFunnelEvent: (...a: any[]) => mockEmitFunnelEvent(...a),
+}));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));
 vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/auth/tokenGenerator', () => ({
@@ -77,7 +83,11 @@ import handler from '@pages/api/otc/verify';
 // registry confers optihashi:pro -> its signup-credit total for this address.
 const DOMAIN_EMAIL = 'newstaff@bike4mind.com';
 const NON_DOMAIN_EMAIL = 'nobody@example.com';
-const EXPECTED_DOMAIN_CREDITS = signupCreditsForEmail(DOMAIN_EMAIL, true);
+// Pinned literal (not derived from the registry, which would make the assertions circular):
+// the optihashi:pro grant pays 250,000. This path resolves the literal domain keys only (no
+// implication expansion), so the implied questmaster:pro credit is not in play here - the
+// implied-key de-dup is pinned in the registry test.
+const EXPECTED_DOMAIN_CREDITS = 250_000;
 
 function makeReqRes(email = DOMAIN_EMAIL) {
   const { req, res } = createMocks({ method: 'POST' });
@@ -132,6 +142,53 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
     });
+  });
+
+  it('persists the signup touches and reports email_verified and credits_granted for the new user', async () => {
+    const acquisition = { firstTouch: { source: 'widgets' }, signupMethod: 'otc', capturedAt: new Date() };
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRecordSignupAcquisition).toHaveBeenCalledWith(
+      expect.objectContaining({ req, user: expect.objectContaining({ id: 'user-1' }), method: 'otc' })
+    );
+    const user = { id: 'user-1', acquisition, isSynthetic: false };
+    expect(mockEmitFunnelEvent).toHaveBeenCalledWith({ user, event: 'email_verified', metadata: { method: 'otc' } });
+    expect(mockEmitFunnelEvent).toHaveBeenCalledWith({
+      user,
+      event: 'credits_granted',
+      metadata: { amount: 1000, source: 'signup', method: 'otc' },
+    });
+  });
+
+  it('keeps a synthetic account out of the signup conversion', async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: true });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).not.toHaveBeenCalled();
+  });
+
+  it('sends the signup conversion for a normal account', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
+  });
+
+  it('reports no credits_granted when the signup seeded none', async () => {
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockEmitFunnelEvent.mock.calls.map(([c]) => c.event)).toEqual(['email_verified']);
   });
 
   // The account exists once registerViaOTC returns and a retry is a login, not a signup, so an
@@ -231,7 +288,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
   it('is a sanity check that the fixture domain actually confers the product credit sum', () => {
     // Guards the suite: if bike4mind.com ever stops conferring the product, the credit
     // assertions below would silently pass on 0.
-    expect(EXPECTED_DOMAIN_CREDITS).toBe(250_000);
+    expect(signupCreditsForEmail(DOMAIN_EMAIL, true)).toBe(EXPECTED_DOMAIN_CREDITS);
   });
 
   it('grants domain-grant signup credits to a new OTC registration on a partner domain', async () => {
@@ -246,7 +303,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       expect.objectContaining({
         ownerId: 'user-1',
         ownerType: CreditHolderType.User,
-        credits: EXPECTED_DOMAIN_CREDITS,
+        credits: 250_000,
         type: 'generic_add',
         transactionId: 'domain-grant-credits:user-1',
       })

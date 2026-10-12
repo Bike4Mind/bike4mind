@@ -4,17 +4,16 @@ import {
   TTS_MAX_INPUT_CHARS,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
+  estimateTtsCreditCost,
+  TTS_DEFAULT_MODEL,
   DEFAULT_TTS_PROVIDER,
   shouldPersistGeneratedAudio,
   type ApiErrorCode,
 } from '@bike4mind/common';
 import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
-import {
-  assertTtsCreditsAvailable,
-  deductTtsCredits,
-  InsufficientTtsCreditsError,
-} from '@server/utils/deductTtsCredits';
+import { deductTtsCredits } from '@server/utils/deductTtsCredits';
+import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
 import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 
@@ -67,9 +66,13 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   const userId = req.user?.id;
   if (userId) {
     try {
-      await assertTtsCreditsAvailable(userId);
+      await assertPreflightCredits({
+        userId,
+        estimatedCredits: estimateTtsCreditCost(vendor, model ?? TTS_DEFAULT_MODEL[vendor], text.length),
+        featureLabel: 'text-to-speech',
+      });
     } catch (error) {
-      if (error instanceof InsufficientTtsCreditsError) {
+      if (error instanceof InsufficientCreditsPreflightError) {
         // 422 + the `insufficient_credits` classifier, same as every other
         // credit-metered endpoint: one handler covers "out of credits" across the
         // surface. The classifier is what separates this from a validation 422,

@@ -928,6 +928,16 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     data: Partial<ISessionDocument> & { id: string },
     opts?: { includeGlobalWrite?: boolean }
   ) => Promise<ISessionDocument | null>;
+  /**
+   * updateWithUpdateAccess that adds `knowledgeIds` ($addToSet) rather than replacing the stored list,
+   * so a concurrent detach is not undone by a caller's stale read.
+   */
+  addKnowledgeIdsWithUpdateAccess: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<Omit<ISessionDocument, 'knowledgeIds'>> & { id: string },
+    knowledgeIds: string[],
+    opts?: { includeGlobalWrite?: boolean }
+  ) => Promise<ISessionDocument | null>;
   upsertByOpenaiConversationId: <Txn>(
     openaiConversationId: string,
     update: Partial<ISession>,

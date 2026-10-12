@@ -1,6 +1,6 @@
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
 import { ModelBackend } from '@bike4mind/common';
@@ -19,6 +19,10 @@ import ModelSelection, {
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
 const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
+const adminSettings = vi.hoisted(() => ({
+  recommendedModelIds: [] as string[],
+  DefaultAPIModel: undefined as string | undefined,
+}));
 
 const textModel = {
   id: 'gpt-text-model',
@@ -58,6 +62,15 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
 
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (state: { isAdmin: boolean }) => unknown) => selector({ isAdmin: admin.isAdmin }),
+}));
+
+vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
+  useAdminSettings: () => ({
+    getSetting: (key: string, fallback = '') =>
+      key === 'DefaultAPIModel' ? (adminSettings.DefaultAPIModel ?? fallback) : fallback,
+    getSettingObject: (key: string, fallback: unknown) =>
+      key === 'recommendedModelIds' ? adminSettings.recommendedModelIds : fallback,
+  }),
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => admin.navigate }));
@@ -384,5 +397,49 @@ describe('provider classifiers cover every backend', () => {
 
   it.each(Object.values(ModelBackend))('%s gets the expected fallback tooltip label', backend => {
     expect(getModelProviderLabel(REPRESENTATIVE[backend].id, backend)).toBe(REPRESENTATIVE[backend].label ?? undefined);
+  });
+});
+
+describe('ModelSelection recommended group', () => {
+  afterEach(() => {
+    adminSettings.recommendedModelIds = [];
+    adminSettings.DefaultAPIModel = undefined;
+  });
+
+  it('recommends the admin-set default model when the list is empty', () => {
+    adminSettings.DefaultAPIModel = imageModel.id;
+    renderSelection({});
+    const cards = within(screen.getByTestId('recommended-section')).getAllByTestId(/^model-card-/);
+    expect(cards.map(c => c.getAttribute('data-testid'))).toEqual([`model-card-${imageModel.id}`]);
+  });
+
+  it('renders no Recommended group when the list is empty and the compiled default is not available', () => {
+    renderSelection({});
+    expect(screen.queryByTestId('recommended-section')).not.toBeInTheDocument();
+  });
+
+  it('pins configured models above the full list and keeps them in the full list', () => {
+    adminSettings.recommendedModelIds = [textModel.id];
+    renderSelection({});
+    const section = screen.getByTestId('recommended-section');
+    expect(section).toHaveTextContent('Recommended');
+    expect(section).toHaveTextContent(textModel.name);
+    expect(screen.getAllByTestId(`model-card-${textModel.id}`).length).toBeGreaterThan(1);
+  });
+
+  it('keeps the configured order, not the provider sort, and shows a repeated id once', () => {
+    adminSettings.recommendedModelIds = [imageModel.id, textModel.id, imageModel.id];
+    renderSelection({});
+    const cards = within(screen.getByTestId('recommended-section')).getAllByTestId(/^model-card-/);
+    expect(cards.map(c => c.getAttribute('data-testid'))).toEqual([
+      `model-card-${imageModel.id}`,
+      `model-card-${textModel.id}`,
+    ]);
+  });
+
+  it('skips ids that are unknown or inaccessible', () => {
+    adminSettings.recommendedModelIds = ['no-such-model'];
+    renderSelection({});
+    expect(screen.queryByTestId('recommended-section')).not.toBeInTheDocument();
   });
 });

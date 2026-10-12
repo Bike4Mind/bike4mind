@@ -488,41 +488,23 @@ describe('updateSessionsQueryData', () => {
 
     expect(dataOf(queryClient, hideApiKey)).toContainEqual(expect.objectContaining({ name: 'From API key' }));
   });
-});
 
-// A snip lives in its source's surface, and the cached lists don't filter by surface, so a surfaced
-// snip must be re-placed by refetch rather than spliced into the main list.
-describe('useSnipSession', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
+  it('creates only into the cached list whose surface slot matches the session surface', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const mainKey = ['sessions', 'own', '', ''];
+    const optiKey = ['sessions', 'own', '', 'opti'];
+    seedEmptyPage(queryClient, mainKey);
+    seedEmptyPage(queryClient, optiKey);
 
-  const snip = async (snipped: Partial<ISessionDocument>) => {
-    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: { id: 'snip-1', name: 'Snip', ...snipped } });
-    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
-    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const wrapper = ({ children }: { children: React.ReactNode }) => (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-    const { result } = renderHook(() => useSnipSession(), { wrapper });
-    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    return invalidate;
-  };
+    updateSessionsQueryData(queryClient, 'write', { ...apiOriginSession, id: 'surfaced', surface: 'opti' });
+    updateSessionsQueryData(queryClient, 'write', { ...apiOriginSession, id: 'main' });
 
-  it('refetches the own-session lists when the snip carries a surface', async () => {
-    const invalidate = await snip({ surface: 'opti' });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
-  });
-
-  it('does not refetch the own-session lists for a main-list snip', async () => {
-    const invalidate = await snip({});
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
+    expect(dataOf(queryClient, mainKey).map(s => s.id)).toEqual(['main']);
+    expect(dataOf(queryClient, optiKey).map(s => s.id)).toEqual(['surfaced']);
   });
 });
 
-// The copy-path write (writeCopiedSession) is shared by clone, fork and snip and delegates to
-// updateSessionsQueryData, so a copy failing a cached list's Content/Origin filter must not be
+// Clone, fork and snip write their copy through updateSessionsQueryData, so a copy failing a cached list's Content/Origin filter must not be
 // spliced into it - the same "Hide API" regression the gate exists for.
 describe('copy-path cache writes', () => {
   beforeEach(() => vi.restoreAllMocks());
@@ -583,5 +565,29 @@ describe('copy-path cache writes', () => {
     result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expectGatedCopy(queryClient);
+  });
+
+  // Clone, fork and snip share the gate, so one hook covers the surface guard for all three.
+  it('a surfaced copy is not inserted into a cached main list, nor a main-list copy into a surface list', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const optiKey = ['sessions', 'own', '', 'opti'];
+    for (const key of [unfilteredKey, optiKey]) {
+      queryClient.setQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[], {
+        pages: [{ data: [], hasMore: false }],
+        pageParams: [{ page: 1 }],
+      });
+    }
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    vi.spyOn(api, 'post')
+      .mockResolvedValueOnce({ data: { id: 'opti-copy', name: 'Copy', surface: 'opti' } })
+      .mockResolvedValueOnce({ data: { id: 'main-copy', name: 'Copy' } });
+    const { result } = renderHook(() => useSnipSession(), { wrapper: wrapperFor(queryClient) });
+
+    await result.current.mutateAsync({ sessionId: SESSION_ID, messageId: 'm1' });
+    await result.current.mutateAsync({ sessionId: SESSION_ID, messageId: 'm2' });
+
+    expect(dataOf(queryClient, unfilteredKey).map(s => s.id)).toEqual(['main-copy']);
+    expect(dataOf(queryClient, optiKey).map(s => s.id)).toEqual(['opti-copy']);
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
   });
 });

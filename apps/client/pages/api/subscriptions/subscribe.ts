@@ -7,8 +7,9 @@ import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
-import { acquisitionToStripeMetadata, readAcquisitionTouches } from '@server/analytics/acquisition';
+import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -18,7 +19,7 @@ type RequestBody = z.infer<typeof subscriptionCheckoutSchema>;
 const handler = baseApi()
   .use(requireStripeWebhook())
   .post<Request<unknown, RequestBody>>(async (req, res) => {
-    const { priceId, callbackUrl, attributionConsent } = subscriptionCheckoutSchema.parse(req.body);
+    const { priceId, callbackUrl, attributionConsent, surface } = subscriptionCheckoutSchema.parse(req.body);
 
     // Restrict the Stripe success/cancel redirect to the deployed app origin - an
     // external callbackUrl is an open-redirect/phishing vector off Stripe's hosted
@@ -32,8 +33,13 @@ const handler = baseApi()
     // be publicly purchasable; when it's off we refuse checkout on the write path, so an
     // un-launched product can't be bought via a stale client OR a direct POST. Admin
     // comp-grants go through a different route and are intentionally unaffected.
+    // Only configured plans are purchasable; any other Stripe price id is refused here
+    // rather than relying on stripe.prices.retrieve below, which accepts any live price.
     const requestedPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
-    if (requestedPlan?.availabilityFlag) {
+    if (!requestedPlan) {
+      throw new BadRequestError('Unknown plan');
+    }
+    if (requestedPlan.availabilityFlag) {
       // Read strictly as `=== true`: `availabilityFlag` is typed as any SettingKey, so if a
       // plan ever points it at a non-boolean setting, "not exactly true" fails closed here
       // rather than coercing a number/string into a truthy "launched".
@@ -87,6 +93,7 @@ const handler = baseApi()
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
+      ...USD_CHECKOUT_SESSION_PARAMS,
       payment_method_types: ['card'],
       line_items: [
         {
@@ -109,7 +116,8 @@ const handler = baseApi()
           ownerType: 'User', // Identifies this as a user subscription (vs organization)
           // Where the customer came from (first and last campaign touch), carried to the
           // invoice webhook, which stores it on the subscription row. See acquisition.ts.
-          ...(attributionConsent === true && acquisitionToStripeMetadata(readAcquisitionTouches(req))),
+          ...checkoutAcquisitionMetadata(req, attributionConsent, req.user.acquisition),
+          ...(surface && { checkout_surface: surface }),
         },
       },
     });

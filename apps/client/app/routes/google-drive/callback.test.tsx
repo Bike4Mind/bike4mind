@@ -191,6 +191,7 @@ describe('GoogleDriveCallbackPage', () => {
       expect(wizard.config.name).toBe('Research');
       expect(wizard.config.tagPrefix).toBe('research');
       expect(wizard.optionalSteps).toEqual({ preview: true, taxonomy: false });
+      expect(wizard.createSource).toBe('googleDrive');
       expect(takeDrivePickerResume('user-1')).toBe(true);
       expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
       expect(h.navigate).toHaveBeenCalledWith({ to: '/' });

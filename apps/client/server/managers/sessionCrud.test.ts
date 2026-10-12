@@ -263,7 +263,7 @@ describe('sessionCrud', () => {
       expect(createSessionService).not.toHaveBeenCalled();
     });
 
-    it('persists only the new fabFileIds onto an existing session, without project propagation', async () => {
+    it('persists only the new fabFileIds onto an existing session, add-only and without project propagation', async () => {
       SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
       const updated = { id: 'existing', knowledgeIds: ['a', 'b'] };
       updateSessionService.mockResolvedValueOnce(updated);
@@ -280,7 +280,13 @@ describe('sessionCrud', () => {
       expect(updateSessionService).toHaveBeenCalledTimes(1);
       const [calledUser, params] = updateSessionService.mock.calls[0];
       expect(calledUser).toBe(user);
-      expect(params).toEqual({ id: 'existing', knowledgeIds: ['a', 'b'], propagateToProjects: false });
+      // Only the delta, add-only: a full list built from this read would undo a detach landing before the write.
+      expect(params).toEqual({
+        id: 'existing',
+        knowledgeIds: ['b'],
+        knowledgeIdsMode: 'add',
+        propagateToProjects: false,
+      });
       expect(result.session).toBe(updated);
     });
 
@@ -308,7 +314,7 @@ describe('sessionCrud', () => {
 
       expect(updateSessionService).toHaveBeenCalledWith(
         user,
-        { id: 'owned', knowledgeIds: ['f1'], propagateToProjects: false },
+        { id: 'owned', knowledgeIds: ['f1'], knowledgeIdsMode: 'add', propagateToProjects: false },
         expect.objectContaining({
           resolveLakeAccess: expect.any(Function),
           resolveAttachmentLakeAccess: expect.any(Function),
@@ -332,7 +338,8 @@ describe('sessionCrud', () => {
       expect(fabFileFindMetadataByIds).toHaveBeenCalledWith(['b', 'img-1']);
       expect(updateSessionService.mock.calls[0][1]).toEqual({
         id: 'existing',
-        knowledgeIds: ['a', 'b'],
+        knowledgeIds: ['b'],
+        knowledgeIdsMode: 'add',
         propagateToProjects: false,
       });
     });
@@ -423,7 +430,7 @@ describe('sessionCrud', () => {
       });
 
       expect(fabFileFindMetadataByIds).toHaveBeenCalledWith(['bb', 'del', 'aa']);
-      expect(updateSessionService.mock.calls[0][1].knowledgeIds).toEqual(['ab', 'bb', 'aa']);
+      expect(updateSessionService.mock.calls[0][1].knowledgeIds).toEqual(['bb', 'aa']);
     });
 
     it('warns when the new ids exceed the metadata cap', async () => {

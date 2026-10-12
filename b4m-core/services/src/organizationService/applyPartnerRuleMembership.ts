@@ -1,4 +1,11 @@
-import { IOrganizationRepository, IUserDocument, IUserRepository, Permission } from '@bike4mind/common';
+import {
+  IAdminSettingsRepository,
+  IOrganizationRepository,
+  IUserDocument,
+  IUserRepository,
+  Permission,
+} from '@bike4mind/common';
+import { loadTeamPlanSettings } from '@bike4mind/utils';
 
 /**
  * Why the auto-add did or didn't happen - returned (not thrown) so the signup paths can
@@ -28,6 +35,8 @@ interface ApplyPartnerRuleMembershipAdapters {
   db: {
     users: IUserRepository;
     organizations: IOrganizationRepository;
+    // Source of the `teamPlanMaxSeats` ceiling the non-Stripe auto-raise clamps at.
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
   };
   logger?: { info: (message: string) => void };
 }
@@ -113,7 +122,10 @@ export async function applyPartnerRuleMembership(
   // Non-Stripe org: atomic add + raise the seat ceiling to fit (#1239). `addMemberRaisingSeats` is
   // race-safe (idempotent on a duplicate; raises seats only to the real post-add member count) and
   // returns the pre-image, so before/after seats come from one atomically-matched document.
-  const pre = await db.organizations.addMemberRaisingSeats(organizationId, member);
+  // Uncached: this runs once per verified partner signup, and a ceiling an admin just lowered must
+  // hold immediately rather than after another instance's cache TTL.
+  const { maxSeats } = await loadTeamPlanSettings(db, { skipCache: true });
+  const pre = await db.organizations.addMemberRaisingSeats(organizationId, member, maxSeats);
   if (!pre) {
     const outcome = await inspectAfterNoMatch(organizationId, userId, db);
     if (outcome.state === 'gone') return { added: false, reason: 'org-missing' };
@@ -124,7 +136,7 @@ export async function applyPartnerRuleMembership(
       await seedUserDetails(user, organizationId, db);
       return { added: false, reason: 'already-member' };
     }
-    // 'absent': the raise is now clamped at ORGANIZATION_SUBSCRIPTION_MAX_SEATS (#1424), so a full org
+    // 'absent': the raise is now clamped at the teamPlanMaxSeats ceiling (#1424), so a full org
     // matches no doc. Fall through to 'at-capacity' - the same alert-an-admin outcome the Stripe path
     // uses - rather than growing a seat floor no later `setSeats` value could satisfy.
     logger?.info(

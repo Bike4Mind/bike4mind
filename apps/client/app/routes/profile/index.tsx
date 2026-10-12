@@ -14,7 +14,7 @@ import PeopleIcon from '@mui/icons-material/People';
 import LinkIcon from '@mui/icons-material/Link';
 import ShareIcon from '@mui/icons-material/Share';
 import dynamic from 'next/dynamic';
-import { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -80,6 +80,28 @@ const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {
   mementos: 'mementos',
 };
 
+/**
+ * Tab text label: hidden on phones unless the tab is active, so the current section is named
+ * while the other tabs stay icon-only. The phone cap fits the longest label (Live Artifacts,
+ * ~100px at 16px Libre Franklin) and only truncates a future, longer one.
+ */
+const TabLabel = ({ active, children }: { active: boolean; children: React.ReactNode }) => (
+  <Typography
+    data-testid="profile-tab-label"
+    data-active={active}
+    sx={{
+      display: { xs: active ? 'block' : 'none', sm: 'block' },
+      color: 'text.primary',
+      maxWidth: { xs: '112px', sm: 'none' },
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    }}
+  >
+    {children}
+  </Typography>
+);
+
 const ProfilePage = () => {
   const { currentUser } = useUser();
   const navigate = useNavigate();
@@ -87,6 +109,7 @@ const ProfilePage = () => {
   const rawTab = (search as { tab?: string })?.tab;
   const rawSubtab = (search as { subtab?: string })?.subtab;
   const activeTab = rawTab || ProfileTab.Profile;
+  const tabListRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { data: friendRequests } = useGetFriendRequests(currentUser?.id);
   const { currentSession } = useSessions();
@@ -141,6 +164,14 @@ const ProfilePage = () => {
   const profileName = currentUser?.name || currentUser?.username;
   useDocumentTitle(profileName ? `${profileName}'s Profile` : 'Profile');
 
+  // On a phone the strip overflows and scrolls, so a deep-linked tab near the end would sit
+  // off-screen with its label. Optional call: jsdom has no scrollIntoView.
+  useEffect(() => {
+    tabListRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [activeTab, isAdmin, hasPublishedArtifacts]);
+
   const handleClose = () => {
     if (currentSession?.id) {
       navigate({ to: `/notebooks/${currentSession.id}` });
@@ -165,6 +196,8 @@ const ProfilePage = () => {
       >
         <ContextHelpButton helpId="features/profile-settings" tooltipText="Learn about Profile & Settings" />
         <IconButton
+          aria-label="Close"
+          data-testid="profile-close-btn"
           onClick={handleClose}
           sx={{
             backgroundColor: theme => theme.palette.background.surface,
@@ -181,7 +214,7 @@ const ProfilePage = () => {
       </Box>
 
       <Tabs
-        aria-label="Basic tabs"
+        aria-label="Profile sections"
         value={activeTab}
         defaultValue={ProfileTab.Profile}
         onChange={(_, tab) => {
@@ -192,90 +225,90 @@ const ProfilePage = () => {
           });
         }}
       >
-        <TabList data-testid="profile-tablist" sx={profileTabListSx}>
-          <PageTab data-testid="profile-tab" sx={{ borderBottomLeftRadius: '0' }} value={ProfileTab.Profile}>
+        <TabList ref={tabListRef} data-testid="profile-tablist" sx={profileTabListSx}>
+          <PageTab
+            data-testid="profile-tab"
+            sx={{ borderBottomLeftRadius: '0' }}
+            value={ProfileTab.Profile}
+            aria-label={t('profile.title')}
+          >
             <Tooltip title={t('profile.tooltip')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <AccountCircleIcon sx={{ flexShrink: 0, color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                  {t('profile.title')}
-                </Typography>
+                <TabLabel active={activeTab === ProfileTab.Profile}>{t('profile.title')}</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="community-tab" sx={{ borderBottomLeftRadius: '0' }} value={ProfileTab.Community}>
+          <PageTab
+            data-testid="community-tab"
+            sx={{ borderBottomLeftRadius: '0' }}
+            value={ProfileTab.Community}
+            aria-label={t('community.title')}
+          >
             <Tooltip title={t('community.tooltip')}>
               <Badge size="sm" color="danger" invisible={friendRequests?.length === 0}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <PeopleIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                  <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                    {t('community.title')}
-                  </Typography>
+                  <TabLabel active={activeTab === ProfileTab.Community}>{t('community.title')}</TabLabel>
                 </Box>
               </Badge>
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="settings-tab" value={ProfileTab.Settings}>
+          <PageTab data-testid="settings-tab" value={ProfileTab.Settings} aria-label={t('settings.title')}>
             <Tooltip title={t('settings.tooltip')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <SettingsIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                  {t('settings.title')}
-                </Typography>
+                <TabLabel active={activeTab === ProfileTab.Settings}>{t('settings.title')}</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="api-keys-tab" value={ProfileTab.ApiKeys}>
+          <PageTab data-testid="api-keys-tab" value={ProfileTab.ApiKeys} aria-label="API Keys">
             <Tooltip title="Manage your API keys">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <KeyOutlinedIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>API Keys</Typography>
+                <TabLabel active={activeTab === ProfileTab.ApiKeys}>API Keys</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="usage-tab" value={ProfileTab.Usage}>
+          <PageTab data-testid="usage-tab" value={ProfileTab.Usage} aria-label="Usage">
             <Tooltip title="View your credit usage and model pricing">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <InsightsIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>Usage</Typography>
+                <TabLabel active={activeTab === ProfileTab.Usage}>Usage</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
 
-          <PageTab data-testid="integrations-tab" value={ProfileTab.Integrations}>
+          <PageTab data-testid="integrations-tab" value={ProfileTab.Integrations} aria-label="Integrations">
             <Tooltip title="Manage external integrations">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <LinkIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                  Integrations
-                </Typography>
+                <TabLabel active={activeTab === ProfileTab.Integrations}>Integrations</TabLabel>
               </Box>
             </Tooltip>
           </PageTab>
 
           {isAdmin && (
-            <PageTab data-testid="security-tab" value={ProfileTab.Security}>
+            <PageTab data-testid="security-tab" value={ProfileTab.Security} aria-label="Security">
               <Tooltip title="View security events and alerts">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <SecurityIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                  <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>Security</Typography>
+                  <TabLabel active={activeTab === ProfileTab.Security}>Security</TabLabel>
                 </Box>
               </Tooltip>
             </PageTab>
           )}
 
           {hasPublishedArtifacts && (
-            <PageTab data-testid="published-tab" value={ProfileTab.Published}>
+            <PageTab data-testid="published-tab" value={ProfileTab.Published} aria-label="Live Artifacts">
               <Tooltip title="Manage your Live Artifacts (published & shared)">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <ShareIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                  <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                    Live Artifacts
-                  </Typography>
+                  <TabLabel active={activeTab === ProfileTab.Published}>Live Artifacts</TabLabel>
                 </Box>
               </Tooltip>
             </PageTab>

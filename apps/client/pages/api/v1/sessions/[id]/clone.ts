@@ -14,7 +14,7 @@ import {
 import { ForbiddenError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
 import { SessionEvents, redactSessionForClient, sessionCloneContract } from '@bike4mind/common';
-import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
+import { copySurfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 
 const handler = nextRouteForContract(sessionCloneContract, {
   rateLimit: rateLimit({ limit: 10, windowMs: 60_000, bucket: 'sessions/clone' }),
@@ -56,7 +56,7 @@ const handler = nextRouteForContract(sessionCloneContract, {
         // alternative is persisting an unreachable scope, which is permanent once non-empty.
         resolveLakeAccess: async () =>
           (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
-        resolveSurfaceAccess: surfaceAccessForRequest(req),
+        resolveSurfaceAccess: copySurfaceAccessForRequest(req),
       }
     )
   );

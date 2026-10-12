@@ -1,5 +1,37 @@
 # @bike4mind/cli
 
+## 2.1.0
+
+### Minor Changes
+
+- [#4039](https://github.com/Bike4Mind/bike4mind/pull/4039) [`766aef9`](https://github.com/Bike4Mind/bike4mind/commit/766aef961bc8b721247f51a53b8f1f8ecb052aa3) Thanks [@jjmarfa](https://github.com/jjmarfa)! - return datalake_tag from GET /api/v1/data-lakes
+
+- [#4041](https://github.com/Bike4Mind/bike4mind/pull/4041) [`d926531`](https://github.com/Bike4Mind/bike4mind/commit/d926531cee78330864ca4144ba303a6b0a3c64b6) Thanks [@vinchi777](https://github.com/vinchi777)! - add generate_image MCP tool
+
+- [#4054](https://github.com/Bike4Mind/bike4mind/pull/4054) [`5d1d429`](https://github.com/Bike4Mind/bike4mind/commit/5d1d42996972fa555319d56d8bda375bf9d4eb2c) Thanks [@julsanchez](https://github.com/julsanchez)! - add list, get and create project tools to the MCP server
+
+- [#4056](https://github.com/Bike4Mind/bike4mind/pull/4056) [`20adbdd`](https://github.com/Bike4Mind/bike4mind/commit/20adbdd525e80075f9d7dadf810de4ad65e83fca) Thanks [@julsanchez](https://github.com/julsanchez)! - add rename/clone/delete notebook tools to mcp serve
+
+- [#4109](https://github.com/Bike4Mind/bike4mind/pull/4109) [`1d78b45`](https://github.com/Bike4Mind/bike4mind/commit/1d78b4565729be4bd00b676e09080c3768743101) Thanks [@onoya](https://github.com/onoya)! - report send_message progress while the reply is generated
+
+- [#4111](https://github.com/Bike4Mind/bike4mind/pull/4111) [`8fa77ac`](https://github.com/Bike4Mind/bike4mind/commit/8fa77acfb4991a300fd63ca9e7adf6758d2bb367) Thanks [@onoya](https://github.com/onoya)! - expose Briefcase prompts as MCP prompts
+
+### Patch Changes
+
+- [#3961](https://github.com/Bike4Mind/bike4mind/pull/3961) [`658303a`](https://github.com/Bike4Mind/bike4mind/commit/658303af566aece2e8fdc716a96a984a34abb3e7) Thanks [@vinchi777](https://github.com/vinchi777)! - bound the live trace under an open prompt and keep the trace on abort
+
+- [#3962](https://github.com/Bike4Mind/bike4mind/pull/3962) [`34f491c`](https://github.com/Bike4Mind/bike4mind/commit/34f491c62e641d1121c15923364a8ec162512cdc) Thanks [@jjmarfa](https://github.com/jjmarfa)! - calibrate CLI token estimates to the session model
+
+- [#3972](https://github.com/Bike4Mind/bike4mind/pull/3972) [`f3f5853`](https://github.com/Bike4Mind/bike4mind/commit/f3f585305efb9c7053c1901fda332584a9af3d7b) Thanks [@julsanchez](https://github.com/julsanchez)! - raise sharp and shell-quote overrides past new advisories
+
+- [#3976](https://github.com/Bike4Mind/bike4mind/pull/3976) [`d3690b4`](https://github.com/Bike4Mind/bike4mind/commit/d3690b461873e0f11989284a6f1d8f66e32ebe7f) Thanks [@onoya](https://github.com/onoya)! - bump @modelcontextprotocol/sdk past GHSA-6qxp-vccf-f47h
+
+- [#4047](https://github.com/Bike4Mind/bike4mind/pull/4047) [`8af61ce`](https://github.com/Bike4Mind/bike4mind/commit/8af61ce21605847ddceb5d9d3b5901ba7706d19f) Thanks [@jarlacut](https://github.com/jarlacut)! - type AgentStep toolInput as unknown
+
+- [#4122](https://github.com/Bike4Mind/bike4mind/pull/4122) [`0838962`](https://github.com/Bike4Mind/bike4mind/commit/0838962cc87930266d8b4918c081b3dc4bade3eb) Thanks [@julsanchez](https://github.com/julsanchez)! - stop API keys posting as the human actor, record event origin, validate delegations
+
+- [#4139](https://github.com/Bike4Mind/bike4mind/pull/4139) [`e9afd46`](https://github.com/Bike4Mind/bike4mind/commit/e9afd4637c67a4fee0c1a25a5dae8f0d8eab6e61) Thanks [@julsanchez](https://github.com/julsanchez)! - stop streaming tagged reasoning text to completions callers
+
 ## 2.0.0
 
 ### Major Changes

@@ -141,6 +141,7 @@ vi.mock('@server/services/publish', () => ({
   authorDisplayName: () => 'u1',
   toAnnotationDto: () => ({}),
   requestHasGateProof: () => false,
+  loadLiveOwner: async () => ({ id: 'owner' }),
 }));
 
 type Verb = 'get' | 'delete' | 'post';

@@ -387,36 +387,6 @@ const cloudSecurityScanCron = new sst.aws.Cron('CloudSecurityScan', {
 });
 
 /**
- * LiveOps Triage Job Cleanup Cron
- * Detects and fails stuck jobs (processing > 13 minutes).
- *
- * Schedule: Every 10 minutes
- * Enabled: All stages (jobs can get stuck on any stage)
- */
-const liveOpsTriageJobCleanupCron = new sst.aws.Cron('liveOpsTriageJobCleanup', {
-  schedule: 'rate(10 minutes)',
-  function: {
-    handler: 'apps/workers/src/cron/liveOpsTriageJobCleanup.handler',
-    vpc: lambdaVpc,
-    link: [...allSecrets],
-    timeout: '1 minute',
-    runtime: 'nodejs24.x',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '3 days',
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-    ],
-  },
-});
-
-/**
  * Security Scan Scheduler
  * Checks for scheduled security scans and triggers them via GitHub Actions.
  *
@@ -1038,7 +1008,6 @@ export {
   whatsNewHighlightsCron,
   cloudSecurityScanCron,
   integrationHealthCheckCron,
-  liveOpsTriageJobCleanupCron,
   securityScanSchedulerCron,
   deepAgentWakeCron,
   dataLakeResearchScheduleCron,

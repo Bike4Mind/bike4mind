@@ -1,4 +1,5 @@
-import { Box, Typography, Modal, ModalDialog, ModalClose, Divider, useTheme } from '@mui/joy';
+import { Box, Typography, Modal, ModalDialog, ModalClose, Divider, Link, useTheme } from '@mui/joy';
+import { useNavigate } from '@tanstack/react-router';
 import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
 import dayjs from 'dayjs';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
@@ -10,7 +11,7 @@ import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
 import { ICreditTransaction } from '@bike4mind/common';
 import { useTranslation } from 'react-i18next';
-import { LOW_CREDITS_THRESHOLD } from '../Session/CreditButton';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import {
   brand,
   brandAlpha,
@@ -53,14 +54,18 @@ const CreditsModal = ({ open, onClose }: CreditsModalProps) => {
         }}
       >
         <ModalClose className="credits-modal-close" />
-        {open && <CreditsModalContent transactions={getTransactions.data || []} />}
+        {open && <CreditsModalContent transactions={getTransactions.data || []} onClose={onClose} />}
       </ModalDialog>
     </Modal>
   );
 };
 
-const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ transactions }) => {
+const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () => void }> = ({
+  transactions,
+  onClose,
+}) => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const handlePaymentComplete = useCallback(
     (credits: number) => {
       toast.success(t('credits_modal.purchase_success', { credits }));
@@ -75,7 +80,8 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
 
   // Hide credit packages when selected account is an organization
   const canPurchaseCredits = !selectedAccount || selectedAccount.personal;
-  const isLowCredits = currentCredits < LOW_CREDITS_THRESHOLD;
+  const lowCreditsThreshold = useLowCreditsThreshold();
+  const isLowCredits = currentCredits < lowCreditsThreshold;
   const noCredits = currentCredits <= 0;
   const color = noCredits ? 'danger' : isLowCredits ? 'warning' : 'neutral';
   const safeMode = mode === 'dark' || mode === 'light' ? mode : 'light';
@@ -342,6 +348,20 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
           })}
         >
           {t('credits_modal.history_title')}
+          <Typography level="body-sm" sx={{ fontWeight: 400, mt: 0.5 }}>
+            {t('credits_modal.history_usage_hint', 'This lists purchases only.')}{' '}
+            <Link
+              component="button"
+              type="button"
+              data-testid="credits-modal-see-usage-link"
+              onClick={() => {
+                onClose();
+                void navigate({ to: '/profile', search: { tab: 'usage' } });
+              }}
+            >
+              {t('credits_modal.see_usage', 'See usage')}
+            </Link>
+          </Typography>
         </Box>
         <Box
           className="credits-modal-transactions-list"

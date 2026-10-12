@@ -16,7 +16,12 @@
  * (ACCESS_MODEL §3.2) adds seat-membership resolution HERE - callers never
  * change. Note the webhook invalidation fan-out for seats is separate work.
  */
-import { resolveEntitlements, normalizeTag, BASE_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import {
+  applyImpliedEntitlements,
+  resolveEntitlements,
+  normalizeTag,
+  BASE_ENTITLEMENT_KEY,
+} from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
@@ -104,7 +109,10 @@ export async function getUserEntitlements(
   // hold" chokepoint feeding both the client `/api/entitlements` and the server
   // admission gate) rather than in the pure registry, which stays grant-rows-only.
   keys.add(BASE_ENTITLEMENT_KEY);
-  return [...keys];
+  // Implications run last, over the union of every source, so an implying key
+  // confers the same keys whether it came from a tag, domain, partner rule or
+  // subscription. Must stay the only place they are applied for gating.
+  return applyImpliedEntitlements(keys);
 }
 
 /**

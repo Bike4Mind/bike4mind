@@ -1,6 +1,6 @@
 ---
 title: Telemetry Data Classification
-description: Subscription acquisition data, consent gates, storage, and retention
+description: Subscription acquisition and API-key usage data, consent gates, storage, and retention
 ---
 
 # Telemetry Data Classification
@@ -128,3 +128,15 @@ already see the denial.
   invoice's processing and the MongoDB subscription record.
 - The admin subscription API includes acquisition, but the subscription table
   has no dedicated acquisition column.
+
+## API-key usage log
+
+Every request to a `baseApi` route that authenticates with an API key writes one `ApiKeyUsageLog` row when the response finishes. Routes served through the contract router (`/api/ai/v1`) and embed-key routes (`/api/embed`) do not write rows. The `endpoint` field stores the Next.js route template (for example `/api/agents/[id]`), never the raw URL: path ids and the query string are not recorded. This is best effort: a route param that shares its name and its exact value (or values, for a catch-all) with a query-string key is left as written, because the two cannot be told apart. The `UserApiKeyEvents.USED` analytics event carries the same templated endpoint. Rows written before templating was introduced may still hold a raw URL until they expire.
+
+| Data           | Storage                           | Lifetime            | Purpose                                          |
+| -------------- | --------------------------------- | ------------------- | ------------------------------------------------ |
+| Endpoint       | Route template, no query string   | 90 days (TTL index) | Per-route usage stats, scope-rollout preflight   |
+| Method, status | HTTP method and response status   | 90 days (TTL index) | Usage stats, abuse and security investigation    |
+| Latency        | Response time in milliseconds     | 90 days (TTL index) | Usage stats                                      |
+| Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
+| Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |

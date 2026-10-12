@@ -1,7 +1,12 @@
 import type { IMcpServerDocument } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { generateMcpToolsFromCache } from '@bike4mind/services/llm';
+import {
+  generateMcpToolsFromCache,
+  shouldLiveFetchTools,
+  buildMcpToolCacheUpdate,
+  type McpToolSchema,
+} from '@bike4mind/services/llm';
 
 export interface LoadAgentMcpToolsDeps {
   mcpServers: {
@@ -9,7 +14,8 @@ export interface LoadAgentMcpToolsDeps {
     update(doc: {
       id: string;
       tools: string[];
-      toolSchemas: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>;
+      toolSchemas: McpToolSchema[];
+      toolSchemasFetchedAt: Date;
     }): Promise<unknown>;
   };
   getMcpClient: (server: IMcpServerDocument) => Promise<{
@@ -51,19 +57,17 @@ export async function loadAgentMcpTools(
 
       // Live-fetch when cached schemas are missing (e.g. OAuth callback tool
       // fetch failed on a Lambda cold start). Mirrors the fallback in
-      // ToolBuilder.buildMcpTools so agents get the same recovery path.
-      if (!schemas?.length) {
+      // ToolBuilder.buildMcpTools so agents get the same recovery path. A marker
+      // younger than the TTL means the empty result is confirmed - skip the fetch.
+      if (!schemas?.length && shouldLiveFetchTools(server)) {
         try {
           logger.info(`[AgentExecutor][MCP] No cached tool schemas for ${server.name} - fetching live`);
           const client = await deps.getMcpClient(server);
           const liveTools = await client.getTools();
-          if (Array.isArray(liveTools) && liveTools.length > 0) {
+          if (Array.isArray(liveTools)) {
             schemas = liveTools;
-            await deps.mcpServers.update({
-              id: server.id,
-              tools: liveTools.map((t: { name: string }) => t.name),
-              toolSchemas: liveTools,
-            });
+            // Written for an empty result too: that is the confirmed-zero-tools state.
+            await deps.mcpServers.update(buildMcpToolCacheUpdate(server.id, liveTools));
             logger.info(
               `[AgentExecutor][MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`
             );

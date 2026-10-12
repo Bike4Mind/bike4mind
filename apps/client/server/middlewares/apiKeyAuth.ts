@@ -16,6 +16,7 @@ import { createHash } from 'crypto';
 import type { z } from 'zod';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@server/cli/auth';
+import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -77,6 +78,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
 
     try {
       const startTime = Date.now();
+      const endpointPath = resolveRouteTemplate(req);
 
       const validation = await userApiKeyService.validateUserApiKey(apiKey, {
         db: {
@@ -132,7 +134,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
           heldScopes: validation.scopes,
           requiredScopes,
           alsoRequiredScopes,
-          endpoint: req.originalUrl,
+          endpoint: endpointPath,
         };
         if (gate.outcome === 'stagedAllow') {
           req.logger?.warn('API key scope check missed but staged - allowing', context);
@@ -152,7 +154,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
           keyHash: hashApiKeyForLogging(apiKey),
           keyId: validation.keyId,
           userId: validation.userId,
-          endpoint: req.originalUrl,
+          endpoint: endpointPath,
           blockReasons,
         });
       }
@@ -196,7 +198,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
           metadata: {
             keyId: validation.keyId!,
             keyPrefix: hashApiKeyForLogging(apiKey), // Hash instead of prefix for security
-            endpoint: req.originalUrl,
+            endpoint: endpointPath,
             method: req.method,
             responseTime,
             statusCode: 200, // Will be updated by response middleware if needed
@@ -208,9 +210,6 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
       });
 
       // Store API key info for detailed logging after response
-      // Determine endpoint for logging (fallback to req.url if originalUrl is not available)
-      const endpointPath = req.originalUrl || req.url || (req as any).path || req.baseUrl || 'unknown';
-
       const userId = validation.userId ?? user?.id;
       if (!userId) {
         throw new UnauthorizedError('API key validation missing user id');
@@ -265,7 +264,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
       req.logger?.info(`API key authenticated user: ${user.id}`, {
         keyId: validation.keyId,
         scopes: validation.scopes,
-        endpoint: req.originalUrl,
+        endpoint: endpointPath,
       });
 
       next();

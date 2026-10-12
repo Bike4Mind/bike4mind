@@ -492,6 +492,20 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.DEEPSEEK_V4_PRO,
 ]);
 
+// Matches the native, Bedrock (any region prefix), gateway (`anthropic/`), context-suffixed (`[1m]`)
+// and catalog spellings alike, so a catalog-only id is covered without a ChatModels entry first.
+const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?=$|[-:@[])/;
+
+/**
+ * Whether the model accepts forced tool use. Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
+ * return 400 for `tool_choice` `{type:'any'}` and `{type:'tool'}` (Messages, count_tokens and Batches
+ * alike); `auto` and `none` still work. Adapters route json_schema through `output_config.format` and
+ * downgrade a caller's required/named choice to `auto` + `strict` for these models.
+ */
+export function supportsForcedToolChoice(modelId: string): boolean {
+  return !NO_FORCED_TOOL_CHOICE_FAMILY.test(modelId);
+}
+
 /**
  * Models whose safety classifiers can decline a request with `stop_reason: 'refusal'`
  * (HTTP 200, empty or partial content) - Claude Fable 5's GA classifiers target research

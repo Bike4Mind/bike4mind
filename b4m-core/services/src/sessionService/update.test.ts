@@ -719,3 +719,104 @@ describe('updateSession - added knowledge ids are access-checked', () => {
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
   });
 });
+
+describe("updateSession - knowledgeIdsMode 'add'", () => {
+  const user = { id: 'user-1' } as IUserDocument;
+
+  // Resolves NEW_FILE and LAKE_FILE_ID only; OTHERS_FILE is someone else's.
+  const makeAdapters = (storedIds: string[], lakeFiles: Array<Record<string, unknown>> = []) => {
+    const findAccessibleInIds = vi.fn(async (ids: string[]) =>
+      ids.filter(id => id === NEW_FILE || id === LAKE_FILE_ID).map(id => ({ id }))
+    );
+    return {
+      adapters: {
+        db: {
+          sessions: {
+            shareable: {
+              findUpdateAccessById: vi.fn().mockResolvedValue({
+                id: 'session-1',
+                knowledgeIds: storedIds,
+                artifactIds: [],
+                tags: [],
+                name: 'Session',
+              }),
+            },
+            updateWithUpdateAccess: vi.fn(),
+            addKnowledgeIdsWithUpdateAccess: vi.fn((_user: unknown, data: unknown) => Promise.resolve(data)),
+          },
+          projects: { findAllBySessionId: vi.fn().mockResolvedValue([]) },
+          fabFiles: {
+            findAccessibleInIds,
+            shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(lakeFiles) },
+          },
+          caches: {},
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
+        } as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- storage isn't exercised; getCachedSignedUrl is mocked above
+        storage: {} as any,
+      },
+    };
+  };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('adds only the accessible new ids and never writes the stored list back', async () => {
+    const { adapters } = makeAdapters([KEPT_PRIVATE]);
+    await updateSession(
+      user,
+      { id: 'session-1', knowledgeIds: [KEPT_PRIVATE, OTHERS_FILE, NEW_FILE], knowledgeIdsMode: 'add' },
+      adapters
+    );
+
+    const { addKnowledgeIdsWithUpdateAccess, updateWithUpdateAccess } = adapters.db.sessions;
+    expect(updateWithUpdateAccess).not.toHaveBeenCalled();
+    expect(addKnowledgeIdsWithUpdateAccess).toHaveBeenCalledOnce();
+    const [calledUser, data, added] = addKnowledgeIdsWithUpdateAccess.mock.calls[0];
+    expect(calledUser).toBe(user);
+    expect(data).not.toHaveProperty('knowledgeIds');
+    expect(added).toEqual([NEW_FILE]);
+  });
+
+  it('derives the lake scope from the stored ids plus the additions', async () => {
+    const { adapters } = makeAdapters([KEPT_PRIVATE], [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], knowledgeIdsMode: 'add' }, adapters);
+
+    expect(adapters.db.fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(user, [
+      KEPT_PRIVATE,
+      LAKE_FILE_ID,
+    ]);
+    expect(adapters.db.sessions.addKnowledgeIdsWithUpdateAccess.mock.calls[0][1]).toMatchObject({
+      retrievalTags: ['datalake:acme'],
+    });
+  });
+
+  it('drops an unusable stored id before the lake derivation casts the list', async () => {
+    const { adapters } = makeAdapters(
+      ['Legacy-UUID-2019', KEPT_PRIVATE],
+      [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]
+    );
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], knowledgeIdsMode: 'add' }, adapters);
+
+    expect(adapters.db.fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(user, [
+      KEPT_PRIVATE,
+      LAKE_FILE_ID,
+    ]);
+  });
+
+  it('does not re-add a stored id that differs only in hex case', async () => {
+    const { adapters } = makeAdapters([LAKE_FILE_ID.toUpperCase()]);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], knowledgeIdsMode: 'add' }, adapters);
+
+    const [, , added] = adapters.db.sessions.addKnowledgeIdsWithUpdateAccess.mock.calls[0];
+    expect(added).toEqual([]);
+  });
+
+  it('404s when the gated add-only write is refused', async () => {
+    const { adapters } = makeAdapters([]);
+    adapters.db.sessions.addKnowledgeIdsWithUpdateAccess.mockResolvedValue(null);
+
+    await expect(
+      updateSession(user, { id: 'session-1', knowledgeIds: [NEW_FILE], knowledgeIdsMode: 'add' }, adapters)
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});

@@ -5,6 +5,9 @@ import {
   ScopeRef,
   SettingKey,
   settingsMap,
+  resolveTeamPlanSettings,
+  TEAM_PLAN_SETTING_KEYS,
+  type TeamPlanSettings,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
@@ -225,6 +228,21 @@ export async function getSettingsByNames(
   });
 
   return result;
+}
+
+/**
+ * The team-plan seat floor/ceiling and credits-per-seat, read through the settings cache and
+ * validated by `resolveTeamPlanSettings` (defaults: the ORGANIZATION_SUBSCRIPTION_* constants).
+ * Every server-side seat or team-credit check reads this rather than the constants.
+ */
+export async function loadTeamPlanSettings(
+  db: {
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
+  },
+  options?: { logger?: Logger; skipCache?: boolean }
+): Promise<TeamPlanSettings> {
+  const raw = await getSettingsByNames([...TEAM_PLAN_SETTING_KEYS], db, options);
+  return resolveTeamPlanSettings(raw);
 }
 
 /**

@@ -388,6 +388,28 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     );
   }
 
+  /**
+   * updateWithUpdateAccess that ADDS `knowledgeIds` ($addToSet) instead of `$set`-ing the whole list,
+   * so a detach or attach that lands between the caller's read and this write survives it.
+   */
+  async addKnowledgeIdsWithUpdateAccess(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<Omit<ISessionDocument, 'knowledgeIds'>> & { id: string },
+    knowledgeIds: string[],
+    opts?: { includeGlobalWrite?: boolean }
+  ): Promise<ISessionDocument | null> {
+    // `knowledgeIds` is written by the `$addToSet` below, so it must not also reach the `$set` - a
+    // hydrated doc passes the parameter type structurally. `__v` is stripped by _plainUpdate.
+    const { id, knowledgeIds: _replacedList, ...setData } = data as typeof data & { knowledgeIds?: unknown };
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this._plainUpdate(
+      { _id: convertId(id), deletedAt: null, $or: updateAccessArms(user, opts) },
+      setData as Record<string, unknown>,
+      undefined,
+      { $addToSet: { knowledgeIds: { $each: knowledgeIds } } }
+    );
+  }
+
   async upsertByOpenaiConversationId(openaiConversationId: string, update: Partial<ISession>) {
     // Scope the match to the owner: the conversation id is client-controlled (it comes
     // straight from the uploaded export), so without userId a forged id colliding with

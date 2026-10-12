@@ -230,6 +230,15 @@ describe('OrgGitHubLakeConnectionModel - sync claim', () => {
     expect(await repo.claimForSync(id)).toBeTruthy();
   });
 
+  // The UI's Access lost state hangs off this status, so it must survive a release and still re-sync.
+  it('release can park the connection in access_lost, and a later claim may retry it', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    await repo.releaseSyncClaim(id, token!, 'reconnect', 'access_lost');
+    expect(await repo.findById(id)).toMatchObject({ status: 'access_lost', lastError: 'reconnect' });
+    expect(await repo.claimForSync(id)).toBeTruthy();
+  });
+
   it('release by a superseded token leaves the new owner alone', async () => {
     const { id } = await repo.create(base);
     const stale = await repo.claimForSync(id);

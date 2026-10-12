@@ -380,12 +380,12 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
   /**
-   * Inserts the document then recounts active keys for the same (userId, pool).
-   * Returns the document when the count is within `cap`; revokes the just-inserted
-   * document and returns 'at_cap' when it would exceed `cap`. Deterministic
-   * tie-breaking (oldest `cap` keys survive by createdAt/id sort) prevents the
-   * both-rollback corner case that arises when two concurrent callers both insert
-   * and both naively undo their own key.
+   * Inserts the document, then recounts active keys for the same (userId, pool).
+   * Returns the document when the count is within `cap`; otherwise hard-deletes its
+   * own insert and returns 'at_cap'. Every caller that counts over the cap yields,
+   * because `createdAt` is stamped client-side and so cannot rank concurrent inserts
+   * that commit out of order. The cap is therefore never exceeded, at the cost that
+   * simultaneous creates at `cap - 1` may all be rejected and have to be retried.
    */
   createIfUnderCap: (
     doc: Parameters<IUserApiKeyRepository['create']>[0],

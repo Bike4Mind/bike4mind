@@ -3,6 +3,7 @@ import { ImageModels, ModelInfo } from '@bike4mind/common';
 import { estimateGeneratedMediaUsd } from './agentToolMediaCost';
 import { estimateMusicCredits } from '../musicCost';
 import { estimateAudioCredits } from '../audioCost';
+import { estimateImageCredits } from '../imageCost';
 
 // Grok Imagine is a flat 0.055 USD/image (no size/quality inputs), so it keeps the
 // image assertions independent of the size/quality cost matrix.
@@ -39,6 +40,18 @@ describe('estimateGeneratedMediaUsd', () => {
   it('edit_image is priced like image_generation', () => {
     const data = { model: ImageModels.GROK_IMAGINE_IMAGE_QUALITY, n: 1, prompt: 'x' };
     expect(estimateGeneratedMediaUsd('edit_image', data, models)).toBeGreaterThan(0);
+  });
+
+  it('edit_image bills its one source image as input on a GPT model; image_generation does not', () => {
+    const gpt = { id: ImageModels.GPT_IMAGE_2 } as ModelInfo;
+    const data = { model: ImageModels.GPT_IMAGE_2, n: 1, quality: 'high', size: '1024x1024' };
+    const input = { model: data.model, size: data.size, quality: data.quality } as const;
+    expect(estimateGeneratedMediaUsd('image_generation', data, [gpt])).toBe(
+      estimateImageCredits(gpt, 1, input).usdCost
+    );
+    expect(estimateGeneratedMediaUsd('edit_image', data, [gpt])).toBe(
+      estimateImageCredits(gpt, 1, { ...input, inputImageCount: 1 }).usdCost
+    );
   });
 
   it('returns 0 for a non-media tool', () => {

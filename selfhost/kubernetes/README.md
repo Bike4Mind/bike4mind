@@ -64,13 +64,16 @@ Copy `images.example.yaml` outside the checkout and replace all registry placeho
 
    App and workers wait for Mongo PRIMARY and a successful storage initialization marker. The initializer creates the seven configured buckets, upload notification registrations and current Compose lifecycle policies, then writes the marker. It is safe to rerun. Its deterministic name changes when chart initialization inputs or values change, avoiding immutable Job updates. Change `initializationRevision` when an existing Secret's contents change or an explicit rerun is needed. Do not delete PVCs to retry initialization.
 
-5. Open three separate terminals for the browser-facing services. The chatcompletion port serves the CLI/API SSE endpoint. Keep these loopback-bound port-forwards private.
+5. Open four separate terminals for the browser-facing services. The chatcompletion port serves the CLI/API SSE endpoint. Keep these loopback-bound port-forwards private.
 
    ```sh
    kubectl port-forward --namespace bike4mind-eval svc/b4m-app 3000:3000
    kubectl port-forward --namespace bike4mind-eval svc/b4m-ws 3001:3001
    kubectl port-forward --namespace bike4mind-eval svc/b4m-chatcompletion 8788:8080
+   kubectl port-forward --namespace bike4mind-eval svc/b4m-minio 19000:9000
    ```
+
+   The MinIO API forward matches `config.S3_PRESIGN_ENDPOINT` for QuestMaster ZIP downloads. Backend storage traffic keeps the private service endpoint. For remote browsers, set this value to a trusted HTTPS S3 API origin serving the same buckets; preserve the signed host, path and query through any proxy.
 
    Open `http://localhost:3000`. Read test email by forwarding deployment/b4m-mail port 8025. Mailpit's UI port is intentionally absent from its Service.
 

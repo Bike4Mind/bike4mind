@@ -12,7 +12,12 @@ vi.mock('../../../hooks/data/imageTemplates', () => ({
 }));
 
 vi.mock('../../../hooks/data/useModelInfo', () => ({
-  useModelInfo: () => ({ data: [{ id: 'flux-pro-1.1', name: 'Flux Pro 1.1' }] }),
+  useModelInfo: () => ({
+    data: [
+      { id: 'flux-pro-1.1', name: 'Flux Pro 1.1' },
+      { id: 'gpt-image-2', name: 'GPT Image 2' },
+    ],
+  }),
 }));
 
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -73,5 +78,17 @@ describe('ImageTemplateControls (settings bar)', () => {
       </TestWrapper>
     );
     expect(screen.queryByTestId('applied-template-chip')).toBeNull();
+  });
+
+  it('labels GPT image pricing as a base amount because input images add credits', () => {
+    useLLM.setState({ model: 'gpt-image-2', quality: 'medium', size: '1024x1024', n: 1 });
+
+    render(
+      <TestWrapper>
+        <ImageTemplateControls />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('image-cost-preview-chip')).toHaveTextContent('From 106 credits');
   });
 });

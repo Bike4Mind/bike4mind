@@ -37,7 +37,7 @@ export const useEntitlements = (options: { enabled?: boolean } = {}) => {
   });
 };
 
-export type EntitlementSourceType = 'tag' | 'domain' | 'subscription' | 'admin-bypass' | 'developer-bypass';
+export type EntitlementSourceType = 'tag' | 'domain' | 'subscription' | 'implied' | 'admin-bypass' | 'developer-bypass';
 
 export interface EntitlementSource {
   type: EntitlementSourceType;
@@ -55,7 +55,7 @@ export interface EntitlementAccessRow {
  * Admin-only "Product Access" view of another user's product entitlements -
  * every known product key, whether they hold it, and (unlike `useEntitlements`,
  * which only returns the held-key list for the CURRENT user) the source(s)
- * behind each one: tag / domain / subscription / admin- or developer-bypass.
+ * behind each one: tag / domain / subscription / implied / admin- or developer-bypass.
  * The fix for phantom-access visibility (admin can't otherwise see a
  * domain-grant or subscription hold, only tags).
  */

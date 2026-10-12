@@ -33,14 +33,13 @@ const InboxBadge: FC<{ children: ReactNode }> = ({ children }) => {
     'invites',
     useMemo(() => ({}), []),
     useCallback<SubscriptionCallbackFunction<IInviteDocument>>(
-      (type, data) => {
+      type => {
         if (!userEmail) return;
 
         // Only handle invites that involve the current user
-        const isRelevantToUser = data.recipients?.pending?.includes(userEmail);
-
-        // Only invalidate for relevant changes
-        if ((type === 'insert' || type === 'update') && isRelevantToUser) {
+        // The event carries no `recipients` for non-admins (server/websocket/dataSubscribeFieldLimits.ts),
+        // so relevance is left to the refetch, which only returns invites addressed to the caller.
+        if (type === 'insert' || type === 'update') {
           debounceFetch();
         }
       },

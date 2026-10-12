@@ -156,7 +156,14 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
   protected async _plainUpdate<D = T>(
     idFilter: Record<string, unknown>,
     data: Record<string, unknown>,
-    options?: Record<string, unknown>
+    options?: Record<string, unknown>,
+    /**
+     * Extra update operators merged beside the `$set` (e.g. a `$addToSet`). Lets a repo override
+     * with a non-`$set` write while keeping this core's `__v` strip, query-option handling and
+     * transaction propagation in one place. The `$set`/`$unset` this core builds win over any the
+     * extra operators try to carry, so they cannot clobber the field set.
+     */
+    extraOps?: Record<string, unknown>
   ): Promise<D | null> {
     // Strip `__v` from the `$set`. A whole-doc `update` from a stale in-memory copy would otherwise
     // write the read-time version straight back, rewinding the monotonic counter `updateGuarded`
@@ -167,7 +174,9 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     const { setData, unsetOperand, queryOptions } = splitUnsetOption(writable, options);
     const query = this.model.findOneAndUpdate(
       idFilter as mongoose.FilterQuery<T>,
-      (unsetOperand ? { $set: setData, $unset: unsetOperand } : { $set: setData }) as mongoose.UpdateQuery<T>,
+      (unsetOperand
+        ? { ...extraOps, $set: setData, $unset: unsetOperand }
+        : { ...extraOps, $set: setData }) as mongoose.UpdateQuery<T>,
       { new: true, ...queryOptions }
     );
     // Only attach an explicit session when one is set. Passing `.session(null)` tells Mongoose "no

@@ -141,3 +141,39 @@ describe.each([
     expect(screen.getByTestId('sidenav-item-menuitem-send-datalake')).toBeInTheDocument();
   });
 });
+
+describe.each([
+  ['default sidenav row', undefined],
+  ['header row', 'header'],
+] as const)('SidenavItem %s - read-only', (_label, location) => {
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+  });
+
+  it('renders the actions menu when not read-only', () => {
+    render(
+      <TestWrapper>
+        <SidenavItem session={session} location={location} />
+      </TestWrapper>
+    );
+
+    const menuButton = screen.getByTestId('sidenav-item-menu-btn');
+    expect(menuButton).toBeInTheDocument();
+    // The list row's menu button is icon-only (the header row's carries the title as text).
+    if (location !== 'header') expect(menuButton).toHaveAttribute('aria-label', 'Chat options');
+  });
+
+  it('renders no menu and opens the session on click when read-only', () => {
+    const onClick = vi.fn();
+    render(
+      <TestWrapper>
+        <SidenavItem session={session} location={location} onClick={onClick} readOnly />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId('sidenav-item-menu-btn')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('sidenav-item-session-btn'));
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+});

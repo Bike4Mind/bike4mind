@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { API_ERROR_CODES, API_KEY_USER_CAP_ERROR_CODE } from './apiErrorCodes';
+import { AGENT_LIMIT_REACHED_ERROR_CODE, API_ERROR_CODES, API_KEY_USER_CAP_ERROR_CODE } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
 import { CompletionSseErrorEventSchema } from './schemas/cliCompletions';
@@ -36,7 +36,12 @@ describe('API_ERROR_CODES', () => {
       VIDEO_JOB_PUBLIC_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
-    const emitted = new Set<string>([...NARROWING_TUPLES.flat(), API_KEY_USER_CAP_ERROR_CODE]);
+    // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.
+    const emitted = new Set<string>([
+      ...NARROWING_TUPLES.flat(),
+      API_KEY_USER_CAP_ERROR_CODE,
+      AGENT_LIMIT_REACHED_ERROR_CODE,
+    ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });
 

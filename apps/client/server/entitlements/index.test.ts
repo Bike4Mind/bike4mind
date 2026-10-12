@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { getRequestEntitlements, getUserEntitlements, requestHasEntitlement, userHasEntitlement } from './index';
 import type { Request } from 'express';
+import { __registryRows } from '@client/lib/entitlements/registry';
 
 // Minimal req shim - only the fields the entitlement helpers touch.
 const makeReq = (user: {
@@ -128,6 +129,40 @@ describe('getUserEntitlements', () => {
   it('treats a preloaded empty list as authoritative (no repository fallback)', async () => {
     await expect(getUserEntitlements(user, [])).resolves.toEqual(['sometag', 'base']);
     expect(findActive).not.toHaveBeenCalled();
+  });
+
+  // Implied rows come from the real registry (the mock spreads it), so these assert the
+  // wiring: implications apply after EVERY source, not just the pure registry ones.
+  it('applies implied entitlements to a tag-derived implying key', async () => {
+    findActive.mockResolvedValue([]);
+    for (const row of __registryRows.impliedRows) {
+      const keys = await getUserEntitlements({ id: 'u7', tags: [row.ifHeld] });
+      expect(keys).toEqual([row.ifHeld, 'base', ...row.alsoGrant]);
+    }
+  });
+
+  it('applies implied entitlements to a partner-rule-derived implying key', async () => {
+    findActive.mockResolvedValue([]);
+    for (const row of __registryRows.impliedRows) {
+      mockPartnerEntitlements.mockResolvedValue(new Set([row.ifHeld]));
+      const keys = await getUserEntitlements({ id: 'u8', tags: [], email: 'p@partner.com', emailVerified: true });
+      expect(keys).toEqual(expect.arrayContaining([row.ifHeld, ...row.alsoGrant]));
+    }
+  });
+
+  it('skips a non-string key from a malformed source instead of throwing', async () => {
+    findActive.mockResolvedValue([]);
+    mockPartnerEntitlements.mockResolvedValue(new Set([123, 'Partner:Key']));
+    const keys = await getUserEntitlements({ id: 'u10', tags: [], email: 'p@partner.com', emailVerified: true });
+    expect(keys).toEqual(['partner:key', 'base']);
+  });
+
+  it('returns no implied key when the implying key is not held', async () => {
+    findActive.mockResolvedValue([]);
+    const keys = await getUserEntitlements({ id: 'u9', tags: [] });
+    for (const row of __registryRows.impliedRows) {
+      for (const key of row.alsoGrant) expect(keys).not.toContain(key);
+    }
   });
 });
 

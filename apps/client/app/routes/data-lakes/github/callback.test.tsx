@@ -164,6 +164,18 @@ describe('GitHubLakeCallbackPage', () => {
     expect(h.authorizeMutate).not.toHaveBeenCalled();
   });
 
+  it('treats a handoff-less install return as a completed access repair', () => {
+    sessionStorage.clear();
+    setSearch({ setup_action: 'update', installation_id: '42' });
+    renderPage();
+
+    expect(h.toastInfo).toHaveBeenCalledWith('GitHub access updated. Use Re-sync on the lake to resume syncing.');
+    expect(h.toastError).not.toHaveBeenCalled();
+    expect(h.replace).toHaveBeenCalledWith('/');
+    expect(h.openManager).not.toHaveBeenCalled();
+    expect(h.authorizeMutate).not.toHaveBeenCalled();
+  });
+
   it('reopens the picker with no server call when the install fallback returns with no code', () => {
     setSearch({ installation_id: '42', state: 's1' });
     renderPage();

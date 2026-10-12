@@ -77,6 +77,7 @@ const PlanCard = ({
       >
         {isPopular && (
           <Box
+            data-testid="plan-card-popular-badge"
             sx={{
               bgcolor: 'primary.500',
               color: 'white',
@@ -128,7 +129,7 @@ const PlanCard = ({
       )}
 
       {isCurrentPlan && currentPlanDetails && !currentPlanDetails.canceledAt && (
-        <Box sx={{ height: '95px', mb: '16px' }}>
+        <Box sx={{ mb: '16px' }}>
           <Box
             sx={{
               fontSize: '14px',
@@ -145,7 +146,6 @@ const PlanCard = ({
                 textAlign: 'center',
                 fontSize: '14px',
                 lineHeight: '14px',
-                mb: '17px',
               }}
             >
               {/* A delinquent plan still renews on paper, so saying so would read as
@@ -156,7 +156,6 @@ const PlanCard = ({
                     date: dayjs(currentPlanDetails.periodEndsAt).format('MMM D, YYYY'),
                   })}
             </Typography>
-            <Box sx={{ fontSize: '16px', lineHeight: '16px', textAlign: 'center' }}>****</Box>
           </Box>
         </Box>
       )}

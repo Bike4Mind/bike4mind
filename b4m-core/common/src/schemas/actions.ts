@@ -596,6 +596,7 @@ export const CliCompletionChunkAction = z.object({
   chunk: z.object({
     type: z.enum(['content', 'tool_use']),
     text: z.string(),
+    toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
     tools: z.array(z.unknown()).optional(),
     usage: z
       .object({

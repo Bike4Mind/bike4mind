@@ -61,6 +61,13 @@ describe('parseStreamEvent', () => {
     expect(event).toEqual({ type: 'content', text: 'hi' });
   });
 
+  it.each(['content', 'tool_use'] as const)('keeps toolStarted on %s frames', type => {
+    expect(parseStreamEvent({ type, text: '', toolStarted: { name: 'file_write', id: 'call_1' } })).toMatchObject({
+      type,
+      toolStarted: { name: 'file_write', id: 'call_1' },
+    });
+  });
+
   it('returns null for an unrecognized event type (skip semantics)', () => {
     expect(parseStreamEvent({ type: 'message_start', text: 'x' })).toBeNull();
   });

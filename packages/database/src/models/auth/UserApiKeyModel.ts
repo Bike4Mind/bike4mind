@@ -176,25 +176,16 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     try {
       const filter = this.activeKeyFilter(userId, pool);
       const count = await this.model.countDocuments(filter);
-      // Over cap: keep the oldest `cap` keys so concurrent callers in the same process
-      // agree on which keys survive (stable sort by createdAt, _id). Cross-process
-      // clock skew on a same-millisecond insert can land at cap+1; that narrow window
-      // requires an atomic counter to close completely.
+      // Over cap: this caller yields. Ranking survivors by createdAt is unsafe because
+      // inserts on separate pooled connections commit out of order: a later-stamped key can
+      // count `cap` and succeed before an earlier-stamped one commits, so the earlier one
+      // would rank itself in and land at cap+1. Yielding never exceeds the cap; the cost is
+      // that truly simultaneous creates at cap - 1 can all be rejected (caller may retry).
       if (count > cap) {
-        const survivors = await this.model
-          .find(filter)
-          .sort({ createdAt: 1, _id: 1 })
-          .limit(cap)
-          .select('_id')
-          .lean<{ _id: mongoose.Types.ObjectId }[]>()
-          .exec();
-        const survivorIds = new Set(survivors.map(s => String(s._id)));
-        if (!survivorIds.has(String(created._id))) {
-          // Hard-delete via the raw driver: the soft-delete plugin's deleteOne would
-          // only set deletedAt, leaving the row visible with status ACTIVE.
-          await this.model.collection.deleteOne({ _id: created._id });
-          return 'at_cap';
-        }
+        // Hard-delete via the raw driver: the soft-delete plugin's deleteOne would
+        // only set deletedAt, leaving the row visible with status ACTIVE.
+        await this.model.collection.deleteOne({ _id: created._id });
+        return 'at_cap';
       }
       return created;
     } catch (err) {

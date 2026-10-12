@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-07T10:30:57.943Z",
-  "notice": "Fallback defaults last maintained on 2026-10-07. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-11T16:20:28.746Z",
+  "notice": "Fallback defaults last maintained on 2026-10-11. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -510,11 +510,46 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "Anthropic's latest flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
+        "description": "Anthropic's previous flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
         "logoFile": "Anthropic_logo.png",
         "rank": 0,
         "isSlowModel": true,
         "releaseDate": "2026-07-24"
+      }
+    },
+    {
+      "modelId": "claude-opus-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-opus-5-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 5.5 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's latest flagship model. Claude 5.5 Opus delivers adaptive extended thinking, coding, and agentic capabilities at a lower price than Claude 5 Opus.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
       }
     },
     {
@@ -1708,7 +1743,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "Anthropic's latest flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
+        "description": "Anthropic's previous flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
         "logoFile": "Anthropic_logo.png",
         "rank": 1,
         "isSlowModel": true,
@@ -2654,7 +2689,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision at mid-tier cost, a reliable workhorse for everyday professional tasks.",
+        "description": "GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision, priced between Sol and Luna, a reliable workhorse for everyday professional tasks.",
         "logoFile": "OpenAI_Logo.svg",
         "rank": 1,
         "trainingCutoff": "2026-01-01",

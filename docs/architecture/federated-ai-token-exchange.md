@@ -100,8 +100,7 @@ on it would break if the alias ever moved.
 
 ## Registering a client
 
-`packages/scripts/src/seed-oauth-client.ts` registers a client and prints its
-`client_id` / `client_secret`. For a B4M-issued client:
+Admins register clients from the admin console (Security > OAuth Clients), which takes the same trust config in its "Federated trust" section. Both it and `packages/scripts/src/seed-oauth-client.ts` go through `createOAuthClient` (`packages/database/src/models/auth/oauthClientAdmin.ts`), so the rules below apply to both. The script prints the `client_id` / `client_secret`; it is the fallback where no admin user exists. For a B4M-issued client:
 
 ```bash
 MONGODB_URI=<uri> \

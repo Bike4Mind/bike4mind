@@ -1636,7 +1636,11 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     },
     // Progress/finalize is written to the bob_runs doc; ManageConnections lets the worker
     // push live status over the reading-screen websocket subscription (issue #33 step D).
-    permissions: [{ actions: ['execute-api:ManageConnections'], resources: ['*'] }],
+    // PutMetricData (no resource scope) is for Lumina5/AnthropicAPI emitted from llm-adapters.
+    permissions: [
+      { actions: ['execute-api:ManageConnections'], resources: ['*'] },
+      { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
+    ],
   },
   SINGLE_RECORD_BATCH
 );

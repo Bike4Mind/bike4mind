@@ -5,8 +5,11 @@ import {
   swapOptimisticPromptBubbleId,
   createOptimisticPromptBubble,
   appendReplyToLatestOptimisticBubble,
+  buildOptimisticQuest,
+  createOptimisticQuest,
   updateOptimisticQuest,
 } from './llm';
+import { updateSingleQueryDataFast } from './react-query';
 
 const sessionId = 'sess_abc';
 const queryKey = ['quests', 'session', sessionId];
@@ -51,6 +54,7 @@ describe('createOptimisticPromptBubble routingSource (live badge)', () => {
     const quests = readQuests(qc);
     expect(quests).toHaveLength(1);
     expect(quests[0].routingSource).toBe('complexity');
+    expect(quests[0]).toMatchObject({ _optimistic: true });
   });
 
   it('omits routingSource for a normal (quest_processor) send', () => {
@@ -90,11 +94,88 @@ describe('appendReplyToLatestOptimisticBubble creditsUsed (live chip)', () => {
     appendReplyToLatestOptimisticBubble(qc, sessionId, 'the answer', 'exec_1');
     expect(readQuests(qc)[0].creditsUsed).toBeUndefined();
   });
+
+  it.each(['before', 'after'])('lets the persisted document win when an insert arrives %s the id swap', order => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'do the thing');
+    const serverInsert = makeQuest({
+      id: 'real_quest_id',
+      updatedAt: new Date('2025-01-01'),
+      prompt: 'do the thing',
+    });
+
+    if (order === 'before') {
+      updateSingleQueryDataFast(qc, queryKey, 'write', serverInsert, { keysAllowedToCreate: [queryKey] });
+    }
+    swapOptimisticPromptBubbleId(qc, sessionId, 'real_quest_id');
+    if (order === 'after') {
+      updateSingleQueryDataFast(qc, queryKey, 'write', serverInsert, { keysAllowedToCreate: [queryKey] });
+    }
+    appendReplyToLatestOptimisticBubble(qc, sessionId, 'client reply', 'exec_1');
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      { ...serverInsert, replies: ['server reply'], creditsUsed: 42 },
+      { keysAllowedToCreate: [] }
+    );
+
+    expect(readQuests(qc).find(quest => quest.id === 'real_quest_id')).toMatchObject({
+      replies: ['server reply'],
+      creditsUsed: 42,
+    });
+  });
+
+  it('recovers a completed reply after a late dispatch insert temporarily blanks it', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'do the thing');
+    swapOptimisticPromptBubbleId(qc, sessionId, 'real_quest_id');
+    appendReplyToLatestOptimisticBubble(qc, sessionId, 'client reply', 'exec_1');
+
+    const dispatchInsert = makeQuest({
+      id: 'real_quest_id',
+      updatedAt: new Date('2025-01-01'),
+      prompt: 'do the thing',
+      replies: [],
+    });
+    updateSingleQueryDataFast(qc, queryKey, 'write', dispatchInsert, { keysAllowedToCreate: [] });
+    expect(readQuests(qc)[0].replies).toEqual([]);
+
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      { ...dispatchInsert, updatedAt: new Date('2025-01-02'), replies: ['server reply'] },
+      { keysAllowedToCreate: [] }
+    );
+    expect(readQuests(qc)[0].replies).toEqual(['server reply']);
+  });
+});
+
+describe('optimistic quest marker', () => {
+  it('marks buildOptimisticQuest output', () => {
+    expect(buildOptimisticQuest(sessionId, 'hello')).toMatchObject({ _optimistic: true });
+  });
+
+  it('keeps the marker on createOptimisticQuest errors', async () => {
+    const qc = seedQueryClient([]);
+
+    await expect(
+      createOptimisticQuest(qc, sessionId, 'hello', async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+
+    expect(readQuests(qc)[0]).toMatchObject({ _optimistic: true, status: 'done' });
+  });
 });
 
 describe('swapOptimisticPromptBubbleId', () => {
   it('renames the optimistic bubble to the real id when no collision exists', () => {
-    const optimistic = makeQuest({ id: 'optimistic-quest-sess_abc-12345', prompt: 'do the thing' });
+    const optimistic = {
+      ...makeQuest({ id: 'optimistic-quest-sess_abc-12345', prompt: 'do the thing' }),
+      _optimistic: true,
+    };
     const qc = seedQueryClient([optimistic]);
 
     swapOptimisticPromptBubbleId(qc, sessionId, 'real_quest_id');
@@ -103,6 +184,7 @@ describe('swapOptimisticPromptBubbleId', () => {
     expect(quests).toHaveLength(1);
     expect(quests[0].id).toBe('real_quest_id');
     expect(quests[0].prompt).toBe('do the thing');
+    expect(quests[0]).toMatchObject({ _optimistic: true });
   });
 
   it('drops the optimistic bubble when the real id is already present (change-stream race)', () => {
@@ -186,5 +268,48 @@ describe('updateOptimisticQuest (same-id re-run)', () => {
     const [cached] = readQuests(qc);
     expect(cached.status).toBe('done');
     expect(cached.replies?.[0]).toContain('**Error:**');
+    expect(cached).not.toHaveProperty('_optimistic');
+  });
+
+  it('keeps the rerun error when an older running server frame arrives', async () => {
+    const qc = seedQueryClient([
+      makeQuest({ id: 'rerun', status: 'done', updatedAt: new Date('2025-01-01'), replies: ['old answer'] }),
+    ]);
+
+    await expect(
+      updateOptimisticQuest(qc, 'rerun', sessionId, { status: undefined }, async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      makeQuest({ id: 'rerun', status: 'running', updatedAt: new Date('2020-01-01'), replies: [] }),
+      { keysAllowedToCreate: [] }
+    );
+
+    expect(readQuests(qc)[0]).toMatchObject({ status: 'done', replies: [expect.stringContaining('**Error:**')] });
+  });
+
+  it('replaces the rerun error with a genuinely newer server document', async () => {
+    const qc = seedQueryClient([makeQuest({ id: 'rerun', status: 'done' })]);
+
+    await expect(
+      updateOptimisticQuest(qc, 'rerun', sessionId, { status: undefined }, async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      makeQuest({ id: 'rerun', status: 'done', updatedAt: new Date('2100-01-01'), replies: ['server result'] }),
+      { keysAllowedToCreate: [] }
+    );
+
+    expect(readQuests(qc)[0]).toMatchObject({ status: 'done', replies: ['server result'] });
   });
 });

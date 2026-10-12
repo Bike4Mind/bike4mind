@@ -1,5 +1,17 @@
 # @bike4mind/infra
 
+## 2.1.0
+
+### Minor Changes
+
+- [#4042](https://github.com/Bike4Mind/bike4mind/pull/4042) [`3e5efa7`](https://github.com/Bike4Mind/bike4mind/commit/3e5efa790ed3bd5daa6824577cfd0025502d6a76) Thanks [@vinchi777](https://github.com/vinchi777)! - emit ProcessingFailed metric from CLI and embed completion paths
+
+### Patch Changes
+
+- [#2411](https://github.com/Bike4Mind/bike4mind/pull/2411) [`b83d2c9`](https://github.com/Bike4Mind/bike4mind/commit/b83d2c901d66b46de6b95818cb0088f3564e2a05) Thanks [@poysama](https://github.com/poysama)! - refuse to deploy a stage whose tier-1 secrets are unset
+
+- [#4031](https://github.com/Bike4Mind/bike4mind/pull/4031) [`7aa174a`](https://github.com/Bike4Mind/bike4mind/commit/7aa174ab29c4682a44fca39fb68b06cda8475265) Thanks [@julsanchez](https://github.com/julsanchez)! - share Lumina5/Quests metric names via @bike4mind/infra
+
 ## 2.0.0
 
 ### Major Changes

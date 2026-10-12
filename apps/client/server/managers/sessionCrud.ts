@@ -178,8 +178,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
     // turns read session.knowledgeIds). Images stay per-turn: a notebook image is re-sent as base64
     // every turn (see resolveAttachScope). Never propagated to projects: an automatic attach is not
     // consent to share. Best-effort: this turn still carries every id as a per-turn session file.
-    const knownIds = session?.knowledgeIds ?? [];
-    const known = new Set(knownIds.map(id => String(id).toLowerCase()));
+    const known = new Set((session?.knowledgeIds ?? []).map(id => String(id).toLowerCase()));
     const addedIds = persistFabFileIds
       ? [...new Set((fabFileIds ?? []).map(id => id.toLowerCase()))].filter(id => !known.has(id))
       : [];
@@ -198,7 +197,9 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
         if (notebookIds.length > 0) {
           session = await sessionService.updateSession(
             user,
-            { id: session.id, knowledgeIds: [...knownIds, ...notebookIds], propagateToProjects: false },
+            // Add-only: `known` was read before the metadata lookup, so writing the full list back
+            // would undo a detach the user made in the meantime.
+            { id: session.id, knowledgeIds: notebookIds, knowledgeIdsMode: 'add', propagateToProjects: false },
             {
               db: {
                 sessions: sessionRepository,

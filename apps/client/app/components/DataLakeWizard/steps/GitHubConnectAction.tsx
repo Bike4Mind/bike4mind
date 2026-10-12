@@ -5,7 +5,7 @@ import LinkOffIcon from '@mui/icons-material/LinkOff';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { acceptsConnectorContent } from '@bike4mind/common';
+import { acceptsConnectorContent, isGitHubLakeAccessLost } from '@bike4mind/common';
 import {
   useDisconnectLakeGitHub,
   useLakeGitHubConnection,
@@ -16,6 +16,7 @@ import {
 import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGitHubConnect';
 import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectionDisplay';
 import { getServerErrorField } from '@client/app/utils/error';
+import GitHubAccessLostState from './GitHubAccessLostState';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import GitHubLakeSyncProgress from '@client/app/components/datalake/GitHubLakeSyncProgress';
 import GitHubLakeSyncRulesModal from '@client/app/components/datalake/GitHubLakeSyncRulesModal';
@@ -209,6 +210,7 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
 
   const { label, color } = describeGitHubConnection(connection);
   const blockedReason = resyncBlockedReason(connection);
+  const accessLost = isGitHubLakeAccessLost(connection);
 
   return (
     <Sheet
@@ -315,7 +317,7 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
                 Cancel
               </Button>
             </>
-          ) : (
+          ) : !accessLost ? (
             <Button
               data-testid="github-disconnect-btn"
               size="sm"
@@ -333,12 +335,21 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
                   ? 'Retry disconnect'
                   : 'Disconnecting'}
             </Button>
-          ))}
+          ) : null)}
       </Stack>
-      {connection.lastError && (
-        <Typography level="body-xs" color={color} data-testid="github-connection-last-error">
-          {connection.lastError}
-        </Typography>
+      {accessLost ? (
+        <GitHubAccessLostState
+          connection={connection}
+          onDisconnect={() => setConfirmingDisconnect(true)}
+          disconnectDisabled={confirmingDisconnect}
+          canManage={canManage}
+        />
+      ) : (
+        connection.lastError && (
+          <Typography level="body-xs" color={color} data-testid="github-connection-last-error">
+            {connection.lastError}
+          </Typography>
+        )
       )}
     </Sheet>
   );

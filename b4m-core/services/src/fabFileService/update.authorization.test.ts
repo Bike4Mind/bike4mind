@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { IFabFileDocument, IUserDocument, Permission } from '@bike4mind/common';
+import { NotFoundError } from '@bike4mind/utils';
 import { updateFabFile } from './update';
 import { createShareableFake } from '../__tests__/utils/shareableFake';
 
@@ -42,11 +43,23 @@ describe('updateFabFile authorization', () => {
     await expect(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       updateFabFile({ id: SHAREE } as IUserDocument, { id: 'file-1', fileContent: 'pwned' }, adapters as any)
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(NotFoundError);
 
     expect(storage.upload).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
     expect(file.fileSize).toBe(12);
+  });
+
+  // NotFoundError, not Forbidden: PATCH /api/v1/files/{id} publishes a denial as 404 so ids cannot be probed.
+  it('refuses a stranger with NotFoundError, and writes nothing', async () => {
+    const file = sharedFile([Permission.read]);
+    const { adapters, update } = adaptersFor(file);
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateFabFile({ id: 'user-stranger' } as IUserDocument, { id: 'file-1', notes: 'x' }, adapters as any)
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('still allows a sharee holding update to edit the file', async () => {

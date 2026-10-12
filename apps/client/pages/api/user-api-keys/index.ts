@@ -19,7 +19,8 @@ import {
   UserApiKeyEvents,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
+import { USER_API_KEY_SCOPE_VALUES, isApiKeyScopeOffered } from '@client/app/constants/apiKeyScopes';
+import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -148,6 +149,14 @@ const handler = baseApi()
     const invalidScopes = requestedScopes.filter(s => !USER_API_KEY_SCOPE_VALUES.includes(s as ApiKeyScope));
     if (invalidScopes.length > 0) {
       throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
+    }
+
+    // Product scopes (OptiHashi, Overwatch, Hearth) need the product too: the New-Key modal hides
+    // them from users without it, and this keeps a hand-built request from minting one anyway.
+    const scopeAccess = await resolveApiKeyScopeAccess(req);
+    const unentitledScopes = requestedScopes.filter(s => !isApiKeyScopeOffered(s as ApiKeyScope, scopeAccess));
+    if (unentitledScopes.length > 0) {
+      throw new ForbiddenError(`Scope not available on your account: ${unentitledScopes.join(', ')}`);
     }
 
     // Authorize org-billed minting: caller must administer the org (owner or
