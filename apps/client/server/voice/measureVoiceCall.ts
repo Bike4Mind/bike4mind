@@ -2,7 +2,6 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { z } from 'zod';
-import { evidencedCallSeconds } from './evidencedCallSeconds';
 import type { VoiceHold } from './settleVoiceHold';
 
 const logger = new Logger({ metadata: { service: 'measureVoiceCall' } });
@@ -22,17 +21,17 @@ const PROVIDER_LOOKUP_TIMEOUT_MS = 10_000;
  * - `measured`: bill `elapsedSeconds`. From the provider's own record when the hold carries
  *   provider conversation ids, so offline time and a transport that never connected cost nothing;
  *   wall clock otherwise (the OpenAI realtime path, or a provider that issued no id). A
- *   conversation the provider still has no record of past the grace window is billed by the
- *   session's turn evidence instead (`turn-evidence`): a transport that never connected has no
- *   turns and costs nothing, but a provider that lost or never retained the record (a rotated
- *   workspace key, a no-retention agent) must not make the call free.
+ *   conversation the provider still has no record of past the grace window never connected and
+ *   costs nothing. Session turns can't stand in for it: a v2 voice turn is an ordinary chat quest,
+ *   so a message typed after the failed connect would be billed as call time. The miss is logged
+ *   so a provider that lost the record (a rotated workspace key) is visible.
  * - `live`: the provider still has the call open. Settling now would bill a running call at its
  *   duration so far, so the caller must wait.
  * - `pending`: the provider has no record yet, within the grace window.
  * - `unverifiable`: the provider lookup failed or no key is configured.
  */
 export type VoiceCallMeasurement =
-  | { kind: 'measured'; elapsedSeconds: number; source: 'provider' | 'wall-clock' | 'turn-evidence' }
+  | { kind: 'measured'; elapsedSeconds: number; source: 'provider' | 'wall-clock' }
   | { kind: 'live' }
   | { kind: 'pending' }
   | { kind: 'unverifiable'; reason: string };
@@ -86,16 +85,11 @@ export async function measureVoiceCallSeconds(hold: VoiceHold, now: Date = new D
     if (lookup.status === 'initiated' || lookup.status === 'in-progress') return { kind: 'live' };
     totalSeconds += lookup.durationSeconds;
   }
-  const providerSeconds = Math.ceil(totalSeconds);
-  if (missingIds.length === 0) return { kind: 'measured', elapsedSeconds: providerSeconds, source: 'provider' };
-
-  logger.warn('[measureVoiceCall] provider has no record of the conversation; billing session turns', {
-    sessionId: hold.id,
-    conversationIds: missingIds,
-  });
-  // The turn evidence spans the whole hold, recorded conversations included, so take the larger.
-  const evidenced = await evidencedCallSeconds(hold);
-  return evidenced > providerSeconds
-    ? { kind: 'measured', elapsedSeconds: evidenced, source: 'turn-evidence' }
-    : { kind: 'measured', elapsedSeconds: providerSeconds, source: 'provider' };
+  if (missingIds.length > 0) {
+    logger.warn('[measureVoiceCall] provider has no record of the conversation; billing it as never connected', {
+      sessionId: hold.id,
+      conversationIds: missingIds,
+    });
+  }
+  return { kind: 'measured', elapsedSeconds: Math.ceil(totalSeconds), source: 'provider' };
 }

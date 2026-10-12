@@ -97,7 +97,7 @@ describe('measureVoiceCallSeconds', () => {
     ).toEqual({ kind: 'pending' });
   });
 
-  it('bills zero seconds for a provider 404 past the grace window with no turns (the transport never connected)', async () => {
+  it('bills zero seconds for a provider 404 past the grace window (the transport never connected)', async () => {
     fetchSpy.mockResolvedValue(new Response('', { status: 404 }));
 
     expect(
@@ -106,28 +106,18 @@ describe('measureVoiceCallSeconds', () => {
     expect(mocks.warn).toHaveBeenCalledWith(expect.any(String), { sessionId: 's1', conversationIds: ['conv_a'] });
   });
 
-  // A rotated workspace key or a no-retention agent 404s every lookup; that must not make calls free.
-  it('bills the session turns for a provider 404 past the grace window when the call produced turns', async () => {
+  // A v2 voice turn is an ordinary chat quest, so a message typed after a failed connect looks
+  // like a call turn; it must not be billed as call time.
+  it('does not bill session turns for a provider 404 past the grace window', async () => {
     fetchSpy.mockResolvedValue(new Response('', { status: 404 }));
-    mocks.findTurns.mockResolvedValue([{ timestamp: secondsAfterStart(95) }]);
+    mocks.findTurns.mockResolvedValue([{ timestamp: secondsAfterStart(90) }]);
 
-    expect(await measureVoiceCallSeconds(holdWith(['conv_a']), secondsAfterStart(500))).toEqual({
+    expect(await measureVoiceCallSeconds(holdWith(['conv_a']), secondsAfterStart(120))).toEqual({
       kind: 'measured',
-      elapsedSeconds: 95,
-      source: 'turn-evidence',
-    });
-    expect(mocks.findTurns).toHaveBeenCalledWith('s1', STARTED);
-  });
-
-  it('keeps the provider total when it exceeds the turn evidence for a partly missing call', async () => {
-    fetchSpy.mockResolvedValueOnce(new Response('', { status: 404 })).mockResolvedValueOnce(conversation('done', 120));
-    mocks.findTurns.mockResolvedValue([{ timestamp: secondsAfterStart(30) }]);
-
-    expect(await measureVoiceCallSeconds(holdWith(['conv_a', 'conv_b']), secondsAfterStart(500))).toEqual({
-      kind: 'measured',
-      elapsedSeconds: 120,
+      elapsedSeconds: 0,
       source: 'provider',
     });
+    expect(mocks.findTurns).not.toHaveBeenCalled();
   });
 
   it('still counts the conversations the provider did record when another is missing past grace', async () => {
