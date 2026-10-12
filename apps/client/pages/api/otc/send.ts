@@ -4,10 +4,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
   OTC_LIMITS,
-  emailSubject,
+  OTC_SEND_EMAIL_BUDGETS,
+  chargeOtcEmailBudget,
   ipSubject,
   otcCounterLimit,
   otcDistinctEmailsPerIpLimit,
+  otcEmailBudgetRetryAfter,
 } from '@server/utils/otcLimits';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl } from '@server/utils/mailer/emailHelpers';
@@ -18,8 +20,6 @@ const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   .use(otcCounterLimit({ bucket: 'send-ip-daily', ...OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
   .use(otcCounterLimit({ bucket: 'send-ip-total', ...OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
-  .use(otcCounterLimit({ bucket: 'send-email', ...OTC_LIMITS.send.perEmail, subject: emailSubject }))
-  .use(otcCounterLimit({ bucket: 'send-email-daily', ...OTC_LIMITS.send.perEmailDaily, subject: emailSubject }))
   .use(otcDistinctEmailsPerIpLimit())
   .post(async (req, res) => {
     const { email } = req.body;
@@ -34,6 +34,14 @@ const handler = baseApi({ auth: false })
     // Validate format after normalization to avoid Zod 422 leaking schema details.
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       return res.status(400).json({ error: 'Invalid email address' });
+    }
+
+    // Per-email budgets are checked here but only spent once a code is actually dispatched (see
+    // OTC_SEND_EMAIL_BUDGETS), so refused requests cannot exhaust the owner's allowance.
+    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, OTC_SEND_EMAIL_BUDGETS);
+    if (budgetRetryAfter !== undefined) {
+      res.setHeader('Retry-After', String(budgetRetryAfter));
+      return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
 
     // Atomic per-recipient cooldown (keyed on PendingOtcToken, written for every send, so it never reveals whether an account exists).
@@ -92,6 +100,9 @@ const handler = baseApi({ auth: false })
         },
       }
     );
+
+    // The reservation serializes sends per email, so the budget checked above cannot be raced past.
+    await chargeOtcEmailBudget(normalizedEmail, OTC_SEND_EMAIL_BUDGETS);
 
     // Store the nonce server-side so the verify endpoint can reject replayed tokens.
     // On non-production stages only (isE2EEnabled - hard-false on production), also persist

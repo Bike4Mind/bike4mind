@@ -12,7 +12,7 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 vi.mock('@server/analytics/signupEvents', () => ({ emitSignupForSourceProducts: vi.fn().mockResolvedValue([]) }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { signAccessToken: () => 'full-access' },
 }));
@@ -52,6 +52,10 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
+    tryAddWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 0, expiresAt: new Date() })),
+  },
   adminSettingsRepository: { findBySettingName: vi.fn() },
   registrationInviteRepository: {},
   subscriberRepository: {},

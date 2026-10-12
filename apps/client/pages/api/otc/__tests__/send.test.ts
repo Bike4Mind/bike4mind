@@ -31,11 +31,27 @@ vi.mock('@server/utils/config', () => ({
 
 const mockTryReserveSlot = vi.fn();
 const mockConfirmReservation = vi.fn();
+// In-memory stand-in for the cache counters (one fixed window, never expiring within a test).
+const cache = vi.hoisted(() => {
+  const counts = new Map<string, number>();
+  const expiresAt = () => new Date(Date.now() + 60_000);
+  return {
+    counts,
+    tryIncrement: async (key: string, limit: number) => {
+      const count = counts.get(key) ?? 0;
+      if (count + 1 > limit) return { success: false, count, expiresAt: expiresAt() };
+      counts.set(key, count + 1);
+      return { success: true, count: count + 1, expiresAt: expiresAt() };
+    },
+    peek: async (key: string) => ({ success: true, count: counts.get(key) ?? 0, expiresAt: expiresAt() }),
+  };
+});
 const mockTryIncrement = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: (...a: any[]) => mockTryIncrement(...a),
-    deleteByKey: vi.fn(),
+    tryAddWithinLimitFixedWindow: (key: string) => cache.peek(key),
+    deleteByKey: async (key: string) => cache.counts.delete(key),
   },
   pendingOtcTokenRepository: {
     tryReserveSlot: (...a: any[]) => mockTryReserveSlot(...a),
@@ -49,57 +65,72 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import handler from '@pages/api/otc/send';
-import { OTC_LIMITS } from '@server/utils/otcLimits';
+import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
 
 const EMAIL = 'someone@example.com';
 
-function makeReqRes(email: string = EMAIL) {
-  const { req, res } = createMocks({ method: 'POST' });
+function makeReqRes(email: string = EMAIL, ip = '81.2.69.160') {
+  const { req, res } = createMocks({ method: 'POST', headers: { 'x-real-ip': ip } });
   (req as any).body = { email };
   return { req, res };
 }
 
+const resetCache = () => {
+  cache.counts.clear();
+  mockTryIncrement.mockImplementation(cache.tryIncrement);
+};
+
 // Runs every recorded middleware in order, as baseApi would before the route handler.
 async function runMiddleware(req: any, res: any) {
   for (const mw of wiring.uses) {
-    await new Promise<void>((resolve, reject) => mw(req, res, (err?: unknown) => (err ? reject(err) : resolve())));
+    await new Promise<void>((resolve, reject) => {
+      Promise.resolve(mw(req, res, (err?: unknown) => (err ? reject(err) : resolve()))).catch(reject);
+    });
   }
 }
 
 describe('/api/otc/send limiter wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
-    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
   });
 
-  it('counts every send against the per-email, per-IP and distinct-email-per-IP limits', async () => {
+  it('counts every request against the per-IP and distinct-email-per-IP limits, but not the per-email ones', async () => {
     const { req, res } = makeReqRes();
     await runMiddleware(req, res);
 
-    const emailKey = /^otc-limit:send-email:[0-9a-f]{32}$/;
-    const emailDailyKey = /^otc-limit:send-email-daily:[0-9a-f]{32}$/;
-    const { perEmail, perEmailDaily, perIpTotal, perIpDaily, perIpDistinctEmails } = OTC_LIMITS.send;
-    expect(mockTryIncrement).toHaveBeenCalledWith(expect.stringMatching(emailKey), perEmail.limit, perEmail.windowMs);
+    const { perIpTotal, perIpDaily, perIpDistinctEmails } = OTC_LIMITS.send;
     expect(mockTryIncrement).toHaveBeenCalledWith(
-      expect.stringMatching(emailDailyKey),
-      perEmailDaily.limit,
-      perEmailDaily.windowMs
-    );
-    expect(mockTryIncrement).toHaveBeenCalledWith(
-      expect.stringMatching(/^otc-limit:send-ip-total:/),
+      'otc-limit:send-ip-total:81.2.69.160',
       perIpTotal.limit,
       perIpTotal.windowMs
     );
     expect(mockTryIncrement).toHaveBeenCalledWith(
-      expect.stringMatching(/^otc-limit:send-ip-daily:/),
+      'otc-limit:send-ip-daily:81.2.69.160',
       perIpDaily.limit,
       perIpDaily.windowMs
     );
     expect(mockTryIncrement).toHaveBeenCalledWith(
-      expect.stringMatching(/^otc-limit:ip-distinct:/),
+      'otc-limit:ip-distinct:81.2.69.160',
       perIpDistinctEmails.limit,
       perIpDistinctEmails.windowMs
+    );
+    expect(mockTryIncrement).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^otc-limit:send-email/),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('buckets IPv6 callers by /64', async () => {
+    const { req, res } = makeReqRes(EMAIL, '2a02:c7f:aa:1:1:2:3:4');
+    await runMiddleware(req, res);
+
+    expect(mockTryIncrement).toHaveBeenCalledWith(
+      'otc-limit:send-ip-total:2a02:c7f:aa:1::/64',
+      expect.anything(),
+      expect.anything()
     );
   });
 
@@ -112,9 +143,63 @@ describe('/api/otc/send limiter wiring', () => {
   });
 });
 
+describe('/api/otc/send per-email budget', () => {
+  const VICTIM = 'victim@example.com';
+  const sendKey = `otc-limit:send-email:${otcEmailKey(VICTIM)}`;
+  const reservedAt = new Date('2026-01-01T00:00:00.000Z');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCache();
+    mockIsE2EEnabled.mockReturnValue(false);
+    mockConfirmReservation.mockResolvedValue(true);
+    mockSendOTC.mockResolvedValue({ pendingToken: 'pending-token', nonce: 'real-nonce', code: '123456' });
+  });
+
+  async function post(email: string, ip: string) {
+    const { req, res } = makeReqRes(email, ip);
+    try {
+      await runMiddleware(req, res);
+    } catch {
+      return res;
+    }
+    await handler(req, res);
+    return res;
+  }
+
+  it('lets an attacker spamming one address spend only what real dispatched codes cost', async () => {
+    // The cooldown admits one send in ten; the rest are refused before any code goes out.
+    let attempt = 0;
+    mockTryReserveSlot.mockImplementation(async () =>
+      attempt++ % 10 === 0 ? { allowed: true, reservedAt } : { allowed: false, retryAfterSeconds: 20 }
+    );
+    for (let i = 0; i < 30; i++) await post(VICTIM, '81.2.69.166');
+
+    expect(mockSendOTC).toHaveBeenCalledTimes(3);
+    expect(cache.counts.get(sendKey)).toBe(3);
+
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    const victim = await post(VICTIM, '81.2.69.110');
+    expect(victim._getStatusCode()).toBe(200);
+  });
+
+  it('refuses with 429 and Retry-After, without reserving or dispatching, once the budget is spent', async () => {
+    cache.counts.set(sendKey, OTC_LIMITS.send.perEmail.limit);
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+
+    const res = await post(VICTIM, '81.2.69.110');
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(res.getHeader('Retry-After')).toBeDefined();
+    expect(mockTryReserveSlot).not.toHaveBeenCalled();
+    expect(mockSendOTC).not.toHaveBeenCalled();
+  });
+});
+
 describe('/api/otc/send', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
     mockSendOTC.mockResolvedValue({ pendingToken: 'pending-token', nonce: 'real-nonce', code: '123456' });
   });

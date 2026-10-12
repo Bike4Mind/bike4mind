@@ -96,12 +96,80 @@ export const otcCounterLimit =
     return next(new TooManyRequestsError(`Rate limit exceeded. Try again in ${seconds} seconds.`));
   };
 
-export const emailSubject = (req: Parameters<RequestHandler>[0]): string | undefined => {
-  const email = normalizeOtcEmail(req.body?.email);
-  return email ? otcEmailKey(otcLimitMailbox(email)) : undefined;
-};
+export const ipSubject = (req: Parameters<RequestHandler>[0]): string => otcIpBucket(getClientIp(req));
 
-export const ipSubject = (req: Parameters<RequestHandler>[0]): string => getClientIp(req);
+/**
+ * The per-IP limit subject. IPv6 is bucketed by /64, the smallest prefix a single subscriber is
+ * usually assigned, so one holder cannot rotate through addresses for a fresh budget. IPv4 and
+ * IPv4-mapped IPv6 are keyed on the full address. Anything unparseable is returned unchanged.
+ */
+export function otcIpBucket(ip: string): string {
+  if (!ip.includes(':')) return ip;
+  const address = ip.split('%')[0];
+  const mappedV4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+  if (mappedV4) return mappedV4[1];
+
+  const halves = address.split('::');
+  if (halves.length > 2) return ip;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - left.length - right.length;
+  if (missing < 0 || (halves.length === 1 && missing !== 0)) return ip;
+  const groups = [...left, ...Array<string>(missing).fill('0'), ...right];
+  if (!groups.every(g => /^[0-9a-f]{1,4}$/i.test(g))) return ip;
+  return `${groups
+    .slice(0, 4)
+    .map(g => parseInt(g, 16).toString(16))
+    .join(':')}::/64`;
+}
+
+interface OtcEmailBudget {
+  bucket: string;
+  limit: number;
+  windowMs: number;
+}
+
+/**
+ * Per-email budgets are charged by the handlers, not by middleware, so only real events spend them:
+ * a dispatched code for sends, a wrong guess against a live token for verifies. Charging every
+ * request would let anyone who knows an address lock its owner out with junk traffic, which the
+ * per-IP caps bound instead.
+ */
+export const OTC_SEND_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
+  { bucket: 'send-email', ...OTC_LIMITS.send.perEmail },
+  { bucket: 'send-email-daily', ...OTC_LIMITS.send.perEmailDaily },
+];
+export const OTC_VERIFY_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
+  { bucket: 'verify-email', ...OTC_LIMITS.verify.perEmail },
+];
+
+const budgetKey = (bucket: string, email: string) => `otc-limit:${bucket}:${otcEmailKey(otcLimitMailbox(email))}`;
+
+/** Retry-After seconds when any of the email's budgets is spent, else undefined. Spends nothing. */
+export async function otcEmailBudgetRetryAfter(
+  email: string,
+  budgets: readonly OtcEmailBudget[]
+): Promise<number | undefined> {
+  if (isE2EEnabled()) return undefined;
+  for (const { bucket, limit, windowMs } of budgets) {
+    const { count, expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(
+      budgetKey(bucket, email),
+      0,
+      limit,
+      windowMs
+    );
+    if (count >= limit) return retryAfterSeconds(expiresAt, windowMs);
+  }
+  return undefined;
+}
+
+/** Spends one unit of each of the email's budgets. */
+export async function chargeOtcEmailBudget(email: string, budgets: readonly OtcEmailBudget[]): Promise<void> {
+  if (isE2EEnabled()) return;
+  for (const { bucket, limit, windowMs } of budgets) {
+    await cacheRepository.tryIncrementWithinLimitFixedWindow(budgetKey(bucket, email), limit, windowMs);
+  }
+}
 
 /**
  * Caps how many DISTINCT emails one IP may request codes for per window. A first sighting of an
@@ -114,7 +182,7 @@ export const otcDistinctEmailsPerIpLimit = (): RequestHandler => async (req, res
   if (!email) return next();
 
   const { limit, windowMs } = OTC_LIMITS.send.perIpDistinctEmails;
-  const ip = getClientIp(req);
+  const ip = otcIpBucket(getClientIp(req));
   const pairKey = `otc-limit:ip-email-seen:${ip}:${otcEmailKey(otcLimitMailbox(email))}`;
 
   const seen = await cacheRepository.tryIncrementWithinLimitFixedWindow(pairKey, 1, windowMs);

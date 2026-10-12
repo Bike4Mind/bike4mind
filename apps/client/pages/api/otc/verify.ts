@@ -26,7 +26,14 @@ import {
 } from '@server/organizations/notifySeatCeilingRaised';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { OTC_LIMITS, emailSubject, ipSubject, otcCounterLimit } from '@server/utils/otcLimits';
+import {
+  OTC_LIMITS,
+  OTC_VERIFY_EMAIL_BUDGETS,
+  chargeOtcEmailBudget,
+  ipSubject,
+  otcCounterLimit,
+  otcEmailBudgetRetryAfter,
+} from '@server/utils/otcLimits';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
 import { setRefreshCookie } from '@server/auth/refreshCookie';
@@ -55,8 +62,6 @@ const MAX_PENDING_OTC_ATTEMPTS = 5;
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   .use(otcCounterLimit({ bucket: 'verify-ip', ...OTC_LIMITS.verify.perIp, subject: ipSubject }))
-  // Brute-force bound per address across every token; the per-token attempt cap alone resets with each new code.
-  .use(otcCounterLimit({ bucket: 'verify-email', ...OTC_LIMITS.verify.perEmail, subject: emailSubject }))
   .post(async (req, res) => {
     const { email, code, username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
 
@@ -97,6 +102,15 @@ const handler = baseApi({ auth: false })
       throw new UnprocessableEntityError('Too many failed attempts. Please request a new code.');
     }
 
+    // Brute-force bound per address across every token; the per-token attempt cap alone resets with
+    // each new code. Only a wrong guess against a live token spends it (see OTC_VERIFY_EMAIL_BUDGETS);
+    // tokenless junk is bounded by the per-IP cap.
+    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, OTC_VERIFY_EMAIL_BUDGETS);
+    if (budgetRetryAfter !== undefined) {
+      res.setHeader('Retry-After', String(budgetRetryAfter));
+      return res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+    }
+
     // Server-side nonce: single-use + JWT-replay protection. Rotating to a fresh
     // nonce invalidates the presented token (the client must use the re-issued token
     // below to retry). A stale/replayed token fails this check -> generic invalid.
@@ -112,6 +126,7 @@ const handler = baseApi({ auth: false })
 
     const isValid = await userService.verifyPendingOTC(code, tokenPayload.otcHash);
     if (!isValid) {
+      await chargeOtcEmailBudget(normalizedEmail, OTC_VERIFY_EMAIL_BUDGETS);
       // Re-issue the token with an incremented attempt count + the rotated nonce so
       // the user can retry. Identical response for existing and non-existent accounts
       // (no existence lookup has happened yet).
