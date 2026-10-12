@@ -97,6 +97,31 @@ describe('grantCreditPurchase on a real replica set', () => {
     expect(await lots()).toBe(1);
   });
 
+  it('grants exactly once when a transient error aborts an attempt after both writes', async () => {
+    const user = await seedBuyer();
+    const realIncrement = userRepository.incrementCredits.bind(userRepository);
+    let calls = 0;
+    vi.spyOn(userRepository, 'incrementCredits').mockImplementation(async (...args) => {
+      const updated = await realIncrement(...args);
+      calls += 1;
+      if (calls === 1) {
+        throw new mongoose.mongo.MongoServerError({
+          message: 'write conflict',
+          code: 112,
+          errorLabels: ['TransientTransactionError'],
+        });
+      }
+      return updated;
+    });
+
+    expect(await grantCreditPurchase(grantFor(user.id))).toBe('granted');
+
+    expect(calls).toBe(2);
+    expect(await balanceOf(user.id)).toBe(600);
+    expect(await ledgerRows()).toBe(1);
+    expect(await lots()).toBe(1);
+  });
+
   it('grants concurrent deliveries of the same intent exactly once', async () => {
     const user = await seedBuyer();
 
