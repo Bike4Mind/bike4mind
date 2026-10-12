@@ -240,7 +240,7 @@ export interface paths {
     };
     /**
      * Get the caller's credit balance
-     * @description Returns the authenticated caller's spendable credit balance - the same number as `credits.balance` on `GET /api/v1/me`, without the identity and plan fields. Use it to check a key can afford a batch before starting one. The subject is always the credential holder; this endpoint accepts no user or owner id. `balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying any one of `me:read`, `ai:chat` or `ai:generate`, or a JWT.
+     * @description Returns the authenticated caller's spendable credit balance - the same number as `credits.balance` on `GET /api/v1/me`, without the identity and plan fields. Use it to check a key can afford a batch before starting one. The subject is always the credential holder; this endpoint accepts no user or owner id. `balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying any one of `me:read`, `ai:chat`, `ai:generate` or `ai:decide`, or a JWT.
      */
     get: operations['getCreditBalance'];
     put?: never;
@@ -260,7 +260,7 @@ export interface paths {
     };
     /**
      * List models
-     * @description Lists the models the caller can use right now - the platform catalog filtered to the providers the caller has a key for, their own or the platform's. Use it to choose a `model` by capability before calling a generation endpoint: `context_window` and `max_output_tokens` for text models, and for image models the `image` block, which lists the accepted `size` values (or the rule they must meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured. The list is cached for up to a minute per caller. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT.
+     * @description Lists the models the caller can use right now - the platform catalog filtered to the providers the caller has a key for, their own or the platform's. Use it to choose a `model` by capability before calling a generation endpoint: `context_window` and `max_output_tokens` for text models, and for image models the `image` block, which lists the accepted `size` values (or the rule they must meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured. To pick the cheapest text model, compare `credits_per_1m_tokens` - the rate a call is billed at. The list is cached for up to a minute per caller. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT.
      */
     get: operations['listModels'];
     put?: never;
@@ -381,6 +381,46 @@ export interface paths {
      * @description Returns one embedding vector per input string. The request and success bodies follow the OpenAI embeddings API shape; error bodies use the standard B4M error envelope. `model` is any embedding model this deployment supports (OpenAI, Voyage AI, Amazon Bedrock, or a self-hosted Ollama model); `input` is a string or up to 2048 strings, at most 300000 tokens in total and each within the model context window. The input count is further capped so inputs x output width stays within 196608 values (128 inputs at 1536 dimensions) - page larger jobs across requests. Pre-tokenized input (arrays of token ids) is not accepted; clients that send it by default, such as LangChain's Python `OpenAIEmbeddings`, must be set to send strings (`check_embedding_ctx_length=False`). `dimensions` shortens the vector on models that support it (OpenAI `text-embedding-3-*`, and Voyage models with several published widths). Billed in credits per input token from the per-model embedding rate, reserved before the provider call and refunded if it fails. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
      */
     post: operations['createEmbeddings'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/decisions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Answer typed questions with probabilities
+     * @description Evaluates each question independently against the same `input` and returns calibrated probabilities - no generated text. Question types: `predicate` (probability a statement is true), `choice` (pick one value) and `score` (an ordered scale; `score` is the probability-weighted mean of 0-based level indices). `confidence` is computed by B4M with one published formula for every model. Answers come back in question order; a question the model declines is a `refusal` answer and does not fail the request. `input` is a string or a list of `text`, `json` and `image` parts; an image is a `file_id` you can read or a base64 `data:` URL (http(s) URLs are rejected). Platform ceilings: 50 questions, 64 choices, 2-10 levels and 8 images; each model's own caps are listed by `GET /api/v1/decision-models` and a request over one is a 422 naming the cap and `param`. Probabilities are not comparable across models: tune thresholds per model against labelled examples, and pin a versioned model id when you do. A busy provider is retried once on the same model, never another; after that the response is a 503 with `Retry-After`. Billed per input and output token at the model's rate, settled to the exact expected cost (most calls charge 0 credits, some 1). Authenticate with an API key (`b4m_live_`) carrying `ai:decide` or `ai:generate`, or a JWT.
+     */
+    post: operations['createDecision'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/decision-models': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the decision models you can use
+     * @description Returns the decision models this deployment serves, with their per-model caps and USD token prices. A floating alias carries `alias_of`; pin the versioned id when you tune thresholds, since a new version can shift probabilities. The catalog is a handful of entries, so it is returned whole, not paginated (as `GET /api/v1/video-models`).
+     */
+    get: operations['listDecisionModels'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -1754,6 +1794,7 @@ export interface components {
      *           "supports_vision": false,
      *           "deprecation_date": null,
      *           "replaced_by": null,
+     *           "credits_per_1m_tokens": null,
      *           "image": {
      *             "sizing": {
      *               "kind": "presets",
@@ -1897,6 +1938,15 @@ export interface components {
             edit: boolean;
             requires_input_image: boolean;
           };
+        } | null;
+        /** @description What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model. */
+        credits_per_1m_tokens: {
+          /** @description Credits per 1M input tokens. */
+          input: number;
+          /** @description Credits per 1M output tokens. */
+          output: number;
+          /** @description Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate. */
+          cached_input: number | null;
         } | null;
       }[];
       next_cursor: string | null;
@@ -2357,6 +2407,394 @@ export interface components {
        * @enum {string}
        */
       encoding_format?: 'float' | 'base64';
+    };
+    /**
+     * @example {
+     *       "id": "dec_8f14e45fceea167a5a36dedd4bea2543",
+     *       "object": "decision",
+     *       "model": "gpt-6-luna",
+     *       "answers": [
+     *         {
+     *           "type": "predicate",
+     *           "name": "is_urgent",
+     *           "probability": 0.93
+     *         },
+     *         {
+     *           "type": "choice",
+     *           "name": "team",
+     *           "choice": "billing",
+     *           "probabilities": [
+     *             {
+     *               "value": "billing",
+     *               "probability": 0.88
+     *             },
+     *             {
+     *               "value": "technical",
+     *               "probability": 0.1
+     *             },
+     *             {
+     *               "value": "sales",
+     *               "probability": 0.02
+     *             }
+     *           ],
+     *           "confidence": 0.82
+     *         },
+     *         {
+     *           "type": "score",
+     *           "name": "frustration",
+     *           "score": 1.1,
+     *           "probabilities": [
+     *             {
+     *               "value": 0,
+     *               "label": "calm",
+     *               "probability": 0.1
+     *             },
+     *             {
+     *               "value": 1,
+     *               "label": "frustrated",
+     *               "probability": 0.7
+     *             },
+     *             {
+     *               "value": 2,
+     *               "label": "angry",
+     *               "probability": 0.2
+     *             }
+     *           ],
+     *           "confidence": 0.55
+     *         }
+     *       ],
+     *       "usage": {
+     *         "input_tokens": 412,
+     *         "output_tokens": 0,
+     *         "total_tokens": 412
+     *       }
+     *     }
+     */
+    createDecisionResponse200: {
+      /** @description Unique per decision. */
+      id: string;
+      /** @enum {string} */
+      object: 'decision';
+      /** @description The resolved model version. Pin it when you tune thresholds. */
+      model: string;
+      /** @description One per question, in question order. */
+      answers: (
+        | {
+            /** @enum {string} */
+            type: 'predicate';
+            name: string;
+            /** @description Probability that the statement is true. */
+            probability: number;
+          }
+        | {
+            /** @enum {string} */
+            type: 'choice';
+            name: string;
+            /** @description The most probable value. */
+            choice: string;
+            /** @description In request order. */
+            probabilities: {
+              value: string;
+              probability: number;
+            }[];
+            /** @description (n * p_max - 1) / (n - 1), computed by B4M for every model. */
+            confidence: number;
+          }
+        | {
+            /** @enum {string} */
+            type: 'score';
+            name: string;
+            /** @description Probability-weighted mean of the 0-based level indices. */
+            score: number;
+            /** @description In level order; value is the level index. */
+            probabilities: {
+              value: number;
+              label: string;
+              probability: number;
+            }[];
+            /** @description Distance-aware: 1 - sum(p_i * |i - peak|) / mean_i(|i - (n-1)/2|). */
+            confidence: number;
+          }
+        | {
+            /** @enum {string} */
+            type: 'refusal';
+            name: string;
+          }
+      )[];
+      usage: {
+        input_tokens: number;
+        output_tokens: number;
+        total_tokens: number;
+      };
+    };
+    createDecisionResponse401: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'provider_overloaded'
+        | 'provider_error'
+        | 'context_length_exceeded'
+        | 'limit_exceeded'
+        | 'unsupported_input'
+        | 'invalid_request'
+        | 'model_unavailable'
+        | 'input_image_not_found';
+      /** @description Path of the offending field, e.g. questions[1].choices. */
+      param?: string;
+    };
+    createDecisionResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'provider_overloaded'
+        | 'provider_error'
+        | 'context_length_exceeded'
+        | 'limit_exceeded'
+        | 'unsupported_input'
+        | 'invalid_request'
+        | 'model_unavailable'
+        | 'input_image_not_found';
+      /** @description Path of the offending field, e.g. questions[1].choices. */
+      param?: string;
+    };
+    createDecisionResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'provider_overloaded'
+        | 'provider_error'
+        | 'context_length_exceeded'
+        | 'limit_exceeded'
+        | 'unsupported_input'
+        | 'invalid_request'
+        | 'model_unavailable'
+        | 'input_image_not_found';
+      /** @description Path of the offending field, e.g. questions[1].choices. */
+      param?: string;
+    };
+    createDecisionResponse502: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'provider_overloaded'
+        | 'provider_error'
+        | 'context_length_exceeded'
+        | 'limit_exceeded'
+        | 'unsupported_input'
+        | 'invalid_request'
+        | 'model_unavailable'
+        | 'input_image_not_found';
+      /** @description Path of the offending field, e.g. questions[1].choices. */
+      param?: string;
+    };
+    createDecisionResponse503: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'provider_overloaded'
+        | 'provider_error'
+        | 'context_length_exceeded'
+        | 'limit_exceeded'
+        | 'unsupported_input'
+        | 'invalid_request'
+        | 'model_unavailable'
+        | 'input_image_not_found';
+      /** @description Path of the offending field, e.g. questions[1].choices. */
+      param?: string;
+    };
+    /**
+     * @example {
+     *       "model": "gpt-6-luna",
+     *       "input": [
+     *         {
+     *           "type": "text",
+     *           "text": "Help! My payouts have been failing for 3 days."
+     *         },
+     *         {
+     *           "type": "json",
+     *           "json": {
+     *             "plan": "pro",
+     *             "open_tickets": 2
+     *           }
+     *         }
+     *       ],
+     *       "questions": [
+     *         {
+     *           "type": "predicate",
+     *           "name": "is_urgent",
+     *           "instructions": "The customer needs a reply within 24 hours."
+     *         },
+     *         {
+     *           "type": "choice",
+     *           "name": "team",
+     *           "instructions": "Which team should handle this?",
+     *           "choices": [
+     *             {
+     *               "value": "billing",
+     *               "description": "Payments, payouts, refunds"
+     *             },
+     *             {
+     *               "value": "technical",
+     *               "description": "Bugs, outages"
+     *             },
+     *             {
+     *               "value": "sales"
+     *             }
+     *           ]
+     *         },
+     *         {
+     *           "type": "score",
+     *           "name": "frustration",
+     *           "instructions": "How frustrated is the customer?",
+     *           "levels": [
+     *             {
+     *               "label": "calm"
+     *             },
+     *             {
+     *               "label": "frustrated"
+     *             },
+     *             {
+     *               "label": "angry",
+     *               "description": "Threatens to churn"
+     *             }
+     *           ]
+     *         }
+     *       ]
+     *     }
+     */
+    createDecisionRequest: {
+      /** @description A decision model id from `GET /api/v1/decision-models`. */
+      model: string;
+      input:
+        | string
+        | (
+            | {
+                /** @enum {string} */
+                type: 'text';
+                text: string;
+              }
+            | {
+                /** @enum {string} */
+                type: 'json';
+                /** @description Structured state. Sent natively to models that accept it, otherwise serialized to text. */
+                json:
+                  | {
+                      [key: string]: unknown;
+                    }
+                  | unknown[];
+              }
+            | {
+                /** @enum {string} */
+                type: 'image';
+                /** @description A Files entry the caller can read. Exactly one of file_id or image_url. */
+                file_id?: string;
+                /** @description A base64 data: URL. http(s) URLs are rejected; upload the image and pass file_id instead. */
+                image_url?: string;
+              }
+          )[];
+      questions: (
+        | {
+            /** @enum {string} */
+            type: 'predicate';
+            /** @description Unique within the request; answers carry it back. */
+            name: string;
+            /** @description A statement to judge true or false against the input. */
+            instructions: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'choice';
+            /** @description Unique within the request; answers carry it back. */
+            name: string;
+            instructions: string;
+            choices: {
+              value: string;
+              description?: string;
+            }[];
+          }
+        | {
+            /** @enum {string} */
+            type: 'score';
+            /** @description Unique within the request; answers carry it back. */
+            name: string;
+            instructions: string;
+            /** @description Ordered lowest to highest; the answer score is a 0-based index into this list. */
+            levels: {
+              label: string;
+              description?: string;
+            }[];
+          }
+      )[];
+      /** @description A stable, non-identifying id for your end user. Defaults to a hash of the B4M user id. */
+      safety_identifier?: string;
+    };
+    listDecisionModelsResponse200: {
+      models: {
+        id: string;
+        /** @enum {string} */
+        object: 'decision_model';
+        display_name: string;
+        provider: string;
+        /** @description Set on a floating alias; pin the versioned id to keep thresholds stable. */
+        alias_of: string | null;
+        supports_images: boolean;
+        limits: {
+          max_questions: number;
+          max_choices: number;
+          max_levels: number;
+          max_images: number;
+          max_input_tokens: number;
+        };
+        pricing: {
+          usd_per_million_input_tokens: number;
+          usd_per_million_output_tokens: number;
+        };
+      }[];
     };
     getQuestResponse200: {
       id: string;
@@ -6882,6 +7320,347 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['createEmbeddingsResponse503'];
+        };
+      };
+    };
+  };
+  createDecision: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createDecisionRequest'];
+      };
+    };
+    responses: {
+      /** @description One answer per question, in question order. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createDecisionResponse200'];
+        };
+      };
+      /** @description The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing/invalid credentials, or the provider refused the configured key (`errorCode: "provider_rejected"`). */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createDecisionResponse401'];
+        };
+      };
+      /** @description The API key holds neither `ai:decide` nor `ai:generate`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description An image `file_id` does not exist or is not readable by the caller. Reading one also needs the `files:read` scope; a key without it gets 403. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createDecisionResponse404'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The body failed validation, or the request exceeds a per-model cap (`limit_exceeded`), sends an image to a text-only model (`unsupported_input`), repeats a question name or choice value (`invalid_request`), names a model this deployment does not serve (`model_unavailable`), overflows the model context (`context_length_exceeded`), or the caller cannot afford it (`insufficient_credits`). `param` names the offending field when there is one. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createDecisionResponse422'];
+        };
+      };
+      /** @description Per-key or per-user decisions rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The provider failed or answered something that does not fit the questions (`provider_error`). */
+      502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createDecisionResponse502'];
+        };
+      };
+      /** @description The provider stayed overloaded through one same-model retry (`errorCode: "provider_overloaded"`), or this deployment has no credential for the model (`errorCode: "provider_not_configured"`). */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying; sent with `provider_overloaded`. */
+          'Retry-After'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createDecisionResponse503'];
+        };
+      };
+    };
+  };
+  listDecisionModels: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The served models. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listDecisionModelsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key holds neither `ai:decide` nor `ai:generate`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-key or per-user decisions rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
     };

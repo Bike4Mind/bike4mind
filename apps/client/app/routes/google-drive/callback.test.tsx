@@ -26,7 +26,11 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => h.orgId 
 
 import GoogleDriveCallbackPage from './callback';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import { saveDriveConnectHandoff, takeDrivePickerResume } from '@client/app/utils/driveConnectHandoff';
+import {
+  saveDriveConnectHandoff,
+  takeDriveLakeResyncResume,
+  takeDrivePickerResume,
+} from '@client/app/utils/driveConnectHandoff';
 
 const saveWizardDraft = (authUrl = 'https://accounts.google.com/auth?state=signed-state') =>
   saveDriveConnectHandoff(
@@ -68,6 +72,7 @@ beforeEach(() => {
   h.orgId = 'org-1';
   sessionStorage.clear();
   takeDrivePickerResume();
+  takeDriveLakeResyncResume();
   useDataLakeWizardStore.getState().resetWizard();
   useDataLakeWizardStore.getState().closeManager();
 });
@@ -290,9 +295,9 @@ describe('GoogleDriveCallbackPage', () => {
   });
 
   describe('returning to an existing lake', () => {
-    const saveLakeHandoff = () =>
+    const saveLakeHandoff = (resync?: boolean) =>
       saveDriveConnectHandoff(
-        { kind: 'lake', userId: 'user-1', organizationId: 'org-1', dataLakeId: 'lake-7' },
+        { kind: 'lake', userId: 'user-1', organizationId: 'org-1', dataLakeId: 'lake-7', ...(resync && { resync }) },
         'https://accounts.google.com/auth?state=signed-state'
       );
 
@@ -308,7 +313,18 @@ describe('GoogleDriveCallbackPage', () => {
       expect(store.managerLakeId).toBe('lake-7');
       expect(store.isOpen).toBe(false);
       expect(takeDrivePickerResume('user-1')).toBe(false);
+      expect(takeDriveLakeResyncResume('user-1')).toBeNull();
       expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
+    });
+
+    it('asks the reopened lake to finish the Re-sync that sent the user to consent', async () => {
+      saveLakeHandoff(true);
+      h.apiGet.mockResolvedValue({ data: undefined });
+
+      render(<GoogleDriveCallbackPage />);
+
+      await waitFor(() => expect(useDataLakeWizardStore.getState().managerLakeId).toBe('lake-7'));
+      expect(takeDriveLakeResyncResume('user-1')).toBe('lake-7');
     });
 
     it('does not reopen the lake when the connect failed', async () => {
