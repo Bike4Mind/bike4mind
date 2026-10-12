@@ -187,6 +187,47 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
     expect(emitProductEvent).not.toHaveBeenCalled();
   });
 
+  it("does not credit an organization invoice from the checkout user's signup touches", async () => {
+    invoice();
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(
+      buildSub({ userId: 'u1', stage: 'test', ownerType: 'Organization', organizationId: 'org1' }) as Awaited<
+        ReturnType<typeof stripe.subscriptions.retrieve>
+      >
+    );
+
+    await run();
+
+    expect(handleOrganizationSubscriptionInvoice).toHaveBeenCalledOnce();
+    expect(userRepository.findById).not.toHaveBeenCalled();
+    expect(emitProductEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not credit a malformed organization invoice when the legacy parser drops its owner type', async () => {
+    invoice();
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(
+      buildSub({ userId: 'u1', stage: 'test', ownerType: 'Organization' }) as Awaited<
+        ReturnType<typeof stripe.subscriptions.retrieve>
+      >
+    );
+
+    await run();
+
+    expect(userRepository.findById).not.toHaveBeenCalled();
+    expect(emitProductEvent).not.toHaveBeenCalled();
+  });
+
+  it('still credits a paid legacy user invoice with no owner type', async () => {
+    invoice();
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(
+      buildSub({ userId: 'u1', stage: 'test' }) as Awaited<ReturnType<typeof stripe.subscriptions.retrieve>>
+    );
+
+    await run();
+
+    expect(handleUserSubscriptionInvoice).toHaveBeenCalledOnce();
+    expect(emitProductEvent).toHaveBeenCalledTimes(2);
+  });
+
   it('sends nothing for a synthetic payer or one with no stored acquisition', async () => {
     invoice();
     vi.mocked(userRepository.findById).mockResolvedValue({ ...payer, isSynthetic: true } as never);

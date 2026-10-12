@@ -157,6 +157,7 @@ describe('emitPurchaseForSourceProducts', () => {
       productId: 'widgets',
       event: 'purchase',
       eventId: stableEventId('purchase', 'widgets', 'in_1'),
+      reportFailure: true,
       userId: 'u1',
       utm: { source: 'widgets', campaign: 'launch' },
       metadata: {
@@ -252,13 +253,17 @@ describe('emitPurchaseForSourceProducts', () => {
   });
 
   it('never throws when the emitter rejects or the key lookup throws', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     mockEmit.mockRejectedValue(new Error('down'));
     await expect(emitPurchaseForSourceProducts(invoice())).resolves.toEqual(['widgets']);
+    expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] purchase emit failed', { productId: 'widgets' });
 
     mockKeyFor.mockImplementation(() => {
       throw new Error('bad config');
     });
     await expect(emitPurchaseForSourceProducts(invoice())).resolves.toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] purchase attribution failed');
+    warnSpy.mockRestore();
   });
 });
 

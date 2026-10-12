@@ -316,6 +316,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
           productId: 'widgets',
           event: 'purchase',
           eventId: stableEventId('purchase', 'widgets', 'pi_pack'),
+          reportFailure: true,
           userId: 'user123',
           utm: { source: 'widgets', campaign: 'launch' },
           metadata: { touch: 'first', attribution: 'self-reported', kind: 'credits', value: 9.99, currency: 'USD' },

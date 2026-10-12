@@ -92,12 +92,11 @@ export const handler = withEventContext(async (event, logger) => {
     });
   }
 
-  // Credit the payment to the product the payer came through, read from the touches stored on
-  // them at signup (this handler has no browser, so no cookies). Every paid invoice counts - first
-  // charge, renewal, seat increase - and a zero-amount one (a trial) sends nothing; billingReason
-  // tells them apart. Keyed on the invoice id, so a retried handler sends the same eventId. Never
-  // throws: a retry here would re-run the credit granting above.
-  if (metadata.userId) {
+  // An organization subscription belongs to the organization, not the user who started checkout.
+  // That user's signup touches cannot attribute the organization's payments.
+  // Legacy subscriptions without ownerType were handled as User above. Check the raw value too:
+  // the compatibility parse can erase an invalid Organization ownerType.
+  if (metadata.userId && (metadata.ownerType === SubscriptionOwnerType.User || !subscription.metadata.ownerType)) {
     let payer: Awaited<ReturnType<typeof userRepository.findById>> = null;
     try {
       payer = await userRepository.findById(metadata.userId);

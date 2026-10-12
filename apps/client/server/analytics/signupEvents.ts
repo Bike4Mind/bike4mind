@@ -7,10 +7,10 @@ import { pseudonymizeUserId } from './pseudonymize';
 // Kept apart from acquisition.ts, which is pure: this is the one piece that sends, so importing
 // the touch helpers (checkout, the subscription write path) does not pull in the emitter and its
 // config. It sends the conversions another product can be credited with: `signup`, when an account
-// is created, and `purchase`, when that account later pays (a subscription invoice or a credit
-// pack). Both pick the credited product from a self-reported `utm.source` and say so on the event
-// (see ATTRIBUTION). docs-site/docs/security/telemetry-data-classification.md describes both
-// streams and must stay in sync with what this module sends.
+// is created, and `purchase`, when that account later pays (an individual subscription invoice or
+// a credit pack). Both pick the credited product from a self-reported `utm.source` and say so on
+// the event (see ATTRIBUTION). docs-site/docs/security/telemetry-data-classification.md describes
+// both streams and must stay in sync with what this module sends.
 
 /**
  * A UUID that is the same every time for the same parts, so a retried request sends the same
@@ -128,10 +128,12 @@ export type PurchaseCreditUser = {
  * The touches come from the user record (`user.acquisition`, written with consent at signup), not
  * from cookies or from checkout metadata: a purchase is confirmed by a Stripe webhook that has no
  * browser, a credit-pack payment intent carries no attribution metadata at all, and reading the
- * signup touches keeps the purchase on the same product its signup was credited to. A user with no
- * stored acquisition (they declined consent, or signed up before touches were stored) credits
- * nothing. A later consent withdrawal does not stop it: the webhook has no browser to ask, and the
- * server keeps no per-user consent state, so stored touches keep crediting purchases.
+ * signup touches keeps the purchase on the same product its signup was credited to. Organization
+ * invoices are excluded by the caller: their checkout user's signup is not the organization's
+ * acquisition. A user with no stored acquisition (they declined consent, or signed up before
+ * touches were stored) credits nothing. A later consent withdrawal does not stop it: the webhook
+ * has no browser to ask, and the server keeps no per-user consent state, so stored touches keep
+ * crediting purchases.
  *
  * Only money actually collected counts: a zero amount (a trial, a fully discounted or
  * balance-paid invoice) sends nothing, and refunds are never sent. Synthetic users are skipped.
@@ -166,6 +168,7 @@ export async function emitPurchaseForSourceProducts(opts: {
           productId,
           event: PURCHASE_EVENT,
           eventId: stableEventId(PURCHASE_EVENT, productId, paymentId),
+          reportFailure: true,
           userId: user.id,
           utm,
           metadata: {
@@ -176,11 +179,14 @@ export async function emitPurchaseForSourceProducts(opts: {
             currency: currency.toUpperCase(),
             ...(billingReason && { billingReason }),
           },
-        }).catch(() => {})
+        }).catch(() => {
+          console.warn('[b4m-analytics] purchase emit failed', { productId });
+        })
       )
     );
     return [...byProduct.keys()];
   } catch {
+    console.warn('[b4m-analytics] purchase attribution failed');
     return [];
   }
 }
