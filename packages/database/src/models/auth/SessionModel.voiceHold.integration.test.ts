@@ -139,4 +139,85 @@ describe('sessionRepository voice holds', () => {
 
     expect(await Session.findById(id).lean()).toMatchObject({ voiceProviderConversationIds: [] });
   });
+
+  describe('claiming against the measured provider conversations', () => {
+    it('claims while the ids match what was measured', async () => {
+      const startedAt = minutesAgo(5);
+      const id = await seed('call', 100, startedAt, { voiceProviderConversationIds: ['conv_a', 'conv_b'] });
+
+      expect(await sessionRepository.claimVoiceHold(id, startedAt, ['conv_a', 'conv_b'])).toBe(true);
+    });
+
+    it('leaves the hold live when a reconnect appended an id after the measurement', async () => {
+      const startedAt = minutesAgo(5);
+      const id = await seed('call', 100, startedAt, { voiceProviderConversationIds: ['conv_a'] });
+      await sessionRepository.appendVoiceProviderConversationId(id, startedAt, 'conv_b');
+
+      expect(await sessionRepository.claimVoiceHold(id, startedAt, ['conv_a'])).toBe(false);
+      expect(await Session.findById(id).lean()).toMatchObject({
+        voiceReservedCredits: 100,
+        voiceProviderConversationIds: ['conv_a', 'conv_b'],
+      });
+    });
+
+    it('treats a hold with no recorded ids as matching an empty measurement', async () => {
+      const startedAt = minutesAgo(5);
+      const id = await seed('call', 100, startedAt);
+      await Session.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(id) },
+        { $unset: { voiceProviderConversationIds: '' } }
+      );
+
+      expect(await sessionRepository.claimVoiceHold(id, startedAt, [])).toBe(true);
+    });
+
+    it('does not claim an empty measurement once a reconnect recorded an id', async () => {
+      const startedAt = minutesAgo(5);
+      const id = await seed('call', 100, startedAt);
+      await sessionRepository.appendVoiceProviderConversationId(id, startedAt, 'conv_a');
+
+      expect(await sessionRepository.claimVoiceHold(id, startedAt, [])).toBe(false);
+    });
+  });
+
+  describe('appendVoiceProviderConversationId', () => {
+    it('keeps every id when reconnects append concurrently', async () => {
+      const startedAt = minutesAgo(5);
+      const id = await seed('call', 100, startedAt, { voiceProviderConversationIds: ['conv_a'] });
+
+      const results = await Promise.all(
+        ['conv_b', 'conv_c', 'conv_d'].map(conv =>
+          sessionRepository.appendVoiceProviderConversationId(id, startedAt, conv)
+        )
+      );
+
+      expect(results).toEqual([true, true, true]);
+      const after = await Session.findById(id).lean();
+      expect([...(after?.voiceProviderConversationIds ?? [])].sort()).toEqual(['conv_a', 'conv_b', 'conv_c', 'conv_d']);
+    });
+
+    it('records a repeated id once', async () => {
+      const startedAt = minutesAgo(5);
+      const id = await seed('call', 100, startedAt, { voiceProviderConversationIds: ['conv_a'] });
+
+      expect(await sessionRepository.appendVoiceProviderConversationId(id, startedAt, 'conv_a')).toBe(true);
+      expect(await Session.findById(id).lean()).toMatchObject({ voiceProviderConversationIds: ['conv_a'] });
+    });
+
+    it('attaches nothing once the hold has been claimed', async () => {
+      const startedAt = minutesAgo(5);
+      const id = await seed('call', 100, startedAt, { voiceProviderConversationIds: ['conv_a'] });
+      await sessionRepository.claimVoiceHold(id, startedAt);
+
+      expect(await sessionRepository.appendVoiceProviderConversationId(id, startedAt, 'conv_b')).toBe(false);
+      expect(await Session.findById(id).lean()).toMatchObject({ voiceProviderConversationIds: [] });
+    });
+
+    it("never attaches to a newer call's hold", async () => {
+      const id = await seed('call', 100, minutesAgo(1), { voiceProviderConversationIds: ['conv_new'] });
+
+      expect(await sessionRepository.appendVoiceProviderConversationId(id, minutesAgo(60), 'conv_old')).toBe(false);
+      expect(await Session.findById(id).lean()).toMatchObject({ voiceProviderConversationIds: ['conv_new'] });
+    });
+  });
 });

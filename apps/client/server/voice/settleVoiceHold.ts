@@ -17,13 +17,19 @@ export type VoiceHoldSettlement = { settled: false } | { settled: true; owed: nu
  * the rest. The one settlement rule shared by POST /api/v1/voice/sessions/{id}/end and the stale
  * hold sweep (apps/workers/src/cron/voiceHoldSweep.ts). The hold is claimed atomically before any
  * credit moves, so of concurrent settlers exactly one refunds; the others get `settled: false`.
+ * So does a settler whose measured ids a reconnect has since added to; the hold stays live and
+ * the next end or sweep measures it again.
  * The caller supplies `elapsedSeconds`, measured by measureVoiceCallSeconds (./measureVoiceCall.ts).
  *
  * If crediting back throws, the hold is restored and the error rethrown, so the sweep retries it
  * rather than leaving the user charged the full reservation with no record left to reconcile.
  */
 export async function settleVoiceHold(hold: VoiceHold, elapsedSeconds: number): Promise<VoiceHoldSettlement> {
-  const claimed = await sessionRepository.claimVoiceHold(hold.id, hold.voiceSessionStartedAt);
+  const claimed = await sessionRepository.claimVoiceHold(
+    hold.id,
+    hold.voiceSessionStartedAt,
+    hold.voiceProviderConversationIds
+  );
   if (!claimed) return { settled: false };
 
   const owed = creditsForElapsed(hold.voiceReservedCredits, elapsedSeconds);

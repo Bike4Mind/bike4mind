@@ -251,21 +251,41 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
 
   // A reconnect leaves the original reservation record untouched so end-reconciliation
   // measures the full call duration, not just the post-reconnect segment.
-  const voiceProviderConversationIds = createResult.providerConversationId
-    ? [...(reuseHold ? (session.voiceProviderConversationIds ?? []) : []), createResult.providerConversationId]
-    : reuseHold
-      ? (session.voiceProviderConversationIds ?? [])
-      : [];
-  await sessionRepository.update({
-    id: session.id,
-    voiceProviderConversationIds,
-    ...(!reuseHold
-      ? {
-          voiceReservedCredits: enforceCredits ? reservedCredits : null,
-          voiceSessionStartedAt: new Date(),
+  const { providerConversationId } = createResult;
+  let holdTracksCall = reuseHold && !providerConversationId;
+  if (reuseHold && providerConversationId && session.voiceSessionStartedAt) {
+    // Appended atomically, not read-modify-written around the provider round trip above: two
+    // overlapping reconnects would otherwise drop one id, and its call time would go unbilled.
+    holdTracksCall = await sessionRepository.appendVoiceProviderConversationId(
+      session.id,
+      new Date(session.voiceSessionStartedAt),
+      providerConversationId
+    );
+    if (!holdTracksCall) {
+      // An end or the sweep settled the hold after this request read it. Without a fresh hold
+      // the reconnected call would run unreserved and unbilled.
+      req.logger.warn('[voice-v2/sessions] hold settled during reconnect; taking a fresh hold', {
+        sessionId: session.id,
+        providerConversationId,
+      });
+      if (enforceCredits) {
+        if ((req.user?.currentCredits ?? 0) < reservedCredits) {
+          throw insufficientCreditsError(
+            `Insufficient credits for voice session (requires ~${reservedCredits} credits)`
+          );
         }
-      : {}),
-  });
+        await userRepository.incrementCredits(req.user.id, -reservedCredits);
+      }
+    }
+  }
+  if (!holdTracksCall) {
+    await sessionRepository.update({
+      id: session.id,
+      voiceProviderConversationIds: providerConversationId ? [providerConversationId] : [],
+      voiceReservedCredits: enforceCredits ? reservedCredits : null,
+      voiceSessionStartedAt: new Date(),
+    });
+  }
 
   return res.status(200).json({
     session: { id: session.id, name: session.name },

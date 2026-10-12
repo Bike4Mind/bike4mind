@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   countActiveVoiceSessions: vi.fn(),
   sessionUpdate: vi.fn(),
   claimVoiceHold: vi.fn(),
+  appendVoiceProviderConversationId: vi.fn(),
   findByIdAndUserId: vi.fn(),
   incrementCredits: vi.fn(),
   getSession: vi.fn(),
@@ -65,7 +66,7 @@ vi.mock('@bike4mind/voice', async orig => ({
   createElevenLabsConversationalTransport: (config: { agentId: string }) => ({
     estimateCost: () => ({ voiceMinutesUpperBound: 5, creditsToReserve: RESERVED_CREDITS }),
     createSession: async (input: { sessionToken: string }) => {
-      await mocks.createTransportSession(input);
+      const override = (await mocks.createTransportSession(input)) as { providerConversationId?: string } | undefined;
       return {
         clientBootstrap: {
           transport: 'elevenlabs-conversational',
@@ -74,7 +75,7 @@ vi.mock('@bike4mind/voice', async orig => ({
           sessionToken: input.sessionToken,
         },
         llmProxyToken: input.sessionToken,
-        providerConversationId: 'conv_123',
+        providerConversationId: override?.providerConversationId ?? 'conv_123',
       };
     },
   }),
@@ -114,6 +115,7 @@ vi.mock('@bike4mind/database', async orig => {
       update: (...a: unknown[]) => mocks.sessionUpdate(...a),
       findByIdAndUserId: (...a: unknown[]) => mocks.findByIdAndUserId(...a),
       claimVoiceHold: (...a: unknown[]) => mocks.claimVoiceHold(...a),
+      appendVoiceProviderConversationId: (...a: unknown[]) => mocks.appendVoiceProviderConversationId(...a),
     },
     userRepository: {
       ...(actual.userRepository as object),
@@ -215,6 +217,7 @@ beforeEach(() => {
   mocks.sessionUpdate.mockResolvedValue(undefined);
   mocks.incrementCredits.mockResolvedValue(undefined);
   mocks.claimVoiceHold.mockResolvedValue(true);
+  mocks.appendVoiceProviderConversationId.mockResolvedValue(true);
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
   mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
@@ -395,21 +398,85 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.createTransportSession).not.toHaveBeenCalled();
   });
 
-  it('reuses the live hold on a reconnect and records the new provider conversation', async () => {
-    mocks.findByIdAndUserId.mockResolvedValue({
+  describe('on a reconnect that reuses the live hold', () => {
+    const heldSince = new Date('2026-10-12T10:00:00.000Z');
+    const heldSession = (voiceProviderConversationIds: string[]) => ({
       id: SESSION_ID,
       name: 'My notebook',
       voiceReservedCredits: RESERVED_CREDITS,
-      voiceSessionStartedAt: new Date(),
-      voiceProviderConversationIds: ['conv_previous'],
+      voiceSessionStartedAt: heldSince,
+      voiceProviderConversationIds,
     });
-    const { res, run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
-    await run();
-    expect(res._getStatusCode()).toBe(200);
-    expect(mocks.incrementCredits).not.toHaveBeenCalled();
-    expect(mocks.sessionUpdate).toHaveBeenCalledWith({
-      id: SESSION_ID,
-      voiceProviderConversationIds: ['conv_previous', 'conv_123'],
+    const fireReconnect = () => fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
+
+    it('appends the new provider conversation to that hold without rewriting the reservation', async () => {
+      mocks.findByIdAndUserId.mockResolvedValue(heldSession(['conv_previous']));
+      const { res, run } = fireReconnect();
+      await run();
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.incrementCredits).not.toHaveBeenCalled();
+      expect(mocks.appendVoiceProviderConversationId).toHaveBeenCalledWith(SESSION_ID, heldSince, 'conv_123');
+      expect(mocks.sessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('keeps every id when two reconnects overlap the provider round trip', async () => {
+      // Stands in for the atomic $addToSet, so the test fails if the handler goes back to
+      // writing an array computed from its own read.
+      const stored = ['conv_previous'];
+      mocks.findByIdAndUserId.mockImplementation(async () => heldSession([...stored]));
+      mocks.appendVoiceProviderConversationId.mockImplementation(async (_id: string, _at: Date, conv: string) => {
+        if (!stored.includes(conv)) stored.push(conv);
+        return true;
+      });
+
+      // Neither provider call resolves until both requests have read the session.
+      let releaseProvider!: () => void;
+      const providerGate = new Promise<void>(resolve => (releaseProvider = resolve));
+      const nextIds = ['conv_first', 'conv_second'];
+      mocks.createTransportSession.mockImplementation(async () => {
+        const providerConversationId = nextIds.shift();
+        await providerGate;
+        return { providerConversationId };
+      });
+
+      const first = fireReconnect();
+      const second = fireReconnect();
+      const runs = Promise.all([first.run(), second.run()]);
+      await vi.waitFor(() => expect(mocks.createTransportSession).toHaveBeenCalledTimes(2));
+      expect(mocks.findByIdAndUserId).toHaveBeenCalledTimes(2);
+      releaseProvider();
+      await runs;
+
+      expect(first.res._getStatusCode()).toBe(200);
+      expect(second.res._getStatusCode()).toBe(200);
+      expect([...stored].sort()).toEqual(['conv_first', 'conv_previous', 'conv_second']);
+      expect(mocks.sessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('takes a fresh hold when the old one was settled before the id could be recorded', async () => {
+      mocks.findByIdAndUserId.mockResolvedValue(heldSession(['conv_previous']));
+      mocks.appendVoiceProviderConversationId.mockResolvedValue(false);
+      const { res, run } = fireReconnect();
+      await run();
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', -RESERVED_CREDITS);
+      expect(mocks.sessionUpdate).toHaveBeenCalledWith({
+        id: SESSION_ID,
+        voiceProviderConversationIds: ['conv_123'],
+        voiceReservedCredits: RESERVED_CREDITS,
+        voiceSessionStartedAt: expect.any(Date),
+      });
+    });
+
+    it('refuses the reconnect when a fresh hold is needed but the caller cannot cover it', async () => {
+      mocks.findByIdAndUserId.mockResolvedValue(heldSession(['conv_previous']));
+      mocks.appendVoiceProviderConversationId.mockResolvedValue(false);
+      mocks.userFindById.mockResolvedValue({ ...JWT_USER, currentCredits: RESERVED_CREDITS - 1 });
+      const { res, run } = fireReconnect();
+      await run();
+      expect(res._getStatusCode()).toBe(422);
+      expect(mocks.incrementCredits).not.toHaveBeenCalled();
+      expect(mocks.sessionUpdate).not.toHaveBeenCalled();
     });
   });
 
@@ -418,8 +485,13 @@ describe('POST /api/v1/voice/sessions', () => {
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
+      expect.objectContaining({
+        id: SESSION_ID,
+        voiceReservedCredits: RESERVED_CREDITS,
+        voiceProviderConversationIds: ['conv_123'],
+      })
     );
+    expect(mocks.appendVoiceProviderConversationId).not.toHaveBeenCalled();
     expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1');
   });
 
@@ -465,7 +537,7 @@ describe('POST /api/v1/voice/sessions', () => {
       const { res, run } = fireSessions();
       await run();
       expect(res._getStatusCode()).toBe(200);
-      expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, staleStartedAt);
+      expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, staleStartedAt, ['conv_old']);
       expect(mocks.incrementCredits.mock.calls).toEqual([
         ['user-1', refund],
         ['user-1', -RESERVED_CREDITS],
@@ -597,7 +669,7 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(body.refunded).toBeGreaterThan(0);
     expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', body.refunded);
     // The hold is claimed before the refund so a duplicate end cannot double-refund.
-    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt, []);
     expect(mocks.claimVoiceHold.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.incrementCredits.mock.invocationCallOrder[0]
     );
@@ -682,6 +754,19 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
         'user-1',
         RESERVED_CREDITS - creditsForElapsed(RESERVED_CREDITS, 60)
       );
+    });
+
+    it('settles nothing when a reconnect appended an id while the call was being measured', async () => {
+      const held = heldSession();
+      mocks.findByIdAndUserId.mockResolvedValue(held);
+      providerReplies(200, { status: 'done', metadata: { call_duration_secs: 60 } });
+      mocks.claimVoiceHold.mockResolvedValue(false);
+      const { res, run } = fireEnd();
+      await run();
+      expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, held.voiceSessionStartedAt, ['conv_123']);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
+      expect(mocks.incrementCredits).not.toHaveBeenCalled();
     });
 
     it('returns 409 and settles nothing while the provider still has the call open', async () => {

@@ -1161,8 +1161,10 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   /**
    * Atomically clear the voice hold that started at `startedAt`. Resolves true for the single
    * caller that cleared it, false when it was already settled or replaced by a newer call.
+   * With `measuredConversationIds`, it also resolves false (leaving the hold live for a later
+   * settle) when a reconnect has added a provider conversation the caller did not measure.
    */
-  claimVoiceHold: (sessionId: string, startedAt: Date) => Promise<boolean>;
+  claimVoiceHold: (sessionId: string, startedAt: Date, measuredConversationIds?: string[]) => Promise<boolean>;
 
   /**
    * Put back a hold claimed by `claimVoiceHold` whose refund then failed, so it can be settled
@@ -1174,4 +1176,11 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     startedAt: Date,
     voiceProviderConversationIds?: string[]
   ) => Promise<boolean>;
+
+  /**
+   * Atomically add a provider conversation id to the voice hold that started at `startedAt`, so
+   * overlapping reconnects each keep theirs. Resolves false (and writes nothing) when that hold
+   * was already settled or replaced by a newer call.
+   */
+  appendVoiceProviderConversationId: (sessionId: string, startedAt: Date, conversationId: string) => Promise<boolean>;
 }

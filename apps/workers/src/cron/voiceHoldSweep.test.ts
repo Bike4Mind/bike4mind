@@ -72,7 +72,7 @@ describe('voiceHoldSweep', () => {
 
     const result = await runVoiceHoldSweep(NOW);
 
-    expect(claimVoiceHold).toHaveBeenCalledWith('a', STARTED);
+    expect(claimVoiceHold).toHaveBeenCalledWith('a', STARTED, undefined);
     expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED);
     expect(result).toEqual({ candidates: 1, settled: 1, refundedCredits: RESERVED, alreadySettled: 0, failed: 0 });
   });

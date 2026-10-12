@@ -27,9 +27,15 @@ describe('settleVoiceHold', () => {
     const result = await settleVoiceHold(HOLD, MAX_SESSION_SECONDS / 3);
 
     expect(result).toEqual({ settled: true, owed: 200, refund: 400 });
-    expect(claimVoiceHold).toHaveBeenCalledWith('s1', STARTED);
+    expect(claimVoiceHold).toHaveBeenCalledWith('s1', STARTED, undefined);
     expect(incrementCredits).toHaveBeenCalledWith('u1', 400);
     expect(claimVoiceHold.mock.invocationCallOrder[0]).toBeLessThan(incrementCredits.mock.invocationCallOrder[0]);
+  });
+
+  it('claims only while the hold still carries the conversations that were measured', async () => {
+    await settleVoiceHold({ ...HOLD, voiceProviderConversationIds: ['conv_a'] }, 0);
+
+    expect(claimVoiceHold).toHaveBeenCalledWith('s1', STARTED, ['conv_a']);
   });
 
   it('refunds the whole hold for a call with no elapsed time', async () => {

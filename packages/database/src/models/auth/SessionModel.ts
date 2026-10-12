@@ -669,12 +669,20 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     }));
   }
 
-  async claimVoiceHold(sessionId: string, startedAt: Date) {
+  async claimVoiceHold(sessionId: string, startedAt: Date, measuredConversationIds?: string[]) {
     // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
     // end, sweep or settlement frame wins, and a newer call's hold is never touched.
+    // Matching the measured ids keeps a conversation appended mid-measurement from being wiped
+    // unbilled; appendVoiceProviderConversationId only ever adds to the end, so order is stable.
+    const idsUnchanged =
+      measuredConversationIds === undefined
+        ? {}
+        : measuredConversationIds.length === 0
+          ? { 'voiceProviderConversationIds.0': { $exists: false } }
+          : { voiceProviderConversationIds: measuredConversationIds };
     const claimed = await this.sessionModel
       .findOneAndUpdate(
-        { _id: sessionId, voiceSessionStartedAt: startedAt },
+        { _id: sessionId, voiceSessionStartedAt: startedAt, ...idsUnchanged },
         { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null, voiceProviderConversationIds: [] } },
         { projection: { _id: 1 } }
       )
@@ -696,6 +704,17 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       )
       .setOptions({ includeDeleted: true });
     return modifiedCount === 1;
+  }
+
+  async appendVoiceProviderConversationId(sessionId: string, startedAt: Date, conversationId: string) {
+    // matchedCount, not modifiedCount: a retried id already in the set is still recorded.
+    const { matchedCount } = await this.sessionModel
+      .updateOne(
+        { _id: sessionId, voiceSessionStartedAt: startedAt },
+        { $addToSet: { voiceProviderConversationIds: conversationId } }
+      )
+      .setOptions({ includeDeleted: true });
+    return matchedCount === 1;
   }
 
   async findSessionIdsByUserId(userId: string) {
