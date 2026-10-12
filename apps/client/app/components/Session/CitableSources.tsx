@@ -26,10 +26,15 @@ const COLLAPSED_COUNT = 3;
 /**
  * The detector is a pattern match over prose, and its contract is that a finding means "worth a
  * human's eye", never a proven contradiction (b4m-core/common/src/constants/corpusInconsistency.ts).
- * Shown once under the list so each badge tooltip stays one line. Names no specific kind, so it holds for a future kind joining the asserted list.
+ * Shown once under the list so each badge tooltip stays one line. Names no specific kind, so it
+ * holds for a future kind joining the asserted list.
  */
 const CONFLICT_NOTE =
   'Flagged sources may disagree. This is a heuristic match over the retrieved passages, not a proven contradiction - read the sources before relying on either.';
+
+// Popper's default flip would swap a conflict tooltip to the opposite side when space runs out,
+// which is exactly where conflictPlacementOf found the partner chip.
+const CONFLICT_TOOLTIP_MODIFIERS = [{ name: 'flip', options: { fallbackPlacements: ['right', 'left'] } }];
 
 const getIconForType = (type: CitableSourceType) => {
   switch (type) {
@@ -364,6 +369,7 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
             <Tooltip
               size="sm"
               placement={conflictPlacement}
+              modifiers={CONFLICT_TOOLTIP_MODIFIERS}
               title={conflictTooltip}
               onOpen={() => onConflictTooltipChange(true)}
               onClose={() => onConflictTooltipChange(false)}
@@ -471,7 +477,7 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
       {/* The gap to the pill below, or to the conflict note when one shows. It does NOT add to the
           pill's own 8px top margin: block-level siblings collapse to the larger of the two, so this
           value alone is what shows. */}
-      <Stack spacing={1} sx={{ mb: '16px' }}>
+      <Stack spacing={1} sx={{ mb: showConflictNote ? 1 : '16px' }}>
         {visible.map((source, index) => {
           const key = String(source.id || source.url || index);
           return (
@@ -491,13 +497,11 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
         })}
       </Stack>
 
-      {/* Relies on margin collapsing (keep the parent Box free of padding and borders): -8px against
-          the Stack's 16px leaves an 8px gap above, and 16px still separates the pill below. */}
       {showConflictNote && (
         <Typography
           level="body-xs"
           data-testid="citable-sources-conflict-note"
-          sx={{ color: 'text.tertiary', mt: '-8px', mb: '16px' }}
+          sx={{ color: 'text.tertiary', mb: '16px' }}
         >
           {CONFLICT_NOTE}
         </Typography>
