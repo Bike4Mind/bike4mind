@@ -315,3 +315,33 @@ describe('ApiClient API key auth', () => {
     expect(seen?.headers['x-api-key']).toBeUndefined();
   });
 });
+
+describe('ApiClient 401 on a streaming completions request', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAuthTokens.mockResolvedValue({
+      accessToken: 'stale',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      userId: 'user-1',
+    });
+    mockRefreshToken.mockResolvedValue({ access_token: 'fresh', refresh_token: 'refresh2', expires_in: 3600 });
+  });
+
+  it('refreshes once and retries once, then gives up', async () => {
+    const client = new ApiClient('http://localhost:3000');
+    let calls = 0;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      calls += 1;
+      return Promise.reject(make401(config));
+    }) as AxiosAdapter;
+
+    const error = await rejection(
+      client.getAxiosInstance().post('/api/ai/v1/completions', { model: 'm', messages: [] }, { responseType: 'stream' })
+    );
+
+    expect(error).toBeInstanceOf(SessionRevokedError);
+    expect(mockRefreshToken).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(2);
+  });
+});

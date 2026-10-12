@@ -129,6 +129,12 @@ describe('API reference facts shared with the generated docs', () => {
     expect(rates).toContain('Retry-After');
   });
 
+  it('says the streaming completions endpoint answers an exceeded ceiling with a 429, not an in-stream event', () => {
+    const rates = section('### Rate Limits');
+    expect(rates).not.toMatch(/in-stream/);
+    expect(rates).toContain('rate-limits before it opens its event');
+  });
+
   it('quotes the real request-id length cap', () => {
     expect(API_REFERENCE_CONTENT).toContain(`capped at ${MAX_REQUEST_ID_LENGTH} characters`);
   });

@@ -6,8 +6,10 @@ import {
   getLlmWithFallback,
   findFallbackForMissingModel,
   isSafetyRefusalError,
+  getHttpStatus,
 } from './fallback';
 import { AxiosError } from 'axios';
+import { ApiError } from '@google/genai';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
 import { toProviderEndUserId } from '../llm';
 
@@ -786,5 +788,24 @@ describe('findFallbackForMissingModel', () => {
     );
 
     expect(result!.model.id).toBe('claude-sonnet-5');
+  });
+});
+
+describe('getHttpStatus', () => {
+  it('reads the status off a real @google/genai ApiError', () => {
+    const raw = '{"error":{"code":404,"message":"no longer available to new users","status":"NOT_FOUND"}}';
+    expect(getHttpStatus(new ApiError({ message: raw, status: 404 }))).toBe(404);
+  });
+
+  it('reads an axios response status', () => {
+    expect(getHttpStatus(createAxiosError(401))).toBe(401);
+  });
+
+  it('reads an AWS SDK $metadata status', () => {
+    expect(getHttpStatus(Object.assign(new Error('unavailable'), { $metadata: { httpStatusCode: 503 } }))).toBe(503);
+  });
+
+  it('returns undefined for an error without a status', () => {
+    expect(getHttpStatus(new Error('boom'))).toBeUndefined();
   });
 });

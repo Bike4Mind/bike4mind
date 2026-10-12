@@ -225,6 +225,17 @@ describe('formatSSEError', () => {
     });
   });
 
+  it('attaches a provider classifier', () => {
+    expect(
+      formatSSEError(new Error('Model provider returned an error (upstream 404)'), 'req-2', 'provider_error')
+    ).toEqual({
+      type: 'error',
+      message: 'Model provider returned an error (upstream 404)',
+      requestId: 'req-2',
+      code: 'provider_error',
+    });
+  });
+
   it('omits the code field entirely when no classifier is passed (no undefined serialization)', () => {
     const event = formatSSEError(new Error('boom'), 'req-1');
     expect(event).not.toHaveProperty('code');

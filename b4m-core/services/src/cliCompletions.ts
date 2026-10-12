@@ -20,6 +20,7 @@ import {
   IUserRepository,
   normalizeMultimodalMessages,
   BadRequestError,
+  HTTPError,
   type CompletionSource,
 } from '@bike4mind/common';
 import {
@@ -35,6 +36,7 @@ import {
 import {
   getLlmByModel,
   getAvailableModels,
+  type GetAvailableModelsOptions,
   reasonsWithinOutputBudget,
   resolveOutputMaxTokens,
   type ICompletionOptions,
@@ -148,6 +150,14 @@ export interface CompletionParams {
   alwaysRecordUsage?: boolean;
   logger?: Logger;
   onChunk: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>;
+  /**
+   * Called once, after model resolution and the credit hold, immediately before the provider call.
+   * The SSE route commits its 200 here, so anything thrown earlier can still be a real HTTP status.
+   * A throw from it refunds the hold.
+   */
+  onReady?: () => void | Promise<void>;
+  /** Forwarded to `getAvailableModels` when set; omitted, the listing call is unchanged. */
+  listingOptions?: GetAvailableModelsOptions;
 }
 
 /**
@@ -286,8 +296,7 @@ export function resolveOpenAiBareModelAlias(modelId: string): string {
 }
 
 /**
- * Shared LLM completion logic
- * Used by Next.js API route, Lambda function, and available for 3rd party integrations
+ * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
@@ -355,7 +364,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Get effective API keys (user keys or fallback to admin demo keys)
   const apiKeys = await getEffectiveLLMApiKeys(userId, { db, getSettingsByNames });
 
-  const models = await getAvailableModels(apiKeys);
+  const models = params.listingOptions
+    ? await getAvailableModels(apiKeys, params.listingOptions)
+    : await getAvailableModels(apiKeys);
   const modelInfo = models.find(m => m.id === (model as ChatModels));
 
   const llm = getLlmByModel(apiKeys as ApiKeyTable, {
@@ -365,10 +376,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   });
 
   if (!llm) {
-    // Only an id outside the static catalog is caller input. A catalogued model with no backend
-    // means the platform key is missing or its model listing failed: an operator fault that must stay counted.
+    // Only an id outside the static catalog is caller input. A catalogued model with no backend means the
+    // platform key is missing or its listing timed out: retryable, and still counted as an operator fault.
     const message = `Failed to create LLM backend for model: ${model}`;
-    throw CHAT_MODELS.includes(model as ChatModels) ? new Error(message) : new BadRequestError(message);
+    if (!CHAT_MODELS.includes(model as ChatModels)) throw new BadRequestError(message);
+    throw new HTTPError(503, message, { errorCode: 'provider_not_configured' });
   }
 
   llm.currentModel = model;
@@ -564,6 +576,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   };
 
   try {
+    await params.onReady?.();
     await llm.complete(model, messages, completionOptions, wrappedOnChunk);
   } catch (error) {
     // If completion fails, refund the reserved credits to whichever pool paid

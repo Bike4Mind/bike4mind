@@ -110,7 +110,7 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
   });
 
-  it('raises a plain Error, not caller input, for a catalogued model whose backend is unavailable', async () => {
+  it('raises a retryable 503 provider_not_configured, not caller input, for a catalogued model without a backend', async () => {
     const { db } = buildDb();
 
     const rejection = executeCompletion({ ...baseParams, model: ChatModels.CLAUDE_4_SONNET_BEDROCK, db });
@@ -118,6 +118,10 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
       `Failed to create LLM backend for model: ${ChatModels.CLAUDE_4_SONNET_BEDROCK}`
     );
     await expect(rejection).rejects.not.toBeInstanceOf(BadRequestError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 503,
+      additionalInfo: { errorCode: 'provider_not_configured' },
+    });
   });
 
   // A plain-object alias map would return Object.prototype members (the Object

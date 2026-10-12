@@ -1,9 +1,63 @@
 import { HTTPError, HttpStatus, NotFoundError, UnprocessableEntityError, isZodError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { fromZodError } from 'zod-validation-error';
+import type { RateLimitErrorInfo } from '@server/cli/auth';
+
+/**
+ * The public error envelope. Shared with the completions SSE route
+ * (server/chatCompletion/external/sseRoute.ts), whose Express app has no req.requestId.
+ */
+export function buildErrorBody({
+  error,
+  requestId,
+  name,
+  additionalInfo,
+}: {
+  error: string;
+  requestId: string | undefined;
+  name?: string;
+  additionalInfo?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    ...additionalInfo,
+    // Deprecated, remove on 2026-12-01 along with `name` in ApiErrorSchema /
+    // ErrorResponse. It leaks the thrower's class name onto a public wire and it
+    // shadows any `name` an endpoint put in additionalInfo. Documented in the
+    // envelope only for the deprecation window; see CONVENTIONS.md section 1.
+    ...(name !== undefined && { name }),
+    error,
+    request_id: requestId,
+  };
+}
+
+/**
+ * Status, headers and envelope for an HTTPError. Rate-limit info in additionalInfo becomes
+ * `Retry-After` and rate-limit headers; `rateLimitInBody` keeps it in the body too.
+ */
+export function httpErrorToResponse(
+  error: HTTPError,
+  requestId: string | undefined,
+  { name, rateLimitInBody = false }: { name?: string; rateLimitInBody?: boolean } = {}
+): { status: number; headers: Record<string, string>; body: Record<string, unknown> } {
+  const { retryAfter, rateLimitHeaders, ...rest }: RateLimitErrorInfo & Record<string, unknown> =
+    error.additionalInfo ?? {};
+  const headers: Record<string, string> = {};
+  if (typeof retryAfter === 'number') headers['Retry-After'] = String(retryAfter);
+  for (const [headerName, value] of Object.entries(rateLimitHeaders ?? {})) headers[headerName] = String(value);
+  return {
+    status: error.statusCode,
+    headers,
+    body: buildErrorBody({
+      additionalInfo: rateLimitInBody ? error.additionalInfo : rest,
+      name,
+      error: error.message || 'Server Error',
+      requestId,
+    }),
+  };
+}
 
 const errorHandler = (error: unknown, req: Request, res: Response) => {
-  let additionalInfo: Record<string, unknown> | undefined;
+  let httpResponse: ReturnType<typeof httpErrorToResponse> | undefined;
   let statusCode = HttpStatus.InternalServerError;
   let castMessage: string | undefined;
 
@@ -43,8 +97,8 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
     }
 
     if (errorObj instanceof HTTPError) {
-      ({ statusCode } = errorObj);
-      additionalInfo = errorObj.additionalInfo;
+      httpResponse = httpErrorToResponse(errorObj, req.requestId, { name: errorObj.name, rateLimitInBody: true });
+      statusCode = httpResponse.status;
     } else if ('status' in error && typeof (error as Record<string, unknown>).status === 'number') {
       statusCode = (error as Record<string, unknown>).status as number;
     }
@@ -58,25 +112,25 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
       req.logger.warn(message);
     }
 
-    res.status(statusCode).json({
-      ...additionalInfo,
-      // Deprecated, remove on 2026-12-01 along with `name` in ApiErrorSchema /
-      // ErrorResponse. It leaks the thrower's class name onto a public wire and it
-      // shadows any `name` an endpoint put in additionalInfo. Documented in the
-      // envelope only for the deprecation window; see CONVENTIONS.md section 1.
-      name: errorObj.name,
-      error: castMessage ?? (errorObj.message || 'Server Error'),
-      request_id: req.requestId,
-    });
+    if (httpResponse) {
+      if (Object.keys(httpResponse.headers).length > 0) res.set(httpResponse.headers);
+      res.status(statusCode).json(httpResponse.body);
+      return;
+    }
+
+    res.status(statusCode).json(
+      buildErrorBody({
+        name: errorObj.name,
+        error: castMessage ?? (errorObj.message || 'Server Error'),
+        requestId: req.requestId,
+      })
+    );
     return;
   }
 
   // Unknown error shape - treat as server error
   req.logger.error(`${req.method} ${req.url} → ${statusCode}: Unknown error`, error);
-  res.status(statusCode).json({
-    error: 'An unknown error occurred',
-    request_id: req.requestId,
-  });
+  res.status(statusCode).json(buildErrorBody({ error: 'An unknown error occurred', requestId: req.requestId }));
   return;
 };
 

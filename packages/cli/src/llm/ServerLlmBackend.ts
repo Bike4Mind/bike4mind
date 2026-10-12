@@ -13,6 +13,57 @@ import { createTransientRetryPolicy } from './retryPolicy';
 import { bridgeToAsyncIterable } from './streamBridge';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
 
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+const ERROR_BODY_READ_TIMEOUT_MS = 5000;
+
+/**
+ * With responseType 'stream', axios hands an error response back with its body still unread.
+ * The read is bounded by size and time; past either limit the stream is destroyed and the
+ * partial body returned.
+ */
+async function readResponseBody(data: unknown): Promise<string> {
+  if (typeof data === 'string') return data;
+  if (Buffer.isBuffer(data)) return data.toString('utf-8');
+  if (typeof data !== 'object' || data === null) return '';
+  if (!(Symbol.asyncIterator in data)) return JSON.stringify(data);
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const read = (async () => {
+    try {
+      for await (const chunk of data as AsyncIterable<Buffer | string>) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        chunks.push(buf);
+        total += buf.length;
+        if (total >= MAX_ERROR_BODY_BYTES) return;
+      }
+    } catch (readError) {
+      logger.debug(`[ServerLlmBackend] Could not read error body: ${String(readError)}`);
+    }
+  })();
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, ERROR_BODY_READ_TIMEOUT_MS);
+  });
+  await Promise.race([read, timedOut]);
+  clearTimeout(timer);
+  (data as { destroy?: () => void }).destroy?.();
+  return Buffer.concat(chunks).subarray(0, MAX_ERROR_BODY_BYTES).toString('utf-8');
+}
+
+/** The server's JSON error envelope, when the body is one. */
+function parseApiError(text: string): { error: string; errorCode?: string } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    const { error, errorCode } = parsed as { error?: unknown; errorCode?: unknown };
+    if (typeof error !== 'string') return undefined;
+    return typeof errorCode === 'string' ? { error, errorCode } : { error };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Server-side LLM backend that proxies requests through the Bike4Mind API over
  * Server-Sent Events (SSE). API keys remain secure on the server.
@@ -98,7 +149,7 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
         logger.debug('[ServerLlmBackend] Request was canceled, resolving gracefully');
         return;
       }
-      throw this.toStreamingRequestError(error);
+      throw await this.toStreamingRequestError(error);
     }
 
     logger.debug('[ServerLlmBackend] Got response, setting up SSE parser');
@@ -198,11 +249,11 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   }
 
   /**
-   * Map a streaming-request (pre-stream) failure to a clear Error: the axios
-   * 403-with-HTML-error-page case, other HTTP statuses, and common network / auth
-   * errors. Abort and ERR_CANCELED are handled by the caller, not here.
+   * Map a streaming-request (pre-stream) failure to a clear Error: the server's JSON error
+   * envelope (message plus errorCode), an HTML error page on a 403, other HTTP statuses, and
+   * common network / auth errors. Abort and ERR_CANCELED are handled by the caller, not here.
    */
-  private toStreamingRequestError(error: unknown): Error {
+  private async toStreamingRequestError(error: unknown): Promise<Error> {
     logger.error('LLM completion failed', error);
 
     if (isAxiosError(error)) {
@@ -215,57 +266,35 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
         })}`
       );
 
-      if (error.response?.status === 403 && error.response.data) {
-        let errorDetails = '';
-        try {
-          let responseText = '';
-          // response.data is a stream when responseType: 'stream'
-          const stream = error.response.data;
+      const response = error.response;
+      if (response) {
+        const responseText = await readResponseBody(response.data);
+        logger.debug(`[ServerLlmBackend] Response preview: ${responseText.substring(0, 200)}`);
 
-          if (Buffer.isBuffer(stream)) {
-            responseText = stream.toString('utf-8');
-          } else if (stream?._readableState?.buffer?.length > 0) {
-            const chunks: Buffer[] = [];
-            for (const chunk of stream._readableState.buffer) {
-              if (chunk?.data) {
-                chunks.push(Buffer.from(chunk.data));
-              }
-            }
-            responseText = Buffer.concat(chunks).toString('utf-8');
-          } else if (typeof stream === 'string') {
-            responseText = stream;
-          }
+        const apiError = parseApiError(responseText);
+        if (apiError) {
+          const detail = apiError.errorCode ? `${apiError.error} (${apiError.errorCode})` : apiError.error;
+          // isLlmUnavailableError (utils/handoff.ts) matches this prefix to trigger fallback on 5xx.
+          return new Error(
+            response.status >= 500 ? `Request failed with status ${response.status}: ${detail}` : detail
+          );
+        }
 
-          logger.debug(`[ServerLlmBackend] Response preview: ${responseText.substring(0, 200)}`);
-
-          // If it's HTML, try to extract a meaningful error message
+        if (response.status === 403) {
+          let errorDetails = '';
           if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
-            const title = htmlErrorTitle(responseText);
-            const h1 = htmlFirstH1(responseText);
-
-            if (title !== null) {
-              errorDetails = title;
-            } else if (h1 !== null) {
-              errorDetails = h1.trim();
-            }
+            errorDetails = htmlErrorTitle(responseText) ?? htmlFirstH1(responseText)?.trim() ?? '';
           } else if (responseText) {
             errorDetails = responseText.substring(0, 100).trim();
           }
-        } catch (extractError) {
-          logger.error('[ServerLlmBackend] Error extracting response:', extractError);
+          return new Error(
+            errorDetails
+              ? `403 Forbidden: ${errorDetails}`
+              : '403 Forbidden - Request blocked by server. Check debug logs at ~/.bike4mind/debug/'
+          );
         }
 
-        return new Error(
-          errorDetails
-            ? `403 Forbidden: ${errorDetails}`
-            : '403 Forbidden - Request blocked by server. Check debug logs at ~/.bike4mind/debug/'
-        );
-      }
-
-      if (error.response) {
-        return new Error(
-          `Request failed with status ${error.response.status}: ${error.response.statusText || 'Unknown error'}`
-        );
+        return new Error(`Request failed with status ${response.status}: ${response.statusText || 'Unknown error'}`);
       }
     }
 

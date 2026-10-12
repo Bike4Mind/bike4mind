@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
+import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 
 vi.mock('@server/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
@@ -49,10 +49,17 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 }));
 
 import jwt from 'jsonwebtoken';
-import { checkRateLimit, verifyApiKey, verifyJwtToken, verifyEmbedApiKey, verifyEmbedKeyById } from './auth';
+import {
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+  verifyApiKey,
+  verifyJwtToken,
+  verifyEmbedApiKey,
+  verifyEmbedKeyById,
+} from './auth';
 import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
-import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
+import { checkApiKeyRateLimit, extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 const userId = 'user-abc';
@@ -512,5 +519,82 @@ describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
   it('refuses a key whose owner no longer exists', async () => {
     vi.mocked(User.findById).mockResolvedValue(null);
     await expect(verifyApiKey({})).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('verifyApiKey scope gate', () => {
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      isValid: true,
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.EMBED_CHAT],
+      rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    });
+  });
+
+  it('throws a ForbiddenError naming the scopes the endpoint accepts', async () => {
+    const rejection = verifyApiKey({}, { requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] });
+    await expect(rejection).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { required_scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] },
+    });
+    await expect(rejection).rejects.toThrow('requires ai:chat or ai:generate');
+  });
+});
+
+describe('rate-limit errors carry their status and retry window', () => {
+  beforeEach(() => {
+    cacheStore.clear();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('checkRateLimit throws a TooManyRequestsError with retryAfter in seconds', async () => {
+    vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    for (let i = 0; i < 100; i++) {
+      await checkRateLimit(userId);
+    }
+    vi.setSystemTime(new Date(Date.now() + 45 * 60_000));
+
+    const rejection = checkRateLimit(userId);
+    await expect(rejection).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 429, additionalInfo: { retryAfter: 900 } });
+    await expect(rejection).rejects.toThrow(/^Rate limit exceeded/);
+  });
+
+  it('checkApiKeyRateLimitOrThrow throws a TooManyRequestsError carrying retryAfter and the rate-limit headers', async () => {
+    const headers = {
+      'X-RateLimit-Limit-Minute': 10,
+      'X-RateLimit-Remaining-Minute': 0,
+      'X-RateLimit-Reset-Minute': 1767225612,
+      'X-RateLimit-Limit-Day': 100,
+      'X-RateLimit-Remaining-Day': 50,
+      'X-RateLimit-Reset-Day': 1767312000,
+    };
+    vi.mocked(checkApiKeyRateLimit).mockResolvedValue({
+      allowed: false,
+      error: 'Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.',
+      retryAfter: 12,
+      limitType: 'minute',
+      headers,
+    });
+    const info = {
+      keyId: 'k1',
+      userId: 'u1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    };
+
+    const rejection = checkApiKeyRateLimitOrThrow(info, { endpoint: '/api/ai/v1/completions', method: 'POST' });
+    await expect(rejection).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 429,
+      additionalInfo: { retryAfter: 12, rateLimitHeaders: headers },
+    });
+    await expect(rejection).rejects.toThrow('Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.');
   });
 });

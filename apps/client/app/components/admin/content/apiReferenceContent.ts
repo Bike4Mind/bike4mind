@@ -102,15 +102,16 @@ holding scopes it doesn't literally list.
 | Requests per day | ${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay.toLocaleString('en-US')} |
 
 A key can be minted with its own ceilings. Responses from rate-limited routes called with an API
-key carry the current state of both windows (the streaming completions endpoint excepted):
+key carry the current state of both windows (the streaming completions endpoint sends them only on
+an API-key \`429\`):
 
 ${API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\`: ${API_KEY_RATE_LIMIT_HEADERS[header]}`).join('\n')}
 
 A request refused at the route scope gate (\`403\`) or for a bad key (\`401\`) never reaches the
 limiter and carries none of these headers. Exceeding a ceiling returns \`429 Too Many Requests\` with
-a \`Retry-After\` header giving the seconds to wait before retrying; the streaming completions
-endpoint (\`POST /api/ai/v1/completions\`) opens its event stream first, so an exceeded ceiling
-arrives there as an in-stream \`error\` event rather than a \`429\`.
+a \`Retry-After\` header giving the seconds to wait before retrying. That includes the streaming
+completions endpoint (\`POST /api/ai/v1/completions\`), which rate-limits before it opens its event
+stream.
 
 Some reads and job polls are exempt from the per-day ceiling and count only against the
 per-minute one; the Rate limits section of the [generated API docs](/api/v1/docs) lists them.
