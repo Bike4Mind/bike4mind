@@ -51,8 +51,9 @@ export type AsyncGenerationProvider<TProviderId extends string, TModelId extends
 };
 
 /**
- * One request returns the finished output (music). Bound `generate` by `ctx.signal`: a timeout or network error
- * leaves the outcome unknown, so the job handler must not resubmit after it.
+ * One request returns the finished output (music), so every call may bill. Bound `generate` by `ctx.signal`: a
+ * timeout or network error leaves the outcome unknown, so throw and the job handler must not call it again.
+ * Return `failed` with `retryable: true` only when the provider definitively generated nothing (e.g. a 429).
  */
 export type SyncGenerationProvider<TProviderId extends string, TModelId extends string, TRequest> = ProviderBase<
   TProviderId,

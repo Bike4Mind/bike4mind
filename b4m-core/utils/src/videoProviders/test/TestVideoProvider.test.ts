@@ -61,6 +61,7 @@ describe('TestVideoProvider specifics', () => {
 });
 
 const stubProvider = (id: VideoProviderId, models: readonly VideoModelId[]): VideoProvider => ({
+  mode: 'async',
   id,
   models,
   submit: vi.fn(),
