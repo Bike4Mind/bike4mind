@@ -33,15 +33,14 @@ export const createCompletionContract = defineEndpoint({
     '`source`) form and are translated to whatever the target model speaks. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
-    'a real HTTP status, before any stream opens: malformed JSON or an unknown `model` `400`, a bad ' +
+    'a real HTTP status, before any stream opens: malformed JSON or an unknown or retired `model` `400`, a bad ' +
     'credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB ' +
     '`413`, a body that fails schema validation `422`, insufficient credits `422` with ' +
-    '`errorCode: "insufficient_credits"`, a rate limit `429` with `Retry-After`, and a catalogued model ' +
-    'this deployment cannot serve right now `503` with `errorCode: "provider_not_configured"` (retryable). ' +
+    '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model ' +
+    'whose provider is not configured on this deployment `503` with `errorCode: "provider_not_configured"` (retryable). ' +
     'Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band ' +
     "`error` event. Branch on that event's `code`, never on `message`, which is prose and may change: " +
-    '`insufficient_credits` (buy credits) or `spend_cap_exceeded` (the key hit its admin-set ceiling; ' +
-    'raise the cap) when credits run out mid-generation, `provider_rejected` when the model provider ' +
+    '`insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider ' +
     'refused our credentials, and `provider_error` for any other provider failure. Treat `code` as optional.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
@@ -71,7 +70,7 @@ export const createCompletionContract = defineEndpoint({
     422: {
       description:
         'The body failed schema validation, or the caller cannot afford the request ' +
-        '(`errorCode: "insufficient_credits"`, or `"spend_cap_exceeded"` when the key hit its ceiling).',
+        '(`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap).',
       schema: InsufficientCreditsErrorSchema,
     },
     429: {
@@ -82,7 +81,7 @@ export const createCompletionContract = defineEndpoint({
     500: { description: 'Internal error before the stream opened.', schema: ApiErrorSchema },
     503: {
       description:
-        'Temporarily unavailable: the model is catalogued but has no usable backend right now ' +
+        "Temporarily unavailable: the model's provider is not configured on this deployment " +
         '(`errorCode: "provider_not_configured"`), or the database is unreachable (no `errorCode`). Retry later.',
       schema: ProviderNotConfiguredErrorSchema,
     },

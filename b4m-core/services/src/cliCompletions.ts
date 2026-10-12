@@ -41,7 +41,7 @@ import {
   resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
-  type ApiKeyTable,
+  isModelProviderConfigured,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
@@ -368,19 +368,26 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     ? await getAvailableModels(apiKeys, params.listingOptions)
     : await getAvailableModels(apiKeys);
   const modelInfo = models.find(m => m.id === (model as ChatModels));
+  const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
-  const llm = getLlmByModel(apiKeys as ApiKeyTable, {
+  const llm = getLlmByModel(apiKeys, {
     modelInfo,
     logger: logger ?? new Logger(),
     endUserId: userId,
   });
 
   if (!llm) {
-    // Only an id outside the static catalog is caller input. A catalogued model with no backend means the
-    // platform key is missing or its listing timed out: retryable, and still counted as an operator fault.
     const message = `Failed to create LLM backend for model: ${model}`;
-    if (!CHAT_MODELS.includes(model as ChatModels)) throw new BadRequestError(message);
-    throw new HTTPError(503, message, { errorCode: 'provider_not_configured' });
+    if (!catalogued) throw new BadRequestError(message);
+    const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {
+      logger?.error?.('[cliCompletions] provider check failed; answering 503', { model, cause });
+      return false;
+    });
+    if (!providerConfigured) throw new HTTPError(503, message, { errorCode: 'provider_not_configured' });
+    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status
+    // would loop clients forever. Static listings cannot time out, so absence here is not transient.
+    logger?.warn?.('[cliCompletions] catalogued model unavailable on a configured provider', { model });
+    throw new BadRequestError(message);
   }
 
   llm.currentModel = model;

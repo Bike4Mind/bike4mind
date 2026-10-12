@@ -356,6 +356,18 @@ function withListingTimeout<T>(promise: Promise<T>, ms: number, label: string): 
 const applyPrivateVisibility = (models: ModelInfo[], includePrivate: boolean): ModelInfo[] =>
   includePrivate ? models : models.filter(m => !m.private);
 
+/** Evaluated under the effective isSelfHost, so an isSelfHost override cannot list Bedrock off hosted defaults. */
+function resolveGateContext(
+  apiKeys: ApiKeyTable | null,
+  overrides: { isSelfHost?: boolean; bedrockReachable?: boolean } = {}
+): BackendGateContext {
+  const isSelfHost = overrides.isSelfHost ?? process.env.B4M_SELF_HOST === 'true';
+  const bedrockReachable =
+    overrides.bedrockReachable ??
+    bedrockClientCredentials({ ...process.env, B4M_SELF_HOST: isSelfHost ? 'true' : undefined }) !== null;
+  return { apiKeys, isSelfHost, bedrockReachable };
+}
+
 // Given Settings data, return a list of models that are available.  In the
 // future, we might consider using this to filter based on capability.
 // Only meant to be called from the server.
@@ -365,11 +377,8 @@ export const getAvailableModels = async (
 ): Promise<ModelInfo[]> => {
   const { perBackendTimeoutMs } = options;
   const includePrivate = options.includePrivate ?? true;
-  const isSelfHost = options.isSelfHost ?? process.env.B4M_SELF_HOST === 'true';
-  // Evaluated under the effective isSelfHost, so an isSelfHost override cannot list Bedrock off hosted defaults.
-  const bedrockReachable =
-    options.bedrockReachable ??
-    bedrockClientCredentials({ ...process.env, B4M_SELF_HOST: isSelfHost ? 'true' : undefined }) !== null;
+  const gateCtx = resolveGateContext(apiKeys, options);
+  const { isSelfHost, bedrockReachable } = gateCtx;
 
   // Check module-level cache first
   const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, bedrockReachable, perBackendTimeoutMs });
@@ -381,7 +390,6 @@ export const getAvailableModels = async (
   // the catalog merge gates catalog-only records with, so the two tiers cannot
   // disagree about which backends this caller can reach. The local-image env
   // fallback lives in that predicate for the same reason.
-  const gateCtx: BackendGateContext = { apiKeys, isSelfHost, bedrockReachable };
   const openaiKey = resolveListingKey(ModelBackend.OpenAI, gateCtx);
   const anthropicKey = resolveListingKey(ModelBackend.Anthropic, gateCtx);
   const geminiKey = resolveListingKey(ModelBackend.Gemini, gateCtx);
@@ -501,6 +509,28 @@ export const getAvailableModels = async (
 
   return applyPrivateVisibility(filtered, includePrivate);
 };
+
+/**
+ * Can this caller reach a static-table backend that serves `modelId`? Reads the adapter tables, not the live
+ * listing; an id no static table names (an Ollama pull, a catalog-only row) answers false.
+ */
+export async function isModelProviderConfigured(modelId: string, apiKeys: ApiKeyTable | null): Promise<boolean> {
+  const ctx = resolveGateContext(apiKeys);
+  const placeholder = 'static-listing';
+  const statics: Array<[ModelBackend, () => ICompletionBackend]> = [
+    [ModelBackend.OpenAI, () => new OpenAIBackend(placeholder)],
+    [ModelBackend.Anthropic, () => new AnthropicBackend(placeholder)],
+    [ModelBackend.Gemini, () => new GeminiBackend(placeholder)],
+    [ModelBackend.XAI, () => new XAIBackend(placeholder)],
+    [ModelBackend.Kimi, () => new KimiBackend(placeholder)],
+    [ModelBackend.DeepSeek, () => new DeepSeekBackend(placeholder)],
+    [ModelBackend.Bedrock, () => new UndifferentiatedBedrockBackend()],
+  ];
+  for (const [backend, build] of statics) {
+    if (isBackendUsable(backend, ctx) && (await build().getModelInfo()).some(m => m.id === modelId)) return true;
+  }
+  return false;
+}
 
 /**
  * Superseded pins the given caller can be upgraded off, for clients that must

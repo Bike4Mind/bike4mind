@@ -269,17 +269,16 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 | Status | Meaning | `errorCode` |
 |--------|---------|-------------|
-| 400 | Malformed JSON, or a `model` B4M does not know. | - |
+| 400 | Malformed JSON, or a `model` B4M does not know or cannot serve you. | - |
 | 401 | The key was rejected. Re-mint once (see "One re-mint" above). | - |
 | 403 | The key lacks a scope this endpoint needs; `required_scopes` names them. | - |
 | 405 | Wrong HTTP method; use `POST`. | - |
 | 413 | The body is over 25 MB. | - |
-| 422 | The user is out of credits. Prompt them to top up their B4M balance. | `insufficient_credits` |
-| 422 | The key hit an admin-set spending ceiling. Topping up does not help. | `spend_cap_exceeded` |
+| 422 | The user or their org is out of credits, or the org's per-member credit cap is reached. Prompt them to top up their B4M balance. | `insufficient_credits` |
 | 422 | The body failed validation; `error` names the failing fields. | - |
 | 429 | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | - |
 | 500 | Internal error. Retry, and log `request_id` if it persists. | - |
-| 503 | The database is unavailable, or the model is not configured on this deployment. Retry later or pick another model. | `provider_not_configured` for the model case |
+| 503 | The database is unavailable, or the model's provider is not configured on this deployment. Retry later or pick another model. | `provider_not_configured` for the model case |
 
 The body is `{ "error": "...", "request_id": "...", "errorCode": "..." }` (`errorCode` only where the table shows one), and `request_id` also arrives as the `X-Request-ID` header. Branch on the status and `errorCode`, never on `error`, which is prose and can change. The public API never returns 402.
 
@@ -290,7 +289,6 @@ Once the stream opens the status is 200 and stays 200. A failure after that poin
 ```
 
 - `code: "insufficient_credits"`: the user ran out of credits mid-generation. Prompt them to top up their B4M balance.
-- `code: "spend_cap_exceeded"`: the key hit an admin-set spending ceiling, so topping up does not help. Keys from the exchange do not carry a cap today, so you should not see it, but handle it defensively.
 - `code: "provider_rejected"`: the model provider refused B4M's credentials. Your key is fine; retry later or pick another model.
 - `code: "provider_error"`: the model provider failed. Retry, or pick another model. The provider's own response body is never forwarded.
 - `code` absent, or any other `code`: show `message` and log `requestId`.
@@ -493,7 +491,6 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
 
 ```ts
 class OutOfCreditsError extends Error {}
-class SpendCapError extends Error {}
 class RateLimitedError extends Error {
   constructor(readonly retryAfterS: number) {
     super(`Rate limited; retry in ${retryAfterS}s`);
@@ -541,7 +538,6 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
     // Failures found before the stream opens are JSON with a real status.
     const err: { error?: string; errorCode?: string; request_id?: string } = await res.json().catch(() => ({}));
     if (err.errorCode === 'insufficient_credits') throw new OutOfCreditsError(err.error);
-    if (err.errorCode === 'spend_cap_exceeded') throw new SpendCapError(err.error);
     if (res.status === 429) throw new RateLimitedError(Number(res.headers.get('Retry-After')) || 60);
     throw new Error(`Completion failed (${res.status} ${err.errorCode ?? ''}, request_id ${err.request_id}): ${err.error}`);
   }
@@ -570,7 +566,6 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
       const event = JSON.parse(data);
       if (event.type === 'error') {
         if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
-        if (event.code === 'spend_cap_exceeded') throw new SpendCapError(event.message);
         throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
       }
       if (event.stopReason) stopReason = event.stopReason;
@@ -581,7 +576,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
 }
 ```
 
-Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `SpendCapError`, tell them a B4M spending cap was reached (topping up will not help). On `RateLimitedError`, wait `retryAfterS` seconds before retrying. On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens`. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling. On `UnusableReplyError` (for example `degenerate_repetition` or `refusal`), do not show the text; retry or tell the user the reply failed.
+Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `RateLimitedError`, wait `retryAfterS` seconds before retrying. On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens`. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling. On `UnusableReplyError` (for example `degenerate_repetition` or `refusal`), do not show the text; retry or tell the user the reply failed.
 
 ## Further reading
 
