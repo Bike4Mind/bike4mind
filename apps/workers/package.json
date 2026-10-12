@@ -38,7 +38,7 @@
     "p-limit": "^7.3.2",
     "sst": "4.17.1",
     "uuid": "^14.0.2",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@bike4mind/typescript-config": "workspace:*",

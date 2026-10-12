@@ -464,4 +464,75 @@ describe('stale dispatched callbacks', () => {
       expect((await questRepository.findCallbackById(id))!.redispatchCount).toBe(1);
     });
   });
+
+  describe('questRepository.failExhaustedCallbacks', () => {
+    const opts = () => ({
+      staleBefore: new Date(Date.now() - WINDOW_MS),
+      horizonBefore: new Date(Date.now() - HORIZON_MS),
+      maxRedispatches: 3,
+    });
+
+    it('fails a stale callback that has reached the redispatch limit', async () => {
+      const id = await dispatchedQuest(WINDOW_MS + 60_000, 3);
+
+      const result = await questRepository.failExhaustedCallbacks(opts());
+
+      expect(result.redispatchLimitReached).toBe(1);
+      expect(result.horizonPassed).toBe(0);
+      const cb = await questRepository.findCallbackById(id);
+      expect(cb!.state).toBe('failed');
+      expect(cb!.lastError).toBe('redispatch limit reached');
+      expect(cb!.completedAt).toBeInstanceOf(Date);
+    });
+
+    it('fails a callback that has passed the redispatch horizon', async () => {
+      const id = await dispatchedQuest(HORIZON_MS + 60_000);
+
+      const result = await questRepository.failExhaustedCallbacks(opts());
+
+      expect(result.horizonPassed).toBe(1);
+      expect(result.redispatchLimitReached).toBe(0);
+      const cb = await questRepository.findCallbackById(id);
+      expect(cb!.state).toBe('failed');
+      expect(cb!.lastError).toBe('redispatch horizon passed');
+      expect(cb!.completedAt).toBeInstanceOf(Date);
+    });
+
+    it('does not touch a stale callback that still has redispatches remaining', async () => {
+      const id = await dispatchedQuest(WINDOW_MS + 60_000, 2);
+
+      const result = await questRepository.failExhaustedCallbacks(opts());
+
+      expect(result.redispatchLimitReached).toBe(0);
+      expect(result.horizonPassed).toBe(0);
+      expect((await questRepository.findCallbackById(id))!.state).toBe('dispatched');
+    });
+
+    it('does not touch a callback still inside the delivery window', async () => {
+      const id = await dispatchedQuest(WINDOW_MS - 60_000, 3);
+
+      const result = await questRepository.failExhaustedCallbacks(opts());
+
+      expect(result.redispatchLimitReached).toBe(0);
+      expect(result.horizonPassed).toBe(0);
+      expect((await questRepository.findCallbackById(id))!.state).toBe('dispatched');
+    });
+
+    it('concurrent sweeps fail each exhausted callback exactly once', async () => {
+      const limitId = await dispatchedQuest(WINDOW_MS + 60_000, 3);
+      const horizonId = await dispatchedQuest(HORIZON_MS + 60_000);
+      const shared = opts();
+
+      const [r1, r2] = await Promise.all([
+        questRepository.failExhaustedCallbacks(shared),
+        questRepository.failExhaustedCallbacks(shared),
+      ]);
+
+      // Combined across both concurrent runs: each callback is failed exactly once.
+      expect(r1.redispatchLimitReached + r2.redispatchLimitReached).toBe(1);
+      expect(r1.horizonPassed + r2.horizonPassed).toBe(1);
+      expect((await questRepository.findCallbackById(limitId))!.state).toBe('failed');
+      expect((await questRepository.findCallbackById(horizonId))!.state).toBe('failed');
+    });
+  });
 });

@@ -19,7 +19,7 @@ const MANIFEST_KEY = 'manifest.json';
  * Exported for use by fork fetcher for schema validation.
  */
 export const WhatsNewModalPayloadSchema = z.object({
-  version: z.literal('1.0').optional().prefault('1.0'),
+  version: z.literal('1.0').prefault('1.0'),
   modalId: z.string().min(1).max(100), // MongoDB ObjectId is 24 chars, allow some buffer
   title: z.string().min(1).max(200),
   subtitle: z.string().min(1).max(500),
