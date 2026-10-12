@@ -1,4 +1,4 @@
-import type { AttackSimulationFinding } from '../types';
+import type { AttackSimulationFinding } from '@server/security/attackSimulation/types';
 import { buildFingerprint } from '../fingerprint';
 import { assertTargetUrlIsSafe, probeFetch } from './probeUtils';
 

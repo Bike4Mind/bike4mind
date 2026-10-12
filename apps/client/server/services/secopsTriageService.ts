@@ -413,7 +413,7 @@ Important context for your analysis:
 
 Provide two things:
 1. "whatThisMeans": 1-2 sentences explaining what the probe actually observed in plain English, distinguishing between probable-false-positive (endpoint missing) and real-exploit (endpoint reachable + behaves unsafely).
-2. "howToFix": Numbered remediation steps. If the finding looks like a false positive, the fix is to update the probe path list in apps/client/server/security/attackSimulation/probes — say so explicitly. Otherwise, walk through the code-level fix (route, middleware, rate-limit config, etc.) and how to verify in the next scheduled Active Defense run.
+2. "howToFix": Numbered remediation steps. If the finding looks like a false positive, the fix is to update the probe path list in apps/workers/src/security/attackSimulation/probes - say so explicitly. Otherwise, walk through the code-level fix (route, middleware, rate-limit config, etc.) and how to verify in the next scheduled Active Defense run.
 
 Respond with ONLY valid JSON (no markdown, no code blocks):
 {"whatThisMeans": "...", "howToFix": "..."}`,
