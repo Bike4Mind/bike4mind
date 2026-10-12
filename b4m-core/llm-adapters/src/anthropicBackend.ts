@@ -1251,7 +1251,8 @@ export class AnthropicBackend implements ICompletionBackend {
           apiParams.max_tokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS
         );
         // The synthesized response_format tool is forced via tool_choice, which the API rejects
-        // alongside thinking - so only the off switch survives there.
+        // alongside thinking - so only the off switch survives there. Native structured outputs
+        // (models without forced tool use) carry the format in output_config and keep any level.
         const plan: ReasoningEffortPlan =
           usingResponseFormatToolUse && (requested.kind === 'adaptive' || requested.kind === 'budget')
             ? { kind: 'default' }

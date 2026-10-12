@@ -126,6 +126,18 @@ describe('AnthropicBackend reasoningEffort', () => {
     expect(request.thinking).toEqual({ type: 'disabled' });
   });
 
+  it('keeps the native structured-output format when adding effort on a model without forced tool use', async () => {
+    const request = await requestFor(ChatModels.CLAUDE_5_5_OPUS, {
+      reasoningEffort: 'low',
+      maxTokens: 2000,
+      responseFormat: jsonSchemaFormat,
+    });
+
+    expect(request.tool_choice).toBeUndefined();
+    expect(request.thinking).toEqual({ type: 'adaptive' });
+    expect(request.output_config).toMatchObject({ effort: 'low', format: { type: 'json_schema' } });
+  });
+
   it('sends no thinking config when reasoningEffort is absent', async () => {
     const request = await requestFor(ChatModels.CLAUDE_5_SONNET, { maxTokens: 800 });
 
