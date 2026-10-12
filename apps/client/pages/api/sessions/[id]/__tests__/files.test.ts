@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 import { createMocks } from 'node-mocks-http';
 
@@ -83,12 +83,18 @@ describe('GET /api/sessions/[id]/files', () => {
   });
 });
 
-it('uses request-local browser signing for collection responses', async () => {
-  await call(SESSION_ID).result;
-  const adapter = listFabFilesBySession.mock.calls[0][2] as {
-    storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
-  };
-  expect(adapter.storage.signedUrlCache).toBe('bypass');
-  await adapter.storage.generateSignedUrl('owned/report.txt', 600);
-  expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', { expiresIn: 600, audience: 'browser' });
-});
+it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
+  'uses request-local browser signing for collection responses',
+  async endpoint => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
+    await call(SESSION_ID).result;
+    const adapter = listFabFilesBySession.mock.calls[0][2] as {
+      storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
+    };
+    expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
+    await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+    expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', { expiresIn: 600, audience: 'browser' });
+  }
+);
+
+afterEach(() => vi.unstubAllEnvs());

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 import { createMocks } from 'node-mocks-http';
 
@@ -104,16 +104,26 @@ function invokeGet(query: Record<string, unknown> = {}) {
 }
 
 describe('GET /api/files', () => {
-  it('uses request-local browser signing for collection responses', async () => {
-    const { req, res } = invokeGet();
-    await mockRefs.getHandler!(req, res);
-    const adapter = mockRefs.searchArgs?.[2] as {
-      storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
-    };
-    expect(adapter.storage.signedUrlCache).toBe('bypass');
-    await adapter.storage.generateSignedUrl('owned/report.txt', 600);
-    expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', { expiresIn: 600, audience: 'browser' });
-  });
+  it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
+    'uses request-local browser signing for collection responses',
+    async endpoint => {
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
+      const { req, res } = invokeGet();
+      await mockRefs.getHandler!(req, res);
+      const adapter = mockRefs.searchArgs?.[2] as {
+        storage: {
+          signedUrlCache?: string;
+          generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
+        };
+      };
+      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
+      await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+      expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
+        expiresIn: 600,
+        audience: 'browser',
+      });
+    }
+  );
 
   beforeEach(() => {
     mockRefs.searchArgs = undefined;
@@ -249,3 +259,5 @@ describe('DELETE /api/files', () => {
     expect(mockRefs.deleteManyArgs).toBeUndefined();
   });
 });
+
+afterEach(() => vi.unstubAllEnvs());

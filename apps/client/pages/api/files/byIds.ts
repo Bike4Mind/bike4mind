@@ -41,7 +41,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
     const adapter = {
       db: { fabFiles: fabFileRepository, users: userRepository, adminSettings: adminSettingsRepository },
       storage: {
-        signedUrlCache: 'bypass' as const,
+        ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
         generateSignedUrl: async (path: string, expireInSeconds: number) => {
           return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds, audience: 'browser' });
         },

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, getDataLakeTags } from '@bike4mind/common';
@@ -69,16 +69,26 @@ function invokeGet(query: Record<string, unknown> = {}, user: Record<string, unk
 const scopeArg = () => mockRefs.searchArgs?.[3] as Record<string, unknown> | undefined;
 
 describe('GET /api/files/search', () => {
-  it('uses request-local browser signing for collection responses', async () => {
-    const { req, res } = invokeGet();
-    await mockRefs.getHandler!(req, res);
-    const adapter = mockRefs.searchArgs?.[2] as {
-      storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
-    };
-    expect(adapter.storage.signedUrlCache).toBe('bypass');
-    await adapter.storage.generateSignedUrl('owned/report.txt', 600);
-    expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', { expiresIn: 600, audience: 'browser' });
-  });
+  it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
+    'uses request-local browser signing for collection responses',
+    async endpoint => {
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
+      const { req, res } = invokeGet();
+      await mockRefs.getHandler!(req, res);
+      const adapter = mockRefs.searchArgs?.[2] as {
+        storage: {
+          signedUrlCache?: string;
+          generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
+        };
+      };
+      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
+      await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+      expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
+        expiresIn: 600,
+        audience: 'browser',
+      });
+    }
+  );
 
   beforeEach(() => {
     mockRefs.searchArgs = undefined;
@@ -238,3 +248,5 @@ describe('GET /api/files/search', () => {
     });
   });
 });
+
+afterEach(() => vi.unstubAllEnvs());

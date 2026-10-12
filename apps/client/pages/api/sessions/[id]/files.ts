@@ -40,7 +40,7 @@ const handler = baseApi()
             adminSettings: adminSettingsRepository,
           },
           storage: {
-            signedUrlCache: 'bypass' as const,
+            ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
             generateSignedUrl: async (path: string, expireInSeconds: number) => {
               return await getFilesStorage().getSignedUrl(path, 'get', {
                 expiresIn: expireInSeconds,

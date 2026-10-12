@@ -241,7 +241,7 @@ export async function queryDataLakeArticles(
       projects: projectRepository,
     },
     storage: {
-      signedUrlCache: 'bypass' as const,
+      ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
       generateSignedUrl: async (path: string, expireInSeconds: number) => {
         try {
           return await getFilesStorage().getSignedUrl(path, 'get', {
