@@ -102,6 +102,36 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: Ungranted Credit Purchases
+   *
+   * Fires when the daily reconciliation finds a succeeded Stripe credit purchase with no
+   * purchase transaction. The Slack post from the cron is best-effort; this alarm is the
+   * signal that cannot fail quietly. The metric is emitted once a day (0 when clean), so
+   * the period is one day.
+   *
+   * Metric emitted by: apps/workers/src/cron/creditPurchaseReconciliation.ts
+   * Namespace: Lumina5/CreditPurchases / UngrantedPurchases
+   */
+  new aws.cloudwatch.MetricAlarm('ungrantedCreditPurchases', {
+    name: `${$app.name}-${$app.stage}-ungranted-credit-purchases`,
+    alarmDescription: 'Stripe credit purchase succeeded but no credits were granted',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'UngrantedPurchases',
+    namespace: 'Lumina5/CreditPurchases',
+    dimensions: { Stage: $app.stage },
+    period: 86400, // matches the daily cron
+    statistic: 'Maximum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'CreditPurchases',
+      Severity: 'High',
+    },
+  });
+
+  /**
    * Alarm: High Failure Count
    *
    * Triggers when more than 2 failures occur in a 5-minute period.

@@ -451,8 +451,7 @@ describe('DataLakeLakePicker', () => {
   it('lets the trigger label inherit the button color, which the themed body-sm default does not', () => {
     renderPicker({ lakes: [lake({ id: 'a', name: 'Research Corpus' })], selectedLakeIds: ['a'] });
 
-    // text.tertiary is the brand hue at 50% alpha in this theme - around 2.2:1 on the light
-    // surface, which is not a contrast the primary scope label can afford.
+    // text.tertiary is the theme's dimmest text tier, a step below the primary scope label.
     const label = screen.getByTestId('datalake-lake-picker-btn').querySelector('p');
     expect(label).toHaveTextContent('Research Corpus');
     // Resolves through the button's own variant color instead of the themed body-sm default.

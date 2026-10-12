@@ -171,7 +171,8 @@ export async function assertUrlAllowed(url: string): Promise<void> {
  * bypassed by a public host that 3xx-redirects to an internal one. This validates up front
  * (assertUrlAllowed, DNS-resolving), fetches with redirect:'manual', re-validates the Location the
  * same way, and follows at most one hop with redirect:'error'. Callers keep their own
- * timeout/size/content-type handling via `init` and the returned Response.
+ * timeout/size/content-type handling via `init` and the returned Response. Callers may reject a
+ * redirect target before the second fetch when their own routing rules make it unsafe.
  *
  * TOCTOU residual: validateTargetUrl resolves DNS here, but global fetch() (undici) resolves the name
  * again at connect time and cannot install fab-pipeline's connect-time ssrfSafeLookup, which is built
@@ -184,7 +185,11 @@ export async function assertUrlAllowed(url: string): Promise<void> {
  *
  * @throws SsrfError if the target or its redirect target is unsafe.
  */
-export async function safeFetch(url: string, init: RequestInit = {}): Promise<Response> {
+export async function safeFetch(
+  url: string,
+  init: RequestInit = {},
+  options: { assertRedirectAllowed?: (target: URL) => void } = {}
+): Promise<Response> {
   await assertUrlAllowed(url);
 
   const response = await fetch(url, { ...init, redirect: 'manual' });
@@ -199,6 +204,7 @@ export async function safeFetch(url: string, init: RequestInit = {}): Promise<Re
   }
   const target = new URL(location, url).toString();
   try {
+    options.assertRedirectAllowed?.(new URL(target));
     await assertUrlAllowed(target);
   } catch (e) {
     if (e instanceof SsrfError) {

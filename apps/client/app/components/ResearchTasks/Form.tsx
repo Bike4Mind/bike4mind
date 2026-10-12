@@ -96,7 +96,7 @@ const researchTaskFormSchema = z
       .max(500),
     type: z.enum(ResearchTaskType),
     executionType: z.enum(ResearchTaskExecutionType),
-    urls: z.array(z.url('Please enter a valid URL')).optional().prefault([]),
+    urls: z.array(z.url('Please enter a valid URL')).prefault([]),
     canDiscoverLinks: z.boolean().optional(),
     prompt: z.string().optional(),
     maxDepth: z.number().min(1, 'Max depth must be at least 1').max(10, 'Max depth cannot exceed 10').optional(),

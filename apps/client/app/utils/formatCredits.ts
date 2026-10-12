@@ -1,5 +1,15 @@
 const plural = (n: number) => (n === 1 ? 'credit' : 'credits');
 
+/**
+ * A credit count with en-US grouping ("50,000"), whatever the browser locale: the app copy is
+ * English, and a bare toLocaleString() put "50.000" beside "9,951 credits" for a Spanish browser.
+ */
+export const formatCreditAmount = (credits: number): string => credits.toLocaleString('en-US');
+
+/** Screen-reader name for a one-time credit pack button, shared by both credits dialogs. */
+export const purchaseCreditsAriaLabel = (credits: number, priceDollars: number): string =>
+  `Purchase ${formatCreditAmount(credits)} credits for $${priceDollars}`;
+
 // Below this, `compact` still shows every digit: abbreviating 9,903 to "9.9K" hid single-answer spends.
 const COMPACT_FROM = 100_000;
 

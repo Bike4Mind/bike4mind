@@ -583,6 +583,8 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     images: { type: [String], required: false },
     videos: { type: [String], required: false },
     videoJobIds: { type: [String], default: undefined },
+    // Agent-mode video clips claimed by this run; the per-run cap's counter (see claimAgentVideoClip).
+    agentVideoClipsClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -850,7 +852,7 @@ export type StaleCallbackDispatchCriteria = {
   dispatchedBefore: Date;
   /** Claims made before this are too old to re-send: the caller has stopped waiting for them. */
   dispatchedAfter: Date;
-  /** Reclaims allowed per arm; a callback that has used them all is left for a human. */
+  /** Reclaims allowed per arm; a callback that has used them all is failed by failExhaustedCallbacks. */
   maxRedispatches: number;
 };
 
@@ -1229,6 +1231,31 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     await this.model.updateOne({ _id: convertId(questId) }, { $addToSet: { videoJobIds: { $each: jobIds } } });
   }
 
+  /**
+   * Claim one of an agent run's `limit` video clip slots. The run's parent, its in-process subagents and its checkpoint continuations share
+   * this Quest and can claim concurrently, so the check and the increment must be one atomic update.
+   * Returns false when the cap is reached or no Quest matches.
+   */
+  async claimAgentVideoClip(questId: string, limit: number): Promise<boolean> {
+    if (limit <= 0) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: convertId(questId),
+        $or: [{ agentVideoClipsClaimed: { $exists: false } }, { agentVideoClipsClaimed: { $lt: limit } }],
+      },
+      { $inc: { agentVideoClipsClaimed: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Give back a slot from claimAgentVideoClip whose call started no new clip. */
+  async releaseAgentVideoClip(questId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: convertId(questId), agentVideoClipsClaimed: { $gt: 0 } },
+      { $inc: { agentVideoClipsClaimed: -1 } }
+    );
+  }
+
   // Cheap existence check (Mongo `exists` returns just the `_id` of the first
   // match). The voice proxy uses this to decide whether to emit an ElevenLabs
   // buffer chunk on the very first turn of a fresh session (no prior quests).
@@ -1429,6 +1456,57 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return docs.map(doc => doc._id.toString());
   }
 
+  /**
+   * Atomically move exhausted dispatched callbacks to `failed`. Two disjoint cases:
+   * - Redispatch limit reached: stale but still within the horizon, retries used up.
+   * - Horizon passed: last claim older than the maximum re-send window regardless of retry count.
+   *   A reclaim resets `dispatchedAt`, so in steady state this only catches pre-horizon backlog or
+   *   callbacks stranded while the sweep was down; exhausted retries land in the first case.
+   * Concurrent sweeps are safe: each updateMany is gated on `state: 'dispatched'`, so
+   * only one writer flips any given callback and the second finds nothing to modify.
+   * Returns counts by failure reason for separate metrics.
+   */
+  async failExhaustedCallbacks(opts: {
+    staleBefore: Date;
+    horizonBefore: Date;
+    maxRedispatches: number;
+  }): Promise<{ redispatchLimitReached: number; horizonPassed: number }> {
+    const now = new Date();
+    const [limitResult, horizonResult] = await Promise.all([
+      this.model.updateMany(
+        {
+          'callback.state': 'dispatched',
+          'callback.dispatchedAt': { $lt: opts.staleBefore, $gte: opts.horizonBefore },
+          'callback.redispatchCount': { $gte: opts.maxRedispatches },
+        },
+        {
+          $set: {
+            'callback.state': 'failed',
+            'callback.completedAt': now,
+            'callback.lastError': 'redispatch limit reached',
+          },
+        }
+      ),
+      this.model.updateMany(
+        {
+          'callback.state': 'dispatched',
+          'callback.dispatchedAt': { $lt: opts.horizonBefore },
+        },
+        {
+          $set: {
+            'callback.state': 'failed',
+            'callback.completedAt': now,
+            'callback.lastError': 'redispatch horizon passed',
+          },
+        }
+      ),
+    ]);
+    return {
+      redispatchLimitReached: limitResult.modifiedCount,
+      horizonPassed: horizonResult.modifiedCount,
+    };
+  }
+
   // Returns the most recent quest in the session that has no reply yet, or
   // null if every quest already has one (or none exist).
   async findLatestUnrepliedMessage(sessionId: string) {
@@ -1537,8 +1615,8 @@ function initializeQuestModel() {
       { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
     );
 
-    // Serves findStaleDispatchedCallbacks (questTimeoutSweep backstop). Partial, so it holds only
-    // the in-flight callbacks. Pre-built by 20260921235990_ensure-quest-callback-dispatched-index.
+    // Serves findStaleDispatchedCallbacks and failExhaustedCallbacks (questTimeoutSweep backstop).
+    // Partial, so it holds only the in-flight callbacks. Pre-built by 20260921235990_ensure-quest-callback-dispatched-index.
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, 'callback.dispatchedAt': 1 },
       { name: 'callbackState_dispatchedAt', partialFilterExpression: { 'callback.state': 'dispatched' } }

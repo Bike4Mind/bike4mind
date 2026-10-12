@@ -32,7 +32,7 @@ const createInviteSchema = z.object({
   permissions: z.array(z.enum(Permission)),
   recipients: z.string().array().optional(),
   description: z.string().optional(),
-  expiresAt: z.date().optional().prefault(defaultExpiration()),
+  expiresAt: z.date().prefault(defaultExpiration()),
   // No prefault here: the default depends on recipients.length (below), which this schema
   // cannot see. No caller currently sets this explicitly.
   available: z.number().optional(),

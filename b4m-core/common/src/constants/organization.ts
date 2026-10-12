@@ -115,3 +115,33 @@ export const isOrgOwnerOrCurrentAdmin = (
  * `findById`. The budget routes enforce it; the client uses it only to decide which controls to show.
  */
 export const canManageMemberCreditBudgets = isOrgOwnerOrCurrentAdmin;
+
+/** The actor slice an administration decision needs - resolved from auth, never from the body. */
+export type OrgAuthorityActor = { id: string; isAdmin?: boolean | null };
+
+/** The organization slice an administration decision needs. */
+export type AdministrableOrg = { userId: string; managerId?: string | null };
+
+/**
+ * May this actor administer the organization's roster - remove members, or add them through the
+ * direct `addMember` path? Billing owner, appointed manager, or platform admin.
+ *
+ * Deliberately NARROWER than `shareable.findAccessibleById`, which is a MEMBERSHIP ACL: it admits
+ * anyone in `users[]` holding `read`, and `addMember` only ever grants `[Permission.read]`, so
+ * every ordinary member satisfied it and could therefore enroll arbitrary accounts.
+ *
+ * NOT the same set as `isOrgOwnerOrCurrentAdmin`: a manager passes this but not that, an appointed
+ * admin passes that but not this. Invites (and cancelling them) gate on that one, behind an
+ * `isOrgMember` check, so the client must ask each control's own server predicate rather than
+ * one "can manage" flag.
+ *
+ * `userId` and `managerId` are declared `String` on the organization schema, so a strict
+ * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
+ * (b4m-core/services), the addUser route (apps/client/pages/api/organizations/[id]/addUser.ts),
+ * `canManageOrg` in apps/client/server/utils/orgAccess.ts, and the client's Members tab
+ * (components/organizations/Member.tsx).
+ */
+export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
+  if (actor.isAdmin) return true;
+  return organization.userId === actor.id || (!!organization.managerId && organization.managerId === actor.id);
+}

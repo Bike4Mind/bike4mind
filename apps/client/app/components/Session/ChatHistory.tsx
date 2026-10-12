@@ -29,6 +29,9 @@ const VirtuosoScroller = React.forwardRef<HTMLDivElement, React.HTMLAttributes<H
       <Box
         {...props}
         ref={ref}
+        // A named region, not a live log: ReplyAnnouncer reads each reply once it completes.
+        role="region"
+        aria-label="Conversation"
         // Match the sidebar's scrollbar exactly (thin, same thumb/track).
         sx={scrollbarStyles}
       />

@@ -227,6 +227,7 @@ export enum ChatModels {
   CLAUDE_FABLE_5_1_BEDROCK = 'global.anthropic.claude-fable-5-1',
   CLAUDE_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-5',
   CLAUDE_5_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-5-5',
+  CLAUDE_5_5_HAIKU_BEDROCK = 'global.anthropic.claude-haiku-5-5',
 
   // Anthropic hosted Anthropic models
   CLAUDE_3_OPUS = 'claude-3-opus-20240229',
@@ -247,6 +248,7 @@ export enum ChatModels {
   CLAUDE_FABLE_5 = 'claude-fable-5',
   CLAUDE_5_OPUS = 'claude-opus-5',
   CLAUDE_5_5_OPUS = 'claude-opus-5-5',
+  CLAUDE_5_5_HAIKU = 'claude-haiku-5-5',
 
   JURASSIC2_ULTRA = 'ai21.j2-ultra-v1',
   JURASSIC2_MID = 'ai21.j2-mid-v1',
@@ -469,6 +471,9 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_5_OPUS,
   ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+  // Haiku 5.5 accepts only temperature=1 and top_p=0.99 and rejects top_k; omitting all three is the documented path
+  ChatModels.CLAUDE_5_5_HAIKU,
+  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
   // Moonshot pins temperature and top_p on every current Kimi and documents them
   // as unmodifiable: the chat API reference states only the moonshot-v1 family
   // accepts them, and the thinking guide says outright that for kimi-k2.7-code
@@ -500,7 +505,8 @@ const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fa
  * Whether the model accepts forced tool use. Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
  * return 400 for `tool_choice` `{type:'any'}` and `{type:'tool'}` (Messages, count_tokens and Batches
  * alike); `auto` and `none` still work. Adapters route json_schema through `output_config.format` and
- * downgrade a caller's required/named choice to `auto` + `strict` for these models.
+ * downgrade a caller's required/named choice to `auto` + `strict` for these models. Haiku 5.5 is
+ * deliberately absent: it accepts forced `any`/`tool` (its response just carries no thinking block).
  */
 export function supportsForcedToolChoice(modelId: string): boolean {
   return !NO_FORCED_TOOL_CHOICE_FAMILY.test(modelId);

@@ -1,18 +1,18 @@
-import {
-  ArtifactPayload,
-  ArtifactOperation,
-  ArtifactType,
-  mapMimeTypeToArtifactType,
-  matchArtifactBlocks,
-  scanArtifactOpenTag,
-} from '@bike4mind/common';
+import { ArtifactPayload, ArtifactType, scanArtifactOpenTag } from '@bike4mind/common';
 import { detectElidedContent } from '@bike4mind/utils/artifactElision';
 import {
-  stripHtmlComments,
-  hasFullHtmlDocument,
-  hasCompleteSvg,
+  type ArtifactParseResult,
+  type ParsedArtifact,
+  extractArtifactBlocks,
+  extractComponentName,
   extractHTMLTitle,
+  hasCompleteSvg,
+  hasFullHtmlDocument,
+  isSvgGraphicallyEmpty,
   maskToolOutputRegions,
+  promoteBareHtmlDocument,
+  promoteToolCallJsonArtifact,
+  sanitizeHTMLTitle,
 } from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
 import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
@@ -24,44 +24,10 @@ import {
   replaceLogFormatResultObjects,
 } from './toolOutputResultScan';
 
-// Value is anchored to its own quote kind so a double-quoted value can contain
-// apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
-// body, group 3 the single-quoted one; exactly one matches.
-const ATTRIBUTE_REGEX = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
-
-export interface ParsedArtifact {
-  fullMatch: string;
-  identifier?: string;
-  type: ArtifactType;
-  language?: string;
-  title: string;
-  content: string;
-  operation: ArtifactOperation;
-  startIndex: number;
-  endIndex: number;
-}
-
-export interface ArtifactParseResult {
-  artifacts: ParsedArtifact[];
-  cleanedContent: string; // Content with artifact tags removed
-}
-
-/**
- * A "graphically empty" SVG has no drawable content - only the root <svg> wrapper
- * around whitespace and/or comments. Small local models sometimes emit such a stub
- * as a placeholder (e.g. `<svg ...><!-- fish illustration goes here --></svg>`),
- * which would otherwise render/persist as a blank canvas. Deliberately conservative:
- * only whitespace/comments count as empty, so it never drops an SVG with a real
- * element (it does miss rarer stubs like an empty `<g></g>`, which is acceptable).
- * Exported for tests.
- */
-export function isSvgGraphicallyEmpty(svg: string): boolean {
-  const withoutComments = stripHtmlComments(svg);
-  // Self-closing root, e.g. `<svg .../>`, has no children.
-  if (/^\s*<svg\b[^>]*\/>\s*$/i.test(withoutComments)) return true;
-  const inner = withoutComments.replace(/^\s*<svg\b[^>]*>/i, '').replace(/<\/svg\s*>\s*$/i, '');
-  return inner.trim().length === 0;
-}
+// Block extraction, the shared types and the shared promoters live in core; this module keeps
+// the render-specific stripping and the client-only convert passes.
+export type { ArtifactParseResult, ParsedArtifact };
+export { isSvgGraphicallyEmpty };
 
 /**
  * Parses Claude-style artifact syntax from text content
@@ -75,64 +41,10 @@ export function parseArtifacts(
   content: string,
   options?: { rechartsDisplayMode?: 'inline' | 'artifact' }
 ): ArtifactParseResult {
-  const artifacts: ParsedArtifact[] = [];
+  // Unlike the server's parseArtifacts, an untyped or unknown-type block still renders: it
+  // resolves through its `language` attribute, then falls back to 'code'.
+  const artifacts = extractArtifactBlocks(content, { typeFallback: 'language-then-code' });
   let cleanedContent = content;
-
-  for (const block of matchArtifactBlocks(content)) {
-    const { index: startIndex, fullMatch, attrs: attributesString, body: artifactContent } = block;
-    const endIndex = startIndex + fullMatch.length;
-
-    // Parse attributes
-    const attributes: Record<string, string> = {};
-    let attrMatch;
-    ATTRIBUTE_REGEX.lastIndex = 0;
-
-    while ((attrMatch = ATTRIBUTE_REGEX.exec(attributesString)) !== null) {
-      const [, key, doubleQuoted, singleQuoted] = attrMatch;
-      attributes[key] = doubleQuoted ?? singleQuoted;
-    }
-
-    // Determine artifact type and operation
-    const mimeType = attributes.type || '';
-    const identifier = attributes.identifier;
-    const title = attributes.title || 'Untitled Artifact';
-    const language = attributes.language;
-
-    // Map MIME type to our artifact type, with language fallback
-    let artifactType = mapMimeTypeToArtifactType(mimeType);
-
-    // If MIME type mapping failed, try language attribute fallback
-    if (!artifactType && language) {
-      artifactType = mapLanguageToArtifactType(language);
-      if (artifactType) {
-        console.info(`[ArtifactParser] Used language fallback: "${language}" → "${artifactType}"`);
-      }
-    }
-
-    // If still no type found, fallback to generic 'code' artifact to prevent content loss
-    if (!artifactType) {
-      artifactType = 'code';
-      console.info(
-        `[ArtifactParser] No type or language specified, defaulting to 'code' artifact: type="${mimeType}", language="${language}"`
-      );
-    }
-
-    // Determine operation (create for new, update for existing with same identifier)
-    const operation: ArtifactOperation =
-      identifier && artifacts.some(a => a.identifier === identifier) ? 'update' : 'create';
-
-    artifacts.push({
-      fullMatch,
-      identifier,
-      type: artifactType,
-      language: language || 'text',
-      title,
-      content: artifactContent.trim(),
-      operation,
-      startIndex,
-      endIndex,
-    });
-  }
 
   // Remove artifact tags from content (in reverse order to maintain indices)
   // For recharts, handle based on display mode preference
@@ -231,71 +143,6 @@ export function parseArtifactsWithFallback(
     artifacts: [...parseResult.artifacts, ...converted.artifacts],
     cleanedContent: converted.cleanedContent,
   };
-}
-
-// mapMimeTypeToArtifactType is the single source of truth in @bike4mind/common.
-
-/**
- * Maps language attribute to artifact type
- * Used as a fallback when MIME type mapping returns null
- * Supports common language identifiers from various AI providers
- */
-function mapLanguageToArtifactType(language: string): ArtifactType | null {
-  const normalized = language.toLowerCase().trim();
-
-  // React/JSX
-  if (normalized === 'jsx' || normalized === 'tsx' || normalized === 'react') {
-    return 'react';
-  }
-
-  // JavaScript/TypeScript
-  if (normalized === 'javascript' || normalized === 'js' || normalized === 'typescript' || normalized === 'ts') {
-    return 'code';
-  }
-
-  // Python
-  if (normalized === 'python' || normalized === 'py') {
-    return 'python';
-  }
-
-  // Other programming languages
-  if (
-    normalized === 'java' ||
-    normalized === 'cpp' ||
-    normalized === 'c++' ||
-    normalized === 'c' ||
-    normalized === 'rust' ||
-    normalized === 'go' ||
-    normalized === 'golang' ||
-    normalized === 'ruby' ||
-    normalized === 'rb' ||
-    normalized === 'php' ||
-    normalized === 'swift' ||
-    normalized === 'kotlin' ||
-    normalized === 'csharp' ||
-    normalized === 'cs' ||
-    normalized === 'c#'
-  ) {
-    return 'code';
-  }
-
-  // Markup languages
-  if (normalized === 'html' || normalized === 'xhtml') {
-    return 'html';
-  }
-  if (normalized === 'svg') {
-    return 'svg';
-  }
-  if (normalized === 'markdown' || normalized === 'md') {
-    return 'code';
-  }
-
-  // Specialized visualizations
-  if (normalized === 'mermaid') {
-    return 'mermaid';
-  }
-
-  return null;
 }
 
 /**
@@ -644,7 +491,7 @@ ${stripArtifactTagsFromRawBody(String(toolOutput.content))}
 
 // Search-window bound for the five React indicator predicates below. Each is linear on
 // its own, as are the other regex predicates here (the html-fragment tag check, the
-// python gates, looksLikeHtml, promoteBareHtmlDocument's open/close scans), which stay
+// python gates, and core's looksLikeHtml and promoteBareHtmlDocument scans), which stay
 // uncapped; this only keeps five passes over the same fence body from adding up. It is
 // not a body-length cap: an indicator inside the window still promotes the full,
 // untruncated body, and an indicator past the window leaves the fence a plain code block.
@@ -728,8 +575,8 @@ ${codeContent.trim()}
   // The two-tier split is the original behavior; what changed is that two adjacent `html`
   // fences are now two artifacts, where the old regex merged them into one. A body carrying
   // a CR, U+2028 or U+2029 is also accepted now, where the old `.`/`\n`-built pattern could
-  // not reach across one - core's html fence body is the same [\s\S] class, so the twins
-  // agree on which bodies promote.
+  // not reach across one - the html fence in core's convertCodeBlocksToArtifacts uses the
+  // same [\s\S] body class, so client and core agree on which bodies promote.
   const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
@@ -816,183 +663,6 @@ ${trimmedCode}
 }
 
 /**
- * Promotes an artifact that a small local model emitted as a hallucinated tool
- * call instead of an <artifact> tag or ```html fence. Such models invent a
- * builder tool (e.g. build_html, which is not a real tool anywhere) and return
- * its call as JSON: a name plus an arguments object carrying the HTML as a
- * string. The call never executes, so the raw JSON would otherwise render as a
- * code block. Recognized strictly (tool-call shape AND an HTML-string argument)
- * so ordinary JSON is left alone.
- *
- * NOTE: this runs inside convertCodeBlocksToArtifacts, which EVERY backend (cloud
- * included) flows through, not just local/Ollama. The strict recognition - an
- * invented builder-tool name AND an HTML-string argument - is what keeps a cloud
- * model that merely SHOWS such tool-call JSON as an example from having it
- * swallowed and re-rendered as an artifact.
- *
- * Recognition must stay identical to the twin in b4m-core/utils/src/artifactParser.ts.
- * Only the server copy marks tool echoes; this one skips spans it already marked.
- */
-function promoteToolCallJsonArtifact(content: string, holds: (value: string) => boolean): string {
-  // Fence labels a model uses for a tool call; a ```html fence is handled above.
-  // The negative lookahead stops ```tool matching inside ```tool_calls etc.
-  const fenceRegex = /```(?:json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
-  const afterFences = content.replace(fenceRegex, (match, body) =>
-    holds(body) ? match : (toolCallJsonToArtifact(body) ?? match)
-  );
-  if (afterFences !== content) return afterFences;
-
-  // A model may also return the bare object as its entire reply (no fence).
-  const trimmed = content.trim();
-  if (trimmed.startsWith('{') && trimmed.endsWith('}') && !holds(trimmed)) {
-    const artifact = toolCallJsonToArtifact(trimmed);
-    if (artifact) return content.replace(trimmed, () => artifact);
-  }
-  return content;
-}
-
-/**
- * Parse one candidate as a tool call whose arguments carry an HTML string and
- * return the equivalent <artifact> markup, or null if it is not that shape.
- * Accepts the name/arguments key aliases small models improvise.
- */
-function toolCallJsonToArtifact(candidate: string): string | null {
-  const trimmed = candidate.trim();
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const obj = parsed as Record<string, unknown>;
-
-  let name: unknown;
-  let args: unknown;
-  const fn = obj.function;
-  if (fn && typeof fn === 'object') {
-    name = (fn as Record<string, unknown>).name;
-    args = (fn as Record<string, unknown>).arguments;
-  } else {
-    name = obj.name ?? obj.function ?? obj.tool ?? obj.tool_name;
-  }
-  if (args === undefined) args = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input;
-  // Promote only an invented artifact-builder tool name (build_html, create_webpage,
-  // render_page, generate_ui...). A real tool whose args merely include HTML, e.g.
-  // send_html_email, must be left alone. Anchored so the leading verb is the tool's
-  // purpose, not an "html" substring buried mid-name.
-  if (
-    typeof name !== 'string' ||
-    !/^(build|create|render|make|generate|write)[-_]?(html|artifact|page|webpage|website|ui)/i.test(name) ||
-    !args ||
-    typeof args !== 'object'
-  )
-    return null;
-
-  const html = Object.values(args as Record<string, unknown>).find(
-    (v): v is string => typeof v === 'string' && looksLikeHtml(v)
-  );
-  if (!html) return null;
-
-  const title = sanitizeHTMLTitle(extractHTMLTitle(html), 'HTML Page');
-  const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
-  return `<artifact identifier="${identifier}" type="text/html" title="${title}">
-${html.trim()}
-</artifact>`;
-}
-
-/** Full-document marker or at least one HTML element tag. */
-function looksLikeHtml(value: string): boolean {
-  return /<!DOCTYPE\s+html/i.test(value) || /<[a-z][a-z0-9]*[\s/>]/i.test(value);
-}
-
-/**
- * Promotes a bare <!DOCTYPE html>...</html> (or <html>...</html>) document emitted as
- * raw markup with no code fence and no <artifact> wrapper. Neither parseArtifacts
- * (needs <artifact> tags) nor the fenced detectors catch this shape, so it would
- * otherwise render as raw HTML in the chat. Runs last so the fence/artifact guards
- * see all earlier conversions.
- */
-function promoteBareHtmlDocument(content: string, holds: (value: string) => boolean): string {
-  // Two forward cursors instead of one <html>...</html> pattern, and guard counts that
-  // accumulate over the gap since the previous document instead of re-reading the whole
-  // prefix: both of the old shapes re-scanned from the start of the message on every
-  // candidate, so this pass cost time quadratic in the message length.
-  // Detection must stay identical to the twin in b4m-core/utils/src/artifactParser.ts;
-  // only the server copy marks tool echoes.
-  const openRegex = /<!DOCTYPE\s+html|<html/gi;
-  const closeRegex = /<\/html\s*>/gi;
-  let out = '';
-  let copiedTo = 0;
-  let promoted = false;
-  let scannedTo = 0;
-  let fences = 0;
-  let artifactOpens = 0;
-  let artifactCloses = 0;
-  let open: RegExpExecArray | null;
-  while ((open = openRegex.exec(content)) !== null) {
-    closeRegex.lastIndex = open.index + open[0].length;
-    const close = closeRegex.exec(content);
-    // Closers only move forward, so a later opening cannot have one either.
-    if (!close) break;
-    const start = open.index;
-    const end = close.index + close[0].length;
-    openRegex.lastIndex = end;
-
-    const gap = content.slice(scannedTo, start);
-    fences += (gap.match(/```/g) || []).length;
-    artifactOpens += (gap.match(/<artifact\b/gi) || []).length;
-    artifactCloses += (gap.match(/<\/artifact>/gi) || []).length;
-    scannedTo = start;
-
-    // Skip a document sitting inside a code fence (odd number of ``` before it) or
-    // inside an already-open <artifact> tag.
-    if (fences % 2 === 1 || artifactOpens > artifactCloses) continue;
-
-    const doc = content.slice(start, end);
-    if (holds(doc)) continue;
-    const title = sanitizeHTMLTitle(extractHTMLTitle(doc), 'HTML Page');
-    const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
-    out += content.slice(copiedTo, start);
-    out += `<artifact identifier="${identifier}" type="text/html" title="${title}">
-${doc.trim()}
-</artifact>`;
-    copiedTo = end;
-    promoted = true;
-  }
-  return promoted ? out + content.slice(copiedTo) : content;
-}
-
-/**
- * Extracts component name from React code
- */
-function extractComponentName(code: string): string | null {
-  // Try to find function component name
-  const functionMatch = code.match(/function\s+([A-Z][a-zA-Z0-9]*)/);
-  if (functionMatch) return functionMatch[1];
-
-  // Try to find const component name
-  const constMatch = code.match(/const\s+([A-Z][a-zA-Z0-9]*)\s*=/);
-  if (constMatch) return constMatch[1];
-
-  // Try to find class component name
-  const classMatch = code.match(/class\s+([A-Z][a-zA-Z0-9]*)/);
-  if (classMatch) return classMatch[1];
-
-  return null;
-}
-
-// Strip <, >, and " before interpolating a document-controlled title into title="...".
-// Some artifact attribute parsers are not quote-aware, so any of these characters would
-// corrupt or prematurely close the tag. Falls back to `fallback` when stripping empties
-// the string (e.g. a title that was only quotes).
-function sanitizeHTMLTitle(raw: string | null, fallback: string): string {
-  const sanitized = (raw ?? '').replace(/[<>"]/g, '').trim();
-  return sanitized || fallback;
-}
-
-/**
  * Extracts a title from Python code
  * Looks for docstrings, main function names, or class definitions
  */
@@ -1049,7 +719,7 @@ export function generateCompleteArtifactId(type: string, identifier: string, tim
 /**
  * Returns true when `tail` (the substring from `<artifact` onward) contains
  * a complete opening tag (i.e. the closing `>` arrived before the stream was
- * cut). Used by the truncated-artifact detector in PromptReplies to decide
+ * cut). Used by repairTruncatedArtifact (./replyTruncation) to decide
  * whether to best-effort close the tag or drop the partial.
  */
 export function hasCompleteOpeningTag(tail: string): boolean {

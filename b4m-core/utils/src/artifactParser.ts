@@ -69,22 +69,32 @@ export function isSvgGraphicallyEmpty(svg: string): boolean {
 }
 
 /**
- * Parses Claude-style artifact syntax from text content
- *
- * Example syntax:
- * <artifact identifier="todo-app" type="application/vnd.ant.react" title="Todo List App">
- * // React component code here
- * </artifact>
+ * How extractArtifactBlocks resolves a block whose `type` attribute is missing or unknown.
+ *  - 'none': drop the block. The server persistence path (parseArtifacts below) uses this,
+ *    so only typed blocks reach promptMeta.artifacts.
+ *  - 'language-then-code': try the `language` attribute, then fall back to 'code', and
+ *    default `language` to 'text'. The client render path uses this so no block is lost.
  */
-export function parseArtifacts(content: string): ArtifactParseResult {
+export type ArtifactTypeFallback = 'none' | 'language-then-code';
+
+export interface ExtractArtifactBlocksOptions {
+  typeFallback?: ArtifactTypeFallback;
+}
+
+/**
+ * Every `<artifact ...>...</artifact>` block in `content`, in source order, with its
+ * attributes resolved and its position kept so callers can strip or replace the tag.
+ * Shared by this module's parseArtifacts and the client's (apps/client/app/utils/artifactParser.ts),
+ * which differ only in `typeFallback` and in what they do with the tags afterwards.
+ */
+export function extractArtifactBlocks(content: string, options: ExtractArtifactBlocksOptions = {}): ParsedArtifact[] {
+  const fallback = options.typeFallback ?? 'none';
   const artifacts: ParsedArtifact[] = [];
-  let cleanedContent = content;
 
   for (const block of matchArtifactBlocks(content)) {
     const { index: startIndex, fullMatch, attrs: attributesString, body: artifactContent } = block;
     const endIndex = startIndex + fullMatch.length;
 
-    // Parse attributes
     const attributes: Record<string, string> = {};
     let attrMatch;
     ATTRIBUTE_REGEX.lastIndex = 0;
@@ -94,33 +104,49 @@ export function parseArtifacts(content: string): ArtifactParseResult {
       attributes[key] = doubleQuoted ?? singleQuoted;
     }
 
-    // Determine artifact type and operation
-    const mimeType = attributes.type || '';
     const identifier = attributes.identifier;
     const title = attributes.title || 'Untitled Artifact';
-    const language = attributes.language;
+    let language = attributes.language;
 
-    // Map MIME type to our artifact type
-    const artifactType = mapMimeTypeToArtifactType(mimeType);
+    let artifactType = mapMimeTypeToArtifactType(attributes.type || '');
+    if (fallback === 'language-then-code') {
+      if (!artifactType && language) artifactType = mapLanguageToArtifactType(language);
+      if (!artifactType) artifactType = 'code';
+      language = language || 'text';
+    }
+    if (!artifactType) continue;
 
-    // Determine operation (create for new, update for existing with same identifier)
+    // An identifier seen on an earlier kept block makes this one an update.
     const operation: ArtifactOperation =
       identifier && artifacts.some(a => a.identifier === identifier) ? 'update' : 'create';
 
-    if (artifactType) {
-      artifacts.push({
-        fullMatch,
-        identifier,
-        type: artifactType,
-        language,
-        title,
-        content: artifactContent.trim(),
-        operation,
-        startIndex,
-        endIndex,
-      });
-    }
+    artifacts.push({
+      fullMatch,
+      identifier,
+      type: artifactType,
+      language,
+      title,
+      content: artifactContent.trim(),
+      operation,
+      startIndex,
+      endIndex,
+    });
   }
+
+  return artifacts;
+}
+
+/**
+ * Parses Claude-style artifact syntax from text content
+ *
+ * Example syntax:
+ * <artifact identifier="todo-app" type="application/vnd.ant.react" title="Todo List App">
+ * // React component code here
+ * </artifact>
+ */
+export function parseArtifacts(content: string): ArtifactParseResult {
+  const artifacts = extractArtifactBlocks(content);
+  let cleanedContent = content;
 
   // Remove artifact tags from content (in reverse order to maintain indices)
   artifacts
@@ -138,6 +164,68 @@ export function parseArtifacts(content: string): ArtifactParseResult {
 }
 
 // mapMimeTypeToArtifactType is the single source of truth in @bike4mind/common.
+
+/**
+ * Maps a `language` attribute to an artifact type, for extractArtifactBlocks'
+ * 'language-then-code' fallback when the MIME type maps to nothing.
+ */
+export function mapLanguageToArtifactType(language: string): ArtifactType | null {
+  const normalized = language.toLowerCase().trim();
+
+  // React/JSX
+  if (normalized === 'jsx' || normalized === 'tsx' || normalized === 'react') {
+    return 'react';
+  }
+
+  // JavaScript/TypeScript
+  if (normalized === 'javascript' || normalized === 'js' || normalized === 'typescript' || normalized === 'ts') {
+    return 'code';
+  }
+
+  // Python
+  if (normalized === 'python' || normalized === 'py') {
+    return 'python';
+  }
+
+  // Other programming languages
+  if (
+    normalized === 'java' ||
+    normalized === 'cpp' ||
+    normalized === 'c++' ||
+    normalized === 'c' ||
+    normalized === 'rust' ||
+    normalized === 'go' ||
+    normalized === 'golang' ||
+    normalized === 'ruby' ||
+    normalized === 'rb' ||
+    normalized === 'php' ||
+    normalized === 'swift' ||
+    normalized === 'kotlin' ||
+    normalized === 'csharp' ||
+    normalized === 'cs' ||
+    normalized === 'c#'
+  ) {
+    return 'code';
+  }
+
+  // Markup languages
+  if (normalized === 'html' || normalized === 'xhtml') {
+    return 'html';
+  }
+  if (normalized === 'svg') {
+    return 'svg';
+  }
+  if (normalized === 'markdown' || normalized === 'md') {
+    return 'code';
+  }
+
+  // Specialized visualizations
+  if (normalized === 'mermaid') {
+    return 'mermaid';
+  }
+
+  return null;
+}
 
 // Linear anchor checks for the fenced-code detectors below. Each detector used to
 // encode a content requirement inside a `(?:.*\n)*?ANCHOR(?:\n.*)*?` regex that
@@ -577,15 +665,28 @@ ${codeContent.trim()}
     }
   });
 
-  content = promoteToolCallJsonArtifact(content, echoFence, echoOnly, holds);
+  content = promoteToolCallJsonArtifact(content, holds, { fence: echoFence, only: echoOnly });
 
-  content = promoteBareHtmlDocument(content, echoFence, echoOnly, holds);
+  content = promoteBareHtmlDocument(content, holds, { fence: echoFence, only: echoOnly });
 
   return mask.restore(content);
 }
 
 /** Returns the protected marked fence when the span is a tool echo, else null. */
-type EchoFence = (lang: string, body: string, whole: string, start: number, end: number) => string | null;
+export type EchoFence = (lang: string, body: string, whole: string, start: number, end: number) => string | null;
+
+/**
+ * Tool-echo handling for the promoters below. Only this module's convert pass passes one;
+ * the client calls them without it, since it never sees tool output and relies on the
+ * fences marked here.
+ */
+export interface EchoMarking {
+  fence: EchoFence;
+  /** Mark echoes but promote nothing else (markToolEchoes). */
+  only: boolean;
+}
+
+const NO_ECHO: EchoMarking = { fence: () => null, only: false };
 
 /**
  * Promotes an artifact that a small local model emitted as a hallucinated tool
@@ -602,16 +703,15 @@ type EchoFence = (lang: string, body: string, whole: string, start: number, end:
  * model that merely SHOWS such tool-call JSON as an example from having it
  * swallowed and re-rendered as an artifact.
  *
- * Recognition must stay identical to the twin in apps/client/app/utils/artifactParser.ts.
- * Only this copy marks tool echoes; the client never sees tool output and relies on the
- * fences marked here.
+ * Also called by the client's convertCodeBlocksToArtifacts (apps/client/app/utils/artifactParser.ts),
+ * without `echo`.
  */
-function promoteToolCallJsonArtifact(
+export function promoteToolCallJsonArtifact(
   content: string,
-  echoFence: EchoFence,
-  echoOnly: boolean,
-  holds: (value: string) => boolean
+  holds: (value: string) => boolean,
+  echo: EchoMarking = NO_ECHO
 ): string {
+  const { fence: echoFence, only: echoOnly } = echo;
   // Fence labels a model uses for a tool call; a ```html fence is handled above.
   // The negative lookahead stops ```tool matching inside ```tool_calls etc.
   const fenceRegex = /```(json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
@@ -700,20 +800,19 @@ function looksLikeHtml(value: string): boolean {
  * raw markup with no code fence and no <artifact> wrapper. Neither parseArtifacts
  * (needs <artifact> tags) nor the fenced detectors catch this shape, so it would
  * otherwise render as raw HTML in the chat (parser gap B). Runs last so the
- * fence/artifact guards see all earlier conversions.
+ * fence/artifact guards see all earlier conversions. Also called by the client's
+ * convertCodeBlocksToArtifacts, without `echo`.
  */
-function promoteBareHtmlDocument(
+export function promoteBareHtmlDocument(
   content: string,
-  echoFence: EchoFence,
-  echoOnly: boolean,
-  holds: (value: string) => boolean
+  holds: (value: string) => boolean,
+  echo: EchoMarking = NO_ECHO
 ): string {
+  const { fence: echoFence, only: echoOnly } = echo;
   // Two forward cursors instead of one <html>...</html> pattern, and guard counts that
   // accumulate over the gap since the previous document instead of re-reading the whole
   // prefix: both of the old shapes re-scanned from the start of the message on every
   // candidate, so this pass cost time quadratic in the message length.
-  // Detection must stay identical to the twin in apps/client/app/utils/artifactParser.ts;
-  // only this copy marks tool echoes.
   const openRegex = /<!DOCTYPE\s+html|<html/gi;
   const closeRegex = /<\/html\s*>/gi;
   let out = '';
@@ -765,7 +864,7 @@ ${doc.trim()}
 /**
  * Extracts component name from React code
  */
-function extractComponentName(code: string): string | null {
+export function extractComponentName(code: string): string | null {
   // Try to find function component name
   const functionMatch = code.match(/function\s+([A-Z][a-zA-Z0-9]*)/);
   if (functionMatch) return functionMatch[1];
@@ -809,7 +908,7 @@ function nextMatchIndex(re: RegExp, text: string, from: number): number {
 // Some artifact attribute parsers are not quote-aware, so any of these characters would
 // corrupt or prematurely close the tag. Falls back to `fallback` when stripping empties
 // the string (e.g. a title that was only quotes).
-function sanitizeHTMLTitle(raw: string | null, fallback: string): string {
+export function sanitizeHTMLTitle(raw: string | null, fallback: string): string {
   const sanitized = (raw ?? '').replace(/[<>"]/g, '').trim();
   return sanitized || fallback;
 }

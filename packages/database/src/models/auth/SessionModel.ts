@@ -647,6 +647,43 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     });
   }
 
+  async findStaleVoiceHolds(startedBefore: Date, limit: number) {
+    const sessions = await this.sessionModel
+      .find(
+        { voiceSessionStartedAt: { $lt: startedBefore }, voiceReservedCredits: { $gt: 0 } },
+        { userId: 1, voiceReservedCredits: 1, voiceSessionStartedAt: 1 }
+      )
+      .sort({ voiceSessionStartedAt: 1 })
+      .limit(limit)
+      .lean();
+    return sessions.map(s => ({
+      id: s._id.toString(),
+      userId: s.userId,
+      voiceReservedCredits: s.voiceReservedCredits as number,
+      voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
+    }));
+  }
+
+  async claimVoiceHold(sessionId: string, startedAt: Date) {
+    // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
+    // end, sweep or settlement frame wins, and a newer call's hold is never touched.
+    const claimed = await this.sessionModel.findOneAndUpdate(
+      { _id: sessionId, voiceSessionStartedAt: startedAt },
+      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null } },
+      { projection: { _id: 1 } }
+    );
+    return claimed != null;
+  }
+
+  async restoreVoiceHold(sessionId: string, voiceReservedCredits: number, startedAt: Date) {
+    // Only while no newer call has started a hold on the session.
+    const { modifiedCount } = await this.sessionModel.updateOne(
+      { _id: sessionId, voiceSessionStartedAt: null },
+      { $set: { voiceReservedCredits, voiceSessionStartedAt: startedAt } }
+    );
+    return modifiedCount === 1;
+  }
+
   async findSessionIdsByUserId(userId: string) {
     const deletedAtFilter = {
       $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
@@ -813,6 +850,12 @@ SessionSchema.index(
 
 // Index for countActiveVoiceSessionsByUserId - runs on every voice session creation
 SessionSchema.index({ userId: 1, voiceSessionStartedAt: 1 }, { sparse: true });
+// Index for findStaleVoiceHolds (the stale voice hold sweep). Partial: only sessions carrying a
+// voice marker (a reservation, or a bare marker when enforceCredits was off), so it stays tiny.
+SessionSchema.index(
+  { voiceSessionStartedAt: 1 },
+  { partialFilterExpression: { voiceSessionStartedAt: { $type: 'date' } } }
+);
 
 export const Session: ISessionModel =
   (mongoose.models[ModelName] as unknown as ISessionModel) ?? model<ISession, ISessionModel>(ModelName, SessionSchema);

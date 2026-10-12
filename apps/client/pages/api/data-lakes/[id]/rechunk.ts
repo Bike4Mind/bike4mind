@@ -16,8 +16,8 @@ import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
-import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { CONVERGENCE_ORIGIN } from '@bike4mind/common';
+import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
 import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbeddingModel';
 
 /**

@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
   loadPrefixArmCandidateLakes: vi.fn(async () => []),
   sendToQueue: vi.fn(async () => 'msg-1'),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/drive-disconnect-purge'),
+  isDriveLakePollScheduled: vi.fn(async () => false),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -68,6 +69,10 @@ vi.mock('@bike4mind/database', async importOriginal => {
     userRepository: { ...actual.userRepository, findById: h.userFindById },
   };
 });
+vi.mock('@server/integrations/google/drive/drivePollSchedule', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/integrations/google/drive/drivePollSchedule')>()),
+  isDriveLakePollScheduled: h.isDriveLakePollScheduled,
+}));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     findOtherLakeClaims: h.findOtherLakeClaims,
@@ -106,6 +111,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     h.userFindById.mockImplementation(async (id: string) => ({ id }));
     h.connMarkDisconnecting.mockResolvedValue(MARK);
     h.sendToQueue.mockResolvedValue('msg-1');
+    h.isDriveLakePollScheduled.mockResolvedValue(false);
   });
 
   it('GET returns a credential-free connection view, with how many files it ingested', async () => {
@@ -132,6 +138,65 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     });
     expect(JSON.stringify(payload)).not.toContain('SHOULD-NOT-LEAK');
     expect(h.fabFilesCountByDriveConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:lake1');
+  });
+
+  describe('GET last-synced time and sync schedule', () => {
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+    const conn = (over: Record<string, unknown> = {}) => ({
+      id: 'conn1',
+      organizationId: 'orgA',
+      driveFolderId: 'Folder123',
+      status: 'connected',
+      enabled: true,
+      ...over,
+    });
+    const getConnection = async () => {
+      const { res, json } = makeRes();
+      await run(makeReq('GET'), res);
+      return json.mock.calls[0][0].connection;
+    };
+
+    it('returns lastPolledAt as the last sync, distinct from lastUsedAt', async () => {
+      const lastPolledAt = new Date('2026-10-01T00:00:00Z');
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn({ lastPolledAt, lastUsedAt: new Date('2026-10-02T00:00:00Z') }));
+      const connection = await getConnection();
+      expect(connection.lastPolledAt).toEqual(lastPolledAt);
+      expect(connection.lastUsedAt).not.toEqual(lastPolledAt);
+    });
+
+    it('returns a null lastPolledAt for a connection no sync run has finished yet', async () => {
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn());
+      expect((await getConnection()).lastPolledAt).toBeNull();
+    });
+
+    it('reports manual sync while the poll flags are off', async () => {
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn());
+      expect((await getConnection()).syncSchedule).toEqual({ mode: 'manual' });
+    });
+
+    it.each([
+      ['connected', {}],
+      ['live syncing', { status: 'syncing', syncClaimedAt: new Date() }],
+    ])('reports the poll cadence for a %s connection', async (_label, over) => {
+      h.isDriveLakePollScheduled.mockResolvedValue(true);
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn(over));
+      expect((await getConnection()).syncSchedule).toEqual({ mode: 'automatic', intervalMs: SIX_HOURS_MS });
+    });
+
+    it.each([
+      ['needs a reconnect', { status: 'needs_reconnect' }],
+      ['has a credential error', { status: 'credential_error' }],
+      ['is disabled', { enabled: false }],
+      // Stale claim: findDueForPoll only takes 'connected', so it waits on a Re-sync forever.
+      [
+        'is stuck syncing on a stale claim',
+        { status: 'syncing', syncClaimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+      ],
+    ])('reports the automatic sync as paused when the connection %s', async (_label, over) => {
+      h.isDriveLakePollScheduled.mockResolvedValue(true);
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn(over));
+      expect((await getConnection()).syncSchedule).toEqual({ mode: 'paused' });
+    });
   });
 
   it('GET count folds in the deletable orphans the purge will remove, and excludes the kept ones', async () => {
