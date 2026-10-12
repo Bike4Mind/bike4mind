@@ -16,6 +16,7 @@ import {
   ReplyCitablesContext,
   remarkCitationMarkers,
   resolveCitationMarker,
+  shouldLinkCitationMarkers,
 } from './inlineCitations';
 
 // The marker link calls useNavigate, which needs a router context we don't set up here.
@@ -79,6 +80,20 @@ describe('citationMarkersLinkable', () => {
   });
 });
 
+describe('shouldLinkCitationMarkers', () => {
+  const linkable = [lakeCitable('a', 1), lakeCitable('b', 2)];
+
+  it('links only a completed reply whose citables are all stamped', () => {
+    expect(shouldLinkCitationMarkers(linkable, true)).toBe(true);
+    expect(shouldLinkCitationMarkers(linkable, false)).toBe(false);
+  });
+
+  it('does not link an unlinkable reply even when completed', () => {
+    expect(shouldLinkCitationMarkers([lakeCitable('a', 1), lakeCitable('tool-hit')], true)).toBe(false);
+    expect(shouldLinkCitationMarkers([], true)).toBe(false);
+  });
+});
+
 describe('resolveCitationMarker', () => {
   it('resolves [N] to citables[N-1] on a linkable turn, and nothing out of range', () => {
     const citables = [lakeCitable('a', 1), lakeCitable('b', 2)];
@@ -135,6 +150,31 @@ describe('inline citation markers in a reply', () => {
     fireEvent.click(screen.getByTestId('citation-marker-link'));
     expect(onCitationClick).toHaveBeenCalledWith(source);
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('skips navigation when the internal-click override handles the source', () => {
+    const onInternalCitationClick = vi.fn(() => true);
+    const source = lakeCitable('file-1', 1);
+    render(
+      <CitationInteractionProvider value={{ onInternalCitationClick }}>
+        <Reply content="Cited [1]." citables={[source]} />
+      </CitationInteractionProvider>
+    );
+    fireEvent.click(screen.getByTestId('citation-marker-link'));
+    expect(onInternalCitationClick).toHaveBeenCalledWith(source);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('falls through to navigation when the internal-click override declines', () => {
+    const onInternalCitationClick = vi.fn(() => false);
+    render(
+      <CitationInteractionProvider value={{ onInternalCitationClick }}>
+        <Reply content="Cited [1]." citables={[lakeCitable('file-1', 1)]} />
+      </CitationInteractionProvider>
+    );
+    fireEvent.click(screen.getByTestId('citation-marker-link'));
+    expect(onInternalCitationClick).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith({ to: '/opti', search: { mode: 'datalake', article: 'file-1' } });
   });
 
   it('links each number of a comma-listed marker and keeps the text intact', () => {
