@@ -64,7 +64,8 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {
     addVoiceBilledCredits: async (_id: string, startedAt: Date, credits: number) => {
       if (state.session.voiceSessionStartedAt?.getTime() !== startedAt.getTime()) return null;
-      const before = state.session.voiceBilledCredits ?? 0;
+      if (state.session.voiceBilledCredits === undefined) return null;
+      const before = state.session.voiceBilledCredits;
       state.session.voiceBilledCredits = before + credits;
       return before;
     },
@@ -283,6 +284,16 @@ describe('voiceSessionEnded realtime billing', () => {
 
     expect(state.session.voiceSessionStartedAt).toBeNull();
     expect(charged()).toBe(35);
+  });
+
+  it('charges a response frame against a hold without the realtime marker from the balance', async () => {
+    delete state.session.voiceBilledCredits;
+
+    await send(30, 'resp-1');
+
+    expect(state.session.voiceBilledCredits).toBeUndefined();
+    expect(state.session.voiceSessionStartedAt).not.toBeNull();
+    expect(charged()).toBe(HOLD + 30);
   });
 
   it('settles a close only once when the frame is replayed', async () => {
