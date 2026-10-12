@@ -3,8 +3,10 @@
 //
 // The body carries a machine-readable block of the advisories the auto-fix left
 // for a human, one `GHSA | package | severity | reason` line each, between
-// SKIPPED_START and SKIPPED_END. A missing block means "unknown", never "none":
-// an empty block is the only way to say nothing was skipped.
+// SKIPPED_START and SKIPPED_END. The reason is everything after the third ` | `;
+// it can itself contain `|` (a raw patched range such as `>=1.2.5 <2.0.0 || >=2.3.1`).
+// A missing block means "unknown", never "none": an empty block is the only way
+// to say nothing was skipped.
 
 import crypto from 'crypto';
 

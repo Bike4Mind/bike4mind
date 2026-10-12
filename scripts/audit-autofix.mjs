@@ -54,14 +54,42 @@ function semverLine(v) {
   return major === 0 ? `0.${minor}` : `${major}`;
 }
 
-// Why a floor cannot be applied for these installed versions, or null when it can.
-// A `name@<X: ^X` floor fixes a version only if that version is below X and on
-// X's semver line; anything else is a cross-major move or a no-op.
-function floorProblem(floor, installed) {
-  for (const v of installed) {
+// Every version of every package in a pnpm v9 lockfile's `packages:` section,
+// whose keys are `name@version` (peer suffixes live under `snapshots:`). A line
+// scan, because the audit job runs without installing a YAML parser.
+export function lockfileVersions(lockText) {
+  const versions = new Map();
+  let inPackages = false;
+  for (const line of lockText.split('\n')) {
+    if (/^\S/.test(line)) {
+      inPackages = line.startsWith('packages:');
+      continue;
+    }
+    const m = inPackages && line.match(/^ {2}'?([^'\s]+?)'?:\s*$/);
+    if (!m) continue;
+    const at = m[1].lastIndexOf('@');
+    if (at <= 0) continue;
+    const name = m[1].slice(0, at);
+    if (!versions.has(name)) versions.set(name, []);
+    versions.get(name).push(m[1].slice(at + 1));
+  }
+  return versions;
+}
+
+// Why a floor cannot be applied, or null when it can. A `name@<X: ^X` override
+// rewrites every dependent whose declared range reaches below X, not only the
+// vulnerable copies, so each installed copy below X must be on X's semver line,
+// and each vulnerable copy must be below X or the floor fixes nothing.
+function floorProblem(floor, vulnerable, installed) {
+  if (vulnerable.length === 0 && installed.length === 0) return 'no installed version found';
+  for (const v of vulnerable) {
     if (!VERSION.test(String(v))) return `installed \`${v}\` is not a plain version`;
     if (compareVersions(v, floor) >= 0) return `installed \`${v}\` is not below the patched floor \`${floor}\``;
-    if (semverLine(v) !== semverLine(floor)) return `installed \`${v}\` would move across a major to \`^${floor}\``;
+  }
+  for (const v of [...vulnerable, ...installed]) {
+    if (!VERSION.test(String(v))) return `installed \`${v}\` is not a plain version`;
+    if (compareVersions(v, floor) < 0 && semverLine(v) !== semverLine(floor))
+      return `installed \`${v}\` would move across a major to \`^${floor}\``;
   }
   return null;
 }
@@ -74,8 +102,10 @@ function parseOverrideKey(key) {
 }
 
 // Returns { overrides, fixes, skipped, changed }. `overrides` is a new object
-// with key order preserved; `currentOverrides` is not mutated.
-export function computeOverrideFixes(report, allowlist, currentOverrides = {}) {
+// with key order preserved; `currentOverrides` is not mutated. `installedVersions`
+// maps a package to all its locked versions (see lockfileVersions); without it,
+// only the advisory's vulnerable copies are checked.
+export function computeOverrideFixes(report, allowlist, currentOverrides = {}, installedVersions = new Map()) {
   const failing = extractNewAdvisories(report, allowlist);
   if (failing === null) throw new Error('Unrecognized audit report shape');
 
@@ -109,7 +139,7 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}) {
   let entries = Object.entries(currentOverrides);
   const fixes = [];
   for (const [pkg, { floor, advisories, installed }] of targets) {
-    const problem = floorProblem(floor, installed);
+    const problem = floorProblem(floor, installed, installedVersions.get(pkg) || []);
     if (problem) {
       for (const a of advisories) skipped.push({ ...a, reason: `${problem} (needs a human)` });
       continue;
@@ -143,6 +173,14 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}) {
       continue;
     }
     const lowerFloors = ownKeys.filter(k => floorOf(k));
+    // An existing floor on another major means that major is still in use; replacing
+    // the floor would drop it and move those consumers across.
+    const otherLine = lowerFloors.find(k => semverLine(String(currentOverrides[k]).slice(1)) !== semverLine(floor));
+    if (otherLine) {
+      for (const a of advisories)
+        skipped.push({ ...a, reason: `\`${otherLine}\` holds a floor on another major (needs a human)` });
+      continue;
+    }
     const newKey = `${pkg}@<${floor}`;
     const newValue = `^${floor}`;
     const from = lowerFloors.map(k => `\`${k}: ${currentOverrides[k]}\``).join(', ') || '(none)';
@@ -198,8 +236,9 @@ async function main() {
   const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
   const allowlist = new Set(JSON.parse(await fs.readFile(path.join(scriptDir, 'audit-allowlist.json'), 'utf8')));
   const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
+  const installed = lockfileVersions(await fs.readFile(path.join(scriptDir, '..', 'pnpm-lock.yaml'), 'utf8'));
 
-  const result = computeOverrideFixes(report, allowlist, pkg.pnpm?.overrides);
+  const result = computeOverrideFixes(report, allowlist, pkg.pnpm?.overrides, installed);
   const shapeNote =
     !report.advisories && report.vulnerabilities
       ? 'The report only has the `vulnerabilities` shape, which carries no patched versions; nothing was fixed automatically.'

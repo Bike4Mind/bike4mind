@@ -202,8 +202,9 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      # Rebuilt from the current main on every failing run, so the bot branch
-      # never conflicts. A push happens only when the fix content changed.
+      # Rebuilt from the current main on every failing run. A push happens only
+      # when package.json or pnpm-lock.yaml differ from the branch (a new fix, or
+      # main changing either file), so CI is not re-run for unrelated main commits.
       - name: Push auto-fix branch and open or update PR
         id: autofix-pr
         if: steps.recheck.outcome == 'success'

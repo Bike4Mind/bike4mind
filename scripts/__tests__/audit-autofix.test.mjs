@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { computeOverrideFixes, patchedFloor, renderSkippedLines } from '../audit-autofix.mjs';
+import { computeOverrideFixes, lockfileVersions, patchedFloor, renderSkippedLines } from '../audit-autofix.mjs';
 
 const ALLOWLIST = new Set(['GHSA-known-1111-1111']);
 
@@ -116,6 +116,60 @@ describe('computeOverrideFixes', () => {
     expect(result.skipped.map(s => s.ghsa)).toEqual(['GHSA-new-aaaa-aaaa', 'GHSA-new-cccc-cccc']);
   });
 
+  it('checks unaffected locked copies too, since the override rewrites them as well', () => {
+    // Advisory scoped to 2.x: only 2.2.0 is a finding, but `some-pkg@<2.3.1` would also rewrite the 1.x dependent.
+    const scoped = advisory({
+      vulnerable_versions: '>=2.0.0 <2.3.1',
+      patched_versions: '>=2.3.1',
+      findings: [{ version: '2.2.0' }],
+    });
+    const withOlder = new Map([['some-pkg', ['1.9.0', '2.2.0']]]);
+    const result = computeOverrideFixes(report(scoped), ALLOWLIST, {}, withOlder);
+    expect(result.changed).toBe(false);
+    expect(result.skipped[0].reason).toMatch(/`1\.9\.0` would move across a major/);
+    // A copy above the floor is not matched by `<2.3.1`, so it does not block the fix.
+    const withNewer = new Map([['some-pkg', ['2.2.0', '3.1.0']]]);
+    expect(computeOverrideFixes(report(scoped), ALLOWLIST, {}, withNewer).overrides).toEqual({
+      'some-pkg@<2.3.1': '^2.3.1',
+    });
+  });
+
+  it('leaves a package whose existing floor is on another major to a human', () => {
+    const scoped = advisory({ patched_versions: '>=2.3.1', findings: [{ version: '2.2.0' }] });
+    const current = { 'some-pkg@<1.5.0': '^1.5.0' };
+    const result = computeOverrideFixes(report(scoped), ALLOWLIST, current);
+    expect(result.overrides).toEqual(current);
+    expect(result.skipped[0].reason).toMatch(/floor on another major/);
+  });
+
+  it('fails closed when no installed version is known', () => {
+    const result = computeOverrideFixes(report(advisory({ findings: [] })), ALLOWLIST, {});
+    expect(result.changed).toBe(false);
+    expect(result.skipped[0].reason).toMatch(/no installed version found/);
+  });
+
+  it('reads every locked version from the packages section only', () => {
+    const lock = [
+      "lockfileVersion: '9.0'",
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      'packages:',
+      "  '@scope/x@1.0.0':",
+      '    resolution: {integrity: sha512-a}',
+      '  some-pkg@1.9.0:',
+      '    resolution: {integrity: sha512-b}',
+      '  some-pkg@2.2.0:',
+      'snapshots:',
+      "  '@scope/x@1.0.0(react@18.0.0)':",
+      '  some-pkg@9.9.9: {}',
+    ].join('\n');
+    expect(Object.fromEntries(lockfileVersions(lock))).toEqual({
+      '@scope/x': ['1.0.0'],
+      'some-pkg': ['1.9.0', '2.2.0'],
+    });
+  });
+
   it('renders one parseable line per skipped advisory', () => {
     const result = computeOverrideFixes(report(advisory({ patched_versions: '<0.0.0' })), ALLOWLIST, {});
     expect(renderSkippedLines(result.skipped)).toEqual([
@@ -188,6 +242,7 @@ describe('main (CLI)', () => {
     fs.copyFileSync(scriptPath, path.join(dir, 'scripts', 'audit-autofix.mjs'));
     fs.copyFileSync(new URL('../audit-gate.mjs', import.meta.url), path.join(dir, 'scripts', 'audit-gate.mjs'));
     fs.writeFileSync(path.join(dir, 'scripts', 'audit-allowlist.json'), '[]');
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\npackages:\n  some-pkg@1.10.0:\n");
   });
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });

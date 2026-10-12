@@ -294,7 +294,7 @@ To fix a failing gate (or the tracking issue):
 
 When the scheduled audit finds advisories on `main`, it also opens an auto-fix PR from the `ci/dependency-audit-autofix` branch that applies steps 1 and 2. A human reviews its lockfile diff and merges it; prefer that PR over writing the same bump by hand.
 
-The auto-fix only raises a floor within the installed major. Anything else (a major bump, no patched release, a range or line override) is listed in the tracking issue between `<!-- dependency-audit-skipped -->` markers, one `GHSA | package | severity | reason` line each. An empty block means nothing was skipped; a missing block means the run could not tell.
+The auto-fix only raises a floor within the installed major. Anything else (a major bump, no patched release, a range or line override) is listed in the tracking issue between `<!-- dependency-audit-skipped -->` markers, one `GHSA | package | severity | reason` line each (the reason is everything after the third ` | `). An empty block means nothing was skipped; a missing block means the run could not tell.
 
 ### Preview deploys
 

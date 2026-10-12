@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { describe, it, expect } from 'vitest';
 import { parseSkippedBlock, planIssueBody, SKIPPED_START, SKIPPED_END } from '../audit-issue.mjs';
 
@@ -59,7 +60,13 @@ describe('planIssueBody', () => {
   });
 
   it('treats a body from before the skipped block as changed', () => {
-    const legacy = '<!-- dependency-audit-main -->\n<!-- dependency-audit-findings:0123456789abcdef -->\n';
+    // The previous format hashed only the sorted advisory lines.
+    const lines = GATE.split('\n')
+      .filter(l => /^\s*\[[A-Z]+\] /.test(l))
+      .map(l => l.trim())
+      .sort();
+    const oldHash = crypto.createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 16);
+    const legacy = `<!-- dependency-audit-main -->\n<!-- dependency-audit-findings:${oldHash} -->\n`;
     expect(planIssueBody({ ...base, existingBody: legacy, skippedText: SKIP }).changed).toBe(true);
   });
 });
