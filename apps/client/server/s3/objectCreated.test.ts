@@ -49,7 +49,7 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: h.recomputeUploaded,
 }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
   completedBatchStatus: h.completedBatchStatus,
 }));
