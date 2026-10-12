@@ -18,7 +18,9 @@ import Stripe from 'stripe';
  *
  * Only the analytics-relevant scalars are returned - never the Stripe object.
  */
-const handler = baseApi()
+// Browser only: the customer's own return from Stripe is the one caller, so an API key
+// has no business here (jwtOnly).
+const handler = baseApi({ auth: 'jwtOnly' })
   // A live Stripe read per request; same throttle as the checkout-session route.
   .use(
     rateLimit({
