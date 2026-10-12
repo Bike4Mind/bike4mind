@@ -82,6 +82,8 @@ function makeWrapper() {
   };
 }
 
+const isHydrated = () => useWorkBenchStore.getState().isWorkBenchHydrated(SESSION_ID);
+
 const workbenchIds = () => (useWorkBenchStore.getState().getWorkBenchFiles(SESSION_ID) ?? []).map(f => f.id);
 
 async function hydrate(result: { current: ReturnType<typeof useSessions> }, knowledgeIds: string[]) {
@@ -141,5 +143,45 @@ describe('SessionsContext workbench hydration', () => {
     });
 
     expect(workbenchIds()).toEqual(['a', 'b']);
+  });
+
+  it('marks the bucket hydrated only once the fetch lands', async () => {
+    let release: (v: IFabFileDocument[]) => void = () => {};
+    mockGetFabFilesByIds.mockReturnValue(
+      new Promise<IFabFileDocument[]>(resolve => {
+        release = resolve;
+      })
+    );
+
+    const { result } = renderHook(() => useSessions(), { wrapper: makeWrapper() });
+    await hydrate(result, ['a']);
+    expect(isHydrated()).toBe(false);
+
+    await act(async () => {
+      release([fabFile('a')]);
+    });
+    expect(isHydrated()).toBe(true);
+  });
+
+  it('leaves the bucket unhydrated when the fetch fails', async () => {
+    // An attach after a failed hydration would PUT a partial list over the real one, so
+    // adds must stay refused rather than the window silently closing.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGetFabFilesByIds.mockRejectedValue(new Error('offline'));
+
+    const { result } = renderHook(() => useSessions(), { wrapper: makeWrapper() });
+    await hydrate(result, ['a']);
+
+    await waitFor(() => expect(consoleError).toHaveBeenCalled());
+    expect(isHydrated()).toBe(false);
+    consoleError.mockRestore();
+  });
+
+  it('marks a loaded notebook with no knowledge files hydrated without fetching', async () => {
+    const { result } = renderHook(() => useSessions(), { wrapper: makeWrapper() });
+    await hydrate(result, []);
+
+    expect(isHydrated()).toBe(true);
+    expect(mockGetFabFilesByIds).not.toHaveBeenCalled();
   });
 });
