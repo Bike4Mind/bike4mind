@@ -22,6 +22,9 @@ import type { Request } from 'express';
  * the two doors cannot authorize differently.
  */
 export async function loadAccessibleFabFile(req: Request, id: string) {
+  // Browser URLs only differ from private ones when S3_PRESIGN_ENDPOINT is set (see S3Storage), and only
+  // then must they stay out of the shared URL cache. Without it the cached URL is valid for every reader.
+  const browserSigningIsDistinct = Boolean(process.env.S3_PRESIGN_ENDPOINT?.trim());
   const adapter = {
     db: {
       fabFiles: fabFileRepository,
@@ -29,7 +32,7 @@ export async function loadAccessibleFabFile(req: Request, id: string) {
       adminSettings: adminSettingsRepository,
     },
     storage: {
-      signedUrlCache: 'bypass' as const,
+      ...(browserSigningIsDistinct && { signedUrlCache: 'bypass' as const }),
       generateSignedUrl: async (path: string, expireInSeconds: number) => {
         try {
           return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds, audience: 'browser' });

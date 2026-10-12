@@ -107,6 +107,19 @@ describe('loadAccessibleFabFile browser response URLs', () => {
     expect(url.searchParams.get('X-Amz-Expires')).toBe('600');
     expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it('keeps the shared URL cache when no browser signing endpoint is configured', async () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    let cacheMode: string | undefined = 'unset';
+    getFabFile.mockImplementation(
+      async (_user: unknown, _input: unknown, adapter: { storage: { signedUrlCache?: string } }) => {
+        cacheMode = adapter.storage.signedUrlCache;
+        return lakeFile;
+      }
+    );
+    await loadAccessibleFabFile(request(), 'file-1');
+    expect(cacheMode).toBeUndefined();
+  });
 });
 
 afterEach(() => vi.unstubAllEnvs());
