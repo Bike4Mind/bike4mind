@@ -10,6 +10,7 @@ import {
   resolveRetryAfterDelayMs,
 } from '../rateLimitHeaders';
 import { getErrorMessage } from '../atlassian/config';
+import { assertSafeApiPath } from '../atlassian/apiPath';
 
 import {
   formatUserResponse,
@@ -289,6 +290,7 @@ export class ConfluenceApi {
    * Build URL with query parameters
    */
   private buildUrl(path: string, query: QueryParams = {}, useV1 = false): string {
+    assertSafeApiPath(path);
     const baseUrl = useV1 ? this.config.apiBaseUrlV1 : this.config.apiBaseUrlV2;
     const base = `${baseUrl}${path}`;
     const url = new URL(base);
@@ -972,7 +974,7 @@ export class ConfluenceApi {
 
     // 1. Try v2 Footer Comment Delete
     try {
-      await this.request('DELETE', `/footer-comments/${commentId}`);
+      await this.request('DELETE', `/footer-comments/${encodeURIComponent(commentId)}`);
       return;
     } catch {
       // Ignore 404 (might be inline) or 400
@@ -980,15 +982,19 @@ export class ConfluenceApi {
 
     // 2. Try v2 Inline Comment Delete
     try {
-      await this.request('DELETE', `/inline-comments/${commentId}`);
+      await this.request('DELETE', `/inline-comments/${encodeURIComponent(commentId)}`);
       return;
     } catch {
       // Ignore
     }
 
-    // 3. Fallback to v1 Content Delete
+    // 3. Fallback to v1 Content Delete. v1 deletes any content type, so confirm the id is a comment first.
     try {
-      await this.requestV1('DELETE', `/content/${commentId}`);
+      const content = await this.getV1<{ type?: string }>(`/content/${encodeURIComponent(commentId)}`);
+      if (content.type !== 'comment') {
+        throw new Error(`Content ${commentId} is not a comment; refusing to delete it as one.`);
+      }
+      await this.requestV1('DELETE', `/content/${encodeURIComponent(commentId)}`);
     } catch (error: unknown) {
       if (getErrorMessage(error).includes('410')) {
         throw new Error(
@@ -1314,7 +1320,7 @@ export class ConfluenceApi {
     }
 
     // Build URL using v1 API - v2 API doesn't support attachment uploads with OAuth
-    const url = `${this.config.apiBaseUrlV1}/content/${pageId}/child/attachment`;
+    const url = this.buildUrl(`/content/${pageId}/child/attachment`, {}, true);
 
     // Make request with special headers for attachment upload
     const response = await fetch(url, {
@@ -1392,7 +1398,7 @@ export class ConfluenceApi {
 
     // Use v1 API endpoint for download - this works with OAuth Bearer tokens
     // The endpoint returns a 302 redirect to the actual downloadable URL
-    const downloadUrl = `${this.config.apiBaseUrlV1}/content/${pageId}/child/attachment/${attachmentId}/download`;
+    const downloadUrl = this.buildUrl(`/content/${pageId}/child/attachment/${attachmentId}/download`, {}, true);
 
     // Download the actual file content, following redirects
     const response = await fetch(downloadUrl, {

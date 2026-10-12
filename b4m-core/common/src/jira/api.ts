@@ -37,6 +37,7 @@ import {
   type FormattedJiraIssueType,
 } from './format';
 import { AgileApi } from './agile/api';
+import { assertSafeApiPath } from '../atlassian/apiPath';
 
 // --- Types & Interfaces ---
 
@@ -446,6 +447,7 @@ export class JiraApi {
    * Build URL with query parameters
    */
   private buildUrl(path: string, query: QueryParams = {}): string {
+    assertSafeApiPath(path);
     const base = `${this.config.apiBaseUrl}${path}`;
     const url = new URL(base);
     Object.entries(query).forEach(([key, value]) => {
@@ -1152,7 +1154,7 @@ export class JiraApi {
     const { issueKey, accountId } = params;
     // Jira expects the account ID as a bare JSON string, not an object.
     // request() runs JSON.stringify on the body, so the raw string becomes the quoted string Jira wants.
-    await this.request<void>('POST', `/issue/${issueKey}/watchers`, {
+    await this.request<void>('POST', `/issue/${encodeURIComponent(issueKey)}/watchers`, {
       body: accountId,
     });
   }
@@ -1162,7 +1164,7 @@ export class JiraApi {
    */
   async removeWatcher(params: { issueKey: string; accountId: string }): Promise<void> {
     const { issueKey, accountId } = params;
-    await this.request<void>('DELETE', `/issue/${issueKey}/watchers`, {
+    await this.request<void>('DELETE', `/issue/${encodeURIComponent(issueKey)}/watchers`, {
       query: { accountId },
     });
   }
@@ -1429,7 +1431,7 @@ export class JiraApi {
     const blob = new Blob([binaryContent], { type: detectedMimeType });
     formData.append('file', blob, filename);
 
-    const url = `${this.config.apiBaseUrl}/issue/${issueKey}/attachments`;
+    const url = this.buildUrl(`/issue/${issueKey}/attachments`);
 
     // Make request with special headers for attachment upload
     const response = await fetch(url, {

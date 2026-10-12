@@ -13,6 +13,7 @@
  */
 
 import { JiraConfig } from '../api';
+import { assertSafeApiPath } from '../../atlassian/apiPath';
 import {
   JiraWebhook,
   JiraWebhookListResponse,
@@ -41,6 +42,7 @@ export class WebhookApi {
    * Note: Webhooks use a different base URL than other Jira APIs.
    */
   private buildUrl(path: string, query: QueryParams = {}): string {
+    assertSafeApiPath(path);
     const url = new URL(`${this.config.apiBaseUrl}${path}`);
 
     for (const [key, value] of Object.entries(query)) {

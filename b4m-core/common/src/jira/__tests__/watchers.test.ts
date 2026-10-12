@@ -100,4 +100,57 @@ describe('JiraApi Watcher Operations', () => {
       expect(callArgs[1]?.method).toBe('DELETE');
     });
   });
+
+  describe('issue key handling in watcher paths', () => {
+    it('encodes the issue key as a single path segment', async () => {
+      const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        headers: new Headers(),
+        text: async () => '',
+      } as Response);
+
+      await jiraApi.addWatcher({ issueKey: 'PROJ-1/comment', accountId: 'acc-1' });
+
+      expect(mockFetch.mock.calls[0][0]).toContain('/issue/PROJ-1%2Fcomment/watchers');
+    });
+
+    it.each(['PROJ-1?x=', 'PROJ-1#', '%2e%2e'])('keeps issue key %s inside one encoded segment', async issueKey => {
+      const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        headers: new Headers(),
+        text: async () => '',
+      } as Response);
+
+      await jiraApi.removeWatcher({ issueKey, accountId: 'acc-1' });
+
+      const url = new URL(mockFetch.mock.calls[0][0]);
+      expect(url.pathname.endsWith(`/issue/${encodeURIComponent(issueKey)}/watchers`)).toBe(true);
+      expect(url.hash).toBe('');
+      expect([...url.searchParams.keys()]).toEqual(['accountId']);
+    });
+
+    it.each(['addWatcher', 'removeWatcher'] as const)(
+      '%s rejects a dot-segment issue key without sending a request',
+      async method => {
+        const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+
+        await expect(jiraApi[method]({ issueKey: '..', accountId: 'acc-1' })).rejects.toThrow('Invalid API path');
+        expect(mockFetch).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['PROJ-1?x=', 'PROJ-1#', '../project/PROJ'])(
+      'rejects issue key %s on a path that interpolates it raw',
+      async issueKey => {
+        const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+
+        await expect(jiraApi.getWatchers({ issueKey })).rejects.toThrow('Invalid API path');
+        expect(mockFetch).not.toHaveBeenCalled();
+      }
+    );
+  });
 });

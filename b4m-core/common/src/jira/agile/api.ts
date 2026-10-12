@@ -2,6 +2,7 @@
 // Uses Jira Agile REST API 1.0 (Jira Software)
 
 import { isValidIssueKey, type JiraConfig } from '../api';
+import { assertSafeApiPath } from '../../atlassian/apiPath';
 import {
   formatBoard,
   formatBoardList,
@@ -48,6 +49,7 @@ export class AgileApi {
    * Build URL for Agile API (uses different base URL than standard Jira API)
    */
   private buildAgileUrl(path: string, query: QueryParams = {}): string {
+    assertSafeApiPath(path);
     const base = `${this.config.agileApiBaseUrl}${path}`;
     const url = new URL(base);
     Object.entries(query).forEach(([key, value]) => {

@@ -14,6 +14,7 @@ import {
   JiraCommentWebhookEvent,
   JiraSprintWebhookEvent,
 } from './types';
+import { isValidIssueKey } from '../api';
 
 /**
  * Calculate days until a date.
@@ -158,6 +159,36 @@ type SlackActionElement = {
 };
 
 /**
+ * Browse URL for a webhook issue, or undefined when the payload key is not a well-formed issue key,
+ * so a malformed key is rendered as plain text instead of being spliced into a link.
+ */
+function issueBrowseUrl(siteUrl: string, issueKey: string): string | undefined {
+  return isValidIssueKey(issueKey) ? `${siteUrl}/browse/${issueKey}` : undefined;
+}
+
+function issueKeyMrkdwn(issueUrl: string | undefined, issueKey: string): string {
+  const label = escapeSlackMrkdwn(issueKey);
+  return issueUrl ? `*<${issueUrl}|${label}>*` : `*${label}*`;
+}
+
+function viewInJiraActions(issueUrl: string | undefined): SlackBlock[] {
+  if (!issueUrl) return [];
+  return [
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'View in Jira', emoji: true },
+          url: issueUrl,
+          style: 'primary',
+        },
+      ],
+    },
+  ];
+}
+
+/**
  * Format an issue event for Slack.
  */
 export function formatIssueEventForSlack(event: JiraIssueWebhookEvent, siteUrl: string): SlackMessage {
@@ -165,7 +196,7 @@ export function formatIssueEventForSlack(event: JiraIssueWebhookEvent, siteUrl: 
   const { fields } = issue;
 
   const priorityEmoji = getPriorityEmoji(fields.priority?.name);
-  const issueUrl = `${siteUrl}/browse/${issue.key}`;
+  const issueUrl = issueBrowseUrl(siteUrl, issue.key);
 
   // Determine event action for header
   let action: string;
@@ -229,7 +260,7 @@ export function formatIssueEventForSlack(event: JiraIssueWebhookEvent, siteUrl: 
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*<${issueUrl}|${escapeSlackMrkdwn(issue.key)}>* ${escapeSlackMrkdwn(fields.summary)}`,
+        text: `${issueKeyMrkdwn(issueUrl, issue.key)} ${escapeSlackMrkdwn(fields.summary)}`,
       },
     },
     {
@@ -268,22 +299,7 @@ export function formatIssueEventForSlack(event: JiraIssueWebhookEvent, siteUrl: 
     ],
   });
 
-  // Add action button
-  blocks.push({
-    type: 'actions',
-    elements: [
-      {
-        type: 'button',
-        text: {
-          type: 'plain_text',
-          text: 'View in Jira',
-          emoji: true,
-        },
-        url: issueUrl,
-        style: 'primary',
-      },
-    ],
-  });
+  blocks.push(...viewInJiraActions(issueUrl));
 
   return {
     blocks,
@@ -297,7 +313,7 @@ export function formatIssueEventForSlack(event: JiraIssueWebhookEvent, siteUrl: 
 export function formatCommentEventForSlack(event: JiraCommentWebhookEvent, siteUrl: string): SlackMessage {
   const { issue, comment, webhookEvent } = event;
 
-  const issueUrl = `${siteUrl}/browse/${issue.key}`;
+  const issueUrl = issueBrowseUrl(siteUrl, issue.key);
 
   let action: string;
   let emoji: string;
@@ -332,7 +348,7 @@ export function formatCommentEventForSlack(event: JiraCommentWebhookEvent, siteU
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*<${issueUrl}|${escapeSlackMrkdwn(issue.key)}>* ${escapeSlackMrkdwn(issue.fields.summary)}`,
+        text: `${issueKeyMrkdwn(issueUrl, issue.key)} ${escapeSlackMrkdwn(issue.fields.summary)}`,
       },
     },
   ];
@@ -361,21 +377,7 @@ export function formatCommentEventForSlack(event: JiraCommentWebhookEvent, siteU
         },
       ],
     },
-    {
-      type: 'actions',
-      elements: [
-        {
-          type: 'button',
-          text: {
-            type: 'plain_text',
-            text: 'View in Jira',
-            emoji: true,
-          },
-          url: issueUrl,
-          style: 'primary',
-        },
-      ],
-    }
+    ...viewInJiraActions(issueUrl)
   );
 
   return {
@@ -519,8 +521,7 @@ export function formatGenericEventForSlack(
       }
     | undefined;
   const changelog = payload.changelog as
-    | { items?: Array<{ field?: string; fromString?: string; toString?: string }> }
-    | undefined;
+    { items?: Array<{ field?: string; fromString?: string; toString?: string }> } | undefined;
   const project = (payload.project ?? issue?.fields?.project) as { key?: string; name?: string } | undefined;
   const version = payload.version as { name?: string; description?: string; released?: boolean } | undefined;
   const worklog = payload.worklog as { author?: { displayName?: string }; timeSpent?: string } | undefined;
@@ -547,12 +548,12 @@ export function formatGenericEventForSlack(
 
   // Issue details
   if (issue?.key) {
-    const issueUrl = `${siteUrl}/browse/${issue.key}`;
+    const issueUrl = issueBrowseUrl(siteUrl, issue.key);
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*<${issueUrl}|${escapeSlackMrkdwn(issue.key)}>* ${escapeSlackMrkdwn(issue.fields?.summary || '')}`,
+        text: `${issueKeyMrkdwn(issueUrl, issue.key)} ${escapeSlackMrkdwn(issue.fields?.summary || '')}`,
       },
     });
 
@@ -639,18 +640,8 @@ export function formatGenericEventForSlack(
 
   // View in Jira button if we have an issue
   if (issue?.key) {
-    const issueUrl = `${siteUrl}/browse/${issue.key}`;
-    blocks.push({
-      type: 'actions',
-      elements: [
-        {
-          type: 'button',
-          text: { type: 'plain_text', text: 'View in Jira', emoji: true },
-          url: issueUrl,
-          style: 'primary',
-        },
-      ],
-    });
+    const issueUrl = issueBrowseUrl(siteUrl, issue.key);
+    blocks.push(...viewInJiraActions(issueUrl));
   }
 
   const summary = issue?.key
