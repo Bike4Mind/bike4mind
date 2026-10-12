@@ -74,6 +74,12 @@ describe('fetchUpstreamFeed', () => {
     expect(mockSafeFetch).not.toHaveBeenCalled();
   });
 
+  it.each(['/api/v1/whats-new/', '/api/v1/whats-new//'])('still rejects the own API route spelled %s', async path => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', `https://self.example.com${path}`);
+    expect(await fetchOnce()).toBeNull();
+    expect(mockSafeFetch).not.toHaveBeenCalled();
+  });
+
   it('returns a valid page and forwards limit and cursor', async () => {
     mockSafeFetch.mockResolvedValue(json(PAGE));
     expect(await fetchOnce({ limit: 3, cursor: 'c1' })).toEqual(PAGE);
