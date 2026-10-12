@@ -140,7 +140,7 @@ const inboxFromSource = (email: string, ip: string) => `${otcLimitMailbox(email)
 
 /**
  * Per-email budgets are charged by the handlers, not by middleware, so only real events spend them:
- * a dispatched code for sends, a wrong guess against a live token for verifies. Charging every
+ * a code about to be dispatched for sends (refunded if dispatch throws), a wrong guess against a live token for verifies. Charging every
  * request would let anyone who knows an address lock its owner out with junk traffic, which the
  * per-IP caps bound instead. See OTC_LIMITS for why the send budgets are keyed per source.
  */
@@ -196,6 +196,36 @@ export async function chargeOtcEmailBudget(
       budget.windowMs
     );
   }
+}
+
+/**
+ * Spends one unit of every budget or none: on the first full budget the units already taken are
+ * handed back. Returns the Retry-After seconds when refused, else a refund for a failed dispatch.
+ */
+export async function reserveOtcEmailBudget(
+  email: string,
+  ip: string,
+  budgets: readonly OtcEmailBudget[]
+): Promise<{ retryAfter: number } | { refund: () => Promise<void> }> {
+  const taken: string[] = [];
+  const refund = async () => {
+    for (const key of taken) await cacheRepository.decrementCounter(key);
+  };
+  if (isE2EEnabled()) return { refund };
+  for (const budget of budgets) {
+    const key = budgetKey(budget, email, ip);
+    const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      key,
+      budget.limit,
+      budget.windowMs
+    );
+    if (!success) {
+      await refund();
+      return { retryAfter: retryAfterSeconds(expiresAt, budget.windowMs) };
+    }
+    taken.push(key);
+  }
+  return { refund };
 }
 
 /**

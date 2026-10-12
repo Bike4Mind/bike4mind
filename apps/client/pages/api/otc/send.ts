@@ -5,11 +5,11 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
   OTC_LIMITS,
   OTC_SEND_EMAIL_BUDGETS,
-  chargeOtcEmailBudget,
   ipSubject,
   otcCounterLimit,
   otcDistinctEmailsPerIpLimit,
   otcEmailBudgetRetryAfter,
+  reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl } from '@server/utils/mailer/emailHelpers';
@@ -37,8 +37,9 @@ const handler = baseApi({ auth: false })
     }
 
     const ipBucket = ipSubject(req);
-    // Per-email budgets are checked here but only spent once a code is actually dispatched (see
-    // OTC_SEND_EMAIL_BUDGETS), so refused requests cannot exhaust the owner's allowance.
+    // Per-email budgets are only spent once a code is about to be dispatched (see
+    // OTC_SEND_EMAIL_BUDGETS), so refused requests cannot exhaust the owner's allowance. This read
+    // refuses an over-budget caller before it can touch the address's cooldown below.
     const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
     if (budgetRetryAfter !== undefined) {
       res.setHeader('Retry-After', String(budgetRetryAfter));
@@ -62,13 +63,22 @@ const handler = baseApi({ auth: false })
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
 
-    const result = await userService.sendOTC(
-      { email: normalizedEmail },
-      {
-        mailer: {
-          sendOTCEmail: async (toEmail: string, code: string) => {
-            const logoUrl = getLogoUrl();
-            const emailBody = `
+    // The reservation is keyed on the exact address and the budgets on the folded inbox, so concurrent
+    // sends to aliases of one inbox can all pass the read above; this atomic spend is the real bound.
+    const budget = await reserveOtcEmailBudget(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
+    if ('retryAfter' in budget) {
+      res.setHeader('Retry-After', String(budget.retryAfter));
+      return res.status(429).json({ error: 'Please wait before requesting another code.' });
+    }
+
+    const result = await userService
+      .sendOTC(
+        { email: normalizedEmail },
+        {
+          mailer: {
+            sendOTCEmail: async (toEmail: string, code: string) => {
+              const logoUrl = getLogoUrl();
+              const emailBody = `
 <!DOCTYPE html>
 <html>
   <head>
@@ -89,21 +99,22 @@ const handler = baseApi({ auth: false })
     </div>
   </body>
 </html>`;
-            await EmailEvents.Send.publish({
-              to: toEmail,
-              subject: 'Your sign-in code',
-              body: emailBody,
-            });
+              await EmailEvents.Send.publish({
+                to: toEmail,
+                subject: 'Your sign-in code',
+                body: emailBody,
+              });
+            },
           },
-        },
-        signPendingToken: payload => {
-          return jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' });
-        },
-      }
-    );
-
-    // The reservation serializes sends per email, so the budget checked above cannot be raced past.
-    await chargeOtcEmailBudget(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
+          signPendingToken: payload => {
+            return jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' });
+          },
+        }
+      )
+      .catch(async (err: unknown) => {
+        await budget.refund();
+        throw err;
+      });
 
     // Store the nonce server-side so the verify endpoint can reject replayed tokens.
     // On non-production stages only (isE2EEnabled - hard-false on production), also persist

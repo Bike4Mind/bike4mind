@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   tryIncrement: vi.fn<(key: string, limit: number, ttlMs: number) => Promise<CounterResult>>(),
   tryAdd: vi.fn<(key: string, amount: number, limit: number, ttlMs: number) => Promise<CounterResult>>(),
   deleteByKey: vi.fn(),
+  decrementCounter: vi.fn(),
   isE2EEnabled: vi.fn(),
 }));
 
@@ -16,6 +17,7 @@ vi.mock('@bike4mind/database', () => ({
     tryIncrementWithinLimitFixedWindow: mocks.tryIncrement,
     tryAddWithinLimitFixedWindow: mocks.tryAdd,
     deleteByKey: mocks.deleteByKey,
+    decrementCounter: mocks.decrementCounter,
   },
 }));
 vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
@@ -33,6 +35,7 @@ import {
   otcEmailKey,
   otcIpBucket,
   otcLimitMailbox,
+  reserveOtcEmailBudget,
 } from './otcLimits';
 
 const makeReq = (email?: unknown) => ({ body: { email } }) as unknown as Request;
@@ -171,10 +174,34 @@ describe('per-email budgets', () => {
     await expect(otcEmailBudgetRetryAfter('a@b.co', '203.0.113.7', OTC_VERIFY_EMAIL_BUDGETS)).resolves.toBeUndefined();
   });
 
+  it('reserves every send budget or none, handing back units taken before a full one', async () => {
+    mocks.tryIncrement.mockImplementation(async key => (key.startsWith('otc-limit:send-email:') ? denied() : allowed));
+
+    const result = await reserveOtcEmailBudget('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS);
+
+    expect(result).toEqual({ retryAfter: 90 });
+    expect(mocks.decrementCounter.mock.calls.map(([key]) => key)).toEqual([
+      `otc-limit:send-email-ip:${otcEmailKey('a@b.co|203.0.113.7')}`,
+      `otc-limit:send-email-ip-daily:${otcEmailKey('a@b.co|203.0.113.7')}`,
+    ]);
+  });
+
+  it('refunds a successful reservation on request', async () => {
+    const result = await reserveOtcEmailBudget('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS);
+    if (!('refund' in result)) throw new Error('expected a reservation');
+    expect(mocks.decrementCounter).not.toHaveBeenCalled();
+
+    await result.refund();
+    expect(mocks.decrementCounter).toHaveBeenCalledTimes(OTC_SEND_EMAIL_BUDGETS.length);
+  });
+
   it('neither checks nor charges in E2E', async () => {
     mocks.isE2EEnabled.mockReturnValue(true);
     await expect(otcEmailBudgetRetryAfter('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS)).resolves.toBeUndefined();
     await chargeOtcEmailBudget('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS);
+    await expect(reserveOtcEmailBudget('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS)).resolves.toHaveProperty(
+      'refund'
+    );
 
     expect(mocks.tryAdd).not.toHaveBeenCalled();
     expect(mocks.tryIncrement).not.toHaveBeenCalled();

@@ -35,15 +35,27 @@ const mockConfirmReservation = vi.fn();
 const cache = vi.hoisted(() => {
   const counts = new Map<string, number>();
   const expiresAt = () => new Date(Date.now() + 60_000);
+  const state = { blindPeek: false };
   return {
     counts,
+    state,
     tryIncrement: async (key: string, limit: number) => {
       const count = counts.get(key) ?? 0;
       if (count + 1 > limit) return { success: false, count, expiresAt: expiresAt() };
       counts.set(key, count + 1);
       return { success: true, count: count + 1, expiresAt: expiresAt() };
     },
-    peek: async (key: string) => ({ success: true, count: counts.get(key) ?? 0, expiresAt: expiresAt() }),
+    // blindPeek models concurrent requests that all read the budget before any of them spends it.
+    peek: async (key: string) => ({
+      success: true,
+      count: state.blindPeek ? 0 : (counts.get(key) ?? 0),
+      expiresAt: expiresAt(),
+    }),
+    decrement: async (key: string) => {
+      const count = (counts.get(key) ?? 0) - 1;
+      counts.set(key, count);
+      return count;
+    },
   };
 });
 const mockTryIncrement = vi.fn();
@@ -52,6 +64,7 @@ vi.mock('@bike4mind/database', () => ({
     tryIncrementWithinLimitFixedWindow: (...a: any[]) => mockTryIncrement(...a),
     tryAddWithinLimitFixedWindow: (key: string) => cache.peek(key),
     deleteByKey: async (key: string) => cache.counts.delete(key),
+    decrementCounter: (key: string) => cache.decrement(key),
   },
   pendingOtcTokenRepository: {
     tryReserveSlot: (...a: any[]) => mockTryReserveSlot(...a),
@@ -77,6 +90,7 @@ function makeReqRes(email: string = EMAIL, ip = '81.2.69.160') {
 
 const resetCache = () => {
   cache.counts.clear();
+  cache.state.blindPeek = false;
   mockTryIncrement.mockImplementation(cache.tryIncrement);
 };
 
@@ -227,6 +241,31 @@ describe('/api/otc/send per-email budget', () => {
 
     rollShortWindows();
     expect((await post(VICTIM, VICTIM_IP))._getStatusCode()).toBe(200);
+  });
+
+  it('bounds racing alias sends that all passed the budget read', async () => {
+    cache.state.blindPeek = true;
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    const results = [];
+    for (let i = 0; i < 8; i++) results.push(await post(`victim+${i}@gmail.com`, ATTACKER_IP));
+
+    const { perEmailPerIp } = OTC_LIMITS.send;
+    expect(mockSendOTC).toHaveBeenCalledTimes(perEmailPerIp.limit);
+    const refused = results.filter(r => r._getStatusCode() === 429);
+    expect(refused).toHaveLength(8 - perEmailPerIp.limit);
+    expect(refused.every(r => r.getHeader('Retry-After') !== undefined)).toBe(true);
+    expect(cache.counts.get(inboxKey)).toBe(perEmailPerIp.limit);
+  });
+
+  it('refunds the budget when dispatch fails', async () => {
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    mockSendOTC.mockRejectedValueOnce(new Error('publish failed'));
+    const { req, res } = makeReqRes(VICTIM, VICTIM_IP);
+    await runMiddleware(req, res);
+
+    await expect(handler(req, res)).rejects.toThrow('publish failed');
+    expect(cache.counts.get(sourceKey(VICTIM_IP))).toBe(0);
+    expect(cache.counts.get(inboxKey)).toBe(0);
   });
 
   it('refuses with 429 and Retry-After, without reserving or dispatching, once the budget is spent', async () => {
