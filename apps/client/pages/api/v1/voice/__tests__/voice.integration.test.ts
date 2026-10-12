@@ -581,4 +581,21 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
   });
+
+  it('drops the realtime billed-credits marker when there is no hold to settle', async () => {
+    // enforceCredits off: a realtime bootstrap leaves no reservation but does write the marker.
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: null,
+      voiceSessionStartedAt: new Date(Date.now() - 1000),
+      voiceBilledCredits: 0,
+    });
+    const { res, run } = fireEnd();
+    await run();
+    expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
+    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
+      { id: SESSION_ID, voiceReservedCredits: null, voiceSessionStartedAt: null },
+      { unset: ['voiceBilledCredits'] }
+    );
+  });
 });
