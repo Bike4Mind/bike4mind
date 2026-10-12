@@ -93,6 +93,17 @@ async function reconcileVoiceSession(sessionId: string | null): Promise<void> {
   }
 }
 
+// Probe the microphone BEFORE bootstrapping: the bootstrap reserves credits, and a
+// browser with no (or a denied) mic would otherwise pay for a call that can never
+// connect. The tracks are released at once; the SDK reopens the mic itself.
+async function ensureMicrophone(): Promise<void> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw Object.assign(new Error('Microphone is not available in this browser.'), { name: 'NotFoundError' });
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach(track => track.stop());
+}
+
 function formatSessionsError(err: unknown): string {
   if (axios.isAxiosError(err)) {
     const status = err.response?.status;
@@ -188,7 +199,10 @@ async function establishConnection(
       scheduleReconnect(set, myGen, ctx);
       return;
     }
+    // Reconnects exhausted: the original connect's hold is still live, so settle it.
+    const sid = activeSessionId;
     activeSessionId = null;
+    void reconcileVoiceSession(sid);
     set({
       phase: 'error',
       errorMessage: `Failed to ${isReconnect ? 'reconnect' : 'create'} voice session: ${formatSessionsError(err)}`,
@@ -283,7 +297,11 @@ async function establishConnection(
       scheduleReconnect(set, myGen, ctx);
       return;
     }
+    // The bootstrap above already reserved credits; release them, or the failed
+    // call keeps the whole up-front hold.
+    const sid = activeSessionId;
     activeSessionId = null;
+    void reconcileVoiceSession(sid);
     set({ phase: 'error', errorMessage: formatConnectError(err) });
   }
 }
@@ -301,6 +319,14 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     reconnectAttempts = 0;
     const myGen = ++startGen;
     set({ phase: 'requesting-session', errorMessage: null, mode: null, lastUserMessage: null });
+    try {
+      await ensureMicrophone();
+    } catch (err) {
+      if (myGen !== startGen) return;
+      set({ phase: 'error', errorMessage: formatConnectError(err) });
+      return;
+    }
+    if (myGen !== startGen) return;
     await establishConnection(set, myGen, { sessionId, reasoningModelId, onSessionResolved }, false);
   },
 
