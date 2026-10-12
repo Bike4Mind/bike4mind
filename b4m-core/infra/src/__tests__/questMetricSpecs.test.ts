@@ -13,6 +13,8 @@ describe('questMetricSpecs', () => {
       TimeoutSweepRecovered: 'TimeoutSweepRecovered',
       TimeoutSweepCallbacksRedispatched: 'TimeoutSweepCallbacksRedispatched',
       TimeoutSweepStaleCallbacksReenqueued: 'TimeoutSweepStaleCallbacksReenqueued',
+      TimeoutSweepCallbacksFailedLimitReached: 'TimeoutSweepCallbacksFailedLimitReached',
+      TimeoutSweepCallbacksFailedHorizonPassed: 'TimeoutSweepCallbacksFailedHorizonPassed',
     });
   });
 });

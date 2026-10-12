@@ -852,7 +852,7 @@ export type StaleCallbackDispatchCriteria = {
   dispatchedBefore: Date;
   /** Claims made before this are too old to re-send: the caller has stopped waiting for them. */
   dispatchedAfter: Date;
-  /** Reclaims allowed per arm; a callback that has used them all is left for a human. */
+  /** Reclaims allowed per arm; a callback that has used them all is failed by failExhaustedCallbacks. */
   maxRedispatches: number;
 };
 
@@ -1456,6 +1456,57 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return docs.map(doc => doc._id.toString());
   }
 
+  /**
+   * Atomically move exhausted dispatched callbacks to `failed`. Two disjoint cases:
+   * - Redispatch limit reached: stale but still within the horizon, retries used up.
+   * - Horizon passed: last claim older than the maximum re-send window regardless of retry count.
+   *   A reclaim resets `dispatchedAt`, so in steady state this only catches pre-horizon backlog or
+   *   callbacks stranded while the sweep was down; exhausted retries land in the first case.
+   * Concurrent sweeps are safe: each updateMany is gated on `state: 'dispatched'`, so
+   * only one writer flips any given callback and the second finds nothing to modify.
+   * Returns counts by failure reason for separate metrics.
+   */
+  async failExhaustedCallbacks(opts: {
+    staleBefore: Date;
+    horizonBefore: Date;
+    maxRedispatches: number;
+  }): Promise<{ redispatchLimitReached: number; horizonPassed: number }> {
+    const now = new Date();
+    const [limitResult, horizonResult] = await Promise.all([
+      this.model.updateMany(
+        {
+          'callback.state': 'dispatched',
+          'callback.dispatchedAt': { $lt: opts.staleBefore, $gte: opts.horizonBefore },
+          'callback.redispatchCount': { $gte: opts.maxRedispatches },
+        },
+        {
+          $set: {
+            'callback.state': 'failed',
+            'callback.completedAt': now,
+            'callback.lastError': 'redispatch limit reached',
+          },
+        }
+      ),
+      this.model.updateMany(
+        {
+          'callback.state': 'dispatched',
+          'callback.dispatchedAt': { $lt: opts.horizonBefore },
+        },
+        {
+          $set: {
+            'callback.state': 'failed',
+            'callback.completedAt': now,
+            'callback.lastError': 'redispatch horizon passed',
+          },
+        }
+      ),
+    ]);
+    return {
+      redispatchLimitReached: limitResult.modifiedCount,
+      horizonPassed: horizonResult.modifiedCount,
+    };
+  }
+
   // Returns the most recent quest in the session that has no reply yet, or
   // null if every quest already has one (or none exist).
   async findLatestUnrepliedMessage(sessionId: string) {
@@ -1564,8 +1615,8 @@ function initializeQuestModel() {
       { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
     );
 
-    // Serves findStaleDispatchedCallbacks (questTimeoutSweep backstop). Partial, so it holds only
-    // the in-flight callbacks. Pre-built by 20260921235990_ensure-quest-callback-dispatched-index.
+    // Serves findStaleDispatchedCallbacks and failExhaustedCallbacks (questTimeoutSweep backstop).
+    // Partial, so it holds only the in-flight callbacks. Pre-built by 20260921235990_ensure-quest-callback-dispatched-index.
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, 'callback.dispatchedAt': 1 },
       { name: 'callbackState_dispatchedAt', partialFilterExpression: { 'callback.state': 'dispatched' } }

@@ -13,6 +13,8 @@ export const QUEST_METRICS = {
   TimeoutSweepRecovered: 'TimeoutSweepRecovered',
   TimeoutSweepCallbacksRedispatched: 'TimeoutSweepCallbacksRedispatched',
   TimeoutSweepStaleCallbacksReenqueued: 'TimeoutSweepStaleCallbacksReenqueued',
+  TimeoutSweepCallbacksFailedLimitReached: 'TimeoutSweepCallbacksFailedLimitReached',
+  TimeoutSweepCallbacksFailedHorizonPassed: 'TimeoutSweepCallbacksFailedHorizonPassed',
 } as const;
 
 export type QuestMetricName = (typeof QUEST_METRICS)[keyof typeof QUEST_METRICS];
