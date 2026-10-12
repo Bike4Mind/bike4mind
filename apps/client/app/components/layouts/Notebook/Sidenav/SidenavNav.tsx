@@ -411,6 +411,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               ? t('sidenav.gearsStartHereCredits', {
                   count: gearsSignal.startHereCredits,
                   credits: gearsSignal.startHereCredits.toLocaleString(i18n.language),
+                  defaultValue: 'Start here, +{{credits}} credits',
                   defaultValue_one: 'Start here, +{{credits}} credit',
                   defaultValue_other: 'Start here, +{{credits}} credits',
                 })
