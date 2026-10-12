@@ -1,6 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DriveConnectionStatus } from '@client/app/hooks/data/driveConnectionDisplay';
+import type { DriveConnectionStatus, DriveSyncSchedule } from '@client/app/hooks/data/driveConnectionDisplay';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { invalidateLakeFileQueries } from '@client/app/hooks/data/invalidateLakeFileQueries';
 
@@ -16,6 +16,9 @@ export type LakeDriveConnection = {
   lastError: string | null;
   lastUsedAt: string | null;
   connectedAt: string | null;
+  /** When the last sync run ended, whatever started it. `lastUsedAt` is the last Drive API call, not a sync. */
+  lastPolledAt: string | null;
+  syncSchedule: DriveSyncSchedule;
   /** How many documents this connection has ingested into the lake - disconnecting deletes all of them. */
   fileCount: number;
   /** A disconnect was accepted and its file purge is running in the background. */

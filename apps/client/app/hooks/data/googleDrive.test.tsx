@@ -214,6 +214,8 @@ describe('driveConnectionPollInterval', () => {
     lastError: null,
     lastUsedAt: null,
     connectedAt: null,
+    lastPolledAt: null,
+    syncSchedule: { mode: 'manual' },
     fileCount: 0,
     disconnecting: false,
     disconnectStalled: false,

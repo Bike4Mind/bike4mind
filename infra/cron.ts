@@ -736,7 +736,8 @@ const creditPurchaseReconciliationCron = new sst.aws.Cron('creditPurchaseReconci
  * against its data lake and applies adds/edits/removals. Dark until both EnableDataLakes and
  * EnableDataLakeDrivePoll admin flags are on (the handler enforces the gate).
  *
- * Schedule: hourly (connections are re-polled at most every ~6h; see POLL_INTERVAL_MS in the handler)
+ * Schedule: hourly (connections are re-polled at most every ~6h; see DRIVE_LAKE_POLL_INTERVAL_MS in
+ * apps/client/server/integrations/google/drive/drivePollSchedule.ts)
  * Enabled: production + dev
  */
 const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {

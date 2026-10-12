@@ -12,6 +12,10 @@ import type { DriveConnectionOwner, IDataLakeDocument, IOrgGoogleDriveConnection
 import type { DriveDisconnectPurgePayload } from '@server/queueHandlers/driveDisconnectPurge';
 import { listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
 import {
+  DRIVE_LAKE_POLL_INTERVAL_MS,
+  isDriveLakePollScheduled,
+} from '@server/integrations/google/drive/drivePollSchedule';
+import {
   authorizeLakeDriveAccess,
   authorizeLakeDriveRead,
 } from '@server/integrations/google/drive/authorizeLakeDriveAccess';
@@ -29,7 +33,7 @@ import { Request } from 'express';
  * `fileCount` rides along so the disconnect-confirmation dialog can warn how many documents a
  * disconnect will delete without a separate round trip.
  */
-function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: number) {
+function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: number, pollEnabled: boolean) {
   return {
     id: c.id,
     driveFolderId: c.driveFolderId,
@@ -40,10 +44,28 @@ function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: numbe
     lastError: c.lastError ?? null,
     lastUsedAt: c.lastUsedAt ?? null,
     connectedAt: c.connectedAt ?? null,
+    // Stamped when ANY sync run ends (manual Re-sync, initial connect or the poll), failed runs too:
+    // with a lastError it is the last ATTEMPT. lastUsedAt is the last Drive API call, not a sync.
+    lastPolledAt: c.lastPolledAt ?? null,
+    syncSchedule: syncScheduleOf(c, pollEnabled),
     fileCount,
     disconnecting: !!c.disconnectRequestedAt,
     disconnectStalled: !!c.disconnectRequestedAt && isDriveDisconnectStalled(c.disconnectRequestedAt),
   };
+}
+
+type DriveSyncSchedule = { mode: 'automatic'; intervalMs: number } | { mode: 'paused' } | { mode: 'manual' };
+
+/**
+ * Whether the scheduled poll will pick this connection up. Mirrors findDueForPoll's filter (enabled +
+ * status 'connected'; a live 'syncing' claim returns to 'connected' when its run ends, a stale one
+ * never does), so a connection the poll skips until someone acts reads as paused, not automatic.
+ */
+function syncScheduleOf(c: IOrgGoogleDriveConnectionDocument, pollEnabled: boolean): DriveSyncSchedule {
+  if (!pollEnabled) return { mode: 'manual' };
+  const pollable = c.status === 'connected' || (c.status === 'syncing' && isDriveSyncClaimLive(c));
+  if (!c.enabled || !pollable) return { mode: 'paused' };
+  return { mode: 'automatic', intervalMs: DRIVE_LAKE_POLL_INTERVAL_MS };
 }
 
 async function findLake(req: Request): Promise<IDataLakeDocument> {
@@ -127,8 +149,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // The confirm number must equal what the purge removes, so it folds in the gate-cleared orphans
     // (files this connection unpicked and left alive) the purge sweeps the same way - the member
     // count alone under-reports exactly the rows this change is about.
-    const orphans = await listDeletableDriveOrphans(lake, conn.id, req.logger);
-    return res.json({ connection: toSafeConnection(conn, fileCount + orphans.length), canManage });
+    const [orphans, pollEnabled] = await Promise.all([
+      listDeletableDriveOrphans(lake, conn.id, req.logger),
+      isDriveLakePollScheduled(),
+    ]);
+    return res.json({ connection: toSafeConnection(conn, fileCount + orphans.length, pollEnabled), canManage });
   })
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
