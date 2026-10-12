@@ -676,11 +676,12 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
   });
 
   it('refunds nothing when a concurrent end or the stale hold sweep settled the hold first', async () => {
-    mocks.findByIdAndUserId.mockResolvedValue({
+    mocks.findByIdAndUserId.mockResolvedValueOnce({
       id: SESSION_ID,
       voiceReservedCredits: RESERVED_CREDITS,
       voiceSessionStartedAt: new Date(Date.now() - 1000),
     });
+    mocks.findByIdAndUserId.mockResolvedValueOnce({ id: SESSION_ID, voiceReservedCredits: null });
     mocks.claimVoiceHold.mockResolvedValue(false);
     const { res, run } = fireEnd();
     await run();
@@ -756,7 +757,7 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
       );
     });
 
-    it('settles nothing when a reconnect appended an id while the call was being measured', async () => {
+    it('returns 409 and settles nothing when a reconnect appended an id while the call was being measured', async () => {
       const held = heldSession();
       mocks.findByIdAndUserId.mockResolvedValue(held);
       providerReplies(200, { status: 'done', metadata: { call_duration_secs: 60 } });
@@ -764,8 +765,7 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
       const { res, run } = fireEnd();
       await run();
       expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, held.voiceSessionStartedAt, ['conv_123']);
-      expect(res._getStatusCode()).toBe(200);
-      expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
+      expect(res._getStatusCode()).toBe(409);
       expect(mocks.incrementCredits).not.toHaveBeenCalled();
     });
 

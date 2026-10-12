@@ -36,6 +36,7 @@ export interface VoiceHoldSweepResult {
   settled: number;
   refundedCredits: number;
   alreadySettled: number;
+  reconnected: number;
   failed: number;
 }
 
@@ -60,6 +61,7 @@ export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHo
     settled: 0,
     refundedCredits: 0,
     alreadySettled: 0,
+    reconnected: 0,
     failed: 0,
   };
 
@@ -68,7 +70,12 @@ export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHo
       const elapsedSeconds = await staleCallSeconds(hold, now);
       const settlement = await settleVoiceHold(hold, elapsedSeconds);
       if (!settlement.settled) {
-        result.alreadySettled++;
+        if (settlement.reason === 'conversation-added') {
+          result.reconnected++;
+          logger.info('[voiceHoldSweep] hold gained a conversation while settling; left live', { sessionId: hold.id });
+        } else {
+          result.alreadySettled++;
+        }
         continue;
       }
       result.settled++;

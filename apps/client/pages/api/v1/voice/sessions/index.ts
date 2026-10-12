@@ -207,7 +207,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
         'The previous voice call on this notebook is still being settled; try again in a few seconds'
       );
     }
-    // settled: false means a concurrent end or the sweep settled it first.
+    // Not settled means a concurrent end or the sweep got there first, or a reconnect kept the hold live.
     const settlement = await settleVoiceHold(hold, measurement.elapsedSeconds);
     if (settlement.settled) staleHoldRefund = settlement.refund;
   }

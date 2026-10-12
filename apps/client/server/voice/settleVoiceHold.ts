@@ -10,15 +10,17 @@ export type VoiceHold = {
   voiceProviderConversationIds?: string[];
 };
 
-export type VoiceHoldSettlement = { settled: false } | { settled: true; owed: number; refund: number };
+export type VoiceHoldSettlement =
+  | { settled: false; reason: 'already-settled' | 'conversation-added' }
+  | { settled: true; owed: number; refund: number };
 
 /**
  * Settle a voice credit hold: keep `elapsedSeconds` of call time (capped at the hold) and refund
  * the rest. The one settlement rule shared by POST /api/v1/voice/sessions/{id}/end and the stale
  * hold sweep (apps/workers/src/cron/voiceHoldSweep.ts). The hold is claimed atomically before any
- * credit moves, so of concurrent settlers exactly one refunds; the others get `settled: false`.
- * So does a settler whose measured ids a reconnect has since added to; the hold stays live and
- * the next end or sweep measures it again.
+ * credit moves, so of concurrent settlers exactly one refunds; the others get `settled: false`
+ * with reason 'already-settled'. A settler whose measured ids a reconnect has since added to gets
+ * 'conversation-added' instead: the hold stays live and the next end or sweep measures it again.
  * The caller supplies `elapsedSeconds`, measured by measureVoiceCallSeconds (./measureVoiceCall.ts).
  *
  * If crediting back throws, the hold is restored and the error rethrown, so the sweep retries it
@@ -30,7 +32,16 @@ export async function settleVoiceHold(hold: VoiceHold, elapsedSeconds: number): 
     hold.voiceSessionStartedAt,
     hold.voiceProviderConversationIds
   );
-  if (!claimed) return { settled: false };
+  if (!claimed) {
+    if (!hold.voiceProviderConversationIds) return { settled: false, reason: 'already-settled' };
+    const current = await sessionRepository.findByIdAndUserId(hold.id, hold.userId, { includeDeleted: true });
+    const stillLive =
+      !!current &&
+      (current.voiceReservedCredits ?? 0) > 0 &&
+      !!current.voiceSessionStartedAt &&
+      new Date(current.voiceSessionStartedAt).getTime() === hold.voiceSessionStartedAt.getTime();
+    return { settled: false, reason: stillLive ? 'conversation-added' : 'already-settled' };
+  }
 
   const owed = creditsForElapsed(hold.voiceReservedCredits, elapsedSeconds);
   const refund = Math.max(0, hold.voiceReservedCredits - owed);

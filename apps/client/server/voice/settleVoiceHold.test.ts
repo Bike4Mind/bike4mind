@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { claimVoiceHold, restoreVoiceHold, incrementCredits } = vi.hoisted(() => ({
+const { claimVoiceHold, findByIdAndUserId, restoreVoiceHold, incrementCredits } = vi.hoisted(() => ({
   claimVoiceHold: vi.fn(),
+  findByIdAndUserId: vi.fn(),
   restoreVoiceHold: vi.fn(),
   incrementCredits: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
-  sessionRepository: { claimVoiceHold, restoreVoiceHold },
+  sessionRepository: { claimVoiceHold, findByIdAndUserId, restoreVoiceHold },
   userRepository: { incrementCredits },
 }));
 
@@ -50,8 +51,42 @@ describe('settleVoiceHold', () => {
   it('moves no credits when another settler claimed the hold first', async () => {
     claimVoiceHold.mockResolvedValue(false);
 
-    expect(await settleVoiceHold(HOLD, 0)).toEqual({ settled: false });
+    expect(await settleVoiceHold(HOLD, 0)).toEqual({ settled: false, reason: 'already-settled' });
+    expect(findByIdAndUserId).not.toHaveBeenCalled();
     expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  describe('when the claim fails on a hold measured against provider ids', () => {
+    const MEASURED = { ...HOLD, voiceProviderConversationIds: ['conv_a'] };
+
+    beforeEach(() => {
+      claimVoiceHold.mockResolvedValue(false);
+    });
+
+    it('reports conversation-added when the same hold is still live', async () => {
+      findByIdAndUserId.mockResolvedValue({
+        id: 's1',
+        voiceReservedCredits: 600,
+        voiceSessionStartedAt: new Date(STARTED),
+      });
+
+      expect(await settleVoiceHold(MEASURED, 0)).toEqual({ settled: false, reason: 'conversation-added' });
+      expect(findByIdAndUserId).toHaveBeenCalledWith('s1', 'u1', { includeDeleted: true });
+      expect(incrementCredits).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the session is gone', null],
+      ['the hold was cleared', { id: 's1', voiceReservedCredits: null, voiceSessionStartedAt: null }],
+      [
+        'a newer hold replaced it',
+        { id: 's1', voiceReservedCredits: 600, voiceSessionStartedAt: new Date('2026-10-11T13:00:00Z') },
+      ],
+    ])('reports already-settled when %s', async (_label, current) => {
+      findByIdAndUserId.mockResolvedValue(current);
+
+      expect(await settleVoiceHold(MEASURED, 0)).toEqual({ settled: false, reason: 'already-settled' });
+    });
   });
 
   it('restores the hold and rethrows when crediting back fails', async () => {

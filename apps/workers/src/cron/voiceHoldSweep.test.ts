@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   findStaleVoiceHolds,
   claimVoiceHold,
+  findByIdAndUserId,
   restoreVoiceHold,
   findTurns,
   incrementCredits,
@@ -12,6 +13,7 @@ const {
   measureVoiceCallSeconds: vi.fn(),
   findStaleVoiceHolds: vi.fn(),
   claimVoiceHold: vi.fn(),
+  findByIdAndUserId: vi.fn(),
   restoreVoiceHold: vi.fn(),
   findTurns: vi.fn(),
   incrementCredits: vi.fn(),
@@ -20,7 +22,7 @@ const {
 
 vi.mock('@bike4mind/database', () => ({
   connectDB,
-  sessionRepository: { findStaleVoiceHolds, claimVoiceHold, restoreVoiceHold },
+  sessionRepository: { findStaleVoiceHolds, claimVoiceHold, findByIdAndUserId, restoreVoiceHold },
   questRepository: { findAllBySessionIdAndGreaterThanOrEqualToTimestamp: findTurns },
   userRepository: { incrementCredits },
 }));
@@ -74,7 +76,14 @@ describe('voiceHoldSweep', () => {
 
     expect(claimVoiceHold).toHaveBeenCalledWith('a', STARTED, undefined);
     expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED);
-    expect(result).toEqual({ candidates: 1, settled: 1, refundedCredits: RESERVED, alreadySettled: 0, failed: 0 });
+    expect(result).toEqual({
+      candidates: 1,
+      settled: 1,
+      refundedCredits: RESERVED,
+      alreadySettled: 0,
+      reconnected: 0,
+      failed: 0,
+    });
   });
 
   it('keeps the evidenced call time, from the hold start to the last turn', async () => {
@@ -123,6 +132,18 @@ describe('voiceHoldSweep', () => {
 
     expect(incrementCredits).not.toHaveBeenCalled();
     expect(result).toMatchObject({ settled: 0, alreadySettled: 1 });
+  });
+
+  it('counts a hold that gained a conversation while settling as reconnected and leaves it live', async () => {
+    findStaleVoiceHolds.mockResolvedValue([{ ...hold('a'), voiceProviderConversationIds: ['conv_1'] }]);
+    claimVoiceHold.mockResolvedValue(false);
+    findByIdAndUserId.mockResolvedValue({ id: 'a', voiceReservedCredits: RESERVED, voiceSessionStartedAt: STARTED });
+    measureVoiceCallSeconds.mockResolvedValue({ kind: 'measured', elapsedSeconds: 60, source: 'provider' });
+
+    const result = await runVoiceHoldSweep(NOW);
+
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ settled: 0, alreadySettled: 0, reconnected: 1 });
   });
 
   it('keeps sweeping after one hold fails', async () => {

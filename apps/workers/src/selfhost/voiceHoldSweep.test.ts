@@ -14,7 +14,14 @@ describe('self-hosted voice hold sweep', () => {
     registerVoiceHoldSweep({ registerScheduledTask });
 
     expect(registerScheduledTask).toHaveBeenCalledWith('voiceHoldSweep', 300_000, expect.any(Function));
-    run.mockResolvedValueOnce({ candidates: 2, settled: 1, refundedCredits: 5, alreadySettled: 0, failed: 1 });
+    run.mockResolvedValueOnce({
+      candidates: 2,
+      settled: 1,
+      refundedCredits: 5,
+      alreadySettled: 0,
+      reconnected: 0,
+      failed: 1,
+    });
     await expect(task?.()).rejects.toThrow('Failed to settle 1 stale voice hold(s)');
   });
 });
