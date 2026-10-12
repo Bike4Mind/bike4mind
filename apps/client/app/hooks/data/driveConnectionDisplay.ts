@@ -112,15 +112,22 @@ export type DriveSyncSchedule = { mode: 'automatic'; intervalMs: number } | { mo
 
 const HOUR_MS = 60 * 60 * 1000;
 
-export function describeDriveSyncSchedule(schedule: DriveSyncSchedule): string {
-  switch (schedule.mode) {
+/**
+ * Null when there is nothing to say: like `status` (see DriveConnectionStatus), the field arrives
+ * unvalidated, so an API that predates it or a mode this build does not know must not crash the panel.
+ */
+export function describeDriveSyncSchedule(schedule: DriveSyncSchedule | undefined): string | null {
+  switch (schedule?.mode) {
     case 'automatic': {
+      // The hourly cron tick and its per-run cap make the real gap a little longer than the interval.
       const hours = Math.max(1, Math.round(schedule.intervalMs / HOUR_MS));
-      return `Syncs automatically every ${hours === 1 ? 'hour' : `${hours} hours`}`;
+      return `Syncs automatically about every ${hours === 1 ? 'hour' : `${hours} hours`}`;
     }
     case 'paused':
       return 'Automatic sync paused';
     case 'manual':
       return 'Syncs only on a manual Re-sync';
+    default:
+      return null;
   }
 }

@@ -25,7 +25,7 @@ const h = vi.hoisted(() => ({
   loadPrefixArmCandidateLakes: vi.fn(async () => []),
   sendToQueue: vi.fn(async () => 'msg-1'),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/drive-disconnect-purge'),
-  isDriveLakePollEnabled: vi.fn(async () => false),
+  isDriveLakePollScheduled: vi.fn(async () => false),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -71,7 +71,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
 });
 vi.mock('@server/integrations/google/drive/drivePollSchedule', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/integrations/google/drive/drivePollSchedule')>()),
-  isDriveLakePollEnabled: h.isDriveLakePollEnabled,
+  isDriveLakePollScheduled: h.isDriveLakePollScheduled,
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
@@ -111,7 +111,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     h.userFindById.mockImplementation(async (id: string) => ({ id }));
     h.connMarkDisconnecting.mockResolvedValue(MARK);
     h.sendToQueue.mockResolvedValue('msg-1');
-    h.isDriveLakePollEnabled.mockResolvedValue(false);
+    h.isDriveLakePollScheduled.mockResolvedValue(false);
   });
 
   it('GET returns a credential-free connection view, with how many files it ingested', async () => {
@@ -174,9 +174,12 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
       expect((await getConnection()).syncSchedule).toEqual({ mode: 'manual' });
     });
 
-    it.each(['connected', 'syncing'])('reports the poll cadence for a %s connection', async status => {
-      h.isDriveLakePollEnabled.mockResolvedValue(true);
-      h.connFindByDataLakeIdAny.mockResolvedValue(conn({ status }));
+    it.each([
+      ['connected', {}],
+      ['live syncing', { status: 'syncing', syncClaimedAt: new Date() }],
+    ])('reports the poll cadence for a %s connection', async (_label, over) => {
+      h.isDriveLakePollScheduled.mockResolvedValue(true);
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn(over));
       expect((await getConnection()).syncSchedule).toEqual({ mode: 'automatic', intervalMs: SIX_HOURS_MS });
     });
 
@@ -184,8 +187,13 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
       ['needs a reconnect', { status: 'needs_reconnect' }],
       ['has a credential error', { status: 'credential_error' }],
       ['is disabled', { enabled: false }],
+      // Stale claim: findDueForPoll only takes 'connected', so it waits on a Re-sync forever.
+      [
+        'is stuck syncing on a stale claim',
+        { status: 'syncing', syncClaimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+      ],
     ])('reports the automatic sync as paused when the connection %s', async (_label, over) => {
-      h.isDriveLakePollEnabled.mockResolvedValue(true);
+      h.isDriveLakePollScheduled.mockResolvedValue(true);
       h.connFindByDataLakeIdAny.mockResolvedValue(conn(over));
       expect((await getConnection()).syncSchedule).toEqual({ mode: 'paused' });
     });

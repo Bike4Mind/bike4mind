@@ -36,7 +36,7 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'https://sqs.example.com/purge' }));
 vi.mock('@server/integrations/google/drive/drivePollSchedule', () => ({
   DRIVE_LAKE_POLL_INTERVAL_MS: 6 * 60 * 60 * 1000,
-  isDriveLakePollEnabled: async () => false,
+  isDriveLakePollScheduled: async () => false,
 }));
 vi.mock('@server/integrations/google/drive/connectorOrphanFiles', () => ({
   listDeletableDriveOrphans: async () => [],

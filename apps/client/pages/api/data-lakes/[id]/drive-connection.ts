@@ -13,7 +13,7 @@ import type { DriveDisconnectPurgePayload } from '@server/queueHandlers/driveDis
 import { listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
 import {
   DRIVE_LAKE_POLL_INTERVAL_MS,
-  isDriveLakePollEnabled,
+  isDriveLakePollScheduled,
 } from '@server/integrations/google/drive/drivePollSchedule';
 import {
   authorizeLakeDriveAccess,
@@ -44,8 +44,8 @@ function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: numbe
     lastError: c.lastError ?? null,
     lastUsedAt: c.lastUsedAt ?? null,
     connectedAt: c.connectedAt ?? null,
-    // Stamped when ANY sync run ends (manual Re-sync, initial connect or the poll), so it is the last
-    // sync, unlike lastUsedAt, which is the last Drive API call.
+    // Stamped when ANY sync run ends (manual Re-sync, initial connect or the poll), failed runs too:
+    // with a lastError it is the last ATTEMPT. lastUsedAt is the last Drive API call, not a sync.
     lastPolledAt: c.lastPolledAt ?? null,
     syncSchedule: syncScheduleOf(c, pollEnabled),
     fileCount,
@@ -58,12 +58,13 @@ type DriveSyncSchedule = { mode: 'automatic'; intervalMs: number } | { mode: 'pa
 
 /**
  * Whether the scheduled poll will pick this connection up. Mirrors findDueForPoll's filter (enabled +
- * status 'connected'; a 'syncing' one returns to 'connected' when its run ends), so a connection the
- * poll skips until it is reconnected reads as paused rather than automatic.
+ * status 'connected'; a live 'syncing' claim returns to 'connected' when its run ends, a stale one
+ * never does), so a connection the poll skips until someone acts reads as paused, not automatic.
  */
 function syncScheduleOf(c: IOrgGoogleDriveConnectionDocument, pollEnabled: boolean): DriveSyncSchedule {
   if (!pollEnabled) return { mode: 'manual' };
-  if (!c.enabled || (c.status !== 'connected' && c.status !== 'syncing')) return { mode: 'paused' };
+  const pollable = c.status === 'connected' || (c.status === 'syncing' && isDriveSyncClaimLive(c));
+  if (!c.enabled || !pollable) return { mode: 'paused' };
   return { mode: 'automatic', intervalMs: DRIVE_LAKE_POLL_INTERVAL_MS };
 }
 
@@ -150,7 +151,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // count alone under-reports exactly the rows this change is about.
     const [orphans, pollEnabled] = await Promise.all([
       listDeletableDriveOrphans(lake, conn.id, req.logger),
-      isDriveLakePollEnabled(),
+      isDriveLakePollScheduled(),
     ]);
     return res.json({ connection: toSafeConnection(conn, fileCount + orphans.length, pollEnabled), canManage });
   })

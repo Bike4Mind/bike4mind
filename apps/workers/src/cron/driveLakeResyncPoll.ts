@@ -22,7 +22,7 @@ import { connectDB, orgGoogleDriveConnectionRepository } from '@bike4mind/databa
 import { Logger } from '@bike4mind/observability';
 import {
   DRIVE_LAKE_POLL_INTERVAL_MS,
-  isDriveLakePollEnabled,
+  readDriveLakePollFlags,
 } from '@server/integrations/google/drive/drivePollSchedule';
 import { Config } from '@server/utils/config';
 import { sendToQueue } from '@server/utils/sqs';
@@ -52,8 +52,9 @@ export async function handler() {
   const stage = Resource.App.stage;
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
 
-  if (!(await isDriveLakePollEnabled())) {
-    logger.info('[driveLakeResyncPoll] disabled; skipping');
+  const { featureOn, pollOn } = await readDriveLakePollFlags();
+  if (!featureOn || !pollOn) {
+    logger.info('[driveLakeResyncPoll] disabled; skipping', { featureOn, pollOn });
     return { statusCode: 200, body: JSON.stringify({ enqueued: 0, disabled: true }) };
   }
 

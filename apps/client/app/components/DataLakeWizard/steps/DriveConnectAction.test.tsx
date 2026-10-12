@@ -137,7 +137,7 @@ describe('DriveConnectAction', () => {
 
     const line = screen.getByTestId('drive-connection-last-synced');
     expect(line).toHaveTextContent(/Last synced 2 hours ago/);
-    expect(line).toHaveTextContent('Syncs automatically every 6 hours');
+    expect(line).toHaveTextContent('Syncs automatically about every 6 hours');
   });
 
   it('says Not synced yet and manual-only before any sync run has ended with the poll off', () => {
@@ -147,6 +147,30 @@ describe('DriveConnectAction', () => {
     const line = screen.getByTestId('drive-connection-last-synced');
     expect(line).toHaveTextContent('Not synced yet');
     expect(line).toHaveTextContent('Syncs only on a manual Re-sync');
+  });
+
+  it('calls a failed run the last sync ATTEMPT, since a failed run stamps lastPolledAt too', () => {
+    h.connection.current = connected({
+      lastPolledAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      lastError: 'Google Drive is rate-limiting this sync.',
+    });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    const line = screen.getByTestId('drive-connection-last-synced');
+    expect(line).toHaveTextContent(/Last sync attempt 10 minutes ago/);
+    expect(line).not.toHaveTextContent('Last synced');
+  });
+
+  it('drops the schedule while disconnecting, when the disabled connection would read as paused', () => {
+    h.connection.current = connected({ disconnecting: true, syncSchedule: { mode: 'paused' } });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connection-last-synced')).not.toHaveTextContent('paused');
+  });
+
+  it('still renders when the API sends no schedule', () => {
+    h.connection.current = connected({ syncSchedule: undefined as never });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connection-last-synced')).toHaveTextContent(/^Not synced yet$/);
   });
 
   it('reports the automatic sync as paused for a connection the poll skips', () => {
