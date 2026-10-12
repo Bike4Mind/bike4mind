@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ISessionDocument } from '@bike4mind/common';
@@ -25,7 +25,9 @@ vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ state: { location: { pathname: '/notebooks/s1' } } }),
   useNavigate: () => vi.fn(),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
+}));
 vi.mock('@client/app/contexts/NotebookSearchContext', () => ({ useNotebookSearch: () => ({ setSearch: vi.fn() }) }));
 vi.mock('@client/app/components/Session/SearchBarWithToggle', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/SessionOwnerBadge', () => ({ default: () => null }));
@@ -70,5 +72,14 @@ describe('NotebookHeader (phone) session title', () => {
     hoisted.cachedSession = { id: 'other', name: 'Other chat' };
     render(<NotebookHeader />, { wrapper: Wrapper });
     expect(screen.getByTestId('header-session-name')).toHaveTextContent('New Notebook');
+  });
+});
+
+describe('NotebookHeader', () => {
+  it('is the page banner landmark and holds the menu toggle', () => {
+    hoisted.currentSession = null;
+    render(<NotebookHeader />, { wrapper: Wrapper });
+    const banner = screen.getByRole('banner');
+    expect(within(banner).getByTestId('notebook-header-menu-btn')).toBeInTheDocument();
   });
 });

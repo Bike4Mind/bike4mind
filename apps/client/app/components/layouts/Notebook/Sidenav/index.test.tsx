@@ -85,3 +85,11 @@ describe('NotebookSideNav conversation list', () => {
     expect(shows('default-notebook-list')).not.toBeNull();
   });
 });
+
+describe('NotebookSideNav landmark', () => {
+  it('is a navigation landmark named Sidebar', () => {
+    h.pathname = '/new';
+    render(<NotebookSideNav />);
+    expect(screen.getByRole('navigation', { name: 'Sidebar' })).toBe(screen.getByTestId('sidenav-container'));
+  });
+});

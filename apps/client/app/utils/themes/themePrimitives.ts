@@ -97,14 +97,17 @@ export const colorSchemes = {
     palette: {
       // Match the outlined-border stroke so dividers and borders share one color.
       divider: gray[800], // #2C3135
+      // Every text token clears 4.5:1 on body, surface, panel and the tinted row and reply grounds
+      // (contrast.test.ts measures it). primary50/primary70 keep their names but no longer their
+      // alphas: 50% read at 4.3:1, and 60% falls to 4.0:1 on the reply bubble.
       text: {
         navLinks: cyan[300],
         icon: brandAlpha[100][50],
         primary: brand[100],
-        primary50: brandAlpha[100][50],
-        primary70: brandAlpha[100][70],
-        secondary: brandAlpha[100][70],
-        tertiary: brandAlpha[100][50],
+        primary50: brandAlpha[100][70],
+        primary70: brandAlpha[100][80],
+        secondary: brandAlpha[100][80],
+        tertiary: brandAlpha[100][70],
       },
       border: {
         light: brandAlpha[100][15],
@@ -222,14 +225,16 @@ export const colorSchemes = {
   },
   light: {
     palette: {
+      // As in dark: each text token clears 4.5:1 on every ground it sits on; at 50-70% brand[400]
+      // measured 2.2-3.4:1. icon is non-text and only needs 3:1.
       text: {
         navLinks: brand[600],
-        icon: brandAlpha[400][50],
+        icon: brandAlpha[400][70],
         primary: brand[400],
-        primary50: brandAlpha[400][50],
-        primary70: brandAlpha[400][70],
-        secondary: brandAlpha[400][60],
-        tertiary: brandAlpha[400][50],
+        primary50: brandAlpha[400][90],
+        primary70: brandAlpha[400][95],
+        secondary: brandAlpha[400][95],
+        tertiary: brandAlpha[400][90],
       },
       border: {
         light: gray[150],
