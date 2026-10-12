@@ -20,6 +20,7 @@ import {
 } from '@bike4mind/database';
 import { sessionService, creditService } from '@bike4mind/services';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
+import { settleVoiceHold } from '@server/voice/settleVoiceHold';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const { userId, sessionId, model, usage } = VoiceSessionEndedAction.parse(JSON.parse(event.body ?? ''));
@@ -101,54 +102,44 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
   }
 
-  // Claim the hold before any credit moves: of this frame, a replay, the end endpoint and the
-  // stale hold sweep (apps/workers/src/cron/voiceHoldSweep.ts), exactly one settles it.
-  if (!(await sessionRepository.claimVoiceHold(session.id, new Date(session.voiceSessionStartedAt)))) {
+  // Settles through the shared rule: of this frame, a replay, the end endpoint and the stale hold
+  // sweep, exactly one settles the hold and moves the balance.
+  const settlement = await settleVoiceHold(
+    {
+      id: session.id,
+      userId: user.id,
+      voiceReservedCredits: voiceReservedCredits ?? null,
+      voiceSessionStartedAt: new Date(session.voiceSessionStartedAt),
+      voiceConnectedAt: session.voiceConnectedAt ?? null,
+      voiceLastActivityAt: session.voiceLastActivityAt ?? null,
+      voiceBillingMode: session.voiceBillingMode ?? null,
+    },
+    { kind: 'realtime', reportedCredits: actualCredits, openUntil: new Date() },
+    'realtime-frame'
+  );
+  if (!settlement.settled) {
     logger.warn(`voiceSessionEnded: session ${sessionId} hold already settled - ignoring`);
     return { statusCode: 200 };
   }
 
-  if (voiceReservedCredits != null) {
-    // Reservation pattern: balance already decremented at session start.
-    // Reconcile: refund overage or charge underage via delta.
-    const delta = voiceReservedCredits - actualCredits;
-    if (delta !== 0) {
-      await userRepository.incrementCredits(user.id, delta);
+  // Audit record of what was charged (usage, or the open-time floor when that is higher); the
+  // balance was already settled above.
+  await creditService.subtractCredits(
+    {
+      ownerId: user.id,
+      ownerType: CreditHolderType.User,
+      credits: settlement.chargedCredits,
+      type: 'realtime_voice_usage',
+      model,
+      sessionId,
+    },
+    {
+      db: { creditTransactions: creditTransactionRepository },
+      creditHolderMethods: userRepository,
+      skipBalanceUpdate: true,
+      currentCreditHolder: user,
     }
-    // Create audit transaction for actual cost
-    await creditService.subtractCredits(
-      {
-        ownerId: user.id,
-        ownerType: CreditHolderType.User,
-        credits: actualCredits,
-        type: 'realtime_voice_usage',
-        model,
-        sessionId,
-      },
-      {
-        db: { creditTransactions: creditTransactionRepository },
-        creditHolderMethods: userRepository,
-        skipBalanceUpdate: true,
-        currentCreditHolder: user,
-      }
-    );
-  } else {
-    // No reservation (enforceCredits was off at session start) - deduct normally
-    await creditService.subtractCredits(
-      {
-        ownerId: user.id,
-        ownerType: CreditHolderType.User,
-        credits: actualCredits,
-        type: 'realtime_voice_usage',
-        model,
-        sessionId,
-      },
-      {
-        db: { creditTransactions: creditTransactionRepository },
-        creditHolderMethods: userRepository,
-      }
-    );
-  }
+  );
 
   // Dual-write usage event: analytics only, never billing.
   usageEventRepository
@@ -166,13 +157,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       cachedInputTokens: usage.textCachedInputTokens + usage.audioCachedInputTokens,
       cacheWriteTokens: 0,
       costUsd: totalUsd,
-      creditsCharged: actualCredits,
+      creditsCharged: settlement.chargedCredits,
       status: 'ok',
       latencyMs: Date.now() - new Date(session.voiceSessionStartedAt).getTime(),
     })
     .catch(err => logger.warn('Failed to record usage event', err));
 
-  const credits = actualCredits;
+  const credits = settlement.chargedCredits;
 
   // Check if credits are now exhausted and enforcement is enabled
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });

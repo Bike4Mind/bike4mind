@@ -18,6 +18,7 @@ import {
   SessionListFilters,
   SessionOriginChannel,
   tagAttemptDueFilter,
+  VoiceHoldMarkers,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
@@ -275,6 +276,9 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     },
     voiceReservedCredits: { type: Number, required: false, default: null },
     voiceSessionStartedAt: { type: Date, required: false, default: null },
+    voiceConnectedAt: { type: Date, required: false, default: null },
+    voiceLastActivityAt: { type: Date, required: false, default: null },
+    voiceBillingMode: { type: String, enum: ['connected_time', 'realtime', null], required: false, default: null },
     ...ShareableDocumentSchema,
   },
   {
@@ -651,7 +655,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     const sessions = await this.sessionModel
       .find(
         { voiceSessionStartedAt: { $lt: startedBefore }, voiceReservedCredits: { $gt: 0 } },
-        { userId: 1, voiceReservedCredits: 1, voiceSessionStartedAt: 1 }
+        {
+          userId: 1,
+          voiceReservedCredits: 1,
+          voiceSessionStartedAt: 1,
+          voiceConnectedAt: 1,
+          voiceLastActivityAt: 1,
+          voiceBillingMode: 1,
+        }
       )
       .sort({ voiceSessionStartedAt: 1 })
       .limit(limit)
@@ -661,7 +672,16 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       userId: s.userId,
       voiceReservedCredits: s.voiceReservedCredits as number,
       voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
+      voiceConnectedAt: s.voiceConnectedAt ?? null,
+      voiceLastActivityAt: s.voiceLastActivityAt ?? null,
+      voiceBillingMode: s.voiceBillingMode ?? null,
     }));
+  }
+
+  async recordVoiceActivity(sessionId: string, at: Date) {
+    const openHold = { _id: sessionId, voiceSessionStartedAt: { $ne: null } };
+    await this.sessionModel.updateOne({ ...openHold, voiceConnectedAt: null }, { $set: { voiceConnectedAt: at } });
+    await this.sessionModel.updateOne(openHold, { $max: { voiceLastActivityAt: at } });
   }
 
   async claimVoiceHold(sessionId: string, startedAt: Date) {
@@ -669,17 +689,38 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     // end, sweep or settlement frame wins, and a newer call's hold is never touched.
     const claimed = await this.sessionModel.findOneAndUpdate(
       { _id: sessionId, voiceSessionStartedAt: startedAt },
-      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null } },
+      {
+        $set: {
+          voiceReservedCredits: null,
+          voiceSessionStartedAt: null,
+          voiceConnectedAt: null,
+          voiceLastActivityAt: null,
+          voiceBillingMode: null,
+        },
+      },
       { projection: { _id: 1 } }
     );
     return claimed != null;
   }
 
-  async restoreVoiceHold(sessionId: string, voiceReservedCredits: number, startedAt: Date) {
+  async restoreVoiceHold(
+    sessionId: string,
+    voiceReservedCredits: number | null,
+    startedAt: Date,
+    markers: VoiceHoldMarkers = {}
+  ) {
     // Only while no newer call has started a hold on the session.
     const { modifiedCount } = await this.sessionModel.updateOne(
       { _id: sessionId, voiceSessionStartedAt: null },
-      { $set: { voiceReservedCredits, voiceSessionStartedAt: startedAt } }
+      {
+        $set: {
+          voiceReservedCredits,
+          voiceSessionStartedAt: startedAt,
+          voiceConnectedAt: markers.voiceConnectedAt ?? null,
+          voiceLastActivityAt: markers.voiceLastActivityAt ?? null,
+          voiceBillingMode: markers.voiceBillingMode ?? null,
+        },
+      }
     );
     return modifiedCount === 1;
   }

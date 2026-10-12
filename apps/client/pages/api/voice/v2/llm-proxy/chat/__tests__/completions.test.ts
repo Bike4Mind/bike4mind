@@ -54,8 +54,12 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
 }));
 
+const mockRecordVoiceActivity = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  sessionRepository: {
+    recordVoiceActivity: (...args: unknown[]) => mockRecordVoiceActivity(...args),
+  },
   questRepository: {
     findAllBySessionIdAndGreaterThanOrEqualToTimestamp: (...args: unknown[]) => mockFindDuplicateQuests(...args),
     markStopped: vi.fn().mockResolvedValue(undefined),
@@ -133,6 +137,7 @@ function primeSuccessfulTurn() {
     reasoningModelId: 'test-model',
   });
   mockFindDuplicateQuests.mockResolvedValue([]);
+  mockRecordVoiceActivity.mockResolvedValue(undefined);
   mockUserFindById.mockResolvedValue({ id: 'user-1' });
   mockGetSettingsMap.mockResolvedValue({});
   mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
@@ -194,5 +199,34 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - apiKeyId', () => {
 
     expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBeUndefined();
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBeUndefined();
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  it("marks the token's session connected and alive on every verified turn", async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date));
+  });
+
+  it('records nothing for a turn whose token does not verify', async () => {
+    mockVerifyVoiceSessionToken.mockImplementation(() => {
+      throw new Error('bad token');
+    });
+    const res = { ...makeRes(), status: () => ({ json: () => undefined }) };
+
+    await handler(makeReq() as never, res as never);
+
+    expect(mockRecordVoiceActivity).not.toHaveBeenCalled();
+  });
+
+  it('still answers the turn when recording the activity fails', async () => {
+    mockRecordVoiceActivity.mockRejectedValue(new Error('db blip'));
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).toHaveBeenCalled();
   });
 });

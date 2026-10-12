@@ -1,4 +1,4 @@
-import { Connection, questRepository, userRepository } from '@bike4mind/database';
+import { Connection, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { ApiKeyScope, Permission, VoiceSessionSendTranscriptAction } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
@@ -60,6 +60,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     ...turn,
     ...(timestamp ? { timestamp } : {}),
   });
+
+  // A transcript frame is the server's own sighting of a live realtime call: the stale hold sweep
+  // floors an unsettled realtime hold by the time up to its last one.
+  await sessionRepository.recordVoiceActivity(sessionId, new Date());
 
   return { statusCode: 200 };
 });

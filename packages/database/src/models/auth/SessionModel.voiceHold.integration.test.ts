@@ -88,4 +88,32 @@ describe('sessionRepository voice holds', () => {
     expect(await sessionRepository.restoreVoiceHold(id, 999, minutesAgo(1))).toBe(false);
     expect(await Session.findById(id).lean()).toMatchObject({ voiceReservedCredits: 100 });
   });
+
+  it('marks a hold connected once and keeps its latest activity', async () => {
+    const id = await seed('call', 100, minutesAgo(10));
+    const first = minutesAgo(9);
+    const later = minutesAgo(5);
+
+    await sessionRepository.recordVoiceActivity(id, first);
+    await sessionRepository.recordVoiceActivity(id, later);
+    // A delayed report from earlier must not move either marker back.
+    await sessionRepository.recordVoiceActivity(id, minutesAgo(8));
+
+    const after = await Session.findById(id).lean();
+    expect(after?.voiceConnectedAt).toEqual(first);
+    expect(after?.voiceLastActivityAt).toEqual(later);
+    const [stale] = await sessionRepository.findStaleVoiceHolds(new Date(), 1);
+    expect(stale).toMatchObject({ voiceConnectedAt: first, voiceLastActivityAt: later });
+  });
+
+  it('records no activity without an open hold, and a claim clears the markers', async () => {
+    const startedAt = minutesAgo(10);
+    const id = await seed('call', 100, startedAt);
+    await sessionRepository.recordVoiceActivity(id, minutesAgo(9));
+
+    await sessionRepository.claimVoiceHold(id, startedAt);
+    await sessionRepository.recordVoiceActivity(id, minutesAgo(1));
+
+    expect(await Session.findById(id).lean()).toMatchObject({ voiceConnectedAt: null, voiceLastActivityAt: null });
+  });
 });

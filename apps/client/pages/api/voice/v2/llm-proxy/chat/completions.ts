@@ -6,7 +6,7 @@
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
 import { DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
-import { adminSettingsRepository, questRepository, userRepository } from '@bike4mind/database';
+import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
   ChatCompletionFeature,
   ChatCompletionInvoke,
@@ -232,6 +232,13 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   }
 
   const model = sessionCtx.reasoningModelId;
+
+  // ElevenLabs calling the proxy with a valid token is server-to-server proof the call is live
+  // (it also calls on user silence), so it marks the hold connected without trusting the browser.
+  // Fire-and-forget: it must not delay the turn's first token.
+  sessionRepository.recordVoiceActivity(sessionCtx.sessionId, new Date()).catch(err => {
+    req.logger.warn({ err }, '[voice-v2/llm-proxy] failed to record voice activity');
+  });
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');

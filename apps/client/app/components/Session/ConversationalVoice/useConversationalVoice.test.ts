@@ -125,4 +125,31 @@ describe('useConversationalVoice — auto-reconnect', () => {
     expect(useConversationalVoiceStore.getState().phase).toBe('ended');
     expect(endCalls().length).toBeGreaterThanOrEqual(1);
   });
+
+  const activityCalls = () => apiPost.mock.calls.filter(([url]) => String(url).endsWith('/activity'));
+
+  it('reports the call connected, beats while it stays up, and stops once it ends', async () => {
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    expect(activityCalls()).toHaveLength(0);
+
+    onConnect();
+    expect(activityCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/activity']);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(activityCalls()).toHaveLength(3);
+
+    await useConversationalVoiceStore.getState().end();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(activityCalls()).toHaveLength(3);
+  });
+
+  it('stops beating while a dropped call reconnects', async () => {
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    onConnect();
+    onDisconnect({ reason: 'error', message: 'drop', context: new Event('close') });
+
+    // The reconnect re-establishes but never comes back up.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(activityCalls()).toHaveLength(1);
+  });
 });

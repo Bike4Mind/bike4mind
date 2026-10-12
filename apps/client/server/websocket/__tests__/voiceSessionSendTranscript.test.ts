@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   sessionFindOne: vi.fn(),
   userFindById: vi.fn(),
   upsertVoiceTranscriptTurn: vi.fn(),
+  recordVoiceActivity: vi.fn(),
   ofType: vi.fn(),
   accessibleBy: vi.fn(),
 }));
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   Connection: { findOne: mocks.connectionFindOne },
   questRepository: { upsertVoiceTranscriptTurn: mocks.upsertVoiceTranscriptTurn },
+  sessionRepository: { recordVoiceActivity: mocks.recordVoiceActivity },
   userRepository: { findById: mocks.userFindById },
 }));
 
@@ -67,6 +69,7 @@ describe('voiceSessionSendTranscript authorization', () => {
     mocks.ofType.mockReturnValue({ scopeMarker: 'update-scope' });
     mocks.sessionFindOne.mockResolvedValue({ _id: 'session-1' });
     mocks.upsertVoiceTranscriptTurn.mockResolvedValue({});
+    mocks.recordVoiceActivity.mockResolvedValue(undefined);
   });
 
   const run = () => func(event as never, {} as never, logger as never);
@@ -89,12 +92,19 @@ describe('voiceSessionSendTranscript authorization', () => {
     );
   });
 
+  it('records the frame as server-seen activity on the call', async () => {
+    await run();
+
+    expect(mocks.recordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date));
+  });
+
   it('writes nothing when the session is readable but not writable by the caller', async () => {
     // A sharee holding only [read, share] falls out of the accessibleBy(update) filter.
     mocks.sessionFindOne.mockResolvedValue(null);
 
     expect(await run()).toEqual({ statusCode: 200 });
     expect(mocks.upsertVoiceTranscriptTurn).not.toHaveBeenCalled();
+    expect(mocks.recordVoiceActivity).not.toHaveBeenCalled();
   });
 
   it('writes nothing when the socket was opened with a bridge-only key', async () => {

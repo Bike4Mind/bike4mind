@@ -20,7 +20,7 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
 import { z } from 'zod';
@@ -89,8 +89,7 @@ const handler = baseApi().post(async (req, res) => {
 
   // Pre-reserve credits for max session duration (60 min x ~$0.77/hr audio)
   // Reservation prevents unbounded post-facto billing for long sessions.
-  const VOICE_RESERVE_USD = 0.77; // ~60 min worst-case cost
-  const reservedCredits = usdToCredits(VOICE_RESERVE_USD);
+  const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
   if (enforceCredits && !isReconnect) {
     const currentCredits = req.user?.currentCredits ?? 0;
     if (currentCredits < reservedCredits) {
@@ -399,6 +398,9 @@ When you get the tool result back, summarize it conversationally for voice.`;
       id: session.id,
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
       voiceSessionStartedAt,
+      voiceConnectedAt: null,
+      voiceLastActivityAt: null,
+      voiceBillingMode: 'realtime',
     });
   }
 

@@ -848,6 +848,31 @@ export interface ISession {
    * Used to enforce the 60-minute hard cap.
    */
   voiceSessionStartedAt?: Date | null;
+
+  /**
+   * When the open voice call was first seen connected (the client's connect report or the first
+   * provider turn). Null until then and cleared when the hold settles; a call that never
+   * connected is not billed.
+   */
+  voiceConnectedAt?: Date | null;
+
+  /** Latest sign of life from the open voice call (client heartbeat or provider turn). */
+  voiceLastActivityAt?: Date | null;
+
+  /**
+   * How the open hold is billed: `connected_time` (ElevenLabs calls) or `realtime` (OpenAI realtime
+   * calls, billed on usage with a time floor). Null on holds opened before it was recorded.
+   */
+  voiceBillingMode?: VoiceBillingMode | null;
+}
+
+export type VoiceBillingMode = 'connected_time' | 'realtime';
+
+/** The per-call state a claimed voice hold carries, restored with it if its settlement fails. */
+export interface VoiceHoldMarkers {
+  voiceConnectedAt?: Date | null;
+  voiceLastActivityAt?: Date | null;
+  voiceBillingMode?: VoiceBillingMode | null;
 }
 
 ///////////
@@ -1145,7 +1170,23 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   findStaleVoiceHolds: (
     startedBefore: Date,
     limit: number
-  ) => Promise<Array<{ id: string; userId: string; voiceReservedCredits: number; voiceSessionStartedAt: Date }>>;
+  ) => Promise<
+    Array<{
+      id: string;
+      userId: string;
+      voiceReservedCredits: number;
+      voiceSessionStartedAt: Date;
+      voiceConnectedAt: Date | null;
+      voiceLastActivityAt: Date | null;
+      voiceBillingMode: VoiceBillingMode | null;
+    }>
+  >;
+
+  /**
+   * Record that the session's open voice call is connected and alive at `at`: sets
+   * voiceConnectedAt the first time and advances voiceLastActivityAt. A no-op without an open hold.
+   */
+  recordVoiceActivity: (sessionId: string, at: Date) => Promise<void>;
 
   /**
    * Atomically clear the voice hold that started at `startedAt`. Resolves true for the single
@@ -1154,8 +1195,14 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   claimVoiceHold: (sessionId: string, startedAt: Date) => Promise<boolean>;
 
   /**
-   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, so it can be settled
-   * again. Resolves false (and writes nothing) when the session already holds a newer call.
+   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, with its per-call
+   * `markers`, so it can be settled again. Resolves false (and writes nothing) when the session
+   * already holds a newer call.
    */
-  restoreVoiceHold: (sessionId: string, voiceReservedCredits: number, startedAt: Date) => Promise<boolean>;
+  restoreVoiceHold: (
+    sessionId: string,
+    voiceReservedCredits: number | null,
+    startedAt: Date,
+    markers?: VoiceHoldMarkers
+  ) => Promise<boolean>;
 }

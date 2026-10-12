@@ -139,6 +139,7 @@ import endHandler from '../sessions/[id]/end';
 import legacyVoicesHandler from '../../../voice/v2/voices';
 import legacySessionsHandler from '../../../voice/v2/sessions';
 import legacyEndHandler from '../../../voice/v2/sessions/[id]/end';
+import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
 import legacyAgentsHandler from '../../../voice/v2/agents';
 import {
   ApiKeyScope,
@@ -530,6 +531,33 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(mocks.claimVoiceHold.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.incrementCredits.mock.invocationCallOrder[0]
     );
+  });
+
+  it('refunds the whole hold of a call that never connected', async () => {
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: new Date(Date.now() - 120_000),
+      voiceConnectedAt: null,
+    });
+    const { res, run } = fireEnd();
+    await run();
+    expect(res._getJSONData()).toMatchObject({ refunded: RESERVED_CREDITS });
+  });
+
+  it('bills a connected call from its connect, not from the hold start', async () => {
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: new Date(Date.now() - MAX_SESSION_SECONDS * 1000),
+      voiceConnectedAt: new Date(Date.now() - (MAX_SESSION_SECONDS * 1000) / 2),
+    });
+    const { res, run } = fireEnd();
+    await run();
+    const { refunded } = res._getJSONData();
+    // About half the hold: connected for half the longest call.
+    expect(refunded).toBeGreaterThan(RESERVED_CREDITS * 0.45);
+    expect(refunded).toBeLessThan(RESERVED_CREDITS * 0.55);
   });
 
   it('refunds nothing when a concurrent end or the stale hold sweep settled the hold first', async () => {

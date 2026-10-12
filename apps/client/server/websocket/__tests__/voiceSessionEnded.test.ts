@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   connectionFindOne: vi.fn(),
@@ -33,6 +33,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: vi.fn(() => false),
   NotFoundError: class NotFoundError extends Error {},
+  usdToCredits: () => 100,
   usdToCreditsStochastic: () => 40,
 }));
 vi.mock('@server/voice/realtimeVoicePricing', () => ({ pickRealtimeVoiceTier: () => ({ tier: {} }) }));
@@ -70,11 +71,17 @@ const settle = () => (func as unknown as (...args: unknown[]) => Promise<unknown
 describe('voiceSessionEnded hold claim', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // One minute into the call, so the open-time floor stays below the reported usage.
+    vi.useFakeTimers({ now: new Date(STARTED.getTime() + 60_000) });
     mocks.connectionFindOne.mockResolvedValue({ userId: 'user-1' });
     mocks.userFindById.mockResolvedValue({ id: 'user-1' });
     mocks.getSession.mockResolvedValue({ id: 'session-1', voiceReservedCredits: 100, voiceSessionStartedAt: STARTED });
     mocks.claimVoiceHold.mockResolvedValue(true);
     mocks.recordUsageEvent.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('claims the hold at its start time, then reconciles the reservation', async () => {
@@ -103,5 +110,15 @@ describe('voiceSessionEnded hold claim', () => {
     await settle();
 
     expect(mocks.claimVoiceHold).not.toHaveBeenCalled();
+  });
+
+  it('settles a frame reporting less than the open time at no less than that time', async () => {
+    // 30 minutes in: the floor is half the 100-credit hold, above the 40 credits the frame reports.
+    vi.setSystemTime(new Date(STARTED.getTime() + 30 * 60_000));
+
+    await settle();
+
+    expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', 50);
+    expect(mocks.subtractCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 50 }), expect.anything());
   });
 });

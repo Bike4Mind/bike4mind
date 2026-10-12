@@ -220,6 +220,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       id: session.id,
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
       voiceSessionStartedAt,
+      voiceConnectedAt: null,
+      voiceLastActivityAt: null,
+      voiceBillingMode: 'connected_time',
     });
   }
 
