@@ -70,6 +70,8 @@ import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import EditIcon from '@mui/icons-material/Edit';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { formatAnswerCost } from '@client/app/utils/formatCredits';
+import { answerCostBreakdown, formatCostParts } from '@client/app/utils/answerCostBreakdown';
+import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
@@ -686,6 +688,8 @@ const MessageContent: React.FC<ContentProps> = memo(
       const modelInfo = modelInfoRepo.find(m => m.id === modelName);
       return modelInfo?.name || modelName;
     };
+
+    const costParts = answerCostBreakdown(messageData.promptMeta, getToolDisplayName);
 
     return (
       <Stack
@@ -1393,7 +1397,23 @@ const MessageContent: React.FC<ContentProps> = memo(
             currentUser?.showCreditsUsed !== false &&
             !isProcessingPrompt &&
             typeof messageData.creditsUsed === 'number' ? (
-              <Tooltip title="Credits this answer used. You can hide this in your profile.">
+              <Tooltip
+                title={
+                  costParts.length > 0 ? (
+                    <Box data-testid="credits-used-breakdown">
+                      {costParts.map(part => (
+                        <Box key={`${part.label}|${part.model ?? ''}`}>
+                          {part.label}
+                          {part.model ? ` (${getModelDisplayName(part.model)})` : ''}: {formatAnswerCost(part.credits)}
+                        </Box>
+                      ))}
+                      <Box sx={{ mt: 0.5 }}>You can hide this in your profile.</Box>
+                    </Box>
+                  ) : (
+                    'Credits this answer used. You can hide this in your profile.'
+                  )
+                }
+              >
                 <Chip
                   data-testid="credits-used"
                   size="sm"
@@ -1402,6 +1422,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                   startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
                 >
                   {formatAnswerCost(messageData.creditsUsed)}
+                  {costParts.length > 0 && ` (${formatCostParts(costParts)})`}
                 </Chip>
               </Tooltip>
             ) : null}

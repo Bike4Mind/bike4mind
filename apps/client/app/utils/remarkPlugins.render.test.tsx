@@ -1,19 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Options } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { promoteInlineLatexDollars, remarkGfmNoSingleTilde } from './remarkPlugins';
+import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from './remarkPlugins';
+
+type PluginList = NonNullable<Options['remarkPlugins']>;
 
 // Asserts on rendered KaTeX, not the preprocessed string, because the failure mode is the parser
-// eating `\(`/`\[` as escapes. Plugin sets mirror PromptReplies (gfm) and UserPrompt (breaks).
-const PLUGIN_SETS = {
-  'assistant reply (gfm)': [remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]],
+// eating `\(`/`\[` as escapes. The user bubble set mirrors UserPrompt.
+const PLUGIN_SETS: Record<string, PluginList> = {
+  'assistant reply': assistantReplyRemarkPlugins,
   'user bubble (breaks)': [remarkBreaks, [remarkMath, { singleDollarTextMath: false }]],
-} as const;
+};
 
-function render(markdown: string, remarkPlugins: (typeof PLUGIN_SETS)[keyof typeof PLUGIN_SETS]) {
+function render(markdown: string, remarkPlugins: PluginList) {
   const html = renderToStaticMarkup(
     <ReactMarkdown remarkPlugins={[...remarkPlugins]} rehypePlugins={[rehypeKatex]}>
       {promoteInlineLatexDollars(markdown)}
@@ -125,5 +127,33 @@ describe.each(Object.entries(PLUGIN_SETS))('LaTeX delimiters render as KaTeX: %s
     const para = Array.from(doc.querySelectorAll('p')).find(el => el.textContent?.includes('Next paragraph.'));
     expect(para).toBeDefined();
     expect(para!.closest('.katex')).toBeNull();
+  });
+});
+
+describe('assistant reply line breaks', () => {
+  const renderReply = (markdown: string) => {
+    const html = renderToStaticMarkup(
+      <ReactMarkdown remarkPlugins={assistantReplyRemarkPlugins}>{markdown}</ReactMarkdown>
+    );
+    return new DOMParser().parseFromString(html, 'text/html');
+  };
+
+  it('keeps one signature line per line instead of joining them', () => {
+    const doc = renderReply('Atentamente,\n[Su nombre]\n[Nombre de la tienda]\nMadrid');
+    expect(doc.querySelectorAll('p')).toHaveLength(1);
+    expect(doc.querySelectorAll('p br')).toHaveLength(3);
+  });
+
+  it('leaves fenced code untouched', () => {
+    const doc = renderReply('```\nline one\nline two\n```');
+    expect(doc.querySelectorAll('br')).toHaveLength(0);
+    expect(doc.querySelector('code')?.textContent).toBe('line one\nline two\n');
+  });
+
+  it('still renders tables and lists', () => {
+    const doc = renderReply('| a | b |\n| - | - |\n| 1 | 2 |\n\n- one\n- two');
+    expect(doc.querySelectorAll('table td')).toHaveLength(2);
+    expect(doc.querySelectorAll('li')).toHaveLength(2);
+    expect(doc.querySelectorAll('br')).toHaveLength(0);
   });
 });

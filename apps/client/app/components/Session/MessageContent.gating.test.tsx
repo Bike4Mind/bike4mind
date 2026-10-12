@@ -688,6 +688,23 @@ describe('MessageContent per-message credits-used chip - enforceCredits gating',
     expect(screen.queryByTestId('credits-used')).not.toBeInTheDocument();
   });
 
+  it('splits an image answer into the chat and image-tool shares', () => {
+    mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: true }];
+    mocks.showCreditsUsed = true;
+
+    renderMessageContent({
+      ...messageData,
+      creditsUsed: 184,
+      promptMeta: {
+        ...(messageData as IChatHistoryItem).promptMeta,
+        tokenUsage: { creditsUsed: 64 },
+        functionCalls: [{ name: 'image_generation', creditsUsed: 120 }],
+      },
+    } as unknown as IChatHistoryItem);
+
+    expect(screen.getByTestId('credits-used')).toHaveTextContent('184 credits (Chat 64 + Image Generation 120)');
+  });
+
   it('hides the chip when the enforceCredits setting is unset (self-host default)', () => {
     mocks.serverSettings = [];
     mocks.showCreditsUsed = true;

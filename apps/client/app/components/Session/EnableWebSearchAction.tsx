@@ -1,0 +1,55 @@
+import { FC } from 'react';
+import { Box, Button, Typography } from '@mui/joy';
+import TravelExploreIcon from '@mui/icons-material/TravelExplore';
+import { toast } from 'sonner';
+import { useShallow } from 'zustand/react/shallow';
+import { useLLM } from '@client/app/contexts/LLMContext';
+import { useConfig } from '@client/app/hooks/data/settings';
+import { isToolKeyMissing } from '@client/app/utils/toolMapping';
+import { replyReportsNoWebSearch } from '@client/app/utils/webSearchUnavailable';
+
+/**
+ * Under a reply that says it had no search tool, offers the same switch as Tools > Web Search.
+ * Hidden once Web Search is on, and when the deployment has no search key (the switch is disabled
+ * there too, see ToolsSection).
+ */
+const EnableWebSearchAction: FC<{ reply: string }> = ({ reply }) => {
+  const [tools, setLLM] = useLLM(useShallow(s => [s.tools, s.setLLM]));
+  const { data: config } = useConfig();
+
+  if (
+    tools.includes('web_search') ||
+    isToolKeyMissing('web_search', config?.toolAvailability) ||
+    !replyReportsNoWebSearch(reply)
+  ) {
+    return null;
+  }
+
+  const enable = () => {
+    setLLM({ tools: [...tools, 'web_search'] });
+    toast.success('Web Search is on. Send your question again to search the web.');
+  };
+
+  return (
+    <Box
+      data-testid="enable-web-search-action"
+      sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mt: 1 }}
+    >
+      <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+        Web Search is off for this chat.
+      </Typography>
+      <Button
+        size="sm"
+        variant="soft"
+        color="primary"
+        startDecorator={<TravelExploreIcon />}
+        onClick={enable}
+        data-testid="enable-web-search-btn"
+      >
+        Enable web search
+      </Button>
+    </Box>
+  );
+};
+
+export default EnableWebSearchAction;

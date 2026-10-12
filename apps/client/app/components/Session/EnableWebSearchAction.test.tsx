@@ -1,0 +1,59 @@
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+
+const hoisted = vi.hoisted(() => ({
+  tools: [] as string[],
+  setLLM: vi.fn(),
+  toolAvailability: undefined as Record<string, boolean> | undefined,
+}));
+
+vi.mock('@client/app/contexts/LLMContext', () => ({
+  useLLM: (selector: (s: unknown) => unknown) => selector({ tools: hoisted.tools, setLLM: hoisted.setLLM }),
+}));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useConfig: () => ({ data: { toolAvailability: hoisted.toolAvailability } }),
+}));
+vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
+
+import EnableWebSearchAction from './EnableWebSearchAction';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const Wrapper = ({ children }: { children: ReactNode }) => (
+  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+);
+
+const NO_SEARCH_REPLY = 'Sorry, no search tool is connected, so I cannot look that up.';
+
+describe('EnableWebSearchAction', () => {
+  beforeEach(() => {
+    hoisted.tools = ['current_datetime'];
+    hoisted.setLLM.mockReset();
+    hoisted.toolAvailability = undefined;
+  });
+
+  it('turns Web Search on when the reply says no search tool is connected', () => {
+    render(<EnableWebSearchAction reply={NO_SEARCH_REPLY} />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByTestId('enable-web-search-btn'));
+    expect(hoisted.setLLM).toHaveBeenCalledWith({ tools: ['current_datetime', 'web_search'] });
+  });
+
+  it('stays hidden for an ordinary reply', () => {
+    render(<EnableWebSearchAction reply="Here is your answer." />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('enable-web-search-action')).not.toBeInTheDocument();
+  });
+
+  it('stays hidden once Web Search is already on', () => {
+    hoisted.tools = ['web_search'];
+    render(<EnableWebSearchAction reply={NO_SEARCH_REPLY} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('enable-web-search-action')).not.toBeInTheDocument();
+  });
+
+  it('stays hidden when the deployment has no search key', () => {
+    hoisted.toolAvailability = { web_search: false };
+    render(<EnableWebSearchAction reply={NO_SEARCH_REPLY} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('enable-web-search-action')).not.toBeInTheDocument();
+  });
+});

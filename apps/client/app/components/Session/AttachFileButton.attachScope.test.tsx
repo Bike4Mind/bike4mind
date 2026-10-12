@@ -140,3 +140,35 @@ describe('AttachFileButton attach-scope control', () => {
     expect(screen.getByText('Nothing is kept - files attach to one message only.')).toBeInTheDocument();
   });
 });
+
+describe('AttachFileButton menu after a file is attached', () => {
+  const button = (totalFilesCount: number) => (
+    <Wrapper>
+      <AttachFileButton
+        onUploadFromComputer={vi.fn()}
+        onAddFromGoogleDrive={vi.fn()}
+        onAddFromFileBrowser={vi.fn()}
+        attachScopeMode="auto"
+        onAttachScopeModeChange={vi.fn()}
+        totalFilesCount={totalFilesCount}
+      />
+    </Wrapper>
+  );
+
+  it('closes when the attached file count goes up', () => {
+    const { rerender } = render(button(0));
+    fireEvent.click(screen.getByTestId('attach-files-btn'));
+    expect(screen.getByTestId('attach-file-scope-radiogroup')).toBeInTheDocument();
+
+    rerender(button(1));
+    expect(screen.queryByTestId('attach-file-scope-radiogroup')).not.toBeInTheDocument();
+  });
+
+  it('stays open when a file is removed', () => {
+    const { rerender } = render(button(2));
+    fireEvent.click(screen.getByTestId('attach-files-btn'));
+
+    rerender(button(1));
+    expect(screen.getByTestId('attach-file-scope-radiogroup')).toBeInTheDocument();
+  });
+});
