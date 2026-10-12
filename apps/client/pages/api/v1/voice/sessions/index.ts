@@ -25,8 +25,17 @@ import { sessionService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createElevenLabsConversationalTransport, type ElevenLabsClientBootstrap } from '@bike4mind/voice';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { BadGatewayError, BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@server/utils/errors';
+import {
+  BadGatewayError,
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  HTTPError,
+  NotFoundError,
+} from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
+import { measureVoiceCallSeconds } from '@server/voice/measureVoiceCall';
+import { settleVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
@@ -175,8 +184,36 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   // live hold so a stray flag can't skip a real charge.
   const reuseHold = shouldReuseVoiceHold(isReconnect, session);
 
+  // A fresh call writes a new hold over the session's, so an earlier call whose end was refused
+  // (still live, not yet recorded, unverifiable) must be settled first; otherwise its reservation
+  // is overwritten and never refunded. Shares end.ts's measurement and settlement rule.
+  let staleHoldRefund = 0;
+  const staleReserved = session.voiceReservedCredits ?? 0;
+  if (!reuseHold && staleReserved > 0 && session.voiceSessionStartedAt) {
+    const hold = {
+      id: session.id,
+      userId: req.user.id,
+      voiceReservedCredits: staleReserved,
+      voiceSessionStartedAt: new Date(session.voiceSessionStartedAt),
+      voiceProviderConversationIds: session.voiceProviderConversationIds ?? [],
+    };
+    const measurement = await measureVoiceCallSeconds(hold);
+    if (measurement.kind !== 'measured') {
+      req.logger.warn(
+        { sessionId: session.id, measurement },
+        '[voice-v2/sessions] previous voice hold not yet settleable; refusing a new call'
+      );
+      throw new ConflictError(
+        'The previous voice call on this notebook is still being settled; try again in a few seconds'
+      );
+    }
+    // settled: false means a concurrent end or the sweep settled it first.
+    const settlement = await settleVoiceHold(hold, measurement.elapsedSeconds);
+    if (settlement.settled) staleHoldRefund = settlement.refund;
+  }
+
   if (enforceCredits && !reuseHold) {
-    if ((req.user?.currentCredits ?? 0) < reservedCredits) {
+    if ((req.user?.currentCredits ?? 0) + staleHoldRefund < reservedCredits) {
       throw insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
     }
     await userRepository.incrementCredits(req.user.id, -reservedCredits);

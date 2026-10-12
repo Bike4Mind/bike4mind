@@ -240,6 +240,24 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
     expect(endCalls()[0]).toHaveLength(1);
   });
 
+  it('shows the server message when the notebook still holds an unsettled call (409)', async () => {
+    const message = 'The previous voice call on this notebook is still being settled; try again in a few seconds';
+    apiPost.mockImplementation(() =>
+      Promise.reject(
+        new AxiosError('request failed', 'ERR_BAD_REQUEST', undefined, undefined, {
+          status: 409,
+          data: { error: message },
+        } as AxiosResponse)
+      )
+    );
+
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+
+    const state = useConversationalVoiceStore.getState();
+    expect(state.phase).toBe('error');
+    expect(state.errorMessage).toBe(`Failed to create voice session: ${message}`);
+  });
+
   it('does not reserve credits when ended during the microphone probe', async () => {
     let resolveMicrophone: (stream: { getTracks: () => { stop: typeof stopTrack }[] }) => void = () => {
       throw new Error('Microphone probe was not started');

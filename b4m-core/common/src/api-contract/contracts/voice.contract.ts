@@ -87,7 +87,8 @@ export const createVoiceSessionContract = defineEndpoint({
     'any overrides, and forward `sessionToken` as `custom_llm_extra_body.b4m_session`. Transcripts are ' +
     'appended to the session as the call runs. When credits are enforced, the maximum call length is ' +
     'reserved up front and reconciled down by `POST /api/v1/voice/sessions/{id}/end`, so always end the ' +
-    'call. Pass `isReconnect: true` to re-attach a dropped transport without a second reservation. ' +
+    'call. Pass `isReconnect: true` to re-attach a dropped transport without a second reservation. A fresh ' +
+    'call on a session that still holds an earlier reservation settles that one first, or answers `409`. ' +
     '`POST /api/voice/v2/sessions` is a legacy alias of this endpoint. Authenticate with an API key ' +
     '(`b4m_live_`) or a JWT.',
   tags: ['Voice'],
@@ -124,6 +125,12 @@ export const createVoiceSessionContract = defineEndpoint({
     },
     404: {
       description: 'The `sessionId` does not exist or is not owned by the caller (a malformed id is also a 404).',
+      schema: ApiErrorSchema,
+    },
+    409: {
+      description:
+        'The session still holds the reservation of an earlier call that cannot be settled yet (the provider ' +
+        'still reports it open, has not recorded it, or cannot be reached); nothing was reserved. Retry shortly.',
       schema: ApiErrorSchema,
     },
     422: {

@@ -21395,7 +21395,7 @@
       "post": {
         "operationId": "createVoiceSession",
         "summary": "Start a voice session",
-        "description": "Opens a real-time voice conversation on the platform default voice agent, attached to an existing session (`sessionId`) or a new one, and returns the `clientBootstrap` to hand to the ElevenLabs Conversational AI SDK client-side (`Conversation.startSession`): connect with `signedUrl`, apply any overrides, and forward `sessionToken` as `custom_llm_extra_body.b4m_session`. Transcripts are appended to the session as the call runs. When credits are enforced, the maximum call length is reserved up front and reconciled down by `POST /api/v1/voice/sessions/{id}/end`, so always end the call. Pass `isReconnect: true` to re-attach a dropped transport without a second reservation. `POST /api/voice/v2/sessions` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Opens a real-time voice conversation on the platform default voice agent, attached to an existing session (`sessionId`) or a new one, and returns the `clientBootstrap` to hand to the ElevenLabs Conversational AI SDK client-side (`Conversation.startSession`): connect with `signedUrl`, apply any overrides, and forward `sessionToken` as `custom_llm_extra_body.b4m_session`. Transcripts are appended to the session as the call runs. When credits are enforced, the maximum call length is reserved up front and reconciled down by `POST /api/v1/voice/sessions/{id}/end`, so always end the call. Pass `isReconnect: true` to re-attach a dropped transport without a second reservation. A fresh call on a session that still holds an earlier reservation settles that one first, or answers `409`. `POST /api/voice/v2/sessions` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "Voice"
         ],
@@ -21672,6 +21672,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The session still holds the reservation of an earlier call that cannot be settled yet (the provider still reports it open, has not recorded it, or cannot be reached); nothing was reserved. Retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }

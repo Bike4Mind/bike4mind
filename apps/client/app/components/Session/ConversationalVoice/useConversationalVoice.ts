@@ -225,6 +225,8 @@ function formatSessionsError(err: unknown): string {
   if (axios.isAxiosError(err)) {
     const status = err.response?.status;
     const data = err.response?.data as { error?: string; detail?: string } | string | undefined;
+    // 409: an earlier call on this notebook is still being settled; the server message says so.
+    if (status === 409 && typeof data === 'object' && data?.error) return data.error;
     let detail: string;
     if (typeof data === 'string') {
       detail = data;
@@ -452,7 +454,7 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
       if (pendingSettlements.has(sessionId)) {
         set({
           phase: 'error',
-          errorMessage: 'Previous voice call is still being settled. Check your connection and retry.',
+          errorMessage: 'The previous voice call on this notebook is still being settled; try again in a few seconds.',
         });
         return;
       }

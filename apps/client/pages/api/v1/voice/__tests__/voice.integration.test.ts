@@ -196,6 +196,11 @@ function settings(overrides: Record<string, string> = {}) {
   });
 }
 
+const fireEnd = (opts: { apiKey?: string | null; id?: string; body?: Record<string, unknown> | string } = {}) => {
+  const id = opts.id ?? SESSION_ID;
+  return fire(endHandler, { url: `/api/v1/voice/sessions/${id}/end`, query: { id }, body: {}, ...opts });
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.userFindById.mockResolvedValue({ ...JWT_USER });
@@ -418,6 +423,71 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1');
   });
 
+  describe('when a fresh call starts over an unsettled hold', () => {
+    const staleStartedAt = new Date(Date.now() - 60_000);
+    const providerReplies = (json: unknown) =>
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(json), { status: 200 }));
+
+    beforeEach(() => {
+      mocks.findByIdAndUserId.mockResolvedValue({
+        id: SESSION_ID,
+        name: 'My notebook',
+        voiceReservedCredits: RESERVED_CREDITS,
+        voiceSessionStartedAt: staleStartedAt,
+        voiceProviderConversationIds: ['conv_old'],
+      });
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    // /end answers 409 while the provider still has the call open; a redial must not stack a
+    // second reservation over (and orphan) the first.
+    it('returns 409 and reserves nothing while the previous call cannot be settled', async () => {
+      providerReplies({ status: 'in-progress', metadata: { call_duration_secs: 5 } });
+      const end = fireEnd();
+      await end.run();
+      expect(end.res._getStatusCode()).toBe(409);
+
+      const { res, run } = fireSessions();
+      await run();
+      expect(res._getStatusCode()).toBe(409);
+      expect(res._getJSONData().error).toMatch(/previous voice call/i);
+      expect(mocks.incrementCredits).not.toHaveBeenCalled();
+      expect(mocks.claimVoiceHold).not.toHaveBeenCalled();
+      expect(mocks.sessionUpdate).not.toHaveBeenCalled();
+      expect(mocks.createTransportSession).not.toHaveBeenCalled();
+    });
+
+    it('settles the previous hold, then reserves the new call', async () => {
+      providerReplies({ status: 'done', metadata: { call_duration_secs: 60 } });
+      const refund = RESERVED_CREDITS - creditsForElapsed(RESERVED_CREDITS, 60);
+      const { res, run } = fireSessions();
+      await run();
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, staleStartedAt);
+      expect(mocks.incrementCredits.mock.calls).toEqual([
+        ['user-1', refund],
+        ['user-1', -RESERVED_CREDITS],
+      ]);
+      expect(mocks.sessionUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: SESSION_ID,
+          voiceReservedCredits: RESERVED_CREDITS,
+          voiceProviderConversationIds: ['conv_123'],
+        })
+      );
+    });
+
+    it('counts the previous hold refund toward the new reservation', async () => {
+      providerReplies({ status: 'done', metadata: { call_duration_secs: 0 } });
+      mocks.userFindById.mockResolvedValue({ ...JWT_USER, currentCredits: RESERVED_CREDITS / 2 });
+      const { res, run } = fireSessions();
+      await run();
+      expect(res._getStatusCode()).toBe(200);
+    });
+  });
+
   it('creates a session when no sessionId is sent', async () => {
     const { res, run } = fireSessions({ body: { reasoningModelId: 'claude-sonnet-4-6' } });
     await run();
@@ -488,11 +558,6 @@ describe('POST /api/v1/voice/sessions', () => {
 });
 
 describe('POST /api/v1/voice/sessions/{id}/end', () => {
-  const fireEnd = (opts: { apiKey?: string | null; id?: string; body?: Record<string, unknown> | string } = {}) => {
-    const id = opts.id ?? SESSION_ID;
-    return fire(endHandler, { url: `/api/v1/voice/sessions/${id}/end`, query: { id }, body: {}, ...opts });
-  };
-
   it('rejects a key lacking ai:generate (403) before touching credits', async () => {
     validateWithScopes([ApiKeyScope.READ_FILES]);
     const { res, run } = fireEnd();
