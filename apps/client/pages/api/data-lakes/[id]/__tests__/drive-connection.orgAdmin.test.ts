@@ -34,6 +34,10 @@ vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById
 vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'https://sqs.example.com/purge' }));
+vi.mock('@server/integrations/google/drive/drivePollSchedule', () => ({
+  DRIVE_LAKE_POLL_INTERVAL_MS: 6 * 60 * 60 * 1000,
+  isDriveLakePollScheduled: async () => false,
+}));
 vi.mock('@server/integrations/google/drive/connectorOrphanFiles', () => ({
   listDeletableDriveOrphans: async () => [],
 }));
