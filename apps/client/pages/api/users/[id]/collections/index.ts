@@ -9,7 +9,7 @@ const PaginatedCollectionsQuerySchema = z.object({
   id: z.string(),
   page: z.coerce.number().optional(),
   limit: z.coerce.number().optional(),
-  search: z.string().optional().prefault(''),
+  search: z.string().prefault(''),
   type: z.enum(CollectionType).nullable().optional(),
 });
 

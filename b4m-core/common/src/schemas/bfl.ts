@@ -26,7 +26,6 @@ export const BFLSafetyToleranceSchema = z
   .number()
   .min(BFL_SAFETY_TOLERANCE.MIN)
   .max(BFL_SAFETY_TOLERANCE.LEGACY_INPUT_MAX)
-  .optional()
   .prefault(BFL_SAFETY_TOLERANCE.DEFAULT)
   .transform(value => Math.min(value, BFL_SAFETY_TOLERANCE.MAX));
 
@@ -53,7 +52,7 @@ export type BFLImageModel = (typeof BFL_IMAGE_MODELS)[number];
 const CommonBFLParams = z.object({
   prompt: z.string().nullable().optional(),
   safety_tolerance: BFLSafetyToleranceSchema,
-  output_format: z.enum(['jpeg', 'png']).nullable().optional().prefault('jpeg'),
+  output_format: z.enum(['jpeg', 'png']).nullable().prefault('jpeg'),
   image_prompt: z.string().nullable().optional(),
   webhook_url: z.string().min(1).max(2083).nullable().optional(),
   webhook_secret: z.string().nullable().optional(),

@@ -16,7 +16,7 @@ const generateInviteSchema = z.object({
   startingCredits: z.number().min(0, 'Starting credits must be non-negative').prefault(500),
   startingStorage: z.number().min(0, 'Starting storage must be non-negative').prefault(1000),
   emailBody: z.string().optional(),
-  unlimitedUse: z.boolean().optional().prefault(false),
+  unlimitedUse: z.boolean().prefault(false),
   expiresAt: z.string().optional(),
 });
 
