@@ -75,9 +75,13 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: 'u1', currentCredits: 100 }, refreshUser: vi.fn() }),
 }));
 
+const sendJsonMessage = vi.fn();
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ sendJsonMessage: vi.fn(), subscribeToAction: () => () => {} }),
+  useWebsocket: () => ({ sendJsonMessage, subscribeToAction: () => () => {} }),
 }));
+
+const getUserMedia = vi.fn();
+Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia }, configurable: true });
 
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: () => undefined,
@@ -126,6 +130,9 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     (toast.error as ReturnType<typeof vi.fn>).mockClear();
     apiPost.mockReset();
     apiPost.mockResolvedValue(VOICE_SESSION_RESPONSE);
+    sendJsonMessage.mockClear();
+    getUserMedia.mockReset();
+    getUserMedia.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
     useVoiceSessionStore.getState().reset();
     // jsdom doesn't implement these - keep the audio-element teardown quiet.
     HTMLMediaElement.prototype.pause = vi.fn();
@@ -280,5 +287,96 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     });
 
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  const settlementFrames = () =>
+    sendJsonMessage.mock.calls.map(([frame]) => frame).filter(frame => frame.action === 'voice_session_ended');
+  const ZERO_SETTLEMENT = {
+    action: 'voice_session_ended',
+    sessionId: 's1',
+    model: 'gpt-realtime',
+    userId: 'u1',
+    usage: {
+      audioInputTokens: 0,
+      audioCachedInputTokens: 0,
+      audioOutputTokens: 0,
+      textInputTokens: 0,
+      textCachedInputTokens: 0,
+      textOutputTokens: 0,
+    },
+  };
+
+  it('never bootstraps (so never reserves credits) when no microphone is available', async () => {
+    getUserMedia.mockRejectedValue(Object.assign(new Error('Requested device not found'), { name: 'NotFoundError' }));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      await view.result.current.connect();
+    });
+
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(setupRealtimeConnection).not.toHaveBeenCalled();
+    expect(view.result.current.connectionStatus).toBe('disconnected');
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/No microphone detected/), {
+      id: 'voice-session-start-error',
+    });
+  });
+
+  it('settles the credit hold at zero usage when the connection fails after bootstrap', async () => {
+    setupRealtimeConnection.mockRejectedValueOnce(Object.assign(new Error('mic gone'), { name: 'NotFoundError' }));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      await view.result.current.connect();
+    });
+
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    expect(view.result.current.connectionStatus).toBe('disconnected');
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+  });
+
+  it('settles the credit hold when reconnects are exhausted before any response', async () => {
+    const view = await connectAndConnected();
+
+    for (let i = 0; i < 3; i++) {
+      act(() => {
+        latestPc().__emit('connectionstatechange', 'failed');
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+    }
+    act(() => {
+      latestPc().__emit('connectionstatechange', 'failed');
+    });
+
+    expect(view.result.current.connectionStatus).toBe('disconnected');
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+  });
+
+  it('does not send a zero settlement once a response has settled the hold', async () => {
+    const view = await connectAndConnected();
+    act(() => {
+      view.result.current.endSession();
+    });
+    act(() => {
+      latestDc().__emitMessage({
+        type: 'response.done',
+        response: {
+          usage: {
+            input_token_details: {
+              audio_tokens: 5,
+              text_tokens: 1,
+              cached_tokens_details: { audio_tokens: 0, text_tokens: 0 },
+            },
+            output_token_details: { audio_tokens: 7, text_tokens: 2 },
+          },
+        },
+      });
+    });
+
+    const frames = settlementFrames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0].usage).toMatchObject({ audioInputTokens: 5, audioOutputTokens: 7 });
   });
 });
