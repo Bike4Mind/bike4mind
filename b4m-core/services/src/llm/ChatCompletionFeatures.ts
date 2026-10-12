@@ -3578,6 +3578,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       });
       const existingCitables = quest.promptMeta.citables || [];
       const citableKey = (c: CitableSource) => c.id || c.url || c.title;
+      const withoutCitationIndex = (c: CitableSource): CitableSource => {
+        if (c.metadata?.citationIndex === undefined) return c;
+        const { citationIndex: _staleIndex, ...metadata } = c.metadata;
+        return { ...c, metadata };
+      };
       if (this.citationStyle === 'indexed') {
         // INVARIANT (indexed style): the [N] headings above number sources 1..k in
         // `citables` order, so the emitted manifest MUST keep these forced-retrieval
@@ -3594,10 +3599,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           );
         }
         const newKeys = new Set(citables.map(citableKey).filter(Boolean));
-        const keptExisting = existingCitables.filter(c => {
-          const key = citableKey(c);
-          return !key || !newKeys.has(key);
-        });
+        // A kept citable's stamp numbered an earlier injection, so it would link a marker of this
+        // turn to whatever document happens to sit at that position now.
+        const keptExisting = existingCitables
+          .filter(c => {
+            const key = citableKey(c);
+            return !key || !newKeys.has(key);
+          })
+          .map(withoutCitationIndex);
         quest.promptMeta.citables = [...citables, ...keptExisting];
       } else {
         // Named style: legacy order - existing citables first, then de-duplicated new ones.

@@ -15,11 +15,12 @@ import React, {
   createContext,
   ComponentProps,
 } from 'react';
-import ReactMarkdown, { ExtraProps } from 'react-markdown';
+import ReactMarkdown, { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
 import { createMarkdownComponents } from './markdown/markdownComponents';
 import {
   CITATION_MARKER_TAG,
   CitationMarker,
+  hasCitationMarkers,
   ReplyCitablesContext,
   remarkCitationMarkers,
 } from './markdown/inlineCitations';
@@ -141,10 +142,10 @@ const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
   return <SearchResultCards content={content} replyComplete={replyComplete} />;
 };
 
-// The web_search places of the reply being rendered, keyed by place id - the only source of map
-// pins. Context for the same identity-stability reason as ReplyCompleteContext above.
 const NO_CITABLES: readonly CitableSource[] = [];
 
+// The web_search places of the reply being rendered, keyed by place id - the only source of map
+// pins. Context for the same identity-stability reason as ReplyCompleteContext above.
 export const ReplyPlacesContext = createContext<ReadonlyMap<string, WebSearchPlace>>(new Map());
 
 const LocationMapInReply: FC<{ content: string }> = ({ content }) => {
@@ -1312,6 +1313,17 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
+  // Off until a stamped citable lands, so a reply that can never link a marker keeps its `[N]` as
+  // ordinary text (search highlighting matches across it) rather than one element per marker.
+  const linksCitationMarkers = hasCitationMarkers(promptMeta?.citables ?? NO_CITABLES);
+  const replyRemarkPlugins = useMemo(
+    (): ReactMarkdownOptions['remarkPlugins'] => [
+      remarkGfmNoSingleTilde,
+      [remarkMath, { singleDollarTextMath: false }],
+      ...(linksCitationMarkers ? [remarkCitationMarkers] : []),
+    ],
+    [linksCitationMarkers]
+  );
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1854,11 +1866,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                                       a: link,
                                       [CITATION_MARKER_TAG]: CitationMarker,
                                     }}
-                                    remarkPlugins={[
-                                      remarkGfmNoSingleTilde,
-                                      [remarkMath, { singleDollarTextMath: false }],
-                                      remarkCitationMarkers,
-                                    ]}
+                                    remarkPlugins={replyRemarkPlugins}
                                     rehypePlugins={[rehypeKatex]}
                                     remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
                                   >

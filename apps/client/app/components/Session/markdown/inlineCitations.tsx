@@ -83,6 +83,10 @@ export const resolveCitationMarker = (citables: readonly CitableSource[], index:
   return source?.metadata?.citationIndex === index ? source : undefined;
 };
 
+/** Whether any citable can answer to a marker, i.e. whether the reply needs the marker pass at all. */
+export const hasCitationMarkers = (citables: readonly CitableSource[]): boolean =>
+  citables.some(source => typeof source.metadata?.citationIndex === 'number');
+
 const CitationMarkerLink: FC<{ source: CitableSource; index: number; children: ReactNode }> = ({
   source,
   index,
@@ -92,16 +96,17 @@ const CitationMarkerLink: FC<{ source: CitableSource; index: number; children: R
   if (!renderAsButton && !source.url) return <>{children}</>;
 
   const shared = {
-    'aria-label': `Source ${index}: ${source.title}`,
+    // Leads with the visible `[N]` so a voice user can say what they see (WCAG 2.5.3).
+    'aria-label': `[${index}] ${source.title}`,
     title: source.title,
     'data-testid': 'citation-marker-link',
     level: 'inherit',
-    underline: 'hover',
   } as const;
 
   if (!renderAsButton) {
+    // `.b4m-md a` (observatory.css) already draws the reply's link rule; a Joy underline doubles it.
     return (
-      <Link {...shared} href={source.url} target="_blank" rel="noopener noreferrer">
+      <Link {...shared} underline="none" href={source.url} target="_blank" rel="noopener noreferrer">
         {children}
       </Link>
     );
@@ -111,6 +116,7 @@ const CitationMarkerLink: FC<{ source: CitableSource; index: number; children: R
       {...shared}
       component="button"
       type="button"
+      underline="hover"
       onClick={onClick}
       sx={{ font: 'inherit', p: 0, border: 0, bgcolor: 'transparent', verticalAlign: 'baseline' }}
     >

@@ -12,6 +12,7 @@ import { CitationInteractionProvider } from '../CitationInteractionContext';
 import {
   CITATION_MARKER_TAG,
   CitationMarker,
+  hasCitationMarkers,
   ReplyCitablesContext,
   remarkCitationMarkers,
   resolveCitationMarker,
@@ -77,6 +78,14 @@ describe('resolveCitationMarker', () => {
   });
 });
 
+describe('hasCitationMarkers', () => {
+  it('is on only once a citable carries a marker stamp', () => {
+    expect(hasCitationMarkers([])).toBe(false);
+    expect(hasCitationMarkers([lakeCitable('tool-hit'), webCitable])).toBe(true);
+    expect(hasCitationMarkers([lakeCitable('tool-hit')])).toBe(false);
+  });
+});
+
 describe('inline citation markers in a reply', () => {
   beforeEach(() => {
     navigate.mockClear();
@@ -89,7 +98,7 @@ describe('inline citation markers in a reply', () => {
     const marker = screen.getByTestId('citation-marker-link');
     expect(marker.tagName).toBe('BUTTON');
     expect(marker).toHaveTextContent('[1]');
-    expect(marker).toHaveAccessibleName('Source 1: file-1.pdf');
+    expect(marker).toHaveAccessibleName('[1] file-1.pdf');
 
     fireEvent.click(marker);
     expect(useSessionLayout.getState().citedPassage).toEqual({

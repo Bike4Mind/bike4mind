@@ -672,7 +672,10 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
       'indexed'
     );
     const quest = makeQuest({
-      promptMeta: { citables: [{ id: 'pre-existing', type: 'document', title: 'Earlier source' }] },
+      // Stamped by an earlier injection: left as-is, [3] would link to it although the model was told k=2.
+      promptMeta: {
+        citables: [{ id: 'pre-existing', type: 'document', title: 'Earlier source', metadata: { citationIndex: 3 } }],
+      },
     } as unknown as Partial<IChatHistoryItemDocument>);
     await feature.getContextMessages(
       quest,
