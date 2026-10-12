@@ -15,6 +15,8 @@ const state = vi.hoisted(() => ({
   transactions: [] as Array<{ credits: number; transactionId?: string }>,
   // Runs just before a claim, to stand in for another settler that got there first.
   beforeClaim: null as null | (() => void),
+  failIncrement: false,
+  failTransaction: false,
 }));
 
 const sendToClient = vi.hoisted(() => vi.fn());
@@ -47,11 +49,13 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findById: async () => ({ id: 'u1', currentCredits: state.balance }),
     incrementCredits: async (_id: string, delta: number) => {
+      if (state.failIncrement) throw new Error('mongo blip');
       state.balance += delta;
     },
   },
   creditTransactionRepository: {
     createTransaction: async (_type: string, data: { credits: number; transactionId?: string }) => {
+      if (state.failTransaction) throw new Error('mongo blip');
       if (data.transactionId && state.transactions.some(t => t.transactionId === data.transactionId)) return null;
       state.transactions.push(data);
       return data;
@@ -75,6 +79,16 @@ vi.mock('@bike4mind/database', () => ({
         voiceSessionStartedAt: null,
       };
       return { billedCredits };
+    },
+    restoreVoiceHold: async (_id: string, reserved: number, startedAt: Date, billedCredits: number | null) => {
+      if (state.session.voiceSessionStartedAt !== null) return false;
+      state.session = {
+        ...state.session,
+        voiceReservedCredits: reserved,
+        voiceSessionStartedAt: startedAt,
+        ...(billedCredits !== null ? { voiceBilledCredits: billedCredits } : {}),
+      };
+      return true;
     },
   },
 }));
@@ -120,6 +134,8 @@ describe('voiceSessionEnded realtime billing', () => {
     state.balance = STARTING_BALANCE - HOLD;
     state.transactions = [];
     state.beforeClaim = null;
+    state.failIncrement = false;
+    state.failTransaction = false;
     sendToClient.mockClear();
   });
 
@@ -236,6 +252,37 @@ describe('voiceSessionEnded realtime billing', () => {
     expect(state.balance).toBe(STARTING_BALANCE - HOLD);
     expect(state.transactions).toHaveLength(0);
     expect(state.session.voiceSessionStartedAt).toBe(newerCall);
+  });
+
+  it('restores the hold and records no settlement when the refund fails, so a retry settles it once', async () => {
+    await send(30, 'resp-1');
+    const startedAt = state.session.voiceSessionStartedAt;
+    state.failIncrement = true;
+
+    await expect(send(0)).rejects.toThrow('mongo blip');
+
+    expect(state.session.voiceSessionStartedAt).toEqual(startedAt);
+    expect(state.session.voiceReservedCredits).toBe(HOLD);
+    expect(state.session.voiceBilledCredits).toBe(30);
+    expect(state.balance).toBe(STARTING_BALANCE - HOLD);
+    expect(state.transactions.map(t => t.credits)).toEqual([-30]);
+
+    state.failIncrement = false;
+    await send(0);
+
+    expect(state.session.voiceSessionStartedAt).toBeNull();
+    expect(charged()).toBe(30);
+    expect(state.transactions.reduce((sum, t) => sum - t.credits, 0)).toBe(charged());
+  });
+
+  it('still pays the refund when the closing ledger row cannot be written', async () => {
+    await send(30, 'resp-1');
+    state.failTransaction = true;
+
+    await expect(send(5)).rejects.toThrow('mongo blip');
+
+    expect(state.session.voiceSessionStartedAt).toBeNull();
+    expect(charged()).toBe(35);
   });
 
   it('settles a close only once when the frame is replayed', async () => {

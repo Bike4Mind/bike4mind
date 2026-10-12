@@ -176,13 +176,28 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       actualCredits = floor - billed;
     }
 
-    if (actualCredits > 0) {
-      await recordUsage(actualCredits);
-    }
     // Already taken: the hold, plus anything billed past it. Owed: everything billed plus this frame.
+    // The balance moves before the ledger row, so a failed ledger write loses only the audit row,
+    // never the refund. If the balance move fails the hold is restored (as settleVoiceHold does)
+    // so a retried frame or the stale-hold sweep can still settle it.
     const delta = Math.max(0, reserved - billed) - actualCredits;
     if (delta !== 0) {
-      await userRepository.incrementCredits(user.id, delta);
+      try {
+        await userRepository.incrementCredits(user.id, delta);
+      } catch (creditError) {
+        await sessionRepository
+          .restoreVoiceHold(session.id, reserved, startedAt, claimed.billedCredits)
+          .catch(restoreError => {
+            throw new AggregateError(
+              [creditError, restoreError],
+              `voice hold ${sessionId}: settlement failed and the hold could not be restored`
+            );
+          });
+        throw creditError;
+      }
+    }
+    if (actualCredits > 0) {
+      await recordUsage(actualCredits);
     }
   }
 
