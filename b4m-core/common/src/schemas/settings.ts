@@ -4397,6 +4397,7 @@ export const settingsMap = {
     description: 'The AI model used for organization feedback summaries. The selected provider must be configured.',
     options: CHAT_MODELS,
     category: 'AI',
+    order: 199,
   }),
   EnableEmailAnalysis: makeBooleanSetting({
     key: 'EnableEmailAnalysis',

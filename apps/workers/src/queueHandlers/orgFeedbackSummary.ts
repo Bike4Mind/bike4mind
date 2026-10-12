@@ -26,7 +26,7 @@ import {
 } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
-import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { buildApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -116,14 +116,7 @@ async function generateSummary(message: OrgFeedbackSummaryMessage, promptBody: s
     getSettingsByNames,
   };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
-  const apiKeyTable = {
-    openai: coreKeys.openai || undefined,
-    anthropic: coreKeys.anthropic || undefined,
-    gemini: coreKeys.gemini || undefined,
-    bfl: coreKeys.bfl || undefined,
-    ollama: coreKeys.ollama || undefined,
-    xai: coreKeys.xai || undefined,
-  };
+  const apiKeyTable = buildApiKeyTable(coreKeys);
 
   const models = await getAvailableModels(apiKeyTable);
   const modelInfo = models.find(m => m.id === model);

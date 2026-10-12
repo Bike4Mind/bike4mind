@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   findOne: vi.fn(),
   getSettingsValue: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
+  buildApiKeyTable: vi.fn((keys: Record<string, string>) => keys),
   getAvailableModels: vi.fn(),
   getLlmByModel: vi.fn(),
   updateOne: vi.fn(async () => ({})),
@@ -48,6 +49,7 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  buildApiKeyTable: h.buildApiKeyTable,
   getAvailableModels: h.getAvailableModels,
   getLlmByModel: h.getLlmByModel,
 }));
@@ -125,6 +127,24 @@ describe('runOrgFeedbackSummary', () => {
     expect(h.complete.mock.calls[0][0]).toBe('anthropic-haiku');
     expect(h.getLlmByModel.mock.calls[0][1].modelInfo.id).toBe('anthropic-haiku');
     expect(JSON.parse(h.upload.mock.calls[0][0]).model).toBe('anthropic-haiku');
+  });
+
+  it.each([
+    { provider: 'kimi', model: 'kimi-k3' },
+    { provider: 'deepseek', model: 'deepseek-flash' },
+  ])('passes the configured $provider key through to model discovery', async ({ provider, model }) => {
+    h.getSettingsValue.mockResolvedValue(model);
+    h.getEffectiveLLMApiKeys.mockResolvedValue({ [provider]: 'provider-key' });
+    h.getAvailableModels.mockImplementation(async (keys: Record<string, string>) =>
+      keys[provider] ? [{ id: model }] : []
+    );
+
+    await run();
+
+    expect(h.buildApiKeyTable).toHaveBeenCalledWith({ [provider]: 'provider-key' });
+    expect(h.getAvailableModels).toHaveBeenCalledWith({ [provider]: 'provider-key' });
+    expect(h.complete.mock.calls[0][0]).toBe(model);
+    expect(JSON.parse(h.upload.mock.calls[0][0]).model).toBe(model);
   });
 
   it('fails before inference when the explicitly selected model is unavailable', async () => {
