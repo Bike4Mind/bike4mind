@@ -51,6 +51,7 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 
 const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
+const mockConsumeOtherCodes = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
@@ -61,7 +62,10 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: {},
   creditTransactionRepository: {},
   userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a), count: vi.fn(), update: vi.fn() },
-  pendingOtcTokenRepository: { validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a) },
+  pendingOtcTokenRepository: {
+    validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
+    consumeOtherCodes: (...a: any[]) => mockConsumeOtherCodes(...a),
+  },
   authSessionRepository: {},
   passkeyCredentialRepository: { countByUser: vi.fn(() => Promise.resolve(0)) },
 }));

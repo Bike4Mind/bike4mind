@@ -57,6 +57,7 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 
 const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
+const mockConsumeOtherCodes = vi.fn();
 const mockTryIncrement = vi.fn();
 const mockTryAdd = vi.fn(async (_key: string, _amount: number, _limit: number, _ttlMs: number) => ({
   success: true,
@@ -73,7 +74,10 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: {},
   creditTransactionRepository: {},
   userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a), count: vi.fn(), update: vi.fn() },
-  pendingOtcTokenRepository: { validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a) },
+  pendingOtcTokenRepository: {
+    validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
+    consumeOtherCodes: (...a: any[]) => mockConsumeOtherCodes(...a),
+  },
   authSessionRepository: {},
 }));
 

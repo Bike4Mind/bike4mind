@@ -145,6 +145,8 @@ const handler = baseApi({ auth: false })
     }
 
     // --- CODE PROVEN - only the email owner can reach here. Branch on existence now. ---
+    // Up to MAX_LIVE_OTC_CODES codes stay live per address; a proven one retires the rest.
+    await pendingOtcTokenRepository.consumeOtherCodes(normalizedEmail, newNonce);
     const existingUser = await userRepository.findByEmail(normalizedEmail);
 
     if (existingUser) {

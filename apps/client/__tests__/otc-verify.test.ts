@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockFindByEmail = vi.fn();
 const mockUpdate = vi.fn();
 const mockValidateAndRotateNonce = vi.fn();
+const mockConsumeOtherCodes = vi.fn();
 const mockVerifyPendingOTC = vi.fn();
 const mockRegisterViaOTC = vi.fn();
 const mockUserHasMFA = vi.fn();
@@ -73,6 +74,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: unknown[]) => mockValidateAndRotateNonce(...a),
+    consumeOtherCodes: (...a: unknown[]) => mockConsumeOtherCodes(...a),
   },
   adminSettingsRepository: {},
   registrationInviteRepository: {},
@@ -184,6 +186,34 @@ describe('/api/otc/verify — enumeration resistance', () => {
     const body = mockRes.json.mock.calls[0][0];
     expect(body.error).toMatch(/Invalid code\. 4 attempts remaining\./);
     expect(body.pendingToken).toBe('reissued-token');
+  });
+
+  it('leaves the other live codes for the address alone on a wrong code', async () => {
+    mockJwtVerify.mockReturnValue(validToken());
+    mockVerifyPendingOTC.mockResolvedValue(false);
+
+    await handler(makeReq({ email: 'user@example.com', code: '000000', pendingToken: 'tok' }), mockRes);
+
+    expect(mockConsumeOtherCodes).not.toHaveBeenCalled();
+  });
+
+  it('retires every other live code for the address once a code is proven', async () => {
+    mockJwtVerify.mockReturnValue(validToken());
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue({
+      id: 'u1',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tokenVersion: 0,
+      toJSON: () => ({ id: 'u1', username: 'bob' }),
+    });
+
+    await handler(makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' }), mockRes);
+
+    const [, , rotatedNonce] = mockValidateAndRotateNonce.mock.calls[0];
+    expect(mockConsumeOtherCodes).toHaveBeenCalledWith('user@example.com', rotatedNonce);
+    expect(mockRes.status).toHaveBeenCalledWith(200);
   });
 
   it('throws a generic "Invalid code." (no existence read) for a missing token', async () => {
