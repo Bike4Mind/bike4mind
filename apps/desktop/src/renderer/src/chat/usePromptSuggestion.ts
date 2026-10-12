@@ -5,8 +5,8 @@ export interface PromptSuggestionController {
   /** The guess to draw as placeholder text, or null to use the ordinary placeholder. */
   suggestion: string | null;
   /**
-   * Throw the current guess away. Called by the composer the moment the input stops being
-   * empty, whether the user typed, pasted, or took the guess itself.
+   * Throw the current guess away. Called on send, which a rejected turn never follows with a
+   * 'start' - typing or taking the guess only hides it, so it survives an emptied draft.
    */
   dismiss: () => void;
 }

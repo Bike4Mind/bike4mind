@@ -142,7 +142,10 @@ export function Composer({
    * setting that makes it - a hint that sent itself would let model output choose the next turn.
    */
   suggestion?: string | null;
-  /** The hint is gone - the user typed over it, or took it. Asks the owner to drop it. */
+  /**
+   * A draft went out, so the hint has served its turn. Typing over it or taking it with Tab does
+   * NOT end it: emptying the box again brings it back, until a send or the next turn.
+   */
   onSuggestionDismissed?: () => void;
 }) {
   const [text, setText] = useState('');
@@ -203,11 +206,13 @@ export function Composer({
     const action = composerSubmitAction(draft, sessionMode);
     if (action.kind === 'command' && onRunCommand && !disabled) {
       setText('');
+      onSuggestionDismissed?.();
       onRunCommand(action.invocation.command.name, action.invocation.args);
       return;
     }
     if (!canSubmit) return;
     setText('');
+    onSuggestionDismissed?.();
     onSend(draft);
   };
 
@@ -266,7 +271,7 @@ export function Composer({
   const pick = (name: string) => {
     // The trailing space is what closes the menu (the text is no longer a bare token) and what
     // leaves the user positioned to type arguments.
-    onTextChange(`/${name} `);
+    setText(`/${name} `);
     setDismissed(null);
     textareaRef.current?.focus();
   };
@@ -341,23 +346,7 @@ export function Composer({
     }
     // Fills the draft and stops. The user still has to press Enter, on text they can now read
     // and edit - which is the whole reason this is a different key from the one that sends.
-    if (shown) {
-      setText(shown);
-      onSuggestionDismissed?.();
-    }
-  };
-
-  /**
-   * The user is composing their own message, so the hint stops being one.
-   *
-   * Dropped rather than hidden: it is thrown away on the first keystroke and the ordinary
-   * placeholder is what comes back if they delete it all again, because a hint that reappeared
-   * under a box the user has already emptied once would be offering the same guess about a
-   * conversation they have moved on from. Covers paste and drop too - both change the value.
-   */
-  const onTextChange = (next: string) => {
-    setText(next);
-    if (suggestion && next.length > 0) onSuggestionDismissed?.();
+    if (shown) setText(shown);
   };
 
   /**
@@ -438,7 +427,9 @@ export function Composer({
             of where the transcript ends while every other composer row reached it. */}
         <Textarea
           value={text}
-          onChange={event => onTextChange(event.target.value)}
+          // Only hides the hint (see shownSuggestion), never ends it: emptying the box again
+          // brings the same guess back, since nothing has been sent and it still fits the reply.
+          onChange={event => setText(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={composerPlaceholder({ disabled, text, suggestion, placeholder, disabledPlaceholder })}
           disabled={disabled}

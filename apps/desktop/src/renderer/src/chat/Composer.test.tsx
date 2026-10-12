@@ -279,3 +279,45 @@ describe('the composer command menu', () => {
     expect(rows()).toHaveLength(0);
   });
 });
+
+describe('the suggested next prompt', () => {
+  const placeholder = () => input().getAttribute('placeholder');
+
+  it('comes back when a typed draft is cleared', () => {
+    const dismissed = vi.fn();
+    mount({ suggestion: 'Add a test', placeholder: 'Send a message...', onSuggestionDismissed: dismissed });
+    expect(placeholder()).toBe('Add a test');
+
+    type('Keep going');
+    expect(placeholder()).toBe('Send a message...');
+
+    type('');
+    expect(placeholder()).toBe('Add a test');
+    expect(dismissed).not.toHaveBeenCalled();
+  });
+
+  it('comes back when a draft taken with Tab is cleared, and Tab still takes it', () => {
+    const dismissed = vi.fn();
+    mount({ suggestion: 'Add a test', onSuggestionDismissed: dismissed });
+
+    press('Tab');
+    expect(input().value).toBe('Add a test');
+
+    type('');
+    expect(placeholder()).toBe('Add a test');
+    press('Tab');
+    expect(input().value).toBe('Add a test');
+    expect(dismissed).not.toHaveBeenCalled();
+  });
+
+  it('ends once the draft is sent', () => {
+    const dismissed = vi.fn();
+    const send = vi.fn();
+    mount({ suggestion: 'Add a test', onSuggestionDismissed: dismissed, onSend: send });
+
+    press('Tab');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('Add a test');
+    expect(dismissed).toHaveBeenCalledTimes(1);
+  });
+});
