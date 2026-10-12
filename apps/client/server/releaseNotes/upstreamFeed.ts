@@ -1,5 +1,7 @@
+import { z } from 'zod';
 import { paginatedResponseSchema, PublicReleaseNoteSchema, type PublicReleaseNote } from '@bike4mind/common';
 import { safeFetch } from '@server/utils/ssrfProtection';
+import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 
 export type UpstreamFeedPage = { data: PublicReleaseNote[]; next_cursor: string | null };
 type Logger = { warn: (message: string, meta?: Record<string, unknown>) => void };
@@ -15,6 +17,26 @@ const OUTAGE_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 100;
 
 const pageSchema = paginatedResponseSchema(PublicReleaseNoteSchema);
+const JSON_FEED_CURSOR_SCOPE = 'v1.whats-new.json-feed';
+const jsonFeedCursorSchema = z.object({ published_at: z.string(), id: z.string().min(1) });
+const compareIds = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+// A JSON Feed 1.x document (https://jsonfeed.org), the format a marketing site's What's New page
+// publishes. Only the fields a slide needs are read; an item without a date or text is skipped.
+const jsonFeedSchema = z.object({
+  version: z.string().startsWith('https://jsonfeed.org/version/'),
+  items: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string().optional(),
+      summary: z.string().optional(),
+      content_text: z.string().optional(),
+      date_published: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+    })
+  ),
+});
+// The upstream's own API route, including when another path redirects to it.
+const WHATS_NEW_API_PATH = '/api/v1/whats-new';
 const cache = new Map<string, { page: UpstreamFeedPage; expiresAt: number }>();
 let outage: { base: string; until: number } | undefined;
 
@@ -51,6 +73,9 @@ const ownHostnames = (): string[] => {
   const domain = hostnameOf(process.env.SERVER_DOMAIN);
   return [domain, domain && `app.${domain}`, hostnameOf(process.env.APP_URL)].filter((host): host is string => !!host);
 };
+
+const isOwnApiRoute = (url: URL): boolean =>
+  ownHostnames().includes(normalizeHost(url.hostname)) && url.pathname.replace(/\/+$/, '') === WHATS_NEW_API_PATH;
 
 async function readCapped(response: Response): Promise<string | null> {
   if (!response.body) return '';
@@ -89,8 +114,8 @@ async function fetchPage(
     logger.warn('[whats-new] WHATS_NEW_FEED_URL must use https');
     return down;
   }
-  // Pointing the feed at this deployment would make each request fetch itself recursively.
-  if (ownHostnames().includes(normalizeHost(url.hostname))) {
+  // A static feed on an own host is safe, but the app's own API route would recurse.
+  if (isOwnApiRoute(url)) {
     logger.warn('[whats-new] WHATS_NEW_FEED_URL points at this deployment; ignoring it');
     return down;
   }
@@ -109,7 +134,15 @@ async function fetchPage(
   });
   try {
     const response = await Promise.race([
-      safeFetch(url.toString(), { headers: { accept: 'application/json' }, signal: controller.signal }),
+      safeFetch(
+        url.toString(),
+        { headers: { accept: 'application/json' }, signal: controller.signal },
+        {
+          assertRedirectAllowed: target => {
+            if (isOwnApiRoute(target)) throw new Error("redirect points at this deployment's own feed route");
+          },
+        }
+      ),
       timeout,
     ]);
     if (!response.ok) {
@@ -134,11 +167,11 @@ async function fetchPage(
       body = undefined;
     }
     const parsed = pageSchema.safeParse(body);
-    if (!parsed.success) {
-      logger.warn('[whats-new] upstream feed body did not match the public schema');
-      return { page: null, upstreamDown: false };
-    }
-    return { page: parsed.data, upstreamDown: false };
+    if (parsed.success) return { page: parsed.data, upstreamDown: false };
+    const feed = jsonFeedSchema.safeParse(body);
+    if (feed.success) return { page: jsonFeedToPage(feed.data, limit, cursor), upstreamDown: false };
+    logger.warn('[whats-new] upstream feed body matched neither the public schema nor JSON Feed');
+    return { page: null, upstreamDown: false };
   } catch (error) {
     logger.warn('[whats-new] upstream feed fetch failed', {
       error: error instanceof Error ? error.message : String(error),
@@ -147,6 +180,53 @@ async function fetchPage(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** A page of JSON Feed items ordered by publish date and id, with a stable cursor across new entries. */
+export function jsonFeedToPage(feed: z.infer<typeof jsonFeedSchema>, limit: number, cursor?: string): UpstreamFeedPage {
+  const notes: PublicReleaseNote[] = [];
+  for (const item of feed.items) {
+    const publishedAt = item.date_published ? new Date(item.date_published) : undefined;
+    const headline = item.title?.trim() ?? '';
+    const summary = item.content_text?.trim() || item.summary?.trim() || '';
+    if (!publishedAt || Number.isNaN(publishedAt.getTime()) || (!headline && !summary)) continue;
+    notes.push({
+      id: item.id,
+      release_tag: item.tags?.[0]?.trim() || 'Update',
+      headline,
+      summary,
+      published_at: publishedAt.toISOString(),
+      items: [],
+    });
+  }
+  notes.sort((a, b) => b.published_at.localeCompare(a.published_at) || compareIds(a.id, b.id));
+
+  let remaining = notes;
+  if (cursor !== undefined) {
+    try {
+      const decoded: unknown = JSON.parse(decodeCursor(cursor, JSON_FEED_CURSOR_SCOPE));
+      const position = jsonFeedCursorSchema.parse(decoded);
+      const at = new Date(position.published_at);
+      if (Number.isNaN(at.getTime()) || at.toISOString() !== position.published_at) {
+        return { data: [], next_cursor: null };
+      }
+      remaining = notes.filter(
+        note =>
+          note.published_at < position.published_at ||
+          (note.published_at === position.published_at && note.id > position.id)
+      );
+    } catch {
+      // A cursor from a previous upstream cannot be resumed after the source changes.
+      return { data: [], next_cursor: null };
+    }
+  }
+  const data = remaining.slice(0, limit);
+  const last = data[data.length - 1];
+  const next_cursor =
+    remaining.length > limit && last
+      ? encodeCursor(JSON_FEED_CURSOR_SCOPE, JSON.stringify({ published_at: last.published_at, id: last.id }))
+      : null;
+  return { data, next_cursor };
 }
 
 /**
