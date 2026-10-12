@@ -1,6 +1,7 @@
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
 import { ModelBackend } from '@bike4mind/common';
@@ -21,6 +22,7 @@ const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
 const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
 // Text models appended to the accessible list per test; reset in afterEach below.
 const extraTextModels = vi.hoisted(() => [] as ModelInfo[]);
+const favoriteModelIds = vi.hoisted(() => new Set<string>());
 const adminSettings = vi.hoisted(() => ({
   recommendedModelIds: [] as string[],
   DefaultAPIModel: undefined as string | undefined,
@@ -82,7 +84,11 @@ vi.mock('@client/app/hooks/data/useModelStats', () => ({
 }));
 
 vi.mock('@client/app/hooks/useFavoriteModels', () => ({
-  useFavoriteModels: () => ({ favoriteModelIds: new Set<string>(), isFavorite: () => false, toggleFavorite: vi.fn() }),
+  useFavoriteModels: () => ({
+    favoriteModelIds,
+    isFavorite: (id: string) => favoriteModelIds.has(id),
+    toggleFavorite: vi.fn(),
+  }),
 }));
 
 vi.mock('@client/app/utils/modelRanking', () => ({
@@ -112,6 +118,7 @@ vi.mock('./AISettings/MetaDataChips', () => ({
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 const renderSelection = (props: {
+  model?: string;
   setModel?: (model: ModelName) => void;
   onSelectionComplete?: () => void;
   onSettingsClick?: (model: ModelInfo) => void;
@@ -119,7 +126,7 @@ const renderSelection = (props: {
   render(
     <CssVarsProvider theme={appTheme}>
       <ModelSelection
-        model={textModel.id}
+        model={props.model ?? textModel.id}
         setModel={props.setModel ?? vi.fn()}
         onSelectionComplete={props.onSelectionComplete}
         imageModel={false}
@@ -449,6 +456,8 @@ describe('ModelSelection recommended group', () => {
 describe('ModelSelection duplicate and unavailable rows', () => {
   afterEach(() => {
     extraTextModels.length = 0;
+    favoriteModelIds.clear();
+    adminSettings.recommendedModelIds = [];
   });
 
   it('shows a Bedrock model once and hides its unavailable foundation-id twin', () => {
@@ -473,6 +482,45 @@ describe('ModelSelection duplicate and unavailable rows', () => {
     expect(screen.queryByTestId('model-card-anthropic.claude-opus-5-5')).not.toBeInTheDocument();
     expect(screen.queryByText('Unavailable')).not.toBeInTheDocument();
   });
+
+  it('hides disabled favorites and recommendations when they are not active', () => {
+    const unavailableId = 'anthropic.claude-opus-5-5';
+    extraTextModels.push({ ...textModel, id: unavailableId, backend: ModelBackend.Bedrock, disabled: true });
+    favoriteModelIds.add(unavailableId);
+    adminSettings.recommendedModelIds = [unavailableId];
+    renderSelection({});
+
+    expect(screen.queryByTestId(`model-card-${unavailableId}`)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('recommended-section')).not.toBeInTheDocument();
+  });
+
+  it('shows an unavailable active model and its enabled profile twin', () => {
+    const activeId = 'anthropic.claude-opus-5-5';
+    const enabledId = 'global.anthropic.claude-opus-5-5';
+    extraTextModels.push(
+      { ...textModel, id: activeId, backend: ModelBackend.Bedrock, disabled: true },
+      { ...textModel, id: enabledId, backend: ModelBackend.Bedrock }
+    );
+    renderSelection({ model: activeId });
+
+    expect(screen.getByTestId(`model-card-${activeId}`)).toHaveAttribute('data-disabled');
+    expect(screen.getByTestId(`model-card-${enabledId}`)).toBeInTheDocument();
+  });
+
+  it('keeps pinned twin ids in their sections when the active alias wins the provider row', () => {
+    const activeId = 'gpt-4.1';
+    const pinnedId = 'gpt-4.1-2025-04-14';
+    extraTextModels.push(
+      { ...textModel, id: activeId, backend: ModelBackend.OpenAI },
+      { ...textModel, id: pinnedId, backend: ModelBackend.OpenAI }
+    );
+    favoriteModelIds.add(pinnedId);
+    adminSettings.recommendedModelIds = [pinnedId];
+    renderSelection({ model: activeId });
+
+    expect(within(screen.getByTestId('recommended-section')).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
+    expect(within(screen.getByTestId('favorites-section')).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
+  });
 });
 
 describe('ModelSelection keyboard access', () => {
@@ -480,7 +528,8 @@ describe('ModelSelection keyboard access', () => {
     extraTextModels.length = 0;
   });
 
-  it('selects a model from a focusable button inside its card', () => {
+  it.each(['{Enter}', ' '])('selects a model with %s on its focusable button', async key => {
+    const user = userEvent.setup();
     const setModel = vi.fn();
     const onSelectionComplete = vi.fn();
     renderSelection({ setModel, onSelectionComplete });
@@ -490,7 +539,8 @@ describe('ModelSelection keyboard access', () => {
     expect(selectButton).toHaveAccessibleName(imageModel.name);
     expect(screen.getByTestId(`model-select-btn-${textModel.id}`)).toHaveAttribute('aria-pressed', 'true');
 
-    fireEvent.click(selectButton);
+    selectButton.focus();
+    await user.keyboard(key);
 
     expect(setModel).toHaveBeenCalledWith(imageModel.id);
     expect(onSelectionComplete).toHaveBeenCalledOnce();

@@ -25,10 +25,10 @@ function routePreference(model: ModelInfo): number {
   return BEDROCK_PROFILE_PREFIX.test(id) ? 1 : 2;
 }
 
-function preferenceTuple(model: ModelInfo, preferredIds: ReadonlySet<string>): number[] {
+function preferenceTuple(model: ModelInfo, preferredIds: ReadonlySet<string>, activeModelId: string): number[] {
   const id = String(model.id);
   return [
-    model.disabled ? 1 : 0,
+    id === activeModelId ? 0 : 1,
     preferredIds.has(id) ? 0 : 1,
     routePreference(model),
     DATE_SUFFIX.test(id.replace(VERSION_SUFFIX, '')) ? 1 : 0,
@@ -43,21 +43,26 @@ function isPreferred(candidate: number[], incumbent: number[]): boolean {
 }
 
 /**
- * One row per canonical model, with disabled rows dropped, in input order.
+ * One enabled row per canonical model, in input order. A disabled active model is also kept so
+ * the user can see their current selection and switch to an enabled twin.
  *
- * `preferredIds` (the selected model, Recommended and Favorites) win their group so a pinned id is
- * never the twin that gets hidden; a disabled preferred id is the one disabled row kept, so the
- * active model never silently vanishes from the list.
+ * `preferredIds` (Recommended and Favorites) win their group unless the active model is enabled.
+ * Disabled favorites and recommendations are hidden like other unavailable models.
  */
-export function dedupeModelsForPicker(models: ModelInfo[], preferredIds: ReadonlySet<string>): ModelInfo[] {
+export function dedupeModelsForPicker(
+  models: ModelInfo[],
+  preferredIds: ReadonlySet<string>,
+  activeModelId: string
+): ModelInfo[] {
   const winners = new Map<string, { model: ModelInfo; preference: number[] }>();
   for (const model of models) {
+    if (model.disabled) continue;
     const key = canonicalModelKey(model);
-    const preference = preferenceTuple(model, preferredIds);
+    const preference = preferenceTuple(model, preferredIds, activeModelId);
     const incumbent = winners.get(key);
     if (!incumbent || isPreferred(preference, incumbent.preference)) winners.set(key, { model, preference });
   }
 
   const kept = new Set(Array.from(winners.values(), winner => winner.model));
-  return models.filter(model => kept.has(model) && (!model.disabled || preferredIds.has(String(model.id))));
+  return models.filter(model => kept.has(model) || (model.disabled && String(model.id) === activeModelId));
 }

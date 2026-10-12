@@ -757,116 +757,126 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   const storedRecommendedIds = getSettingObject<string[]>('recommendedModelIds', emptyIds);
   const defaultModelId = getSetting('DefaultAPIModel');
 
-  // Ids a twin must never hide: the active model and everything pinned above the provider groups.
+  // Favor pinned ids in provider groups unless the active model is an enabled twin.
   const preferredModelIds = useMemo(
-    () => new Set([model, ...favoriteModelIds, ...resolveRecommendedModelIds(storedRecommendedIds, defaultModelId)]),
-    [model, favoriteModelIds, storedRecommendedIds, defaultModelId]
+    () => new Set([...favoriteModelIds, ...resolveRecommendedModelIds(storedRecommendedIds, defaultModelId)]),
+    [favoriteModelIds, storedRecommendedIds, defaultModelId]
   );
 
-  const { filteredModels, maxContextWindow, maxTokens, modelsByBackend, modelsByBackendAndType } = useMemo(() => {
-    // Start with accessible models instead of all models
-    let availableModels: ModelInfo[] = [];
+  const { filteredModels, hiddenPinnedModels, maxContextWindow, maxTokens, modelsByBackend, modelsByBackendAndType } =
+    useMemo(() => {
+      // Start with accessible models instead of all models
+      let availableModels: ModelInfo[] = [];
 
-    if (showAllModels) {
-      availableModels = accessibleModels;
-    } else if (modelFilter === 'video') {
-      availableModels = accessibleVideoModels;
-    } else {
-      availableModels = imageModel ? accessibleImageModels : accessibleTextModels;
-    }
+      if (showAllModels) {
+        availableModels = accessibleModels;
+      } else if (modelFilter === 'video') {
+        availableModels = accessibleVideoModels;
+      } else {
+        availableModels = imageModel ? accessibleImageModels : accessibleTextModels;
+      }
 
-    // Filter out excluded models
-    const withoutExcluded = availableModels.filter(m => !EXCLUDED_MODEL_IDS.includes(m.id));
+      // Filter out excluded models
+      const withoutExcluded = availableModels.filter(m => !EXCLUDED_MODEL_IDS.includes(m.id));
 
-    // Filter out deprecated models (e.g., models with deprecationDate in the past)
-    const withoutDeprecated = withoutExcluded.filter(m => !isModelDeprecated(m));
+      // Filter out deprecated models (e.g., models with deprecationDate in the past)
+      const withoutDeprecated = withoutExcluded.filter(m => !isModelDeprecated(m));
 
-    // Bedrock profiles, dated snapshots and unavailable rows collapse to one usable row per model.
-    const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds);
+      // Bedrock profiles, dated snapshots and unavailable rows collapse to one usable row per model.
+      const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds, model);
 
-    // Filter by search query if present
-    const searchFiltered = debouncedSearchQuery
-      ? deduped.filter(m => {
-          const searchLower = debouncedSearchQuery.toLowerCase();
-          const nameMatch = m.name.toLowerCase().includes(searchLower);
-          const descMatch = m.description && m.description.toLowerCase().includes(searchLower);
-          return nameMatch || descMatch;
-        })
-      : deduped;
+      const searchLower = debouncedSearchQuery.toLowerCase();
+      const matchesSearch = (candidate: ModelInfo) =>
+        !searchLower ||
+        candidate.name.toLowerCase().includes(searchLower) ||
+        !!candidate.description?.toLowerCase().includes(searchLower);
+      const searchFiltered = deduped.filter(matchesSearch);
 
-    // Group models by backend for accordion view
-    const grouped = searchFiltered.reduce(
-      (acc, model) => {
-        const backend = getModelBackend(model);
-        if (!acc[backend]) {
-          acc[backend] = [];
-        }
-        acc[backend].push(model);
-        return acc;
-      },
-      {} as Record<string, ModelInfo[]>
-    );
+      // Pinned sections can still show their exact ids when an enabled active twin wins the
+      // provider row. Keep their own access, availability and search filters in step.
+      const hiddenPinnedModels = withoutDeprecated.filter(
+        candidate =>
+          preferredModelIds.has(String(candidate.id)) &&
+          !deduped.includes(candidate) &&
+          (!candidate.disabled || candidate.id === model) &&
+          matchesSearch(candidate)
+      );
 
-    // Sort within each backend by curated rank, then recency (see modelRanking.ts)
-    Object.keys(grouped).forEach(backend => {
-      grouped[backend] = sortModelsForPicker(grouped[backend]);
-    });
+      // Group models by backend for accordion view
+      const grouped = searchFiltered.reduce(
+        (acc, model) => {
+          const backend = getModelBackend(model);
+          if (!acc[backend]) {
+            acc[backend] = [];
+          }
+          acc[backend].push(model);
+          return acc;
+        },
+        {} as Record<string, ModelInfo[]>
+      );
 
-    // Group models by backend and then by type for "All Models" view
-    const groupedByBackendAndType = searchFiltered.reduce(
-      (acc, model) => {
-        const backend = getModelBackend(model);
-        // Ensure consistent type categorization
-        const type = model.type === 'image' ? 'image' : model.type === 'video' ? 'video' : 'text';
+      // Sort within each backend by curated rank, then recency (see modelRanking.ts)
+      Object.keys(grouped).forEach(backend => {
+        grouped[backend] = sortModelsForPicker(grouped[backend]);
+      });
 
-        if (!acc[backend]) {
-          acc[backend] = { text: [], image: [], video: [] };
-        }
+      // Group models by backend and then by type for "All Models" view
+      const groupedByBackendAndType = searchFiltered.reduce(
+        (acc, model) => {
+          const backend = getModelBackend(model);
+          // Ensure consistent type categorization
+          const type = model.type === 'image' ? 'image' : model.type === 'video' ? 'video' : 'text';
 
-        // Only add the model to the appropriate type section
-        acc[backend][type].push(model);
-        return acc;
-      },
-      {} as Record<string, { text: ModelInfo[]; image: ModelInfo[]; video: ModelInfo[] }>
-    );
+          if (!acc[backend]) {
+            acc[backend] = { text: [], image: [], video: [] };
+          }
 
-    // Sort models within each backend and type by capability
-    Object.keys(groupedByBackendAndType).forEach(backend => {
-      groupedByBackendAndType[backend].text = sortModelsForPicker(groupedByBackendAndType[backend].text);
-      groupedByBackendAndType[backend].image = sortModelsForPicker(groupedByBackendAndType[backend].image);
-      groupedByBackendAndType[backend].video = sortModelsForPicker(groupedByBackendAndType[backend].video);
-    });
+          // Only add the model to the appropriate type section
+          acc[backend][type].push(model);
+          return acc;
+        },
+        {} as Record<string, { text: ModelInfo[]; image: ModelInfo[]; video: ModelInfo[] }>
+      );
 
-    // Flatten the sorted models
-    const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
+      // Sort models within each backend and type by capability
+      Object.keys(groupedByBackendAndType).forEach(backend => {
+        groupedByBackendAndType[backend].text = sortModelsForPicker(groupedByBackendAndType[backend].text);
+        groupedByBackendAndType[backend].image = sortModelsForPicker(groupedByBackendAndType[backend].image);
+        groupedByBackendAndType[backend].video = sortModelsForPicker(groupedByBackendAndType[backend].video);
+      });
 
-    // Find maximum values
-    let maxCtx = 0;
-    let maxTok = 0;
+      // Flatten the sorted models
+      const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
 
-    searchFiltered.forEach(m => {
-      if (m.contextWindow > maxCtx) maxCtx = m.contextWindow;
-      if (m.max_tokens > maxTok) maxTok = m.max_tokens;
-    });
+      // Find maximum values
+      let maxCtx = 0;
+      let maxTok = 0;
 
-    return {
-      filteredModels: sorted,
-      maxContextWindow: maxCtx,
-      maxTokens: maxTok,
-      modelsByBackend: grouped,
-      modelsByBackendAndType: groupedByBackendAndType,
-    };
-  }, [
-    imageModel,
-    accessibleModels,
-    accessibleTextModels,
-    accessibleImageModels,
-    accessibleVideoModels,
-    modelFilter,
-    debouncedSearchQuery,
-    showAllModels,
-    preferredModelIds,
-  ]);
+      searchFiltered.forEach(m => {
+        if (m.contextWindow > maxCtx) maxCtx = m.contextWindow;
+        if (m.max_tokens > maxTok) maxTok = m.max_tokens;
+      });
+
+      return {
+        filteredModels: sorted,
+        hiddenPinnedModels,
+        maxContextWindow: maxCtx,
+        maxTokens: maxTok,
+        modelsByBackend: grouped,
+        modelsByBackendAndType: groupedByBackendAndType,
+      };
+    }, [
+      imageModel,
+      accessibleModels,
+      accessibleTextModels,
+      accessibleImageModels,
+      accessibleVideoModels,
+      modelFilter,
+      debouncedSearchQuery,
+      showAllModels,
+      preferredModelIds,
+      model,
+    ]);
 
   // Auto-expand the selected model's backend when it changes
   useEffect(() => {
@@ -881,17 +891,20 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   }, [selectedModelBackend]);
 
   // Compute favorite models from the already-filtered list (respects search, filter, access control)
-  const favoriteModels = useMemo(() => filteredModels.filter(m => isFavorite(m.id)), [filteredModels, isFavorite]);
+  const favoriteModels = useMemo(
+    () => [...filteredModels, ...hiddenPinnedModels].filter(m => isFavorite(m.id)),
+    [filteredModels, hiddenPinnedModels, isFavorite]
+  );
 
   // Admin-ordered ids -> models. Reads from filteredModels so search, type filter and access
   // control apply, and an id that is unknown or inaccessible is dropped rather than shown dead.
   const recommendedModels = useMemo(() => {
-    const byId = new Map<string, ModelInfo>(filteredModels.map(m => [m.id, m]));
+    const byId = new Map<string, ModelInfo>([...filteredModels, ...hiddenPinnedModels].map(m => [m.id, m]));
     return resolveRecommendedModelIds(storedRecommendedIds, defaultModelId).flatMap(id => {
       const found = byId.get(id);
       return found ? [found] : [];
     });
-  }, [filteredModels, storedRecommendedIds, defaultModelId]);
+  }, [filteredModels, hiddenPinnedModels, storedRecommendedIds, defaultModelId]);
 
   // Provider section order for display. Same ordering the memo above applies when flattening
   // filteredModels, so the accordions and the flat list agree.
