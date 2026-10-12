@@ -10,7 +10,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { apiKeyService, dataLakeResearchService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
-import { resolveWebSearchProviders, searchWithHedge } from '@bike4mind/services/llm';
+import { resolveWebSearchProviders, safeHostname, searchWithHedge } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -29,8 +29,6 @@ import { lakeConfigAuditDb } from './lakeConfigAuditDb';
  */
 
 const LOGGED_SEARCH_HOSTS = 10;
-
-const hostnameOf = (url: string): string => (URL.canParse(url) ? new URL(url).hostname : url);
 
 /** What the loop reports back, so the handler can log a one-line outcome. */
 export interface ResearchRunOutcome {
@@ -298,7 +296,7 @@ export async function runLakeResearch(
           maxResults,
           recencyDays,
           hits: hits.length,
-          hosts: hits.slice(0, LOGGED_SEARCH_HOSTS).map(hit => hostnameOf(hit.url)),
+          hosts: hits.slice(0, LOGGED_SEARCH_HOSTS).map(hit => safeHostname(hit.url)),
         });
         return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));
       },
