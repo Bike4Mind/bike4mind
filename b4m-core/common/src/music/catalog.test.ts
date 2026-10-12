@@ -40,7 +40,13 @@ describe('published prices', () => {
     expect(estimateMusicCostUsd(MUSIC_MODEL_CATALOG['lyria-3-clip-preview'], { durationSeconds: 30 })).toBe(0.04);
   });
 
-  it('bills ElevenLabs at $0.15 per output minute', () => {
-    expect(estimateMusicCostUsd(MUSIC_MODEL_CATALOG.music_v1, { durationSeconds: 60 })).toBeCloseTo(0.15, 10);
+  it.each(['music_v2_5', 'music_v2', 'music_v1'] as const)('bills %s at $0.15 per output minute', id => {
+    expect(estimateMusicCostUsd(MUSIC_MODEL_CATALOG[id], { durationSeconds: 60 })).toBeCloseTo(0.15, 10);
+  });
+
+  it('enables the current ElevenLabs models by default and leaves v1 to an admin', () => {
+    expect(MUSIC_MODEL_CATALOG.music_v2_5.defaultEnabled).toBe(true);
+    expect(MUSIC_MODEL_CATALOG.music_v2.defaultEnabled).toBe(true);
+    expect(MUSIC_MODEL_CATALOG.music_v1.defaultEnabled).toBe(false);
   });
 });

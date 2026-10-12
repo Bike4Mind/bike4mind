@@ -2,6 +2,9 @@
 export const MUSIC_PROVIDER_IDS = ['test', 'gemini-lyria', 'elevenlabs'] as const;
 export type MusicProviderId = (typeof MUSIC_PROVIDER_IDS)[number];
 
+// Upper bound for any model, so an oversized body fails schema validation before capability checks run.
+export const MAX_MUSIC_LYRICS_CHARS = 10_000;
+
 export const MUSIC_OUTPUT_FORMATS = ['mp3'] as const;
 export type MusicOutputFormat = (typeof MUSIC_OUTPUT_FORMATS)[number];
 

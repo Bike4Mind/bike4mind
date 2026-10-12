@@ -1,14 +1,22 @@
 import { z } from 'zod';
-import type { MusicModelCapabilities } from './types';
+import { MAX_MUSIC_LYRICS_CHARS, type MusicModelCapabilities } from './types';
 
 // Adding a model: append its id here, then TypeScript forces a declaration in MUSIC_MODEL_CATALOG.
-export const MUSIC_MODEL_IDS = ['test-music', 'lyria-3.5', 'lyria-3-clip-preview', 'music_v1'] as const;
+export const MUSIC_MODEL_IDS = [
+  'test-music',
+  'lyria-3.5',
+  'lyria-3-clip-preview',
+  'music_v2_5',
+  'music_v2',
+  'music_v1',
+] as const;
 export type MusicModelId = (typeof MUSIC_MODEL_IDS)[number];
 export const MusicModelIdSchema = z.enum(MUSIC_MODEL_IDS);
 
-// Lyria documents no lyrics limit; these bounds cover a full song and are revisited against the live adapter.
-const LYRIA_SONG_LYRICS_MAX_CHARS = 3000;
-const LYRIA_CLIP_LYRICS_MAX_CHARS = 1000;
+// ElevenLabs bills every music model at $0.15 per output minute.
+const ELEVENLABS_MUSIC_USD_PER_SECOND = 0.15 / 60;
+// music_length_ms: the API reference allows 3-600 s, the capability page caps songs at 5 min; take the stricter.
+const ELEVENLABS_MUSIC_DURATION = { control: 'exact', min: 3, max: 300, default: 60 } as const;
 
 export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> = {
   // Deterministic, free, registered only when ENABLE_TEST_MUSIC_PROVIDER=true (never in production).
@@ -25,11 +33,12 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
     defaultEnabled: true,
   },
   // Length is steered by the prompt only and documented as "a couple of minutes"; billed per song whatever it runs.
+  // Lyrics travel inside the prompt (131k input tokens), so only the shared lyrics cap applies.
   'lyria-3.5': {
     provider: 'gemini-lyria',
     displayName: 'Lyria 3.5',
     vocals: 'optional',
-    lyrics: { maxChars: LYRIA_SONG_LYRICS_MAX_CHARS },
+    lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS },
     duration: { control: 'approximate', min: 30, max: 180, default: 120 },
     outputFormats: ['mp3'],
     typicalRenderSeconds: 60,
@@ -41,7 +50,7 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
     provider: 'gemini-lyria',
     displayName: 'Lyria 3 Clip',
     vocals: 'optional',
-    lyrics: { maxChars: LYRIA_CLIP_LYRICS_MAX_CHARS },
+    lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS },
     duration: { control: 'fixed', seconds: 30 },
     outputFormats: ['mp3'],
     typicalRenderSeconds: 20,
@@ -49,19 +58,44 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
     preview: true,
     defaultEnabled: true,
   },
-  // music_length_ms is 3-300 s here: the API reference allows 600 s but the capability page caps songs at 5 min.
-  // Custom lyrics go through a composition plan, which caps each line at 200 characters. $0.15 per output minute.
-  music_v1: {
+  // Newest ElevenLabs model. Custom lyrics go through a chunked composition plan (3-120 s per chunk).
+  music_v2_5: {
     provider: 'elevenlabs',
-    displayName: 'ElevenLabs Music',
+    displayName: 'ElevenLabs Music v2.5',
     vocals: 'optional',
-    lyrics: { maxChars: 4000, maxLineChars: 200 },
-    duration: { control: 'exact', min: 3, max: 300, default: 60 },
+    lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS },
+    duration: ELEVENLABS_MUSIC_DURATION,
     outputFormats: ['mp3'],
     typicalRenderSeconds: 60,
-    pricing: { unit: 'per_second', usd: 0.0025 },
+    pricing: { unit: 'per_second', usd: ELEVENLABS_MUSIC_USD_PER_SECOND },
     preview: false,
     defaultEnabled: true,
+  },
+  music_v2: {
+    provider: 'elevenlabs',
+    displayName: 'ElevenLabs Music v2',
+    vocals: 'optional',
+    lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS },
+    duration: ELEVENLABS_MUSIC_DURATION,
+    outputFormats: ['mp3'],
+    typicalRenderSeconds: 60,
+    pricing: { unit: 'per_second', usd: ELEVENLABS_MUSIC_USD_PER_SECOND },
+    preview: false,
+    defaultEnabled: true,
+  },
+  // Superseded by v2/v2.5 (ElevenLabs gives months of notice before removal); off unless an admin enables it.
+  // Its section-based composition plan caps each lyric line at 200 characters.
+  music_v1: {
+    provider: 'elevenlabs',
+    displayName: 'ElevenLabs Music v1',
+    vocals: 'optional',
+    lyrics: { maxChars: 4000, maxLineChars: 200 },
+    duration: ELEVENLABS_MUSIC_DURATION,
+    outputFormats: ['mp3'],
+    typicalRenderSeconds: 60,
+    pricing: { unit: 'per_second', usd: ELEVENLABS_MUSIC_USD_PER_SECOND },
+    preview: false,
+    defaultEnabled: false,
   },
 };
 

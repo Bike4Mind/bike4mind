@@ -1,8 +1,6 @@
 import { z } from 'zod';
 import { MusicModelIdSchema } from './catalog';
-
-// Upper bound for any model, so an oversized body fails schema validation before capability checks run.
-export const MAX_MUSIC_LYRICS_CHARS = 10_000;
+import { MAX_MUSIC_LYRICS_CHARS } from './types';
 
 export const MusicGenerationRequestSchema = z.object({
   model: MusicModelIdSchema,
