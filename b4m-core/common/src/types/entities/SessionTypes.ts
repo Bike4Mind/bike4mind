@@ -1134,4 +1134,25 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The count of active voice sessions
    */
   countActiveVoiceSessionsByUserId: (userId: string) => Promise<number>;
+
+  /**
+   * Oldest-first sessions whose voice credit hold was reserved before `startedBefore` and never
+   * settled, at most `limit` of them.
+   */
+  findStaleVoiceHolds: (
+    startedBefore: Date,
+    limit: number
+  ) => Promise<Array<{ id: string; userId: string; voiceReservedCredits: number; voiceSessionStartedAt: Date }>>;
+
+  /**
+   * Atomically clear the voice hold that started at `startedAt`. Resolves true for the single
+   * caller that cleared it, false when it was already settled or replaced by a newer call.
+   */
+  claimVoiceHold: (sessionId: string, startedAt: Date) => Promise<boolean>;
+
+  /**
+   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, so it can be settled
+   * again. Resolves false (and writes nothing) when the session already holds a newer call.
+   */
+  restoreVoiceHold: (sessionId: string, voiceReservedCredits: number, startedAt: Date) => Promise<boolean>;
 }

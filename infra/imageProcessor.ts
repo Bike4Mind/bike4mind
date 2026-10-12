@@ -22,9 +22,6 @@ export const imageProcessor = new sst.aws.Function('ImageProcessor', {
   timeout: '5 minutes',
   memory: '2048 MB',
   link: [...allSecrets, generatedImagesBucket, appFilesBucket, fabFileBucket],
-  logging: {
-    retention: '3 days',
-  },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },

@@ -9,6 +9,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { green, greenAlpha } from '@client/app/utils/themes/colors';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
 type Account = {
   id: string;
@@ -276,7 +277,7 @@ const AccountSelector = () => {
                   }}
                   startDecorator={<Bike4MindIcon size="14" />}
                 >
-                  <Box component="span">{account.credits.toLocaleString()}</Box>
+                  <Box component="span">{formatCreditAmount(account.credits)}</Box>
                 </Chip>
               </Tooltip>
             </Option>

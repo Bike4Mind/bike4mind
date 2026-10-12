@@ -33,9 +33,6 @@ export const emailBatchQueueSubscription = emailBatchQueue.subscribe(
     memory: '512 MB',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, eventBus],
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // APP_URL is needed for tracking links in emails
@@ -67,9 +64,6 @@ export const emailJobQueueSubscription = emailJobQueue.subscribe(
     timeout: '5 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, emailBatchQueue, eventBus],
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

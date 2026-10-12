@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-11T16:20:28.746Z",
-  "notice": "Fallback defaults last maintained on 2026-10-11. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-12T04:20:47.607Z",
+  "notice": "Fallback defaults last maintained on 2026-10-12. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -261,6 +261,41 @@
         "rank": 3,
         "trainingCutoff": "2025-07-01",
         "releaseDate": "2025-10-16"
+      }
+    },
+    {
+      "modelId": "claude-haiku-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-haiku-5-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 5.5 Haiku",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's fastest model. Claude 5.5 Haiku targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 3,
+        "releaseDate": "2026-10-07"
       }
     },
     {
@@ -1603,6 +1638,41 @@
         "logoFile": "Anthropic_logo.png",
         "rank": 0,
         "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-haiku-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-haiku-5-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 5.5 Haiku",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5.5 Haiku via AWS Bedrock, built for high-volume, latency-sensitive work, with adaptive thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 3,
+        "releaseDate": "2026-10-07"
       }
     },
     {

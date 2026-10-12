@@ -17,12 +17,10 @@ export function resolveRouteTemplate(req: RouteRequest): string {
   const pathname = raw.split(/[?#]/, 1)[0] || '/';
   const segments = pathname.split('/');
 
-  // req.query also carries the real query string (a repeated key becomes an array), and Next.js
-  // lets a route param override a query key of the same name. A value that equals the query
-  // string's own values for that key is indistinguishable from a query-only key, and letting it
-  // claim segments would mis-template (`/api/x/1?n=1`) or let a caller spoof the template
-  // (`?z=api&z=admin`), so it is skipped. A differing value can only be a route param, so a
-  // colliding name (`?path=1` on a `[...path]` route) still gets templated.
+  // req.query also carries the real query string (a repeated key becomes an array). A key whose
+  // values equal the query string's own values for it is a query-only key; letting it claim
+  // segments would mis-template (`/api/x/1?n=1`) or let a caller spoof the template
+  // (`?z=api&z=admin`), so it is skipped.
   const search = new URLSearchParams(raw.split('#', 1)[0].split('?').slice(1).join('?'));
   const params = Object.entries(req.query ?? {}).filter((entry): entry is [string, string | string[]] => {
     const [key, value] = entry;

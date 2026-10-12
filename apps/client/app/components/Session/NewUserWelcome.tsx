@@ -6,6 +6,8 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
+import { useAnswerCostReference } from '@client/app/hooks/useAnswerCostReference';
+import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
 import useChatActions from '@client/app/hooks/useChatActions';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { APP_NAME, getBrandName } from '@client/config/general';
@@ -35,6 +37,7 @@ const NewUserWelcome = () => {
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const defaultFreeCredits = Number(useGetSettingsValue('defaultFreeCredits')) || 0;
   const balance = useEffectiveCredits();
+  const answerCostReference = useAnswerCostReference();
   const sendPrompt = useChatActions(s => s.sendPrompt);
   const setChatInputValue = useChatInput(s => s.setChatInputValue);
   const requestFocus = useChatInput(s => s.requestFocus);
@@ -85,6 +88,9 @@ const NewUserWelcome = () => {
     awaitingVerification,
     pendingGrant: currentUser?.pendingCreditGrant ?? defaultFreeCredits,
   });
+  // Same credits the line above quotes: the pending grant before verification, else the live balance.
+  const estimateCredits = awaitingVerification ? (currentUser?.pendingCreditGrant ?? defaultFreeCredits) : balance;
+  const answersEstimate = creditsLine ? formatAnswersEstimate(estimateCredits, answerCostReference) : null;
 
   return (
     <Sheet
@@ -120,6 +126,11 @@ const NewUserWelcome = () => {
       {creditsLine && (
         <Typography level="body-md" data-testid="new-user-welcome-credits">
           {creditsLine}
+        </Typography>
+      )}
+      {answersEstimate && (
+        <Typography level="body-sm" data-testid="new-user-welcome-answers-estimate" sx={{ color: 'text.secondary' }}>
+          {answersEstimate}
         </Typography>
       )}
       <Typography level="body-sm" sx={{ color: 'text.secondary' }}>

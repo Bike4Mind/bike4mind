@@ -738,6 +738,31 @@ export class AnthropicBackend implements ICompletionBackend {
           "Anthropic's latest flagship model. Claude 5.5 Opus delivers adaptive extended thinking, coding, and agentic capabilities at a lower price than Claude 5 Opus.",
         isSlowModel: true,
       },
+      {
+        id: ChatModels.CLAUDE_5_5_HAIKU,
+        type: 'text',
+        name: 'Claude 5.5 Haiku',
+        backend: ModelBackend.Anthropic,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        // Priced by prompt length: a request over 100K prompt tokens pays the higher tier. Cache reads (0.1x) and
+        // 5m cache writes (1.25x) match the default multipliers at both tiers.
+        pricing: {
+          100_000: { input: 0.1 / 1_000_000, output: 0.5 / 1_000_000 }, // $0.10 / 1M Input tokens, $0.50 / 1M Output tokens
+          1_000_000: { input: 0.5 / 1_000_000, output: 2.5 / 1_000_000 }, // $0.50 / 1M Input tokens, $2.50 / 1M Output tokens
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 3,
+        supportsTools: true,
+        releaseDate: '2026-10-07',
+        description:
+          "Anthropic's fastest model. Claude 5.5 Haiku targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
+      },
     ];
   }
 

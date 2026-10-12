@@ -20,8 +20,9 @@ const summaryMarkdownComponents = {
       {children}
     </Typography>
   ),
+  // Rendered as h2: the org page already carries the screen's single h1 (see routeHeading.ts).
   h1: ({ children }: { children?: ReactNode }) => (
-    <Typography component="h1" level="title-lg" sx={{ mb: 1 }}>
+    <Typography component="h2" level="title-lg" sx={{ mb: 1 }}>
       {children}
     </Typography>
   ),

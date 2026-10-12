@@ -101,6 +101,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
   }
 
+  // Claim the hold before any credit moves: of this frame, a replay, the end endpoint and the
+  // stale hold sweep (apps/workers/src/cron/voiceHoldSweep.ts), exactly one settles it.
+  if (!(await sessionRepository.claimVoiceHold(session.id, new Date(session.voiceSessionStartedAt)))) {
+    logger.warn(`voiceSessionEnded: session ${sessionId} hold already settled - ignoring`);
+    return { statusCode: 200 };
+  }
+
   if (voiceReservedCredits != null) {
     // Reservation pattern: balance already decremented at session start.
     // Reconcile: refund overage or charge underage via delta.
@@ -164,13 +171,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       latencyMs: Date.now() - new Date(session.voiceSessionStartedAt).getTime(),
     })
     .catch(err => logger.warn('Failed to record usage event', err));
-
-  // Clear voice reservation fields on session
-  await sessionRepository.update({
-    id: sessionId,
-    voiceReservedCredits: null,
-    voiceSessionStartedAt: null,
-  });
 
   const credits = actualCredits;
 
