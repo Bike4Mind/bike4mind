@@ -53,6 +53,8 @@ const NotebookSideNav = () => {
 
   return (
     <Stack
+      component="nav"
+      aria-label="Sidebar"
       data-testid="sidenav-container"
       sx={theme => ({
         height: '100dvh',

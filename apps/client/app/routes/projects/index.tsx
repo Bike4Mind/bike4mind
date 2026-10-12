@@ -122,9 +122,14 @@ const ProjectsPage = () => {
       >
         <Box display="flex" alignItems="center" gap={1}>
           <Box
+            component="h1"
             fontSize="24px"
             lineHeight="24px"
-            sx={theme => ({ color: theme.palette.mode === 'dark' ? '#D1E4F4' : '#335F70' })}
+            sx={theme => ({
+              m: 0,
+              fontWeight: 'inherit',
+              color: theme.palette.mode === 'dark' ? '#D1E4F4' : '#335F70',
+            })}
           >
             Projects
           </Box>

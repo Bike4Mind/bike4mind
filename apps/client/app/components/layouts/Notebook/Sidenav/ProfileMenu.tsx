@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useRef, useState } from 'react';
+import { KeyboardEvent as ReactKeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar, Box, Chip, CircularProgress, Divider, IconButton, Radio, Stack, Typography } from '@mui/joy';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useNavigate } from '@tanstack/react-router';
@@ -59,6 +59,39 @@ export const closeSideNavOnOverlay = (isOverlay: boolean, setOpenSideNav: (open:
 // Strip the trailing " (Personal)" suffix that useAccounts appends to the personal account name.
 const stripPersonalSuffix = (name: string) => name.replace(/ \(Personal\)$/, '');
 
+/** A menu's own items, excluding those of a menu nested inside it (the More flyout). */
+const ownMenuItems = (menu: HTMLElement | null) =>
+  menu
+    ? Array.from(menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')).filter(
+        el => el.closest('[role="menu"]') === menu
+      )
+    : [];
+
+const focusMenuItem = (menu: HTMLElement | null, which: 'first' | 'last') => {
+  const items = ownMenuItems(menu);
+  (which === 'first' ? items[0] : items[items.length - 1])?.focus();
+};
+
+/** Roving focus for Arrow/Home/End within one menu; returns whether the key moved focus. */
+const moveMenuFocus = (menu: HTMLElement, key: string) => {
+  const items = ownMenuItems(menu);
+  if (items.length === 0) return false;
+  const current = items.indexOf(document.activeElement as HTMLElement);
+  const next =
+    key === 'ArrowDown'
+      ? (current + 1) % items.length
+      : key === 'ArrowUp'
+        ? (Math.max(current, 0) - 1 + items.length) % items.length
+        : key === 'Home'
+          ? 0
+          : key === 'End'
+            ? items.length - 1
+            : -1;
+  if (next === -1) return false;
+  items[next].focus();
+  return true;
+};
+
 type MenuRowProps = {
   icon: ReactNode;
   label: string;
@@ -66,14 +99,19 @@ type MenuRowProps = {
   endDecorator?: ReactNode;
   testId?: string;
   danger?: boolean;
+  /** Set on a row that opens a nested menu; carries its expanded state. */
+  submenuOpen?: boolean;
 };
 
 /** A single icon + label row used throughout the profile menu and its "More" flyout. */
-const MenuRow = ({ icon, label, onClick, endDecorator, testId, danger }: MenuRowProps) => (
+const MenuRow = ({ icon, label, onClick, endDecorator, testId, danger, submenuOpen }: MenuRowProps) => (
   <Box
     data-testid={testId}
     role="menuitem"
-    tabIndex={0}
+    // Focus moves by arrow key (see moveMenuFocus), so Tab never walks the rows.
+    tabIndex={-1}
+    aria-haspopup={submenuOpen === undefined ? undefined : 'menu'}
+    aria-expanded={submenuOpen}
     onClick={onClick}
     // Keyboard parity: Enter/Space activate the row like a real menuitem.
     onKeyDown={e => {
@@ -108,7 +146,17 @@ type AccountCardProps = {
 export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare, showCredits }: AccountCardProps) => (
   <Box
     data-testid="profile-account-option"
+    role="menuitemradio"
+    aria-checked={selected}
+    aria-label={name}
+    tabIndex={-1}
     onClick={onSelect}
+    onKeyDown={e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onSelect();
+      }
+    }}
     sx={theme => ({
       display: 'flex',
       flexDirection: 'column',
@@ -151,7 +199,9 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
           color="success"
           size="sm"
           onChange={onSelect}
-          slotProps={{ input: { 'aria-label': name } }}
+          // The card itself is the menuitemradio; this is only its visual state.
+          aria-hidden
+          slotProps={{ input: { 'aria-label': name, tabIndex: -1 } }}
         />
       )}
     </Box>
@@ -218,6 +268,10 @@ const ProfileMenu = () => {
   const appVersion = useAppVersion();
 
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
+  const focusOnOpenRef = useRef<'first' | 'last'>('first');
   const [open, setOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const { openView: openBillingView } = useBillingView();
@@ -225,6 +279,22 @@ const ProfileMenu = () => {
   const closeAll = () => {
     setOpen(false);
     setMoreOpen(false);
+  };
+
+  // Rows that open a dialog or a new tab hand focus back to the trigger BEFORE acting: the panel
+  // unmounts with the focused row, and a dialog restores focus to whatever held it when it opened.
+  const closeToTrigger = () => {
+    triggerRef.current?.focus();
+    closeAll();
+  };
+
+  const openMenu = (focus: 'first' | 'last') => {
+    if (open) {
+      focusMenuItem(panelRef.current, focus);
+      return;
+    }
+    focusOnOpenRef.current = focus;
+    setOpen(true);
   };
 
   const closeNavigation = () => {
@@ -245,7 +315,9 @@ const ProfileMenu = () => {
       }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeAll();
+      if (e.key !== 'Escape') return;
+      if (rootRef.current?.contains(document.activeElement)) triggerRef.current?.focus();
+      closeAll();
     };
     document.addEventListener('mousedown', handlePointerDown);
     document.addEventListener('keydown', handleKeyDown);
@@ -262,6 +334,44 @@ const ProfileMenu = () => {
     if (!open) setMoreOpen(false);
   }, [open]);
 
+  useEffect(() => {
+    if (open) focusMenuItem(panelRef.current, focusOnOpenRef.current);
+  }, [open]);
+
+  useEffect(() => {
+    if (moreOpen) focusMenuItem(flyoutRef.current, 'first');
+  }, [moreOpen]);
+
+  const handlePanelKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    // Tab leaves a menu rather than walking it, so it closes and returns to the trigger.
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      closeToTrigger();
+      return;
+    }
+    if (e.key === 'ArrowRight' && (e.target as HTMLElement).getAttribute('aria-haspopup') === 'menu') {
+      e.preventDefault();
+      setMoreOpen(true);
+      return;
+    }
+    if (panelRef.current && moveMenuFocus(panelRef.current, e.key)) e.preventDefault();
+  };
+
+  const handleFlyoutKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    // Handled keys stop here so the outer panel (and the document Escape listener) never see them.
+    if (e.key === 'Escape' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      e.stopPropagation();
+      setMoreOpen(false);
+      panelRef.current?.querySelector<HTMLElement>('[aria-haspopup="menu"]')?.focus();
+      return;
+    }
+    if (flyoutRef.current && moveMenuFocus(flyoutRef.current, e.key)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
   const planLabel =
     selectedAccount && !selectedAccount.personal ? t('account.team', 'Team') : t('account.personal', 'Personal');
 
@@ -269,8 +379,11 @@ const ProfileMenu = () => {
     <Box ref={rootRef} sx={{ position: 'relative' }}>
       {open && (
         <Box
+          ref={panelRef}
           data-testid="profile-menu-panel"
           role="menu"
+          aria-label={t('account.menu', 'Account menu')}
+          onKeyDown={handlePanelKeyDown}
           sx={theme2 => ({
             ...menuSurfaceSx(theme2),
             position: 'absolute',
@@ -369,8 +482,8 @@ const ProfileMenu = () => {
               label={t('credits.title', 'Credits')}
               onClick={() => {
                 logEvent.mutate({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
+                closeToTrigger();
                 openBillingView('credits');
-                setOpen(false);
               }}
             />
           )}
@@ -380,13 +493,15 @@ const ProfileMenu = () => {
               icon={<MonetizationOnIcon sx={{ fontSize: '18px' }} />}
               label={t('subscriptions.title', 'Subscriptions')}
               onClick={() => {
+                closeToTrigger();
                 openBillingView('plans');
-                setOpen(false);
               }}
             />
           )}
           {modeToggleEnabled && (
             <Box
+              role="group"
+              aria-label={t('theme.title', 'Theme')}
               sx={theme2 => ({
                 display: 'flex',
                 alignItems: 'center',
@@ -424,6 +539,9 @@ const ProfileMenu = () => {
                   size="sm"
                   variant="plain"
                   color="neutral"
+                  role="menuitemradio"
+                  aria-checked={mode === 'dark'}
+                  tabIndex={-1}
                   onClick={() => setMode('dark')}
                   // Selected circle matches a selected notebook/project; non-selected uses the same
                   // hover background as a notebook row.
@@ -448,6 +566,9 @@ const ProfileMenu = () => {
                   size="sm"
                   variant="plain"
                   color="neutral"
+                  role="menuitemradio"
+                  aria-checked={mode === 'light'}
+                  tabIndex={-1}
                   onClick={() => setMode('light')}
                   // Selected circle matches a selected notebook/project; non-selected uses the same
                   // hover background as a notebook row.
@@ -490,12 +611,16 @@ const ProfileMenu = () => {
                   />
                 </InboxBadge>
               }
+              submenuOpen={moreOpen}
               onClick={() => setMoreOpen(v => !v)}
             />
             {moreOpen && (
               <Box
+                ref={flyoutRef}
                 data-testid="profile-menu-more-flyout"
                 role="menu"
+                aria-label={t('common.more', 'More')}
+                onKeyDown={handleFlyoutKeyDown}
                 sx={theme2 => ({
                   // 12px, one step softer than the main panel's 8px: the flyout floats clear of
                   // the panel rather than reading as part of it.
@@ -516,8 +641,8 @@ const ProfileMenu = () => {
                   }
                   label={t('inbox.title', 'Inbox')}
                   onClick={() => {
+                    closeToTrigger();
                     setInboxOpen(true);
-                    closeAll();
                   }}
                 />
                 <MenuRow
@@ -525,8 +650,8 @@ const ProfileMenu = () => {
                   icon={<PersonAddIcon sx={{ fontSize: '18px' }} />}
                   label={t('inviteShort', 'Invite')}
                   onClick={() => {
+                    closeToTrigger();
                     toggleReferralModal();
-                    closeAll();
                   }}
                 />
                 <MenuRow
@@ -534,8 +659,8 @@ const ProfileMenu = () => {
                   icon={<InfoOutlinedIcon sx={{ fontSize: '18px' }} />}
                   label={t('intro.title', 'About Us')}
                   onClick={() => {
+                    closeToTrigger();
                     openExternalLinkByKey('about');
-                    closeAll();
                   }}
                 />
                 <MenuRow
@@ -543,8 +668,8 @@ const ProfileMenu = () => {
                   icon={<GavelIcon sx={{ fontSize: '18px' }} />}
                   label={t('terms_policies', 'Terms & Policies')}
                   onClick={() => {
+                    closeToTrigger();
                     openExternalLinkByKey('terms');
-                    closeAll();
                   }}
                 />
                 <MenuRow
@@ -552,8 +677,8 @@ const ProfileMenu = () => {
                   icon={<CookieOutlinedIcon sx={{ fontSize: '18px' }} />}
                   label={t('cookie_settings', 'Cookie settings')}
                   onClick={() => {
+                    closeToTrigger();
                     openCookieSettings();
-                    closeAll();
                   }}
                 />
                 {isQuestMasterEnabled && (
@@ -587,8 +712,8 @@ const ProfileMenu = () => {
                   icon={<ApiIcon sx={{ fontSize: '18px' }} />}
                   label={t('api_docs', 'API Docs')}
                   onClick={() => {
+                    closeToTrigger();
                     openExternalLinkByKey('apiDocs');
-                    closeAll();
                   }}
                 />
                 <MenuRow
@@ -596,8 +721,8 @@ const ProfileMenu = () => {
                   icon={<LogoDevIcon sx={{ fontSize: '18px' }} />}
                   label={t('changelog.title', 'Changelog')}
                   onClick={() => {
+                    closeToTrigger();
                     openExternalLinkByKey('changelog');
-                    closeAll();
                   }}
                 />
               </Box>
@@ -613,8 +738,8 @@ const ProfileMenu = () => {
               icon={<RefreshIcon sx={{ fontSize: '18px' }} />}
               label={t('return_to_safety', 'Return to safety')}
               onClick={() => {
+                closeToTrigger();
                 returnToAdmin.mutate();
-                setOpen(false);
               }}
             />
           )}
@@ -643,17 +768,22 @@ const ProfileMenu = () => {
       )}
 
       <Box
+        ref={triggerRef}
         data-testid="profile-menu-card"
         role="button"
         tabIndex={0}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t('account.menu', 'Account menu')}
-        onClick={() => setOpen(v => !v)}
+        onClick={() => (open ? closeAll() : openMenu('first'))}
         onKeyDown={e => {
-          if (e.key === 'Enter' || e.key === ' ') {
+          if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
             e.preventDefault();
-            setOpen(v => !v);
+            if (open && e.key !== 'ArrowDown') closeAll();
+            else openMenu('first');
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            openMenu('last');
           }
         }}
         sx={theme2 => ({

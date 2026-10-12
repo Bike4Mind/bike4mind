@@ -194,3 +194,97 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
     expect(billing.openView).toHaveBeenCalledWith('plans');
   });
 });
+
+describe('ProfileMenu - keyboard', () => {
+  beforeEach(() => {
+    billing.openView.mockClear();
+    billing.creditsEnabled = true;
+  });
+
+  afterEach(() => {
+    billing.creditsEnabled = false;
+  });
+
+  const renderMenu = () =>
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+  const openByKeyboard = (key = 'Enter') => {
+    renderMenu();
+    const trigger = screen.getByTestId('profile-menu-card');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key });
+    return trigger;
+  };
+
+  const panelItems = () =>
+    Array.from(screen.getByTestId('profile-menu-panel').querySelectorAll<HTMLElement>('[role^="menuitem"]')).filter(
+      el => el.closest('[role="menu"]') === screen.getByTestId('profile-menu-panel')
+    );
+
+  it('moves focus to the first item when it opens', () => {
+    openByKeyboard();
+    expect(document.activeElement).toBe(screen.getByTestId('profile-menu-profile'));
+  });
+
+  it('opens on ArrowUp with focus on the last item', () => {
+    openByKeyboard('ArrowUp');
+    expect(document.activeElement).toBe(screen.getByTestId('logout-btn'));
+  });
+
+  it('walks the items with the arrow keys and wraps', () => {
+    openByKeyboard();
+    const items = panelItems();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[1]);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'End' });
+    expect(document.activeElement).toBe(items[items.length - 1]);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[0]);
+  });
+
+  it('keeps every item out of the Tab order', () => {
+    openByKeyboard();
+    for (const item of panelItems()) expect(item.tabIndex).toBe(-1);
+  });
+
+  it('closes on Escape and returns focus to the trigger', () => {
+    const trigger = openByKeyboard();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('closes on Tab instead of walking the page behind it', () => {
+    const trigger = openByKeyboard();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Tab' });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('opens More with ArrowRight and closes it with Escape back onto More', () => {
+    openByKeyboard();
+    const more = screen.getByTestId('profile-menu-more');
+    more.focus();
+    fireEvent.keyDown(more, { key: 'ArrowRight' });
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(screen.getByTestId('profile-more-inbox'));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
+    expect(screen.queryByTestId('profile-menu-more-flyout')).not.toBeInTheDocument();
+    expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
+    expect(document.activeElement).toBe(more);
+  });
+
+  it('hands focus to the trigger before opening a dialog, so the dialog can restore it', () => {
+    const trigger = openByKeyboard();
+    let focusedWhenOpened: Element | null = null;
+    billing.openView.mockImplementationOnce(() => {
+      focusedWhenOpened = document.activeElement;
+    });
+    fireEvent.click(screen.getByTestId('profile-menu-subscriptions'));
+    expect(focusedWhenOpened).toBe(trigger);
+  });
+});
