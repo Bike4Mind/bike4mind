@@ -43,7 +43,7 @@ export const subscriberFanout = new sst.aws.Service('subscriberFanoutV2', {
     },
   ],
   logging: {
-    retention: '3 days',
+    retention: $app.stage === 'production' ? '1 month' : '1 week',
   },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,

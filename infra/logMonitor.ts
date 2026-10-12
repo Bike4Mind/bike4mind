@@ -52,9 +52,6 @@ const logHandler = new sst.aws.Function('logHandler', {
   runtime: 'nodejs24.x',
   link: [...allSecrets, sreJobQueue],
   vpc: lambdaVpc,
-  logging: {
-    retention: '3 days',
-  },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
