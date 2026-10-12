@@ -341,6 +341,46 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       );
     });
 
+    it('flags a buyer mismatch but still grants to the customer user', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      const event = {
+        ...packEvent,
+        data: {
+          object: { ...packEvent.data.object, metadata: { ...packEvent.data.object.metadata, userId: 'other456' } },
+        },
+      };
+
+      const { req } = await invokeWebhookWithEvent(event);
+
+      expect(req.logger!.error).toHaveBeenCalledWith(
+        expect.stringContaining('mismatch'),
+        expect.objectContaining({
+          step: 'user_mismatch',
+          paymentIntentId: 'pi_pack',
+          metadataUserId: 'other456',
+          customerUserId: 'user123',
+        })
+      );
+      expect(mockGrantCreditPurchase).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user123' }),
+        expect.anything()
+      );
+    });
+
+    it('does not flag a mismatch when the customer and metadata agree', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      const event = {
+        ...packEvent,
+        data: {
+          object: { ...packEvent.data.object, metadata: { ...packEvent.data.object.metadata, userId: 'user123' } },
+        },
+      };
+
+      const { req } = await invokeWebhookWithEvent(event);
+
+      expect(req.logger!.error).not.toHaveBeenCalled();
+    });
+
     it('logs an error and grants nothing when no user can be found for a paid intent', async () => {
       mockFindByStripeCustomerId.mockResolvedValue(null);
       mockFindById.mockResolvedValue(null);

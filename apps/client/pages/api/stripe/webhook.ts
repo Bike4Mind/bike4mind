@@ -101,9 +101,18 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       // The customer is the primary link; the server-set metadata.userId covers an intent whose
       // customer is no longer on the user (e.g. after a customer.deleted).
+      const customerUser = customerId ? await userRepository.findByStripeCustomerId(customerId) : null;
       const user =
-        (customerId ? await userRepository.findByStripeCustomerId(customerId) : null) ??
-        (intent.metadata?.userId ? await userRepository.findById(intent.metadata.userId) : null);
+        customerUser ?? (intent.metadata?.userId ? await userRepository.findById(intent.metadata.userId) : null);
+      // Both come from the same user at start-payment, so a difference means drift or tampering.
+      // The customer's user still wins; this only makes the mismatch visible.
+      if (customerUser && intent.metadata?.userId && customerUser.id !== intent.metadata.userId) {
+        req.logger.error('[CreditPurchase] customer/metadata user mismatch', {
+          step: 'user_mismatch',
+          ...trace,
+          customerUserId: customerUser.id,
+        });
+      }
       if (!user) {
         // A paid intent with no purchaser is money taken with no credits granted. Logged loudly
         // here; the creditPurchaseReconciliation cron also alerts on it.
