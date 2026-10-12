@@ -394,10 +394,10 @@ names gets `undefined`.
 
 ## 7. Deprecation
 
-Nothing published is ever silently removed. Deprecating anything - a field, an alias, a
-whole endpoint - means: mark it deprecated in the contract, state a sunset date in the
-description, keep serving it until that date, and announce it before the date rather
-than after.
+Nothing published is ever silently removed while anyone is left to warn. Deprecating
+anything - a field, an alias, a whole endpoint - means: mark it deprecated in the
+contract, state a sunset date in the description, keep serving it until that date, and
+announce it before the date rather than after.
 
 Undocumented legacy routes still count as published if they are reachable, so they go
 through the same window unless nobody is left to warn. Check who calls one first: the
