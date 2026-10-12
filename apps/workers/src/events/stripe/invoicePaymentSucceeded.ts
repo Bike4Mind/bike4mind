@@ -1,3 +1,4 @@
+import { userRepository } from '@bike4mind/database';
 import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import { SubscriptionMetadata, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import {
@@ -10,6 +11,7 @@ import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { withEventContext } from '@server/utils/eventContext';
 import { postNewSubscriptionToSlack } from '@server/integrations/slack/slack';
+import { emitPurchaseForSourceProducts } from '@server/analytics/signupEvents';
 
 export const handler = withEventContext(async (event, logger) => {
   const { invoiceId, subscriptionId } = StripeEvents.InvoicePaymentSucceeded.schema.parse(event.properties);
@@ -87,6 +89,30 @@ export const handler = withEventContext(async (event, logger) => {
       invoiceId,
       email: invoice.customer_email ?? undefined,
       ownerType: metadata.ownerType,
+    });
+  }
+
+  // Credit the payment to the product the payer came through, read from the touches stored on
+  // them at signup (this handler has no browser, so no cookies). Every paid invoice counts - first
+  // charge, renewal, seat increase - and a zero-amount one (a trial) sends nothing; billingReason
+  // tells them apart. Keyed on the invoice id, so a retried handler sends the same eventId. Never
+  // throws: a retry here would re-run the credit granting above.
+  if (metadata.userId) {
+    let payer: Awaited<ReturnType<typeof userRepository.findById>> = null;
+    try {
+      payer = await userRepository.findById(metadata.userId);
+    } catch (error) {
+      logger.warn(`Purchase not credited to a source product: payer lookup failed for invoice ${invoiceId}`, {
+        error,
+      });
+    }
+    await emitPurchaseForSourceProducts({
+      user: payer,
+      paymentId: invoiceId,
+      kind: 'subscription',
+      amountMinor: invoice.amount_paid,
+      currency: invoice.currency,
+      billingReason: invoice.billing_reason,
     });
   }
 });

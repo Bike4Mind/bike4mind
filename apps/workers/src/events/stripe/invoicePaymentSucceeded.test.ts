@@ -7,6 +7,8 @@ import {
 } from '@client/lib/userSubscriptions/serverUtils';
 import { handler } from './invoicePaymentSucceeded';
 import { emitProductEvent } from '@server/analytics/emitActiveEvent';
+import { stableEventId } from '@server/analytics/signupEvents';
+import { userRepository } from '@bike4mind/database';
 
 vi.mock('@server/integrations/stripe/stripe', () => ({
   stripe: {
@@ -44,8 +46,16 @@ vi.mock('@server/integrations/slack/slack', () => ({
   postNewSubscriptionToSlack: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with
+// ingest keys for two made-up products.
 vi.mock('@server/analytics/emitActiveEvent', () => ({
+  HOST_PRODUCT_ID: 'bike4mind',
   emitProductEvent: vi.fn().mockResolvedValue(undefined),
+  ingestKeyFor: (p: string) => (p === 'widgets' || p === 'gadgets' ? 'key' : undefined),
+}));
+
+vi.mock('@bike4mind/database', () => ({
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
 }));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -107,29 +117,102 @@ describe('invoicePaymentSucceeded — stage guard', () => {
   });
 });
 
-describe('invoicePaymentSucceeded - acquisition is not product activity', () => {
-  beforeEach(() => vi.clearAllMocks());
+describe('invoicePaymentSucceeded - purchase credited to the source product', () => {
+  const payer = { id: 'u1', acquisition: { firstTouch: { source: 'widgets' }, lastTouch: { source: 'gadgets' } } };
+  type Invoice = Awaited<ReturnType<typeof stripe.invoices.retrieve>>;
 
-  it.each(['subscription_create', 'subscription_cycle'])(
-    'does not emit cookie-selected product events for %s',
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(emitProductEvent).mockResolvedValue(undefined);
+    vi.mocked(userRepository.findById).mockResolvedValue(payer as never);
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(
+      buildSub({
+        userId: 'u1',
+        stage: 'test',
+        ownerType: 'User',
+        // Checkout's own attribution metadata is NOT what is read: the stored signup touches are.
+        acq_first_source: 'elsewhere',
+      }) as Awaited<ReturnType<typeof stripe.subscriptions.retrieve>>
+    );
+  });
+
+  const invoice = (over: Record<string, unknown> = {}) =>
+    vi.mocked(stripe.invoices.retrieve).mockResolvedValue({
+      id: 'in_1',
+      billing_reason: 'subscription_create',
+      amount_paid: 2999,
+      currency: 'usd',
+      ...over,
+    } as unknown as Invoice);
+
+  it.each(['subscription_create', 'subscription_cycle', 'subscription_update'])(
+    'credits a paid %s invoice to each product the payer came through, keyed on the invoice',
     async billingReason => {
-      vi.mocked(stripe.invoices.retrieve).mockResolvedValue({ id: 'in_1', billing_reason: billingReason } as Awaited<
-        ReturnType<typeof stripe.invoices.retrieve>
-      >);
-      vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(
-        buildSub({
-          userId: 'u1',
-          stage: 'test',
-          ownerType: 'User',
-          acq_first_source: 'widgets',
-          acq_last_source: 'gadgets',
-        }) as Awaited<ReturnType<typeof stripe.subscriptions.retrieve>>
-      );
+      invoice({ billing_reason: billingReason });
 
       await run();
 
       expect(handleUserSubscriptionInvoice).toHaveBeenCalledOnce();
-      expect(emitProductEvent).not.toHaveBeenCalled();
+      expect(userRepository.findById).toHaveBeenCalledWith('u1');
+      expect(
+        vi.mocked(emitProductEvent).mock.calls.map(([c]) => [c.productId, c.event, c.eventId, c.metadata])
+      ).toEqual([
+        [
+          'widgets',
+          'purchase',
+          stableEventId('purchase', 'widgets', 'in_1'),
+          {
+            touch: 'first',
+            attribution: 'self-reported',
+            kind: 'subscription',
+            value: 29.99,
+            currency: 'USD',
+            billingReason,
+          },
+        ],
+        [
+          'gadgets',
+          'purchase',
+          stableEventId('purchase', 'gadgets', 'in_1'),
+          expect.objectContaining({ touch: 'last' }),
+        ],
+      ]);
     }
   );
+
+  it('sends nothing for a zero-amount invoice (a trial)', async () => {
+    invoice({ amount_paid: 0 });
+    await run();
+    expect(handleUserSubscriptionInvoice).toHaveBeenCalledOnce();
+    expect(emitProductEvent).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for a synthetic payer or one with no stored acquisition', async () => {
+    invoice();
+    vi.mocked(userRepository.findById).mockResolvedValue({ ...payer, isSynthetic: true } as never);
+    await run();
+    vi.mocked(userRepository.findById).mockResolvedValue({ id: 'u1' } as never);
+    await run();
+    expect(emitProductEvent).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for a skipped foreign-stage invoice', async () => {
+    invoice();
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(
+      buildSub({ userId: 'u1', stage: 'production', ownerType: 'User' }) as Awaited<
+        ReturnType<typeof stripe.subscriptions.retrieve>
+      >
+    );
+    await run();
+    expect(emitProductEvent).not.toHaveBeenCalled();
+  });
+
+  it('still succeeds when the payer lookup or the emit fails', async () => {
+    invoice();
+    vi.mocked(emitProductEvent).mockRejectedValue(new Error('down'));
+    await expect(run()).resolves.toBeUndefined();
+
+    vi.mocked(userRepository.findById).mockRejectedValue(new Error('db down'));
+    await expect(run()).resolves.toBeUndefined();
+  });
 });
