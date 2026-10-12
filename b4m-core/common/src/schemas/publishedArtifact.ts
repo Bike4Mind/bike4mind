@@ -400,16 +400,12 @@ export const PublishedArtifactSchema = z.object({
   /** Group id a viewer must belong to when gated cross-scope. */
   gatedToGroupId: z.string().optional(),
 
-  /** Unguessable capability token for no-sign-in `/a/<shareToken>` links. Distinct
-   *  from `publicId` (which stays stable for `/p/*`) so rotating it revokes every
-   *  outstanding link without touching the artifact. Absent until the owner opts in. */
-  shareToken: z.string().optional(),
-  /** When `shareToken` was last minted/rotated; drives the owner-facing "link created" surface. */
-  shareTokenUpdatedAt: z.date().nullish(),
-  /** Every share link ever minted, revoked ones included. THE source of truth for share links
-   *  as of #3255 step 3 - the two fields above are now only mirrored from the newest live entry
-   *  for rollback safety. `token` is stripped from serialized responses, so an owner-facing
-   *  read sees only the metadata. */
+  /** Every share link ever minted, revoked ones included. THE single representation of a
+   *  share link as of #3523, which dropped the `shareToken` / `shareTokenUpdatedAt` scalars
+   *  that #3255 step 3 kept mirrored here for rollback safety. Unguessable capability tokens
+   *  for no-sign-in `/a/<token>` links, distinct from `publicId` (which stays stable for
+   *  `/p/*`) so revoking one never touches the artifact. `token` is stripped from serialized
+   *  responses, so an owner-facing read sees only the metadata. */
   shareTokens: z.array(ShareTokenEntrySchema).prefault([]),
 
   /** Collaboration gate: who (among viewers) may annotate. Orthogonal to

@@ -93,7 +93,7 @@ const seed = async (over: Record<string, unknown> = {}) => {
 };
 
 describe('share-token route against real storage', () => {
-  it('mints, adds, revokes by id and revokes the rest, keeping the array and mirror in step', async () => {
+  it('mints, adds, revokes by id and revokes the rest, on the array alone', async () => {
     await seed();
 
     const minted = await call();
@@ -121,16 +121,28 @@ describe('share-token route against real storage', () => {
     const afterOne = await raw();
     expect(afterOne.shareTokens).toHaveLength(2);
     expect(afterOne.shareTokens[0].revokedAt).toBeInstanceOf(Date);
-    // The mirror follows the survivor rather than the link that was just revoked.
-    expect(afterOne.shareToken).toBe(added.body.shareToken);
-    expect(afterOne.shareTokenUpdatedAt).toEqual(afterOne.shareTokens[1].createdAt);
-    expect(afterOne).not.toHaveProperty('__live'); // the scratch field never persists
+    // No second representation is written, against a REAL mongod rather than an asserted
+    // pipeline shape (#3523). This is the assertion that would catch the mirror coming back by
+    // any route - a stray $set, a schema default, a re-added field - which the unit test's
+    // pipeline-shape checks cannot.
+    expect(afterOne).not.toHaveProperty('shareToken');
+    expect(afterOne).not.toHaveProperty('shareTokenUpdatedAt');
+    expect(afterOne).not.toHaveProperty('__live'); // no scratch field, since nothing re-derives
+
+    // The owner-facing timestamp is DERIVED from the surviving link, so it follows the survivor
+    // exactly as the mirrored scalar used to - which is the whole reason the response kept the
+    // field when the storage went.
+    const stateAfterOne = await call({ method: 'GET' });
+    expect(stateAfterOne.body.shareToken).toBe(added.body.shareToken);
+    expect(new Date(stateAfterOne.body.shareTokenUpdatedAt)).toEqual(afterOne.shareTokens[1].createdAt);
 
     await call({ method: 'DELETE' });
     const afterAll_ = await raw();
-    // $$REMOVE really unsets the scalar rather than writing null.
     expect(afterAll_).not.toHaveProperty('shareToken');
     expect(liveShareTokens(afterAll_ as never)).toHaveLength(0);
+    // Nothing live, so the derived timestamp is null rather than describing a revoked link.
+    const stateAfterAll = await call({ method: 'GET' });
+    expect(stateAfterAll.body).toMatchObject({ hasShareToken: false, shareTokenUpdatedAt: null });
 
     // A plain mint after revoke-all still passes its "no live entry" precondition.
     const reminted = await call();
@@ -153,18 +165,25 @@ describe('share-token route against real storage', () => {
     expect((await raw()).shareTokens).toHaveLength(1);
   });
 
-  it('rescues a pre-backfill scalar-only link when adding another, instead of overwriting it', async () => {
-    // The pipeline sets the scalar to the new token. On a row the backfill missed that is the
-    // ONLY copy of the existing link, so it has to be folded into the array in the same write.
+  it('ignores a leftover scalar rather than reading it as a link (#3523)', async () => {
+    // The handler's legacy-rescue path is gone, because the migration mirrored every scalar-only
+    // link into the array. A row that somehow still holds only a scalar - written by a
+    // pre-migration build - reports nothing shared and mints cleanly, rather than half-reading a
+    // field the schema no longer declares. `seed` inserts through the raw collection, so it can
+    // still write a field strict-mode Mongoose would drop - which is what makes this reachable
+    // at all.
     await seed({ shareToken: 'LEGACY', shareTokenUpdatedAt: new Date('2026-09-10T00:00:00.000Z'), shareTokens: [] });
 
-    const added = await call({ body: { additional: true } });
-    expect(added.body.shareLinks).toHaveLength(2);
-    // The URL the owner already shared still resolves.
-    expect(await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter('LEGACY') })).not.toBeNull();
-    const stored = await raw();
-    expect(stored.shareTokens.map((e: { token: string }) => e.token)).toEqual(['LEGACY', added.body.shareToken]);
-    expect(stored.shareTokens[0].createdAt).toEqual(new Date('2026-09-10T00:00:00.000Z'));
+    const state = await call({ method: 'GET' });
+    expect(state.body).toMatchObject({ hasShareToken: false, shareLinks: [] });
+    // The orphaned token does not resolve either - `shareTokenFilter` is the array alone now, so
+    // a URL held against a row in this state is already dead. That is why the migration mirrors
+    // rather than letting such links lapse.
+    expect(await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter('LEGACY') })).toBeNull();
+
+    const minted = await call();
+    expect(minted.status).toBe(200);
+    expect((await raw()).shareTokens).toHaveLength(1);
   });
 
   it('cannot orphan a gate when two revoke-by-id calls race for the last two links', async () => {
