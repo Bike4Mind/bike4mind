@@ -222,6 +222,7 @@ export const brandAlpha = {
     30: alpha(brand[100], 0.3), // #D1E4F44D / rgba(209, 228, 244, 0.3)
     35: alpha(brand[100], 0.35), // #D1E4F459 / rgba(209, 228, 244, 0.35)
     50: alpha(brand[100], 0.5), // #D1E4F480 / rgba(209, 228, 244, 0.5)
+    60: alpha(brand[100], 0.6), // #D1E4F499 / rgba(209, 228, 244, 0.6)
     70: alpha(brand[100], 0.7), // #D1E4F4B3 / rgba(209, 228, 244, 0.7)
     75: alpha(brand[100], 0.75), // #D1E4F4BF / rgba(209, 228, 244, 0.75)
     80: alpha(brand[100], 0.8), // #D1E4F4CC / rgba(209, 228, 244, 0.8)
@@ -246,6 +247,8 @@ export const brandAlpha = {
     50: alpha(brand[400], 0.5), // #335F7080 / rgba(51, 95, 112, 0.5)
     60: alpha(brand[400], 0.6), // #335F7099 / rgba(51, 95, 112, 0.6)
     70: alpha(brand[400], 0.7), // #335F70B3 / rgba(51, 95, 112, 0.7)
+    85: alpha(brand[400], 0.85), // #335F70D9 / rgba(51, 95, 112, 0.85)
+    90: alpha(brand[400], 0.9), // #335F70E6 / rgba(51, 95, 112, 0.9)
   },
 
   // brand[500] (#3b82f6) with opacity - Main brand blue for gradients and shadows
