@@ -39,6 +39,8 @@ const handoffSchema = z.discriminatedUnion('kind', [
     ...baseSchema,
     kind: z.literal('lake'),
     dataLakeId: z.string().min(1),
+    /** The consent was a Re-sync/Reconnect of the lake's bound folder: run the sync on return. */
+    resync: z.boolean().optional(),
   }),
 ]);
 
@@ -164,6 +166,25 @@ export function takeDrivePickerResume(userId?: string, now = Date.now()): boolea
   const pending = drivePickerResume;
   drivePickerResume = null;
   if (!pending || !userId || pending.userId !== userId) return false;
+  const age = now - pending.at;
+  return age >= 0 && age <= DRIVE_PICKER_RESUME_TTL_MS;
+}
+
+/**
+ * One-shot signal from the callback to DriveConnectAction to re-run the Re-sync/Reconnect that sent
+ * the user to consent, once the manager reopens on that lake. Same binding and expiry as the picker
+ * resume above, plus the lake, so it can never sync a different lake.
+ */
+let driveLakeResyncResume: { userId: string; dataLakeId: string; at: number } | null = null;
+
+export function requestDriveLakeResyncResume(userId: string, dataLakeId: string, now = Date.now()): void {
+  driveLakeResyncResume = { userId, dataLakeId, at: now };
+}
+
+export function takeDriveLakeResyncResume(userId: string | undefined, dataLakeId: string, now = Date.now()): boolean {
+  const pending = driveLakeResyncResume;
+  driveLakeResyncResume = null;
+  if (!pending || !userId || pending.userId !== userId || pending.dataLakeId !== dataLakeId) return false;
   const age = now - pending.at;
   return age >= 0 && age <= DRIVE_PICKER_RESUME_TTL_MS;
 }

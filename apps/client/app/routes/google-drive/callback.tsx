@@ -7,6 +7,7 @@ import {
   consumeDriveConnectHandoff,
   rebindDriveConnectHandoff,
   requestDrivePickerResume,
+  requestDriveLakeResyncResume,
 } from '@client/app/utils/driveConnectHandoff';
 import { GOOGLE_DRIVE_CONNECT_ERROR } from '@client/shared/googleDriveConnectErrors';
 import { LinearProgress } from '@mui/joy';
@@ -68,7 +69,8 @@ const reportConnectFailure = (error: unknown, failedState: string) => {
 /**
  * Puts the user back where the connect started, when that surface saved a handoff for this exact
  * OAuth attempt (see driveConnectHandoff): the Create wizard reopens with the typed-in config and
- * opens the folder picker; an existing lake reopens in the manager, where the user picks the folder.
+ * opens the folder picker; an existing lake reopens in the manager, where the user picks the folder
+ * or, for a Re-sync/Reconnect, the bound folder syncs again.
  */
 const resumeDriveConnect = (oauthState: string) => {
   const owner = currentOwner();
@@ -77,6 +79,7 @@ const resumeDriveConnect = (oauthState: string) => {
   if (!handoff) return;
   if (handoff.kind === 'lake') {
     useDataLakeWizardStore.getState().openManager('mine', handoff.dataLakeId);
+    if (handoff.resync) requestDriveLakeResyncResume(owner.userId, handoff.dataLakeId);
     return;
   }
   useDataLakeWizardStore.getState().openWizard();
