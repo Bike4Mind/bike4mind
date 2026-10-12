@@ -36,7 +36,6 @@ import {
 import {
   getLlmByModel,
   getAvailableModels,
-  type GetAvailableModelsOptions,
   reasonsWithinOutputBudget,
   resolveOutputMaxTokens,
   type ICompletionOptions,
@@ -156,8 +155,6 @@ export interface CompletionParams {
    * A throw from it refunds the hold.
    */
   onReady?: () => void | Promise<void>;
-  /** Forwarded to `getAvailableModels` when set; omitted, the listing call is unchanged. */
-  listingOptions?: GetAvailableModelsOptions;
 }
 
 /**
@@ -364,9 +361,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Get effective API keys (user keys or fallback to admin demo keys)
   const apiKeys = await getEffectiveLLMApiKeys(userId, { db, getSettingsByNames });
 
-  const models = params.listingOptions
-    ? await getAvailableModels(apiKeys, params.listingOptions)
-    : await getAvailableModels(apiKeys);
+  const models = await getAvailableModels(apiKeys);
   const modelInfo = models.find(m => m.id === (model as ChatModels));
   const catalogued = CHAT_MODELS.includes(model as ChatModels);
 

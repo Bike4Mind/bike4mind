@@ -109,7 +109,6 @@ import {
   UnauthorizedError,
   spendCapExceededError,
 } from '@bike4mind/common';
-import { PICKER_LISTING_OPTIONS } from '@bike4mind/llm-adapters';
 
 type ExecuteParams = {
   onReady?: () => void | Promise<void>;
@@ -294,14 +293,6 @@ describe('POST /api/ai/v1/completions - stream', () => {
     expect(text).toContain('hello');
     expect(text).toContain('[DONE]');
     expect(frames(text).some(f => f.type === 'error')).toBe(false);
-  });
-
-  it('lists models with the picker deadline and private models included', async () => {
-    await (await post()).text();
-
-    expect(mockExecuteCompletion).toHaveBeenCalledWith(
-      expect.objectContaining({ listingOptions: { ...PICKER_LISTING_OPTIONS, includePrivate: true } })
-    );
   });
 
   it('starts the heartbeat only once onReady commits the stream', async () => {

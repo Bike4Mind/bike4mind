@@ -39,7 +39,6 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 
 import { BadRequestError } from '@bike4mind/common';
-import { getAvailableModels, PICKER_LISTING_OPTIONS } from '@bike4mind/llm-adapters';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { executeCompletion } from './cliCompletions';
 
@@ -124,23 +123,5 @@ describe('executeCompletion onReady', () => {
     expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -10);
     expect(users.incrementCredits).toHaveBeenNthCalledWith(2, 'user1', 10);
     expect(mockComplete).not.toHaveBeenCalled();
-  });
-
-  it('forwards listingOptions to the model listing when passed', async () => {
-    const { db } = buildDb();
-    const listingOptions = { ...PICKER_LISTING_OPTIONS, includePrivate: true };
-
-    await executeCompletion({ ...baseParams, db, listingOptions });
-
-    expect(getAvailableModels).toHaveBeenCalledWith({}, listingOptions);
-  });
-
-  it('lists models exactly as before when listingOptions is absent', async () => {
-    const { db } = buildDb();
-
-    await executeCompletion({ ...baseParams, db });
-
-    expect(getAvailableModels).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(getAvailableModels).mock.calls[0]).toEqual([{}]);
   });
 });

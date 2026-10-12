@@ -26,7 +26,6 @@ import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveQuestErrorCode } from '@bike4mind/services/llm';
 import { getHttpStatus } from '@bike4mind/utils';
-import { PICKER_LISTING_OPTIONS } from '@bike4mind/llm-adapters';
 import {
   connectDB,
   mongoose,
@@ -280,8 +279,6 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         source,
         logger,
         onReady,
-        // The picker deadline bounds pre-stream work; includePrivate keeps pinned private models resolvable by id.
-        listingOptions: { ...PICKER_LISTING_OPTIONS, includePrivate: true },
         onChunk: async (text, info) => {
           if (info?.inputTokens) finalInputTokens = info.inputTokens;
           if (info?.outputTokens) finalOutputTokens = info.outputTokens;
