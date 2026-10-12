@@ -61,6 +61,8 @@ describe('pages/api/[...unmatchedApiPath] route precedence', () => {
     ['/api/does-not-exist/at-all', '/api/[type]/[id]'],
     ['/api/v1/nope', V1_CATCH_ALL],
     ['/api/v1/nope/at/all', V1_CATCH_ALL],
+    // A miss below a real v1 folder is still a v1 miss, not the invite route or the root catch-all.
+    ['/api/v1/files/does/not/exist', V1_CATCH_ALL],
     ['/api/stripe/webhook', '/api/stripe/webhook'],
     ['/api/publish/serve/a/b', '/api/publish/serve/[...path]'],
     ['/chat', SPA_CATCH_ALL],
