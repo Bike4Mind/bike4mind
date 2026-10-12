@@ -15,9 +15,10 @@
  *
  * Schedule: rate(5 minutes).
  */
-import { connectDB, questRepository, sessionRepository } from '@bike4mind/database';
+import { connectDB, sessionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
+import { evidencedCallSeconds } from '@server/voice/evidencedCallSeconds';
 import { measureVoiceCallSeconds } from '@server/voice/measureVoiceCall';
 import { settleVoiceHold, type VoiceHold } from '@server/voice/settleVoiceHold';
 import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
@@ -36,21 +37,6 @@ export interface VoiceHoldSweepResult {
   refundedCredits: number;
   alreadySettled: number;
   failed: number;
-}
-
-async function evidencedCallSeconds(hold: VoiceHold): Promise<number> {
-  const turns = await questRepository.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(
-    hold.id,
-    hold.voiceSessionStartedAt
-  );
-  const startedAtMs = hold.voiceSessionStartedAt.getTime();
-  const windowEndMs = startedAtMs + MAX_SESSION_SECONDS * 1000;
-  const lastTurnAtMs = turns.reduce((latest, turn) => {
-    const turnAtMs = new Date(turn.timestamp).getTime();
-    return turnAtMs <= windowEndMs && turnAtMs > latest ? turnAtMs : latest;
-  }, 0);
-  if (!lastTurnAtMs) return 0;
-  return Math.floor((lastTurnAtMs - startedAtMs) / 1000);
 }
 
 async function staleCallSeconds(hold: VoiceHold, now: Date): Promise<number> {
