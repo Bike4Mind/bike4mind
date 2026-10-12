@@ -293,6 +293,17 @@
     "upload": "Upload Files",
     "long_title": "File Browser"
   },
+  "newChat": "New chat",
+  "a11y": {
+    "advanced_search": "Advanced search and actions",
+    "collapse_sidebar": "Collapse sidebar",
+    "close_files": "Close files",
+    "change_profile_photo": "Change profile photo",
+    "clear_type_filter": "Clear type filter",
+    "previous_page": "Previous page",
+    "next_page": "Next page",
+    "page_number": "Page {{page}}"
+  },
   "view": "View",
   "info": "Info",
   "clone": "Clone",
@@ -303,7 +314,8 @@
     "tooltip": "Profile",
     "collection": "Collection",
     "collections": {
-      "all_types": "All Types"
+      "all_types": "All Types",
+      "type_filter": "Filter by type"
     },
     "users_profile": "{{ name }}'s Profile",
     "storage_used": "Storage Used",
