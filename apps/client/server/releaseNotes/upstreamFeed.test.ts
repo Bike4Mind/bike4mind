@@ -209,3 +209,57 @@ describe('fetchUpstreamFeed', () => {
     expect(mockSafeFetch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('fetchUpstreamFeed with a JSON Feed document', () => {
+  const SITE_FEED = 'https://self.example.com/whats-new.json';
+  const jsonFeed = (items: unknown[]) => ({ version: 'https://jsonfeed.org/version/1.1', title: 'What is new', items });
+  const item = (id: string, date: string | undefined, title = `Title ${id}`) => ({
+    id,
+    title,
+    content_text: `Text ${id}`,
+    date_published: date,
+    tags: ['Feature', 'App'],
+  });
+
+  beforeEach(() => vi.stubEnv('WHATS_NEW_FEED_URL', SITE_FEED));
+
+  it('reads the site feed on the apex domain, which is not the API route of this deployment', async () => {
+    mockSafeFetch.mockResolvedValue(json(jsonFeed([item('a', '2026-10-09T00:00:00.000Z')])));
+    const page = await fetchOnce();
+    expect(mockSafeFetch).toHaveBeenCalledTimes(1);
+    expect(page).toEqual({
+      data: [
+        {
+          id: 'a',
+          release_tag: 'Feature',
+          headline: 'Title a',
+          summary: 'Text a',
+          published_at: '2026-10-09T00:00:00.000Z',
+          items: [],
+        },
+      ],
+      next_cursor: null,
+    });
+  });
+
+  it('orders newest first, honours the limit and skips undated items', async () => {
+    mockSafeFetch.mockResolvedValue(
+      json(
+        jsonFeed([
+          item('old', '2026-09-01T00:00:00.000Z'),
+          item('undated', undefined),
+          item('new', '2026-10-09T00:00:00.000Z'),
+          item('mid', '2026-10-01T00:00:00.000Z'),
+        ])
+      )
+    );
+    const page = await fetchOnce({ limit: 2 });
+    expect(page?.data.map(note => note.id)).toEqual(['new', 'mid']);
+    expect(page?.next_cursor).toBeNull();
+  });
+
+  it('still rejects a body that is neither shape', async () => {
+    mockSafeFetch.mockResolvedValue(json({ version: 'rss', items: [] }));
+    expect(await fetchOnce()).toBeNull();
+  });
+});

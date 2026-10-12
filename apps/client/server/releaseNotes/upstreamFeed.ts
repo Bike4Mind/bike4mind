@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { paginatedResponseSchema, PublicReleaseNoteSchema, type PublicReleaseNote } from '@bike4mind/common';
 import { safeFetch } from '@server/utils/ssrfProtection';
 
@@ -15,6 +16,23 @@ const OUTAGE_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 100;
 
 const pageSchema = paginatedResponseSchema(PublicReleaseNoteSchema);
+// A JSON Feed 1.x document (https://jsonfeed.org), the format a marketing site's What's New page
+// publishes. Only the fields a slide needs are read; an item without a date or text is skipped.
+const jsonFeedSchema = z.object({
+  version: z.string().startsWith('https://jsonfeed.org/version/'),
+  items: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string().optional(),
+      summary: z.string().optional(),
+      content_text: z.string().optional(),
+      date_published: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+    })
+  ),
+});
+// The upstream's own API route; only a fetch of that path from this deployment could recurse.
+const WHATS_NEW_API_PATH = '/api/v1/whats-new';
 const cache = new Map<string, { page: UpstreamFeedPage; expiresAt: number }>();
 let outage: { base: string; until: number } | undefined;
 
@@ -89,8 +107,10 @@ async function fetchPage(
     logger.warn('[whats-new] WHATS_NEW_FEED_URL must use https');
     return down;
   }
-  // Pointing the feed at this deployment would make each request fetch itself recursively.
-  if (ownHostnames().includes(normalizeHost(url.hostname))) {
+  // Pointing the feed at this deployment's own route would make each request fetch itself
+  // recursively. Another path on an own host (a static JSON Feed on the apex site) cannot.
+  const isOwnApiRoute = url.pathname.replace(/\/+$/, '') === WHATS_NEW_API_PATH;
+  if (ownHostnames().includes(normalizeHost(url.hostname)) && isOwnApiRoute) {
     logger.warn('[whats-new] WHATS_NEW_FEED_URL points at this deployment; ignoring it');
     return down;
   }
@@ -134,11 +154,11 @@ async function fetchPage(
       body = undefined;
     }
     const parsed = pageSchema.safeParse(body);
-    if (!parsed.success) {
-      logger.warn('[whats-new] upstream feed body did not match the public schema');
-      return { page: null, upstreamDown: false };
-    }
-    return { page: parsed.data, upstreamDown: false };
+    if (parsed.success) return { page: parsed.data, upstreamDown: false };
+    const feed = jsonFeedSchema.safeParse(body);
+    if (feed.success) return { page: jsonFeedToPage(feed.data, limit), upstreamDown: false };
+    logger.warn('[whats-new] upstream feed body matched neither the public schema nor JSON Feed');
+    return { page: null, upstreamDown: false };
   } catch (error) {
     logger.warn('[whats-new] upstream feed fetch failed', {
       error: error instanceof Error ? error.message : String(error),
@@ -147,6 +167,27 @@ async function fetchPage(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** A JSON Feed as one page of release notes, newest first. The document is not paged, so neither is this. */
+export function jsonFeedToPage(feed: z.infer<typeof jsonFeedSchema>, limit: number): UpstreamFeedPage {
+  const notes: PublicReleaseNote[] = [];
+  for (const item of feed.items) {
+    const publishedAt = item.date_published ? new Date(item.date_published) : undefined;
+    const headline = item.title?.trim() ?? '';
+    const summary = (item.content_text ?? item.summary ?? '').trim();
+    if (!publishedAt || Number.isNaN(publishedAt.getTime()) || (!headline && !summary)) continue;
+    notes.push({
+      id: item.id,
+      release_tag: item.tags?.[0]?.trim() || 'Update',
+      headline,
+      summary,
+      published_at: publishedAt.toISOString(),
+      items: [],
+    });
+  }
+  notes.sort((a, b) => b.published_at.localeCompare(a.published_at));
+  return { data: notes.slice(0, limit), next_cursor: null };
 }
 
 /**
