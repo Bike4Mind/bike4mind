@@ -188,6 +188,30 @@ describe('copied file signing', () => {
     expect(h.signUrl).toHaveBeenCalledWith('owned/image.png', 'get', { expiresIn: 3600, audience: 'browser' });
   });
 
+  it('preserves real hydrated copied-image fields in the signed response', async () => {
+    const { FabFile } = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
+    const saved = new FabFile({
+      fileName: 'copy.png',
+      filePath: 'owned/copy.png',
+      mimeType: 'image/png',
+      moderationStatus: 'clean',
+    });
+    const original = saved.toJSON();
+    h.createFabFile.mockResolvedValue(saved);
+    const { res, json } = makeRes();
+    await handler(req('me'), res);
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: original.id,
+        fileName: 'copy.png',
+        filePath: 'owned/copy.png',
+        fileUrl: 'https://objects.example.invalid/get',
+      })
+    );
+    expect(json.mock.calls[0][0]).not.toHaveProperty('_doc');
+    expect(saved.toJSON()).toEqual(original);
+  });
+
   it('honors both private service signing modes', async () => {
     h.createFabFile.mockImplementation(async (_user, _params, adapter) => {
       await adapter.storage.generateSignedUrl('owned/file', 600, 'get');

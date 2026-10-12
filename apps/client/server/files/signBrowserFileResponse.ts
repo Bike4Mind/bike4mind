@@ -4,12 +4,16 @@ import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 
 export async function signBrowserFileResponse(file: IFabFileDocument): Promise<IFabFileDocument> {
-  if (!file.fileUrl) return { ...file };
+  const plainFile =
+    typeof (file as { toJSON?: unknown }).toJSON === 'function'
+      ? (file as unknown as { toJSON: () => IFabFileDocument }).toJSON()
+      : file;
+  if (!plainFile.fileUrl) return { ...plainFile };
 
-  return fabFilesService.generateSignedUrl(file, {
+  return fabFilesService.generateSignedUrl(plainFile, {
     db: { fabFiles: fabFileRepository, users: userRepository, adminSettings: adminSettingsRepository },
     storage: {
-      signedUrlCache: 'bypass',
+      ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
       generateSignedUrl: (path, expiresIn) =>
         getFilesStorage().getSignedUrl(path, 'get', { expiresIn, audience: 'browser' }),
     },

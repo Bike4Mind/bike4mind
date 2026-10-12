@@ -432,6 +432,7 @@ describe('PUT /api/files/[id] - scope gate', () => {
 });
 
 it('returns a browser URL after an authorized edit without updating the private cache', async () => {
+  vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://public.test');
   vi.clearAllMocks();
   const saved = fabFile({
     filePath: 'owned/notes.txt',
@@ -450,3 +451,5 @@ it('returns a browser URL after an authorized edit without updating the private 
   expect(h.update.mock.calls[0][0].fileUrl).toBeUndefined();
   expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
 });
+
+afterEach(() => vi.unstubAllEnvs());

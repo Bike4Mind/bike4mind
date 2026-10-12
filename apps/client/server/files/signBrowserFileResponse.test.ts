@@ -106,3 +106,61 @@ it.each(['pending', 'blocked'])('withholds a %s image before signing', async mod
   expect(h.signUrl).not.toHaveBeenCalled();
   expect(h.update).not.toHaveBeenCalled();
 });
+
+it('preserves real hydrated upload fields without exposing document internals', async () => {
+  const { FabFile } = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
+  const input = new FabFile({
+    fileName: 'upload.txt',
+    mimeType: 'text/plain',
+    presignedUrl: '/api/files/upload/owned',
+  });
+  const original = input.toJSON();
+  const response = await signBrowserFileResponse(input);
+  expect(response).toMatchObject({ id: original.id, fileName: 'upload.txt', presignedUrl: '/api/files/upload/owned' });
+  expect(response).not.toHaveProperty('_doc');
+  expect(response).not.toHaveProperty('$__');
+  expect(input.toJSON()).toEqual(original);
+  expect(h.signUrl).not.toHaveBeenCalled();
+});
+
+it('preserves hydrated clean fields while signing only the response', async () => {
+  const { FabFile } = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
+  const input = new FabFile({
+    fileName: 'report.txt',
+    mimeType: 'text/plain',
+    moderationStatus: 'clean',
+    filePath: 'owned/report.txt',
+    fileUrl: 'http://minio.internal:9000/old',
+    notes: 'retained',
+    tags: [{ name: 'owned' }],
+  });
+  const original = input.toJSON();
+  const response = await signBrowserFileResponse(input);
+  expect(response).toMatchObject({ id: original.id, fileName: 'report.txt', notes: 'retained', tags: original.tags });
+  expect(new URL(response.fileUrl!).origin).toBe('https://objects.example.invalid:9443');
+  expect(response).not.toHaveProperty('_doc');
+  expect(input.toJSON()).toEqual(original);
+  expect(h.update).not.toHaveBeenCalled();
+});
+
+it.each([undefined, '', '   ', 'https://objects.example.invalid:9443'])(
+  'refreshes the shared URL cache only when browser signing is not distinct: %s',
+  async endpoint => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
+    const storage = new S3Storage('files-bucket');
+    h.signUrl.mockImplementation((...args) => storage.getSignedUrl(...args));
+    const input = {
+      id: 'expired',
+      mimeType: 'text/plain',
+      moderationStatus: 'clean',
+      filePath: 'owned/report.txt',
+      fileUrl: 'http://minio.internal:9000/expired',
+      fileUrlExpireAt: new Date(Date.now() - 3600000),
+    } as IFabFileDocument;
+    const original = { ...input };
+    const response = await signBrowserFileResponse(input);
+    expect(new URL(response.fileUrl!).origin).toBe(endpoint?.trim() || 'http://minio.internal:9000');
+    expect(h.update).toHaveBeenCalledTimes(endpoint?.trim() ? 0 : 1);
+    expect(input).toEqual(original);
+  }
+);
