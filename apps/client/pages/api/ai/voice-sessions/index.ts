@@ -20,6 +20,7 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
+import { settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
@@ -355,6 +356,11 @@ When you get the tool result back, summarize it conversationally for voice.`;
       max_output_tokens: 4096,
     },
   };
+
+  // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
+  if (!reuseHold && session) {
+    await settlePriorVoiceHold(session);
+  }
 
   // Deduct credits immediately before the API call - all pre-flight checks have passed.
   // Deferral from the original position ensures no pre-flight throw can strand credits.

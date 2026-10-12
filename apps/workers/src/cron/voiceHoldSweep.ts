@@ -14,10 +14,10 @@
  *
  * Schedule: rate(5 minutes).
  */
-import { connectDB, questRepository, sessionRepository } from '@bike4mind/database';
+import { connectDB, sessionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
-import { settleVoiceHold, type VoiceHold } from '@server/voice/settleVoiceHold';
+import { evidencedVoiceCallSeconds, settleVoiceHold } from '@server/voice/settleVoiceHold';
 import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS } from '@server/voice/voiceSessionLimits';
 import { Resource } from 'sst';
 
@@ -30,29 +30,12 @@ export const REALTIME_VOICE_HOLD_STALE_AFTER_MS = (REALTIME_VOICE_HOLD_SECONDS +
 // Per-run cap; a backlog drains over successive runs, oldest first.
 export const VOICE_HOLD_SWEEP_LIMIT = 200;
 
-type StaleVoiceHold = VoiceHold & { realtime: boolean };
-
 export interface VoiceHoldSweepResult {
   candidates: number;
   settled: number;
   refundedCredits: number;
   alreadySettled: number;
   failed: number;
-}
-
-async function evidencedCallSeconds(hold: StaleVoiceHold): Promise<number> {
-  const turns = await questRepository.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(
-    hold.id,
-    hold.voiceSessionStartedAt
-  );
-  const startedAtMs = hold.voiceSessionStartedAt.getTime();
-  const windowEndMs = startedAtMs + (hold.realtime ? REALTIME_VOICE_HOLD_SECONDS : MAX_SESSION_SECONDS) * 1000;
-  const lastTurnAtMs = turns.reduce((latest, turn) => {
-    const turnAtMs = new Date(turn.timestamp).getTime();
-    return turnAtMs <= windowEndMs && turnAtMs > latest ? turnAtMs : latest;
-  }, 0);
-  if (!lastTurnAtMs) return 0;
-  return Math.floor((lastTurnAtMs - startedAtMs) / 1000);
 }
 
 export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHoldSweepResult> {
@@ -73,7 +56,7 @@ export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHo
 
   for (const hold of holds) {
     try {
-      const elapsedSeconds = await evidencedCallSeconds(hold);
+      const elapsedSeconds = await evidencedVoiceCallSeconds(hold, hold.realtime);
       const settlement = await settleVoiceHold(hold, elapsedSeconds);
       if (!settlement.settled) {
         result.alreadySettled++;

@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   countActiveVoiceSessions: vi.fn(),
   sessionUpdate: vi.fn(),
   claimVoiceHold: vi.fn(),
+  findTurns: vi.fn(),
   findByIdAndUserId: vi.fn(),
   incrementCredits: vi.fn(),
   getSession: vi.fn(),
@@ -113,6 +114,10 @@ vi.mock('@bike4mind/database', async orig => {
       update: (...a: unknown[]) => mocks.sessionUpdate(...a),
       findByIdAndUserId: (...a: unknown[]) => mocks.findByIdAndUserId(...a),
       claimVoiceHold: (...a: unknown[]) => mocks.claimVoiceHold(...a),
+    },
+    questRepository: {
+      ...(actual.questRepository as object),
+      findAllBySessionIdAndGreaterThanOrEqualToTimestamp: (...a: unknown[]) => mocks.findTurns(...a),
     },
     userRepository: {
       ...(actual.userRepository as object),
@@ -208,6 +213,7 @@ beforeEach(() => {
   mocks.sessionUpdate.mockResolvedValue(undefined);
   mocks.incrementCredits.mockResolvedValue(undefined);
   mocks.claimVoiceHold.mockResolvedValue({ billedCredits: null });
+  mocks.findTurns.mockResolvedValue([]);
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
   mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
@@ -410,6 +416,27 @@ describe('POST /api/v1/voice/sessions', () => {
       expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
     );
     expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1');
+  });
+
+  it('settles an earlier call left open before a fresh connect overwrites its hold', async () => {
+    const startedAt = new Date(Date.now() - 20 * 60 * 1000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      userId: 'user-1',
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+    });
+    // Its last turn came a minute in: the earlier call keeps that minute and gets the rest back.
+    mocks.findTurns.mockResolvedValue([{ timestamp: new Date(startedAt.getTime() + 60 * 1000) }]);
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
+    expect(mocks.incrementCredits.mock.calls).toEqual([
+      ['user-1', RESERVED_CREDITS - Math.ceil(RESERVED_CREDITS / 5)],
+      ['user-1', -RESERVED_CREDITS],
+    ]);
   });
 
   it('creates a session when no sessionId is sent', async () => {

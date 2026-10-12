@@ -1,5 +1,10 @@
-import { sessionRepository, userRepository } from '@bike4mind/database';
-import { creditsForElapsed, realtimeCreditsFloor } from './voiceSessionLimits';
+import { questRepository, sessionRepository, userRepository } from '@bike4mind/database';
+import {
+  creditsForElapsed,
+  MAX_SESSION_SECONDS,
+  REALTIME_VOICE_HOLD_SECONDS,
+  realtimeCreditsFloor,
+} from './voiceSessionLimits';
 
 export type VoiceHold = {
   id: string;
@@ -9,6 +14,26 @@ export type VoiceHold = {
 };
 
 export type VoiceHoldSettlement = { settled: false } | { settled: true; owed: number; refund: number };
+
+/**
+ * Call time a hold nobody closed can be shown to have used: from its start to the session's last
+ * turn within the longest call's window, so a call that never produced a turn costs nothing. Turns
+ * past the window are never call time: the user kept using the session after the call died.
+ */
+export async function evidencedVoiceCallSeconds(hold: VoiceHold, realtime: boolean): Promise<number> {
+  const turns = await questRepository.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(
+    hold.id,
+    hold.voiceSessionStartedAt
+  );
+  const startedAtMs = hold.voiceSessionStartedAt.getTime();
+  const windowEndMs = startedAtMs + (realtime ? REALTIME_VOICE_HOLD_SECONDS : MAX_SESSION_SECONDS) * 1000;
+  const lastTurnAtMs = turns.reduce((latest, turn) => {
+    const turnAtMs = new Date(turn.timestamp).getTime();
+    return turnAtMs <= windowEndMs && turnAtMs > latest ? turnAtMs : latest;
+  }, 0);
+  if (!lastTurnAtMs) return 0;
+  return Math.floor((lastTurnAtMs - startedAtMs) / 1000);
+}
 
 /**
  * Settle a voice credit hold: keep `elapsedSeconds` of call time (capped at the hold) and refund
@@ -53,4 +78,26 @@ export async function settleVoiceHold(hold: VoiceHold, elapsedSeconds: number): 
     }
   }
   return { settled: true, owed, refund };
+}
+
+/**
+ * Settle a session's open hold, if any, by the stale-hold sweep's rule. A fresh call writes its
+ * new hold over the session's, so an earlier call that never closed (a closed tab sends no end
+ * request or closing frame) must be settled first or its reservation is lost.
+ */
+export async function settlePriorVoiceHold(session: {
+  id: string;
+  userId: string;
+  voiceReservedCredits?: number | null;
+  voiceSessionStartedAt?: Date | null;
+  voiceBilledCredits?: number | null;
+}): Promise<VoiceHoldSettlement> {
+  if (session.voiceReservedCredits == null || session.voiceSessionStartedAt == null) return { settled: false };
+  const hold: VoiceHold = {
+    id: session.id,
+    userId: session.userId,
+    voiceReservedCredits: session.voiceReservedCredits,
+    voiceSessionStartedAt: session.voiceSessionStartedAt,
+  };
+  return settleVoiceHold(hold, await evidencedVoiceCallSeconds(hold, session.voiceBilledCredits != null));
 }
