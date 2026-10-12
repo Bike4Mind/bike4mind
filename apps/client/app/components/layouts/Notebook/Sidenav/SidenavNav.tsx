@@ -407,7 +407,15 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               ...startHereTagSx(theme),
             }}
           >
-            {t('sidenav.gearsStartHere', 'Start here')}
+            {gearsSignal.startHereCredits > 0
+              ? t(
+                  'sidenav.gearsStartHereCredits',
+                  gearsSignal.startHereCredits === 1
+                    ? 'Start here, +{{credits}} credit'
+                    : 'Start here, +{{credits}} credits',
+                  { credits: gearsSignal.startHereCredits.toLocaleString() }
+                )
+              : t('sidenav.gearsStartHere', 'Start here')}
           </Chip>
         ) : undefined,
       onClick: () => {
