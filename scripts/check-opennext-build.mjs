@@ -12,6 +12,11 @@
 // `buildCommand` (normalizeBuildCommand in platform/src/components/aws/nextjs.ts),
 // and the version is read from infra/web.ts so the two cannot drift.
 //
+// Env a deploy sets that this build does not mirror: ENABLE_SOURCE_MAPS only turns on
+// browser source maps (static assets, not a Lambda bundle), and the *_BUCKET_NAME vars
+// only feed images.remotePatterns hostnames in next.config.mjs. Neither moves the
+// Lambda bundle sizes this script checks.
+//
 // Usage: pnpm turbo:core:build && node scripts/check-opennext-build.mjs
 
 import { spawnSync } from 'node:child_process';
@@ -30,13 +35,14 @@ export function parseOpenNextVersion(source) {
   const versions = [...source.matchAll(OPEN_NEXT_VERSION_PATTERN)].map(match => match[2]);
   if (versions.length !== 1) {
     throw new Error(
-      `Expected exactly one string-literal openNextVersion in infra/web.ts, found ${versions.length}. ` +
-        'Update scripts/check-opennext-build.mjs to read it.'
+      `Expected exactly one string-literal \`openNextVersion: '<x.y.z>'\` in infra/web.ts, found ${versions.length}. ` +
+        'If the pin moved (e.g. into a constant), update OPEN_NEXT_VERSION_PATTERN in scripts/check-opennext-build.mjs.'
     );
   }
   return versions[0];
 }
 
+// Numeric segments only: openNextBuildCommand validates x.y.z before calling this.
 function compareVersions(a, b) {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
@@ -55,11 +61,19 @@ export function openNextBuildCommand(version) {
   return `npx --yes ${packageName}@${version} build`;
 }
 
-// Mirrors what sst zips: every file under the bundle, without descending into
-// symlinked directories. A symlinked file counts at its target's size.
+// Mirrors what sst 4.17.1 zips (Function createZipAsset in
+// platform/src/components/aws/function.ts): glob("**") without `follow`, then archiver
+// (6.0.1) lstat()s each match and stores every symlink as a link entry, so a symlinked
+// directory adds nothing to the unzipped size. A symlinked file is counted here at its
+// target's size, which can only over-report against that zip: the guard may fail a
+// bundle that would fit, never pass one that would not.
+// Directory and dangling links are skipped and reported so a mostly-link bundle cannot
+// read as small without anyone noticing.
 export function bundleSize(dir) {
   let bytes = 0;
   let files = 0;
+  let directoryLinks = 0;
+  let brokenLinks = 0;
   const walk = current => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const full = path.join(current, entry.name);
@@ -70,12 +84,16 @@ export function bundleSize(dir) {
         if (stat?.isFile()) {
           bytes += stat.size;
           files++;
+        } else if (!stat) {
+          brokenLinks++;
+        } else if (stat.isDirectory()) {
+          directoryLinks++;
         }
       }
     }
   };
   walk(dir);
-  return { bytes, files };
+  return { bytes, files, directoryLinks, brokenLinks };
 }
 
 export function lambdaBundles(output) {
@@ -89,8 +107,18 @@ export function lambdaBundles(output) {
   return bundles;
 }
 
+export function hasDefaultBundle(bundles) {
+  return bundles.some(({ name }) => name === 'default');
+}
+
+// `sizes` is [{ name, bytes }]. The limit is inclusive: a bundle of exactly `limit` bytes fits.
+export function findOversized(sizes, limit = LAMBDA_UNZIPPED_LIMIT_BYTES) {
+  return sizes.filter(({ bytes }) => bytes > limit);
+}
+
 const mib = bytes => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 
+// Returns the process exit code so every outcome leaves through the one exit below.
 function main() {
   const version = parseOpenNextVersion(fs.readFileSync(path.join(repoRoot, 'infra/web.ts'), 'utf8'));
   const command = openNextBuildCommand(version);
@@ -118,39 +146,48 @@ function main() {
 
   if (result.status !== 0) {
     console.error(`\nERROR: OpenNext build failed after ${elapsed}s (exit ${result.status ?? result.signal}).`);
-    process.exit(1);
+    return 1;
   }
   console.log(`\nOpenNext build finished in ${elapsed}s`);
 
   const outputFile = path.join(appDir, '.open-next/open-next.output.json');
   const bundles = lambdaBundles(JSON.parse(fs.readFileSync(outputFile, 'utf8')));
-  if (!bundles.some(({ name }) => name === 'default')) {
+  if (!hasDefaultBundle(bundles)) {
     console.error('ERROR: open-next.output.json lists no default server function bundle.');
-    process.exit(1);
+    return 1;
   }
 
-  let oversized = 0;
-  for (const { name, bundle } of bundles) {
-    const { bytes, files } = bundleSize(path.join(appDir, bundle));
-    const over = bytes > LAMBDA_UNZIPPED_LIMIT_BYTES;
-    if (over) oversized++;
-    console.log(`${over ? 'OVER ' : 'ok   '} ${name.padEnd(24)} ${mib(bytes).padStart(10)}  ${files} files  ${bundle}`);
-  }
-
-  if (oversized) {
-    console.error(
-      `\nERROR: ${oversized} bundle(s) exceed Lambda's ${mib(LAMBDA_UNZIPPED_LIMIT_BYTES)} unzipped limit, so the deploy would fail to create the function.`
+  const sizes = bundles.map(({ name, bundle }) => ({
+    name,
+    bundle,
+    ...bundleSize(path.join(appDir, bundle)),
+  }));
+  const oversized = findOversized(sizes);
+  for (const size of sizes) {
+    const { name, bundle, bytes, files, directoryLinks, brokenLinks } = size;
+    const flag = oversized.includes(size) ? 'OVER ' : 'ok   ';
+    console.log(
+      `${flag} ${name.padEnd(24)} ${mib(bytes).padStart(10)}  ${files} files, ${directoryLinks} dir links skipped, ${brokenLinks} broken links  ${bundle}`
     );
-    process.exit(1);
+  }
+
+  if (oversized.length) {
+    console.error(
+      `\nERROR: ${oversized.length} bundle(s) exceed Lambda's ${mib(LAMBDA_UNZIPPED_LIMIT_BYTES)} unzipped limit, so the deploy would fail to create the function.`
+    );
+    return 1;
   }
   console.log(`\nOK: every bundle is under ${mib(LAMBDA_UNZIPPED_LIMIT_BYTES)} unzipped`);
+  return 0;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  let exitCode;
   try {
-    main();
+    exitCode = main();
   } catch (error) {
     console.error(error.message ?? error);
-    process.exit(1);
+    exitCode = 1;
   }
+  process.exit(exitCode);
 }

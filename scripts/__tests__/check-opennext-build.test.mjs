@@ -3,7 +3,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseOpenNextVersion, openNextBuildCommand, bundleSize, lambdaBundles } from '../check-opennext-build.mjs';
+import {
+  parseOpenNextVersion,
+  openNextBuildCommand,
+  bundleSize,
+  lambdaBundles,
+  hasDefaultBundle,
+  findOversized,
+  LAMBDA_UNZIPPED_LIMIT_BYTES,
+} from '../check-opennext-build.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -42,7 +50,7 @@ describe('openNextBuildCommand', () => {
 });
 
 describe('bundleSize', () => {
-  it('counts file bytes, follows file symlinks and skips symlinked directories', () => {
+  it('counts file bytes, follows file symlinks, and reports skipped directory and dangling links', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opennext-size-'));
     dirs.push(root);
     fs.mkdirSync(path.join(root, 'bundle/nested'), { recursive: true });
@@ -52,8 +60,33 @@ describe('bundleSize', () => {
     fs.writeFileSync(path.join(root, 'outside/c.js'), 'x'.repeat(1000));
     fs.symlinkSync(path.join(root, 'outside/c.js'), path.join(root, 'bundle/c.js'));
     fs.symlinkSync(path.join(root, 'outside'), path.join(root, 'bundle/linked-dir'));
+    fs.symlinkSync(path.join(root, 'outside/missing.js'), path.join(root, 'bundle/dangling.js'));
 
-    expect(bundleSize(path.join(root, 'bundle'))).toEqual({ bytes: 1150, files: 3 });
+    expect(bundleSize(path.join(root, 'bundle'))).toEqual({ bytes: 1150, files: 3, directoryLinks: 1, brokenLinks: 1 });
+  });
+});
+
+describe('hasDefaultBundle', () => {
+  it('requires the server function bundle, not just any bundle', () => {
+    expect(hasDefaultBundle([{ name: 'default', bundle: 'a' }])).toBe(true);
+    expect(hasDefaultBundle([{ name: 'imageOptimizer', bundle: 'b' }])).toBe(false);
+    expect(hasDefaultBundle([])).toBe(false);
+  });
+});
+
+describe('findOversized', () => {
+  it('treats exactly the limit as fitting and one byte over as oversized', () => {
+    const sizes = [
+      { name: 'atLimit', bytes: LAMBDA_UNZIPPED_LIMIT_BYTES },
+      { name: 'overByOne', bytes: LAMBDA_UNZIPPED_LIMIT_BYTES + 1 },
+      { name: 'small', bytes: 1 },
+    ];
+    expect(findOversized(sizes).map(size => size.name)).toEqual(['overByOne']);
+  });
+
+  it('uses the 250 MiB Lambda limit by default and accepts an override', () => {
+    expect(LAMBDA_UNZIPPED_LIMIT_BYTES).toBe(250 * 1024 * 1024);
+    expect(findOversized([{ name: 'x', bytes: 11 }], 10)).toHaveLength(1);
   });
 });
 
