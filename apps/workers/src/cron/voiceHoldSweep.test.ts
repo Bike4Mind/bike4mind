@@ -1,16 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { findStaleVoiceHolds, claimVoiceHold, findTurns, incrementCredits, connectDB } = vi.hoisted(() => ({
-  findStaleVoiceHolds: vi.fn(),
-  claimVoiceHold: vi.fn(),
-  findTurns: vi.fn(),
-  incrementCredits: vi.fn(),
-  connectDB: vi.fn(async () => undefined),
-}));
+const { findStaleVoiceHolds, claimVoiceHold, restoreVoiceHold, findTurns, incrementCredits, connectDB } = vi.hoisted(
+  () => ({
+    findStaleVoiceHolds: vi.fn(),
+    claimVoiceHold: vi.fn(),
+    restoreVoiceHold: vi.fn(),
+    findTurns: vi.fn(),
+    incrementCredits: vi.fn(),
+    connectDB: vi.fn(async () => undefined),
+  })
+);
 
 vi.mock('@bike4mind/database', () => ({
   connectDB,
-  sessionRepository: { findStaleVoiceHolds, claimVoiceHold },
+  sessionRepository: { findStaleVoiceHolds, claimVoiceHold, restoreVoiceHold },
   questRepository: { findAllBySessionIdAndGreaterThanOrEqualToTimestamp: findTurns },
   userRepository: { incrementCredits },
 }));
@@ -43,6 +46,7 @@ describe('voiceHoldSweep', () => {
     vi.clearAllMocks();
     findStaleVoiceHolds.mockResolvedValue([]);
     claimVoiceHold.mockResolvedValue(true);
+    restoreVoiceHold.mockResolvedValue(true);
     findTurns.mockResolvedValue([]);
   });
 
@@ -75,9 +79,27 @@ describe('voiceHoldSweep', () => {
     expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED / 2);
   });
 
+  it('ignores turns past the longest call, so later typing in the session is not call time', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a')]);
+    findTurns.mockResolvedValue([turnAt(MAX_SESSION_SECONDS + 30 * 60)]);
+
+    await runVoiceHoldSweep(NOW);
+
+    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED);
+  });
+
+  it('keeps the last turn inside the window when later turns exist too', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a')]);
+    findTurns.mockResolvedValue([turnAt(MAX_SESSION_SECONDS * 4), turnAt(MAX_SESSION_SECONDS / 2)]);
+
+    await runVoiceHoldSweep(NOW);
+
+    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED / 2);
+  });
+
   it('caps the charge at the hold', async () => {
     findStaleVoiceHolds.mockResolvedValue([hold('a')]);
-    findTurns.mockResolvedValue([turnAt(MAX_SESSION_SECONDS * 3)]);
+    findTurns.mockResolvedValue([turnAt(MAX_SESSION_SECONDS)]);
 
     const result = await runVoiceHoldSweep(NOW);
 
@@ -104,6 +126,16 @@ describe('voiceHoldSweep', () => {
     expect(incrementCredits).toHaveBeenCalledTimes(1);
     expect(incrementCredits).toHaveBeenCalledWith('user-b', RESERVED);
     expect(result).toMatchObject({ settled: 1, failed: 1 });
+  });
+
+  it('restores a hold whose refund failed so the next run retries it', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a')]);
+    incrementCredits.mockRejectedValueOnce(new Error('db blip'));
+
+    const result = await runVoiceHoldSweep(NOW);
+
+    expect(restoreVoiceHold).toHaveBeenCalledWith('a', RESERVED, STARTED);
+    expect(result).toMatchObject({ settled: 0, failed: 1 });
   });
 
   it('connects to the stage database before sweeping', async () => {

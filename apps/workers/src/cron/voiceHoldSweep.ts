@@ -3,8 +3,10 @@
  * connect on a client that never called the end endpoint. Without it such a hold keeps the whole
  * up-front reservation and the session keeps counting against the concurrent-call cap.
  *
- * Keeps only the call time the session evidences - from the hold's start to its last turn, so a
- * call that never produced a turn costs nothing - capped at the hold. Settles through
+ * Keeps only the call time the session evidences - from the hold's start to its last turn within
+ * the longest call's window, so a call that never produced a turn costs nothing - capped at the
+ * hold. Turns past the window are never call time: the user kept using the session after the call
+ * died, and counting them would keep the whole hold. Settles through
  * settleVoiceHold, the same claim-then-refund rule as POST /api/v1/voice/sessions/{id}/end, so a
  * concurrent end and a second sweep run are both no-ops.
  *
@@ -37,9 +39,14 @@ async function evidencedCallSeconds(hold: VoiceHold): Promise<number> {
     hold.id,
     hold.voiceSessionStartedAt
   );
-  const lastTurnAt = Math.max(0, ...turns.map(turn => new Date(turn.timestamp).getTime()));
-  if (!lastTurnAt) return 0;
-  return Math.max(0, Math.floor((lastTurnAt - hold.voiceSessionStartedAt.getTime()) / 1000));
+  const startedAtMs = hold.voiceSessionStartedAt.getTime();
+  const windowEndMs = startedAtMs + MAX_SESSION_SECONDS * 1000;
+  const lastTurnAtMs = turns.reduce((latest, turn) => {
+    const turnAtMs = new Date(turn.timestamp).getTime();
+    return turnAtMs <= windowEndMs && turnAtMs > latest ? turnAtMs : latest;
+  }, 0);
+  if (!lastTurnAtMs) return 0;
+  return Math.floor((lastTurnAtMs - startedAtMs) / 1000);
 }
 
 export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHoldSweepResult> {

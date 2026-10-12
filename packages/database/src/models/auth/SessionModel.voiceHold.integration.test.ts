@@ -72,4 +72,20 @@ describe('sessionRepository voice holds', () => {
     expect(await sessionRepository.claimVoiceHold(id, minutesAgo(60))).toBe(false);
     expect(await Session.findById(id).lean()).toMatchObject({ voiceReservedCredits: 100 });
   });
+
+  it('restores a claimed hold, but never over a newer call', async () => {
+    const startedAt = minutesAgo(60);
+    const id = await seed('call', 100, startedAt);
+    await sessionRepository.claimVoiceHold(id, startedAt);
+
+    expect(await sessionRepository.restoreVoiceHold(id, 100, startedAt)).toBe(true);
+    expect(await Session.findById(id).lean()).toMatchObject({
+      voiceReservedCredits: 100,
+      voiceSessionStartedAt: startedAt,
+    });
+
+    // The hold is live again, so a second restore (standing in for a newer call's hold) must not overwrite it.
+    expect(await sessionRepository.restoreVoiceHold(id, 999, minutesAgo(1))).toBe(false);
+    expect(await Session.findById(id).lean()).toMatchObject({ voiceReservedCredits: 100 });
+  });
 });

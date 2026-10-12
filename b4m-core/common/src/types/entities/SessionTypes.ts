@@ -1149,4 +1149,10 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * caller that cleared it, false when it was already settled or replaced by a newer call.
    */
   claimVoiceHold: (sessionId: string, startedAt: Date) => Promise<boolean>;
+
+  /**
+   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, so it can be settled
+   * again. Resolves false (and writes nothing) when the session already holds a newer call.
+   */
+  restoreVoiceHold: (sessionId: string, voiceReservedCredits: number, startedAt: Date) => Promise<boolean>;
 }

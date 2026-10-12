@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { claimVoiceHold, incrementCredits } = vi.hoisted(() => ({ claimVoiceHold: vi.fn(), incrementCredits: vi.fn() }));
+const { claimVoiceHold, restoreVoiceHold, incrementCredits } = vi.hoisted(() => ({
+  claimVoiceHold: vi.fn(),
+  restoreVoiceHold: vi.fn(),
+  incrementCredits: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
-  sessionRepository: { claimVoiceHold },
+  sessionRepository: { claimVoiceHold, restoreVoiceHold },
   userRepository: { incrementCredits },
 }));
 
@@ -16,6 +20,7 @@ describe('settleVoiceHold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     claimVoiceHold.mockResolvedValue(true);
+    restoreVoiceHold.mockResolvedValue(true);
   });
 
   it('claims the hold, then refunds what the elapsed time does not owe', async () => {
@@ -41,5 +46,26 @@ describe('settleVoiceHold', () => {
 
     expect(await settleVoiceHold(HOLD, 0)).toEqual({ settled: false });
     expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('restores the hold and rethrows when crediting back fails', async () => {
+    const failure = new Error('db blip');
+    incrementCredits.mockRejectedValue(failure);
+
+    await expect(settleVoiceHold(HOLD, 0)).rejects.toBe(failure);
+    expect(restoreVoiceHold).toHaveBeenCalledWith('s1', 600, STARTED);
+  });
+
+  it('surfaces both errors when the hold cannot be restored either', async () => {
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+    restoreVoiceHold.mockRejectedValue(new Error('still down'));
+
+    await expect(settleVoiceHold(HOLD, 0)).rejects.toBeInstanceOf(AggregateError);
+  });
+
+  it('leaves the hold alone when there is nothing to refund', async () => {
+    await settleVoiceHold(HOLD, MAX_SESSION_SECONDS);
+
+    expect(restoreVoiceHold).not.toHaveBeenCalled();
   });
 });
