@@ -1,7 +1,8 @@
 /**
  * Text for the visually hidden h1 the notebook layout gives a screen that has no visible one, or
- * null for a screen that renders its own h1 (or is not listed). Keyed by the first path segment;
- * a screen that gains a visible h1 must leave this list so it does not end up with two.
+ * null for a screen that renders its own h1 (or is not listed). Keyed by first path segment,
+ * except /projects, which routeHeading special-cases. A screen that gains a visible h1 must
+ * leave this list so it does not end up with two.
  */
 const HEADINGS: Record<string, string> = {
   '': 'New chat',
@@ -18,6 +19,11 @@ const HEADINGS: Record<string, string> = {
   billing: 'Billing',
   share: 'Shared notebook',
   studio: 'Studio',
+  hearth: 'Hearth',
+  'deep-agents': 'Deep agents',
+  report: 'Report',
+  'quests-v5': 'Quests',
+  hud: 'The Keep',
 };
 
 export const routeHeading = (pathname: string): string | null => {

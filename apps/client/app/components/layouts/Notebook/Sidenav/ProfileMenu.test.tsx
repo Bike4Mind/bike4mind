@@ -7,7 +7,12 @@ import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import ProfileMenu, { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
 
 // Just enough of the menu's data hooks to render it; none of these rows are under test here.
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+const router = vi.hoisted(() => ({ pathname: '/new', navigate: vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => router.navigate,
+  useLocation: ({ select }: { select: (location: { pathname: string }) => unknown }) =>
+    select({ pathname: router.pathname }),
+}));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
 }));
@@ -73,6 +78,34 @@ describe('ProfileMenu AccountCard - enforceCredits gating', () => {
     expect(screen.queryByText('1,234')).not.toBeInTheDocument();
     // The rest of the card still renders - only the balance disappears.
     expect(screen.getByText('Jane')).toBeInTheDocument();
+  });
+});
+
+describe('ProfileMenu AccountCard - semantics', () => {
+  const renderCard = (props: Partial<React.ComponentProps<typeof AccountCard>> = {}) =>
+    render(
+      <TestWrapper>
+        <AccountCard name="Jane" typeLabel="(Team)" credits={1234} selected onSelect={vi.fn()} showCredits {...props} />
+      </TestWrapper>
+    );
+
+  it('is a menuitemradio that reflects its selected state', () => {
+    const view = renderCard({ selected: true });
+    expect(screen.getByTestId('profile-account-option').getAttribute('role')).toBe('menuitemradio');
+    expect(screen.getByRole('menuitemradio').getAttribute('aria-checked')).toBe('true');
+    view.unmount();
+    renderCard({ selected: false });
+    expect(screen.getByRole('menuitemradio').getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('is named by its content, so the account type is announced with the name', () => {
+    renderCard();
+    expect(screen.getByRole('menuitemradio', { name: /Jane.*\(Team\)/ })).toBeInTheDocument();
+  });
+
+  it('hides the radio decoration from the accessibility tree', () => {
+    renderCard({ bare: false });
+    expect(screen.getAllByRole('menuitemradio')).toHaveLength(1);
   });
 });
 
@@ -285,6 +318,121 @@ describe('ProfileMenu - keyboard', () => {
       focusedWhenOpened = document.activeElement;
     });
     fireEvent.click(screen.getByTestId('profile-menu-subscriptions'));
+    expect(focusedWhenOpened).toBe(trigger);
+  });
+});
+
+describe('ProfileMenu - focus after navigating', () => {
+  beforeEach(() => {
+    router.navigate.mockClear();
+  });
+
+  const openMenu = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+  };
+
+  it('keeps focus on the account card when the target is the page already open (API Keys on /profile)', () => {
+    router.pathname = '/profile';
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-api-keys'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'api-keys' } });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByTestId('profile-menu-card'));
+  });
+
+  it('keeps focus on the account card for Profile when already on /profile', () => {
+    router.pathname = '/profile';
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-profile'));
+    expect(document.activeElement).toBe(screen.getByTestId('profile-menu-card'));
+  });
+
+  it('leaves focus for the layout to move to the new heading when the pathname changes', () => {
+    router.pathname = '/new';
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-profile'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/profile' });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe('ProfileMenu - roles and keyboard details', () => {
+  const renderMenu = () =>
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+  const openByKeyboard = () => {
+    renderMenu();
+    const trigger = screen.getByTestId('profile-menu-card');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    return trigger;
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('exposes the theme toggles as a checked/unchecked menuitemradio pair', () => {
+    openByKeyboard();
+    const dark = screen.getByRole('menuitemradio', { name: 'Dark mode' });
+    const light = screen.getByRole('menuitemradio', { name: 'Light mode' });
+    expect([dark.getAttribute('aria-checked'), light.getAttribute('aria-checked')].sort()).toEqual(['false', 'true']);
+  });
+
+  it('closes on Shift+Tab and returns focus to the trigger', () => {
+    const trigger = openByKeyboard();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Tab', shiftKey: true });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('moves to the first item on Home', () => {
+    openByKeyboard();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'End' });
+    expect(document.activeElement).toBe(screen.getByTestId('logout-btn'));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Home' });
+    expect(document.activeElement).toBe(screen.getByTestId('profile-menu-profile'));
+  });
+
+  it('closes the More flyout on ArrowLeft and puts focus back on More', () => {
+    openByKeyboard();
+    const more = screen.getByTestId('profile-menu-more');
+    more.focus();
+    fireEvent.keyDown(more, { key: 'ArrowRight' });
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowLeft' });
+    expect(screen.queryByTestId('profile-menu-more-flyout')).not.toBeInTheDocument();
+    expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
+    expect(document.activeElement).toBe(more);
+  });
+
+  it('moves into an already-open More flyout on ArrowRight', () => {
+    openByKeyboard();
+    const more = screen.getByTestId('profile-menu-more');
+    fireEvent.click(more);
+    more.focus();
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.keyDown(more, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(screen.getByTestId('profile-more-inbox'));
+  });
+
+  it('hands focus to the trigger before a non-billing row opens a new tab', () => {
+    const trigger = openByKeyboard();
+    let focusedWhenOpened: Element | null = null;
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {
+      focusedWhenOpened = document.activeElement;
+    });
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+    fireEvent.click(screen.getByTestId('profile-more-changelog'));
     expect(focusedWhenOpened).toBe(trigger);
   });
 });

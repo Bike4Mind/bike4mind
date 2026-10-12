@@ -1,7 +1,7 @@
 import { KeyboardEvent as ReactKeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar, Box, Chip, CircularProgress, Divider, IconButton, Radio, Stack, Typography } from '@mui/joy';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
-import { useNavigate } from '@tanstack/react-router';
+import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { UiNavigationEvents } from '@bike4mind/common';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
@@ -58,6 +58,8 @@ export const closeSideNavOnOverlay = (isOverlay: boolean, setOpenSideNav: (open:
 
 // Strip the trailing " (Personal)" suffix that useAccounts appends to the personal account name.
 const stripPersonalSuffix = (name: string) => name.replace(/ \(Personal\)$/, '');
+
+const trimTrailingSlash = (path: string) => (path.length > 1 ? path.replace(/\/+$/, '') : path);
 
 /** A menu's own items, excluding those of a menu nested inside it (the More flyout). */
 const ownMenuItems = (menu: HTMLElement | null) =>
@@ -148,7 +150,6 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
     data-testid="profile-account-option"
     role="menuitemradio"
     aria-checked={selected}
-    aria-label={name}
     tabIndex={-1}
     onClick={onSelect}
     onKeyDown={e => {
@@ -237,6 +238,7 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
 const ProfileMenu = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const pathname = useLocation({ select: location => location.pathname });
   const isOverlay = useIsTablet();
   const setOpenSideNav = useNotebookLayout(s => s.setOpenSideNav);
   const theme = useTheme();
@@ -303,6 +305,15 @@ const ProfileMenu = () => {
     closeAll();
   };
 
+  // The focused row unmounts on close. A real route change lets the layout focus the new heading
+  // (it only acts when focus is on body), so focus is rescued here only when the pathname stays put
+  // (e.g. Profile -> API Keys search change), where that fallback would never fire.
+  const navigateFromMenu = (targetPathname: string, go: () => void) => {
+    if (trimTrailingSlash(targetPathname) === trimTrailingSlash(pathname)) triggerRef.current?.focus();
+    go();
+    closeNavigation();
+  };
+
   // Dismiss the menu on any pointer-down outside the whole profile control, or on Escape.
   // A DOM-level listener is used instead of a fixed-position overlay: the sidebar wrapper
   // carries a `transform` (see Sidenav index.tsx), which traps `position: fixed` to the
@@ -352,7 +363,9 @@ const ProfileMenu = () => {
     }
     if (e.key === 'ArrowRight' && (e.target as HTMLElement).getAttribute('aria-haspopup') === 'menu') {
       e.preventDefault();
-      setMoreOpen(true);
+      // Already open: setMoreOpen(true) is a no-op and the [moreOpen] effect does not re-run.
+      if (moreOpen) focusMenuItem(flyoutRef.current, 'first');
+      else setMoreOpen(true);
       return;
     }
     if (panelRef.current && moveMenuFocus(panelRef.current, e.key)) e.preventDefault();
@@ -417,8 +430,7 @@ const ProfileMenu = () => {
               icon={<AdminPanelSettingsIcon sx={{ fontSize: '18px' }} />}
               label={t('admin.title', 'Admin')}
               onClick={() => {
-                navigate({ to: '/admin' });
-                closeNavigation();
+                navigateFromMenu('/admin', () => navigate({ to: '/admin' }));
               }}
             />
           )}
@@ -434,8 +446,7 @@ const ProfileMenu = () => {
               ) : undefined
             }
             onClick={() => {
-              navigate({ to: '/profile' });
-              closeNavigation();
+              navigateFromMenu('/profile', () => navigate({ to: '/profile' }));
             }}
           />
           <MenuRow
@@ -443,8 +454,7 @@ const ProfileMenu = () => {
             icon={<ExtensionIcon sx={{ fontSize: '18px' }} />}
             label={t('skills.title', 'Skills')}
             onClick={() => {
-              navigate({ to: '/skills' });
-              closeNavigation();
+              navigateFromMenu('/skills', () => navigate({ to: '/skills' }));
             }}
           />
           <MenuRow
@@ -454,8 +464,9 @@ const ProfileMenu = () => {
             onClick={() => {
               // The route fills a missing window itself, but its search type requires both bounds,
               // so the menu hands over the same default rather than a bare link.
-              navigate({ to: '/feedback/rollup', search: defaultFeedbackRollupWindow() });
-              closeNavigation();
+              navigateFromMenu('/feedback/rollup', () =>
+                navigate({ to: '/feedback/rollup', search: defaultFeedbackRollupWindow() })
+              );
             }}
           />
           <MenuRow
@@ -463,8 +474,7 @@ const ProfileMenu = () => {
             icon={<KeyOutlinedIcon sx={{ fontSize: '18px' }} />}
             label={t('apiKeys.title', 'API Keys')}
             onClick={() => {
-              navigate({ to: '/profile', search: { tab: 'api-keys' } });
-              closeNavigation();
+              navigateFromMenu('/profile', () => navigate({ to: '/profile', search: { tab: 'api-keys' } }));
             }}
           />
           <MenuRow
@@ -472,8 +482,7 @@ const ProfileMenu = () => {
             icon={<BusinessIcon sx={{ fontSize: '18px' }} />}
             label={t('organization.teams', 'Teams')}
             onClick={() => {
-              navigate({ to: '/organizations' });
-              closeNavigation();
+              navigateFromMenu('/organizations', () => navigate({ to: '/organizations' }));
             }}
           />
           {isCreditsEnabled && (
@@ -688,8 +697,7 @@ const ProfileMenu = () => {
                     icon={<AutoAwesomeIcon sx={{ fontSize: '18px' }} />}
                     label={t('quests.my_quests', 'My Quests')}
                     onClick={() => {
-                      navigate({ to: '/quests' });
-                      closeNavigation();
+                      navigateFromMenu('/quests', () => navigate({ to: '/quests' }));
                     }}
                   />
                 )}
@@ -703,8 +711,7 @@ const ProfileMenu = () => {
                       // Premium routes are registered at runtime via the codegen
                       // glue, so their paths can't appear in the static route-tree
                       // union - erase the typed `to` here.
-                      navigate({ to: item.path as never });
-                      closeNavigation();
+                      navigateFromMenu(item.path, () => navigate({ to: item.path as never }));
                     }}
                   />
                 ))}

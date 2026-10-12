@@ -62,6 +62,13 @@ describe('NotebookLayout landmarks', () => {
     expect(screen.getAllByRole('heading', { level: 1 }).map(el => el.textContent)).toEqual(['Projects']);
   });
 
+  it('renders no heading of its own on /projects, where the page supplies its h1', () => {
+    h.pathname = '/projects';
+    renderLayout();
+    expect(screen.queryByTestId('route-heading')).toBeNull();
+    expect(screen.queryAllByRole('heading', { level: 1 })).toHaveLength(0);
+  });
+
   it('leaves focus on body at first load so keyboard users start at the sidebar', () => {
     renderLayout();
     act(() => {
