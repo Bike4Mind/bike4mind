@@ -271,9 +271,9 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
 
   private getFallbackModels(): ModelInfo[] {
     return [
-      { id: ChatModels.CLAUDE_4_6_SONNET, name: 'Claude 4.6 Sonnet' },
-      { id: ChatModels.CLAUDE_4_5_SONNET, name: 'Claude 4.5 Sonnet' },
-      { id: ChatModels.CLAUDE_4_5_HAIKU, name: 'Claude 4.5 Haiku' },
+      { id: ChatModels.CLAUDE_4_6_SONNET, name: 'Claude Sonnet 4.6' },
+      { id: ChatModels.CLAUDE_4_5_SONNET, name: 'Claude Sonnet 4.5' },
+      { id: ChatModels.CLAUDE_4_5_HAIKU, name: 'Claude Haiku 4.5' },
       { id: ChatModels.GPT4o, name: 'GPT-4o' },
       { id: ChatModels.GPT4o_MINI, name: 'GPT-4o Mini' },
     ] as ModelInfo[];

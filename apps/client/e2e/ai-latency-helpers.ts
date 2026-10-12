@@ -2,7 +2,7 @@ import type { ModelSelectorPage } from './pages/ModelSelectorPage';
 
 /**
  * Extracts the leading version number from a model display name as shown in the AI
- * Settings modal, e.g. "GPT-5.4" -> 5.4, "Claude 4.7 Opus" -> 4.7. Returns null when
+ * Settings modal, e.g. "GPT-5.4" -> 5.4, "Claude Opus 4.7" -> 4.7. Returns null when
  * the name carries no version (so it can be filtered out of "latest" comparisons).
  */
 export function parseModelVersion(name: string): number | null {
@@ -21,7 +21,7 @@ function latestByVersion(names: string[]): string | undefined {
 export interface LatestModels {
   /** Latest available GPT text model, e.g. "GPT-5.5". undefined when none are enabled. */
   gpt?: string;
-  /** Latest available Claude (Opus preferred), e.g. "Claude 4.8 Opus". undefined when none. */
+  /** Latest available Claude (Opus preferred), e.g. "Claude Opus 4.8". undefined when none. */
   claude?: string;
 }
 
@@ -33,8 +33,8 @@ export interface LatestModels {
  *
  * Single source of truth for "latest": the CI discovery job calls it to build the
  * full-matrix model list, and resolveSelectedModel calls it for local runs. Replaces the
- * old hard-coded ['GPT-5.4', 'Claude 4.7 Opus'] pair, which silently went stale as models
- * came and went across deployments (staging may expose Claude 4.8 Opus while a preview env
+ * old hard-coded ['GPT-5.4', 'Claude Opus 4.7'] pair, which silently went stale as models
+ * came and went across deployments (staging may expose Claude Opus 4.8 while a preview env
  * only has 4.7, and a hard-coded name simply fails to select).
  */
 export async function getLatestModels(modelSelector: ModelSelectorPage): Promise<LatestModels> {

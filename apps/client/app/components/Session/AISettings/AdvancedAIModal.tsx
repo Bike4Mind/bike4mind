@@ -1,4 +1,4 @@
-import React, { ChangeEvent, startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { ChangeEvent, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import {
   Box,
@@ -97,6 +97,7 @@ import { MobileTopBar } from '@client/app/components/MobileTopBar';
 import { brand, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import {
   ASPECT_RATIO_INERT_NOTE,
@@ -1845,6 +1846,17 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   const handleDetailsClose = () => {
     setModelDetailsOpen(false);
     setDetailsModel(null);
+    setSelectionAnnouncement('');
+  };
+
+  // "Use this model" unmounts itself (it becomes the "Current model" label), so focus moves to the
+  // back button rather than falling to <body>, and the persistent status region says what changed.
+  const detailsBackButtonRef = useRef<HTMLButtonElement>(null);
+  const [selectionAnnouncement, setSelectionAnnouncement] = useState('');
+  const handleUseShownModel = (shown: ModelInfo) => {
+    handleModelSelection(shown.id);
+    setSelectionAnnouncement(`Now using ${shown.name}`);
+    detailsBackButtonRef.current?.focus();
   };
 
   // When opened without a specific model (e.g. the composer Templates button),
@@ -2164,6 +2176,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   variant="plain"
                   size="sm"
                   data-testid="model-details-back-btn"
+                  ref={detailsBackButtonRef}
                   onClick={handleDetailsClose}
                   startDecorator={<ArrowBackIcon sx={{ fontSize: '16px' }} />}
                   sx={{
@@ -2181,6 +2194,10 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 >
                   Back to models
                 </Button>
+
+                <Box role="status" data-testid="model-selection-status" sx={visuallyHidden}>
+                  {selectionAnnouncement}
+                </Box>
 
                 {/* Commit control. Opening this screen no longer selects the model (see
                     ModelSelection's onSettingsClick), so it is a preview until this is pressed -
@@ -2211,7 +2228,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                       size="sm"
                       data-testid="model-use-btn"
                       disabled={shown.disabled}
-                      onClick={() => handleModelSelection(shown.id)}
+                      onClick={() => handleUseShownModel(shown)}
                       sx={{ fontSize: '14px', fontWeight: 400, flexShrink: 0 }}
                     >
                       Use this model

@@ -32,6 +32,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { resolveRecommendedModelIds } from '@client/app/utils/recommendedModels';
+import { dedupeModelsForPicker } from '@client/app/utils/pickerModelDedupe';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -293,8 +294,8 @@ const ModelOption = React.memo(
   }) => {
     const priceTierInfo = getModelPriceTier(model);
     const modelSpeed = getModelSpeedFromStats(model.id, avgResponseTimeByModel);
-    // A disabled model stays in the list so users can see it, but it can't be picked:
-    // no click handler, a not-allowed cursor, dimmed, and no hover affordance.
+    // Only reached for the active model (dedupeModelsForPicker hides the rest), so it stays visible
+    // but can't be re-picked: no click handler, a not-allowed cursor, dimmed, no hover affordance.
     const isDisabled = !!model.disabled;
     const isList = viewMode === 'list';
 
@@ -309,17 +310,36 @@ const ModelOption = React.memo(
           variant="soft"
           sx={{ maxWidth: 320 }}
           disableHoverListener={!model.description}
+          // Otherwise the tooltip's title becomes the button's accessible name, hiding the model name.
+          describeChild
         >
-          <Typography
-            level="body-md"
+          {/* The card's keyboard entry point: a native button whose click bubbles to the card's
+              onClick, so Enter and Space select exactly as a pointer click does. */}
+          <Box
+            component="button"
+            type="button"
+            data-testid={`model-select-btn-${model.id}`}
+            disabled={isDisabled}
+            aria-pressed={isSelected}
             sx={{
-              textAlign: 'left',
-              color: 'text.primary',
-              fontWeight: '500',
+              all: 'unset',
+              cursor: 'inherit',
+              borderRadius: '4px',
+              '&:focus-visible': { outline: '2px solid var(--joy-palette-focusVisible)', outlineOffset: '2px' },
             }}
           >
-            {model.name}
-          </Typography>
+            <Typography
+              component="span"
+              level="body-md"
+              sx={{
+                textAlign: 'left',
+                color: 'text.primary',
+                fontWeight: '500',
+              }}
+            >
+              {model.name}
+            </Typography>
+          </Box>
         </Tooltip>
         {/* Selected Checkmark - sits right of the model name */}
         {isSelected && <SelectedCheckIcon />}
@@ -327,11 +347,13 @@ const ModelOption = React.memo(
     );
 
     const favoriteLabel = isFavorite ? 'Remove from favorites' : 'Add to favorites';
+    // Every row has a star and a gear, so the accessible names carry the model to tell them apart.
+    const favoriteAriaLabel = isFavorite ? `Remove ${model.name} from favorites` : `Add ${model.name} to favorites`;
     const favoriteToggle = onToggleFavorite && (
       <Tooltip title={favoriteLabel} placement="bottom">
         <IconButton
           data-testid={`favorite-toggle-${model.id}`}
-          aria-label={favoriteLabel}
+          aria-label={favoriteAriaLabel}
           variant="plain"
           size="sm"
           sx={{
@@ -372,7 +394,7 @@ const ModelOption = React.memo(
       <Tooltip title="View model details & settings" placement="bottom">
         <IconButton
           data-testid={`model-view-more-${model.id}`}
-          aria-label="View model details and settings"
+          aria-label={`View ${model.name} details and settings`}
           variant="plain"
           size="sm"
           sx={{
@@ -679,7 +701,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
-  const { isFavorite, toggleFavorite } = useFavoriteModels();
+  const { favoriteModelIds, isFavorite, toggleFavorite } = useFavoriteModels();
   const [viewMode, setViewMode] = useState<ModelViewMode>('list');
   // Below `sm` the grid is already one column, so the two layouts differ only by the
   // description and the row/column flow - not enough to justify a control. Grid wins there.
@@ -731,6 +753,16 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     setSearchQuery('');
   };
 
+  const { getSetting, getSettingObject } = useAdminSettings();
+  const storedRecommendedIds = getSettingObject<string[]>('recommendedModelIds', emptyIds);
+  const defaultModelId = getSetting('DefaultAPIModel');
+
+  // Ids a twin must never hide: the active model and everything pinned above the provider groups.
+  const preferredModelIds = useMemo(
+    () => new Set([model, ...favoriteModelIds, ...resolveRecommendedModelIds(storedRecommendedIds, defaultModelId)]),
+    [model, favoriteModelIds, storedRecommendedIds, defaultModelId]
+  );
+
   const { filteredModels, maxContextWindow, maxTokens, modelsByBackend, modelsByBackendAndType } = useMemo(() => {
     // Start with accessible models instead of all models
     let availableModels: ModelInfo[] = [];
@@ -749,15 +781,18 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     // Filter out deprecated models (e.g., models with deprecationDate in the past)
     const withoutDeprecated = withoutExcluded.filter(m => !isModelDeprecated(m));
 
+    // Bedrock profiles, dated snapshots and unavailable rows collapse to one usable row per model.
+    const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds);
+
     // Filter by search query if present
     const searchFiltered = debouncedSearchQuery
-      ? withoutDeprecated.filter(m => {
+      ? deduped.filter(m => {
           const searchLower = debouncedSearchQuery.toLowerCase();
           const nameMatch = m.name.toLowerCase().includes(searchLower);
           const descMatch = m.description && m.description.toLowerCase().includes(searchLower);
           return nameMatch || descMatch;
         })
-      : withoutDeprecated;
+      : deduped;
 
     // Group models by backend for accordion view
     const grouped = searchFiltered.reduce(
@@ -830,6 +865,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     modelFilter,
     debouncedSearchQuery,
     showAllModels,
+    preferredModelIds,
   ]);
 
   // Auto-expand the selected model's backend when it changes
@@ -849,9 +885,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
   // Admin-ordered ids -> models. Reads from filteredModels so search, type filter and access
   // control apply, and an id that is unknown or inaccessible is dropped rather than shown dead.
-  const { getSetting, getSettingObject } = useAdminSettings();
-  const storedRecommendedIds = getSettingObject<string[]>('recommendedModelIds', emptyIds);
-  const defaultModelId = getSetting('DefaultAPIModel');
   const recommendedModels = useMemo(() => {
     const byId = new Map<string, ModelInfo>(filteredModels.map(m => [m.id, m]));
     return resolveRecommendedModelIds(storedRecommendedIds, defaultModelId).flatMap(id => {

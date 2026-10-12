@@ -19,6 +19,8 @@ import ModelSelection, {
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
 const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
+// Text models appended to the accessible list per test; reset in afterEach below.
+const extraTextModels = vi.hoisted(() => [] as ModelInfo[]);
 const adminSettings = vi.hoisted(() => ({
   recommendedModelIds: [] as string[],
   DefaultAPIModel: undefined as string | undefined,
@@ -48,8 +50,8 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 
 vi.mock('@client/app/hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({
-    accessibleModels: [textModel, imageModel],
-    accessibleTextModels: [textModel],
+    accessibleModels: [textModel, imageModel, ...extraTextModels],
+    accessibleTextModels: [textModel, ...extraTextModels],
     accessibleImageModels: [imageModel],
     accessibleVideoModels: [],
     isLoading: false,
@@ -80,7 +82,7 @@ vi.mock('@client/app/hooks/data/useModelStats', () => ({
 }));
 
 vi.mock('@client/app/hooks/useFavoriteModels', () => ({
-  useFavoriteModels: () => ({ isFavorite: () => false, toggleFavorite: vi.fn() }),
+  useFavoriteModels: () => ({ favoriteModelIds: new Set<string>(), isFavorite: () => false, toggleFavorite: vi.fn() }),
 }));
 
 vi.mock('@client/app/utils/modelRanking', () => ({
@@ -441,5 +443,67 @@ describe('ModelSelection recommended group', () => {
     adminSettings.recommendedModelIds = ['no-such-model'];
     renderSelection({});
     expect(screen.queryByTestId('recommended-section')).not.toBeInTheDocument();
+  });
+});
+
+describe('ModelSelection duplicate and unavailable rows', () => {
+  afterEach(() => {
+    extraTextModels.length = 0;
+  });
+
+  it('shows a Bedrock model once and hides its unavailable foundation-id twin', () => {
+    extraTextModels.push(
+      {
+        ...textModel,
+        id: 'global.anthropic.claude-opus-5-5',
+        name: 'Claude Opus 5.5',
+        backend: ModelBackend.Bedrock,
+      } as ModelInfo,
+      {
+        ...textModel,
+        id: 'anthropic.claude-opus-5-5',
+        name: 'Claude Opus 5.5',
+        backend: ModelBackend.Bedrock,
+        disabled: true,
+      } as ModelInfo
+    );
+    renderSelection({});
+
+    expect(screen.getByTestId('model-card-global.anthropic.claude-opus-5-5')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-card-anthropic.claude-opus-5-5')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument();
+  });
+});
+
+describe('ModelSelection keyboard access', () => {
+  afterEach(() => {
+    extraTextModels.length = 0;
+  });
+
+  it('selects a model from a focusable button inside its card', () => {
+    const setModel = vi.fn();
+    const onSelectionComplete = vi.fn();
+    renderSelection({ setModel, onSelectionComplete });
+
+    const selectButton = screen.getByTestId(`model-select-btn-${imageModel.id}`);
+    expect(selectButton.tagName).toBe('BUTTON');
+    expect(selectButton).toHaveAccessibleName(imageModel.name);
+    expect(screen.getByTestId(`model-select-btn-${textModel.id}`)).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(selectButton);
+
+    expect(setModel).toHaveBeenCalledWith(imageModel.id);
+    expect(onSelectionComplete).toHaveBeenCalledOnce();
+  });
+
+  it('names the star and settings buttons after their model', () => {
+    renderSelection({ onSettingsClick: vi.fn() });
+
+    expect(screen.getByTestId(`favorite-toggle-${textModel.id}`)).toHaveAccessibleName(
+      `Add ${textModel.name} to favorites`
+    );
+    expect(screen.getByTestId(`model-view-more-${textModel.id}`)).toHaveAccessibleName(
+      `View ${textModel.name} details and settings`
+    );
   });
 });
