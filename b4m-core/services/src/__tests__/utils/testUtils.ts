@@ -220,7 +220,9 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     countByUserId: vi.fn(),
     countActiveVoiceSessionsByUserId: vi.fn(),
     addVoiceBilledCredits: vi.fn(),
-    closeVoiceHold: vi.fn(),
+    findStaleVoiceHolds: vi.fn(),
+    claimVoiceHold: vi.fn(),
+    restoreVoiceHold: vi.fn(),
   });
 
 export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepository> =>

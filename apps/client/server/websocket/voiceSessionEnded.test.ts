@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // up paying, not on which repository calls it made.
 interface FakeSession {
   id: string;
+  userId: string;
   voiceReservedCredits: number | null;
   voiceSessionStartedAt: Date | null;
   voiceBilledCredits?: number;
@@ -61,10 +62,15 @@ vi.mock('@bike4mind/database', () => ({
       state.session.voiceBilledCredits = before + credits;
       return before;
     },
-    closeVoiceHold: async (_id: string, startedAt: Date) => {
+    claimVoiceHold: async (_id: string, startedAt: Date) => {
       if (state.session.voiceSessionStartedAt?.getTime() !== startedAt.getTime()) return null;
-      const billedCredits = state.session.voiceBilledCredits ?? 0;
-      state.session = { id: state.session.id, voiceReservedCredits: null, voiceSessionStartedAt: null };
+      const billedCredits = state.session.voiceBilledCredits ?? null;
+      state.session = {
+        id: state.session.id,
+        userId: state.session.userId,
+        voiceReservedCredits: null,
+        voiceSessionStartedAt: null,
+      };
       return { billedCredits };
     },
   },
@@ -103,6 +109,7 @@ describe('voiceSessionEnded realtime billing', () => {
     // The bootstrap already took the hold out of the balance.
     state.session = {
       id: 's1',
+      userId: 'u1',
       voiceReservedCredits: HOLD,
       voiceSessionStartedAt: new Date(Date.now() - 60_000),
       voiceBilledCredits: 0,
@@ -210,5 +217,17 @@ describe('voiceSessionEnded realtime billing', () => {
     await send(1);
 
     expect(charged()).toBe(realtimeCreditsFloor(HOLD, 45 * 60));
+  });
+
+  it("ignores frames from a user the notebook is shared with, so the owner's hold is never theirs", async () => {
+    state.session.userId = 'owner';
+
+    await send(0);
+    await send(30, 'resp-1');
+
+    expect(state.session.voiceSessionStartedAt).not.toBeNull();
+    expect(state.session.voiceBilledCredits).toBe(0);
+    expect(state.balance).toBe(STARTING_BALANCE - HOLD);
+    expect(state.transactions).toHaveLength(0);
   });
 });

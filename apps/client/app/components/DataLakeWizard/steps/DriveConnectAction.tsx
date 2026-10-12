@@ -8,11 +8,22 @@ import {
   useLakeDriveConnection,
   useLakeDriveCanManage,
   useDisconnectLakeDrive,
+  type LakeDriveConnection,
 } from '@client/app/hooks/data/googleDrive';
-import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
+import { describeDriveConnection, describeDriveSyncSchedule } from '@client/app/hooks/data/driveConnectionDisplay';
 import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
 import { getServerErrorField } from '@client/app/utils/error';
+import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
+
+/**
+ * A failed run stamps lastPolledAt too (releaseSyncClaim), and only a clean one clears lastError, so
+ * with an error on record the time is the last attempt rather than the last sync.
+ */
+function describeLastSync({ lastPolledAt, lastError }: Pick<LakeDriveConnection, 'lastPolledAt' | 'lastError'>) {
+  if (!lastPolledAt) return 'Not synced yet';
+  return `${lastError ? 'Last sync attempt' : 'Last synced'} ${relativeTimeFormat(new Date(lastPolledAt))}`;
+}
 
 /**
  * Connect a Google Drive FOLDER to an EXISTING data lake: pick a folder and the connection is
@@ -59,6 +70,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
     // Not DRIVE_STATUS_BADGE directly: a 'connected' connection carrying a lastError is a sync that
     // stopped short with files missing, and only describeDriveConnection reads it that way.
     const { label, color } = describeDriveConnection(connection);
+    const schedule = describeDriveSyncSchedule(connection.syncSchedule);
     return (
       <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" data-testid="drive-connection-status">
         <CloudIcon color="primary" />
@@ -82,6 +94,15 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
             Re-sync
           </Button>
         )}
+        <Typography
+          level="body-xs"
+          sx={{ color: 'text.tertiary', flexBasis: '100%' }}
+          data-testid="drive-connection-last-synced"
+        >
+          {describeLastSync(connection)}
+          {/* A disconnect disables the connection, so its schedule would read "paused" for no reason. */}
+          {schedule && !connection.disconnecting && ` \u00b7 ${schedule}`}
+        </Typography>
         {connection.disconnecting && (
           <Typography level="body-xs" data-testid="drive-disconnecting-note" sx={{ flexBasis: '100%' }}>
             {connection.fileCount === 0

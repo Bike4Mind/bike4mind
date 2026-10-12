@@ -11,6 +11,7 @@ const mockIncrementCredits = vi.fn();
 const mockPost = vi.fn();
 const mockGetEffectiveApiKey = vi.fn();
 const mockCreateSession = vi.fn();
+const mockGetSession = vi.fn();
 
 vi.mock('axios', () => ({
   default: {
@@ -32,7 +33,10 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => mockGetEffectiveApiKey(...a) },
-  sessionService: { createSession: (...a: unknown[]) => mockCreateSession(...a), getSession: vi.fn() },
+  sessionService: {
+    createSession: (...a: unknown[]) => mockCreateSession(...a),
+    getSession: (...a: unknown[]) => mockGetSession(...a),
+  },
 }));
 
 vi.mock('@bike4mind/utils', async importOriginal => {
@@ -53,8 +57,8 @@ import errorHandler from '@server/middlewares/errorHandler';
 import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
 
 /** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
-async function callRoute() {
-  const { req, res } = createMocks({ method: 'POST', body: {} });
+async function callRoute(body: Record<string, unknown> = {}) {
+  const { req, res } = createMocks({ method: 'POST', body });
   const logger = { warn: vi.fn(), error: vi.fn() };
   (req as any).user = { id: 'user-1', currentCredits: 1_000_000 };
   (req as any).logger = logger;
@@ -140,5 +144,17 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
     expect(mockPost).not.toHaveBeenCalled();
     expect(mockIncrementCredits).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/ai/voice-sessions on an existing notebook', () => {
+  it('opens no credit hold on a notebook the caller does not own', async () => {
+    mockGetSession.mockResolvedValueOnce({ id: 'session-1', userId: 'someone-else' });
+
+    const { res } = await callRoute({ sessionId: 'session-1' });
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockIncrementCredits).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
   });
 });

@@ -32,6 +32,7 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { useAdminTools } from '@client/app/hooks/useAdminTools';
 import { useStableCallback } from '@client/app/hooks/useStableCallback';
 import ChatHistory from '@client/app/components/Session/ChatHistory';
+import ReplyAnnouncer from '@client/app/components/Session/ReplyAnnouncer';
 import ActiveAgentExecutions from '@client/app/components/Session/AgentExecution/ActiveAgentExecutions';
 import PendingApprovalBeacon from '@client/app/components/Session/AgentExecution/PendingApprovalBeacon';
 import ReplyStatus from '@client/app/components/common/ReplyStatus';
@@ -496,6 +497,11 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           }}
         >
           <ScrollToBottomButton isAtBottom={isAtBottom} scrollerRef={scrollerElementRef} />
+          <ReplyAnnouncer
+            sessionId={sessionId}
+            activeStreamingQuestId={activeStreamingQuestId}
+            chatHistory={flattenQuests}
+          />
           {/* Surfaces a pending agent permission request at the bottom (the inline PermissionCard
               can scroll far out of view in a long/streaming transcript). */}
           <PendingApprovalBeacon sessionId={sessionId} scrollerRef={scrollerElementRef} />

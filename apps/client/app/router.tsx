@@ -11,6 +11,7 @@ import {
   createBrowserHistory,
   Outlet,
   redirect,
+  useRouterState,
 } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
@@ -199,9 +200,18 @@ const builtAppShellPremiumRoutes = premiumPartition.appShell.map(descriptor => {
 
 // Root route that wraps all other routes
 function RootComponent() {
+  // NotebookLayout draws its own main beside the sidebar nav, so only pages outside it get one here.
+  // display: contents keeps the page a direct child of the providers' grid.
+  const inNotebookLayout = useRouterState({ select: s => s.matches.some(m => m.routeId === layoutRoute.id) });
   return (
     <>
-      <Outlet />
+      {inNotebookLayout ? (
+        <Outlet />
+      ) : (
+        <Box component="main" sx={{ display: 'contents' }}>
+          <Outlet />
+        </Box>
+      )}
       {process.env.NEXT_PUBLIC_ENABLE_DEVTOOLS === 'true' && <TanStackRouterDevtools position="top-right" />}
     </>
   );

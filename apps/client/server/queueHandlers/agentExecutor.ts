@@ -171,6 +171,11 @@ import {
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 import {
+  attachVideoJobsToRunQuest,
+  buildAgentVideoToolConfig,
+  getAgentVideoToolConfigDeps,
+} from './agentExecutor.videoToolConfig';
+import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
   resolveInvocationEnabledTools,
@@ -1743,6 +1748,11 @@ async function processExecution(
     let pendingSideEffects: { type: string; payload: unknown }[] = [];
     const allSideEffects: { type: string; payload: unknown }[] = [];
 
+    const runQuestId = resolveExecutionQuestId({
+      startPayloadQuestId: startPayload?.questId,
+      executionLinkedQuestId: execution.linkedQuestId,
+    });
+
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async (changes, status) => {
         if (changes?.images?.length) {
@@ -1750,6 +1760,8 @@ async function processExecution(
             if (!generatedImages.includes(img)) generatedImages.push(img);
           }
         }
+        // In-process subagents share these callbacks, so their clips land here too.
+        await attachVideoJobsToRunQuest(changes?.videoJobIds, runQuestId, questRepository, logger);
         if (changes?.promptMeta?.retrieval) {
           retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }
@@ -1806,10 +1818,7 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
-      questId: resolveExecutionQuestId({
-        startPayloadQuestId: startPayload?.questId,
-        executionLinkedQuestId: execution.linkedQuestId,
-      }),
+      questId: runQuestId,
       onSubagentCredits: credits => {
         logger.info(`[Credits] Subagent used ${credits} credits`);
       },
@@ -1862,6 +1871,16 @@ async function processExecution(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
+      videoConfig: await buildAgentVideoToolConfig(
+        {
+          userId: execution.userId,
+          organizationId: execution.organizationId,
+          apiKeyId: execution.apiKeyId,
+          questId: runQuestId,
+          toolEnabled: profileEnabledTools.includes('video_generation'),
+        },
+        getAgentVideoToolConfigDeps(logger)
+      ),
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
@@ -3594,6 +3613,8 @@ async function processSubagentDispatch(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
+      // No videoConfig: this path offers no native tools (see the buildSharedTools call below), and
+      // the per-run cap lives in agentExecutor.videoToolConfig.ts for when it does.
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 

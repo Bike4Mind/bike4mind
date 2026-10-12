@@ -79,6 +79,7 @@ import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
+import { shouldBlurComposerAfterSend } from './composerFocus';
 
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
@@ -1228,10 +1229,11 @@ export function useSendMessage({
 
     clearFiles();
 
-    // Hide keyboard after sending message (mobile)
-    setTimeout(() => {
-      lexicalInputRef.current?.blur();
-    }, 100);
+    if (shouldBlurComposerAfterSend()) {
+      setTimeout(() => {
+        lexicalInputRef.current?.blur();
+      }, 100);
+    }
   };
 
   // Latest-ref so the exported `handleSendClick` below can be permanently

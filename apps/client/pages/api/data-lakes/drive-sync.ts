@@ -9,6 +9,8 @@ import {
   isValidDriveFolderId,
   createDriveClient,
   getFolderAccess,
+  probeConnectedFolder,
+  UNREACHABLE_FOLDER_MESSAGES,
 } from '@server/integrations/google/drive/driveClient';
 import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
 import { decryptToken } from '@server/security/tokenEncryption';
@@ -64,6 +66,44 @@ async function readUserDriveCredential(userId: string): Promise<string> {
 }
 
 /**
+ * A Re-sync of a folder that has gone fails the handler's getFolderAccess probe before any ingest runs, so nothing would
+ * park the connection and its chip would read "Connected" until the next poll. Park it here, but only
+ * on a definite verdict (probeConnectedFolder throws on anything transient) from the connection's own
+ * connector: another manager lacking access proves nothing about the stored grant. A sync in flight
+ * is left alone; its own probe reaches the same verdict.
+ */
+async function parkConnectionIfFolderGone(
+  req: Request,
+  userDrive: ReturnType<typeof createDriveClient>,
+  driveFolderId: string,
+  dataLakeId: string
+): Promise<void> {
+  const connection = await orgGoogleDriveConnectionRepository.findByDriveFolderId(driveFolderId);
+  if (
+    !connection ||
+    connection.targetDataLakeId !== dataLakeId ||
+    connection.connectedBy !== req.user.id ||
+    connection.status !== 'connected' ||
+    connection.disconnectRequestedAt
+  ) {
+    return;
+  }
+  try {
+    const reachability = await probeConnectedFolder(userDrive, driveFolderId);
+    if (reachability.reachable) return;
+    await orgGoogleDriveConnectionRepository.updateHealth(connection.id, {
+      status: 'needs_reconnect',
+      lastError: UNREACHABLE_FOLDER_MESSAGES[reachability.reason],
+    });
+  } catch (e) {
+    // Best-effort: the caller still gets the 403 below, and the next poll's ingest probe retries.
+    req.logger.warn('Google Drive connect: could not mark an unreachable folder for reconnect', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/**
  * Connect a Google Drive folder to a data lake and enqueue a background ingest (#1589).
  *
  * Creates (or refreshes) the OrgGoogleDriveConnection binding and enqueues by connectionId (202).
@@ -115,10 +155,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // they don't own - ids appear in shared Drive URLs - and permanently lock out its real owner. Drive
     // 404s a folder the caller can't see, so a successful read IS the ownership proof (uses the user's
     // own credential, not the org copy).
-    const folderAccess = await getFolderAccess(
-      createDriveClient(await getValidUserDriveAccessToken(req.user.id)),
-      driveFolderId
-    );
+    const userDrive = createDriveClient(await getValidUserDriveAccessToken(req.user.id));
+    const folderAccess = await getFolderAccess(userDrive, driveFolderId);
     // A throttle is not an access verdict: without this, Drive rate-limiting the probe would tell the
     // user they have no access to a folder they own, and they would go hunting a permission problem
     // that does not exist (#2395).
@@ -128,6 +166,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       );
     }
     if (!folderAccess.exists) {
+      await parkConnectionIfFolderGone(req, userDrive, driveFolderId, dataLakeId);
       throw new ForbiddenError('That Google Drive folder does not exist or you do not have access to it.');
     }
     if (!folderAccess.isFolder) {

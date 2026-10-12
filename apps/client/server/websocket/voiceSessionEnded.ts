@@ -70,6 +70,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     logger.warn(`Session not found for sessionId ${sessionId}`);
     return { statusCode: 200 };
   }
+  // getSession also admits users the notebook is shared with, but only the owner can open a hold
+  // (pages/api/ai/voice-sessions) and pay for it: anyone else's close would refund it to them.
+  if (session.userId !== user.id) {
+    logger.warn(`voiceSessionEnded: user ${user.id} does not own session ${sessionId} - rejecting`);
+    return { statusCode: 200 };
+  }
 
   // Rates come from the versioned price catalog (reprices reach voice as data
   // rows); the adapter literal is the fail-safe when the catalog is unreachable.
@@ -131,17 +137,20 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       return { statusCode: 200 };
     }
     const startedAt = new Date(session.voiceSessionStartedAt);
-    const closed = await sessionRepository.closeVoiceHold(session.id, startedAt);
-    if (!closed) {
-      logger.warn(`voiceSessionEnded: session ${sessionId} hold already closed - ignoring`);
+    // Claim the hold before any credit moves: of this frame, a replay, the end endpoint and the
+    // stale hold sweep (apps/workers/src/cron/voiceHoldSweep.ts), exactly one settles it.
+    const claimed = await sessionRepository.claimVoiceHold(session.id, startedAt);
+    if (!claimed) {
+      logger.warn(`voiceSessionEnded: session ${sessionId} hold already settled - ignoring`);
       return { statusCode: 200 };
     }
+    const billed = claimed.billedCredits ?? 0;
     const reserved = session.voiceReservedCredits ?? 0;
 
     // 60-min hard cap: a call that ran over pays at most what is left of its hold
     const SIXTY_MIN_MS = 60 * 60 * 1000;
     if (Date.now() - startedAt.getTime() > SIXTY_MIN_MS && session.voiceReservedCredits != null) {
-      const capped = Math.max(0, reserved - closed.billedCredits);
+      const capped = Math.max(0, reserved - billed);
       logger.warn(`Voice session ${sessionId} exceeded 60-min cap - clamping credits`, {
         actualCredits,
         voiceReservedCredits: reserved,
@@ -158,20 +167,20 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       session.voiceReservedCredits ?? usdToCredits(REALTIME_VOICE_RESERVE_USD),
       elapsedSeconds
     );
-    if (closed.billedCredits + actualCredits < floor) {
+    if (billed + actualCredits < floor) {
       logger.info(`voiceSessionEnded: session ${sessionId} settled at its connected-time floor`, {
-        reportedCredits: closed.billedCredits + actualCredits,
+        reportedCredits: billed + actualCredits,
         floor,
         elapsedSeconds,
       });
-      actualCredits = floor - closed.billedCredits;
+      actualCredits = floor - billed;
     }
 
     if (actualCredits > 0) {
       await recordUsage(actualCredits);
     }
     // Already taken: the hold, plus anything billed past it. Owed: everything billed plus this frame.
-    const delta = Math.max(0, reserved - closed.billedCredits) - actualCredits;
+    const delta = Math.max(0, reserved - billed) - actualCredits;
     if (delta !== 0) {
       await userRepository.incrementCredits(user.id, delta);
     }

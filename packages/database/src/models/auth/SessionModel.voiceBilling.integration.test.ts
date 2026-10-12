@@ -52,13 +52,13 @@ describe('sessionRepository realtime voice billing', () => {
     expect(await sessionRepository.addVoiceBilledCredits(id, startedAt, 30)).toBe(0);
   });
 
-  it('closes a hold exactly once, reports what was billed and clears the billing state', async () => {
+  it('claims a hold exactly once, reports what was billed and clears the billing state', async () => {
     const startedAt = new Date();
     const id = await seedHold(startedAt, 40);
 
     const results = await Promise.all([
-      sessionRepository.closeVoiceHold(id, startedAt),
-      sessionRepository.closeVoiceHold(id, startedAt),
+      sessionRepository.claimVoiceHold(id, startedAt),
+      sessionRepository.claimVoiceHold(id, startedAt),
     ]);
 
     expect(results.filter(Boolean)).toEqual([{ billedCredits: 40 }]);
@@ -73,6 +73,6 @@ describe('sessionRepository realtime voice billing', () => {
     const stale = new Date(Date.now() - 60 * 60 * 1000);
 
     expect(await sessionRepository.addVoiceBilledCredits(id, stale, 10)).toBeNull();
-    expect(await sessionRepository.closeVoiceHold(id, stale)).toBeNull();
+    expect(await sessionRepository.claimVoiceHold(id, stale)).toBeNull();
   });
 });

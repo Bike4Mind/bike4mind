@@ -4,6 +4,7 @@ import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
 import dayjs from 'dayjs';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import PaymentButton from '../Credits/PaymentButton';
+import { formatCreditAmount, purchaseCreditsAriaLabel } from '@client/app/utils/formatCredits';
 import { TransactionType } from '@client/lib/credits/types';
 import { FC, useCallback } from 'react';
 import { toast } from 'sonner';
@@ -195,7 +196,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () 
             }}
           >
             <Bike4MindIcon size={'24'} fill={style[safeMode].color} />
-            {currentCredits.toLocaleString()}
+            {formatCreditAmount(currentCredits)}
           </Typography>
         </Box>
       </Box>
@@ -263,7 +264,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () 
                 sx={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '24px' }}
               >
                 <Bike4MindIcon size={'32'} fill={theme.palette.subscription?.creditsModal.iconFill} />
-                {pkg.credits.toLocaleString()}
+                {formatCreditAmount(pkg.credits)}
               </Box>
               <Typography
                 className="credits-modal-package-description"
@@ -281,6 +282,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () 
               <PaymentButton
                 transactionType={TransactionType.Package}
                 packageId={pkg.id}
+                ariaLabel={purchaseCreditsAriaLabel(pkg.credits, pkg.price)}
                 onPayment={() => handlePaymentComplete(pkg.credits)}
               />
             </Box>
@@ -395,7 +397,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () 
                   sx={{ width: '25%', display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
                   <Bike4MindIcon size={'18'} />
-                  {transaction.credits.toLocaleString()}
+                  {formatCreditAmount(transaction.credits)}
                 </Box>
                 <Box className="credits-modal-transaction-date" sx={{ width: '25%' }}>
                   {dayjs(new Date(transaction.createdAt).toLocaleDateString()).format('MMMM DD, YYYY')}
