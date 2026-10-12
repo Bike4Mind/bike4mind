@@ -70,6 +70,18 @@ describe('grantCreditPurchase on a real replica set', () => {
     expect(await lots()).toBe(1);
   });
 
+  it('runs the grant with snapshot reads and majority writes', async () => {
+    const user = await seedBuyer();
+    const transaction = vi.spyOn(mongoose.connection, 'transaction');
+
+    await grantCreditPurchase(grantFor(user.id));
+
+    expect(transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } })
+    );
+  });
+
   it('leaves no ledger row when the balance write fails between the two writes', async () => {
     const user = await seedBuyer();
     vi.spyOn(userRepository, 'incrementCredits').mockRejectedValueOnce(new Error('balance write failed'));

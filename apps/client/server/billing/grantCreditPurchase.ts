@@ -56,7 +56,9 @@ export async function grantCreditPurchase(
       );
       return 'granted';
     },
-    { logger }
+    // Explicit rather than inherited from the cluster defaults: the committed row is the webhook's
+    // "credits landed" signal, so it must not be readable before it is durable.
+    { logger, readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } }
   );
 
   // The pack lot stays outside the transaction: stamping is best-effort and swallows its own
