@@ -58,8 +58,16 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string, options?: Record<string, unknown>) =>
-      (fallback ?? key).replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options?.[name])),
+    t: (key: string, fallbackOrOptions?: string | Record<string, unknown>, maybeOptions?: Record<string, unknown>) => {
+      const options = typeof fallbackOrOptions === 'object' ? fallbackOrOptions : maybeOptions;
+      const plural = options?.count === undefined ? undefined : options.count === 1 ? 'one' : 'other';
+      const fallback =
+        typeof fallbackOrOptions === 'string'
+          ? fallbackOrOptions
+          : ((plural && options?.[`defaultValue_${plural}`]) ?? options?.defaultValue);
+      return String(fallback ?? key).replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options?.[name]));
+    },
+    i18n: { language: 'en' },
   }),
 }));
 vi.mock('..', () => ({ useNotebookLayout: () => vi.fn() }));
@@ -125,7 +133,7 @@ describe('SidenavNav Gears row tag', () => {
   it('says Start here, with the credits on offer, while Getting Started is unfinished', () => {
     useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 0 });
     renderNav();
-    expect(startHere()).toHaveTextContent(`Start here, +${(6500).toLocaleString()} credits`);
+    expect(startHere()).toHaveTextContent(`Start here, +${(6500).toLocaleString('en')} credits`);
   });
 
   it('says credit, not credits, for a single one', () => {

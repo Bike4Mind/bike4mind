@@ -84,7 +84,7 @@ type NavItem = {
  */
 const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all' }) => {
   const theme = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const currentUser = useUser(s => s.currentUser);
@@ -408,13 +408,12 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             }}
           >
             {gearsSignal.startHereCredits > 0
-              ? t(
-                  'sidenav.gearsStartHereCredits',
-                  gearsSignal.startHereCredits === 1
-                    ? 'Start here, +{{credits}} credit'
-                    : 'Start here, +{{credits}} credits',
-                  { credits: gearsSignal.startHereCredits.toLocaleString() }
-                )
+              ? t('sidenav.gearsStartHereCredits', {
+                  count: gearsSignal.startHereCredits,
+                  credits: gearsSignal.startHereCredits.toLocaleString(i18n.language),
+                  defaultValue_one: 'Start here, +{{credits}} credit',
+                  defaultValue_other: 'Start here, +{{credits}} credits',
+                })
               : t('sidenav.gearsStartHere', 'Start here')}
           </Chip>
         ) : undefined,
