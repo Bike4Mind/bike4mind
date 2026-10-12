@@ -379,4 +379,25 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     expect(frames).toHaveLength(1);
     expect(frames[0].usage).toMatchObject({ audioInputTokens: 5, audioOutputTokens: 7 });
   });
+
+  it('stops every track of the microphone probe so the mic indicator goes off', async () => {
+    const stops = [vi.fn(), vi.fn()];
+    getUserMedia.mockResolvedValue({ getTracks: () => stops.map(stop => ({ stop })) });
+
+    await connectAndConnected();
+
+    stops.forEach(stop => expect(stop).toHaveBeenCalledTimes(1));
+  });
+
+  it('settles an unsettled hold on unmount, and a failing socket does not break teardown', async () => {
+    const view = await connectAndConnected();
+    sendJsonMessage.mockImplementationOnce(() => {
+      throw new Error('socket closed');
+    });
+
+    expect(() => view.unmount()).not.toThrow();
+
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+    expect(latestPc().close).toHaveBeenCalled();
+  });
 });

@@ -383,8 +383,13 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
     const hold = unsettledHoldRef.current;
     if (!hold) return;
     unsettledHoldRef.current = null;
-    sendJsonMessageRef.current({ action: 'voice_session_ended', ...hold, usage: ZERO_VOICE_USAGE });
-  }, []);
+    try {
+      sendJsonMessageRef.current({ action: 'voice_session_ended', ...hold, usage: ZERO_VOICE_USAGE });
+    } catch (err) {
+      // A closed socket must not abort teardown; the stale-hold sweep reclaims the hold.
+      addDebugLog(`[RT] Failed to settle credit hold: ${String(err)}`);
+    }
+  }, [addDebugLog]);
 
   // WebRTC disconnect (terminal)
   const handleDisconnectFromRealtime = useCallback(() => {
