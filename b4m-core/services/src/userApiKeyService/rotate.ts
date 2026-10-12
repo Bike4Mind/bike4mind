@@ -119,7 +119,6 @@ export const rotateUserApiKey = async (
 
   const { key, keyPrefix, keyDigest } = generateNewApiKey();
 
-  delete apiKey.keyHash;
   apiKey.keyDigest = keyDigest;
   apiKey.keyPrefix = keyPrefix;
   if (reOwned) {

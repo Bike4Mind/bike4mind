@@ -191,7 +191,10 @@ describe('userApiKeyService writers vs concurrent writes (real repo + Mongo)', (
 
   it('rotate does not resurrect a key deactivated mid-flight or reset its spend', async () => {
     const minted = await mintEmbedKey();
+    // A legacy bcrypt hash, so the assertion below proves rotation removes it.
+    await userApiKeyRepository.update({ id: minted.id, keyHash: '$2b$12$legacylegacylegacylegac' });
     const before = await reload(minted.id);
+    expect(before!.keyHash).toBeDefined();
 
     await userApiKeyService.rotateUserApiKey(
       'owner-1',

@@ -101,6 +101,11 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
   }
 
   async healKeyPrefix(id: string, keyPrefix: string, matchedSecret: ApiKeyStoredSecret) {
+    // An undefined guard value would serialize as null and match every doc lacking that field.
+    const guardValues = Object.values(matchedSecret);
+    if (guardValues.length !== 1 || typeof guardValues[0] !== 'string' || guardValues[0] === '') {
+      throw new Error('healKeyPrefix requires exactly one non-empty stored secret to guard on');
+    }
     await this.model.updateOne({ _id: id, ...matchedSecret }, { $set: { keyPrefix } });
   }
 

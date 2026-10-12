@@ -51,13 +51,6 @@ export interface ValidationResult {
 }
 
 /**
- * Post-lookup gates shared by every key-validation path (raw-key-by-prefix and
- * by-id). Runs the checks that must hold regardless of HOW the doc was located -
- * expiry, active status, the last-used bump - and returns the safe projection.
- * Centralized so a future gate (revoked flag, org-suspend, ...) can't land on one
- * path and silently skip the other.
- */
-/**
  * Checks `key` against the stored secret and returns the one it matched, or null. A key with a
  * stored digest is checked by constant-time SHA-256 compare only - the digest is authoritative, so a
  * mismatch never falls through to bcrypt. Keys minted before the digest existed fall back to the
@@ -67,12 +60,20 @@ async function matchStoredSecret(key: string, apiKey: IUserApiKeyDocument): Prom
   if (apiKey.keyDigest) {
     return keyDigestMatches(key, apiKey.keyDigest) ? { keyDigest: apiKey.keyDigest } : null;
   }
-  if (apiKey.keyHash && (await bcrypt.compare(key, apiKey.keyHash))) {
-    return { keyHash: apiKey.keyHash };
+  if (apiKey.keyHash) {
+    return (await bcrypt.compare(key, apiKey.keyHash)) ? { keyHash: apiKey.keyHash } : null;
   }
+  Logger.globalInstance.warn('API key record has neither keyDigest nor keyHash; rejecting', { keyId: apiKey.id });
   return null;
 }
 
+/**
+ * Post-lookup gates shared by every key-validation path (raw-key-by-prefix and
+ * by-id). Runs the checks that must hold regardless of HOW the doc was located -
+ * expiry, active status, the last-used bump - and returns the safe projection.
+ * Centralized so a future gate (revoked flag, org-suspend, ...) can't land on one
+ * path and silently skip the other.
+ */
 function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserApiKeyAdapters['db']): ValidationResult {
   if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
     return { isValid: false, reason: 'expired' };
