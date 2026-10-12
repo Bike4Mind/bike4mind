@@ -65,14 +65,17 @@ async function ensureMicrophone(): Promise<void> {
 }
 
 function microphoneErrorMessage(err: unknown): string {
-  const name = (err as { name?: string })?.name;
+  const name = err instanceof Error ? err.name : undefined;
   if (name === 'NotAllowedError') {
     return 'Microphone access denied. Allow this site to use the microphone in your browser settings, then try again.';
   }
   if (name === 'NotReadableError') {
     return 'Microphone is busy (in use by another app). Close other audio apps and retry.';
   }
-  return 'No microphone detected. Plug in / select an audio input device, then retry.';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return 'No microphone detected. Plug in / select an audio input device, then retry.';
+  }
+  return 'Could not start the microphone. Check your browser and device settings, then retry.';
 }
 
 export interface UseVoiceSessionEngineOptions {
@@ -170,6 +173,10 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
   // settles it. A terminal teardown that finds one still set settles it at zero usage,
   // so a call that never produced a response does not keep the whole hold.
   const unsettledHoldRef = useRef<{ sessionId: string; model: string; userId: string } | null>(null);
+  // Bumped by every terminal teardown. A connect compares it across its awaits (the mic
+  // permission prompt, the bootstrap) to notice that End or an unmount ran meanwhile and
+  // must not carry on to open a call on an instance the user already left.
+  const teardownEpochRef = useRef(0);
   // Read through a ref so handleDisconnectFromRealtime stays referentially stable: the
   // unmount cleanup effect depends on it and would otherwise tear down a live call.
   const sendJsonMessageRef = useRef(sendJsonMessage);
@@ -400,6 +407,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
     }
     reconnectAttemptsRef.current = 0;
 
+    teardownEpochRef.current += 1;
     releaseRealtimeResources();
     settleUnsettledHold();
     setConnectionStatus('disconnected');
@@ -440,12 +448,18 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
       )
         return;
       if (!currentUser?.id) return;
+      const userId = currentUser.id;
+      const epoch = teardownEpochRef.current;
+      const isStale = () => teardownEpochRef.current !== epoch;
 
       setConnectionStatus(isReconnect ? 'reconnecting' : 'connecting');
 
       let ephemeralKey: string;
       let resolvedSessionId: string;
       let model: string;
+      const trackHold = () => {
+        unsettledHoldRef.current = { sessionId: resolvedSessionId, model, userId };
+      };
 
       // Check for pending connection data from a pre-navigation API call.
       // When connect() creates a new session on a route without a sessionId,
@@ -460,7 +474,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
         resolvedSessionId = pending.sessionId;
         model = pending.model;
         connectedSessionIdRef.current = resolvedSessionId;
-        unsettledHoldRef.current = { sessionId: resolvedSessionId, model, userId: currentUser.id };
+        trackHold();
         if (pending.voice && pending.voice !== selectedVoice) {
           setSelectedVoice(pending.voice);
         }
@@ -470,10 +484,13 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
           try {
             await ensureMicrophone();
           } catch (err) {
-            toast.error(microphoneErrorMessage(err), { id: 'voice-session-start-error' });
-            setConnectionStatus('disconnected');
+            if (!isStale()) {
+              toast.error(microphoneErrorMessage(err), { id: 'voice-session-start-error' });
+              setConnectionStatus('disconnected');
+            }
             return;
           }
+          if (isStale()) return;
         }
         const response = await api
           .post<{
@@ -506,7 +523,12 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
         connectedSessionIdRef.current = resolvedSessionId;
         model = data.model;
         ephemeralKey = data.ephemeralKey;
-        unsettledHoldRef.current = { sessionId: resolvedSessionId, model, userId: currentUser.id };
+        trackHold();
+        if (isStale()) {
+          // End or unmount ran during the bootstrap, after its own settle found nothing to do.
+          settleUnsettledHold();
+          return;
+        }
 
         if (data.voice && data.voice !== selectedVoice) {
           setSelectedVoice(data.voice);
@@ -552,7 +574,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
       // across that await, so read the live store value - otherwise we'd park a
       // freshly-built pc/dc/audioContext in the refs *after* teardown already ran,
       // leaking a live peer connection (and the mic) the UI thinks is closed.
-      if (useVoiceSessionStore.getState().isEnding) {
+      if (isStale() || useVoiceSessionStore.getState().isEnding) {
         pc.close();
         audioContext.close();
         localStream.getTracks().forEach(track => track.stop());
@@ -672,7 +694,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
                 sessionId: resolvedSessionId,
                 model,
                 usage: usageData,
-                userId: currentUser.id,
+                userId,
               });
               unsettledHoldRef.current = null;
             }
@@ -788,6 +810,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
       updateTranscriptMessage,
       updateTranscriptItem,
       handleDisconnectFromRealtime,
+      settleUnsettledHold,
       completeSessionEnd,
       subscribeToAction,
       onSessionCreated,

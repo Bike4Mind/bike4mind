@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 // Fake WebRTC primitives
@@ -141,6 +141,10 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  afterAll(() => {
+    Reflect.deleteProperty(navigator, 'mediaDevices');
   });
 
   it('enters reconnecting and re-establishes on a failed peer connection', async () => {
@@ -399,5 +403,83 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
 
     expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
     expect(latestPc().close).toHaveBeenCalled();
+  });
+
+  it('hands the hold to the remounted instance instead of settling it when a new session navigates', async () => {
+    const first = renderHook(() => useVoiceSessionEngine({}));
+    await act(async () => {
+      await first.result.current.connect();
+    });
+    expect(apiPost).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+    expect(settlementFrames()).toEqual([]);
+
+    setupRealtimeConnection.mockRejectedValueOnce(new Error('setup failed'));
+    await act(async () => {
+      renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+  });
+
+  it('does not bootstrap when End is pressed while the microphone prompt is open', async () => {
+    let allowMicrophone: (stream: unknown) => void = () => {};
+    getUserMedia.mockReturnValue(new Promise(resolve => (allowMicrophone = resolve)));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      void view.result.current.connect();
+    });
+    act(() => {
+      view.result.current.endSession();
+    });
+    await act(async () => {
+      allowMicrophone({ getTracks: () => [{ stop: vi.fn() }] });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(apiPost).not.toHaveBeenCalledWith('/api/ai/voice-sessions', expect.anything());
+    expect(setupRealtimeConnection).not.toHaveBeenCalled();
+    expect(settlementFrames()).toEqual([]);
+  });
+
+  it('settles a hold reserved after End ran mid-bootstrap, and opens no connection', async () => {
+    let finishBootstrap: (response: unknown) => void = () => {};
+    apiPost.mockReturnValue(new Promise(resolve => (finishBootstrap = resolve)));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      void view.result.current.connect();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      view.result.current.endSession();
+    });
+    expect(settlementFrames()).toEqual([]);
+
+    await act(async () => {
+      finishBootstrap(VOICE_SESSION_RESPONSE);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(setupRealtimeConnection).not.toHaveBeenCalled();
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+  });
+
+  it('reports a generic microphone message for an unrecognised capture failure', async () => {
+    getUserMedia.mockRejectedValue(Object.assign(new Error('boom'), { name: 'AbortError' }));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      await view.result.current.connect();
+    });
+
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Could not start the microphone/), {
+      id: 'voice-session-start-error',
+    });
   });
 });
