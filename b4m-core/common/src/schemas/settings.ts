@@ -561,6 +561,9 @@ export const SettingKeySchema = z.enum([
   'videoGeneration',
   'agentVideoClipsPerRun',
 
+  // MUSIC GENERATION
+  'musicGeneration',
+
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
   'modelDiscoveryMode',
@@ -1129,6 +1132,13 @@ export const VideoGenerationSettingsSchema = z.object({
 });
 
 export type VideoGenerationSettings = z.infer<typeof VideoGenerationSettingsSchema>;
+
+export const MusicGenerationSettingsSchema = z.object({
+  // Per-model override of MUSIC_MODEL_CATALOG[id].defaultEnabled; see isMusicModelEnabled in ../music/enablement.
+  enabledModels: z.record(z.string(), z.boolean()).prefault({}),
+});
+
+export type MusicGenerationSettings = z.infer<typeof MusicGenerationSettingsSchema>;
 
 /**
  * Canonical repository and branch the What's New generator reads from.
@@ -4960,6 +4970,17 @@ export const settingsMap = {
     order: 146,
     // Consumed by apps/client/server/queueHandlers/agentExecutor.videoToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  musicGeneration: makeObjectSetting({
+    key: 'musicGeneration',
+    userReadable: true,
+    name: 'Music Generation',
+    defaultValue: MusicGenerationSettingsSchema.parse({}),
+    description:
+      'Enable or disable individual music generation models. Models without an override use their built-in default.',
+    category: 'AI',
+    order: 147,
+    schema: MusicGenerationSettingsSchema,
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',
