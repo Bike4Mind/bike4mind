@@ -65,4 +65,29 @@ describe('Teams list for an appointed manager', () => {
     fireEvent.click(screen.getByRole('button', { name: 'organization.view_details' }));
     expect(mocks.navigate).toHaveBeenCalledWith({ to: '/organizations/org1' });
   });
+
+  it('lists managed and member teams once each, sorted by name', () => {
+    mocks.memberOrganizations = [
+      { id: 'org2', userId: 'owner2', name: 'Alpha Team', personal: false, seats: 2, currentCredits: 10 },
+      {
+        id: 'org1',
+        userId: 'owner1',
+        managerId: 'manager1',
+        name: 'Managed Team',
+        personal: false,
+        seats: 4,
+        currentCredits: 100,
+      },
+    ];
+    render(
+      <CssVarsProvider theme={theme}>
+        <OrganizationListPage />
+      </CssVarsProvider>
+    );
+
+    expect(screen.getAllByText('Managed Team')).toHaveLength(1);
+    const alpha = screen.getByText('Alpha Team');
+    const managed = screen.getByText('Managed Team');
+    expect(alpha.compareDocumentPosition(managed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

@@ -159,7 +159,7 @@ describe('OrganizationUserCard roster actions', () => {
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
 
-  it('offers a share/update member neither action', () => {
+  it('shows no menu when both invite and revoke are withheld', () => {
     renderCard(accepted(), false, { invite: false, revoke: false });
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
     renderCard(member('p', null, 'pending'), false, { invite: false, revoke: false });

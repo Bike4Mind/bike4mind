@@ -186,7 +186,7 @@ const OrganizationListPage: FC = () => {
       ...(managedOrganizations ?? []).map(org => [org.id, org] as const),
       ...(memberOrganizations ?? []).map(org => [org.id, org] as const),
     ]).values()
-  );
+  ).sort((a, b) => a.name.localeCompare(b.name));
   const isLoading = membersLoading || managedLoading;
   const isFetching = membersFetching || managedFetching;
   const filteredOrganizations = organizations.filter(
