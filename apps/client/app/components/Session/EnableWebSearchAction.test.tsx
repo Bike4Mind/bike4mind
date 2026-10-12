@@ -8,13 +8,18 @@ const hoisted = vi.hoisted(() => ({
   tools: [] as string[],
   setLLM: vi.fn(),
   toolAvailability: undefined as Record<string, boolean> | undefined,
+  supportsTools: true,
 }));
 
 vi.mock('@client/app/contexts/LLMContext', () => ({
-  useLLM: (selector: (s: unknown) => unknown) => selector({ tools: hoisted.tools, setLLM: hoisted.setLLM }),
+  useLLM: (selector: (s: unknown) => unknown) =>
+    selector({ tools: hoisted.tools, setLLM: hoisted.setLLM, model: 'gpt-4o' }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useConfig: () => ({ data: { toolAvailability: hoisted.toolAvailability } }),
+}));
+vi.mock('@client/app/hooks/data/useModelInfo', () => ({
+  useModelInfo: () => ({ data: [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: hoisted.supportsTools }] }),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
 
@@ -32,6 +37,7 @@ describe('EnableWebSearchAction', () => {
     hoisted.tools = ['current_datetime'];
     hoisted.setLLM.mockReset();
     hoisted.toolAvailability = undefined;
+    hoisted.supportsTools = true;
   });
 
   it('turns Web Search on when the reply says no search tool is connected', () => {
@@ -53,6 +59,12 @@ describe('EnableWebSearchAction', () => {
 
   it('stays hidden when the deployment has no search key', () => {
     hoisted.toolAvailability = { web_search: false };
+    render(<EnableWebSearchAction reply={NO_SEARCH_REPLY} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('enable-web-search-action')).not.toBeInTheDocument();
+  });
+
+  it('stays hidden for a model without tool support', () => {
+    hoisted.supportsTools = false;
     render(<EnableWebSearchAction reply={NO_SEARCH_REPLY} />, { wrapper: Wrapper });
     expect(screen.queryByTestId('enable-web-search-action')).not.toBeInTheDocument();
   });
