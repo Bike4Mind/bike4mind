@@ -11,17 +11,22 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 /**
  * Every one-time-code limit lives here.
  *
- * The per-email caps are the anti-email-bombing and brute-force controls, so they are tight. The
- * per-IP caps only bound a single source, so they are sized for a shared office or campus NAT where
- * many distinct people sign in from one address: the short window counts distinct emails per IP
- * (repeat sends to one address are already capped per email) and the blunt total plus daily caps
- * keep one IP bounded no matter what.
+ * Nothing proves who is asking for a code, so any per-email cap a stranger can fill is a lever to
+ * lock the owner out. The send caps that refuse for long are therefore keyed per (inbox, source IP):
+ * one source can neither bomb an inbox nor spend the owner's allowance. The inbox-wide ceiling stops
+ * a many-source bomb but has only a short window, so a lockout bought with it lasts at most one
+ * window after the attacker stops paying. There is deliberately no inbox-wide daily refusal.
+ *
+ * The per-IP caps only bound a single source, so they are sized for a shared office or campus NAT
+ * where many distinct people sign in from one address: the short window counts distinct emails per
+ * IP and the blunt total plus daily caps keep one IP bounded no matter what.
  */
 export const OTC_LIMITS = {
   send: {
     cooldownMs: 30 * 1000,
-    perEmail: { limit: 5, windowMs: 15 * MINUTE_MS },
-    perEmailDaily: { limit: 15, windowMs: DAY_MS },
+    perEmailPerIp: { limit: 5, windowMs: 15 * MINUTE_MS },
+    perEmailPerIpDaily: { limit: 15, windowMs: DAY_MS },
+    perEmail: { limit: 15, windowMs: 15 * MINUTE_MS },
     perIpDistinctEmails: { limit: 15, windowMs: 15 * MINUTE_MS },
     perIpTotal: { limit: 40, windowMs: 15 * MINUTE_MS },
     perIpDaily: { limit: 200, windowMs: DAY_MS },
@@ -32,7 +37,6 @@ export const OTC_LIMITS = {
   },
 } as const;
 
-/** Lowercased, trimmed email from a request body, or undefined when it is not a string. */
 export function normalizeOtcEmail(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const email = value.toLowerCase().trim();
@@ -127,33 +131,45 @@ interface OtcEmailBudget {
   bucket: string;
   limit: number;
   windowMs: number;
+  /** What the budget is keyed on, given the request email and its IP bucket; hashed into the key. */
+  subject: (email: string, ip: string) => string;
 }
+
+const inbox = (email: string) => otcLimitMailbox(email);
+const inboxFromSource = (email: string, ip: string) => `${otcLimitMailbox(email)}|${ip}`;
 
 /**
  * Per-email budgets are charged by the handlers, not by middleware, so only real events spend them:
  * a dispatched code for sends, a wrong guess against a live token for verifies. Charging every
  * request would let anyone who knows an address lock its owner out with junk traffic, which the
- * per-IP caps bound instead.
+ * per-IP caps bound instead. See OTC_LIMITS for why the send budgets are keyed per source.
  */
 export const OTC_SEND_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
-  { bucket: 'send-email', ...OTC_LIMITS.send.perEmail },
-  { bucket: 'send-email-daily', ...OTC_LIMITS.send.perEmailDaily },
+  { bucket: 'send-email-ip', ...OTC_LIMITS.send.perEmailPerIp, subject: inboxFromSource },
+  { bucket: 'send-email-ip-daily', ...OTC_LIMITS.send.perEmailPerIpDaily, subject: inboxFromSource },
+  { bucket: 'send-email', ...OTC_LIMITS.send.perEmail, subject: inbox },
 ];
 export const OTC_VERIFY_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
-  { bucket: 'verify-email', ...OTC_LIMITS.verify.perEmail },
+  { bucket: 'verify-email', ...OTC_LIMITS.verify.perEmail, subject: inbox },
 ];
 
-const budgetKey = (bucket: string, email: string) => `otc-limit:${bucket}:${otcEmailKey(otcLimitMailbox(email))}`;
+const budgetKey = ({ bucket, subject }: OtcEmailBudget, email: string, ip: string) =>
+  `otc-limit:${bucket}:${otcEmailKey(subject(email, ip))}`;
 
-/** Retry-After seconds when any of the email's budgets is spent, else undefined. Spends nothing. */
+/**
+ * Retry-After seconds when any of the email's budgets is spent, else undefined. Spends nothing.
+ * `ip` is the caller's otcIpBucket (see ipSubject).
+ */
 export async function otcEmailBudgetRetryAfter(
   email: string,
+  ip: string,
   budgets: readonly OtcEmailBudget[]
 ): Promise<number | undefined> {
   if (isE2EEnabled()) return undefined;
-  for (const { bucket, limit, windowMs } of budgets) {
+  for (const budget of budgets) {
+    const { limit, windowMs } = budget;
     const { count, expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(
-      budgetKey(bucket, email),
+      budgetKey(budget, email, ip),
       0,
       limit,
       windowMs
@@ -164,10 +180,18 @@ export async function otcEmailBudgetRetryAfter(
 }
 
 /** Spends one unit of each of the email's budgets. */
-export async function chargeOtcEmailBudget(email: string, budgets: readonly OtcEmailBudget[]): Promise<void> {
+export async function chargeOtcEmailBudget(
+  email: string,
+  ip: string,
+  budgets: readonly OtcEmailBudget[]
+): Promise<void> {
   if (isE2EEnabled()) return;
-  for (const { bucket, limit, windowMs } of budgets) {
-    await cacheRepository.tryIncrementWithinLimitFixedWindow(budgetKey(bucket, email), limit, windowMs);
+  for (const budget of budgets) {
+    await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      budgetKey(budget, email, ip),
+      budget.limit,
+      budget.windowMs
+    );
   }
 }
 

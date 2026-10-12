@@ -105,7 +105,8 @@ const handler = baseApi({ auth: false })
     // Brute-force bound per address across every token; the per-token attempt cap alone resets with
     // each new code. Only a wrong guess against a live token spends it (see OTC_VERIFY_EMAIL_BUDGETS);
     // tokenless junk is bounded by the per-IP cap.
-    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, OTC_VERIFY_EMAIL_BUDGETS);
+    const ipBucket = ipSubject(req);
+    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, ipBucket, OTC_VERIFY_EMAIL_BUDGETS);
     if (budgetRetryAfter !== undefined) {
       res.setHeader('Retry-After', String(budgetRetryAfter));
       return res.status(429).json({ error: 'Too many attempts. Please try again later.' });
@@ -126,7 +127,7 @@ const handler = baseApi({ auth: false })
 
     const isValid = await userService.verifyPendingOTC(code, tokenPayload.otcHash);
     if (!isValid) {
-      await chargeOtcEmailBudget(normalizedEmail, OTC_VERIFY_EMAIL_BUDGETS);
+      await chargeOtcEmailBudget(normalizedEmail, ipBucket, OTC_VERIFY_EMAIL_BUDGETS);
       // Re-issue the token with an incremented attempt count + the rotated nonce so
       // the user can retry. Identical response for existing and non-existent accounts
       // (no existence lookup has happened yet).

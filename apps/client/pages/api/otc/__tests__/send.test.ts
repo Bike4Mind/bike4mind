@@ -144,8 +144,11 @@ describe('/api/otc/send limiter wiring', () => {
 });
 
 describe('/api/otc/send per-email budget', () => {
-  const VICTIM = 'victim@example.com';
-  const sendKey = `otc-limit:send-email:${otcEmailKey(VICTIM)}`;
+  const VICTIM = 'victim@gmail.com';
+  const ATTACKER_IP = '81.2.69.166';
+  const VICTIM_IP = '81.2.69.110';
+  const inboxKey = `otc-limit:send-email:${otcEmailKey(VICTIM)}`;
+  const sourceKey = (ip: string) => `otc-limit:send-email-ip:${otcEmailKey(`${VICTIM}|${ip}`)}`;
   const reservedAt = new Date('2026-01-01T00:00:00.000Z');
 
   beforeEach(() => {
@@ -167,27 +170,70 @@ describe('/api/otc/send per-email budget', () => {
     return res;
   }
 
+  // Drops the short-window counters, as if the attacker waited out each 15-minute window.
+  const rollShortWindows = () => {
+    for (const key of [...cache.counts.keys()]) {
+      if (!key.includes('-daily:')) cache.counts.delete(key);
+    }
+  };
+
   it('lets an attacker spamming one address spend only what real dispatched codes cost', async () => {
     // The cooldown admits one send in ten; the rest are refused before any code goes out.
     let attempt = 0;
     mockTryReserveSlot.mockImplementation(async () =>
       attempt++ % 10 === 0 ? { allowed: true, reservedAt } : { allowed: false, retryAfterSeconds: 20 }
     );
-    for (let i = 0; i < 30; i++) await post(VICTIM, '81.2.69.166');
+    for (let i = 0; i < 30; i++) await post(VICTIM, ATTACKER_IP);
 
     expect(mockSendOTC).toHaveBeenCalledTimes(3);
-    expect(cache.counts.get(sendKey)).toBe(3);
+    expect(cache.counts.get(sourceKey(ATTACKER_IP))).toBe(3);
+    expect(cache.counts.get(inboxKey)).toBe(3);
 
     mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
-    const victim = await post(VICTIM, '81.2.69.110');
+    const victim = await post(VICTIM, VICTIM_IP);
     expect(victim._getStatusCode()).toBe(200);
   });
 
+  it('caps one source per inbox, yet the owner still gets a code after a paced day-long attack', async () => {
+    // Paced at the cooldown, so every attacker request reaches dispatch; aliases fold onto one inbox.
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    for (let round = 0; round < 4; round++) {
+      for (let i = 0; i < OTC_LIMITS.send.perEmailPerIp.limit; i++) {
+        await post(`v.i.c.t.i.m+${round}x${i}@gmail.com`, ATTACKER_IP);
+      }
+      rollShortWindows();
+    }
+
+    expect(mockSendOTC).toHaveBeenCalledTimes(OTC_LIMITS.send.perEmailPerIpDaily.limit);
+    const attacker = await post('victim+again@gmail.com', ATTACKER_IP);
+    expect(attacker._getStatusCode()).toBe(429);
+    expect(attacker.getHeader('Retry-After')).toBeDefined();
+
+    const victim = await post(VICTIM, VICTIM_IP);
+    expect(victim._getStatusCode()).toBe(200);
+  });
+
+  it('refuses every source once the inbox-wide short-window ceiling is reached', async () => {
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    const { perEmail, perEmailPerIp } = OTC_LIMITS.send;
+    for (let source = 0; source < perEmail.limit / perEmailPerIp.limit; source++) {
+      for (let i = 0; i < perEmailPerIp.limit; i++) await post(VICTIM, `81.2.70.${source}`);
+    }
+    expect(cache.counts.get(inboxKey)).toBe(perEmail.limit);
+
+    const res = await post(VICTIM, VICTIM_IP);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res.getHeader('Retry-After')).toBeDefined();
+
+    rollShortWindows();
+    expect((await post(VICTIM, VICTIM_IP))._getStatusCode()).toBe(200);
+  });
+
   it('refuses with 429 and Retry-After, without reserving or dispatching, once the budget is spent', async () => {
-    cache.counts.set(sendKey, OTC_LIMITS.send.perEmail.limit);
+    cache.counts.set(sourceKey(VICTIM_IP), OTC_LIMITS.send.perEmailPerIp.limit);
     mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
 
-    const res = await post(VICTIM, '81.2.69.110');
+    const res = await post(VICTIM, VICTIM_IP);
 
     expect(res._getStatusCode()).toBe(429);
     expect(res.getHeader('Retry-After')).toBeDefined();

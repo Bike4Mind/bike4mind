@@ -86,23 +86,36 @@ describe('per-email budgets', () => {
     mocks.tryAdd.mockResolvedValue({ success: true, count: 0, expiresAt: new Date(Date.now() + 60_000) });
   });
 
-  it('charges each send budget once, under a hashed key of the normalized inbox', async () => {
-    await chargeOtcEmailBudget('someone@example.com', OTC_SEND_EMAIL_BUDGETS);
+  it('charges each send budget once, per source and inbox-wide, under hashed keys', async () => {
+    await chargeOtcEmailBudget('someone@example.com', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS);
 
-    const hashed = otcEmailKey('someone@example.com');
-    const { perEmail, perEmailDaily } = OTC_LIMITS.send;
-    expect(mocks.tryIncrement).toHaveBeenCalledTimes(2);
+    const perSource = otcEmailKey('someone@example.com|203.0.113.7');
+    const { perEmail, perEmailPerIp, perEmailPerIpDaily } = OTC_LIMITS.send;
+    expect(mocks.tryIncrement).toHaveBeenCalledTimes(3);
     expect(mocks.tryIncrement).toHaveBeenCalledWith(
-      `otc-limit:send-email:${hashed}`,
+      `otc-limit:send-email-ip:${perSource}`,
+      perEmailPerIp.limit,
+      perEmailPerIp.windowMs
+    );
+    expect(mocks.tryIncrement).toHaveBeenCalledWith(
+      `otc-limit:send-email-ip-daily:${perSource}`,
+      perEmailPerIpDaily.limit,
+      perEmailPerIpDaily.windowMs
+    );
+    expect(mocks.tryIncrement).toHaveBeenCalledWith(
+      `otc-limit:send-email:${otcEmailKey('someone@example.com')}`,
       perEmail.limit,
       perEmail.windowMs
     );
-    expect(mocks.tryIncrement).toHaveBeenCalledWith(
-      `otc-limit:send-email-daily:${hashed}`,
-      perEmailDaily.limit,
-      perEmailDaily.windowMs
-    );
     expect(mocks.tryIncrement.mock.calls.every(([key]) => !key.includes('example.com'))).toBe(true);
+  });
+
+  it('never refuses an inbox for longer than one short window across all sources', () => {
+    const inboxWide = OTC_SEND_EMAIL_BUDGETS.filter(
+      b => b.subject('a@b.co', '1.1.1.1') === b.subject('a@b.co', '2.2.2.2')
+    );
+    expect(inboxWide.map(b => b.windowMs)).toEqual([OTC_LIMITS.send.perEmail.windowMs]);
+    expect(OTC_LIMITS.send.perEmail.windowMs).toBeLessThanOrEqual(15 * 60_000);
   });
 
   it('counts plus-tag, Gmail-dot and compatibility-form variants of one inbox on the same key', async () => {
@@ -114,11 +127,17 @@ describe('per-email budgets', () => {
       'victim@gmail.com.',
       '\uff56ictim@gmail.com',
     ]) {
-      await chargeOtcEmailBudget(variant, OTC_VERIFY_EMAIL_BUDGETS);
+      await chargeOtcEmailBudget(variant, '203.0.113.7', OTC_SEND_EMAIL_BUDGETS);
     }
 
     const keys = new Set(mocks.tryIncrement.mock.calls.map(([key]) => key));
-    expect(keys).toEqual(new Set([`otc-limit:verify-email:${otcEmailKey('victim@gmail.com')}`]));
+    expect(keys).toEqual(
+      new Set([
+        `otc-limit:send-email-ip:${otcEmailKey('victim@gmail.com|203.0.113.7')}`,
+        `otc-limit:send-email-ip-daily:${otcEmailKey('victim@gmail.com|203.0.113.7')}`,
+        `otc-limit:send-email:${otcEmailKey('victim@gmail.com')}`,
+      ])
+    );
   });
 
   it('folds plus-tags on any domain but keeps dots significant outside Gmail', () => {
@@ -128,24 +147,24 @@ describe('per-email budgets', () => {
 
   it('reports Retry-After without spending anything once a budget is spent', async () => {
     mocks.tryAdd.mockImplementation(async (key, _amount, limit) =>
-      key.startsWith('otc-limit:send-email-daily:')
+      key.startsWith('otc-limit:send-email-ip-daily:')
         ? { success: true, count: limit, expiresAt: new Date(Date.now() + 90_000) }
         : { success: true, count: 0, expiresAt: new Date(Date.now() + 60_000) }
     );
 
-    await expect(otcEmailBudgetRetryAfter('a@b.co', OTC_SEND_EMAIL_BUDGETS)).resolves.toBe(90);
+    await expect(otcEmailBudgetRetryAfter('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS)).resolves.toBe(90);
     expect(mocks.tryAdd.mock.calls.every(([, amount]) => amount === 0)).toBe(true);
     expect(mocks.tryIncrement).not.toHaveBeenCalled();
   });
 
   it('reports no wait while every budget has room', async () => {
-    await expect(otcEmailBudgetRetryAfter('a@b.co', OTC_VERIFY_EMAIL_BUDGETS)).resolves.toBeUndefined();
+    await expect(otcEmailBudgetRetryAfter('a@b.co', '203.0.113.7', OTC_VERIFY_EMAIL_BUDGETS)).resolves.toBeUndefined();
   });
 
   it('neither checks nor charges in E2E', async () => {
     mocks.isE2EEnabled.mockReturnValue(true);
-    await expect(otcEmailBudgetRetryAfter('a@b.co', OTC_SEND_EMAIL_BUDGETS)).resolves.toBeUndefined();
-    await chargeOtcEmailBudget('a@b.co', OTC_SEND_EMAIL_BUDGETS);
+    await expect(otcEmailBudgetRetryAfter('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS)).resolves.toBeUndefined();
+    await chargeOtcEmailBudget('a@b.co', '203.0.113.7', OTC_SEND_EMAIL_BUDGETS);
 
     expect(mocks.tryAdd).not.toHaveBeenCalled();
     expect(mocks.tryIncrement).not.toHaveBeenCalled();

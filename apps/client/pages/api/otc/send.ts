@@ -36,9 +36,10 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({ error: 'Invalid email address' });
     }
 
+    const ipBucket = ipSubject(req);
     // Per-email budgets are checked here but only spent once a code is actually dispatched (see
     // OTC_SEND_EMAIL_BUDGETS), so refused requests cannot exhaust the owner's allowance.
-    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, OTC_SEND_EMAIL_BUDGETS);
+    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
     if (budgetRetryAfter !== undefined) {
       res.setHeader('Retry-After', String(budgetRetryAfter));
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
@@ -102,7 +103,7 @@ const handler = baseApi({ auth: false })
     );
 
     // The reservation serializes sends per email, so the budget checked above cannot be raced past.
-    await chargeOtcEmailBudget(normalizedEmail, OTC_SEND_EMAIL_BUDGETS);
+    await chargeOtcEmailBudget(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
 
     // Store the nonce server-side so the verify endpoint can reject replayed tokens.
     // On non-production stages only (isE2EEnabled - hard-false on production), also persist
