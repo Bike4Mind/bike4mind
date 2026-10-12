@@ -4739,7 +4739,9 @@ export const settingsMap = {
     name: 'Hardware Compute: Max USD per run',
     defaultValue: 300,
     min: 1,
-    max: 10_000,
+    // Kept in USD so it survives a HardwareComputeCreditsPerUsd change. The ceiling matches
+    // HardwareComputeMaxUsdPerUserPerDay so one large run can be admitted by raising both.
+    max: 100_000,
     description:
       'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
       'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
@@ -4748,8 +4750,9 @@ export const settingsMap = {
       '2026-07-21) as a conservative default that admits the High-fidelity quality tier (which applies a 16x ' +
       'error-mitigation/debias multiplier, ~10x the Standard tier reservation after margins) for SMALL/sparse ' +
       'briefs only; larger 16-qubit High-fidelity runs reserve well past $300 and are rejected here by design. ' +
-      'Raise further without a deploy (up to $10k) to admit pricier briefs; bounded per-run exposure is the ' +
-      'deliberate tradeoff over universal High-fidelity.',
+      'Raise further without a deploy (up to $100k) to admit pricier briefs; bounded per-run exposure is the ' +
+      'deliberate tradeoff over universal High-fidelity. A run above the per-user daily cap is still ' +
+      'rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,

@@ -79,10 +79,8 @@ const OrganizationPage: FC = () => {
     navigate({ to: '/organizations/$id', params: { id: id as string }, search: { tab }, replace: true });
   };
 
-  // Check user permissions.
-  // In the b4m client only the org owner can add/remove members.
-  // Admins who are merely members of the org are treated as regular members here;
-  // they can manage members via the dedicated Admin -> Organizations panel instead.
+  // The viewer's org permission set, which drives tab visibility (canManageOrg). The Members tab
+  // does not use it: each roster control there asks the server predicate behind its own endpoint.
   const userPermissions = useMemo(() => {
     if (!currentUser || !organization) return [];
     if (currentUser.id === organization.userId) return [Permission.read, Permission.update, Permission.share];
@@ -258,7 +256,7 @@ const OrganizationPage: FC = () => {
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
                 Members ({currentSeats} / {maxSeats})
               </Typography>
-              {currentUser && <OrganizationMembers organization={organization} userPermissions={userPermissions} />}
+              {currentUser && <OrganizationMembers organization={organization} />}
             </TabPanel>
             {canManageGroups && (
               <TabPanel value={OrganizationTabs.Groups}>

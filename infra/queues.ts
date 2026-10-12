@@ -772,7 +772,7 @@ const dataLakeCleanupQueue = new sst.aws.Queue('dataLakeCleanupQueue', {
 });
 const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/dataLakeCleanup.dispatch',
+    handler: 'apps/workers/src/queueHandlers/dataLakeCleanup.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -904,7 +904,7 @@ const driveDisconnectPurgeQueue = new sst.aws.Queue('driveDisconnectPurgeQueue',
 });
 const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/driveDisconnectPurge.dispatch',
+    handler: 'apps/workers/src/queueHandlers/driveDisconnectPurge.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,

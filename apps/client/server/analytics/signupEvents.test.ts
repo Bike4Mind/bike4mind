@@ -10,7 +10,12 @@ vi.mock('./emitActiveEvent', () => ({
 vi.mock('@server/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 
 import { pseudonymize } from './pseudonymize';
-import { emitSignupForSourceProducts, stableEventId } from './signupEvents';
+import {
+  emitPurchaseForSourceProducts,
+  emitSignupForSourceProducts,
+  stableEventId,
+  type PurchaseCreditUser,
+} from './signupEvents';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -130,6 +135,135 @@ describe('emitSignupForSourceProducts', () => {
       })
     ).resolves.toEqual(['widgets', 'gadgets']);
     expect(mockEmit).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('emitPurchaseForSourceProducts', () => {
+  const user = (acquisition?: PurchaseCreditUser['acquisition']): PurchaseCreditUser => ({ id: 'u1', acquisition });
+  const invoice = (over: Partial<Parameters<typeof emitPurchaseForSourceProducts>[0]> = {}) => ({
+    user: user({ firstTouch: { source: 'widgets', campaign: 'launch' } }),
+    paymentId: 'in_1',
+    kind: 'subscription' as const,
+    amountMinor: 2999,
+    currency: 'usd',
+    billingReason: 'subscription_create',
+    ...over,
+  });
+
+  it('credits the stored first touch with the amount in major units, keyed on the payment', async () => {
+    await expect(emitPurchaseForSourceProducts(invoice())).resolves.toEqual(['widgets']);
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockEmit).toHaveBeenCalledWith({
+      productId: 'widgets',
+      event: 'purchase',
+      eventId: stableEventId('purchase', 'widgets', 'in_1'),
+      reportFailure: true,
+      userId: 'u1',
+      utm: { source: 'widgets', campaign: 'launch' },
+      metadata: {
+        touch: 'first',
+        attribution: 'self-reported',
+        kind: 'subscription',
+        value: 29.99,
+        currency: 'USD',
+        billingReason: 'subscription_create',
+      },
+    });
+  });
+
+  it('credits the stored last touch, and marks a product named by both touches once as both', async () => {
+    await emitPurchaseForSourceProducts(invoice({ user: user({ lastTouch: { source: 'gadgets' } }) }));
+    expect(mockEmit.mock.calls.map(([c]) => [c.productId, c.metadata.touch])).toEqual([['gadgets', 'last']]);
+
+    mockEmit.mockClear();
+    await emitPurchaseForSourceProducts(
+      invoice({ user: user({ firstTouch: { source: 'widgets' }, lastTouch: { source: 'widgets' } }) })
+    );
+    expect(mockEmit.mock.calls.map(([c]) => [c.productId, c.metadata.touch])).toEqual([['widgets', 'both']]);
+
+    mockEmit.mockClear();
+    await expect(
+      emitPurchaseForSourceProducts(
+        invoice({ user: user({ firstTouch: { source: 'widgets' }, lastTouch: { source: 'gadgets' } }) })
+      )
+    ).resolves.toEqual(['widgets', 'gadgets']);
+  });
+
+  it('credits a credit pack under its payment intent, without a billing reason', async () => {
+    await emitPurchaseForSourceProducts(
+      invoice({ paymentId: 'pi_9', kind: 'credits', amountMinor: 999, billingReason: undefined })
+    );
+    const [call] = mockEmit.mock.calls[0];
+    expect(call.eventId).toBe(stableEventId('purchase', 'widgets', 'pi_9'));
+    expect(call.metadata).toEqual({
+      touch: 'first',
+      attribution: 'self-reported',
+      kind: 'credits',
+      value: 9.99,
+      currency: 'USD',
+    });
+  });
+
+  it('sends the same eventId for a redelivered payment and a different one for another payment', async () => {
+    await emitPurchaseForSourceProducts(invoice());
+    await emitPurchaseForSourceProducts(invoice());
+    await emitPurchaseForSourceProducts(invoice({ paymentId: 'in_2' }));
+    const ids = mockEmit.mock.calls.map(([c]) => c.eventId);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  it('never credits the host or a keyless source, even when the host has a key', async () => {
+    mockKeyFor.mockImplementation((p: string) => (p === 'widgets' || p === 'bike4mind' ? 'key' : undefined));
+    await expect(
+      emitPurchaseForSourceProducts(
+        invoice({ user: user({ firstTouch: { source: 'bike4mind' }, lastTouch: { source: 'newsletter' } }) })
+      )
+    ).resolves.toEqual([]);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for a user with no stored acquisition, or no user at all', async () => {
+    await expect(emitPurchaseForSourceProducts(invoice({ user: { id: 'u1' } }))).resolves.toEqual([]);
+    await expect(emitPurchaseForSourceProducts(invoice({ user: { id: 'u1', acquisition: null } }))).resolves.toEqual(
+      []
+    );
+    await expect(emitPurchaseForSourceProducts(invoice({ user: null }))).resolves.toEqual([]);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it('skips a synthetic user', async () => {
+    await expect(
+      emitPurchaseForSourceProducts(
+        invoice({ user: { id: 'u1', isSynthetic: true, acquisition: { firstTouch: { source: 'widgets' } } } })
+      )
+    ).resolves.toEqual([]);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -500, null, undefined, Number.NaN])('sends nothing when the amount collected is %s', async amount => {
+    await expect(emitPurchaseForSourceProducts(invoice({ amountMinor: amount }))).resolves.toEqual([]);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing without a payment id or a currency', async () => {
+    await expect(emitPurchaseForSourceProducts(invoice({ paymentId: '' }))).resolves.toEqual([]);
+    await expect(emitPurchaseForSourceProducts(invoice({ currency: null }))).resolves.toEqual([]);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the emitter rejects or the key lookup throws', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockEmit.mockRejectedValue(new Error('down'));
+    await expect(emitPurchaseForSourceProducts(invoice())).resolves.toEqual(['widgets']);
+    expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] purchase emit failed', { productId: 'widgets' });
+
+    mockKeyFor.mockImplementation(() => {
+      throw new Error('bad config');
+    });
+    await expect(emitPurchaseForSourceProducts(invoice())).resolves.toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] purchase attribution failed');
+    warnSpy.mockRestore();
   });
 });
 

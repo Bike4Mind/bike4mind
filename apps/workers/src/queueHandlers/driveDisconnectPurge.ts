@@ -18,17 +18,8 @@ import { deleteDriveOrphans, listDeletableDriveOrphans } from '@server/integrati
 import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
-import { z, ZodError } from 'zod';
-
-export const DriveDisconnectPurgePayload = z.object({
-  connectionId: z.string(),
-  dataLakeId: z.string(),
-  // Absent for a personal connection (one feeding an org-less lake).
-  organizationId: z.string().optional(),
-  // How many times this disconnect has waited out an in-flight sync; bounded by MAX_SYNC_DEFERRALS.
-  syncDeferrals: z.number().int().nonnegative().optional(),
-});
-export type DriveDisconnectPurgePayload = z.infer<typeof DriveDisconnectPurgePayload>;
+import { ZodError } from 'zod';
+import { DriveDisconnectPurgePayload } from '@server/dataLakes/driveDisconnectPurgePayload';
 
 /** Files purged per invocation, sized to finish well inside the consumer's 10-minute timeout. */
 export const DISCONNECT_PURGE_SLICE_SIZE = 1000;

@@ -12,15 +12,14 @@ import {
   scopedSettingsRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { isSupportedEmbeddingModel } from '@bike4mind/common';
+import { CONVERGENCE_ORIGIN, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
-import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
 
 /**
  * GET  /api/data-lakes/:id/converge                     -> the plan (a preview; writes nothing)
