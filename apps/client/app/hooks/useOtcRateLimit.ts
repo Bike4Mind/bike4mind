@@ -67,6 +67,7 @@ export function useOtcRateLimit(): OtcRateLimit {
         setSecondsLeft(prev => {
           if (prev <= 1) {
             stop();
+            setInitialSeconds(0);
             return 0;
           }
           return prev - 1;

@@ -27,6 +27,7 @@ describe('useOtcRateLimit', () => {
     expect(result.current.initialSeconds).toBe(3);
     act(() => vi.advanceTimersByTime(5000));
     expect(result.current.secondsLeft).toBe(0);
+    expect(result.current.initialSeconds).toBe(0);
   });
 
   it.each([undefined, -5, Number.NaN])('falls back to 60s when Retry-After is %s', retryAfterSeconds => {
