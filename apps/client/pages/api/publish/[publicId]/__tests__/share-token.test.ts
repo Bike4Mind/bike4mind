@@ -561,6 +561,25 @@ describe('GET /api/publish/[publicId]/share-token', () => {
     expect(mockUpdateOne).not.toHaveBeenCalled();
   });
 
+  it('derives shareTokenUpdatedAt from the newest LIVE entry, ignoring the scalar and revoked entries', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareTokens: [
+        entry('OLD', { createdAt: new Date('2026-09-16T00:00:00.000Z') }),
+        entry('NEW', { createdAt: new Date('2026-09-22T00:00:00.000Z') }),
+        entry('GONE', {
+          createdAt: new Date('2026-09-29T00:00:00.000Z'),
+          revokedAt: new Date('2026-09-30T00:00:00.000Z'),
+        }),
+      ],
+      shareTokenUpdatedAt: new Date('2026-09-14T00:00:00.000Z'),
+    });
+    const { res, promise } = run({ method: 'GET' });
+    await promise;
+    expect(res._getJSONData().shareTokenUpdatedAt).toBe('2026-09-22T00:00:00.000Z');
+  });
+
   it('does not list a leftover scalar-only link, which cannot exist post-migration', async () => {
     // Through #3488 this listed as `{ id: null, ... }` so it would at least render. #3523's
     // migration mirrored every such link into the array, which is what lets `ShareLinkView.id`

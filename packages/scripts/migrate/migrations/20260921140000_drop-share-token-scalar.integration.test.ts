@@ -176,6 +176,65 @@ describe('drop-share-token-scalar up', () => {
 
     expect((await raw(doc.publicId)).shareTokens).toHaveLength(1);
   });
+
+  it('dates a mirrored link from publishedAt when the row has no shareTokenUpdatedAt', async () => {
+    const publishedAt = new Date('2026-08-01T00:00:00.000Z');
+    const absent = await artifact({ shareToken: 'NO-UPDATED-AT', publishedAt });
+    const nulled = await artifact({ shareToken: 'NULL-UPDATED-AT', shareTokenUpdatedAt: null, publishedAt });
+
+    await migration.up();
+
+    for (const { publicId } of [absent, nulled]) {
+      expect((await raw(publicId)).shareTokens![0].createdAt?.toISOString()).toBe(publishedAt.toISOString());
+    }
+  });
+
+  it('falls back to roughly now only when the row carries no date at all', async () => {
+    const doc = await artifact({ shareToken: 'UNDATED' });
+    const before = Date.now();
+
+    await migration.up();
+
+    const createdAt = (await raw(doc.publicId)).shareTokens![0].createdAt!.getTime();
+    expect(createdAt).toBeGreaterThanOrEqual(before - 5000);
+    expect(createdAt).toBeLessThanOrEqual(Date.now() + 5000);
+  });
+
+  it('mirrors the scalar alongside a revoked entry for a different token, leaving that entry untouched', async () => {
+    const revokedAt = new Date('2026-09-25T00:00:00.000Z');
+    const revoked = entry('Y', { revokedAt });
+    const doc = await artifact({ shareToken: 'X', shareTokens: [revoked] });
+
+    await migration.up();
+
+    const row = await raw(doc.publicId);
+    expect(row.shareTokens).toHaveLength(2);
+    const mirrored = row.shareTokens!.find(e => e.token === 'X');
+    expect(mirrored?.revokedAt).toBeNull();
+    const untouched = row.shareTokens!.find(e => e.token === 'Y');
+    expect(untouched?._id).toEqual(revoked._id);
+    expect(untouched?.revokedAt?.toISOString()).toBe(revokedAt.toISOString());
+  });
+
+  it('rejects on a duplicate scalar token and leaves the scalars in place so a re-run can finish', async () => {
+    const first = await artifact({ shareToken: 'DUP' });
+    const second = await artifact({ shareToken: 'DUP' });
+    // Same spec the model declares; created after seeding so the scalar-only rows insert cleanly.
+    await PublishedArtifact.collection.createIndex(
+      { 'shareTokens.token': 1 },
+      { unique: true, partialFilterExpression: { 'shareTokens.token': { $type: 'string' } } }
+    );
+
+    try {
+      await expect(migration.up()).rejects.toThrow(/E11000|duplicate key/i);
+
+      for (const { publicId } of [first, second]) {
+        expect((await raw(publicId)).shareToken).toBe('DUP');
+      }
+    } finally {
+      await PublishedArtifact.collection.dropIndex('shareTokens.token_1');
+    }
+  });
 });
 
 describe('drop-share-token-scalar down', () => {
@@ -215,6 +274,16 @@ describe('drop-share-token-scalar down', () => {
     await migration.down!();
 
     expect((await PublishedArtifact.collection.indexes()).map(i => i.name)).toContain('shareToken_1');
+  });
+
+  it('is safe to run twice and leaves exactly one shareToken_1 index', async () => {
+    await artifact({ shareTokens: [entry('TWICE')] });
+
+    await migration.down!();
+    await expect(migration.down!()).resolves.toBeUndefined();
+
+    const names = (await PublishedArtifact.collection.indexes()).map(i => i.name);
+    expect(names.filter(name => name === 'shareToken_1')).toHaveLength(1);
   });
 
   it('round-trips: up then down leaves a stranded link live in BOTH shapes', async () => {
