@@ -23,6 +23,7 @@ import {
   deleteFileContract,
 } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
+import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract, listQuestFilesContract } from './quest.contract';
 import {
   listArtifactsContract,
@@ -98,6 +99,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   updateFileContract,
   deleteFileContract,
   createEmbeddingsContract,
+  createDecisionContract,
+  listDecisionModelsContract,
   getQuestContract,
   listQuestFilesContract,
   createSessionContract,

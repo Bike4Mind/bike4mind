@@ -80,6 +80,8 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/v1/video-generations/:id/cancel',
       'GET /api/v1/video-models',
       'POST /api/v1/embeddings',
+      'POST /api/v1/decisions',
+      'GET /api/v1/decision-models',
       'GET /api/v1/voice/voices',
       'POST /api/v1/voice/sessions',
       'POST /api/v1/voice/sessions/:id/end',
@@ -91,6 +93,12 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'GET /api/v1/credits',
       'GET /api/v1/models',
     ],
+  },
+  {
+    value: ApiKeyScope.AI_DECIDE,
+    label: 'AI Decide',
+    description: 'Answer yes/no, pick-one and rating questions with probabilities',
+    endpoints: ['POST /api/v1/decisions', 'GET /api/v1/decision-models', 'GET /api/v1/credits'],
   },
   {
     value: ApiKeyScope.AI_CHAT,

@@ -48,6 +48,7 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
         'realtime_voice_usage',
         'tool_usage',
         'completion_api_usage',
+        'decision_usage',
         'speech_to_text_usage',
         'text_to_speech_usage',
         'sound_effects_usage',

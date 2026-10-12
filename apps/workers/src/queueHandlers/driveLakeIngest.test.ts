@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   connFindById: vi.fn(),
   claimForSync: vi.fn(),
   releaseSyncClaim: vi.fn(),
+  probeConnectedFolder: vi.fn(),
   updateSyncCursor: vi.fn(),
   lakeFindById: vi.fn(),
   lakeFind: vi.fn(),
@@ -157,6 +158,7 @@ vi.mock('@server/integrations/google/drive/driveClient', async importOriginal =>
     listChanges: h.listChanges,
     getStartPageToken: h.getStartPageToken,
     isDriveInvalidCursorError: h.isDriveInvalidCursorError,
+    probeConnectedFolder: h.probeConnectedFolder,
   };
 });
 // Mocks only the network-touching calls; keeps the real DriveWalkTimeBudgetExceededError export so
@@ -298,6 +300,7 @@ describe('driveLakeIngest consumer', () => {
     h.getStartPageToken.mockResolvedValue('start-token-1');
     h.isDriveInvalidCursorError.mockReturnValue(false);
     h.isUnderRoot.mockResolvedValue(true);
+    h.probeConnectedFolder.mockResolvedValue({ reachable: true });
     h.updateSyncCursor.mockResolvedValue({ id: 'conn1' });
     // vi.clearAllMocks() (above) clears call history but NOT a standing mockRejectedValue - reset the
     // admission gate to its happy-path default so a later test's own rejection can't leak forward into
@@ -2314,6 +2317,123 @@ describe('driveLakeIngest consumer', () => {
 
     await expect(run()).rejects.toThrow('settings store unreachable');
     expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
+  describe('connected folder probe', () => {
+    const rateLimited = () => Object.assign(new Error('Rate Limit Exceeded'), { code: 429, response: { status: 429 } });
+    const withCursor = () =>
+      h.connFindById.mockResolvedValue({
+        id: 'conn1',
+        targetDataLakeId: 'lake1',
+        connectedBy: 'user1',
+        organizationId: 'org1',
+        driveFolderId: 'FOLDER',
+        syncCursor: 'cursor-0',
+      });
+
+    it('parks the connection in needs_reconnect when the folder is not found, without walking', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'not_found' });
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      expect(h.probeConnectedFolder).toHaveBeenCalledWith(expect.anything(), 'FOLDER');
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith(
+        'conn1',
+        'token-claim',
+        expect.stringContaining('not found'),
+        'needs_reconnect'
+      );
+      expect(h.walkFolder).not.toHaveBeenCalled();
+      expect(h.listChanges).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it('parks an incremental connection when the folder is trashed, without pulling changes', async () => {
+      withCursor();
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'trashed' });
+
+      await run({ connectionId: 'conn1' });
+
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith(
+        'conn1',
+        'token-claim',
+        expect.stringContaining('trash'),
+        'needs_reconnect'
+      );
+      expect(h.listChanges).not.toHaveBeenCalled();
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    it('parks the connection when Drive denies access to the folder', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'forbidden' });
+
+      await run({ connectionId: 'conn1' });
+
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', expect.any(String), 'needs_reconnect');
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    it('defers the sync when the probe is rate limited, without marking needs_reconnect', async () => {
+      h.probeConnectedFolder.mockRejectedValue(rateLimited());
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'ingest-queue-url',
+        { connectionId: 'conn1', redriveCount: 1 },
+        expect.any(Number)
+      );
+      expect(h.sendToQueue.mock.calls[0][2]).toBeGreaterThanOrEqual(60);
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    it('rethrows a non-throttle probe failure and records it without needs_reconnect', async () => {
+      h.probeConnectedFolder.mockRejectedValue(Object.assign(new Error('Backend Error'), { code: 500 }));
+
+      await expect(run({ connectionId: 'conn1' })).rejects.toThrow('Backend Error');
+
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', 'Backend Error');
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    it('logs and returns when the claim was taken away before the park landed', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'not_found' });
+      h.releaseSyncClaim.mockResolvedValue(null);
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[driveLakeIngest] claim was taken away before parking; leaving the new owner alone',
+        { connectionId: 'conn1' }
+      );
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    it('settles the adopted batch of a continuation whose folder has gone', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'not_found' });
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 3,
+        skippedFiles: 0,
+        files: [{ fabFileId: 'ff-prev' }],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
+
+      expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith(
+        'conn1',
+        'token-adopt',
+        expect.stringContaining('not found'),
+        'needs_reconnect'
+      );
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
   });
 
   describe('incremental sync (#2396)', () => {

@@ -11,6 +11,7 @@ import nc from 'next-connect';
  * next.config.mjs rewrites (/p, /a, /embed, /.well-known) are afterFiles rewrites, which Next.js
  * applies before dynamic routes, so they still reach their handlers. Two-segment misses never get
  * here: pages/api/[type]/[id] (the invite lookup) outranks this route and answers its own JSON 404.
+ * Every /api/v1 miss goes to pages/api/v1/[...unmatchedV1Path] (same handler) instead.
  * server/__tests__/apiCatchAllRouting.test.ts checks the precedence against the real route files.
  *
  * No auth and no DB connect: there is nothing to authorize, and a 404 must not cost a Mongo

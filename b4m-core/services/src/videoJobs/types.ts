@@ -83,7 +83,9 @@ export type CreateVideoJobErrorCode =
   | 'model_unavailable'
   | 'insufficient_credits'
   | 'input_image_not_found'
-  | 'idempotency_key_reused';
+  | 'idempotency_key_reused'
+  // Never returned by createVideoJob itself: the agent-mode per-run cap (agentExecutor.videoToolConfig.ts).
+  | 'clip_limit_reached';
 
 export type CreateVideoJobResult =
   | { ok: true; job: IGenerationJobDocument; created: boolean }
