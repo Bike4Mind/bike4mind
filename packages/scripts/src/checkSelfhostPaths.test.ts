@@ -103,15 +103,18 @@ describe('self-host process paths resolve', () => {
 
   // Exact counts, so a parser that stopped matching an arg fails here instead of passing
   // vacuously: the worker service's tsconfig, hook and entry, and each Dockerfile CMD's hook and
-  // entry. Adding a service, or a selfhost Dockerfile whose CMD is also hook + entry, needs no edit.
+  // entry, plus its tsconfig when it passes one (the images that run from apps/workers do). The
+  // tsconfig is detected from the raw text, not the parser. Adding a service, or a selfhost
+  // Dockerfile of either CMD shape, needs no edit.
   it('finds the worker service and every selfhost Dockerfile CMD', () => {
     expect(dockerfiles.length).toBeGreaterThanOrEqual(2);
     expect(refs.filter(ref => ref.source === `${composeFile} service worker`)).toHaveLength(3);
     for (const file of dockerfiles) {
+      const passesTsconfig = /^CMD\s+\[.*"--tsconfig"/m.test(readFileSync(path.join(REPO_ROOT, file), 'utf8'));
       expect(
         refs.filter(ref => ref.source === `${file} CMD`),
         file
-      ).toHaveLength(2);
+      ).toHaveLength(passesTsconfig ? 3 : 2);
     }
   });
 

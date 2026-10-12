@@ -42,6 +42,9 @@ import {
   getStartPageToken,
   isDriveInvalidCursorError,
   isFolder,
+  probeConnectedFolder,
+  UNREACHABLE_FOLDER_MESSAGES,
+  type ConnectedFolderReachability,
   type DriveChange,
   type DriveFile,
 } from '@server/integrations/google/drive/driveClient';
@@ -53,7 +56,7 @@ import {
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
 } from '@server/integrations/google/drive/driveContent';
-import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import mime from 'mime-types';
@@ -656,7 +659,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
      * Callers MUST return immediately after awaiting this: the claim is released and the batch settled.
      */
     const deferDriveSync = async (
-      phase: 'incremental_pull' | 'folder_walk',
+      phase: 'folder_probe' | 'incremental_pull' | 'folder_walk',
       reason: 'rate_limited' | 'time_budget_exceeded',
       err: unknown
     ) => {
@@ -702,6 +705,40 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         );
       }
     };
+
+    // Probe the connected folder itself before either mode: the incremental changes feed is Drive-wide
+    // and never touches the root, so an un-shared or trashed folder would otherwise poll as a healthy,
+    // empty delta forever. A definite "gone" parks the connection in needs_reconnect (excluded from
+    // findDueForPoll and claimForSync) until the user re-picks the folder, which heals it via
+    // drive-sync's updateCredential.
+    let folderReachability: ConnectedFolderReachability;
+    try {
+      folderReachability = await probeConnectedFolder(drive, connection.driveFolderId);
+    } catch (e) {
+      if (!isDriveRateLimitError(e)) throw e;
+      await deferDriveSync('folder_probe', 'rate_limited', e);
+      return;
+    }
+    if (!folderReachability.reachable) {
+      logger.warn('[driveLakeIngest] connected Drive folder is no longer reachable; needs reconnect', {
+        connectionId,
+        reason: folderReachability.reason,
+      });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      // This run still holds the claim (set above), so the release is guarded like any other exit.
+      const parked = await orgGoogleDriveConnectionRepository.releaseSyncClaim(
+        connectionId,
+        ingestClaimToken,
+        UNREACHABLE_FOLDER_MESSAGES[folderReachability.reason],
+        'needs_reconnect'
+      );
+      if (!parked) {
+        logger.warn('[driveLakeIngest] claim was taken away before parking; leaving the new owner alone', {
+          connectionId,
+        });
+      }
+      return;
+    }
 
     if (!forceFullWalk && connection.syncCursor) {
       try {

@@ -418,7 +418,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4 Opus',
+        name: 'Claude Opus 4',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -441,7 +441,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_1_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.1 Opus',
+        name: 'Claude Opus 4.1',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -464,7 +464,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_SONNET_BEDROCK,
         type: 'text',
-        name: 'Claude 4 Sonnet',
+        name: 'Claude Sonnet 4',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -486,7 +486,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_5_SONNET_BEDROCK,
         type: 'text',
-        name: 'Claude 4.5 Sonnet',
+        name: 'Claude Sonnet 4.5',
         backend: ModelBackend.Bedrock,
         contextWindow: 200000,
         max_tokens: 64000,
@@ -511,7 +511,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
         type: 'text',
-        name: 'Claude 4.5 Haiku',
+        name: 'Claude Haiku 4.5',
         backend: ModelBackend.Bedrock,
         contextWindow: 200000,
         max_tokens: 64000,
@@ -532,7 +532,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_5_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.5 Opus',
+        name: 'Claude Opus 4.5',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -555,7 +555,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
         type: 'text',
-        name: 'Claude 4.6 Sonnet',
+        name: 'Claude Sonnet 4.6',
         backend: ModelBackend.Bedrock,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -580,7 +580,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_5_SONNET_BEDROCK,
         type: 'text',
-        name: 'Claude 5 Sonnet',
+        name: 'Claude Sonnet 5',
         backend: ModelBackend.Bedrock,
         contextWindow: 1_000_000,
         max_tokens: 128_000,
@@ -606,7 +606,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
         type: 'text',
-        name: 'Claude 5.5 Sonnet',
+        name: 'Claude Sonnet 5.5',
         backend: ModelBackend.Bedrock,
         contextWindow: 1_000_000,
         max_tokens: 128_000,
@@ -627,7 +627,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_6_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.6 Opus',
+        name: 'Claude Opus 4.6',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -650,7 +650,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.7 Opus',
+        name: 'Claude Opus 4.7',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -674,7 +674,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.8 Opus',
+        name: 'Claude Opus 4.8',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -740,7 +740,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_5_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 5 Opus',
+        name: 'Claude Opus 5',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -761,7 +761,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 5.5 Opus',
+        name: 'Claude Opus 5.5',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -783,7 +783,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
         type: 'text',
-        name: 'Claude 5.5 Haiku',
+        name: 'Claude Haiku 5.5',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -802,7 +802,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsTools: true,
         releaseDate: '2026-10-07',
         description:
-          "Anthropic's Claude 5.5 Haiku via AWS Bedrock, built for high-volume, latency-sensitive work, with adaptive thinking and a 1M-token context window.",
+          "Anthropic's Claude Haiku 5.5 via AWS Bedrock, built for high-volume, latency-sensitive work, with adaptive thinking and a 1M-token context window.",
       },
     ];
   }

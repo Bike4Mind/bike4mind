@@ -36,6 +36,7 @@ import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAI
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { isToolDenied } from '@client/app/utils/toolMapping';
 import { useState, useRef, useEffect } from 'react';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
@@ -723,26 +724,29 @@ const AttachFileButton = ({
             ) : null}
 
             {/* Mobile only - roll dice */}
-            {isMobile && tools.includes('dice_roll') && currentView === 'main' && (
-              <ListItem sx={{ p: 0 }}>
-                <ListItemButton
-                  onClick={() => {
-                    setIsOpen(false);
-                    setCurrentView('main');
-                    rollRandomDice();
-                  }}
-                  sx={{
-                    color: 'text.primary',
-                    m: 0,
-                  }}
-                >
-                  <ListItemDecorator>
-                    <CasinoIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                  </ListItemDecorator>
-                  Roll Dice
-                </ListItemButton>
-              </ListItem>
-            )}
+            {isMobile &&
+              tools.includes('dice_roll') &&
+              !isToolDenied('dice_roll', currentSession?.disabledTools) &&
+              currentView === 'main' && (
+                <ListItem sx={{ p: 0 }}>
+                  <ListItemButton
+                    onClick={() => {
+                      setIsOpen(false);
+                      setCurrentView('main');
+                      rollRandomDice();
+                    }}
+                    sx={{
+                      color: 'text.primary',
+                      m: 0,
+                    }}
+                  >
+                    <ListItemDecorator>
+                      <CasinoIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                    </ListItemDecorator>
+                    Roll Dice
+                  </ListItemButton>
+                </ListItem>
+              )}
           </List>
         </Box>
       )}
