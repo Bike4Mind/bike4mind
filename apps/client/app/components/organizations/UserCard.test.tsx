@@ -32,11 +32,7 @@ const member = (id: string, creditUsage: MemberCreditUsage | null, status: 'acce
     creditUsage: MemberCreditUsage | null;
   };
 
-const renderCard = (
-  user: ReturnType<typeof member>,
-  canManageCreditBudgets: boolean,
-  userPermissions: Permission[] = [Permission.read]
-) =>
+const renderCard = (user: ReturnType<typeof member>, canManageCreditBudgets: boolean, canManageRoster = false) =>
   render(
     ((children: ReactNode) => (
       <QueryClientProvider client={new QueryClient()}>
@@ -46,7 +42,8 @@ const renderCard = (
       <OrganizationUserCard
         organization={org}
         user={user}
-        userPermissions={userPermissions}
+        canInviteMembers={canManageRoster}
+        canRevokeMembers={canManageRoster}
         canManageCreditBudgets={canManageCreditBudgets}
       />
     )
@@ -87,7 +84,7 @@ describe('OrganizationUserCard monthly limit control', () => {
 
   // The owner row hides every roster action, but the owner's own spend is capped like anyone's.
   it('is offered on the owner row, which has no roster actions', async () => {
-    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, [Permission.share]);
+    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, true);
     openMenu();
     expect(await screen.findByText('Set monthly limit')).toBeTruthy();
     expect(screen.queryByText('Revoke Access')).toBeNull();
@@ -99,7 +96,7 @@ describe('OrganizationUserCard monthly limit control', () => {
   // The billing owner viewing their own row would satisfy canLeave, so this pins the `!isOwner` guard on it.
   it('offers the owner no Leave Team on their own row', async () => {
     viewer.id = 'owner1';
-    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, [Permission.share]);
+    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, true);
     openMenu();
     expect(await screen.findByText('Set monthly limit')).toBeTruthy();
     expect(screen.queryByText('Leave Team')).toBeNull();

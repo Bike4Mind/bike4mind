@@ -135,8 +135,9 @@ export type AdministrableOrg = { userId: string; managerId?: string | null };
  * must ask each control's own server predicate rather than one "can manage" flag.
  *
  * `userId` and `managerId` are declared `String` on the organization schema, so a strict
- * comparison is correct. Server callers: `organizationService` `addMember` and `revokeAccess`
- * (b4m-core/services), and `canManageOrg` in apps/client/server/utils/orgAccess.ts.
+ * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
+ * (b4m-core/services), `canManageOrg` in apps/client/server/utils/orgAccess.ts, and the client's
+ * Members tab (components/organizations/Member.tsx).
  */
 export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
   if (actor.isAdmin) return true;

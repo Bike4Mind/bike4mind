@@ -46,7 +46,7 @@ const buildOrg = (overrides: Partial<IOrganizationDocument>) =>
   }) as unknown as IOrganizationDocument;
 
 const renderMembers = (organization: IOrganizationDocument) =>
-  render(<OrganizationMembers organization={organization} userPermissions={[Permission.read]} />, {
+  render(<OrganizationMembers organization={organization} />, {
     wrapper: TestWrapper,
   });
 

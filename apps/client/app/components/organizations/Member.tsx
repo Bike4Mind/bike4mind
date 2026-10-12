@@ -1,7 +1,9 @@
 import {
+  canAdministerOrganization,
   canManageMemberCreditBudgets,
   InviteType,
   IOrganizationDocument,
+  isOrgOwnerOrCurrentAdmin,
   IUserDocument,
   Permission,
 } from '@bike4mind/common';
@@ -27,10 +29,9 @@ import { useOrganizationSeats } from '@client/app/hooks/data/organizations';
 
 interface OrganizationMembersProps {
   organization: IOrganizationDocument;
-  userPermissions: Permission[];
 }
 
-const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userPermissions }) => {
+const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => {
   const { data: users } = useGetOrganizationUsers(organization.id);
   const [search, setSearch] = useState('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -111,11 +112,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
     return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
   }, [users, search, sortOrder, pendingUsers, organization]);
 
-  const canManageMembers = useMemo(() => {
-    return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
-  }, [userPermissions]);
+  // Each roster control mirrors the server predicate behind its own endpoint. The two sets differ:
+  // a manager may revoke but not invite, an appointed admin may invite but not revoke.
+  // Invites (create + cancel) gate on isOrgOwnerOrCurrentAdmin in sharingService.
+  const canInviteMembers = !!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+  // DELETE /members/:userId gates on canAdministerOrganization in organizationService.revokeAccess.
+  const canRevokeMembers = !!currentUser && canAdministerOrganization(currentUser, organization);
 
-  // Mirrors the server gate on the credit-budget routes; wider than canManageMembers (appointed admins).
+  // Mirrors the server gate on the credit-budget routes.
   const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
 
   // Owner ID, falling back to the current user.
@@ -189,7 +193,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
       }}
     >
       {/* Seats Management Section */}
-      {canManageMembers && (
+      {canInviteMembers && (
         <Card className="organization-members-seats-card" variant="outlined" sx={{ mx: { xs: 0, sm: '20px' } }}>
           <Stack spacing={2} p={2}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
@@ -296,7 +300,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
             <SortByAlphaIcon sx={{ transform: sortOrder === 'desc' ? 'scaleY(-1)' : 'scaleY(1)' }} />
           </IconButton>
 
-          {canManageMembers &&
+          {canInviteMembers &&
             (hasAvailableSeats ? (
               <GenericAddItemsModal
                 title={t('organizations.modals.members.title', 'Add Members to Team')}
@@ -384,7 +388,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
             <OrganizationUserCard
               organization={organization}
               user={user}
-              userPermissions={userPermissions}
+              canInviteMembers={canInviteMembers}
+              canRevokeMembers={canRevokeMembers}
               canManageCreditBudgets={canManageCreditBudgets}
             />
           </Fragment>

@@ -26,7 +26,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { IOrganizationDocument, Permission, WithId } from '@bike4mind/common';
+import { IOrganizationDocument, WithId } from '@bike4mind/common';
 import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { toast } from 'sonner';
 import OrganizationProfileUpdated from './OrganizationProfileUpdated';
@@ -48,7 +48,6 @@ import {
   useTopUpOrganization,
 } from '@client/app/hooks/data/adminOrganizations';
 import { useGetPendingOrganizationUsers } from '@client/app/hooks/data/user';
-import { useUser } from '@client/app/contexts/UserContext';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { create } from 'zustand';
@@ -156,7 +155,6 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
 
 const OrganizationsTab: React.FC = () => {
   const isMobile = useIsMobile();
-  const { currentUser } = useUser();
   const [selectedOrg, setSelectedOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [membersOrg, setMembersOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -736,12 +734,7 @@ const OrganizationsTab: React.FC = () => {
             <Typography level="h4" sx={{ mb: 2 }}>
               {membersOrg.name} - Members
             </Typography>
-            <OrganizationMembers
-              organization={liveMembersOrg ?? membersOrg}
-              userPermissions={
-                currentUser?.isAdmin ? [Permission.read, Permission.update, Permission.share] : [Permission.read]
-              }
-            />
+            <OrganizationMembers organization={liveMembersOrg ?? membersOrg} />
           </ModalDialog>
         </Modal>
       )}
