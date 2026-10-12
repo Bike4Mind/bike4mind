@@ -906,7 +906,7 @@ describe('extractWebhookEventType', () => {
 });
 
 describe('issue links in Slack output', () => {
-  const malformedKey = 'PROJ-1|evil>';
+  const malformedKey = 'PROJ-1|label>';
 
   const linkTargets = (blocks: unknown[]): string[] => JSON.stringify(blocks).match(/https?:\/\/[^"|>\\]+/g) ?? [];
 
@@ -937,7 +937,7 @@ describe('issue links in Slack output', () => {
     for (const output of outputs) {
       expect(JSON.stringify(output.blocks)).not.toContain('/browse/');
       expect(output.blocks.some(b => b.type === 'actions')).toBe(false);
-      expect(JSON.stringify(output.blocks)).toContain('PROJ-1|evil&gt;');
+      expect(JSON.stringify(output.blocks)).toContain('PROJ-1|label&gt;');
     }
   });
 });

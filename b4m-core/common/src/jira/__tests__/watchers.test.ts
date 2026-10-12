@@ -143,14 +143,20 @@ describe('JiraApi Watcher Operations', () => {
       }
     );
 
-    it.each(['PROJ-1?x=', 'PROJ-1#', '../project/PROJ'])(
-      'rejects issue key %s on a path that interpolates it raw',
-      async issueKey => {
-        const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+    it('keeps a multi-segment issue key inside one segment on other issue endpoints', async () => {
+      const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        headers: new Headers(),
+        text: async () => '',
+      } as Response);
 
-        await expect(jiraApi.getWatchers({ issueKey })).rejects.toThrow('Invalid API path');
-        expect(mockFetch).not.toHaveBeenCalled();
-      }
-    );
+      await jiraApi.deleteIssue({ issueKey: 'PROJ-1/comment/10001' });
+
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(new URL(url).pathname.endsWith('/issue/PROJ-1%2Fcomment%2F10001')).toBe(true);
+      expect(init.method).toBe('DELETE');
+    });
   });
 });

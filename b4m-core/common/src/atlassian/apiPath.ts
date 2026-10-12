@@ -1,5 +1,6 @@
 const FORBIDDEN_PATH_CHARS = new Set(['?', '#', '\\']);
-const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+// `..;x` counts too: Java servlet containers strip `;` path parameters before resolving dot segments.
+const DOT_SEGMENT = /^(?:\.|%2e){1,2}(?:;.*)?$/i;
 const MAX_WHITESPACE_OR_CONTROL_CODE = 0x20;
 const DELETE_CODE = 0x7f;
 
@@ -14,13 +15,22 @@ function hasForbiddenChar(path: string): boolean {
 }
 
 /**
- * Throws unless `path` is a plain REST path whose target cannot be changed by its interpolated
- * values. Query strings go through the clients' `query` option, so a path never legitimately
- * carries `?` or `#`, and a `.`/`..` segment (literal or percent-encoded, which `new URL`
- * normalizes the same way) would resolve to a different endpoint than the one the caller built.
+ * Builds a REST path, encoding every interpolated value as a single path segment:
+ * apiPath`/issue/${issueKey}/watchers`. Every Atlassian client path that carries an identifier
+ * should be built with it.
+ */
+export function apiPath(strings: TemplateStringsArray, ...values: Array<string | number>): string {
+  return strings.reduce((path, literal, index) => path + encodeURIComponent(String(values[index - 1])) + literal);
+}
+
+/**
+ * Throws unless `path` is a plain REST path. Query strings go through the clients' `query` option,
+ * so a path never legitimately carries `?` or `#`, and a `.`/`..` segment (literal or
+ * percent-encoded, which `new URL` normalizes the same way) would resolve to a different endpoint
+ * than the one the caller built. This is the backstop for `apiPath`, which cannot encode `..`.
  */
 export function assertSafeApiPath(path: string): void {
   if (hasForbiddenChar(path) || path.split('/').some(segment => DOT_SEGMENT.test(segment))) {
-    throw new Error('Invalid API path: identifiers must not contain path or query syntax');
+    throw new Error(`Invalid API path "${path}": identifiers must not contain path or query syntax`);
   }
 }
