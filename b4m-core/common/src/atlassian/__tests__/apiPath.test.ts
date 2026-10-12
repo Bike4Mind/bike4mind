@@ -19,6 +19,8 @@ describe('assertSafeApiPath', () => {
     ['a current segment', '/issue/./PROJ-1/watchers'],
     ['an encoded parent segment', '/issue/%2E%2e/project/watchers'],
     ['a mixed-encoding parent segment', '/issue/.%2e/project/watchers'],
+    ['a parent segment with a path parameter', '/issue/..;x/project/watchers'],
+    ['an encoded parent segment with a path parameter', '/issue/%2E.;jsessionid=1/project/watchers'],
     ['a tab that would collapse into a parent segment', '/issue/.\t./project/watchers'],
     ['a newline', '/issue/PROJ-1\n/watchers'],
     ['a space', '/issue/PROJ 1/watchers'],
