@@ -182,4 +182,39 @@ describe('creditPurchaseReconciliation cron', () => {
     expect(mockList).not.toHaveBeenCalled();
     expect(mockConnectDB).not.toHaveBeenCalled();
   });
+
+  it('connects to this stage database and reports the counts when configured', async () => {
+    mockList.mockResolvedValue({ data: [intent('pi_granted'), intent('pi_missing')], has_more: false });
+    mockFindByPaymentIntentId.mockImplementation(async (id: string) => (id === 'pi_granted' ? { id: 'tx_1' } : null));
+
+    const response = await handler(undefined, {} as never);
+
+    expect(mockConnectDB).toHaveBeenCalledWith('mongodb://test/test', expect.anything());
+    expect(JSON.parse(response.body)).toEqual({ checked: 2, ungranted: 1, truncated: false });
+  });
+
+  it('flags an intent with no customer, which the webhook skips without granting', async () => {
+    mockList.mockResolvedValue({ data: [intent('pi_no_customer', { customer: null })], has_more: false });
+    mockFindByPaymentIntentId.mockResolvedValue(null);
+
+    const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+    expect(result.ungranted.map(purchase => purchase.paymentIntentId)).toEqual(['pi_no_customer']);
+  });
+
+  it('caps the alert at 20 lines and says how many more are in the logs', async () => {
+    mockList.mockResolvedValue({
+      data: Array.from({ length: 23 }, (_, index) => intent(`pi_${index}`)),
+      has_more: false,
+    });
+    mockFindByPaymentIntentId.mockResolvedValue(null);
+
+    const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+    const message = mockPostMessageToSlack.mock.calls[0][0] as string;
+    expect(result.ungranted).toHaveLength(23);
+    expect(message.match(/- pi_/g)).toHaveLength(20);
+    expect(message).toContain('...and 3 more');
+    expect(mockLoggerError).toHaveBeenCalledTimes(23);
+  });
 });

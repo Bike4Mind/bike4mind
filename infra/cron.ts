@@ -779,6 +779,32 @@ const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Credit Purchase Reconciliation -- alerts on Stripe credit purchases that
+// succeeded with no credit grant.
+const creditPurchaseReconciliationCron = new sst.aws.Cron('creditPurchaseReconciliation', {
+  schedule: 'cron(0 7 * * ? *)', // Daily at 7am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/creditPurchaseReconciliation.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 /**
  * Drive-as-Lake Re-sync Poll (#1591 E1)
  * Re-enqueues each due Google Drive connection onto the ingest handler, which diffs the folder
@@ -1025,6 +1051,7 @@ export {
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
+  creditPurchaseReconciliationCron,
   driveLakeResyncPollCron,
   githubLakeReconcileCron,
   helpDatalakeIngestCron,
