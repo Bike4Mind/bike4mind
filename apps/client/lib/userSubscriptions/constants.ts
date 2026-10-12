@@ -62,14 +62,11 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
     tier: UserSubscriptionTier.Basic,
     features: [
       'Models from OpenAI, Anthropic, Google, xAI, DeepSeek and Moonshot',
-      'Self-hosted Deepseek R1 & Phi-4 for private inference',
-      'Automatic model cost optimization',
       'Credits roll over for 3 months',
-      'Advanced prompt engineering tools',
       'Single API for all models',
       'Priority support response',
     ],
-    description: 'Access every major AI model through one unified interface, with smart cost optimization.',
+    description: 'Access every major AI model through one unified interface.',
   },
 ];
 

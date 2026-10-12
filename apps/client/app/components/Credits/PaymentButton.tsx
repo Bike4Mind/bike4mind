@@ -8,9 +8,12 @@ import { FC, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import PaymentModal from './PaymentModal';
 import { getErrorMessage } from '@client/app/utils/error';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
 interface IPaymentButtonProps {
   onPayment: () => void;
+  /** Accessible name naming what this buys; the visible label is a bare "Purchase". */
+  ariaLabel?: string;
 }
 
 /*
@@ -18,7 +21,7 @@ interface IPaymentButtonProps {
  * a fetch of the client secret from the backend; once fetched it sets `open`, which loads
  * StripeJS and shows the CheckoutForm payment pop-over.
  */
-const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ...rest }) => {
+const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ariaLabel, ...rest }) => {
   const [wantOpen, setWantOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(null);
@@ -30,10 +33,10 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
   const productName = useMemo(() => {
     switch (rest.transactionType) {
       case TransactionType.PerCredit:
-        return `${rest.credits.toLocaleString()} Credits`;
+        return `${formatCreditAmount(rest.credits)} Credits`;
       case TransactionType.Package: {
         const packageInfo = CREDIT_PACKAGES[rest.packageId];
-        return `${packageInfo.credits.toLocaleString()} Credits Package`;
+        return `${formatCreditAmount(packageInfo.credits)} Credits Package`;
       }
       default:
         return 'Unknown Subscription Plan';
@@ -83,6 +86,7 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
     <>
       <Button
         className="credits-modal-payment-button"
+        aria-label={ariaLabel}
         onClick={() => setWantOpen(true)}
         disabled={wantOpen || open || isPricePerCreditSettingRequired}
       >
