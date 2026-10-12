@@ -127,4 +127,37 @@ describe('ProjectAddToModal', () => {
     fireEvent.click(screen.getByTestId('open-add-to-project'));
     expect(mocks.searchEnabled.at(-1)).toBe(true);
   });
+
+  it('retries only the add (never a second create) when the project list cache stays empty', async () => {
+    mocks.createMutateAsync.mockResolvedValue({ id: 'new-project', name: 'Campaign' });
+    mocks.addSessionsMutateAsync.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce([]);
+    const setOpen = vi.fn();
+    createNotebookProject(setOpen);
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId('project-add-to-modal-empty')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(setOpen).toHaveBeenCalledWith(false));
+    expect(mocks.createMutateAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.addSessionsMutateAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Project created and notebook added');
+  });
+
+  it('creates only one project when the form is submitted twice in the same tick', async () => {
+    mocks.createMutateAsync.mockResolvedValue({ id: 'new-project', name: 'Campaign' });
+    mocks.addSessionsMutateAsync.mockResolvedValue([]);
+    const setOpen = vi.fn();
+    render(<ProjectAddToModal open setOpen={setOpen} dataId="session-1" dataType="session" />, { wrapper: Wrapper });
+    fireEvent.change(screen.getByTestId('project-add-to-modal-name-input'), { target: { value: 'Campaign' } });
+
+    const form = screen.getByTestId('project-add-to-modal-empty');
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    await waitFor(() => expect(setOpen).toHaveBeenCalledWith(false));
+    expect(mocks.createMutateAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.addSessionsMutateAsync).toHaveBeenCalledTimes(1);
+  });
 });

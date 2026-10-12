@@ -99,6 +99,9 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   const [search, setSearch] = useState('');
   const [inputValue, setInputValue] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
+  // Set once create succeeded but the add failed: later submits retry the add only, never a second create.
+  const [createdProject, setCreatedProject] = useState<IProjectDocument | null>(null);
+  const inFlight = useRef(false);
 
   const debouncedSearch = useMemo(
     () =>
@@ -119,6 +122,7 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
       setInputValue('');
       setSelectedProject(null);
       setNewProjectName('');
+      setCreatedProject(null);
     }
   }, [isOpen]);
 
@@ -134,6 +138,12 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   const projects = projectResults?.pages.flatMap(page => page.data) ?? [];
   // Only an unfiltered empty result means "no projects"; an empty search just found no match.
   const hasNoProjects = !!projectResults && !isSearching && !search && projects.length === 0;
+
+  const pickerOptions = useMemo(
+    () =>
+      createdProject && !projects.some(p => p.id === createdProject.id) ? [createdProject, ...projects] : projects,
+    [createdProject, projects]
+  );
 
   const close = () => {
     setOpen?.(false);
@@ -165,36 +175,62 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   const addSessionToNewProject = useAddSessionsToProject({ silent: true });
   const isCreating = createProject.isPending || addSessionToNewProject.isPending;
 
-  const handleCreate = async () => {
-    const name = newProjectName.trim();
-    if (!name || isCreating) return;
-    if (dataType === 'file') {
-      const created = await createProject
-        .mutateAsync({ name, description: '', fileIds: [dataId] })
-        .catch(() => undefined);
-      if (created) {
-        toast.success('Project created successfully');
-        close();
-      }
-      return;
-    }
-    const project = await createProject.mutateAsync({ name, description: '' }).catch(() => undefined);
-    if (!project) return;
+  const addNotebookToCreated = async (project: IProjectDocument) => {
     try {
       await addSessionToNewProject.mutateAsync({ projectId: project.id, sessionIds: [dataId] });
     } catch {
-      // The project exists now, so the picker lists it; preselect it so Add retries the notebook.
+      // The project exists, so keep it and preselect it; Add retries only the notebook.
+      setCreatedProject(project);
       setSelectedProject(project);
       setInputValue(project.name);
       toast.error(`Project "${project.name}" was created, but the notebook could not be added to it. Try Add again.`);
       return;
     }
+    setCreatedProject(null);
     toast.success('Project created and notebook added');
     close();
   };
 
+  const handleCreate = async () => {
+    const name = newProjectName.trim();
+    if (!name || inFlight.current) return;
+    inFlight.current = true;
+    try {
+      if (createdProject) {
+        await addNotebookToCreated(createdProject);
+        return;
+      }
+      if (dataType === 'file') {
+        const created = await createProject
+          .mutateAsync({ name, description: '', fileIds: [dataId] })
+          .catch(() => undefined);
+        if (created) {
+          toast.success('Project created successfully');
+          close();
+        }
+        return;
+      }
+      const project = await createProject.mutateAsync({ name, description: '' }).catch(() => undefined);
+      if (!project) return;
+      await addNotebookToCreated(project);
+    } finally {
+      inFlight.current = false;
+    }
+  };
+
   const handleAdd = async () => {
     if (!selectedProject) return;
+
+    if (createdProject && selectedProject.id === createdProject.id) {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      try {
+        await addNotebookToCreated(createdProject);
+      } finally {
+        inFlight.current = false;
+      }
+      return;
+    }
 
     setIsLoading(true);
     if (dataType === 'file') {
@@ -207,6 +243,7 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   const handleClose = () => {
     if (isCreating) return;
     close();
+    setCreatedProject(null);
     setSearch('');
     setInputValue('');
     setSelectedProject(null);
@@ -229,7 +266,7 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
               <Box fontSize="20px" lineHeight="20px" className="project-add-to-modal-title">
                 Add to Project
               </Box>
-              {hasNoProjects || isCreating ? (
+              {!createdProject && (hasNoProjects || isCreating) ? (
                 <Box
                   display="flex"
                   flexDirection="column"
@@ -274,7 +311,7 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
                   <Autocomplete
                     placeholder="Search projects..."
                     loading={isSearching}
-                    options={projects}
+                    options={pickerOptions}
                     value={selectedProject}
                     inputValue={inputValue}
                     onChange={(_event, newValue) => setSelectedProject(newValue)}
@@ -302,8 +339,8 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
                     </Button>
                     <Button
                       onClick={handleAdd}
-                      disabled={isLoading || !selectedProject}
-                      loading={isLoading}
+                      disabled={isLoading || isCreating || !selectedProject}
+                      loading={isLoading || isCreating}
                       className="project-add-to-modal-add-button"
                     >
                       Add
