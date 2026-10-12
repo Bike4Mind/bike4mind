@@ -96,7 +96,7 @@
     "sst": "4.17.1",
     "typescript": "^5.9.3",
     "yargs": "^18.1.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.6",
