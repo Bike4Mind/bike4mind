@@ -18,6 +18,7 @@ import {
 } from '@mui/joy';
 import { FC, ReactNode, useMemo, useState, createContext, useContext, useRef, useEffect } from 'react';
 import { debounce } from 'lodash';
+import { toast } from 'sonner';
 
 interface ProjectAddToModalContextType {
   openModal: (dataId: string, dataType: 'file' | 'session') => void;
@@ -134,10 +135,15 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   // Only an unfiltered empty result means "no projects"; an empty search just found no match.
   const hasNoProjects = !!projectResults && !isSearching && !search && projects.length === 0;
 
+  const close = () => {
+    setOpen?.(false);
+    setOpenModal(false);
+  };
+
   const addFileMutation = useAddFilesToProject({
     onSuccess: () => {
       setIsLoading(false);
-      setOpen?.(false);
+      close();
     },
     onError: () => {
       setIsLoading(false);
@@ -147,32 +153,44 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   const addSessionMutation = useAddSessionsToProject({
     onSuccess: () => {
       setIsLoading(false);
-      setOpen?.(false);
+      close();
     },
     onError: () => {
       setIsLoading(false);
     },
   });
 
-  const createProject = useCreateProject({
-    onSuccess: () => {
-      setOpen?.(false);
-      setOpenModal(false);
-    },
-  });
+  // Create-then-add reports once, after both requests settle; the hooks' own toasts would fire per step.
+  const createProject = useCreateProject({ silentSuccess: true });
+  const addSessionToNewProject = useAddSessionsToProject({ silent: true });
+  const isCreating = createProject.isPending || addSessionToNewProject.isPending;
 
   const handleCreate = async () => {
     const name = newProjectName.trim();
-    if (!name) return;
+    if (!name || isCreating) return;
     if (dataType === 'file') {
-      createProject.mutate({ name, description: '', fileIds: [dataId] });
+      const created = await createProject
+        .mutateAsync({ name, description: '', fileIds: [dataId] })
+        .catch(() => undefined);
+      if (created) {
+        toast.success('Project created successfully');
+        close();
+      }
       return;
     }
     const project = await createProject.mutateAsync({ name, description: '' }).catch(() => undefined);
-    if (project) {
-      setIsLoading(true);
-      addSessionMutation.mutate({ projectId: project.id, sessionIds: [dataId] });
+    if (!project) return;
+    try {
+      await addSessionToNewProject.mutateAsync({ projectId: project.id, sessionIds: [dataId] });
+    } catch {
+      // The project exists now, so the picker lists it; preselect it so Add retries the notebook.
+      setSelectedProject(project);
+      setInputValue(project.name);
+      toast.error(`Project "${project.name}" was created, but the notebook could not be added to it. Try Add again.`);
+      return;
     }
+    toast.success('Project created and notebook added');
+    close();
   };
 
   const handleAdd = async () => {
@@ -187,8 +205,8 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   };
 
   const handleClose = () => {
-    setOpen?.(false);
-    setOpenModal(false);
+    if (isCreating) return;
+    close();
     setSearch('');
     setInputValue('');
     setSelectedProject(null);
@@ -211,7 +229,7 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
               <Box fontSize="20px" lineHeight="20px" className="project-add-to-modal-title">
                 Add to Project
               </Box>
-              {hasNoProjects ? (
+              {hasNoProjects || isCreating ? (
                 <Box
                   display="flex"
                   flexDirection="column"
@@ -238,12 +256,12 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
                     }}
                   />
                   <Box display="flex" justifyContent="flex-end" gap="8px">
-                    <Button variant="outlined" color="neutral" onClick={handleClose} disabled={createProject.isPending}>
+                    <Button variant="outlined" color="neutral" onClick={handleClose} disabled={isCreating}>
                       Cancel
                     </Button>
                     <Button
                       type="submit"
-                      loading={createProject.isPending}
+                      loading={isCreating}
                       disabled={!newProjectName.trim()}
                       data-testid="project-add-to-modal-create-btn"
                     >

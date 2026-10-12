@@ -10,7 +10,12 @@ const mocks = vi.hoisted(() => ({
   createMutate: vi.fn(),
   createMutateAsync: vi.fn(),
   addSessionsMutate: vi.fn(),
+  addSessionsMutateAsync: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
 }));
+
+vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError } }));
 
 vi.mock('@client/app/hooks/data/projects', () => ({
   useSearchProjects: (_search: string, _filters: unknown, _order: unknown, options?: { enabled?: boolean }) => {
@@ -21,7 +26,11 @@ vi.mock('@client/app/hooks/data/projects', () => ({
     };
   },
   useAddFilesToProject: () => ({ mutate: vi.fn() }),
-  useAddSessionsToProject: () => ({ mutate: mocks.addSessionsMutate }),
+  useAddSessionsToProject: () => ({
+    mutate: mocks.addSessionsMutate,
+    mutateAsync: mocks.addSessionsMutateAsync,
+    isPending: false,
+  }),
   useCreateProject: () => ({ mutate: mocks.createMutate, mutateAsync: mocks.createMutateAsync, isPending: false }),
 }));
 
@@ -39,20 +48,53 @@ describe('ProjectAddToModal', () => {
     mocks.createMutate.mockReset();
     mocks.createMutateAsync.mockReset();
     mocks.addSessionsMutate.mockReset();
+    mocks.addSessionsMutateAsync.mockReset();
+    mocks.toastSuccess.mockReset();
+    mocks.toastError.mockReset();
   });
 
-  it('offers to create a project, with the notebook in it, when the user has none', async () => {
-    mocks.createMutateAsync.mockResolvedValue({ id: 'new-project' });
-    render(<ProjectAddToModal open setOpen={vi.fn()} dataId="session-1" dataType="session" />, { wrapper: Wrapper });
-
+  const createNotebookProject = (setOpen: (open: boolean) => void) => {
+    render(<ProjectAddToModal open setOpen={setOpen} dataId="session-1" dataType="session" />, { wrapper: Wrapper });
     expect(screen.getByTestId('project-add-to-modal-empty')).toHaveTextContent('No projects yet');
     fireEvent.change(screen.getByTestId('project-add-to-modal-name-input'), { target: { value: '  Campaign  ' } });
     fireEvent.click(screen.getByTestId('project-add-to-modal-create-btn'));
+  };
 
-    await waitFor(() =>
-      expect(mocks.addSessionsMutate).toHaveBeenCalledWith({ projectId: 'new-project', sessionIds: ['session-1'] })
-    );
+  it('creates a project, adds the notebook, then reports success once and closes', async () => {
+    mocks.createMutateAsync.mockResolvedValue({ id: 'new-project', name: 'Campaign' });
+    mocks.addSessionsMutateAsync.mockResolvedValue([]);
+    const setOpen = vi.fn();
+    createNotebookProject(setOpen);
+
+    await waitFor(() => expect(setOpen).toHaveBeenCalledWith(false));
     expect(mocks.createMutateAsync).toHaveBeenCalledWith({ name: 'Campaign', description: '' });
+    expect(mocks.addSessionsMutateAsync).toHaveBeenCalledWith({ projectId: 'new-project', sessionIds: ['session-1'] });
+    expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Project created and notebook added');
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it('keeps the modal open and says the project exists when adding the notebook fails', async () => {
+    mocks.createMutateAsync.mockResolvedValue({ id: 'new-project', name: 'Campaign' });
+    mocks.addSessionsMutateAsync.mockRejectedValue(new Error('boom'));
+    const setOpen = vi.fn();
+    createNotebookProject(setOpen);
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+    expect(mocks.toastError.mock.calls[0][0]).toContain('was created, but the notebook could not be added');
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+    expect(setOpen).not.toHaveBeenCalled();
+  });
+
+  it('does not try to add the notebook when creating the project fails', async () => {
+    mocks.createMutateAsync.mockRejectedValue(new Error('nope'));
+    const setOpen = vi.fn();
+    createNotebookProject(setOpen);
+
+    await waitFor(() => expect(mocks.createMutateAsync).toHaveBeenCalled());
+    expect(mocks.addSessionsMutateAsync).not.toHaveBeenCalled();
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+    expect(setOpen).not.toHaveBeenCalled();
   });
 
   it('keeps the create button disabled until a name is typed', () => {
