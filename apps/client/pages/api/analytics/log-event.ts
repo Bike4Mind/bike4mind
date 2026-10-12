@@ -10,6 +10,7 @@ import { Request } from 'express';
 const SERVER_ONLY_EVENTS: ReadonlySet<string> = new Set([
   CreditPurchaseEvents.CHECKOUT_STARTED,
   CreditPurchaseEvents.CREDITS_GRANTED,
+  CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
 ]);
 
 const handler = baseApi().post(async (req: Request<{}, unknown, Omit<AnalyticsEventPayloads, 'userId'>>, res) => {

@@ -41,13 +41,14 @@ describe('POST /api/analytics/log-event', () => {
     expect(res.statusCode).toBe(204);
   });
 
-  it.each([CreditPurchaseEvents.CHECKOUT_STARTED, CreditPurchaseEvents.CREDITS_GRANTED])(
-    'refuses the server-only %s event',
-    async type => {
-      const { run } = call({ type, metadata: { paymentIntentId: 'pi_forged', amount: 999, credits: 500 } });
+  it.each([
+    CreditPurchaseEvents.CHECKOUT_STARTED,
+    CreditPurchaseEvents.CREDITS_GRANTED,
+    CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
+  ])('refuses the server-only %s event', async type => {
+    const { run } = call({ type, metadata: { paymentIntentId: 'pi_forged', amount: 999, credits: 500 } });
 
-      await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
-      expect(mockLogEvent).not.toHaveBeenCalled();
-    }
-  );
+    await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
 });

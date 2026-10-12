@@ -20,6 +20,8 @@ export enum CreditPurchaseEvents {
   PAYMENT_ABANDONED = 'Credit Payment Abandoned',
   /** Server: webhook granted the purchased credits. */
   CREDITS_GRANTED = 'Credit Purchase Granted',
+  /** Server: a webhook redelivery found the credits already granted. Not a second grant. */
+  CREDITS_ALREADY_GRANTED = 'Credit Purchase Already Granted',
 }
 
 export type CreditPurchaseConfirmOutcome = 'succeeded' | 'processing' | 'requires_action' | 'error' | 'unknown';
@@ -93,6 +95,16 @@ interface ICreditsGrantedEvent extends IBaseEvent {
   };
 }
 
+interface ICreditsAlreadyGrantedEvent extends IBaseEvent {
+  type: CreditPurchaseEvents.CREDITS_ALREADY_GRANTED;
+  metadata: {
+    paymentIntentId: string;
+    /** Minor units (cents). */
+    amount: number;
+    credits: number;
+  };
+}
+
 export type CreditPurchaseEventPayload =
   | ICheckoutRequestedEvent
   | ICheckoutStartFailedEvent
@@ -100,4 +112,5 @@ export type CreditPurchaseEventPayload =
   | IPaymentFormOpenedEvent
   | IPaymentConfirmResultEvent
   | IPaymentAbandonedEvent
-  | ICreditsGrantedEvent;
+  | ICreditsGrantedEvent
+  | ICreditsAlreadyGrantedEvent;

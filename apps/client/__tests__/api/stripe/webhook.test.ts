@@ -294,7 +294,21 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       const { res } = await invokeWebhookWithEvent(packEvent);
 
       expect(res.status).toHaveBeenCalledWith(200);
-      expect(mockLogEventSafe).not.toHaveBeenCalled();
+      expect(mockLogEventSafe).toHaveBeenCalledOnce();
+      expect(mockLogEventSafe).toHaveBeenCalledWith(
+        {
+          type: CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
+          userId: 'user123',
+          metadata: { paymentIntentId: 'pi_pack', amount: 999, credits: 500 },
+        },
+        undefined,
+        expect.anything()
+      );
+      expect(mockLogEventSafe).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: CreditPurchaseEvents.CREDITS_GRANTED }),
+        undefined,
+        expect.anything()
+      );
     });
 
     it('fails the delivery so Stripe retries when the grant rolls back', async () => {

@@ -158,6 +158,17 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           userId: user.id,
           ...trace,
         });
+        // A first delivery that crashed after the commit never wrote its funnel row; a distinct
+        // step backfills it without implying a second grant. The ledger row stays authoritative.
+        await logEventSafe(
+          {
+            type: CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
+            userId: user.id,
+            metadata: { paymentIntentId: intent.id, amount: intent.amount, credits },
+          },
+          undefined,
+          req.logger
+        );
         break;
       }
 
