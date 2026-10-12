@@ -36,7 +36,7 @@ import {
   recordChunkRescueSweep,
   type ChunkRescueOutcome,
 } from '@server/utils/cloudwatch';
-import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
+import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
 import { runChunkRescueSweep } from '@server/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
 import {

@@ -160,6 +160,16 @@
         "default": "./dist/decisionProviders/index.cjs"
       }
     },
+    "./generationProviders": {
+      "import": {
+        "types": "./dist/generationProviders/index.d.mts",
+        "default": "./dist/generationProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/generationProviders/index.d.cts",
+        "default": "./dist/generationProviders/index.cjs"
+      }
+    },
     "./videoProviders": {
       "import": {
         "types": "./dist/videoProviders/index.d.mts",

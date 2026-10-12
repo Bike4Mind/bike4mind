@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ dispatch: vi.fn(), renew: vi.fn() }));
-vi.mock('@server/queueHandlers/dataLakeCleanup', () => ({ dispatch: h.dispatch }));
+vi.mock('@workers/queueHandlers/dataLakeCleanup', () => ({ dispatch: h.dispatch }));
 vi.mock('@server/utils/sqs', () => ({ changeMessageVisibility: h.renew }));
 import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 

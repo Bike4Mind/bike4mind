@@ -9,7 +9,7 @@ import { dispatch as fabFileChunkDispatch } from '@workers/queueHandlers/fabFile
 import { dispatch as fabFileVectorizeDispatch } from '@workers/queueHandlers/fabFileVectorize';
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@workers/queueHandlers/dataLakeTaxonomyAnalysis';
 import { dispatch as dataLakeResearchRunDispatch } from '@workers/queueHandlers/dataLakeResearchRun';
-import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
+import { dispatch as driveDisconnectPurgeDispatch } from '@workers/queueHandlers/driveDisconnectPurge';
 import { dispatch as driveLakeIngestDispatch } from '@workers/queueHandlers/driveLakeIngest';
 import { dispatch as githubLakeIngestDispatch } from '@workers/queueHandlers/githubLakeIngest';
 import { dispatch as githubLakeRevokeDispatch } from '@workers/queueHandlers/githubLakeRevoke';
@@ -47,7 +47,7 @@ import {
   GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
   GENERATION_JOB_MAX_RECEIVE_COUNT,
   GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
-} from '@server/queueHandlers/sqsDelivery';
+} from '@server/utils/sqsDelivery';
 
 /**
  * Self-host background worker entrypoint.

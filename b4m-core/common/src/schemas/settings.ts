@@ -561,6 +561,9 @@ export const SettingKeySchema = z.enum([
   'videoGeneration',
   'agentVideoClipsPerRun',
 
+  // MUSIC GENERATION
+  'musicGeneration',
+
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
   'modelDiscoveryMode',
@@ -1129,6 +1132,13 @@ export const VideoGenerationSettingsSchema = z.object({
 });
 
 export type VideoGenerationSettings = z.infer<typeof VideoGenerationSettingsSchema>;
+
+export const MusicGenerationSettingsSchema = z.object({
+  // Per-model override of MUSIC_MODEL_CATALOG[id].defaultEnabled; see isMusicModelEnabled in ../music/enablement.
+  enabledModels: z.record(z.string(), z.boolean()).prefault({}),
+});
+
+export type MusicGenerationSettings = z.infer<typeof MusicGenerationSettingsSchema>;
 
 /**
  * Canonical repository and branch the What's New generator reads from.
@@ -4739,7 +4749,9 @@ export const settingsMap = {
     name: 'Hardware Compute: Max USD per run',
     defaultValue: 300,
     min: 1,
-    max: 10_000,
+    // Kept in USD so it survives a HardwareComputeCreditsPerUsd change. The ceiling matches
+    // HardwareComputeMaxUsdPerUserPerDay so one large run can be admitted by raising both.
+    max: 100_000,
     description:
       'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
       'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
@@ -4748,8 +4760,9 @@ export const settingsMap = {
       '2026-07-21) as a conservative default that admits the High-fidelity quality tier (which applies a 16x ' +
       'error-mitigation/debias multiplier, ~10x the Standard tier reservation after margins) for SMALL/sparse ' +
       'briefs only; larger 16-qubit High-fidelity runs reserve well past $300 and are rejected here by design. ' +
-      'Raise further without a deploy (up to $10k) to admit pricier briefs; bounded per-run exposure is the ' +
-      'deliberate tradeoff over universal High-fidelity.',
+      'Raise further without a deploy (up to $100k) to admit pricier briefs; bounded per-run exposure is the ' +
+      'deliberate tradeoff over universal High-fidelity. A run above the per-user daily cap is still ' +
+      'rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
@@ -4960,6 +4973,17 @@ export const settingsMap = {
     order: 146,
     // Consumed by apps/client/server/queueHandlers/agentExecutor.videoToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  musicGeneration: makeObjectSetting({
+    key: 'musicGeneration',
+    userReadable: true,
+    name: 'Music Generation',
+    defaultValue: MusicGenerationSettingsSchema.parse({}),
+    description:
+      'Enable or disable individual music generation models. Models without an override use their built-in default.',
+    category: 'AI',
+    order: 147,
+    schema: MusicGenerationSettingsSchema,
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',

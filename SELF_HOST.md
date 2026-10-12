@@ -1170,9 +1170,9 @@ Focused verification:
 pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
 pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
 pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
-pnpm --filter @bike4mind/client test server/queueHandlers/dataLakeCleanup.test.ts
+pnpm --filter @bike4mind/workers test src/queueHandlers/dataLakeCleanup.test.ts
 # Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.
-CLEANUP_TEST_S3_ENDPOINT=http://127.0.0.1:19000 CLEANUP_TEST_S3_BUCKET=cleanup-test pnpm --filter @bike4mind/client test:integration server/queueHandlers/dataLakeCleanup.e2e.test.ts
+CLEANUP_TEST_S3_ENDPOINT=http://127.0.0.1:19000 CLEANUP_TEST_S3_BUCKET=cleanup-test pnpm --filter @bike4mind/workers test:integration src/queueHandlers/dataLakeCleanup.e2e.test.ts
 ```
 
 The external-service suite skips when its explicit endpoint/bucket are absent. The always-on `dataLakeCleanup.recovery.e2e.test.ts` runs the real handler and replica-set Mongo with controlled storage and existing connector/memory-key test boundaries, including grant-removal recovery and transactional rollback. Mongo fencing and bounded-batch crash tests also run independently. These are application-level controls, not current Kubernetes deployment acceptance.

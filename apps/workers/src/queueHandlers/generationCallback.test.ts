@@ -40,7 +40,7 @@ vi.mock('@server/utils/ssrfProtection', async importOriginal => {
 });
 
 import { dispatch } from './generationCallback';
-import { GENERATION_CALLBACK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { GENERATION_CALLBACK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
 import { SsrfError } from '@server/utils/ssrfProtection';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() } as never;
