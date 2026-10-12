@@ -10,7 +10,7 @@
  * Lexical by design, like the sibling evals: it will miss an exotic paraphrase, but it will not
  * pass a reply that states the stale value as the answer.
  */
-import type { CitableSource } from '@bike4mind/common';
+import { findCitationMarkers, type CitableSource } from '@bike4mind/common';
 import type { EvalGrade } from '../harness';
 import type { LakeRagBankRow, LakeRagKind } from './bank';
 import { LAKE_RAG_KINDS } from './bank';
@@ -108,10 +108,9 @@ function assertedStaleTokens(row: LakeRagBankRow, reply: string): StaleAssertion
   });
 }
 
-/** At most two digits, so a bracketed year or count (`[2016]`, `[146]`) is not read as a marker. */
+/** The same markers the reply renderer links (findCitationMarkers), so the grade and the UI agree. */
 function citedIndices(reply: string): number[] {
-  const markers = [...reply.matchAll(/\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g)];
-  return [...new Set(markers.flatMap(m => m[1].split(',').map(n => Number(n.trim()))))];
+  return [...new Set(findCitationMarkers(reply).flatMap(marker => marker.numbers.map(n => n.value)))];
 }
 
 function gradeIndexedCitation(

@@ -330,13 +330,22 @@ export function applyQuestStatusChanges(
         ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
         : winner;
     }
+    // Tool results number their own sources 1., 2., so once any tool citable lands a [N] is ambiguous;
+    // dropping the forced-retrieval stamps makes the client's citationMarkersLinkable gate fail safe.
+    const finalCitables = changedPromptMeta.citables?.length
+      ? dedupedCitables.map(citable => {
+          if (citable.metadata?.citationIndex === undefined) return citable;
+          const { citationIndex: _stamp, ...metadata } = citable.metadata;
+          return { ...citable, metadata };
+        })
+      : dedupedCitables;
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = materializePromptMetaSession(
       {
         ...quest.promptMeta,
         ...changedPromptMeta,
-        citables: dedupedCitables,
+        citables: finalCitables,
         // Omit the key entirely when neither side has warnings, so an untouched quest is not
         // given an empty array it never had.
         ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),

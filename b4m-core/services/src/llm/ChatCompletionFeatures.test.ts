@@ -592,6 +592,19 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
   });
 
+  it('indexed: stamps each numbered citable with the [N] it answers to; named leaves it off', async () => {
+    type Citable = { id: string; metadata?: Record<string, unknown> };
+    const citablesOf = (quest: { promptMeta?: unknown }) =>
+      (quest.promptMeta as { citables?: Citable[] }).citables ?? [];
+
+    const indexed = await runRetrieval('indexed');
+    expect(citablesOf(indexed.quest).map(c => c.metadata?.citationIndex)).toEqual([1, 2]);
+
+    const named = await runRetrieval('named');
+    expect(citablesOf(named.quest).length).toBeGreaterThan(0);
+    expect(citablesOf(named.quest).every(c => !('citationIndex' in (c.metadata ?? {})))).toBe(true);
+  });
+
   it("anchors each citable at its file's best chunk, with the injected passage text (#3038)", async () => {
     const { quest } = await runRetrieval('indexed');
     const citables =
@@ -659,7 +672,10 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
       'indexed'
     );
     const quest = makeQuest({
-      promptMeta: { citables: [{ id: 'pre-existing', type: 'document', title: 'Earlier source' }] },
+      // Stamped by an earlier injection: left as-is, [3] would link to it although the model was told k=2.
+      promptMeta: {
+        citables: [{ id: 'pre-existing', type: 'document', title: 'Earlier source', metadata: { citationIndex: 3 } }],
+      },
     } as unknown as Partial<IChatHistoryItemDocument>);
     await feature.getContextMessages(
       quest,
@@ -670,6 +686,9 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     // the pre-existing citable is appended AFTER, never allowed to shift the index alignment.
     const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB', 'pre-existing']);
+    // The appended citable is not index-aligned, so it must not answer to any inline marker.
+    const indices = (citables as Array<{ metadata?: { citationIndex?: number } }>).map(c => c.metadata?.citationIndex);
+    expect(indices).toEqual([1, 2, undefined]);
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
       expect.stringContaining('prefix')
     );
