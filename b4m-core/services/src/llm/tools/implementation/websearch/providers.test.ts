@@ -433,6 +433,29 @@ describe('outgoing search request logging', () => {
       hits: 2,
     });
   });
+
+  it('logs the SearXNG request on a non-OK response', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 500));
+
+    await createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5, { recencyDays: 30 });
+
+    expect(loggedRequest(errorSpy, 'WebSearch Tool: SearXNG error')).toEqual({
+      q: 'job shop scheduling',
+      time_range: 'month',
+      limit: 5,
+    });
+  });
+
+  it('logs the SearXNG request when the fetch throws', async () => {
+    fetchMock.mockRejectedValue(new Error('boom'));
+
+    await createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5);
+
+    expect(errorSpy).toHaveBeenCalledWith('❌ WebSearch Tool: SearXNG request failed:', {
+      request: { q: 'job shop scheduling', limit: 5 },
+      error: 'boom',
+    });
+  });
 });
 
 describe('resolveWebSearchProvider precedence', () => {

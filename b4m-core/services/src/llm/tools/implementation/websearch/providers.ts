@@ -809,12 +809,15 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
       if (bucket) params.set('time_range', bucket);
       url.search = params.toString();
 
+      const request = { q: query, ...(bucket && { time_range: bucket }), limit };
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
       try {
         const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
         if (!response.ok) {
           Logger.globalInstance.error('❌ WebSearch Tool: SearXNG error', {
+            request,
             status: response.status,
             statusText: response.statusText,
           });
@@ -825,12 +828,15 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
         const results = parseSearxngResults(data, limit);
         Logger.globalInstance.log('WebSearch Tool: SearXNG response', {
           status: response.status,
-          request: { q: query, ...(bucket && { time_range: bucket }), limit },
+          request,
           hits: results.length,
         });
         return results;
       } catch (error) {
-        Logger.globalInstance.error('❌ WebSearch Tool: SearXNG request failed:', error);
+        Logger.globalInstance.error('❌ WebSearch Tool: SearXNG request failed:', {
+          request,
+          error: error instanceof Error ? error.message : String(error),
+        });
         if (!options?.throwOnError) return [];
         if (isAbortError(error)) {
           throw new Error(`Web search timed out: SearXNG did not respond within ${SEARCH_TIMEOUT_MS / 1000}s`);
