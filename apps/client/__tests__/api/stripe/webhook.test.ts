@@ -321,11 +321,23 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
 
     it('acknowledges a redelivery of an already-granted intent instead of failing it', async () => {
       mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
-      mockAddCredits.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+      mockAddCredits.mockRejectedValue(
+        Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { stripePaymentIntentId: 1 } })
+      );
 
       const { res } = await invokeWebhookWithEvent(packEvent);
 
       expect(res.status).toHaveBeenCalledWith(200);
+      expect(mockLogEventSafe).not.toHaveBeenCalled();
+    });
+
+    it('still fails a duplicate key on anything other than the payment intent so Stripe retries', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      mockAddCredits.mockRejectedValue(
+        Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { transactionId: 1 } })
+      );
+
+      await expect(invokeWebhookWithEvent(packEvent)).rejects.toThrow('E11000');
       expect(mockLogEventSafe).not.toHaveBeenCalled();
     });
 

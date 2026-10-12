@@ -144,8 +144,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           }
         );
       } catch (err: unknown) {
-        // Duplicate key (code 11000) = a redelivery of an intent already granted
-        if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
+        // Duplicate stripePaymentIntentId = a redelivery of an intent already granted. Any other
+        // duplicate key is a real failure and must still 500 so Stripe retries.
+        const dup = err as { code?: number; keyPattern?: Record<string, number> } | null;
+        if (dup?.code === 11000 && dup.keyPattern?.stripePaymentIntentId === 1) {
           req.logger.info('[CreditPurchase] Credits already granted for intent', {
             step: 'already_granted',
             userId: user.id,
