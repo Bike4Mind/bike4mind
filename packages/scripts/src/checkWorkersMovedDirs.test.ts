@@ -17,12 +17,17 @@ const MOVED = [
   { from: 'apps/client/server/cron', to: 'apps/workers/src/cron' },
   { from: 'apps/client/server/jobs', to: 'apps/workers/src/jobs' },
   { from: 'apps/client/server/emailIngestion', to: 'apps/workers/src/emailIngestion' },
+  {
+    from: 'apps/client/server/security/attackSimulation/probes',
+    to: 'apps/workers/src/security/attackSimulation/probes',
+  },
 ] as const;
 
 /**
- * Modules moved out of a directory that can't be guarded whole: apps/client/server/queueHandlers
- * keeps questProcessor (the in-process chat-completion path imports it), so it never empties.
- * Guarded per module instead, by file stem.
+ * Modules moved out of directories that can't be guarded whole, so they are guarded per module by
+ * file stem: apps/client/server/queueHandlers keeps questProcessor (the in-process chat-completion
+ * path imports it), and apps/client/server/security keeps the library the admin dashboard routes
+ * call, including attackSimulation/types (the ingest route's payload contract).
  */
 const MOVED_MODULES = [
   {
@@ -67,6 +72,16 @@ const MOVED_MODULES = [
       'whatsNewGeneration',
       'whatsNewHighlights',
     ],
+  },
+  {
+    from: 'apps/client/server/security',
+    to: 'apps/workers/src/security',
+    stems: ['alertProcessor'],
+  },
+  {
+    from: 'apps/client/server/security/attackSimulation',
+    to: 'apps/workers/src/security/attackSimulation',
+    stems: ['fingerprint', 'runner'],
   },
 ] as const;
 
@@ -129,6 +144,8 @@ describe('directories and modules moved into apps/workers stay moved', () => {
         'apps/workers/src/queueHandlers/imageEdit.dispatch',
         // infra/emailMarketing.ts, which no other moved handler lives in.
         'apps/workers/src/queueHandlers/emailBatch.dispatch',
+        // infra/securityAlerts.ts, which no other moved handler lives in.
+        'apps/workers/src/security/alertProcessor.handler',
       ])
     );
     const stale = handlers
