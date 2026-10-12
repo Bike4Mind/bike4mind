@@ -115,7 +115,7 @@ const CitationMarkerLink: FC<{ source: CitableSource; index: number; children: R
       {...shared}
       component="button"
       type="button"
-      underline="hover"
+      underline="always"
       onClick={onClick}
       sx={{ font: 'inherit', p: 0, border: 0, bgcolor: 'transparent', verticalAlign: 'baseline' }}
     >
