@@ -57,8 +57,8 @@ describe('pages/api/[...unmatchedApiPath] route precedence', () => {
     ['/api/does-not-exist', CATCH_ALL],
     ['/api/does-not-exist/at/all', CATCH_ALL],
     ['/api/stripe/webhook/extra', CATCH_ALL],
-    // Two-segment misses were never SPA-served: the invite route [type]/[id] answers them, with the
-    // same NotFoundError envelope when the type segment names no invite type.
+    // Two-segment misses were never SPA-served: the invite route [type]/[id] matches them, and hands
+    // an unknown type segment to the catch-all handler.
     ['/api/does-not-exist/at-all', '/api/[type]/[id]'],
     ['/api/v1/nope', V1_CATCH_ALL],
     ['/api/v1/nope/at/all', V1_CATCH_ALL],

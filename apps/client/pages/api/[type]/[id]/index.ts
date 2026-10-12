@@ -1,26 +1,21 @@
 // GET /api/:type/:id - Retrieves a single invitation by its redemption key
 
-import { NotFoundError } from '@bike4mind/common';
 import { inviteRepository } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { canViewInvite, getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveInviteType } from '@server/utils/inviteRouteType';
+import { Request, Response } from 'express';
+import unmatchedApiPathHandler from '../../[...unmatchedApiPath]';
 
 interface IParams {
   type?: string;
   id?: string;
 }
 
-const handler = baseApi().get(
+const inviteHandler = baseApi().get(
   asyncHandler<{}, unknown, unknown, IParams>(async (req, res) => {
-    // This route is also the de facto match for every two-segment /api/* miss, so a segment that
-    // names no invite type gets the same envelope 404 as pages/api/[...unmatchedApiPath].
-    if (!resolveInviteType(req.query.type)) {
-      throw new NotFoundError('No API route matches this path');
-    }
-
     // Response depends on who asks, so a shared CDN cache must never store it.
     res.setHeader('Cache-Control', 'private, no-store');
 
@@ -55,6 +50,14 @@ const handler = baseApi().get(
     return res.json(filterInviteRecipientsToSelf(details, req.user.email));
   })
 );
+
+// This route outranks pages/api/[...unmatchedApiPath] for every two-segment /api/* path, so a type
+// segment that names no invite type is a miss and goes to the catch-all on any method, before
+// baseApi: an unknown path must not cost auth, a DB connect or API-key quota.
+const handler = (req: Request, res: Response) => {
+  const type = typeof req.query.type === 'string' ? req.query.type : undefined;
+  return resolveInviteType(type) ? inviteHandler(req, res) : unmatchedApiPathHandler(req, res);
+};
 
 export const config = {
   api: {
