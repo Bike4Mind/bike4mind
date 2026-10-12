@@ -21,20 +21,15 @@ const shareTokenBodySchema = z.object({
  *          `regenerate: true` rotates, revoking EVERY outstanding link in one write;
  *          `additional: true` mints another link alongside the live ones.
  *   DELETE [?id=<entryId>] - revoke. With an id, revokes that one link; without one,
- *          revokes every live link (what the pre-#3255 single-link callers expect).
+ *          revokes every live link (what single-link callers expect).
  *
  * Share links are served `no-store`, so no CDN invalidation is needed on rotate/
  * revoke. The token value is never logged.
  *
- * `shareTokens[]` is the source of truth and the race arbiter (#3255 step 3) - every
- * precondition below pins an entry's liveness. #3523 retired the `shareToken` /
- * `shareTokenUpdatedAt` scalars this route used to mirror alongside it, so there is now one
- * representation of a share link and nothing to keep in step by hand.
- *
- * `shareTokenUpdatedAt` survives as a GET RESPONSE field, derived from the newest live entry's
- * `createdAt` - which is exactly what the mirrored scalar held. It is a documented response
- * field with consumers outside this repo, so retiring the storage did not get to break the
- * shape; deriving it costs nothing and keeps it meaning what it always meant.
+ * `shareTokens[]` is the only representation of a share link and the race arbiter: every
+ * precondition below pins an entry's liveness. `shareTokenUpdatedAt` is a GET response field
+ * only, derived from the newest live entry's `createdAt` (a documented field with external
+ * consumers).
  */
 
 /** Ceiling on live links per artifact. Not a security boundary (the owner can revoke and
@@ -72,13 +67,7 @@ async function loadOwnedArtifact(req: Request, res: Response): Promise<ShareToke
   return artifact;
 }
 
-/** One live link as the owner surface renders it.
- *
- *  `id` is now a plain string (#3523). It was nullable for exactly one case - a pre-backfill row
- *  whose only link lived in the legacy scalar and so had no entry handle to revoke by - and the
- *  migration that retired the scalar mirrored any such link into the array, so no link without
- *  an entry can exist. The id-less DELETE stays, because "revoke every link" is still a thing
- *  the owner asks for; it is no longer the only way to reach a particular link. */
+/** One live link as the owner surface renders it. `id` is the entry `_id` the owner revokes by. */
 interface ShareLinkView {
   id: string;
   shareToken: string;
@@ -104,10 +93,8 @@ function liveLinkViews(artifact: ShareTokenArtifactLean): ShareLinkView[] {
   return liveShareTokens(artifact).map(toShareLinkView);
 }
 
-/** The link the single-link response fields describe: the newest live one. Everything a
- *  pre-#3255 caller reads (`shareToken`, `shareUrl`, `hasShareToken`, and since #3523
- *  `shareTokenUpdatedAt`) is derived from this - which is what the mirrored scalar used to hold,
- *  so those fields keep the values they always had. */
+/** The link the single-link response fields (`shareToken`, `shareUrl`, `hasShareToken`,
+ *  `shareTokenUpdatedAt`) describe: the newest live one. */
 function newestLive(links: ShareLinkView[]): ShareLinkView | undefined {
   return links[links.length - 1];
 }
@@ -119,18 +106,8 @@ const IS_LIVE = { $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] };
 /**
  * Pipeline stages that stamp `revokedAt` on every live entry matching `target`.
  *
- * One stage, since #3523. It used to be four: the `$map` below, then a `$filter` into a `__live`
- * scratch field, a `$set` re-deriving the mirrored `shareToken` / `shareTokenUpdatedAt` from the
- * survivors, and an `$unset` to clean the scratch field up. All three of those existed only to
- * keep the mirror honest - the scalar had to move to the newest SURVIVING token, since a revoke
- * of the newest of several links would otherwise leave it pointing at a link that no longer
- * opened. With one representation there is nothing to re-derive.
- *
- * Still a shared function rather than inlined at the two revoke paths: revoke-by-id and
- * revoke-everything differ only in `target`, and a copy each is how they come to disagree about
- * what "live" means.
- *
- * Stamped rather than pulled - see the call sites for why that matters.
+ * Shared by revoke-by-id and revoke-everything, which differ only in `target`, so they cannot
+ * disagree about what "live" means. Stamped rather than pulled - see the call sites for why.
  */
 function revokeStages(target: Record<string, unknown>, now: Date): Record<string, unknown>[] {
   return [
@@ -169,8 +146,7 @@ const handler = baseApi()
       hasShareToken: Boolean(newest),
       shareToken: newest?.shareToken ?? null,
       shareUrl: newest?.shareUrl ?? null,
-      // DERIVED, not read (#3523): the retired scalar was mirrored to the newest live entry, so
-      // that entry's `createdAt` is the same value it held. Null with nothing live, as before.
+      // Derived from the newest live entry; null with nothing live.
       shareTokenUpdatedAt: newest?.createdAt ?? null,
       shareLinks,
     });
@@ -207,20 +183,13 @@ const handler = baseApi()
     }
 
     // Mint, rotate or add under a compare-and-set so two racing POSTs cannot hand a caller a
-    // link that loses the write race (which would 404). The precondition pins the ARRAY's
-    // liveness, not the legacy scalar (#3255 step 3): "token absent" for a mint is "no live
-    // entry", and a rotate pins the exact entry it rotates away from, so only one racer's
-    // write lands. `additional` deliberately has no such precondition - adding a link is not
-    // idempotent by intent, and the limit above is its only guard.
+    // link that loses the write race (which would 404). A mint requires "no live entry" and a
+    // rotate pins the exact entry it rotates away from, so only one racer's write lands.
+    // `additional` has no precondition: adding a link is not idempotent by intent, and the
+    // limit above is its only guard.
     // (256-bit tokens, so a partial-unique-index collision is negligible.)
     const candidate = generateShareToken();
     const rotatingFrom = regenerate ? newestLive(live) : undefined;
-    // #3523 removed two branches that existed only for the legacy scalar: the stranded-link
-    // fold-in that `additional` did on a pre-backfill row, and the rotate precondition that
-    // pinned the scalar when the row had no entry to pin. Neither state can exist now - the
-    // migration mirrored every scalar-only link into the array - so `additional` needs no
-    // precondition at all (adding a link is not idempotent by intent, and MAX_LIVE_SHARE_LINKS
-    // above is its only guard) and a rotate always has an entry `_id` to pin.
     const precondition = additional
       ? {}
       : rotatingFrom
@@ -282,9 +251,7 @@ const handler = baseApi()
       .lean<ShareTokenArtifactLean>();
     const persisted = current ? liveLinkViews(current) : [];
     const newest = newestLive(persisted);
-    // Compared by TOKEN rather than by entry id, which now that ids are never null is a matter of
-    // taste rather than necessity - but the token is the thing a holder possesses, and "did any
-    // link I was about to rotate away survive?" is a question about those.
+    // Compared by token: it is what a holder possesses.
     const before = new Set(live.map(l => l.shareToken));
     if (regenerate && persisted.some(l => before.has(l.shareToken))) {
       return res
@@ -313,11 +280,7 @@ const handler = baseApi()
     }
     const live = liveLinkViews(artifact);
     // Resolve the target BEFORE writing, so an unknown id is a 404 rather than a write that
-    // matches no entry and reports success. (Through #3488 this was load-bearing for a second
-    // reason: the pipeline's mirror-rebuild stages ran regardless of whether the `$map` matched
-    // anything, so on a pre-backfill row an unknown id would unset the scalar and revoke the
-    // very link it did not name. #3523 removed those stages, but the 404 is still the right
-    // answer and is pinned by a test.)
+    // matches no entry and reports success.
     const target = id ? live.find(link => link.id === id) : undefined;
     if (id && !target) {
       return res.status(404).json({ error: 'No live share link with that id' });

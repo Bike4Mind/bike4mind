@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { Types } from 'mongoose';
 
-const { mockLoad, mockFindOneAndUpdate, mockCurrent, mockUpdateOne } = vi.hoisted(() => ({
+const { mockLoad, mockFindOneAndUpdate, mockCurrent, mockUpdateOne, mockSelect } = vi.hoisted(() => ({
+  mockSelect: vi.fn(), // the field list passed to the lost-race findOne(...).select(...)
   mockLoad: vi.fn(), // loadOwnedArtifact's findOne(...).lean()
   mockFindOneAndUpdate: vi.fn(), // the compare-and-set mint/rotate/add
   mockCurrent: vi.fn(), // lost-race findOne(...).select(...).lean()
@@ -30,7 +31,7 @@ vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: {
     // `.lean()` -> load (loadOwnedArtifact); `.select().lean()` -> lost-race current read.
     findOne: (...a: unknown[]) => ({
-      select: () => ({ lean: () => Promise.resolve(mockCurrent(...a)) }),
+      select: (fields: string) => (mockSelect(fields), { lean: () => Promise.resolve(mockCurrent(...a)) }),
       lean: () => Promise.resolve(mockLoad(...a)),
     }),
     findOneAndUpdate: (...a: unknown[]) => ({ lean: () => Promise.resolve(mockFindOneAndUpdate(...a)) }),
@@ -81,6 +82,7 @@ beforeEach(() => {
   mockLoad.mockReset().mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [] });
   mockFindOneAndUpdate.mockReset().mockResolvedValue({ shareTokens: [entry('TESTTOKEN')] }); // won the CAS
   mockCurrent.mockReset().mockResolvedValue({ shareTokens: [entry('TESTTOKEN')] });
+  mockSelect.mockReset();
   mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 });
 });
 
@@ -224,6 +226,57 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     expect(res._getJSONData()).toMatchObject({ shareToken: 'WINNER-TOKEN', shareUrl: '/a/WINNER-TOKEN' });
   });
 
+  it('re-reads only shareTokens after a lost race, and reports the winner newest-live link', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(null);
+    const winnerOlder = entry('WINNER-OLD');
+    const winnerNewest = entry('WINNER-NEW');
+    mockCurrent.mockResolvedValue({
+      shareTokens: [winnerOlder, entry('GONE', { revokedAt: new Date() }), winnerNewest],
+    });
+    const { res, promise } = run();
+    await promise;
+    expect(mockSelect).toHaveBeenCalledOnce();
+    expect(mockSelect).toHaveBeenCalledWith('shareTokens');
+    expect(mockCurrent.mock.calls[0][0]).toEqual({ publicId: 'pub1', deletedAt: null });
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body).toMatchObject({ id: String(winnerNewest._id), shareToken: 'WINNER-NEW' });
+    expect(body.shareLinks.map((l: { shareToken: string }) => l.shareToken)).toEqual(['WINNER-OLD', 'WINNER-NEW']);
+  });
+
+  it('does not re-read after a won write', async () => {
+    const { promise } = run();
+    await promise;
+    expect(mockSelect).not.toHaveBeenCalled();
+  });
+
+  it('rotates with only revoked entries by minting a first live link, guarded by no-live-entry', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareTokens: [entry('GONE', { revokedAt: new Date() })],
+    });
+    const { res, promise } = run({ body: { regenerate: true } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ shareToken: 'TESTTOKEN' });
+    const [filter] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
+    expect(filter.shareTokens).toEqual({ $not: { $elemMatch: { revokedAt: null } } });
+  });
+
+  it('rotates pinned to the NEWEST live entry when several are live', async () => {
+    const [older, newest] = [entry('OLDER'), entry('NEWEST')];
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareTokens: [older, newest, entry('GONE', { revokedAt: new Date() })],
+    });
+    const { promise } = run({ body: { regenerate: true } });
+    await promise;
+    const [filter] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
+    expect(filter.shareTokens).toEqual({ $elemMatch: { _id: newest._id, revokedAt: null } });
+  });
+
   it('on a regenerate lost race where a pre-rotate link is still live, returns 409', async () => {
     const outgoing = entry('OUTGOING');
     mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [outgoing] });
@@ -293,6 +346,21 @@ describe('POST /api/publish/[publicId]/share-token', () => {
       const parts = pipeline[0].$set.shareTokens.$concatArrays as unknown as unknown[][];
       expect(parts).toHaveLength(2);
       expect((parts[1][0] as { token: string }).token).toBe('TESTTOKEN');
+    });
+
+    it('mints at one below the ceiling, counting only LIVE links (revoked ones do not count)', async () => {
+      const links = [
+        ...Array.from({ length: 19 }, (_, i) => entry(`T${i}`)),
+        entry('GONE-A', { revokedAt: new Date() }),
+        entry('GONE-B', { revokedAt: new Date() }),
+      ];
+      mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: links });
+      const { res, promise } = run({ body: { additional: true } });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockFindOneAndUpdate).toHaveBeenCalledOnce();
+      const [filter] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
+      expect(Object.keys(filter).sort()).toEqual(['deletedAt', 'publicId']);
     });
 
     it('400s past the live-link ceiling rather than growing the array without bound', async () => {
