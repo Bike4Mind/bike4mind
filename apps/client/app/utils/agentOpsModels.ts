@@ -56,7 +56,7 @@ export const backendLabel = (backend: ModelBackend): string => BACKEND_LABELS[ba
 
 /**
  * Display label per model id, disambiguating names shared across backends. Two catalog models can
- * carry the same `name` -- the direct-provider and Bedrock twins of "Claude 4 Opus" -- yet route to
+ * carry the same `name` -- the direct-provider and Bedrock twins of "Claude Opus 4" -- yet route to
  * different credentials, and the picker rendered only the name, so an admin had no way to tell them
  * apart and a wrong pick billed the unintended account (#1596). A name used by more than one option
  * gets a `(Backend)` suffix on every twin; if the backend does not break the tie either, the model
