@@ -58,10 +58,28 @@ vi.mock('./AudioGenerationSettings', () => ({ AudioGenerationSettings: () => <di
 vi.mock('../ImageTemplates/ImageTemplatePanel', () => ({
   ImageTemplatePanel: () => <div data-testid="image-templates" />,
 }));
-// Stands in for a card's settings gear: opens the details screen on a model that is not active.
+// Stands in for a card's settings gear: opens the details screen on a chosen model.
 vi.mock('../ModelSelection', () => ({
   default: ({ onSettingsClick }: { onSettingsClick: (model: ModelInfo) => void }) => (
-    <button data-testid="open-details" onClick={() => onSettingsClick(modelInfoRows[1] as unknown as ModelInfo)} />
+    <>
+      <button data-testid="open-details" onClick={() => onSettingsClick(modelInfoRows[1] as unknown as ModelInfo)} />
+      <button
+        data-testid="open-details-active"
+        onClick={() => onSettingsClick(modelInfoRows[0] as unknown as ModelInfo)}
+      />
+      <button
+        data-testid="open-details-unlisted"
+        onClick={() =>
+          onSettingsClick({
+            id: 'ghost',
+            name: 'Ghost',
+            type: 'text',
+            contextWindow: 1000,
+            max_tokens: 100,
+          } as unknown as ModelInfo)
+        }
+      />
+    </>
   ),
   getModelBackend: () => 'OpenAI',
 }));
@@ -82,32 +100,37 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 
 import { AdvancedAIModal } from './AdvancedAIModal';
 
+const renderModal = () => {
+  llmState = {
+    model: 'gpt-active',
+    temperature: 0.9,
+    max_tokens: 100,
+    tools: [],
+    researchMode: undefined,
+    addResearchConfiguration: vi.fn(),
+    removeResearchConfiguration: vi.fn(),
+    updateResearchConfiguration: vi.fn(),
+  };
+  setLLM.mockClear();
+  render(
+    <TestWrapper>
+      <AdvancedAIModal
+        open
+        onClose={vi.fn()}
+        spokenWords={0}
+        setSpokenWords={vi.fn()}
+        stream
+        setStream={vi.fn()}
+        voiceOver={false}
+        onRollDice={vi.fn()}
+      />
+    </TestWrapper>
+  );
+};
+
 describe('AdvancedAIModal - Use this model', () => {
   it('applies the previewed model, announces it and keeps focus inside the dialog', () => {
-    llmState = {
-      model: 'gpt-active',
-      temperature: 0.9,
-      max_tokens: 100,
-      tools: [],
-      researchMode: undefined,
-      addResearchConfiguration: vi.fn(),
-      removeResearchConfiguration: vi.fn(),
-      updateResearchConfiguration: vi.fn(),
-    };
-    render(
-      <TestWrapper>
-        <AdvancedAIModal
-          open
-          onClose={vi.fn()}
-          spokenWords={0}
-          setSpokenWords={vi.fn()}
-          stream
-          setStream={vi.fn()}
-          voiceOver={false}
-          onRollDice={vi.fn()}
-        />
-      </TestWrapper>
-    );
+    renderModal();
 
     fireEvent.click(screen.getByTestId('open-details'));
     expect(screen.getByTestId('model-selection-status')).toHaveTextContent('');
@@ -118,5 +141,37 @@ describe('AdvancedAIModal - Use this model', () => {
     expect(screen.getByTestId('model-selection-status')).toHaveAttribute('role', 'status');
     expect(screen.getByTestId('model-selection-status')).toHaveTextContent('Now using Claude Other');
     expect(screen.getByTestId('model-details-back-btn')).toHaveFocus();
+  });
+
+  it('does not announce when the shown model is already active', () => {
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('open-details-active'));
+    const useButton = screen.queryByTestId('model-use-btn');
+    if (useButton) fireEvent.click(useButton);
+
+    expect(setLLM).not.toHaveBeenCalled();
+    expect(screen.getByTestId('model-selection-status')).toBeEmptyDOMElement();
+  });
+
+  it('does not announce when the shown model is missing from the model list', () => {
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('open-details-unlisted'));
+    fireEvent.click(screen.getByTestId('model-use-btn'));
+
+    expect(setLLM).not.toHaveBeenCalled();
+    expect(screen.getByTestId('model-selection-status')).toBeEmptyDOMElement();
+  });
+
+  it('clears the previous announcement when details of another model are viewed', () => {
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('open-details'));
+    fireEvent.click(screen.getByTestId('model-use-btn'));
+    expect(screen.getByTestId('model-selection-status')).toHaveTextContent('Now using Claude Other');
+
+    fireEvent.click(screen.getByTestId('open-details-unlisted'));
+    expect(screen.getByTestId('model-selection-status')).toBeEmptyDOMElement();
   });
 });

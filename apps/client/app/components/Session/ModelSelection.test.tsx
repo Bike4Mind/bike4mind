@@ -1,6 +1,6 @@
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
@@ -117,25 +117,28 @@ vi.mock('./AISettings/MetaDataChips', () => ({
 // (notebooklist.*) that only exist here.
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const renderSelection = (props: {
+type SelectionProps = {
   model?: string;
   setModel?: (model: ModelName) => void;
   onSelectionComplete?: () => void;
   onSettingsClick?: (model: ModelInfo) => void;
-}) =>
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <ModelSelection
-        model={props.model ?? textModel.id}
-        setModel={props.setModel ?? vi.fn()}
-        onSelectionComplete={props.onSelectionComplete}
-        imageModel={false}
-        showAllModels
-        modelFilter="all"
-        onSettingsClick={props.onSettingsClick}
-      />
-    </CssVarsProvider>
-  );
+};
+
+const selectionTree = (props: SelectionProps) => (
+  <CssVarsProvider theme={appTheme}>
+    <ModelSelection
+      model={props.model ?? textModel.id}
+      setModel={props.setModel ?? vi.fn()}
+      onSelectionComplete={props.onSelectionComplete}
+      imageModel={false}
+      showAllModels
+      modelFilter="all"
+      onSettingsClick={props.onSettingsClick}
+    />
+  </CssVarsProvider>
+);
+
+const renderSelection = (props: SelectionProps) => render(selectionTree(props));
 
 describe('ModelSelection apply behavior', () => {
   beforeEach(() => {
@@ -520,6 +523,88 @@ describe('ModelSelection duplicate and unavailable rows', () => {
 
     expect(within(screen.getByTestId('recommended-section')).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
     expect(within(screen.getByTestId('favorites-section')).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
+  });
+
+  it('keeps a Favorites card mounted and focused when selecting it flips the provider-row winner', () => {
+    const aliasId = 'gpt-4.1';
+    const pinnedId = 'gpt-4.1-2025-04-14';
+    const laterFavoriteId = 'gpt-later-favorite';
+    extraTextModels.push(
+      { ...textModel, id: aliasId, backend: ModelBackend.OpenAI },
+      { ...textModel, id: pinnedId, backend: ModelBackend.OpenAI },
+      { ...textModel, id: laterFavoriteId, backend: ModelBackend.OpenAI }
+    );
+    favoriteModelIds.add(pinnedId);
+    favoriteModelIds.add(laterFavoriteId);
+    const { rerender } = renderSelection({ model: aliasId });
+
+    const favorites = screen.getByTestId('favorites-section');
+    const selectButton = within(favorites).getByTestId(`model-select-btn-${pinnedId}`);
+    selectButton.focus();
+    expect(selectButton).toHaveFocus();
+
+    rerender(selectionTree({ model: pinnedId }));
+
+    const afterSelect = within(screen.getByTestId('favorites-section')).getByTestId(`model-select-btn-${pinnedId}`);
+    expect(afterSelect).toBe(selectButton);
+    expect(afterSelect).toHaveFocus();
+    expect(afterSelect).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  describe('search over pinned twins', () => {
+    const aliasId = 'gpt-4.1';
+    const pinnedId = 'gpt-4.1-2025-04-14';
+    const searchFor = async (term: string) => {
+      fireEvent.change(screen.getByTestId('model-search-input').querySelector('input') as HTMLInputElement, {
+        target: { value: term },
+      });
+      await waitFor(() => expect(screen.getByTestId('model-search-input').querySelector('input')).toHaveValue(term));
+    };
+
+    beforeEach(() => {
+      extraTextModels.push(
+        { ...textModel, id: aliasId, name: 'Alpha Active', description: '', backend: ModelBackend.OpenAI },
+        { ...textModel, id: pinnedId, name: 'Beta Pinned', description: '', backend: ModelBackend.OpenAI }
+      );
+      favoriteModelIds.add(pinnedId);
+    });
+
+    it('leaves a pinned twin out of Favorites when the search matches only the active winner', async () => {
+      renderSelection({ model: aliasId });
+      expect(within(screen.getByTestId('favorites-section')).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
+
+      await searchFor('alpha');
+
+      await waitFor(() => expect(screen.queryByTestId(`model-card-${pinnedId}`)).not.toBeInTheDocument());
+      expect(screen.queryByTestId('favorites-section')).not.toBeInTheDocument();
+      expect(screen.getByTestId(`model-card-${aliasId}`)).toBeInTheDocument();
+    });
+
+    it('still lists a pinned twin in Favorites when the search matches only that twin', async () => {
+      renderSelection({ model: aliasId });
+
+      await searchFor('beta');
+
+      await waitFor(() => expect(screen.queryByTestId(`model-card-${aliasId}`)).not.toBeInTheDocument());
+      const favorites = screen.getByTestId('favorites-section');
+      expect(within(favorites).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
+      expect(screen.queryByText(/No models found/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps the unavailable active model unselectable by click and by keyboard target', () => {
+    const activeId = 'anthropic.claude-opus-5-5';
+    extraTextModels.push({ ...textModel, id: activeId, backend: ModelBackend.Bedrock, disabled: true });
+    const setModel = vi.fn();
+    const onSelectionComplete = vi.fn();
+    renderSelection({ model: activeId, setModel, onSelectionComplete });
+
+    expect(screen.getByTestId(`model-select-btn-${activeId}`)).toBeDisabled();
+    fireEvent.click(screen.getByTestId(`model-card-${activeId}`));
+    fireEvent.click(screen.getByTestId(`model-select-btn-${activeId}`));
+
+    expect(setModel).not.toHaveBeenCalled();
+    expect(onSelectionComplete).not.toHaveBeenCalled();
   });
 });
 

@@ -910,6 +910,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   // filteredModels, so the accordions and the flat list agree.
   const sortedBackends = useMemo(() => sortBackendsByPriority(Object.keys(modelsByBackend)), [modelsByBackend]);
 
+  // A pinned twin can match a search while the provider row's winner does not, so the empty
+  // state has to consider the pinned sections too.
+  const hasVisibleModels = filteredModels.length > 0 || hiddenPinnedModels.length > 0;
+
   // Derive effective expanded backends from user toggles and search state
   const expandedBackends = useMemo(() => {
     if (debouncedSearchQuery) {
@@ -1388,7 +1392,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
       {/* Models Grid */}
       {/* No access to any models */}
-      {filteredModels.length === 0 && !debouncedSearchQuery && (
+      {!hasVisibleModels && !debouncedSearchQuery && (
         <Box sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-md" sx={{ color: 'text.primary', fontWeight: 500, mb: 1 }}>
             You don&apos;t have access to any AI models.
@@ -1400,7 +1404,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       )}
 
       {/* No models found for search query */}
-      {filteredModels.length === 0 && debouncedSearchQuery && (
+      {!hasVisibleModels && debouncedSearchQuery && (
         <Box sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
             No models found for &quot;{searchQuery}&quot;
@@ -1409,7 +1413,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       )}
 
       {/* Display models */}
-      {filteredModels.length > 0 && (
+      {hasVisibleModels && (
         <Box
           sx={{
             display: 'flex',

@@ -1672,19 +1672,19 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
     : { tier: 'Low', variant: 'green' };
 
   const handleModelSelection = useCallback(
-    (newModel: ModelName) => {
-      if (newModel === model) return;
+    (newModel: ModelName): boolean => {
+      if (newModel === model) return false;
       const newModelInfo = modelInfoRepo?.find(m => m.id === newModel);
-      if (newModelInfo) {
-        startTransition(() => {
-          setLLM(buildModelSelectionPatch(newModelInfo));
-        });
-        if (currentSessionId) {
-          void updateSessionToServer({ id: currentSessionId, lastUsedModel: newModel }).catch(err =>
-            console.error('Failed to persist model selection:', err)
-          );
-        }
+      if (!newModelInfo) return false;
+      startTransition(() => {
+        setLLM(buildModelSelectionPatch(newModelInfo));
+      });
+      if (currentSessionId) {
+        void updateSessionToServer({ id: currentSessionId, lastUsedModel: newModel }).catch(err =>
+          console.error('Failed to persist model selection:', err)
+        );
       }
+      return true;
     },
     [modelInfoRepo, model, setLLM, currentSessionId]
   );
@@ -1839,6 +1839,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   );
 
   const handleViewDetails = (model: ModelInfo) => {
+    setSelectionAnnouncement(null);
     setDetailsModel(model);
     setModelDetailsOpen(true);
   };
@@ -1846,16 +1847,18 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   const handleDetailsClose = () => {
     setModelDetailsOpen(false);
     setDetailsModel(null);
-    setSelectionAnnouncement('');
+    setSelectionAnnouncement(null);
   };
 
   // "Use this model" unmounts itself (it becomes the "Current model" label), so focus moves to the
   // back button rather than falling to <body>, and the persistent status region says what changed.
   const detailsBackButtonRef = useRef<HTMLButtonElement>(null);
-  const [selectionAnnouncement, setSelectionAnnouncement] = useState('');
+  // The count keys the status node so an identical repeat message remounts and is re-announced.
+  const [selectionAnnouncement, setSelectionAnnouncement] = useState<{ text: string; count: number } | null>(null);
   const handleUseShownModel = (shown: ModelInfo) => {
-    handleModelSelection(shown.id);
-    setSelectionAnnouncement(`Now using ${shown.name}`);
+    if (handleModelSelection(shown.id)) {
+      setSelectionAnnouncement(previous => ({ text: `Now using ${shown.name}`, count: (previous?.count ?? 0) + 1 }));
+    }
     detailsBackButtonRef.current?.focus();
   };
 
@@ -2196,7 +2199,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 </Button>
 
                 <Box role="status" data-testid="model-selection-status" sx={visuallyHidden}>
-                  {selectionAnnouncement}
+                  {selectionAnnouncement && <span key={selectionAnnouncement.count}>{selectionAnnouncement.text}</span>}
                 </Box>
 
                 {/* Commit control. Opening this screen no longer selects the model (see
