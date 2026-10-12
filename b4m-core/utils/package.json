@@ -150,6 +150,16 @@
         "default": "./dist/registrableDomain.cjs"
       }
     },
+    "./decisionProviders": {
+      "import": {
+        "types": "./dist/decisionProviders/index.d.mts",
+        "default": "./dist/decisionProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/decisionProviders/index.d.cts",
+        "default": "./dist/decisionProviders/index.cjs"
+      }
+    },
     "./videoProviders": {
       "import": {
         "types": "./dist/videoProviders/index.d.mts",
@@ -216,7 +226,7 @@
     "unpdf": "^1.6.2",
     "uuid": "^14.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/lodash": "^4.17.24",

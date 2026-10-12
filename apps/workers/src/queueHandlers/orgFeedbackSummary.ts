@@ -26,7 +26,7 @@ import {
 } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
-import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { buildApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -34,7 +34,7 @@ import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
-const SUMMARY_MODEL = ChatModels.CLAUDE_4_5_HAIKU_BEDROCK;
+const DEFAULT_SUMMARY_MODEL = ChatModels.CLAUDE_4_5_HAIKU_BEDROCK;
 const SUMMARY_MAX_TOKENS = 2000;
 const SUMMARY_TIMEOUT_MS = 60000;
 
@@ -110,29 +110,22 @@ By day:
 ${bucketList(report.byDay.map(row => ({ key: row.day, count: row.count })))}`;
 }
 
-async function generateSummary(message: OrgFeedbackSummaryMessage, promptBody: string, logger: Logger) {
+async function generateSummary(message: OrgFeedbackSummaryMessage, promptBody: string, model: string, logger: Logger) {
   const dbAdapters = {
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
     getSettingsByNames,
   };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
-  const apiKeyTable = {
-    openai: coreKeys.openai || undefined,
-    anthropic: coreKeys.anthropic || undefined,
-    gemini: coreKeys.gemini || undefined,
-    bfl: coreKeys.bfl || undefined,
-    ollama: coreKeys.ollama || undefined,
-    xai: coreKeys.xai || undefined,
-  };
+  const apiKeyTable = buildApiKeyTable(coreKeys);
 
   const models = await getAvailableModels(apiKeyTable);
-  const modelInfo = models.find(m => m.id === SUMMARY_MODEL);
+  const modelInfo = models.find(m => m.id === model);
   // Unlike the quest export, where the summary is a bonus on top of a zip, the summary IS the
   // product here - an unavailable model is a failed job, not a quieter success.
-  if (!modelInfo) throw new Error(`Summary model ${SUMMARY_MODEL} is not available`);
+  if (!modelInfo) throw new Error(`Summary model ${model} is not available`);
 
   const llm = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: message.userId });
-  if (!llm) throw new Error(`Failed to initialize LLM for ${SUMMARY_MODEL}`);
+  if (!llm) throw new Error(`Failed to initialize LLM for ${model}`);
 
   const systemPrompt = `You are summarizing user feedback for the administrators of an organization.
 
@@ -154,7 +147,7 @@ Write 200-400 words covering:
   let responseText = '';
   await Promise.race([
     llm.complete(
-      SUMMARY_MODEL,
+      model,
       messages,
       { temperature: 0.3, maxTokens: SUMMARY_MAX_TOKENS, stream: false },
       async (texts: (string | null | undefined)[]) => {
@@ -210,14 +203,15 @@ export async function runOrgFeedbackSummary(
 
     await sendProgress(userId, summaryJobId, organizationId, 'processing', 40);
     checkBudget();
-    const summary = await generateSummary(message, buildPrompt(report), logger);
+    const model = (await adminSettingsRepository.getSettingsValue('OrgFeedbackSummaryModel')) || DEFAULT_SUMMARY_MODEL;
+    const summary = await generateSummary(message, buildPrompt(report), model, logger);
 
     const artifact: OrgFeedbackSummaryArtifact = {
       summaryJobId,
       organizationId,
       range: report.range,
       generatedAt: new Date().toISOString(),
-      model: SUMMARY_MODEL,
+      model,
       summary,
       counts: {
         totals: report.totals,

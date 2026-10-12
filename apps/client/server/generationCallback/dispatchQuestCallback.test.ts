@@ -57,7 +57,7 @@ import {
 import {
   GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
   GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
-} from '@server/queueHandlers/sqsDelivery';
+} from '@server/utils/sqsDelivery';
 
 function makeLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;

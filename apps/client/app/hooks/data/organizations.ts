@@ -279,6 +279,18 @@ export function useGetUserOrganizations(userId: string | undefined | null) {
   });
 }
 
+export function useGetManagedOrganizations(userId: string | undefined | null) {
+  return useQuery({
+    queryKey: ['organizations', 'managed', userId],
+    queryFn: async () => {
+      const { data } = await api.get<IOrganizationDocument[]>('/api/organizations/managed');
+      return data;
+    },
+    enabled: !!userId,
+    staleTime: 1000 * 60 * 5,
+  });
+}
+
 function keptSharesMessage(kept: number): string {
   const isSingle = kept === 1;
   return `Member removed. ${kept} share${isSingle ? '' : 's'} on personal data lakes ${isSingle ? 'was' : 'were'} kept; the lake owners are being notified.`;

@@ -20,7 +20,7 @@ import { createFabFile } from '@server/managers/fabFileManager';
 import { evaluateConnectorCopyDeletion } from '@server/integrations/google/drive/connectorCopyGate';
 import { getFilesStorage } from '@server/utils/storage';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
-import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 
 // Shared by the connector ingests: driveLakeIngest.ts and githubLakeIngest.ts (via githubLakeSlice.ts).
 
