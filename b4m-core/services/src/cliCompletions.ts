@@ -345,8 +345,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
       if (!actor?.isAdmin) {
+        logger?.warn?.('[CLI_CREDITS] API key minter is no longer a member of the billing organization', {
+          userId,
+          organizationId: organization.id,
+        });
         throw new BadRequestError(
-          `[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`
+          'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
         );
       }
     }
