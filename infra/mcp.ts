@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process';
 import { computeMcpContentHash } from '@bike4mind/infra';
 import { lambdaVpc } from './vpc';
-import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { router, appUrlForLambdaEnv } from './router';
 import { secrets } from './secrets';
 
@@ -25,9 +25,6 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
   // function carried no `reserved`, so its orphans never blocked a deploy - they accumulated
   // silently (18 of them) and billed for idle capacity nothing could route to.
   link: [secrets.RATE_LIMIT_INGEST_TOKEN],
-  logging: {
-    retention: FUNCTION_LOG_RETENTION,
-  },
   nodejs: {
     // This list must cover the RUNTIME dependency closure of the MCP server
     // children spawned by this handler (they import @bike4mind/common + the

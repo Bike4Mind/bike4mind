@@ -1,4 +1,4 @@
-import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { slackEventBus } from './bus';
 import { slackQuestProcessor } from './functions';
@@ -31,9 +31,6 @@ eventBus.subscribe(
         resources: ['*'],
       },
     ],
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     vpc: lambdaVpc,
   },
   {

@@ -42,7 +42,7 @@ import {
 import { allSecrets } from './secrets';
 import { web } from './web';
 import { mcpHandler } from './mcp';
-import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { lambdaVpc } from './vpc';
 import { imageProcessor } from './functions';
 
@@ -52,9 +52,6 @@ const logHandler = new sst.aws.Function('logHandler', {
   runtime: 'nodejs24.x',
   link: [...allSecrets, sreJobQueue],
   vpc: lambdaVpc,
-  logging: {
-    retention: FUNCTION_LOG_RETENTION,
-  },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },

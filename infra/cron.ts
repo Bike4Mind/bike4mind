@@ -1,7 +1,7 @@
 import { execFileSync, execSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { computeHelpCorpusHash } from '@bike4mind/infra';
-import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
 import {
@@ -30,9 +30,6 @@ const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
     runtime: 'nodejs24.x',
     link: [...allSecrets, researchEngineQueue, fabFileBucket, generatedImagesBucket],
     timeout: '10 minutes',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -57,9 +54,6 @@ const agentProactiveMessageCron = new sst.aws.Cron('agentProactiveMessageCron', 
     runtime: 'nodejs24.x',
     link: [...allSecrets, agentProactiveMessageQueue],
     timeout: '10 minutes',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -75,9 +69,6 @@ const userActivityReportFunction = new sst.aws.Function('userActivityReportFunct
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: FUNCTION_LOG_RETENTION,
   },
   dev: false,
 });
@@ -111,9 +102,6 @@ const secretRotationNotifierCron = new sst.aws.Cron('secretRotationNotifier', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -134,9 +122,6 @@ const apiKeyBaselineCalculation = new sst.aws.Cron('apiKeyBaselineCalculation', 
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -150,9 +135,6 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
     runtime: 'nodejs24.x',
     link: [...allSecrets, emailJobQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -180,9 +162,6 @@ const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
     runtime: 'nodejs24.x',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
     },
     permissions: [
       {
@@ -216,9 +195,6 @@ const liveopsTriageDispatcherCron = new sst.aws.Cron('liveopsTriageDispatcherCro
     runtime: 'nodejs24.x',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
     },
     permissions: [
       {
@@ -258,9 +234,6 @@ const whatsNewHighlightsCron = new sst.aws.Cron('whatsNewHighlightsCron', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
@@ -284,9 +257,6 @@ const telemetryCleanupCron = new sst.aws.Cron('telemetryCleanup', {
     timeout: '10 minutes',
     link: [...allSecrets],
     environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -303,9 +273,6 @@ const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
     timeout: '10 minutes',
     link: [...allSecrets],
     environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -322,9 +289,6 @@ const integrationHealthCheckCron = new sst.aws.Cron('integrationHealthCheck', {
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
     },
     permissions: [
       {
@@ -347,9 +311,6 @@ const cloudSecurityScanCron = new sst.aws.Cron('CloudSecurityScan', {
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
     },
     permissions: [
       {
@@ -405,9 +366,6 @@ const securityScanSchedulerCron = new sst.aws.Cron('securityScanScheduler', {
     link: [...allSecrets],
     timeout: '5 minutes',
     memory: '512 MB',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -431,9 +389,6 @@ const deepAgentWakeCron = new sst.aws.Cron('deepAgentWakeCron', {
     runtime: 'nodejs24.x',
     link: [...allSecrets, deepAgentWakeQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -452,9 +407,6 @@ const dataLakeResearchScheduleCron = new sst.aws.Cron('dataLakeResearchScheduleC
     runtime: 'nodejs24.x',
     link: [...allSecrets, dataLakeResearchQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -477,9 +429,6 @@ const sreStaleDispatchCron = new sst.aws.Cron('SreStaleDispatchCron', {
     runtime: 'nodejs24.x',
     link: [...allSecrets],
     timeout: '2 minutes',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -507,9 +456,6 @@ const attackSimulationFunction = new sst.aws.Function('attackSimulationFunction'
   runtime: 'nodejs24.x',
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: FUNCTION_LOG_RETENTION,
   },
 });
 
@@ -544,9 +490,6 @@ const modelDiscoveryFunction = new sst.aws.Function('modelDiscoveryFunction', {
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: FUNCTION_LOG_RETENTION,
   },
   permissions: [
     {
@@ -601,9 +544,6 @@ const modelDiscoveryStalenessFunction = new sst.aws.Function('modelDiscoveryStal
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
-  logging: {
-    retention: FUNCTION_LOG_RETENTION,
-  },
   permissions: [
     {
       actions: ['cloudwatch:PutMetricData'],
@@ -644,9 +584,6 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
@@ -683,9 +620,6 @@ const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
     // completion callback, so the sweep enqueues one when it recovers a stuck quest.
     link: [...allSecrets, generationCallbackQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -716,9 +650,6 @@ const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
     runtime: 'nodejs24.x',
     link: [...allSecrets, generationJobQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -743,9 +674,6 @@ const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandon
     runtime: 'nodejs24.x',
     link: [...allSecrets],
     timeout: '2 minutes',
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -771,9 +699,6 @@ const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
     },
   },
   enabled: ['production', 'dev'].includes($app.stage),
@@ -801,9 +726,6 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -830,9 +752,6 @@ const githubLakeReconcileCron = new sst.aws.Cron('githubLakeReconcile', {
     link: [...allSecrets, githubLakeIngestQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
     },
   },
   enabled: ['production', 'dev'].includes($app.stage),
@@ -914,9 +833,6 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
         resources: ['*'],
       },
     ],
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -939,9 +855,6 @@ const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
     },
     permissions: [
       {
@@ -980,9 +893,6 @@ const lakeInconsistencySweepCron = new sst.aws.Cron('lakeInconsistencySweep', {
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: FUNCTION_LOG_RETENTION,
     },
     permissions: [
       {

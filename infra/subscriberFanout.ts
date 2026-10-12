@@ -1,5 +1,5 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, FUNCTION_LOG_RETENTION } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
 import { allSecrets, secrets } from './secrets';
 import { cluster, lambdaVpc } from './vpc';
 import { websocketApi } from './websocket';
@@ -43,7 +43,7 @@ export const subscriberFanout = new sst.aws.Service('subscriberFanoutV2', {
     },
   ],
   logging: {
-    retention: FUNCTION_LOG_RETENTION,
+    retention: $app.stage === 'production' ? '1 month' : '1 week',
   },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,

@@ -1,5 +1,5 @@
 import { lambdaVpc } from './vpc';
-import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { router, routePrefix } from './router';
 import { allSecrets } from './secrets';
 
@@ -18,8 +18,5 @@ export const cliToolHandler = new sst.aws.Function('CliToolHandler', {
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: FUNCTION_LOG_RETENTION,
   },
 });

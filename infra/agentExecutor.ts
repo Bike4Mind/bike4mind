@@ -9,7 +9,7 @@
  */
 
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
@@ -46,7 +46,6 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     imageProcessor,
     agentContinuationQueue,
   ],
-  logging: { retention: FUNCTION_LOG_RETENTION },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.

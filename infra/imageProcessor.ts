@@ -1,6 +1,6 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { allSecrets } from './secrets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { lambdaVpc } from './vpc';
 
 /**
@@ -22,9 +22,6 @@ export const imageProcessor = new sst.aws.Function('ImageProcessor', {
   timeout: '5 minutes',
   memory: '2048 MB',
   link: [...allSecrets, generatedImagesBucket, appFilesBucket, fabFileBucket],
-  logging: {
-    retention: FUNCTION_LOG_RETENTION,
-  },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },

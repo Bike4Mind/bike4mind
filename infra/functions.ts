@@ -1,5 +1,5 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, FUNCTION_LOG_RETENTION } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { slackEventBus } from './bus';
 import { imageProcessor } from './imageProcessor';
@@ -42,9 +42,6 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     slackEventBus,
     imageProcessor,
   ],
-  logging: {
-    retention: FUNCTION_LOG_RETENTION,
-  },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
