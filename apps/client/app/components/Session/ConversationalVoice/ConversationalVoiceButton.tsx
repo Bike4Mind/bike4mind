@@ -1,10 +1,18 @@
-import { CircularProgress, IconButton, Tooltip } from '@mui/joy';
+import { Box, CircularProgress, IconButton, Tooltip, Typography } from '@mui/joy';
 import { CallEnd, GraphicEq } from '@mui/icons-material';
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useId, useRef } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
+import { estimateElevenLabsConversationalCost } from '@bike4mind/voice';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { useConversationalVoiceStore } from './useConversationalVoice';
+
+// Same pricing POST /api/voice/v2/sessions reserves against and /end bills pro rata per second,
+// so the hint cannot drift from what a call costs.
+const CREDITS_PER_MINUTE = estimateElevenLabsConversationalCost(60).creditsToReserve;
+export const VOICE_COST_HINT = `About ${CREDITS_PER_MINUTE.toLocaleString('en-US')} credits/min, billed by the second`;
+const START_LABEL = 'Voice (v2 \u2014 any model)';
 
 export interface ConversationalVoiceButtonProps {
   currentSessionId: string | null;
@@ -31,6 +39,7 @@ const ConversationalVoiceButton: React.FC<ConversationalVoiceButtonProps> = ({
   const errorMessage = useConversationalVoiceStore(s => s.errorMessage);
   const start = useConversationalVoiceStore(s => s.start);
   const end = useConversationalVoiceStore(s => s.end);
+  const costHintId = useId();
 
   // No modal to surface errors in - show them as a toast (once per error).
   const lastErrorRef = useRef<string | null>(null);
@@ -66,19 +75,31 @@ const ConversationalVoiceButton: React.FC<ConversationalVoiceButtonProps> = ({
     }
   };
 
+  const idleTitle = (
+    <Box>
+      {START_LABEL}
+      <Typography level="body-xs" textColor="inherit" data-testid="conversational-voice-cost-hint">
+        {VOICE_COST_HINT}
+      </Typography>
+    </Box>
+  );
+
   return (
-    <Tooltip
-      title={isReconnecting ? 'Reconnecting…' : isActive ? 'End voice call' : 'Voice (v2 — any model)'}
-      placement="top"
-    >
+    <Tooltip title={isReconnecting ? 'Reconnecting\u2026' : isActive ? 'End voice call' : idleTitle} placement="top">
       <IconButton
         size="sm"
         variant={isActive ? 'solid' : 'outlined'}
         color={isActive ? 'danger' : 'neutral'}
         onClick={handleClick}
         data-testid="conversational-voice-btn"
+        {...(isActive ? {} : { 'aria-label': START_LABEL, 'aria-describedby': costHintId })}
       >
         {isBusy ? <CircularProgress size="sm" /> : isActive ? <CallEnd /> : <GraphicEq />}
+        {!isActive && (
+          <Box component="span" id={costHintId} sx={visuallyHidden}>
+            {VOICE_COST_HINT}
+          </Box>
+        )}
       </IconButton>
     </Tooltip>
   );
