@@ -3546,6 +3546,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             sourceSystem: 'knowledge_base',
             tags: fileTagNames,
             relevanceScore: 1 - index * 0.1,
+            // Matches the `### [N]` heading above; the client links an inline marker only to a
+            // citable carrying it, so named style must leave it off.
+            ...(this.citationStyle === 'indexed' ? { citationIndex: index + 1 } : {}),
             // Spread rather than assigned: every fid in sourceFileIds was recorded in the same
             // walk, so `cited` is always present - but an absent key must leave the fields off
             // entirely, since an empty-string anchor would make the reader chase a passage that
