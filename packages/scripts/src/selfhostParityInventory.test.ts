@@ -1,8 +1,19 @@
+/**
+ * Static wiring guard for self-host background parity. A 'portable' (wired) entry proves the
+ * mapped local symbol exists and is reachable from the self-host entrypoint, not that it behaves
+ * like the hosted handler: the mapping is a reviewed claim and fingerprints only detect change.
+ * Gaps link to their capability's roadmap epic, not to a per-gap issue.
+ *
+ * Limitation: 'Gap now has local wiring' is detected only when a self-host file registers a
+ * queue/schedule under the hosted literal name. A local registration under another name, or a
+ * newly routed event, still relies on review.
+ */
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  NOT_COVERED,
   discoverParityInventory,
   portableRegistrationFingerprint,
   portableImportCandidates,
@@ -13,12 +24,25 @@ import { selfhostParityPolicy } from './selfhostParityPolicy';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const sources = (source: string) => ({ 'infra/test.ts': source });
 const queue = "const jobs = new sst.aws.Queue('jobs', {}); jobs.subscribe({handler:'apps/workers/jobs.dispatch'});";
+const MAIN = 'apps/workers/src/selfhost/main.ts';
 
 function files(dir: string): string[] {
   return readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap(entry => {
     const name = `${dir}/${entry.name}`;
     return entry.isDirectory() ? files(name) : [name];
   });
+}
+
+const isErrnoException = (error: unknown): error is NodeJS.ErrnoException => error instanceof Error && 'code' in error;
+
+/** Reads a repo file, or undefined when it does not exist. Any other read failure is rethrown. */
+function readIfPresent(file: string): string | undefined {
+  try {
+    return readFileSync(path.join(root, file), 'utf8');
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') return undefined;
+    throw error;
+  }
 }
 
 describe('portable declaration inventory', () => {
@@ -405,6 +429,179 @@ describe('portable declaration inventory', () => {
   });
 });
 
+describe('background trigger shapes', () => {
+  it.each([
+    [
+      "const files = new sst.aws.Bucket('files'); files.notify({notifications:[{name:'created', function:{handler:'apps/workers/created.handler'}, events:['s3:ObjectCreated:*']}]});",
+      'notification:infra/test.ts:files.created',
+    ],
+    [
+      "const rule = new aws.cloudwatch.EventRule('rule', {eventPattern:'{}'}); new aws.cloudwatch.EventTarget('target', {rule: rule.name, arn:'topic'});",
+      'eventRule:infra/test.ts:rule',
+    ],
+    ["new aws.ses.ReceiptRule('inbound', {ruleSetName:'set'});", 'sesRule:infra/test.ts:inbound'],
+    [
+      "const fn = new sst.aws.Function('logs', {handler:'apps/workers/logs.handler'}); new aws.cloudwatch.LogSubscriptionFilter('sub', {logGroup:'g', destinationArn: fn.arn, filterPattern:''});",
+      'logSubscription:infra/test.ts:sub',
+    ],
+    [
+      "new aws.sns.TopicSubscription('sub', {topic:'t', protocol:'email', endpoint:'ops'});",
+      'snsSubscription:infra/test.ts:sub',
+    ],
+    [
+      "const topic = new sst.aws.SnsTopic('alerts'); topic.subscribe({handler:'apps/workers/alert.handler'});",
+      'snsSubscription:infra/test.ts:alerts',
+    ],
+    ["new sst.aws.Function('direct', {handler:'apps/workers/direct.handler'});", 'function:infra/test.ts:direct'],
+    ["new sst.aws.Service('svc', {image:'registry/svc'});", 'service:infra/test.ts:svc'],
+  ])('reports a newly added shape as unreviewed: %s', (source, id) => {
+    const inventory = discoverParityInventory(sources(source));
+    expect(inventory.map(item => item.id)).toEqual([id]);
+    expect(validateParityPolicy(inventory, [], {})).toContain(`Unreviewed declaration: ${id}`);
+  });
+
+  it('inventories a trigger target Function under its trigger, not again on its own', () => {
+    const [item, ...rest] = discoverParityInventory(
+      sources(
+        "const fn = new sst.aws.Function('upload', {handler:'apps/workers/upload.handler'}); const b = new sst.aws.Bucket('b'); b.notify({notifications:[{name:'up', function: fn.arn}]});"
+      )
+    );
+    expect(rest).toEqual([]);
+    expect(item).toMatchObject({ id: 'notification:infra/test.ts:b.up', handlers: ['apps/workers/upload.handler'] });
+  });
+
+  it('leaves HTTP Functions out and lists them as not covered', () => {
+    expect(
+      discoverParityInventory(sources("new sst.aws.Function('api', {handler:'apps/x.handler', url:true});"))
+    ).toEqual([]);
+    expect(NOT_COVERED.map(entry => entry.shape)).toContain('sst.aws.Function with a url option');
+  });
+
+  it('fails on a hosted constructor that is neither inventoried nor listed as not covered', () => {
+    expect(() => discoverParityInventory(sources("new aws.sqs.NewTrigger('x', {});"))).toThrow(/unclassified/);
+    expect(discoverParityInventory(sources("new aws.cloudwatch.MetricAlarm('alarm', {});"))).toEqual([]);
+  });
+
+  it('fails loudly on dynamic or unresolved new shapes', () => {
+    expect(() => discoverParityInventory(sources('new aws.ses.ReceiptRule(name, {});'))).toThrow(/literal.*name/i);
+    expect(() =>
+      discoverParityInventory(sources("new aws.cloudwatch.EventTarget('t', {rule: missing.name, arn:'x'});"))
+    ).toThrow(/unresolved EventTarget rule/);
+    expect(() =>
+      discoverParityInventory(sources("const b = new sst.aws.Bucket('b'); b.notify({notifications: list});"))
+    ).toThrow(/literal notifications/);
+    expect(() =>
+      discoverParityInventory(sources("const bus = new sst.aws.Bus('bus'); bus.notify({notifications:[]});"))
+    ).toThrow(/unsupported notify/);
+    expect(() =>
+      discoverParityInventory(
+        sources("new aws.cloudwatch.LogSubscriptionFilter('s', {logGroup:'g', destinationArn: missing.arn});")
+      )
+    ).toThrow(/unresolved target/);
+  });
+
+  it('identifies a declaration built in a named factory by its site', () => {
+    const [item] = discoverParityInventory(
+      sources(
+        'function subscribeAll(groups: string[]) { groups.forEach(group => new aws.cloudwatch.LogSubscriptionFilter(`sub-${group}`, {logGroup: group})); }'
+      )
+    );
+    expect(item.id).toBe('logSubscription:infra/test.ts:subscribeAll()');
+  });
+});
+
+describe('fingerprint scope', () => {
+  const constants =
+    "export const DEFAULT_ENV = { A: '1' }; export const RATE = 'rate(1 day)'; export const STAGES = ['production'];";
+  const cron =
+    "import {DEFAULT_ENV, RATE, STAGES} from './constants'; const LOCAL_ENV = { B: '1' }; new sst.aws.Cron('daily', {schedule: RATE, enabled: STAGES.includes($app.stage), function:{handler:'apps/workers/daily.handler', environment:{...DEFAULT_ENV, ...LOCAL_ENV}}});";
+  const fingerprint = (constantsText: string, cronText = cron) =>
+    discoverParityInventory({ 'infra/constants.ts': constantsText, 'infra/test.ts': cronText })[0].fingerprint;
+
+  it('ignores an unrelated key added to a shared environment constant', () => {
+    expect(fingerprint(constants.replace("A: '1'", "A: '1', NEW_KEY: 'x'"))).toBe(fingerprint(constants));
+    expect(fingerprint(constants, cron.replace("B: '1'", "B: '1', NEW_KEY: 'x'"))).toBe(fingerprint(constants));
+  });
+
+  it('still detects a changed referenced schedule, stage or in-place handler', () => {
+    const base = fingerprint(constants);
+    expect(fingerprint(constants.replace('1 day', '2 days'))).not.toBe(base);
+    expect(fingerprint(constants.replace("['production']", "['production', 'dev']"))).not.toBe(base);
+    expect(fingerprint(constants, cron.replace('daily.handler', 'weekly.handler'))).not.toBe(base);
+  });
+});
+
+describe('local registration helpers and closed gaps', () => {
+  const helperMain = (call: string) =>
+    `async function main(){ const registerJobsQueue = (name: string, url: string) => { worker.registerQueueHandler(name, url, dispatch); }; ${call} } main();`;
+  const inventory = () => discoverParityInventory(sources(queue));
+  const local = (main: string) => ({ [MAIN]: main, 'apps/workers/jobs.ts': 'export function dispatch() {}' });
+
+  it('maps a registration made through a local helper with a literal queue name', () => {
+    const main = helperMain("registerJobsQueue('jobs', url);");
+    const [item] = inventory();
+    const policy = [
+      {
+        ...item,
+        disposition: 'portable' as const,
+        issue: 'Bike4Mind/bike4mind#2693',
+        reason: 'Helper wiring',
+        portable: {
+          source: MAIN,
+          symbol: 'queue:jobs',
+          fingerprint: portableRegistrationFingerprint(main, 'queue:jobs')!,
+        },
+      },
+    ];
+    expect(validateParityPolicy([item], policy, local(main))).toEqual([]);
+    expect(validateParityPolicy([item], policy, local(helperMain('')))).toContain(
+      `Portable registration not reachable: ${item.id}`
+    );
+  });
+
+  it('does not treat a helper that does not forward its first parameter as the name', () => {
+    const main =
+      "async function main(){ const register = (url: string, name: string) => worker.registerQueueHandler(name, url, dispatch); register('jobs', 'x'); } main();";
+    expect(portableRegistrationFingerprint(main, 'queue:jobs')).toBeUndefined();
+  });
+
+  it('reports a gap whose hosted queue now has a matching local registration', () => {
+    const [item] = inventory();
+    const gap = { ...item, disposition: 'pending' as const, issue: 'Bike4Mind/bike4mind#2693', reason: 'Gap' };
+    expect(validateParityPolicy([item], [gap], local(helperMain('')))).toEqual([]);
+    expect(validateParityPolicy([item], [gap], local(helperMain("registerJobsQueue('jobs', url);")))).toContain(
+      `Gap now has local wiring - review: ${item.id}: ${MAIN}`
+    );
+  });
+});
+
+describe('handler sources', () => {
+  it('rejects a hosted handler whose source file is missing, naming declaration and path', () => {
+    const inventory = discoverParityInventory(sources(queue));
+    expect(inventory[0].handlerSources).toEqual([
+      { handler: 'apps/workers/jobs.dispatch', file: 'apps/workers/jobs.ts', status: 'missing' },
+    ]);
+    expect(validateParityPolicy(inventory, [], {})).toContain(
+      'Hosted handler source missing: queue:infra/test.ts:jobs: apps/workers/jobs.dispatch (expected apps/workers/jobs.ts; AWS import scan skipped)'
+    );
+  });
+
+  it('distinguishes an absent overlay-generated handler explicitly instead of failing', () => {
+    const inventory = discoverParityInventory(
+      sources(
+        "const jobs = new sst.aws.Queue('jobs', {}); jobs.subscribe({handler:'apps/client/server/premium-generated/jobs.dispatch'});"
+      )
+    );
+    expect(inventory[0].handlerSources[0].status).toBe('overlayAbsent');
+    expect(validateParityPolicy(inventory, [], {}).filter(error => error.startsWith('Hosted handler'))).toEqual([]);
+  });
+
+  it('treats only ENOENT as absence when reading repository sources', () => {
+    expect(readIfPresent('infra/does-not-exist.ts')).toBeUndefined();
+    expect(() => readIfPresent('infra')).toThrow(/EISDIR/);
+  });
+});
+
 describe('reviewed repository inventory', () => {
   it('every hosted declaration has a current reviewed disposition', () => {
     const paths = [...files('infra'), ...files('apps/workers/src/selfhost')].filter(
@@ -414,24 +611,22 @@ describe('reviewed repository inventory', () => {
     for (const entry of selfhostParityPolicy) {
       if (!entry.portable) continue;
       for (const dependency of portableImportCandidates(entry.portable.source, sourceFiles[entry.portable.source])) {
+        // Each specifier lists several extension candidates and at most one exists, so ENOENT on
+        // the others is expected; an import with no candidate is reported by the guard.
         for (const candidate of dependency.candidates) {
-          try {
-            sourceFiles[candidate] = readFileSync(path.join(root, candidate), 'utf8');
-            break;
-          } catch {
-            /* Missing imports are reported by the guard. */
-          }
+          const text = readIfPresent(candidate);
+          if (text === undefined) continue;
+          sourceFiles[candidate] = text;
+          break;
         }
       }
     }
     const infra = Object.fromEntries(Object.entries(sourceFiles).filter(([file]) => file.startsWith('infra/')));
-    for (const handler of discoverParityInventory(infra).flatMap(item => item.handlers)) {
-      const file = handler.slice(0, handler.lastIndexOf('.')) + '.ts';
-      try {
-        sourceFiles[file] = readFileSync(path.join(root, file), 'utf8');
-      } catch {
-        /* Generated handlers may be unavailable in the open-core checkout. */
-      }
+    for (const { file } of discoverParityInventory(infra).flatMap(item => item.handlerSources)) {
+      // Left absent on ENOENT: the guard then reports it as a missing handler, unless it is an
+      // overlay-generated handler that an open-core checkout legitimately lacks.
+      const text = readIfPresent(file);
+      if (text !== undefined) sourceFiles[file] = text;
     }
     const inventory = discoverParityInventory({
       ...infra,
@@ -440,6 +635,19 @@ describe('reviewed repository inventory', () => {
     expect(inventory.filter(item => item.kind === 'queue').length).toBeGreaterThan(50);
     expect(inventory.filter(item => item.kind === 'schedule').length).toBeGreaterThan(25);
     expect(inventory.filter(item => item.kind === 'event').length).toBeGreaterThan(5);
+    for (const kind of [
+      'notification',
+      'eventRule',
+      'sesRule',
+      'logSubscription',
+      'snsSubscription',
+      'function',
+      'service',
+    ])
+      expect(
+        inventory.some(item => item.kind === kind),
+        kind
+      ).toBe(true);
     expect(validateParityPolicy(inventory, selfhostParityPolicy, sourceFiles)).toEqual([]);
   });
 });
