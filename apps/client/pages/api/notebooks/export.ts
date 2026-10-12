@@ -76,7 +76,7 @@ const handler = baseApi().post(
         // Imported at call time and memoized: the resolver's graph reaches the Mongoose models (see
         // the session create route), and one export resolves once however many notebooks it spans.
         resolveLakeAccess: () =>
-          (lakeAccess ??= import('@server/queueHandlers/agentExecutor.attachmentLakeAccess').then(m =>
+          (lakeAccess ??= import('@server/dataLakes/attachmentLakeAccess').then(m =>
             m.createAttachmentLakeAccess(req.user, req.logger)()
           )),
       },
