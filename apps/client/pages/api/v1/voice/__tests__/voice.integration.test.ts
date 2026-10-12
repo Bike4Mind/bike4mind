@@ -74,6 +74,7 @@ vi.mock('@bike4mind/voice', async orig => ({
           sessionToken: input.sessionToken,
         },
         llmProxyToken: input.sessionToken,
+        providerConversationId: 'conv_123',
       };
     },
   }),
@@ -388,18 +389,22 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.createTransportSession).not.toHaveBeenCalled();
   });
 
-  it('reuses the live hold on a reconnect: no second charge, reservation record untouched', async () => {
+  it('reuses the live hold on a reconnect and records the new provider conversation', async () => {
     mocks.findByIdAndUserId.mockResolvedValue({
       id: SESSION_ID,
       name: 'My notebook',
       voiceReservedCredits: RESERVED_CREDITS,
       voiceSessionStartedAt: new Date(),
+      voiceProviderConversationIds: ['conv_previous'],
     });
     const { res, run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
-    expect(mocks.sessionUpdate).not.toHaveBeenCalled();
+    expect(mocks.sessionUpdate).toHaveBeenCalledWith({
+      id: SESSION_ID,
+      voiceProviderConversationIds: ['conv_previous', 'conv_123'],
+    });
   });
 
   it('records the reservation on a fresh connect', async () => {
@@ -482,7 +487,7 @@ describe('POST /api/v1/voice/sessions', () => {
 });
 
 describe('POST /api/v1/voice/sessions/{id}/end', () => {
-  const fireEnd = (opts: { apiKey?: string | null; id?: string } = {}) => {
+  const fireEnd = (opts: { apiKey?: string | null; id?: string; body?: Record<string, unknown> } = {}) => {
     const id = opts.id ?? SESSION_ID;
     return fire(endHandler, { url: `/api/v1/voice/sessions/${id}/end`, query: { id }, body: {}, ...opts });
   };

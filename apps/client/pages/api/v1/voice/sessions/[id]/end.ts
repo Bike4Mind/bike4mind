@@ -8,8 +8,9 @@
 import { sessionRepository } from '@bike4mind/database';
 import { endVoiceSessionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { NotFoundError } from '@server/utils/errors';
+import { BadGatewayError, ConflictError, NotFoundError } from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
+import { measureVoiceCallSeconds } from '@server/voice/measureVoiceCall';
 import { settleVoiceHold } from '@server/voice/settleVoiceHold';
 
 const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, res) => {
@@ -19,7 +20,8 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
 
   // Owner-scoped fetch: only the session owner ends the call and receives the
   // refund. A shared-read user must never be able to touch another user's credits.
-  const session = await sessionRepository.findByIdAndUserId(sessionId, req.user.id);
+  // includeDeleted: deleting the notebook mid-call must not strand the reservation.
+  const session = await sessionRepository.findByIdAndUserId(sessionId, req.user.id, { includeDeleted: true });
   if (!session) {
     throw new NotFoundError('Session not found');
   }
@@ -30,15 +32,37 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
   // Already reconciled (no hold left) or nothing was reserved (enforceCredits off):
   // clear any stale marker so the session stops counting as an active voice call.
   if (reserved <= 0 || !startedAt) {
-    await sessionRepository.update({ id: session.id, voiceReservedCredits: null, voiceSessionStartedAt: null });
+    await sessionRepository.update(
+      { id: session.id, voiceReservedCredits: null, voiceSessionStartedAt: null, voiceProviderConversationIds: [] },
+      { includeDeleted: true }
+    );
     return res.status(200).json({ refunded: 0, alreadyReconciled: true });
   }
 
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000));
-  const settlement = await settleVoiceHold(
-    { id: session.id, userId: req.user.id, voiceReservedCredits: reserved, voiceSessionStartedAt: startedAt },
-    elapsedSeconds
-  );
+  const hold = {
+    id: session.id,
+    userId: req.user.id,
+    voiceReservedCredits: reserved,
+    voiceSessionStartedAt: startedAt,
+    voiceProviderConversationIds: session.voiceProviderConversationIds ?? [],
+  };
+  const measurement = await measureVoiceCallSeconds(hold);
+  switch (measurement.kind) {
+    case 'live':
+      // Billing a running call at its duration so far would let the caller keep talking unbilled.
+      throw new ConflictError('The voice call is still in progress; end it before settling');
+    case 'pending':
+      throw new ConflictError('The voice provider has not recorded this call yet; retry shortly');
+    case 'unverifiable':
+      req.logger.warn(
+        { sessionId: session.id, reason: measurement.reason },
+        '[voice-v2/sessions/end] usage unverifiable'
+      );
+      throw new BadGatewayError('Could not verify voice call usage with the provider; retry later');
+  }
+
+  const { elapsedSeconds } = measurement;
+  const settlement = await settleVoiceHold(hold, elapsedSeconds);
   // A concurrent end or the stale-hold sweep settled it first.
   if (!settlement.settled) {
     return res.status(200).json({ refunded: 0, alreadyReconciled: true });
@@ -46,7 +70,7 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
   const { owed, refund } = settlement;
 
   req.logger.info(
-    { sessionId: session.id, elapsedSeconds, reserved, owed, refund },
+    { sessionId: session.id, elapsedSeconds, source: measurement.source, reserved, owed, refund },
     '[voice-v2/sessions/end] reconciled voice credits'
   );
   return res.status(200).json({ refunded: refund, elapsedSeconds });

@@ -310,6 +310,21 @@ const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Settle voice holds no client ever ended (closed tab, failed connect, exhausted /end retries).
+const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/voiceHoldSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    link: [...allSecrets],
+    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+    logging: { retention: '1 week' },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 // Integration Health Check - runs every 5 minutes to probe external APIs
 // Probes: Slack, GitHub, Jira, Confluence
 const integrationHealthCheckCron = new sst.aws.Cron('integrationHealthCheck', {
@@ -1039,6 +1054,7 @@ export {
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   creditLotSweepCron,
+  voiceHoldSweepCron,
   sreStaleDispatchCron,
   attackSimulationFunction,
   attackSimulationCron,

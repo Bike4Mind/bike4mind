@@ -275,6 +275,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     },
     voiceReservedCredits: { type: Number, required: false, default: null },
     voiceSessionStartedAt: { type: Date, required: false, default: null },
+    voiceProviderConversationIds: { type: [String], required: false, default: [] },
     ...ShareableDocumentSchema,
   },
   {
@@ -454,11 +455,12 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     if (count <= 0 || !mongoose.isObjectIdOrHexString(sessionId)) return;
     await this.sessionModel.updateOne({ _id: sessionId }, { $inc: { imageCount: count } });
   }
-  async findByIdAndUserId(id: string, userId: string) {
+  async findByIdAndUserId(id: string, userId: string, options?: { includeDeleted?: boolean }) {
     // A non-ObjectId id can never address a row - report no such row, not a CastError the
     // calling route cannot attribute. Same contract as `BaseRepository.findById`.
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    return this.sessionModel.findOne({ _id: id, userId });
+    const query = this.sessionModel.findOne({ _id: id, userId });
+    return options?.includeDeleted ? query.setOptions({ includeDeleted: true }) : query;
   }
   async findRecentlyUpdatedByUserId(userId: string, ctx: mongoose.mongo.ClientSession | null = null) {
     const query = this.sessionModel.findOne({ userId }).sort({ lastUpdated: -1 }).limit(1);
@@ -651,8 +653,10 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     const sessions = await this.sessionModel
       .find(
         { voiceSessionStartedAt: { $lt: startedBefore }, voiceReservedCredits: { $gt: 0 } },
-        { userId: 1, voiceReservedCredits: 1, voiceSessionStartedAt: 1 }
+        { userId: 1, voiceReservedCredits: 1, voiceSessionStartedAt: 1, voiceProviderConversationIds: 1 }
       )
+      // A notebook deleted mid-call still owes its owner the unused reservation.
+      .setOptions({ includeDeleted: true })
       .sort({ voiceSessionStartedAt: 1 })
       .limit(limit)
       .lean();
@@ -661,6 +665,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       userId: s.userId,
       voiceReservedCredits: s.voiceReservedCredits as number,
       voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
+      voiceProviderConversationIds: s.voiceProviderConversationIds ?? [],
     }));
   }
 
@@ -669,17 +674,23 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     // end, sweep or settlement frame wins, and a newer call's hold is never touched.
     const claimed = await this.sessionModel.findOneAndUpdate(
       { _id: sessionId, voiceSessionStartedAt: startedAt },
-      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null } },
-      { projection: { _id: 1 } }
+      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null, voiceProviderConversationIds: [] } },
+      { projection: { _id: 1 }, includeDeleted: true }
     );
     return claimed != null;
   }
 
-  async restoreVoiceHold(sessionId: string, voiceReservedCredits: number, startedAt: Date) {
+  async restoreVoiceHold(
+    sessionId: string,
+    voiceReservedCredits: number,
+    startedAt: Date,
+    voiceProviderConversationIds: string[] = []
+  ) {
     // Only while no newer call has started a hold on the session.
     const { modifiedCount } = await this.sessionModel.updateOne(
       { _id: sessionId, voiceSessionStartedAt: null },
-      { $set: { voiceReservedCredits, voiceSessionStartedAt: startedAt } }
+      { $set: { voiceReservedCredits, voiceSessionStartedAt: startedAt, voiceProviderConversationIds } },
+      { includeDeleted: true }
     );
     return modifiedCount === 1;
   }

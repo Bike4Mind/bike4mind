@@ -3,10 +3,13 @@
  * connect on a client that never called the end endpoint. Without it such a hold keeps the whole
  * up-front reservation and the session keeps counting against the concurrent-call cap.
  *
- * Keeps only the call time the session evidences - from the hold's start to its last turn within
- * the longest call's window, so a call that never produced a turn costs nothing - capped at the
- * hold. Turns past the window are never call time: the user kept using the session after the call
- * died, and counting them would keep the whole hold. Settles through
+ * Bills the provider-recorded call time when the hold carries provider conversation ids
+ * (measureVoiceCallSeconds). Otherwise - no ids, or the provider cannot answer - it keeps only the
+ * call time the session evidences: from the hold's start to its last turn within the longest
+ * call's window, so a call that never produced a turn costs nothing, capped at the hold. Turns past
+ * the window are never call time: the user kept using the session after the call died, and
+ * counting them would keep the whole hold. The fallback is what keeps a hold whose provider record
+ * is unreadable from being retried forever. Settles through
  * settleVoiceHold, the same claim-then-refund rule as POST /api/v1/voice/sessions/{id}/end, so a
  * concurrent end and a second sweep run are both no-ops.
  *
@@ -15,6 +18,7 @@
 import { connectDB, questRepository, sessionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
+import { measureVoiceCallSeconds } from '@server/voice/measureVoiceCall';
 import { settleVoiceHold, type VoiceHold } from '@server/voice/settleVoiceHold';
 import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
 import { Resource } from 'sst';
@@ -49,6 +53,19 @@ async function evidencedCallSeconds(hold: VoiceHold): Promise<number> {
   return Math.floor((lastTurnAtMs - startedAtMs) / 1000);
 }
 
+async function staleCallSeconds(hold: VoiceHold, now: Date): Promise<number> {
+  if ((hold.voiceProviderConversationIds ?? []).length > 0) {
+    const measurement = await measureVoiceCallSeconds(hold, now);
+    if (measurement.kind === 'measured') return measurement.elapsedSeconds;
+    // Past the stale window a call cannot still be live, so a provider that disagrees is unreliable.
+    logger.warn('[voiceHoldSweep] provider usage unavailable; falling back to session turns', {
+      sessionId: hold.id,
+      measurement,
+    });
+  }
+  return evidencedCallSeconds(hold);
+}
+
 export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHoldSweepResult> {
   const startedBefore = new Date(now.getTime() - VOICE_HOLD_STALE_AFTER_MS);
   const holds = await sessionRepository.findStaleVoiceHolds(startedBefore, VOICE_HOLD_SWEEP_LIMIT);
@@ -62,7 +79,7 @@ export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHo
 
   for (const hold of holds) {
     try {
-      const elapsedSeconds = await evidencedCallSeconds(hold);
+      const elapsedSeconds = await staleCallSeconds(hold, now);
       const settlement = await settleVoiceHold(hold, elapsedSeconds);
       if (!settlement.settled) {
         result.alreadySettled++;

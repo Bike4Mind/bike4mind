@@ -1,4 +1,5 @@
 import { usdToCredits } from '@bike4mind/utils';
+import { z } from 'zod';
 import type { CostEstimate, CreateSessionInput, CreateSessionResult, EndSessionResult, IVoiceTransport } from './types';
 
 export interface ElevenLabsTransportConfig {
@@ -30,6 +31,12 @@ export function estimateElevenLabsConversationalCost(
 }
 
 const SIGNED_URL_ENDPOINT = 'https://api.elevenlabs.io/v1/convai/conversation/get-signed-url';
+const SignedUrlResponseSchema = z.object({
+  signed_url: z.url(),
+  // Optional: the docs promise it only via include_conversation_id. Without it the end endpoint
+  // falls back to wall-clock billing instead of failing every call start.
+  conversation_id: z.string().min(1).optional(),
+});
 
 export interface ElevenLabsClientBootstrap {
   transport: 'elevenlabs-conversational';
@@ -60,7 +67,7 @@ export function createElevenLabsConversationalTransport(config: ElevenLabsTransp
     id: 'elevenlabs-conversational',
 
     async createSession(input: CreateSessionInput): Promise<CreateSessionResult> {
-      const url = `${SIGNED_URL_ENDPOINT}?agent_id=${encodeURIComponent(config.agentId)}`;
+      const url = `${SIGNED_URL_ENDPOINT}?agent_id=${encodeURIComponent(config.agentId)}&include_conversation_id=true`;
       const res = await fetchImpl(url, {
         method: 'GET',
         headers: { 'xi-api-key': config.apiKey },
@@ -71,10 +78,11 @@ export function createElevenLabsConversationalTransport(config: ElevenLabsTransp
         throw new Error(`ElevenLabs signed-url fetch failed: ${res.status} ${body}`);
       }
 
-      const json = (await res.json()) as { signed_url?: string };
-      if (!json.signed_url) {
+      const parsed = SignedUrlResponseSchema.safeParse(await res.json());
+      if (!parsed.success) {
         throw new Error('ElevenLabs signed-url response missing signed_url');
       }
+      const json = parsed.data;
 
       const clientBootstrap: ElevenLabsClientBootstrap = {
         transport: 'elevenlabs-conversational',
@@ -85,7 +93,7 @@ export function createElevenLabsConversationalTransport(config: ElevenLabsTransp
         sessionToken: input.sessionToken,
       };
 
-      return { clientBootstrap, llmProxyToken: input.sessionToken };
+      return { clientBootstrap, llmProxyToken: input.sessionToken, providerConversationId: json.conversation_id };
     },
 
     async endSession(_sessionId: string): Promise<EndSessionResult> {

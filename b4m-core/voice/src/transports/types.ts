@@ -33,6 +33,8 @@ export interface CreateSessionInput {
 
 export interface CreateSessionResult {
   clientBootstrap: unknown;
+  /** Provider-issued id used to verify that a failed connection never opened. */
+  providerConversationId?: string;
   /**
    * The signed session token the proxy verifies (mirrors what the browser
    * forwards inside `clientBootstrap`). Same value as `CreateSessionInput.sessionToken`.

@@ -136,8 +136,9 @@ describe('useConversationalVoice — auto-reconnect', () => {
   it('reconciles the credit hold when reconnect bootstraps keep failing', async () => {
     await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
     onConnect();
+    let offline = true;
     apiPost.mockImplementation((url: string) =>
-      url === '/api/voice/v2/sessions' ? Promise.reject(new Error('offline')) : Promise.resolve({ data: {} })
+      url === '/api/voice/v2/sessions' || offline ? Promise.reject(new Error('offline')) : Promise.resolve({ data: {} })
     );
 
     onDisconnect({ reason: 'error', message: 'drop', context: new Event('close') });
@@ -145,6 +146,36 @@ describe('useConversationalVoice — auto-reconnect', () => {
 
     expect(useConversationalVoiceStore.getState().phase).toBe('error');
     expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+
+    const firstSettlement = endCalls()[0][1];
+    offline = false;
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(endCalls()).toHaveLength(2);
+    expect(firstSettlement).toMatchObject({ verifyProviderUsage: false });
+    expect(endCalls()[1][1]).toMatchObject({ verifyProviderUsage: true, failedToConnect: false });
+  });
+
+  it('does not start another call on the same session while its hold is unsettled', async () => {
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    onConnect();
+    let settlementOffline = true;
+    apiPost.mockImplementation((url: string) => {
+      if (String(url).endsWith('/end') && settlementOffline) return Promise.reject(new Error('offline'));
+      if (url === '/api/voice/v2/sessions') return Promise.resolve({ data: BOOTSTRAP });
+      return Promise.resolve({ data: {} });
+    });
+
+    await useConversationalVoiceStore.getState().end();
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+
+    expect(useConversationalVoiceStore.getState().phase).toBe('error');
+    expect(apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions')).toHaveLength(1);
+
+    settlementOffline = false;
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(0);
   });
 });
 
@@ -194,5 +225,27 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
 
     expect(useConversationalVoiceStore.getState().phase).toBe('error');
     expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+    expect(endCalls()[0][1]).toMatchObject({ failedToConnect: true });
+  });
+
+  it('does not reserve credits when ended during the microphone probe', async () => {
+    let resolveMicrophone: (stream: { getTracks: () => { stop: typeof stopTrack }[] }) => void = () => {
+      throw new Error('Microphone probe was not started');
+    };
+    getUserMedia.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveMicrophone = resolve;
+        })
+    );
+
+    const starting = useConversationalVoiceStore.getState().start({});
+    await useConversationalVoiceStore.getState().end();
+    resolveMicrophone({ getTracks: () => [{ stop: stopTrack }] });
+    await starting;
+
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(sessionCalls()).toHaveLength(0);
+    expect(useConversationalVoiceStore.getState().phase).toBe('ended');
   });
 });

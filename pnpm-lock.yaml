@@ -1796,6 +1796,9 @@ importers:
       '@bike4mind/utils':
         specifier: workspace:*
         version: link:../utils
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       tsdown:
         specifier: ^0.22.3

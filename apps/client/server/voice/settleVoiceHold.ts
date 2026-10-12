@@ -6,6 +6,8 @@ export type VoiceHold = {
   userId: string;
   voiceReservedCredits: number;
   voiceSessionStartedAt: Date;
+  /** Restored with the hold if the refund fails, so a retry can still verify provider usage. */
+  voiceProviderConversationIds?: string[];
 };
 
 export type VoiceHoldSettlement = { settled: false } | { settled: true; owed: number; refund: number };
@@ -15,8 +17,7 @@ export type VoiceHoldSettlement = { settled: false } | { settled: true; owed: nu
  * the rest. The one settlement rule shared by POST /api/v1/voice/sessions/{id}/end and the stale
  * hold sweep (apps/workers/src/cron/voiceHoldSweep.ts). The hold is claimed atomically before any
  * credit moves, so of concurrent settlers exactly one refunds; the others get `settled: false`.
- * The caller supplies `elapsedSeconds`: the end endpoint measures wall clock, the sweep measures
- * the last turn the session evidences.
+ * The caller supplies `elapsedSeconds`, measured by measureVoiceCallSeconds (./measureVoiceCall.ts).
  *
  * If crediting back throws, the hold is restored and the error rethrown, so the sweep retries it
  * rather than leaving the user charged the full reservation with no record left to reconcile.
@@ -33,7 +34,12 @@ export async function settleVoiceHold(hold: VoiceHold, elapsedSeconds: number): 
       await userRepository.incrementCredits(hold.userId, refund);
     } catch (creditError) {
       await sessionRepository
-        .restoreVoiceHold(hold.id, hold.voiceReservedCredits, hold.voiceSessionStartedAt)
+        .restoreVoiceHold(
+          hold.id,
+          hold.voiceReservedCredits,
+          hold.voiceSessionStartedAt,
+          hold.voiceProviderConversationIds ?? []
+        )
         .catch(restoreError => {
           throw new AggregateError(
             [creditError, restoreError],

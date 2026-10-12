@@ -399,6 +399,7 @@ When you get the tool result back, summarize it conversationally for voice.`;
       id: session.id,
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
       voiceSessionStartedAt,
+      voiceProviderConversationIds: [],
     });
   }
 

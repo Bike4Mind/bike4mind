@@ -154,7 +154,10 @@ export const endVoiceSessionContract = defineEndpoint({
   summary: 'End a voice session',
   description:
     'Reconciles the credit reservation taken by `POST /api/v1/voice/sessions` down to the actual call ' +
-    'duration and refunds the difference. Call it when the conversation ends. Idempotent: once the hold ' +
+    'duration and refunds the difference. For an ElevenLabs call the duration is the provider-recorded call ' +
+    'time, so a transport that never connected costs nothing and time spent offline is not billed. Call it ' +
+    'after the conversation has ended: while the provider still reports the call as open the endpoint ' +
+    'answers `409` and settles nothing, so retry after hanging up. Idempotent: once the hold ' +
     'is cleared, a repeat call refunds nothing and reports `alreadyReconciled: true`. Only the session ' +
     'owner can end a call. `POST /api/voice/v2/sessions/{id}/end` is a legacy alias of this endpoint. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.',
@@ -170,6 +173,15 @@ export const endVoiceSessionContract = defineEndpoint({
     },
     404: {
       description: 'No session with that id is owned by the caller (a malformed id is also a 404).',
+      schema: ApiErrorSchema,
+    },
+    409: {
+      description:
+        'The provider still reports the call as open, or has not recorded it yet; nothing was settled. Retry shortly.',
+      schema: ApiErrorSchema,
+    },
+    502: {
+      description: 'The provider could not confirm conversation usage; nothing was settled. Retry later.',
       schema: ApiErrorSchema,
     },
   },

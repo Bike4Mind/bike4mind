@@ -214,14 +214,21 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
 
   // A reconnect leaves the original reservation record untouched so end-reconciliation
   // measures the full call duration, not just the post-reconnect segment.
-  if (!reuseHold) {
-    const voiceSessionStartedAt = new Date();
-    await sessionRepository.update({
-      id: session.id,
-      voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt,
-    });
-  }
+  const voiceProviderConversationIds = createResult.providerConversationId
+    ? [...(reuseHold ? (session.voiceProviderConversationIds ?? []) : []), createResult.providerConversationId]
+    : reuseHold
+      ? (session.voiceProviderConversationIds ?? [])
+      : [];
+  await sessionRepository.update({
+    id: session.id,
+    voiceProviderConversationIds,
+    ...(!reuseHold
+      ? {
+          voiceReservedCredits: enforceCredits ? reservedCredits : null,
+          voiceSessionStartedAt: new Date(),
+        }
+      : {}),
+  });
 
   return res.status(200).json({
     session: { id: session.id, name: session.name },

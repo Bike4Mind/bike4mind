@@ -845,6 +845,8 @@ export interface ISession {
    * Used to enforce the 60-minute hard cap.
    */
   voiceSessionStartedAt?: Date | null;
+  /** Provider-issued ids for checking which voice transports opened and how long they ran. */
+  voiceProviderConversationIds?: string[] | null;
 }
 
 ///////////
@@ -984,7 +986,11 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @param userId - The user ID
    * @returns The session
    */
-  findByIdAndUserId: (id: string, userId: string) => Promise<ISessionDocument | null>;
+  findByIdAndUserId: (
+    id: string,
+    userId: string,
+    options?: { includeDeleted?: boolean }
+  ) => Promise<ISessionDocument | null>;
 
   /**
    * Find all sessions with a knowledge ID
@@ -1142,7 +1148,15 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   findStaleVoiceHolds: (
     startedBefore: Date,
     limit: number
-  ) => Promise<Array<{ id: string; userId: string; voiceReservedCredits: number; voiceSessionStartedAt: Date }>>;
+  ) => Promise<
+    Array<{
+      id: string;
+      userId: string;
+      voiceReservedCredits: number;
+      voiceSessionStartedAt: Date;
+      voiceProviderConversationIds: string[];
+    }>
+  >;
 
   /**
    * Atomically clear the voice hold that started at `startedAt`. Resolves true for the single
@@ -1154,5 +1168,10 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * Put back a hold claimed by `claimVoiceHold` whose refund then failed, so it can be settled
    * again. Resolves false (and writes nothing) when the session already holds a newer call.
    */
-  restoreVoiceHold: (sessionId: string, voiceReservedCredits: number, startedAt: Date) => Promise<boolean>;
+  restoreVoiceHold: (
+    sessionId: string,
+    voiceReservedCredits: number,
+    startedAt: Date,
+    voiceProviderConversationIds?: string[]
+  ) => Promise<boolean>;
 }

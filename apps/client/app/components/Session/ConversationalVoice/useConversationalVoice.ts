@@ -2,7 +2,9 @@ import { create } from 'zustand';
 import { Conversation } from '@elevenlabs/client';
 import type { Mode } from '@elevenlabs/client';
 import { api } from '@client/app/contexts/ApiContext';
+import { useUser } from '@client/app/contexts/UserContext';
 import axios from 'axios';
+import { z } from 'zod';
 
 export interface ConversationalClientBootstrap {
   transport: 'elevenlabs-conversational';
@@ -80,17 +82,129 @@ function clearReconnectTimer(): void {
   }
 }
 
-// Reconcile the up-front credit reservation down to the actual call duration.
-// Best-effort: a failure just leaves the upfront hold in place - it must never
-// block teardown or surface an error to the user. Safe to call more than once
-// (the endpoint is idempotent), so both end() and a natural onDisconnect use it.
+// Failed /end requests wait here and are retried. sessionStorage survives a reload but not a
+// closed tab; the server's voiceHoldSweep (apps/workers/src/cron/voiceHoldSweep.ts) settles
+// whatever this queue never does, so giving up here never strands a hold.
+const PENDING_SETTLEMENTS_KEY = 'voice-pending-settlements';
+const PendingSettlementSchema = z.object({
+  sessionId: z.string(),
+  // The user who held the call: after a sign-out/sign-in in the same tab, another user's
+  // entries are dropped instead of replayed under the wrong credentials.
+  userId: z.string(),
+  attempts: z.number().int().nonnegative(),
+});
+type PendingSettlement = z.infer<typeof PendingSettlementSchema>;
+
+// With the 60s backoff cap this is roughly 20 minutes of retrying before the sweep takes over.
+const MAX_SETTLEMENT_ATTEMPTS = 20;
+const INITIAL_SETTLEMENT_RETRY_MS = 5000;
+const MAX_SETTLEMENT_RETRY_MS = 60_000;
+
+function currentUserId(): string | null {
+  return useUser.getState().currentUser?.id ?? null;
+}
+
+function readPendingSettlements(): Map<string, PendingSettlement> {
+  if (typeof window === 'undefined') return new Map();
+  try {
+    const stored = sessionStorage.getItem(PENDING_SETTLEMENTS_KEY);
+    if (!stored) return new Map();
+    const parsed = z.array(PendingSettlementSchema).parse(JSON.parse(stored));
+    return new Map(parsed.map(settlement => [settlement.sessionId, settlement]));
+  } catch (err) {
+    console.error('Could not restore pending voice credit settlements', err);
+    return new Map();
+  }
+}
+
+const pendingSettlements = readPendingSettlements();
+let settlementRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let settlementInFlight = false;
+let settlementRetryDelayMs = INITIAL_SETTLEMENT_RETRY_MS;
+
+function persistPendingSettlements(): void {
+  try {
+    if (pendingSettlements.size === 0) {
+      sessionStorage.removeItem(PENDING_SETTLEMENTS_KEY);
+    } else {
+      sessionStorage.setItem(PENDING_SETTLEMENTS_KEY, JSON.stringify([...pendingSettlements.values()]));
+    }
+  } catch (err) {
+    console.error('Could not persist pending voice credit settlements', err);
+  }
+}
+
+function scheduleSettlementRetry(): void {
+  if (settlementRetryTimer || pendingSettlements.size === 0) return;
+  settlementRetryTimer = setTimeout(() => {
+    settlementRetryTimer = null;
+    void drainPendingSettlements();
+  }, settlementRetryDelayMs);
+}
+
+// Network failures, 5xx (provider unverifiable) and 409 (the provider still has the call open)
+// can succeed later. Any other status is final: retrying a 403/404 would loop forever.
+function isRetryableSettlementError(err: unknown): boolean {
+  if (!axios.isAxiosError(err)) return false;
+  const status = err.response?.status;
+  return status === undefined || status === 409 || status >= 500;
+}
+
+function dropPendingSettlement(sessionId: string): void {
+  pendingSettlements.delete(sessionId);
+  persistPendingSettlements();
+}
+
+async function drainPendingSettlements(): Promise<void> {
+  if (settlementInFlight || pendingSettlements.size === 0) return;
+  settlementInFlight = true;
+  try {
+    const userId = currentUserId();
+    for (const settlement of [...pendingSettlements.values()]) {
+      if (settlement.userId !== userId) {
+        console.warn('Dropping a voice credit settlement held by another user', settlement.sessionId);
+        dropPendingSettlement(settlement.sessionId);
+        continue;
+      }
+      try {
+        await api.post(`/api/voice/v2/sessions/${settlement.sessionId}/end`);
+        dropPendingSettlement(settlement.sessionId);
+        settlementRetryDelayMs = INITIAL_SETTLEMENT_RETRY_MS;
+      } catch (err) {
+        settlement.attempts += 1;
+        if (!isRetryableSettlementError(err) || settlement.attempts >= MAX_SETTLEMENT_ATTEMPTS) {
+          console.error('Giving up on voice credit settlement; the server sweep will settle it', err);
+          dropPendingSettlement(settlement.sessionId);
+          continue;
+        }
+        persistPendingSettlements();
+        console.error('Voice credit settlement failed; retrying', err);
+        settlementRetryDelayMs = Math.min(settlementRetryDelayMs * 2, MAX_SETTLEMENT_RETRY_MS);
+      }
+    }
+  } finally {
+    settlementInFlight = false;
+    scheduleSettlementRetry();
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => void drainPendingSettlements());
+  if (pendingSettlements.size > 0) scheduleSettlementRetry();
+}
+
 async function reconcileVoiceSession(sessionId: string | null): Promise<void> {
   if (!sessionId) return;
-  try {
-    await api.post(`/api/voice/v2/sessions/${sessionId}/end`, {});
-  } catch {
-    // ignore - reservation reconciliation is not user-blocking
+  const userId = currentUserId();
+  if (!userId) {
+    console.error('No signed-in user to settle the voice credit hold; the server sweep will settle it', sessionId);
+    return;
   }
+  if (!pendingSettlements.has(sessionId)) {
+    pendingSettlements.set(sessionId, { sessionId, userId, attempts: 0 });
+    persistPendingSettlements();
+  }
+  await drainPendingSettlements();
 }
 
 // Probe the microphone BEFORE bootstrapping: the bootstrap reserves credits, and a
@@ -98,7 +212,9 @@ async function reconcileVoiceSession(sessionId: string | null): Promise<void> {
 // connect. The tracks are released at once; the SDK reopens the mic itself.
 async function ensureMicrophone(): Promise<void> {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw Object.assign(new Error('Microphone is not available in this browser.'), { name: 'NotFoundError' });
+    throw Object.assign(new Error('Microphone access needs a secure (https) connection or a supported browser.'), {
+      name: window.isSecureContext ? 'NotSupportedError' : 'SecurityError',
+    });
   }
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   stream.getTracks().forEach(track => track.stop());
@@ -131,6 +247,12 @@ function formatConnectError(err: unknown): string {
   }
   if (name === 'NotReadableError') {
     return 'Microphone is busy (in use by another app). Close other audio apps and retry.';
+  }
+  if (name === 'SecurityError') {
+    return 'Microphone access needs a secure (https) connection. Open the site over https and retry.';
+  }
+  if (name === 'NotSupportedError') {
+    return 'This browser does not support microphone access. Try a current Chrome, Edge, Firefox or Safari.';
   }
   return `Failed to open voice connection: ${err instanceof Error ? err.message : String(err)}`;
 }
@@ -210,8 +332,12 @@ async function establishConnection(
     return;
   }
 
-  // Superseded during the /sessions request - don't open a connection we'd orphan.
-  if (isStale()) return;
+  // Superseded during the /sessions request - don't open a connection we'd orphan. The server
+  // already reserved credits for it, and end() ran before the id was known, so settle it here.
+  if (isStale()) {
+    if (!isReconnect) void reconcileVoiceSession(bootstrap.session?.id ?? null);
+    return;
+  }
 
   activeSessionId = bootstrap.session?.id ?? null;
   // Only the first connect drives the requesting->connecting->navigate flow; a
@@ -319,6 +445,17 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     reconnectAttempts = 0;
     const myGen = ++startGen;
     set({ phase: 'requesting-session', errorMessage: null, mode: null, lastUserMessage: null });
+    if (sessionId && pendingSettlements.has(sessionId)) {
+      await drainPendingSettlements();
+      if (myGen !== startGen) return;
+      if (pendingSettlements.has(sessionId)) {
+        set({
+          phase: 'error',
+          errorMessage: 'Previous voice call is still being settled. Check your connection and retry.',
+        });
+        return;
+      }
+    }
     try {
       await ensureMicrophone();
     } catch (err) {
