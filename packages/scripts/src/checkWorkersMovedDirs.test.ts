@@ -146,6 +146,7 @@ describe('directories and modules moved into apps/workers stay moved', () => {
         'apps/workers/src/queueHandlers/emailBatch.dispatch',
         // infra/securityAlerts.ts, which no other moved handler lives in.
         'apps/workers/src/security/alertProcessor.handler',
+        // infra/cron.ts
         'apps/workers/src/security/attackSimulation/runner.handler',
       ])
     );
