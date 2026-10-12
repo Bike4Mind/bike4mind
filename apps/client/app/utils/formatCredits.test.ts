@@ -1,5 +1,20 @@
-import { describe, it, expect } from 'vitest';
-import { formatAnswerCost, formatCreditBalance } from './formatCredits';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { formatAnswerCost, formatCreditAmount, formatCreditBalance } from './formatCredits';
+
+describe('formatCreditAmount', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('groups with en-US separators even when the browser locale would not', () => {
+    // Stand-in for an es-ES browser: a bare toLocaleString() would give "50.000".
+    const native = Number.prototype.toLocaleString;
+    vi.spyOn(Number.prototype, 'toLocaleString').mockImplementation(function (this: number, locales, options) {
+      return native.call(this, locales ?? 'es-ES', options);
+    });
+
+    expect(formatCreditAmount(50_000)).toBe('50,000');
+    expect(formatCreditBalance(9_951)).toBe('9,951 credits');
+  });
+});
 
 describe('formatCreditBalance', () => {
   it('labels the number and rounds fractional balances down', () => {

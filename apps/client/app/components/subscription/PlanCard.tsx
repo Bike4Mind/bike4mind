@@ -2,6 +2,7 @@ import { Box, Typography, Divider } from '@mui/joy';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
 import { blackAlpha } from '@client/app/utils/themes/colors';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
 interface PlanCardProps {
   name: string;
@@ -116,7 +117,7 @@ const PlanCard = ({
       <Typography sx={{ mb: '20px', fontSize: '24px', lineHeight: '24px' }}>{name}</Typography>
       {credits && (
         <Typography level="body-md" sx={{ mb: answersEstimate ? '8px' : '32px', color: 'neutral.500' }}>
-          {t('subscription_modal.credits_per_month', { credits: credits.toLocaleString() })}
+          {t('subscription_modal.credits_per_month', { credits: formatCreditAmount(credits) })}
         </Typography>
       )}
       {credits && answersEstimate && (

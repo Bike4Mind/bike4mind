@@ -255,7 +255,11 @@ const SubscriptionModalContent = () => {
                   actionButton={
                     <Stack gap={1}>
                       {isStripeManaged && <ManageSubscriptionButton isPrimaryAction={hasPaymentIssue} />}
-                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                      <SubscribeButton
+                        priceId={plan.priceId}
+                        planName={plan.name}
+                        cancellableSubscriptions={cancellableSubscriptions}
+                      />
                     </Stack>
                   }
                 />
