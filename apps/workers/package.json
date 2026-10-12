@@ -50,7 +50,7 @@
     "@types/mime-types": "^3.0.1",
     "@types/node": "^24.0.0",
     "@types/yauzl": "^3.4.0",
-    "mongodb-memory-server": "^11.2.0",
+    "mongodb-memory-server": "^11.3.0",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^6.1.1",
