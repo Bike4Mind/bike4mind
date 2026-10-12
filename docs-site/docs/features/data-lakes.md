@@ -128,6 +128,10 @@ The files are removed in the background, so a large folder can take a few minute
 finishes the connection shows **Disconnecting** and cannot be synced. If it stops making progress,
 a **Retry disconnect** button appears.
 
+**Why does my Drive connection say "Credential error"?**
+Google Drive access for the connection was revoked or has expired, so syncing has stopped. Click
+**Reconnect Google Drive**, approve Google's consent screen, and the folder re-syncs when you return.
+
 ## Related
 
 - [Knowledge Management](./knowledge-management.md) -- uploading and managing files
