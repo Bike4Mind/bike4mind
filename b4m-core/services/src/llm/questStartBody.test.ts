@@ -24,6 +24,10 @@ describe('QuestStartBodySchema.authOrigin', () => {
     expect(QuestStartBodySchema.parse(body).authOrigin).toBe('internal');
   });
 
+  it('keeps a legacy key body a key turn', () => {
+    expect(QuestStartBodySchema.parse({ ...body, apiKeyId: 'k1' }).authOrigin).toBe('apiKey');
+  });
+
   it('rejects an unknown origin', () => {
     expect(() => QuestStartBodySchema.parse({ ...body, authOrigin: 'admin' })).toThrow();
   });
