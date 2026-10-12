@@ -429,7 +429,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
   }, [transactions, timePeriod, viewMode, theme.palette, currentUser]);
 
   // Tooltip text for days remaining, adjusted based on selected time period
-  const tooEarlyToProject = observedDays > 0 && observedDays < MIN_DAYS_FOR_PROJECTION;
+  // Only when a projection would otherwise exist: no burn or no balance is N/A, not "too early".
+  const tooEarlyToProject =
+    burnRate > 0 && (currentUser?.currentCredits ?? 0) > 0 && observedDays < MIN_DAYS_FOR_PROJECTION;
   const daysTooltipText = useMemo(() => {
     if (tooEarlyToProject) {
       return `Shown once there are ${MIN_DAYS_FOR_PROJECTION} days of usage to project from`;

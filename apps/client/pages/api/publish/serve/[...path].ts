@@ -594,7 +594,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
         gateView: gateViewAudit,
         shareTokenEntryId,
       });
-      return sendExport(res, exportFormat, artifact.title, body, exportCacheControl);
+      return sendExport(
+        res,
+        exportFormat,
+        plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact.source.kind),
+        body,
+        exportCacheControl
+      );
     }
     // Reply/fabfile artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
     // standalone SANDBOXED document for the viewer page's iframe. Author JS runs, but the

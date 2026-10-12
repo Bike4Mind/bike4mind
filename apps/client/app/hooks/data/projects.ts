@@ -47,10 +47,12 @@ export const useCreateProject = (callback?: { onSuccess?: () => void; onError?: 
       const response = await api.post<IProjectDocument>('/api/projects', project);
       return response.data;
     },
-    onSuccess: (project: IProjectDocument) => {
+    onSuccess: (project: IProjectDocument, variables) => {
       updateAllQueryData(queryClient, 'projects', 'write', project, {
         keysAllowedToCreate: [['projects', 'search']],
       });
+      // Same refresh the add-to-project hooks do: files created into a project change the own-files list.
+      if (variables.fileIds?.length) queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
 
       toast.success('Project created successfully');
       callback?.onSuccess?.();
