@@ -51,10 +51,12 @@ export const refuseWholeInvite = async (
   }
 
   const pending = invite.recipients?.pending ?? [];
-  const isPendingRecipient = !!user.email && pending.includes(user.email);
+  // Case-insensitive for the same reason as acceptInvite's recipient gate (accept.ts).
+  const email = user.email?.toLowerCase();
+  const isPendingRecipient = !!email && pending.some(p => p.toLowerCase() === email);
 
   if (isPendingRecipient) {
-    invite.recipients!.pending = pending.filter(p => p !== user.email);
+    invite.recipients!.pending = pending.filter(p => p.toLowerCase() !== email);
     invite.recipients!.refused = [...(invite.recipients!.refused ?? []), user.email as string];
     invite.remaining -= 1;
   } else {

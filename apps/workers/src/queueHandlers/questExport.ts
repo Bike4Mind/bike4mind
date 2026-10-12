@@ -390,6 +390,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // Generate presigned URL and emit completed event so client receives download URL on retry
       const filename = `questmaster-${slug}-${dateStr}.zip`;
       const downloadUrl = await appFiles.getSignedUrl(finalZipKey, 'get', {
+        audience: 'browser',
         expiresIn: 3600,
         ResponseContentDisposition: `attachment; filename="${filename}"`,
       });
@@ -645,6 +646,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Generate presigned download URL (1 hour expiry)
     const filename = `questmaster-${slug}-${dateStr}.zip`;
     const downloadUrl = await appFiles.getSignedUrl(finalZipKey, 'get', {
+      audience: 'browser',
       expiresIn: 3600,
       ResponseContentDisposition: `attachment; filename="${filename}"`,
     });

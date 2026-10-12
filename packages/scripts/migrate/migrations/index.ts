@@ -166,6 +166,11 @@ import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note-status-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+// Renumbered from 20260921235999 to 20260921235994 to resolve an id collision with
+// UnsetStoredDefaultForcedRetrievalFloor below, which merged into main first.
+// Deploy note: an environment that ran this migration under the old id has `20260921235999`
+// marked done and will skip UnsetStoredDefaultForcedRetrievalFloor, which now owns it. Delete that
+// environment's stale `20260921235999` row from the migrations collection so the $unset runs.
 import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';

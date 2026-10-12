@@ -1,19 +1,19 @@
 import { BadRequestError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveSubscriptionSource, setSeats } from '@server/services/organizationService';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@client/lib/subscriptions/constants';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { z } from 'zod';
 import { Resource } from 'sst';
 
 const SeatsSchema = z.object({
-  seats: z.number().int().min(1).max(ORGANIZATION_SUBSCRIPTION_MAX_SEATS),
+  // setSeats enforces the configured teamPlanMaxSeats ceiling; this is only the absolute rail.
+  seats: z.number().int().min(1).max(TEAM_PLAN_SEATS_HARD_LIMIT),
 });
 
 interface RequestQuery {

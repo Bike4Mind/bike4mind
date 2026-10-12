@@ -85,6 +85,7 @@ const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: 
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
+const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
@@ -456,7 +457,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
                 flexShrink: 0,
               }}
             >
-              <IconButton onClick={() => setMobileDrawerOpen(true)} size="sm" data-testid="admin-mobile-menu-btn">
+              <IconButton
+                onClick={() => setMobileDrawerOpen(true)}
+                size="sm"
+                data-testid="admin-mobile-menu-btn"
+                aria-label="Open admin menu"
+              >
                 <MenuIcon />
               </IconButton>
               <Typography level="title-sm" sx={{ ml: 1 }}>
@@ -473,6 +479,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
               <TabPanel value={AdminTab.EmailVerification}>
                 {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
+                {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
               </TabPanel>
               <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
                 {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}

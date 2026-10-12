@@ -17,6 +17,7 @@ import {
   CreateFileUploadResponseSchema,
   FileEvents,
   FileResponseSchema,
+  FileSummarySchema,
   ListFilesResponseSchema,
   createFileUploadContract,
   deleteFileContract,
@@ -84,7 +85,6 @@ vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: m
 vi.mock('@server/files/deleteFileForUser', () => ({ deleteFileForUser: mockDeleteFileForUser }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: async () => ({ administeredOrgIds: [] }) }));
 vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => undefined }));
@@ -340,6 +340,7 @@ const ownedDoc = (id: string) => ({
 
 const SUMMARY_KEYS = ['created_at', 'file_name', 'file_size', 'id', 'mime_type', 'moderation_status'];
 const ID_2 = '507f1f77bcf86cd799439012';
+const ID_3 = '507f1f77bcf86cd799439013';
 
 describe('GET /api/v1/files', () => {
   it('returns a schema-valid page of allowlisted summaries with no download URL', async () => {
@@ -359,17 +360,17 @@ describe('GET /api/v1/files', () => {
   });
 
   it('issues a cursor when there is another page, and passes it and search back to the repository', async () => {
-    mockListOwnedBeforeId.mockResolvedValue({ data: [ownedDoc(FILE_ID)], hasMore: true });
-    const first = list({ limit: '1', search: 'Report' });
+    mockListOwnedBeforeId.mockResolvedValue({ data: [ownedDoc(ID_3), ownedDoc(FILE_ID)], hasMore: true });
+    const first = list({ limit: '2', search: 'Report' });
     await callHandler(uploadHandler, first.req, first.res);
     const { next_cursor } = first.res._getJSONData();
     expect(next_cursor).toEqual(expect.any(String));
 
     mockListOwnedBeforeId.mockResolvedValue({ data: [ownedDoc(ID_2)], hasMore: false });
-    const second = list({ limit: '1', search: 'Report', cursor: next_cursor });
+    const second = list({ limit: '2', search: 'Report', cursor: next_cursor });
     await callHandler(uploadHandler, second.req, second.res);
 
-    expect(mockListOwnedBeforeId).toHaveBeenLastCalledWith('u1', { beforeId: FILE_ID, limit: 1, search: 'Report' });
+    expect(mockListOwnedBeforeId).toHaveBeenLastCalledWith('u1', { beforeId: FILE_ID, limit: 2, search: 'Report' });
     expect(second.res._getJSONData()).toMatchObject({ data: [{ id: ID_2 }], next_cursor: null });
   });
 
@@ -397,7 +398,8 @@ describe('GET /api/v1/files', () => {
 });
 
 describe('PATCH /api/v1/files/{id}', () => {
-  it('passes only the provided fields to the shared update, logs it, and returns the re-read file', async () => {
+  it('passes only the provided fields to the shared update, logs it, and returns the summary', async () => {
+    mockUpdateFabFile.mockResolvedValue({ ...fabFile({ fileName: 'renamed.png' }), filePath: 'key.png' });
     const { req, res } = patch(FILE_ID, { file_name: 'renamed.png' });
 
     await callHandler(getHandler, req, res);
@@ -413,10 +415,24 @@ describe('PATCH /api/v1/files/{id}', () => {
       expect.anything(),
       logger
     );
-    expect(mockLoadAccessibleFabFile).toHaveBeenCalledWith(req, FILE_ID);
     const body = res._getJSONData();
-    expect(FileResponseSchema.safeParse(body).success).toBe(true);
+    expect(FileSummarySchema.strict().safeParse(body).success).toBe(true);
+    expect(body).toMatchObject({ id: FILE_ID, file_name: 'renamed.png' });
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  // PATCH is gated on files:write alone, so a signed URL here would hand a write-only key the bytes
+  // GET (files:read) denies it - even when the updated document carries a working one.
+  it('never returns a download URL and never takes the read path', async () => {
+    const { req, res } = patch(FILE_ID, { file_name: 'renamed.png' });
+
+    await callHandler(getHandler, req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body).not.toHaveProperty('download_url');
+    expect(body).not.toHaveProperty('download_url_expires_at');
+    expect(mockLoadAccessibleFabFile).not.toHaveBeenCalled();
   });
 
   it('maps notes alongside the name onto the shared update', async () => {
@@ -441,31 +457,6 @@ describe('PATCH /api/v1/files/{id}', () => {
     expect(mockUpdateFabFile).toHaveBeenCalledWith(req.user, { id: FILE_ID, notes: '' }, expect.anything());
   });
 
-  // Update access is not a subset of read access: the write has committed, so a 404 would lie.
-  it('answers with the updated file, minus its stored URL, when the re-read is denied', async () => {
-    mockUpdateFabFile.mockResolvedValue({ ...fabFile({ fileName: 'renamed.png' }), filePath: 'key.png' });
-    mockLoadAccessibleFabFile.mockRejectedValue(new NotFoundError('Fabfile not found'));
-    const { req, res } = patch(FILE_ID, { file_name: 'renamed.png' });
-
-    await callHandler(getHandler, req, res);
-
-    expect(res._getStatusCode()).toBe(200);
-    const body = res._getJSONData();
-    expect(FileResponseSchema.safeParse(body).success).toBe(true);
-    expect(body).toMatchObject({ id: FILE_ID, file_name: 'renamed.png', download_url: null });
-  });
-
-  // Only a denial is answered from `updated`; anything else (a signing failure, a DB error) must
-  // surface as a 500, not a 200 that silently drops the download URL.
-  it('rethrows a re-read failure that is not a denial', async () => {
-    const signFailed = new Error('sign failed');
-    mockLoadAccessibleFabFile.mockRejectedValue(signFailed);
-    const { req, res } = patch(FILE_ID, { file_name: 'r.png' });
-
-    await expect(callHandler(getHandler, req, res)).rejects.toBe(signFailed);
-    expect(res._isEndCalled()).toBe(false);
-  });
-
   it('treats an empty body as a no-op update that returns the file', async () => {
     const { req, res } = patch(FILE_ID, {});
 
@@ -478,6 +469,7 @@ describe('PATCH /api/v1/files/{id}', () => {
   it.each([
     ['an unknown field', { tags: [] }],
     ['an empty file name', { file_name: '' }],
+    ['a whitespace-only file name', { file_name: '   ' }],
     ['a file name over 255 characters', { file_name: 'a'.repeat(256) }],
     ['notes over 10,000 characters', { notes: 'a'.repeat(10_001) }],
   ])('rejects %s with a validation error (422) before updating', async (_label, body) => {

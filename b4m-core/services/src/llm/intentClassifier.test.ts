@@ -156,6 +156,30 @@ describe('classifyIntent — primary path', () => {
     expect(decision.responseFormatMode).toBe('tool_use');
   });
 
+  it('ignores reasoning frames streamed ahead of the JSON answer', async () => {
+    type Callback = (text: string[], info: Record<string, unknown>) => Promise<void>;
+    const spy = vi.fn(async (_model: string, _messages: unknown, _options: unknown, callback: Callback) => {
+      await callback(['<think>use {braces} here'], { channel: 'reasoning' });
+      await callback(['</think>'], { channel: 'reasoning' });
+      await callback([wellFormedJson], { responseFormatMode: 'native' });
+    });
+    const backend = {
+      currentModel: 'mock',
+      complete: spy,
+      pushToolMessages: vi.fn(),
+      getModelInfo: vi.fn(async () => []),
+    } as unknown as ICompletionBackend;
+    registerCascade([[PRIMARY_MODEL, backend]]);
+
+    const decision = await classifyIntent(
+      { userId: 'u1', message: 'What is NVDA stock price?' },
+      makeAdapters({ [PRIMARY_MODEL]: backend })
+    );
+
+    expect(decision.useAgent).toBe(true);
+    expect(decision.responseFormatMode).toBe('native');
+  });
+
   it('serves repeated calls from the per-user cache', async () => {
     const { backend, spy } = makeBackend({ text: wellFormedJson });
     registerCascade([[PRIMARY_MODEL, backend]]);

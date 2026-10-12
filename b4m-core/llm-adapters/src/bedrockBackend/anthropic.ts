@@ -24,7 +24,7 @@ import {
 } from '../backend';
 import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
-import { getCachingAdapter } from '../caching/adapters';
+import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
@@ -692,7 +692,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-05-28',
         description:
-          "Anthropic's latest flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
+          "Anthropic's previous flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
         isSlowModel: true,
       },
       {
@@ -769,8 +769,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         thinkingStyle: 'adaptive',
+        // Global endpoint, first-party parity; cache hits are 0.05x input on Opus 5.5, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 },
+          1_000_000: { input: 4 / 1_000_000, output: 20 / 1_000_000, cache_read: 0.2 / 1_000_000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -778,6 +779,30 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsTools: true,
         description: "Anthropic's Claude 5.5 Opus model via AWS Bedrock for coding, reasoning, and agentic tasks.",
         isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+        type: 'text',
+        name: 'Claude 5.5 Haiku',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        // First-party parity on the global endpoint, tiered by prompt length (over 100K prompt tokens pays the higher tier).
+        pricing: {
+          100_000: { input: 0.1 / 1_000_000, output: 0.5 / 1_000_000 },
+          1_000_000: { input: 0.5 / 1_000_000, output: 2.5 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 3,
+        supportsTools: true,
+        releaseDate: '2026-10-07',
+        description:
+          "Anthropic's Claude 5.5 Haiku via AWS Bedrock, built for high-volume, latency-sensitive work, with adaptive thinking and a 1M-token context window.",
       },
     ];
   }
@@ -1024,6 +1049,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         JSON.stringify({ model: modelId })
       );
     }
+
+    Object.assign(body, capCacheControlMarkers(body));
 
     // Log the actual body being sent (first 1000 chars)
     const bodyStr = JSON.stringify(body);

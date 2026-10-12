@@ -48,7 +48,6 @@ vi.mock('@server/files/createPresignedUpload', () => ({
   createPresignedUpload: (...a: unknown[]) => mockCreateUpload(...a),
   PRESIGNED_UPLOAD_EXPIRES_IN: 600,
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: async () => ({ administeredOrgIds: [] }) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -205,6 +204,25 @@ describe('/api/v1/files scope enforcement (real middleware chain)', () => {
     expect(patched._getStatusCode()).toBe(200);
     expect(patched._getJSONData()).toMatchObject({ id: FILE_ID });
     expect((await deleteOne())._getStatusCode()).toBe(204);
+  });
+
+  // Write does not imply read: the update must not hand a write-only key the signed URL GET denies it,
+  // even when the stored document carries one.
+  it('a files:write-only key updates (200) without receiving a download URL', async () => {
+    withScopes([ApiKeyScope.WRITE_FILES]);
+    mockUpdateFabFile.mockResolvedValue({
+      ...FILE,
+      fileUrl: 'https://cdn.example/key.png?Signature=abc',
+      fileUrlExpireAt: new Date('2026-01-01T01:00:00.000Z'),
+    });
+
+    const res = await patchOne();
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body).not.toHaveProperty('download_url');
+    expect(body).not.toHaveProperty('download_url_expires_at');
+    expect(mockLoad).not.toHaveBeenCalled();
   });
 
   it('an unknown PATCH body field is a 422 through the real error handler', async () => {

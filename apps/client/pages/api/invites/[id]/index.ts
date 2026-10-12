@@ -9,7 +9,12 @@ import {
   organizationRepository,
   Group,
 } from '@bike4mind/database';
-import { canViewInvite, getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
+import {
+  canViewInvite,
+  getInviteDetails,
+  filterInviteRecipientsToSelf,
+  toSharerInviteViews,
+} from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sharingService } from '@bike4mind/services';
@@ -80,7 +85,8 @@ const handler = baseApi()
         }
       );
 
-      return res.json(updatedInvite);
+      const [view] = await toSharerInviteViews([updatedInvite], req.user);
+      return res.json(view);
     })
   );
 

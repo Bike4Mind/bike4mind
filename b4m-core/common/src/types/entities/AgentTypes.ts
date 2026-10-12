@@ -64,6 +64,11 @@ export interface IAgentRepository extends IBaseRepository<IAgentDocument>, ICred
   incrementQuestsPosted(agentId: string): Promise<IAgentDocument | null>;
   updateCurrentFloorId(agentId: string, floorId: string): Promise<void>;
   countByUserId(userId: string): Promise<number>;
+  /** Owned or shared agents in ascending `_id` order after `afterId`; throws on a non-ObjectId `afterId`. */
+  listAccessibleAfterId(
+    userId: string,
+    page: { afterId?: string; limit: number }
+  ): Promise<{ data: IAgent[]; hasMore: boolean }>;
 
   // Scope-aware lookups used by ServerAgentStore construction in the agent
   // executor. Each list returns non-soft-deleted records only.

@@ -25,6 +25,7 @@ import { toast } from 'sonner';
 import ImageMaskerFlux from './ImageMaskerFlux';
 import { ImageModerationPlaceholder } from './ImageModerationPlaceholder';
 import { SendMessageOptions } from '@client/app/utils/llm';
+import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { blackAlpha, whiteAlpha } from '@client/app/utils/themes/colors';
 
 // Add FabAPI interface
@@ -126,6 +127,8 @@ const ImageContainer: FC<ImageContainerProps> = ({
   const [downloading, setDownloading] = useState<boolean>(false);
   const [currentIndex, setCurrentIndex] = useState<number>(index);
   const [editing, setEditing] = useState<boolean>(false);
+  // Read-only hides Edit: the masker uploads a mask file before the (no-op) send.
+  const readOnly = useSessionReadOnly();
 
   useEffect(() => {
     setCurrentIndex(index);
@@ -393,21 +396,23 @@ const ImageContainer: FC<ImageContainerProps> = ({
           {downloading ? <CircularProgress size="sm" /> : <DownloadIcon fontSize="small" />}
         </IconButton>
       </Tooltip>
-      <Tooltip title="Edit Image">
-        <Box component="span" sx={{ display: 'inline-block' }}>
-          <IconButton
-            onClick={() => setEditing(true)}
-            disabled={editing}
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            sx={{ borderRadius: '50%' }}
-            data-testid="image-edit-btn"
-          >
-            {editing ? <CircularProgress size="sm" /> : <EditIcon fontSize="small" />}
-          </IconButton>
-        </Box>
-      </Tooltip>
+      {!readOnly && (
+        <Tooltip title="Edit Image">
+          <Box component="span" sx={{ display: 'inline-block' }}>
+            <IconButton
+              onClick={() => setEditing(true)}
+              disabled={editing}
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              sx={{ borderRadius: '50%' }}
+              data-testid="image-edit-btn"
+            >
+              {editing ? <CircularProgress size="sm" /> : <EditIcon fontSize="small" />}
+            </IconButton>
+          </Box>
+        </Tooltip>
+      )}
     </>
   );
 
@@ -632,7 +637,12 @@ const ImageContainer: FC<ImageContainerProps> = ({
       </Modal>
 
       {editing && (
-        <ImageMaskerFlux open={editing} onSave={handleImageEdit} imageUrl={src} onClose={() => setEditing(false)} />
+        <ImageMaskerFlux
+          open={!readOnly && editing}
+          onSave={handleImageEdit}
+          imageUrl={src}
+          onClose={() => setEditing(false)}
+        />
       )}
     </Box>
   );

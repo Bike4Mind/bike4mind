@@ -467,7 +467,7 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
   const BEDROCK_TO_DIRECT_TWIN: Array<[string, string]> = [
     ['global.anthropic.claude-fable-5-1', 'claude-fable-5'],
     ['global.anthropic.claude-fable-5', 'claude-fable-5'],
-    ['global.anthropic.claude-opus-5-5', 'claude-opus-5'],
+    ['global.anthropic.claude-opus-5-5', 'claude-opus-5-5'],
     ['global.anthropic.claude-opus-5', 'claude-opus-5'],
     ['global.anthropic.claude-opus-4-8', 'claude-opus-4-8'],
     ['global.anthropic.claude-opus-4-7', 'claude-opus-4-7'],
