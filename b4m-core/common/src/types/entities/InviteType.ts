@@ -69,6 +69,11 @@ export type IBaseInvite = {
   username?: string;
   // Who minted the invite. Absent on invites created before this field existed.
   inviterId?: string;
+  // The `recipients` entries (lowercased) the inviter typed as an email address. Every other entry
+  // was resolved server-side from a user id or username, so its address is something the inviter
+  // never supplied and must not be shown back to them (see inviteManager.toSharerInviteViews).
+  // Absent on invites created before this field existed, which therefore cannot be told apart.
+  typedRecipients?: string[];
 
   // The bearer secret a share link actually carries, and the ONLY key redemption accepts for an
   // invite that has one. The `_id` was the bearer secret before this field existed, which made a

@@ -60,7 +60,7 @@ test.describe('Prompts & AI Chat', () => {
     test.setTimeout(5 * TIMEOUTS.TEST);
 
     await navigationPage.navigateToNewChat();
-    await modelSelector.selectTextModel('Claude 4.5 Haiku', { disableSmartTools: true });
+    await modelSelector.selectTextModel('Claude Haiku 4.5', { disableSmartTools: true });
     await fileUpload.uploadFile(prompts['txt-recipe'].filepath);
 
     const query = prompts['txt-recipe'].queries[0];
@@ -81,7 +81,7 @@ test.describe('Prompts & AI Chat', () => {
     test.setTimeout(5 * TIMEOUTS.TEST);
 
     await navigationPage.navigateToNewChat();
-    await modelSelector.selectTextModel('Claude 4.5 Haiku', { disableSmartTools: true });
+    await modelSelector.selectTextModel('Claude Haiku 4.5', { disableSmartTools: true });
     await fileUpload.uploadFile(prompts['image-cat'].filepath);
 
     const query = prompts['image-cat'].queries[0];
@@ -102,7 +102,7 @@ test.describe('Prompts & AI Chat', () => {
     test.setTimeout(5 * TIMEOUTS.TEST);
 
     await navigationPage.navigateToNewChat();
-    await modelSelector.selectTextModel('Claude 4.5 Haiku', { disableSmartTools: true });
+    await modelSelector.selectTextModel('Claude Haiku 4.5', { disableSmartTools: true });
     await fileUpload.uploadFile(prompts['pdf-lorem'].filepath);
 
     const query = prompts['pdf-lorem'].queries[0];

@@ -41,8 +41,8 @@ export class ModelSelectorPage extends BasePage {
    * Typing into the search box expands every backend accordion (see ModelSelection's
    * expandedBackends), so this surfaces matching models across all providers in one read.
    * Unavailable models render with `data-disabled` on their card and are excluded. The
-   * model name is the first `<p>` in each card (the body-md name Typography precedes the
-   * body-xs description). Favourited models appear twice (Favorites + backend section),
+   * model name is the text of the card's select button. Favourited models appear twice
+   * (Favorites + backend section),
    * so results are de-duplicated.
    */
   async getAvailableModelNames(searchTerm: string): Promise<string[]> {
@@ -67,7 +67,11 @@ export class ModelSelectorPage extends BasePage {
       await this.page.waitForTimeout(MODEL_SEARCH_DEBOUNCE_MS);
       const names = await dialog
         .locator('[data-testid^="model-card-"]:not([data-disabled])')
-        .evaluateAll(cards => cards.map(card => card.querySelector('p')?.textContent?.trim() ?? '').filter(Boolean));
+        .evaluateAll(cards =>
+          cards
+            .map(card => card.querySelector('[data-testid^="model-select-btn-"]')?.textContent?.trim() ?? '')
+            .filter(Boolean)
+        );
       results.push([...new Set(names)]);
     }
     await this.closeModelSelector();

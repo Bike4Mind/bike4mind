@@ -171,4 +171,21 @@ describe('safeFetch - initial-host and redirect-hop SSRF protection', () => {
     await expect(safeFetch('https://93.184.216.34')).rejects.toThrow(/blocked redirect/i);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('lets a caller reject a recursive redirect before the second fetch', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(redirectTo('https://app.example.com/api/v1/whats-new'));
+    global.fetch = fetchMock as never;
+    await expect(
+      safeFetch(
+        'https://example.com/whats-new.json',
+        {},
+        {
+          assertRedirectAllowed: target => {
+            if (target.pathname === '/api/v1/whats-new') throw new Error('recursive feed');
+          },
+        }
+      )
+    ).rejects.toThrow('recursive feed');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

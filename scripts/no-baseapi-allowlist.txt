@@ -63,3 +63,8 @@ apps/client/pages/api/webhooks/qwork/__tests__/index.test.ts # Test file for the
 # Removed Sora-era alias: a 410 tombstone, no auth or body to guard (not a contract route, outside the contract status set)
 apps/client/pages/api/ai/generate-video.ts               # 410 tombstone pointing at POST /api/v1/video-generations
 apps/client/pages/api/ai/__tests__/generate-video.integration.test.ts # Test file for the handler above (script greps by path, not export)
+
+# Unmatched /api/* catch-all: answers a JSON 404 for every method; serves no data, so no auth or DB
+apps/client/pages/api/[...unmatchedApiPath].ts           # JSON 404 in the shared error envelope instead of the SPA shell
+apps/client/pages/api/__tests__/unmatchedApiPath.test.ts # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/v1/[...unmatchedV1Path].ts        # Re-exports the catch-all above so /api/v1 misses outrank pages/api/[type]/[id]

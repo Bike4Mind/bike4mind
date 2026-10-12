@@ -49,6 +49,28 @@ describe('PlanCard', () => {
     expect(screen.queryByText('subscriptions.payment_issue')).not.toBeInTheDocument();
   });
 
+  it('shows the popular badge only when flagged popular', () => {
+    const renderPopular = (isPopular: boolean) =>
+      render(
+        <TestWrapper>
+          <PlanCard
+            name="Professional"
+            description="desc"
+            features={['one']}
+            isPopular={isPopular}
+            actionButton={<button type="button">action</button>}
+          />
+        </TestWrapper>
+      );
+
+    const { unmount } = renderPopular(false);
+    expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();
+    unmount();
+
+    renderPopular(true);
+    expect(screen.getByTestId('plan-card-popular-badge')).toBeInTheDocument();
+  });
+
   it('does not render a masked card-number placeholder', () => {
     renderCard(true);
 

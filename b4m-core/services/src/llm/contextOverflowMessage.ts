@@ -13,7 +13,7 @@ export type TokenSource =
   | 'lakeRetrieval';
 
 export interface ContextOverflowMessageParams {
-  /** Human-readable model name (e.g. "Claude 4.5 Sonnet"). */
+  /** Human-readable model name (e.g. "Claude Sonnet 4.5"). */
   modelName: string;
   inputTokens: number;
   maxSafeInputTokens: number;

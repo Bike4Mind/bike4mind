@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 // Fake WebRTC primitives
@@ -75,9 +75,13 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: 'u1', currentCredits: 100 }, refreshUser: vi.fn() }),
 }));
 
+const sendJsonMessage = vi.fn();
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ sendJsonMessage: vi.fn(), subscribeToAction: () => () => {} }),
+  useWebsocket: () => ({ sendJsonMessage, subscribeToAction: () => () => {} }),
 }));
+
+const getUserMedia = vi.fn();
+Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia }, configurable: true });
 
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: () => undefined,
@@ -126,6 +130,9 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     (toast.error as ReturnType<typeof vi.fn>).mockClear();
     apiPost.mockReset();
     apiPost.mockResolvedValue(VOICE_SESSION_RESPONSE);
+    sendJsonMessage.mockClear();
+    getUserMedia.mockReset();
+    getUserMedia.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
     useVoiceSessionStore.getState().reset();
     // jsdom doesn't implement these - keep the audio-element teardown quiet.
     HTMLMediaElement.prototype.pause = vi.fn();
@@ -134,6 +141,10 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  afterAll(() => {
+    Reflect.deleteProperty(navigator, 'mediaDevices');
   });
 
   it('enters reconnecting and re-establishes on a failed peer connection', async () => {
@@ -280,5 +291,195 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     });
 
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  const settlementFrames = () =>
+    sendJsonMessage.mock.calls.map(([frame]) => frame).filter(frame => frame.action === 'voice_session_ended');
+  const ZERO_SETTLEMENT = {
+    action: 'voice_session_ended',
+    sessionId: 's1',
+    model: 'gpt-realtime',
+    userId: 'u1',
+    usage: {
+      audioInputTokens: 0,
+      audioCachedInputTokens: 0,
+      audioOutputTokens: 0,
+      textInputTokens: 0,
+      textCachedInputTokens: 0,
+      textOutputTokens: 0,
+    },
+  };
+
+  it('never bootstraps (so never reserves credits) when no microphone is available', async () => {
+    getUserMedia.mockRejectedValue(Object.assign(new Error('Requested device not found'), { name: 'NotFoundError' }));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      await view.result.current.connect();
+    });
+
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(setupRealtimeConnection).not.toHaveBeenCalled();
+    expect(view.result.current.connectionStatus).toBe('disconnected');
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/No microphone detected/), {
+      id: 'voice-session-start-error',
+    });
+  });
+
+  it('settles the credit hold at zero usage when the connection fails after bootstrap', async () => {
+    setupRealtimeConnection.mockRejectedValueOnce(Object.assign(new Error('mic gone'), { name: 'NotFoundError' }));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      await view.result.current.connect();
+    });
+
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    expect(view.result.current.connectionStatus).toBe('disconnected');
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+  });
+
+  it('settles the credit hold when reconnects are exhausted before any response', async () => {
+    const view = await connectAndConnected();
+
+    for (let i = 0; i < 3; i++) {
+      act(() => {
+        latestPc().__emit('connectionstatechange', 'failed');
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+    }
+    act(() => {
+      latestPc().__emit('connectionstatechange', 'failed');
+    });
+
+    expect(view.result.current.connectionStatus).toBe('disconnected');
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+  });
+
+  it('does not send a zero settlement once a response has settled the hold', async () => {
+    const view = await connectAndConnected();
+    act(() => {
+      view.result.current.endSession();
+    });
+    act(() => {
+      latestDc().__emitMessage({
+        type: 'response.done',
+        response: {
+          usage: {
+            input_token_details: {
+              audio_tokens: 5,
+              text_tokens: 1,
+              cached_tokens_details: { audio_tokens: 0, text_tokens: 0 },
+            },
+            output_token_details: { audio_tokens: 7, text_tokens: 2 },
+          },
+        },
+      });
+    });
+
+    const frames = settlementFrames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0].usage).toMatchObject({ audioInputTokens: 5, audioOutputTokens: 7 });
+  });
+
+  it('stops every track of the microphone probe so the mic indicator goes off', async () => {
+    const stops = [vi.fn(), vi.fn()];
+    getUserMedia.mockResolvedValue({ getTracks: () => stops.map(stop => ({ stop })) });
+
+    await connectAndConnected();
+
+    stops.forEach(stop => expect(stop).toHaveBeenCalledTimes(1));
+  });
+
+  it('settles an unsettled hold on unmount, and a failing socket does not break teardown', async () => {
+    const view = await connectAndConnected();
+    sendJsonMessage.mockImplementationOnce(() => {
+      throw new Error('socket closed');
+    });
+
+    expect(() => view.unmount()).not.toThrow();
+
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+    expect(latestPc().close).toHaveBeenCalled();
+  });
+
+  it('hands the hold to the remounted instance instead of settling it when a new session navigates', async () => {
+    const first = renderHook(() => useVoiceSessionEngine({}));
+    await act(async () => {
+      await first.result.current.connect();
+    });
+    expect(apiPost).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+    expect(settlementFrames()).toEqual([]);
+
+    setupRealtimeConnection.mockRejectedValueOnce(new Error('setup failed'));
+    await act(async () => {
+      renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+  });
+
+  it('does not bootstrap when End is pressed while the microphone prompt is open', async () => {
+    let allowMicrophone: (stream: unknown) => void = () => {};
+    getUserMedia.mockReturnValue(new Promise(resolve => (allowMicrophone = resolve)));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      void view.result.current.connect();
+    });
+    act(() => {
+      view.result.current.endSession();
+    });
+    await act(async () => {
+      allowMicrophone({ getTracks: () => [{ stop: vi.fn() }] });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(apiPost).not.toHaveBeenCalledWith('/api/ai/voice-sessions', expect.anything());
+    expect(setupRealtimeConnection).not.toHaveBeenCalled();
+    expect(settlementFrames()).toEqual([]);
+  });
+
+  it('settles a hold reserved after End ran mid-bootstrap, and opens no connection', async () => {
+    let finishBootstrap: (response: unknown) => void = () => {};
+    apiPost.mockReturnValue(new Promise(resolve => (finishBootstrap = resolve)));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      void view.result.current.connect();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      view.result.current.endSession();
+    });
+    expect(settlementFrames()).toEqual([]);
+
+    await act(async () => {
+      finishBootstrap(VOICE_SESSION_RESPONSE);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(setupRealtimeConnection).not.toHaveBeenCalled();
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+  });
+
+  it('reports a generic microphone message for an unrecognised capture failure', async () => {
+    getUserMedia.mockRejectedValue(Object.assign(new Error('boom'), { name: 'AbortError' }));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      await view.result.current.connect();
+    });
+
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Could not start the microphone/), {
+      id: 'voice-session-start-error',
+    });
   });
 });

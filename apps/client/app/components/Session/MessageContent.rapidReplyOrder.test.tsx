@@ -41,6 +41,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 }));
 vi.mock('@client/app/hooks/useWorkspaceTargets', () => ({
   surfaceRouteExists: () => true,
+  useWorkspacePresenter: () => (surface: unknown) => surface,
   useWorkspaceTargets: () => ({ current: undefined, copyTargets: [], moveTargets: [] }),
 }));
 vi.mock('@client/app/hooks/data/sessions', () => ({

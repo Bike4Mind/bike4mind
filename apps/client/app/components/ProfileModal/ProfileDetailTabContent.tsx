@@ -99,7 +99,7 @@ const AboutTabContent = () => {
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <SquareSlideToggle
-                  checked={currentUser?.showCreditsUsed ?? false}
+                  checked={currentUser?.showCreditsUsed ?? true}
                   onChange={event => {
                     toggleShowCreditsUsed.mutate(event.target.checked);
                   }}

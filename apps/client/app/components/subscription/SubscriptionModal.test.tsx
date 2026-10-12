@@ -6,6 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import SubscriptionModal from './SubscriptionModal';
 
 /**
@@ -26,6 +27,7 @@ const portalMutate = vi.fn();
 const USER_ID = 'user_1';
 
 let subscriptions: IUserSubscription[] = [];
+let teamPriceActive = true;
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptions: () => ({ data: subscriptions, isPending: false }),
@@ -35,7 +37,13 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 }));
 
 vi.mock('@client/app/hooks/data/stripe', () => ({
-  useGetSubscriptionPlans: () => ({ data: [{ id: PRICE_ID, active: true, unit_amount: 1500 }], isPending: false }),
+  useGetSubscriptionPlans: () => ({
+    data: [
+      { id: PRICE_ID, active: true, unit_amount: 1500 },
+      ...(teamPriceActive ? [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, active: true, unit_amount: 3000 }] : []),
+    ],
+    isPending: false,
+  }),
   useStripePortal: () => ({ mutate: (...args: unknown[]) => portalMutate(...args), isPending: false }),
 }));
 
@@ -43,8 +51,10 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: USER_ID } }),
 }));
 
+let settingValues: Record<string, unknown> = {};
+
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: () => false,
+  useGetSettingsValue: (key: string) => settingValues[key] ?? false,
   useConfig: () => ({ data: { seedStageName: 'production' } }),
 }));
 
@@ -52,8 +62,14 @@ vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
   useCreateTeamModal: (selector: (state: { open: () => void }) => unknown) => selector({ open: vi.fn() }),
 }));
 
+vi.mock('@client/app/hooks/useAnswerCostReference', () => ({
+  useAnswerCostReference: () => ({ modelName: 'Claude 5.5 Sonnet', creditsPerAnswer: 54 }),
+}));
+
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, opts?: { credits?: string }) => (opts?.credits ? `${key}:${opts.credits}` : key),
+  }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -80,14 +96,110 @@ const renderModal = () =>
     </TestWrapper>
   );
 
+describe('SubscriptionModal - Team tab', () => {
+  beforeEach(() => {
+    subscriptions = [];
+    teamPriceActive = true;
+    settingValues = {};
+  });
+
+  it('opens the Business tab, so Team is on offer here as well as from Teams > Create Team', async () => {
+    renderModal();
+
+    const tab = screen.getByRole('tab', { name: 'subscription_modal.business' });
+    expect(tab).not.toHaveAttribute('aria-disabled', 'true');
+
+    await userEvent.setup({ delay: null }).click(tab);
+
+    // 4 seats x $30 from the mocked Stripe price, not a hardcoded figure.
+    expect(screen.getByText(/\$120\.00/)).toBeInTheDocument();
+    expect(screen.getByText('$30.00 per seat per month, 4-seat minimum')).toBeInTheDocument();
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+    expect(screen.queryByTestId('subscription-modal-team-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('says why Team cannot be bought when its Stripe price is not live, instead of hiding the tab', async () => {
+    teamPriceActive = false;
+    renderModal();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeDisabled();
+    expect(screen.getByTestId('subscription-modal-team-unavailable')).toBeInTheDocument();
+    expect(screen.getByText('4-seat minimum')).toBeInTheDocument();
+  });
+
+  it('quotes seats, price and pool size from the admin team plan settings', async () => {
+    settingValues = { teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
+    renderModal();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+
+    expect(screen.getByText(/\$60\.00/)).toBeInTheDocument();
+    expect(screen.getByText('2 team member accounts included')).toBeInTheDocument();
+    expect(screen.getByText('subscription_modal.credits_per_month:2,000')).toBeInTheDocument();
+    expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(
+      /^Estimate: about 37 answers on Claude 5\.5 Sonnet/
+    );
+  });
+});
+
 describe('SubscriptionModal', () => {
   beforeEach(() => {
     subscriptions = [];
+    teamPriceActive = true;
+    settingValues = {};
     cancelMutate.mockReset();
     subscribeMutate.mockReset();
     changeMutate.mockReset();
     portalMutate.mockReset();
     sessionStorage.clear();
+  });
+
+  it('says every account starts with free credits rather than claiming there is no free tier', () => {
+    settingValues = { defaultFreeCredits: 5000 };
+    renderModal();
+
+    expect(screen.getByTestId('subscription-modal-starter-credits')).toHaveTextContent(
+      'subscription_modal.starter_credits'
+    );
+    expect(screen.queryByText(/no_free_tier/)).not.toBeInTheDocument();
+  });
+
+  it('makes no starter-credits claim when sign-ups are granted nothing', () => {
+    settingValues = { defaultFreeCredits: 0 };
+    renderModal();
+
+    expect(screen.queryByTestId('subscription-modal-starter-credits')).not.toBeInTheDocument();
+    expect(screen.getByText(/subscription_modal.credits_rollover/)).toBeInTheDocument();
+  });
+
+  it('estimates how far the Professional credits go on a mid-tier model', () => {
+    renderModal();
+
+    expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(
+      /^Estimate: about 920 answers on Claude 5\.5 Sonnet, at about 4,000 tokens in and 1,000 out per answer\./
+    );
+  });
+
+  it('lists only Professional features a user can find in the app', () => {
+    renderModal();
+
+    expect(screen.queryByText(/Phi-4/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/prompt engineering tools/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cost optimization/)).not.toBeInTheDocument();
+  });
+
+  it('does not badge a lone plan as Most Popular on either tab', async () => {
+    renderModal();
+
+    expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();
   });
 
   it('shows a delinquent plan as the current plan and lets the user cancel it', async () => {
@@ -98,7 +210,9 @@ describe('SubscriptionModal', () => {
     // The payment-issue copy, not the healthy "renews on" line.
     expect(screen.getByText('subscriptions.payment_issue')).toBeInTheDocument();
 
-    await userEvent.setup({ delay: null }).click(screen.getByRole('button', { name: 'Cancel Subscription' }));
+    await userEvent
+      .setup({ delay: null })
+      .click(screen.getByRole('button', { name: 'Cancel Professional subscription' }));
 
     expect(cancelMutate).toHaveBeenCalledWith(PRICE_ID);
   });
@@ -110,7 +224,7 @@ describe('SubscriptionModal', () => {
 
     renderModal();
 
-    expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeEnabled();
   });
 
   it('still offers Change when the user holds a plan in good standing at another price', () => {
@@ -118,7 +232,7 @@ describe('SubscriptionModal', () => {
 
     renderModal();
 
-    expect(screen.getByRole('button', { name: 'Change Subscription' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Change subscription to Professional' })).toBeEnabled();
   });
 
   it('ignores a terminal row, so a finished plan is not shown as current', () => {
@@ -127,7 +241,7 @@ describe('SubscriptionModal', () => {
     renderModal();
 
     expect(screen.queryByText('subscriptions.payment_issue')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeEnabled();
   });
 
   it.each([
@@ -179,7 +293,9 @@ describe('SubscriptionModal', () => {
 
       expect(screen.getByText('subscriptions.payment_issue')).toBeInTheDocument();
       expect(manageButton()).toHaveClass('MuiButton-variantSolid');
-      expect(screen.getByRole('button', { name: 'Cancel Subscription' })).toHaveClass('MuiButton-variantOutlined');
+      expect(screen.getByRole('button', { name: 'Cancel Professional subscription' })).toHaveClass(
+        'MuiButton-variantOutlined'
+      );
     });
 
     it('stays available on a plan that is canceled but not yet ended, so the user can resume it', () => {
@@ -197,7 +313,7 @@ describe('SubscriptionModal', () => {
       renderModal();
 
       expect(manageButton()).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeEnabled();
     });
 
     it('is not offered on a plan card the user does not hold', () => {
@@ -206,7 +322,7 @@ describe('SubscriptionModal', () => {
       renderModal();
 
       expect(manageButton()).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Change Subscription' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Change subscription to Professional' })).toBeEnabled();
     });
 
     it('is not offered on an admin-granted plan, which the portal refuses', () => {

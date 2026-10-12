@@ -431,6 +431,38 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
     });
   });
 
+  describe('decision_usage', () => {
+    it('should forward token fields and apiKeyId without a questId', async () => {
+      const params: DeductCreditsParams = {
+        type: 'decision_usage',
+        user: mockUser,
+        organization: null,
+        credits: 3,
+        sessionId: 'session1',
+        model: 'claude-3-sonnet',
+        source: 'api',
+        inputTokens: 200,
+        outputTokens: 100,
+        apiKeyId: 'apikey-123',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({
+        type: 'decision_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 3,
+        model: 'claude-3-sonnet',
+        inputTokens: 200,
+        outputTokens: 100,
+        apiKeyId: 'apikey-123',
+      });
+      expect('questId' in calledWith).toBe(false);
+    });
+  });
+
   describe('error handling', () => {
     it('should propagate errors from updateUserDetails', async () => {
       mockOrgRepo.updateUserDetails.mockRejectedValue(new Error('DB connection failed'));

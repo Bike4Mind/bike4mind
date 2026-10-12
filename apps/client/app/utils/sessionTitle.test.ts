@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatSessionTitle } from './sessionTitle';
+import { formatSessionTitle, getPendingTitleLabel } from './sessionTitle';
 
 describe('formatSessionTitle', () => {
   it('passes through a normal plain-text title', () => {
@@ -63,5 +63,21 @@ describe('formatSessionTitle', () => {
     expect(out.endsWith('…')).toBe(true);
     // no high surrogate left without its trailing low surrogate
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out)).toBe(false);
+  });
+});
+
+describe('getPendingTitleLabel', () => {
+  const now = new Date('2026-01-01T12:00:00Z').getTime();
+
+  it('shows a placeholder for a fresh default-named session', () => {
+    expect(getPendingTitleLabel('New Notebook', new Date(now - 5000), now)).toBe('Naming chat...');
+  });
+
+  it('shows the real name once it differs from the default', () => {
+    expect(getPendingTitleLabel('Trip plan', new Date(now - 5000), now)).toBeNull();
+  });
+
+  it('gives up on old default-named sessions', () => {
+    expect(getPendingTitleLabel('New Notebook', new Date(now - 10 * 60 * 1000), now)).toBeNull();
   });
 });

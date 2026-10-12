@@ -64,7 +64,13 @@ export type AdminUserListItem = Omit<Pick<IUserDocument, (typeof ADMIN_USER_LIST
   organization?: IOrganizationDocument;
 };
 
+// publicView for an admin caller. Non-admin pickers get PICKER_USER_PROJECTION instead.
 export const PUBLIC_USER_LIST_PROJECTION: Record<string, 1> = { _id: 1, username: 1, name: 1, email: 1 };
+
+// publicView for a non-admin caller (the project/org add-member pickers). No email: another user's
+// address is never returned to a non-admin, and `username` is further stripped from any row outside
+// the caller's shared workspaces (see GET /api/users), leaving just id and name.
+export const PICKER_USER_PROJECTION: Record<string, 1> = { _id: 1, username: 1, name: 1 };
 
 // $sort runs before $project in the GET /api/users pipeline, so an unvalidated sortField lets a
 // caller rank on attributes their own projection strips -- `sortField=isAdmin` turns the public
@@ -72,6 +78,7 @@ export const PUBLIC_USER_LIST_PROJECTION: Record<string, 1> = { _id: 1, username
 // themselves so a field can never be sortable without also being returned.
 export const ADMIN_USER_SORT_FIELDS: ReadonlySet<string> = new Set(Object.keys(ADMIN_USER_PROJECTION));
 export const PUBLIC_USER_SORT_FIELDS: ReadonlySet<string> = new Set(Object.keys(PUBLIC_USER_LIST_PROJECTION));
+export const PICKER_USER_SORT_FIELDS: ReadonlySet<string> = new Set(Object.keys(PICKER_USER_PROJECTION));
 
 // createdAt is projected for admins but not for public callers, so the two paths need
 // different fallbacks for an out-of-allowlist sortField.

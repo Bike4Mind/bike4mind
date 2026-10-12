@@ -17,6 +17,9 @@ vi.mock('./AdminLogoUpload', () => ({ default: () => null }));
 vi.mock('./AdminVideoModelsSetting', () => ({
   AdminVideoModelsSetting: () => <div data-testid="admin-video-models-card" />,
 }));
+vi.mock('./AdminRecommendedModelsSetting', () => ({
+  AdminRecommendedModelsSetting: () => <div data-testid="admin-recommended-models-card" />,
+}));
 vi.mock('./AdminSettingInputField', () => ({
   default: ({ setting, defaultValue }: { setting: { key: SettingKey }; defaultValue: unknown }) => (
     <div data-testid={`generic-setting-${setting.key}`} data-default-value={JSON.stringify(defaultValue)} />
@@ -51,6 +54,15 @@ describe('AdminSettingsTab video generation setting', () => {
 
     expect(screen.getByTestId('admin-video-models-card')).toBeTruthy();
     expect(screen.queryByTestId('generic-setting-videoGeneration')).toBeNull();
+  });
+});
+
+describe('AdminSettingsTab recommended models setting', () => {
+  it('renders the bespoke recommended models editor and no generic recommendedModelIds card', () => {
+    renderAiTab();
+
+    expect(screen.getByTestId('admin-recommended-models-card')).toBeTruthy();
+    expect(screen.queryByTestId('generic-setting-recommendedModelIds')).toBeNull();
   });
 });
 

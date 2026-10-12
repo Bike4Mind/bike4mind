@@ -8,6 +8,7 @@ import Tooltip from '@mui/joy/Tooltip';
 
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { useUser } from '@client/app/contexts/UserContext';
 import { isChatCompletionActiveFor } from '@client/app/hooks/chatCompletionState';
 import {
   useSessions,
@@ -58,6 +59,7 @@ import { ContextUsageWarning } from '../ContextUsageWarning';
 import { useAttachmentFitWarning } from '@client/app/hooks/useAttachmentFitWarning';
 import { ContextCompactionNote } from '../ContextCompactionNote';
 import { MemberCreditBudgetNote } from '../MemberCreditBudgetNote';
+import { CreditPayerNote } from '../CreditPayerNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
@@ -66,8 +68,9 @@ import { useTranslation } from 'react-i18next';
 import { LexicalChatInput, LexicalChatInputRef } from '../LexicalChatInput';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
+import { dismissCreditNudge, isCreditNudgeDismissed } from '../creditNudgeDismissal';
 import { NoModelsWarning, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
-import { LOW_CREDITS_THRESHOLD } from '../CreditButton';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { getComposerCreditUi } from './composerCreditUi';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useMcpServerSync } from './useMcpServerSync';
@@ -135,7 +138,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   );
   const [rephraseGlow, setRephraseGlow] = useState(false);
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
-  const [lowCreditsWarningDismissed, setLowCreditsWarningDismissed] = useState(false);
+  const currentUserId = useUser(state => state.currentUser?.id);
+  // Keyed by user so a dismissal never applies to whoever signs in next on this browser.
+  const [lowCreditsDismissedFor, setLowCreditsDismissedFor] = useState<string | null>(null);
+  const lowCreditsWarningDismissed =
+    !!currentUserId && (lowCreditsDismissedFor === currentUserId || isCreditNudgeDismissed(currentUserId));
   // Band at which the user dismissed the context warning; re-shows on escalation.
   const [contextWarningDismissedBand, setContextWarningDismissedBand] = useState<ContextUsageBand | null>(null);
 
@@ -253,15 +260,16 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const maxFileSize = Number(useGetSettingsValue('MaxFileSize')) || 30;
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
 
-  // Out of credits replaces the message box outright (see CreditsWarning); only the
-  // low-credits notice still overlays it, so only that one needs the box to hold its height.
+  // Out of credits replaces the message box outright (see CreditsWarning); the low-credits
+  // notice sits above it without blocking typing.
+  const lowCreditsThreshold = useLowCreditsThreshold();
   const creditUi = getComposerCreditUi({
     enforceCredits,
     effectiveCredits,
     exhaustedByVoice: creditsExhaustedByVoice,
     hasModels,
     lowWarningDismissed: lowCreditsWarningDismissed,
-    lowThreshold: LOW_CREDITS_THRESHOLD,
+    lowThreshold: lowCreditsThreshold,
   });
 
   // FilePond expects the max file size as an MB string, e.g. '100MB'
@@ -382,7 +390,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const sendBlockedReason = getSendBlockedReason({
     isGenerating: shouldShowStopButton,
     submitting,
-    isModelsLoading,
+    // Until LLMProvider resolves the default there is no model to send with; hold the send rather
+    // than let it run on whatever the store held before the account's own default arrived.
+    isModelsLoading: isModelsLoading || (hasModels && !model),
     isModelsError,
     hasModels,
     isSocketOpen: readyState === ReadyState.OPEN,
@@ -646,6 +656,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   onDismiss={() => setCompactionNoteDismissed(true)}
                 />
                 {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
+                {!creditUi.replaceComposer && <CreditPayerNote session={currentSession} />}
                 {creditUi.replaceComposer ? (
                   <CreditsWarning show />
                 ) : (
@@ -666,7 +677,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         flex: 1,
                         overflow: 'visible',
                         position: 'relative',
-                        minHeight: creditUi.lowCreditsNotice ? '60px' : undefined,
                         transition: 'box-shadow 300ms, outline 300ms',
                         boxShadow: rephraseGlow
                           ? '0 0 0 2px rgba(59,130,246,0.3), 0 0 12px rgba(59,130,246,0.45)'
@@ -678,7 +688,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                       <LowCreditsWarning
                         show={creditUi.lowCreditsNotice}
                         currentCredits={effectiveCredits}
-                        onDismiss={() => setLowCreditsWarningDismissed(true)}
+                        onDismiss={() => {
+                          dismissCreditNudge(currentUserId);
+                          setLowCreditsDismissedFor(currentUserId ?? null);
+                        }}
                       />
                       {/* Slash command suggestions */}
                       {showSlashSuggestions && (

@@ -65,4 +65,4 @@ We may update these Terms. Material changes are released as a new **major versio
 
 ## 13. Contact
 
-Questions about these Terms: **legal@bike4mind.com** _(confirm address before launch)_.
+Questions about these Terms: **legal@bike4mind.com**.

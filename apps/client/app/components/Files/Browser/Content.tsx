@@ -953,6 +953,7 @@ const FileBrowserContent = () => {
             name={fileToShare.fileName}
             type={InviteType.FabFile}
             users={fileToShare.users}
+            ownerId={fileToShare.userId}
           />
         )}
 

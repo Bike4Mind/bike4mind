@@ -190,7 +190,29 @@ describe('TavernWorldModel', () => {
     it('should reject out-of-bounds coordinates', async () => {
       await createWorld();
 
-      await expect(applyEdits('user-1', 0, [{ key: 'ground:96,0', gid: 1 }])).rejects.toThrow(/Invalid edit key/);
+      await expect(applyEdits('user-1', 0, [{ key: 'ground:160,0', gid: 1 }])).rejects.toThrow(/Invalid edit key/);
+    });
+
+    it('should accept the maximum coordinate (159)', async () => {
+      await createWorld();
+
+      const result = await applyEdits('user-1', 0, [{ key: 'ground:159,159', gid: 1 }]);
+      expect(result).not.toBeNull();
+      expect(result!.edits['ground:159,159']).toBe(1);
+    });
+
+    it.each([
+      'ground:-1,0',
+      'ground:0,160',
+      'ground:5abc,0',
+      'ground:1.5,0',
+      'ground:007,0',
+      'ground:1e2,0',
+      'ground:+5,0',
+    ])('should reject non-canonical or out-of-range key %s', async key => {
+      await createWorld();
+
+      await expect(applyEdits('user-1', 0, [{ key, gid: 1 }])).rejects.toThrow(/Invalid edit key/);
     });
 
     it('should reject negative gid', async () => {

@@ -58,10 +58,16 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string, options?: { count?: number }) => {
-      const value = fallback ?? key;
-      return options?.count === undefined ? value : value.replace('{{count}}', String(options.count));
+    t: (key: string, fallbackOrOptions?: string | Record<string, unknown>, maybeOptions?: Record<string, unknown>) => {
+      const options = typeof fallbackOrOptions === 'object' ? fallbackOrOptions : maybeOptions;
+      const plural = options?.count === undefined ? undefined : options.count === 1 ? 'one' : 'other';
+      const fallback =
+        typeof fallbackOrOptions === 'string'
+          ? fallbackOrOptions
+          : ((plural && options?.[`defaultValue_${plural}`]) ?? options?.defaultValue);
+      return String(fallback ?? key).replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options?.[name]));
     },
+    i18n: { language: 'en' },
   }),
 }));
 vi.mock('..', () => ({ useNotebookLayout: () => vi.fn() }));
@@ -83,7 +89,7 @@ const hearthRow = () => screen.queryByTestId('sidenav-nav-hearth');
 beforeEach(() => {
   vi.clearAllMocks();
   useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
-  useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 0 });
+  useGearsNavSignalMock.mockReturnValue({ startHere: false, startHereCredits: 0, claimableCount: 0 });
   useVideoModelsMock.mockReturnValue({ data: [] });
   navItems.length = 0;
   entitlements.length = 0;
@@ -124,20 +130,32 @@ describe('SidenavNav Gears row tag', () => {
     expect(rewards()).not.toBeInTheDocument();
   });
 
-  it('says Start here while Getting Started is unfinished', () => {
-    useGearsNavSignalMock.mockReturnValue({ startHere: true, claimableCount: 0 });
+  it('says Start here, with the credits on offer, while Getting Started is unfinished', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 0 });
     renderNav();
-    expect(startHere()).toHaveTextContent('Start here');
+    expect(startHere()).toHaveTextContent(`Start here, +${(6500).toLocaleString('en')} credits`);
+  });
+
+  it('says credit, not credits, for a single one', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 1, claimableCount: 0 });
+    renderNav();
+    expect(startHere()).toHaveTextContent(/^Start here, \+1 credit$/);
+  });
+
+  it('falls back to a bare Start here when the gears left pay nothing', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 0, claimableCount: 0 });
+    renderNav();
+    expect(startHere()).toHaveTextContent(/^Start here$/);
   });
 
   it('counts the rewards waiting', () => {
-    useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 3 });
+    useGearsNavSignalMock.mockReturnValue({ startHere: false, startHereCredits: 0, claimableCount: 3 });
     renderNav();
     expect(rewards()).toHaveTextContent('Claim 3');
   });
 
   it('a waiting reward replaces Start here rather than sitting beside it', () => {
-    useGearsNavSignalMock.mockReturnValue({ startHere: true, claimableCount: 2 });
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 2 });
     renderNav();
     expect(rewards()).toBeInTheDocument();
     expect(startHere()).not.toBeInTheDocument();

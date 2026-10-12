@@ -635,7 +635,7 @@ const CombinedNotebooks = () => {
                 className="notebook-sidenav-favorites-title"
                 level="body-xs"
                 sx={{
-                  color: 'neutral.softDisabledColor',
+                  color: 'text.tertiary',
                   marginBottom: '0.1em',
                   display: 'flex',
                   alignItems: 'center',
@@ -703,7 +703,7 @@ const CombinedNotebooks = () => {
               <Typography
                 className="notebook-sidenav-section-title"
                 level="body-xs"
-                sx={{ color: 'neutral.softDisabledColor', marginBottom: '0.1em' }}
+                sx={{ color: 'text.tertiary', marginBottom: '0.1em' }}
               >
                 {t('projects.projects', 'Projects')}
               </Typography>

@@ -28,6 +28,14 @@ export const TEST_VIDEO_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTIO
   ? {}
   : { ENABLE_TEST_VIDEO_PROVIDER: 'true' };
 
+/**
+ * Registers the free `test-decisions` model so POST /api/v1/decisions can be exercised end to end without a vendor
+ * key. Never set on production-scale stages. Only the web function serves decisions.
+ */
+export const TEST_DECISION_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTION_STAGES.includes($app.stage)
+  ? {}
+  : { ENABLE_TEST_DECISION_PROVIDER: 'true' };
+
 export const DEFAULT_LAMBDA_ENVIRONMENT = {
   SEED_APP_NAME: $app.name,
   SEED_STAGE_NAME: $app.stage,

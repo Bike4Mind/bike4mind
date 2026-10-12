@@ -16,6 +16,7 @@ import { B4M_HORIZONTAL_LOGO_SVG, B4M_FAVICON_SVG } from '@client/app/utils/b4mL
 // Marketing-site URL sourced from config (empty when unconfigured).
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import { escapeAttr } from './htmlEscape';
+import { sanitizeRedirectTo } from './authRedirect';
 import type { PublishVisibility } from '@bike4mind/common';
 
 const SITE_URL = WEBSITE_URL;
@@ -38,6 +39,22 @@ export interface ShareFooterOptions {
    * footers, where the publicId isn't known until finalize.
    */
   reportPublicId?: string;
+  /** Render only the report link (no brand card); used when the sign-up gate is the page's CTA. */
+  hideCta?: boolean;
+}
+
+/**
+ * Public attribution name for a share page: the owner's display name, never the raw login
+ * handle. Returns undefined (no "Shared by" line) when the only name on file is the username
+ * itself or an email address.
+ */
+export function pickSharedByName(
+  user: { name?: string | null; username?: string | null } | null | undefined
+): string | undefined {
+  const name = user?.name?.trim();
+  if (!name || name.includes('@')) return undefined;
+  if (user?.username && name.toLowerCase() === user.username.trim().toLowerCase()) return undefined;
+  return name;
 }
 
 /**
@@ -69,18 +86,15 @@ function shareWordmarkHtml(): string {
  * never a share-link holder or a signed-in viewer, both of whom already have full access.
  * It sits in the normal page flow after the content, not over it: the content above it is
  * already fully delivered, so this invites the visitor to make their own rather than
- * pretending to withhold anything. Links to the marketing site signup flow when configured,
- * falling back to the app's own /register so it still renders on a self-hosted deployment.
+ * pretending to withhold anything. Links to the app's own /register carrying a `redirectTo`
+ * back to the artifact (see authRedirect.ts), in a new tab so a framed bundle's sandbox does
+ * not trap the signup page and the visitor keeps the artifact open.
  *
  * Pure inline CSS + an HTML checkbox-trick dismiss (no JS) so it passes the same
  * `script-src 'none'` CSP constraint as the share footer.
  */
-export function buildSignupGateHtml(): { styles: string; html: string } {
-  // Link to the marketing site when configured; fall back to the app's own signup page so the
-  // gate renders on self-hosted deployments (and in local dev) without a marketing URL.
-  const signupHref = SITE_URL
-    ? `${SITE_URL}/?utm_source=shared-artifact&utm_medium=signup-gate&utm_campaign=publish`
-    : '/register?utm_source=shared-artifact&utm_medium=signup-gate&utm_campaign=publish';
+export function buildSignupGateHtml(opts: SignupGateOptions = {}): { styles: string; html: string } {
+  const signupHref = buildSignupHref(opts);
   const brandName = escapeAttr(getBrandName());
 
   // All gate CSS lives here so the PAGE template injects it into the existing <style> block --
@@ -151,11 +165,8 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
     `<p class="b4m-gate-body">Create a free ${brandName} account to explore this artifact and build your own \u2014 no credit card required.</p>`,
     '</div>',
     '<div class="b4m-gate-right">',
-    '<div class="b4m-credits-inline">',
-    '<span class="b4m-credits-num">5,000</span>',
-    '<span class="b4m-credits-label">free credits</span>',
-    '</div>',
-    `<a href="${signupHref}" class="b4m-cta-btn">Create free account</a>`,
+    starterCreditsHtml(opts.starterCredits),
+    `<a href="${escapeAttr(signupHref)}" target="_blank" rel="noopener" class="b4m-cta-btn">Create free account</a>`,
     '<label for="b4m-gate-dismiss" class="b4m-dismiss-label">No thanks</label>',
     '</div>',
     '</div>',
@@ -166,6 +177,43 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
 }
 
 const SIGNUP_GATE_MARKER = '<input type="checkbox" id="b4m-gate-dismiss"';
+
+export interface SignupGateOptions {
+  /**
+   * Credits a new account starts with (the `defaultFreeCredits` admin setting). Omitted or
+   * non-positive renders no number, so a page baked at publish time never states a stale amount -
+   * the serve handler re-renders the gate with the live value (replaceSignupGateHtml).
+   */
+  starterCredits?: number | null;
+  /** Same-origin path of the artifact, sent as /register's `redirectTo` so signup lands back on it. */
+  returnTo?: string;
+  /**
+   * App origin to anchor /register to. Needed where the gate renders inside a bundle that may be
+   * served from the isolated usercontent origin, where a root-relative link would miss the app.
+   */
+  appOrigin?: string;
+}
+
+/** The gate's signup URL: the app's /register, with a `redirectTo` when the artifact path is safe. */
+export function buildSignupHref({ returnTo, appOrigin }: SignupGateOptions = {}): string {
+  const params = new URLSearchParams();
+  const redirectTo = sanitizeRedirectTo(returnTo);
+  if (redirectTo) params.set('redirectTo', redirectTo);
+  params.set('utm_source', 'shared-artifact');
+  params.set('utm_medium', 'signup-gate');
+  params.set('utm_campaign', 'publish');
+  return `${appOrigin ?? ''}/register?${params.toString()}`;
+}
+
+function starterCreditsHtml(starterCredits: number | null | undefined): string {
+  if (typeof starterCredits !== 'number' || !Number.isFinite(starterCredits) || starterCredits <= 0) return '';
+  return [
+    '<div class="b4m-credits-inline">',
+    `<span class="b4m-credits-num">${Math.floor(starterCredits).toLocaleString('en-US')}</span>`,
+    '<span class="b4m-credits-label">free credits</span>',
+    '</div>',
+  ].join('');
+}
 
 /**
  * Whether a served page should carry the sign-up gate. Only an anonymous viewer of an
@@ -182,17 +230,117 @@ export function shouldShowSignupGate(
   return effectiveVisibility === 'public' && !viewer?.id;
 }
 
+// The panel opening tag in every gate version published (the pre-#3283 gate had a
+// `<div id="b4m-gate-ol">` overlay between the checkbox and the panel; it is tolerated below).
+const SIGNUP_GATE_PANEL_OPEN = '<div id="b4m-gate-panel"';
+const SIGNUP_GATE_PREAMBLE =
+  /^<input type="checkbox" id="b4m-gate-dismiss"[^>]*>\s*(?:<div id="b4m-gate-ol"[^>]*><\/div>\s*)?$/;
+
+// Index just past the `</div>` that closes the div opening at `openAt`, or -1 if unbalanced.
+function matchingDivCloseEnd(html: string, openAt: number): number {
+  const tags = /<div\b|<\/div>/gi;
+  tags.lastIndex = openAt;
+  let depth = 0;
+  for (let m = tags.exec(html); m; m = tags.exec(html)) {
+    depth += m[0][1] === '/' ? -1 : 1;
+    if (depth === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
 /**
- * Remove a sign-up gate baked into stored artifact bytes (renderArtifactIndexHtml emits it
- * as the last element before `</body>`). The gate's CSS is left in place: every rule keys
- * off the removed elements, so it goes inert.
+ * Locate a sign-up gate baked into stored artifact bytes, as [start, end) where `end` is the
+ * page's closing `</body>`. Only the position renderArtifactIndexHtml writes it counts: the
+ * checkbox and one balanced panel div, followed by nothing but the document's final
+ * `</body></html>`. Matching the marker anywhere would let an artifact whose own content
+ * contains the gate markup lose everything after it on serve.
+ *
+ * Known limit: a full-HTML artifact that ends its body with an exact copy of the gate is only
+ * rejected because renderArtifactIndexHtml injects the share footer after it; with no marketing
+ * URL configured nothing follows it and it is treated as baked.
+ */
+function findBakedSignupGate(html: string): { start: number; end: number } | null {
+  const end = html.lastIndexOf('</body>');
+  if (end === -1 || !/^\s*<\/html>\s*$/i.test(html.slice(end + '</body>'.length))) return null;
+  const start = html.lastIndexOf(SIGNUP_GATE_MARKER, end);
+  if (start === -1) return null;
+  const panelAt = html.indexOf(SIGNUP_GATE_PANEL_OPEN, start);
+  if (panelAt === -1 || panelAt > end || !SIGNUP_GATE_PREAMBLE.test(html.slice(start, panelAt))) return null;
+  const panelEnd = matchingDivCloseEnd(html, panelAt);
+  if (panelEnd === -1 || panelEnd > end || html.slice(panelEnd, end).trim() !== '') return null;
+  return { start, end };
+}
+
+/**
+ * Remove a sign-up gate baked into stored artifact bytes (see findBakedSignupGate). The gate's
+ * CSS is left in place: every rule keys off the removed elements, so it goes inert.
  */
 export function stripSignupGateHtml(html: string): string {
-  const start = html.lastIndexOf(SIGNUP_GATE_MARKER);
-  if (start === -1) return html;
-  const end = html.indexOf('</body>', start);
-  if (end === -1) return html;
-  return html.slice(0, start) + html.slice(end);
+  const gate = findBakedSignupGate(html);
+  return gate ? html.slice(0, gate.start) + html.slice(gate.end) : html;
+}
+
+/**
+ * Swap a gate baked into stored bytes for a freshly built one, so the starter-credit number
+ * reflects the current setting rather than whatever was true at publish time. The baked CSS
+ * is reused as-is (it does not depend on the number). No-op on a page without a gate.
+ */
+export function replaceSignupGateHtml(html: string, opts: SignupGateOptions = {}): string {
+  const gate = findBakedSignupGate(html);
+  return gate ? html.slice(0, gate.start) + buildSignupGateHtml(opts).html + html.slice(gate.end) : html;
+}
+
+// Exact opening tag of the brand card buildShareFooterHtml emits. Already-published pages carry
+// these bytes, so changing them strands stripShareFooterCtaBeforeGate on old content.
+const SHARE_FOOTER_CARD_OPEN =
+  '<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">';
+const SHARE_FOOTER_UTM = 'utm_medium=share-footer';
+
+// Tolerates CRLF or other whitespace a pipeline may have introduced around the card's close.
+function endsWithCardClose(card: string): boolean {
+  const trimmed = card.trimEnd();
+  return trimmed.endsWith('</div>') && trimmed.slice(0, -'</div>'.length).trimEnd().endsWith('</a>');
+}
+
+/** Whether the page carries a baked sign-up gate (see renderArtifactIndexHtml). */
+export function hasSignupGateHtml(html: string): boolean {
+  return findBakedSignupGate(html) !== null;
+}
+
+/**
+ * Whether the page carries the brand footer card buildShareFooterHtml bakes in at publish time:
+ * the exact opening tag whose first child is the share-footer UTM link.
+ */
+export function hasShareFooterCardHtml(html: string): boolean {
+  for (let at = html.indexOf(SHARE_FOOTER_CARD_OPEN); at !== -1; at = html.indexOf(SHARE_FOOTER_CARD_OPEN, at + 1)) {
+    const tagStart = at + SHARE_FOOTER_CARD_OPEN.length;
+    const tagEnd = html.indexOf('>', tagStart);
+    if (tagEnd === -1) return false;
+    const anchorTag = html.slice(tagStart, tagEnd);
+    if (anchorTag.trimStart().startsWith('<a href="') && anchorTag.includes(SHARE_FOOTER_UTM)) return true;
+  }
+  return false;
+}
+
+/**
+ * Remove the brand footer card that renderArtifactIndexHtml bakes directly in front of the
+ * sign-up gate, so a viewer shown the gate gets one sign-up CTA rather than two (the
+ * reply/fabfile viewer does the same with `hideCta`). Only an exact card sitting immediately
+ * before the gate is removed, so it works on pages published before this existed and never
+ * touches the artifact's own content. No-op on a page without that pairing.
+ */
+export function stripShareFooterCtaBeforeGate(html: string): string {
+  const gateStart = findBakedSignupGate(html)?.start ?? -1;
+  if (gateStart === -1) return html;
+  const cardStart = html.lastIndexOf(SHARE_FOOTER_CARD_OPEN, gateStart);
+  if (cardStart === -1) return html;
+  const card = html.slice(cardStart, gateStart);
+  const isExactCard =
+    endsWithCardClose(card) &&
+    card.indexOf('</div>') === card.lastIndexOf('</div>') &&
+    card.indexOf('</a>') === card.lastIndexOf('</a>') &&
+    card.includes(SHARE_FOOTER_UTM);
+  return isExactCard ? html.slice(0, cardStart) + html.slice(gateStart) : html;
 }
 
 /** Returns the footer as an HTML string ready to inject before `</body>`. */
@@ -219,9 +367,11 @@ export function buildShareFooterHtml(opts: ShareFooterOptions = {}): string {
   </div>`
     : '';
 
+  if (opts.hideCta) return report;
+
   // Self-contained navy card (inline styles only) so it renders consistently on
   // any host page, light or dark.
-  return `<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">
+  return `${SHARE_FOOTER_CARD_OPEN}
   <a href="${href}" target="_blank" rel="noopener noreferrer"
      style="display:flex;align-items:center;gap:16px;max-width:600px;width:100%;padding:14px 18px;
             border:1px solid rgba(255,255,255,.14);border-radius:14px;text-decoration:none;

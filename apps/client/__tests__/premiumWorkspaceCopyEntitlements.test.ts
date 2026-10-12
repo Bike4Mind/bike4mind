@@ -194,3 +194,177 @@ describe('premium workspace copy entitlements - gate cross-check', () => {
     expect(result.stderr).toContain('invalid workspaceGateEntitlements keys');
   });
 });
+
+describe('premium workspace copy entitlements - grant displays', () => {
+  // An object-form grant also says how the workspace is shown to a user who reaches it only through
+  // that key. The key half joins the grant table like a bare string; the display half is emitted on
+  // its own, and both of its values reach the UI and the router verbatim.
+  const DISPLAYS = 'app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts';
+  const displays = () => readFileSync(join(clientRoot, DISPLAYS), 'utf8');
+  const gates = { space: ['alpha:pro', 'partner:pro', 'other:pro'] };
+
+  it('emits the empty display form when no grant declares one', () => {
+    writeOverlay('alpha', { workspaceCopyEntitlements: { space: ['partner:pro'] }, workspaceGateEntitlements: gates });
+
+    generate();
+
+    expect(displays()).toContain('premiumWorkspaceGrantDisplays: PremiumWorkspaceGrantDisplays = {}');
+  });
+
+  it('grants an object-form key like a bare one and emits its display separately', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: {
+        space: ['alpha:pro', { key: 'Partner:Pro', label: 'Partner Desk', sessionHref: '/desk?session={sessionId}' }],
+      },
+      workspaceGateEntitlements: gates,
+    });
+
+    expect(generate()).toContain(`"space": ["alpha:pro", "partner:pro"]`);
+    expect(displays()).toContain(
+      `"space": [{"key":"partner:pro","label":"Partner Desk","sessionHref":"/desk?session={sessionId}"}]`
+    );
+    expect(displays()).not.toContain('@bike4mind/premium-alpha');
+  });
+
+  it('omits sessionHref when a display declares only a label', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { space: [{ key: 'partner:pro', label: 'Partner Desk' }] },
+      workspaceGateEntitlements: gates,
+    });
+
+    generate();
+
+    expect(displays()).toContain(`"space": [{"key":"partner:pro","label":"Partner Desk"}]`);
+  });
+
+  it('still requires the gates to admit an object-form key', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { space: [{ key: 'stray:pro', label: 'Stray' }] },
+      workspaceGateEntitlements: gates,
+    });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain(`grants ["stray:pro"] for workspace "space"`);
+  });
+
+  it.each([
+    ['an unknown field', { key: 'partner:pro', label: 'Partner', icon: 'x' }, 'unknown field'],
+    ['a missing label', { key: 'partner:pro' }, 'label undefined'],
+    ['a blank label', { key: 'partner:pro', label: '  ' }, 'label "  "'],
+    ['a padded label', { key: 'partner:pro', label: ' Partner' }, 'one trimmed line'],
+    ['a multi-line label', { key: 'partner:pro', label: 'Partner\nDesk' }, 'one trimmed line'],
+    ['an over-long label', { key: 'partner:pro', label: 'x'.repeat(65) }, 'at most 64 characters'],
+    ['a malformed key', { key: `x"]; //`, label: 'Partner' }, 'is not an entitlement key'],
+  ])('rejects a display with %s', (_name, entry, message) => {
+    writeOverlay('alpha', { workspaceCopyEntitlements: { space: [entry] }, workspaceGateEntitlements: gates });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain(message);
+  });
+
+  it.each([
+    ['no slot', '/desk'],
+    ['two slots', '/desk/{sessionId}/{sessionId}'],
+    ['an absolute URL', 'https://example.com/desk?session={sessionId}'],
+    ['a protocol-relative URL', '//example.com/desk?session={sessionId}'],
+    ['no route before the slot', '/{sessionId}'],
+    ['the slot opening the path', '/{sessionId}/desk'],
+    ['a quote', `/desk?session={sessionId}'`],
+    ['whitespace', '/desk ?session={sessionId}'],
+    ['a fragment', '/desk#{sessionId}'],
+  ])('rejects a sessionHref with %s', (_name, sessionHref) => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { space: [{ key: 'partner:pro', label: 'Partner', sessionHref }] },
+      workspaceGateEntitlements: gates,
+    });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('must be a same-origin path');
+  });
+
+  it('accepts a sessionHref whose slot is a path segment', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: {
+        space: [{ key: 'partner:pro', label: 'Partner', sessionHref: '/desk/{sessionId}' }],
+      },
+      workspaceGateEntitlements: gates,
+    });
+
+    generate();
+
+    expect(displays()).toContain(`"sessionHref":"/desk/{sessionId}"`);
+  });
+
+  it('refuses a key that one package displays twice', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: {
+        space: [
+          { key: 'partner:pro', label: 'Partner' },
+          { key: 'PARTNER:PRO', label: 'Partner Desk' },
+        ],
+      },
+      workspaceGateEntitlements: gates,
+    });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('declares a label more than once');
+  });
+
+  it('does not accept the object form in the gate declaration', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { space: ['partner:pro'] },
+      workspaceGateEntitlements: { space: [{ key: 'partner:pro', label: 'Partner' }] },
+    });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('invalid workspaceGateEntitlements keys');
+  });
+
+  it('merges displays across overlays in package order and drops an identical repeat', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { space: [{ key: 'partner:pro', label: 'Partner' }] },
+      workspaceGateEntitlements: gates,
+    });
+    writeOverlay('beta', {
+      workspaceCopyEntitlements: {
+        space: [
+          { key: 'partner:pro', label: 'Partner' },
+          { key: 'other:pro', label: 'Other' },
+        ],
+      },
+      workspaceGateEntitlements: gates,
+    });
+
+    generate();
+
+    expect(displays()).toContain(
+      `"space": [{"key":"partner:pro","label":"Partner"}, {"key":"other:pro","label":"Other"}]`
+    );
+  });
+
+  it('fails when two overlays show the same key differently, naming both', () => {
+    writeOverlay('alpha', {
+      workspaceCopyEntitlements: { space: [{ key: 'partner:pro', label: 'Partner' }] },
+      workspaceGateEntitlements: gates,
+    });
+    writeOverlay('beta', {
+      workspaceCopyEntitlements: { space: [{ key: 'partner:pro', label: 'Partner', sessionHref: '/b?s={sessionId}' }] },
+      workspaceGateEntitlements: gates,
+    });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('"@bike4mind/premium-alpha" and "@bike4mind/premium-beta"');
+  });
+});

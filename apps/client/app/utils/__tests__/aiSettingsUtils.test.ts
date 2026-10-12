@@ -1,11 +1,16 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import {
   buildModelSelectionPatch,
   computeDefaultMaxTokens,
+  getModelCreditRates,
+  getModelPriceTier,
   getModelSpeedFromStats,
+  getPriceTierTooltip,
   refitMaxTokensForModel,
 } from '../aiSettingsUtils';
-import type { ModelInfo } from '@bike4mind/common';
+import { ChatModels, CREDITS_PER_USD_COST, type ModelInfo } from '@bike4mind/common';
+import { OpenAIBackend } from '@bike4mind/llm-adapters';
 
 describe('computeDefaultMaxTokens', () => {
   it('falls back to the catalog max_tokens when contextWindow is missing/0', () => {
@@ -169,5 +174,96 @@ describe('getModelSpeedFromStats', () => {
     expect(getModelSpeedFromStats('m', { m: 7000 })).toBe('medium');
     expect(getModelSpeedFromStats('m', { m: 14999 })).toBe('medium');
     expect(getModelSpeedFromStats('m', { m: 15000 })).toBe('slow');
+  });
+});
+
+describe('getPriceTierTooltip', () => {
+  const textModel = (pricing: ModelInfo['pricing']) => ({ type: 'text', pricing }) as ModelInfo;
+  // Literal figures below assume the default rate; this fails first, and clearly, if it moves.
+  it('runs at the default 2,000 credits per USD', () => {
+    expect(CREDITS_PER_USD_COST).toBe(2000);
+  });
+
+  it('matches the pricing table for a cheap model (GPT-4.1 Nano: $0.10 / $0.40 per 1M)', () => {
+    const nano = textModel({ 1047576: { input: 0.1 / 1e6, output: 0.4 / 1e6 } });
+    expect(getModelCreditRates(nano)).toEqual({ input: '200', output: '800' });
+    expect(getPriceTierTooltip('Low', nano)).toBe(
+      'Lower cost model: 200 credits per 1M input tokens, 800 per 1M output'
+    );
+  });
+
+  it('keeps up to 2 decimals so very cheap models are not rounded together', () => {
+    const cheap = textModel({ 128000: { input: 0.01234 / 1e6, output: 0.0456 / 1e6 } });
+    const cheaper = textModel({ 128000: { input: 0.0123 / 1e6, output: 0.0456 / 1e6 } });
+
+    expect(getModelCreditRates(cheap)).toEqual({ input: '24.68', output: '91.2' });
+    expect(getModelCreditRates(cheaper)).toEqual({ input: '24.6', output: '91.2' });
+  });
+
+  it('prices a premium model at its base tier with thousands separators', () => {
+    const premium = textModel({
+      1000000: { input: 6 / 1e6, output: 22.5 / 1e6 },
+      200000: { input: 3 / 1e6, output: 15 / 1e6 },
+    });
+
+    expect(getModelCreditRates(premium)).toEqual({ input: '6,000', output: '30,000' });
+    expect(getPriceTierTooltip('High', premium)).toBe(
+      'Premium cost model: 6,000 credits per 1M input tokens, 30,000 per 1M output'
+    );
+  });
+
+  it('falls back to the tier text when the model has no usable price', () => {
+    expect(getPriceTierTooltip('Low', textModel({}))).toBe('Lower cost model');
+    expect(getPriceTierTooltip('Low', textModel({ 128000: { input: 0, output: 0 } }))).toBe('Lower cost model');
+    expect(getPriceTierTooltip('Medium')).toBe('Medium cost model');
+    expect(getPriceTierTooltip('Unknown')).toBe('Cost information unavailable');
+  });
+
+  it('shows zero credits for a freeToRun model instead of falling back to the tier text', () => {
+    const local = { ...textModel({ 8192: { input: 0, output: 0 } }), freeToRun: true } as ModelInfo;
+    expect(getPriceTierTooltip('Low', local)).toBe('Lower cost model: 0 credits per 1M input tokens, 0 per 1M output');
+  });
+
+  it('falls back to the tier text when a rate is not a finite number', () => {
+    expect(getModelCreditRates(textModel({ 8192: { input: NaN, output: 1 / 1e6 } }))).toBeNull();
+    expect(getModelCreditRates(textModel({ 8192: { input: Infinity, output: 1 / 1e6 } }))).toBeNull();
+  });
+
+  it('pre-rounds to 4 decimals like getTextModelCreditsPer1M, so the tooltip and table agree', () => {
+    // 24.6849998 credits: 4 decimals first gives 24.685, which then shows as 24.69
+    const edge = textModel({ 8192: { input: 0.0123424999 / 1e6, output: 1 / 1e6 } });
+    expect(getModelCreditRates(edge)).toEqual({ input: '24.69', output: '2,000' });
+  });
+
+  it('leaves image models on the tier text, since their pricing is not per token', () => {
+    const image = { type: 'image', pricing: { 1: { input: 0.04, output: 0.04 } } } as unknown as ModelInfo;
+    expect(getPriceTierTooltip('Medium', image)).toBe('Medium cost model');
+  });
+});
+
+describe('getModelPriceTier', () => {
+  // Real adapter prices, not copies: a price change that moves Terra out of the order its
+  // description claims, or across a chip threshold, should fail here and prompt a copy review.
+  it('agrees with the GPT-5.6 descriptions on the real catalog prices', async () => {
+    const models = await new OpenAIBackend('test-key').getModelInfo();
+    const byId = (id: ChatModels) => {
+      const model = models.find(m => m.id === id);
+      if (!model) throw new Error(`${id} missing from the OpenAI catalog`);
+      return model;
+    };
+    const firstTierAvg = (model: ModelInfo) => {
+      const [first] = Object.values(model.pricing ?? {});
+      return (first.input + first.output) / 2;
+    };
+    const sol = byId(ChatModels.GPT5_6_SOL);
+    const terra = byId(ChatModels.GPT5_6_TERRA);
+    const luna = byId(ChatModels.GPT5_6_LUNA);
+
+    expect(terra.description).toContain('priced between Sol and Luna');
+    expect(firstTierAvg(sol)).toBeGreaterThan(firstTierAvg(terra));
+    expect(firstTierAvg(terra)).toBeGreaterThan(firstTierAvg(luna));
+    expect(getModelPriceTier(sol).tier).toBe('High');
+    expect(getModelPriceTier(terra).tier).toBe('High');
+    expect(getModelPriceTier(luna).tier).toBe('Medium');
   });
 });

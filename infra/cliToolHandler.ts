@@ -19,7 +19,4 @@ export const cliToolHandler = new sst.aws.Function('CliToolHandler', {
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
-  logging: {
-    retention: '3 days',
-  },
 });
