@@ -7,16 +7,19 @@ import { trackPurchaseConversion } from '@client/app/utils/purchaseConversion';
 /**
  * Handles Stripe Checkout success redirects globally (subscription checkout success).
  *
- * Also the one place a completed purchase is reported to analytics. Renewals bill
- * through Stripe without a redirect, so only genuinely new subscriptions reach
- * here - which is exactly the "first charge" the acquisition funnel needs.
+ * Also where a completed subscription is reported to analytics; credit purchases
+ * are reported by StripePaymentReturnHandler. Renewals bill through Stripe without
+ * a redirect, so only genuinely new subscriptions reach here - which is exactly the
+ * "first charge" the acquisition funnel needs.
  */
 
 /** Reported checkout sessions, so a reload or a re-mount cannot double-count. */
 const REPORTED_SESSIONS_KEY = 'b4m-reported-checkout-sessions';
 
 /**
- * Claim a session id for reporting; false when it was already claimed.
+ * Claim a session id for reporting; false when it was already claimed. Also claims
+ * credit-purchase payment intent ids (StripePaymentReturnHandler); the prefixes keep
+ * the two apart.
  *
  * sessionStorage rather than a module-level Set: the redirect back from Stripe is
  * a full page load, and a customer who reloads the success URL before the query

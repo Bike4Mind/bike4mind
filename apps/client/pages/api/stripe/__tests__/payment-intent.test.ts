@@ -2,14 +2,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-// baseApi: unwrap the chain so handler.get(fn) just returns fn.
+// baseApi: unwrap the chain so handler.get(fn) just returns fn. The options it was built with are
+// kept outside vi's mock registry, so clearAllMocks between tests cannot wipe them.
+const built = vi.hoisted(() => ({ options: undefined as unknown }));
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use: function () {
-      return this;
-    },
-    get: (fn: unknown) => fn,
-  }),
+  baseApi: (options?: unknown) => {
+    built.options = options;
+    return {
+      use: function () {
+        return this;
+      },
+      get: (fn: unknown) => fn,
+    };
+  },
 }));
 
 vi.mock('@bike4mind/utils', () => ({
@@ -54,6 +59,10 @@ function call(intentId: string | undefined, userId = OWNER_ID) {
 describe('GET /api/stripe/payment-intent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('accepts browser sessions only, never an API key', () => {
+    expect(built.options).toEqual({ auth: 'jwtOnly' });
   });
 
   it('returns the purchase facts in major currency units, marked as a credit purchase', async () => {
