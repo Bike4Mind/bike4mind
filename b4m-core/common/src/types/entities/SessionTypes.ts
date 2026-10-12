@@ -197,6 +197,9 @@ export interface IChatHistoryItem {
   /** Ids of the video generation jobs this quest started */
   videoJobIds?: string[];
 
+  /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentVideoClip). */
+  agentVideoClipsClaimed?: number;
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
@@ -1134,4 +1137,25 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The count of active voice sessions
    */
   countActiveVoiceSessionsByUserId: (userId: string) => Promise<number>;
+
+  /**
+   * Oldest-first sessions whose voice credit hold was reserved before `startedBefore` and never
+   * settled, at most `limit` of them.
+   */
+  findStaleVoiceHolds: (
+    startedBefore: Date,
+    limit: number
+  ) => Promise<Array<{ id: string; userId: string; voiceReservedCredits: number; voiceSessionStartedAt: Date }>>;
+
+  /**
+   * Atomically clear the voice hold that started at `startedAt`. Resolves true for the single
+   * caller that cleared it, false when it was already settled or replaced by a newer call.
+   */
+  claimVoiceHold: (sessionId: string, startedAt: Date) => Promise<boolean>;
+
+  /**
+   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, so it can be settled
+   * again. Resolves false (and writes nothing) when the session already holds a newer call.
+   */
+  restoreVoiceHold: (sessionId: string, voiceReservedCredits: number, startedAt: Date) => Promise<boolean>;
 }

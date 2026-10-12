@@ -5,12 +5,12 @@
  * Also served at the legacy `/api/voice/v2/sessions/{id}/end` (re-exported there), which the SPA
  * calls. Auth mode, the `ai:generate` scope and the path param come from `endVoiceSessionContract`.
  */
-import { sessionRepository, userRepository } from '@bike4mind/database';
+import { sessionRepository } from '@bike4mind/database';
 import { endVoiceSessionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { NotFoundError } from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
-import { creditsForElapsed } from '@server/voice/voiceSessionLimits';
+import { settleVoiceHold } from '@server/voice/settleVoiceHold';
 
 const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, res) => {
   const sessionId = req.validatedParams.id;
@@ -25,7 +25,7 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
   }
 
   const reserved = session.voiceReservedCredits ?? 0;
-  const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt).getTime() : null;
+  const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
 
   // Already reconciled (no hold left) or nothing was reserved (enforceCredits off):
   // clear any stale marker so the session stops counting as an active voice call.
@@ -34,16 +34,16 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
     return res.status(200).json({ refunded: 0, alreadyReconciled: true });
   }
 
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-  const owed = creditsForElapsed(reserved, elapsedSeconds);
-  const refund = Math.max(0, reserved - owed);
-
-  // Clear the hold BEFORE crediting back so a duplicate end can't double-refund.
-  // A refund lost to a transient failure here is preferable to issuing free credits.
-  await sessionRepository.update({ id: session.id, voiceReservedCredits: null, voiceSessionStartedAt: null });
-  if (refund > 0) {
-    await userRepository.incrementCredits(req.user.id, refund);
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000));
+  const settlement = await settleVoiceHold(
+    { id: session.id, userId: req.user.id, voiceReservedCredits: reserved, voiceSessionStartedAt: startedAt },
+    elapsedSeconds
+  );
+  // A concurrent end or the stale-hold sweep settled it first.
+  if (!settlement.settled) {
+    return res.status(200).json({ refunded: 0, alreadyReconciled: true });
   }
+  const { owed, refund } = settlement;
 
   req.logger.info(
     { sessionId: session.id, elapsedSeconds, reserved, owed, refund },

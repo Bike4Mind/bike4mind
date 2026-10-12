@@ -66,7 +66,13 @@ describe('buildOptiOrchestrationProfile', () => {
   it('denies image generation and multi-agent delegation', () => {
     const profile = build();
     expect(profile.deniedTools).toEqual(
-      expect.arrayContaining(['image_generation', 'edit_image', 'delegate_to_agent', 'coordinate_task'])
+      expect.arrayContaining([
+        'image_generation',
+        'edit_image',
+        'video_generation',
+        'delegate_to_agent',
+        'coordinate_task',
+      ])
     );
   });
 

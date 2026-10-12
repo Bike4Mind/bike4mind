@@ -9,7 +9,7 @@ import {
   IWorldMemoryEntry,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ShareableDocumentSchema, ShareableDocumentRepository } from '../content/SharableDocumentModel';
 
@@ -115,6 +115,28 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
       hasMore,
       total,
     };
+  }
+
+  /** Keyset page of the agents `userId` owns or has shared with them; the reach assertAgentAccess('view') grants. */
+  async listAccessibleAfterId(userId: string, { afterId, limit }: { afterId?: string; limit: number }) {
+    const conditions: Record<string, unknown> = {
+      $or: [{ userId }, { 'users.userId': userId }],
+      deletedAt: null,
+    };
+
+    if (afterId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(afterId)) throw new Error(`Invalid agent cursor id: ${afterId}`);
+      conditions._id = { $gt: convertId(afterId) };
+    }
+
+    const result = await this.agentModel
+      .find(conditions)
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit).map(doc => doc.toJSON()), hasMore };
   }
 
   async incrementCredits(agentId: string, credits: number): Promise<IAgentDocument | null> {
@@ -652,6 +674,8 @@ AgentSchema.index({ 'heartbeatConfig.enabled': 1, 'heartbeatConfig.lastHeartbeat
 AgentSchema.index({ triggerWords: 1, userId: 1, deletedAt: 1 });
 // Index for countByUserId - runs on every agent creation to enforce per-tier limits
 AgentSchema.index({ userId: 1, deletedAt: 1 });
+// Share arm of the owner-or-shared $or (listAccessibleAfterId, searchAccessible, findByTriggerWords)
+AgentSchema.index({ 'users.userId': 1, deletedAt: 1 });
 // Org-scoped agent lookup
 AgentSchema.index({ organizationId: 1, deletedAt: 1 });
 // Name lookup within a scope - supports findByNameForUser / findByNameForOrganization

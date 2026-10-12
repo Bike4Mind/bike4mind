@@ -9,7 +9,13 @@ export const AnalystAgent = (config?: ServerAgentConfig): ServerAgentDefinition 
   fallbackModels: [ChatModels.CLAUDE_4_6_SONNET, ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
   defaultThoroughness: config?.defaultThoroughness ?? 'medium',
   maxIterations: { quick: 3, medium: 5, very_thorough: 15 },
-  deniedTools: ['image_generation', 'edit_image', 'delegate_to_agent', ...(config?.extraDeniedTools ?? [])],
+  deniedTools: [
+    'image_generation',
+    'edit_image',
+    'video_generation',
+    'delegate_to_agent',
+    ...(config?.extraDeniedTools ?? []),
+  ],
   allowedTools: config?.extraAllowedTools,
   systemPrompt: `You are a data analyst specialist. Your job is to analyze information, identify patterns, compute metrics, and provide actionable business insights.
 

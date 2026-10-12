@@ -2,6 +2,7 @@ import { useCreateProject } from '@client/app/hooks/data/projects';
 import {
   Box,
   Button,
+  DialogTitle,
   FormControl,
   FormHelperText,
   FormLabel,
@@ -13,7 +14,7 @@ import {
   Textarea,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ProjectAddSessionsModal from './AddSessionsModal';
 import ProjectAddFilesModal from './AddFilesModal';
 import { useForm } from 'react-hook-form';
@@ -35,7 +36,7 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
     resolver: zodResolver(
       z.object({
         name: z.string().min(1, 'Project name is required.'),
-        description: z.string().min(1, 'Please write a description for the Project.'),
+        description: z.string(),
       }) as any
     ),
   });
@@ -49,8 +50,18 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
     },
   });
   const [open, setOpen] = useState(false);
+  const openerRef = useRef<HTMLButtonElement>(null);
   const [selectedSessions, setSelectedSessions] = useState<string[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (open) wasOpenRef.current = true;
+    else if (wasOpenRef.current) {
+      wasOpenRef.current = false;
+      openerRef.current?.focus();
+    }
+  }, [open]);
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value.slice(0, 50);
@@ -80,6 +91,7 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
   return (
     <>
       <Button
+        ref={openerRef}
         className="create-project-button"
         data-testid={testId}
         onClick={() => setOpen(true)}
@@ -88,7 +100,15 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
         <AddIcon /> {label ?? 'New Project'}
       </Button>
 
-      <Modal className="create-project-modal" open={open} onClose={handleCloseModal}>
+      <Modal
+        className="create-project-modal"
+        open={open}
+        onClose={handleCloseModal}
+        // Modal would restore focus to whatever held it at open time, which is <body> when the
+        // opener was clicked in a browser that does not focus buttons on click; the effect above
+        // returns focus to the opener on every close path instead.
+        disableRestoreFocus
+      >
         <ModalDialog data-testid="create-project-modal-dialog">
           <form noValidate onSubmit={handleSubmit(handleCreate)}>
             <ModalClose className="create-project-modal-close" />
@@ -101,14 +121,19 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
                 minWidth: { xs: '100%', sm: '400px' },
               }}
             >
-              <Box className="create-project-title" fontSize="20px" lineHeight="20px">
+              <DialogTitle
+                component="h2"
+                className="create-project-title"
+                sx={{ fontSize: '20px', lineHeight: '20px' }}
+              >
                 Create Project
-              </Box>
+              </DialogTitle>
               <Box className="create-project-form-fields" display="flex" flexDirection="column" gap="30px">
                 <FormControl required className="create-project-name-control">
                   <FormLabel className="create-project-name-label">Project Name</FormLabel>
                   <Input
                     data-testid="name-input"
+                    autoFocus
                     {...register('name')}
                     // eslint-disable-next-line react-hooks/incompatible-library
                     value={watch('name')}
@@ -125,7 +150,7 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
                     <span style={{ fontSize: '12px' }}>{watch('name').length}/50</span>
                   </FormHelperText>
                 </FormControl>
-                <FormControl required className="create-project-description-control">
+                <FormControl className="create-project-description-control">
                   <FormLabel className="create-project-description-label">Description</FormLabel>
                   <Textarea
                     data-testid="description-textarea"

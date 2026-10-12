@@ -253,9 +253,6 @@ const appFilesBucketNotification = appFilesBucket.notify({
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
-        logging: {
-          retention: '3 days',
-        },
       },
       events: ['s3:ObjectCreated:*'],
     },
@@ -371,9 +368,6 @@ const uploadCompleteFunction = new sst.aws.Function('HistoryUploadCompleteFuncti
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
-  logging: {
-    retention: '3 days',
-  },
 });
 
 const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunction', {
@@ -383,9 +377,6 @@ const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunct
   vpc: lambdaVpc,
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: '3 days',
   },
   timeout: '5 minutes', // Longer timeout for large imports
   memory: '1024 MB', // More memory for processing

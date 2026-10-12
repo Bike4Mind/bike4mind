@@ -364,15 +364,15 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
     return [
       {
         id: ChatModels.CLAUDE_4_6_SONNET,
-        name: 'Claude 4.6 Sonnet',
+        name: 'Claude Sonnet 4.6',
       },
       {
         id: ChatModels.CLAUDE_4_5_SONNET,
-        name: 'Claude 4.5 Sonnet',
+        name: 'Claude Sonnet 4.5',
       },
       {
         id: ChatModels.CLAUDE_4_5_HAIKU,
-        name: 'Claude 4.5 Haiku',
+        name: 'Claude Haiku 4.5',
       },
       {
         id: ChatModels.GPT4o,

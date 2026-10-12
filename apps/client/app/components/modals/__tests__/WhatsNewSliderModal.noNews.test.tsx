@@ -70,6 +70,8 @@ describe('WhatsNewSliderModal no-news state', () => {
     mocks.modals = { data: [], isPending: false, slidesPending: false, refetch: vi.fn() };
     render(ui());
     expect(screen.getByTestId('no-news-ok-btn')).toBeTruthy();
+    expect(screen.getByText(/all caught up/i)).toBeTruthy();
+    expect(screen.queryByText(/but seriously/i)).toBeNull();
   });
 
   it('dismisses an already-showing no-news once slides arrive', () => {

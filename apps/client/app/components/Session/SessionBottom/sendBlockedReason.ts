@@ -46,8 +46,17 @@ export function getSendBlockedLabel(reason: SendBlockedReason, t: TFunction): st
   }
 }
 
-// 'generating' and 'sending' are already obvious from the Stop button / spinner.
-const TOASTED_REASONS: ReadonlySet<SendBlockedReason> = new Set([
+/**
+ * Text for the blocked-send toast. Same as the Send tooltip except 'sending': a bare "Sending..."
+ * toasted after a refused reply-choice click would read as if that click went out.
+ */
+export function getBlockedSendToastLabel(reason: SendBlockedReason, t: TFunction): string {
+  if (reason === 'sending') return t('session.sendBlocked.sendingToast', 'Another message is still sending');
+  return getSendBlockedLabel(reason, t);
+}
+
+// 'generating' and 'sending' are already obvious from the Stop button / spinner beside the composer.
+const COMPOSER_TOASTED_REASONS: ReadonlySet<SendBlockedReason> = new Set([
   'loadingModels',
   'modelsError',
   'noModels',
@@ -58,13 +67,18 @@ const TOASTED_REASONS: ReadonlySet<SendBlockedReason> = new Set([
 export const BLOCKED_SEND_TOAST_WINDOW_MS = 3_000;
 
 /**
- * Returns a predicate saying whether a blocked Enter should toast its reason now: only for
- * reasons the UI doesn't already show, and at most once per reason per window.
+ * Returns a predicate saying whether a blocked send should toast its reason now, at most once per
+ * reason per window. By default (Enter in the composer) only reasons the composer doesn't already
+ * show toast; `toastEveryReason` is for a click on a control away from the composer (a reply
+ * choice), where the Stop button may be out of sight and a silent refusal reads as a dead button.
  */
-export function createBlockedSendToastGate(windowMs = BLOCKED_SEND_TOAST_WINDOW_MS) {
+export function createBlockedSendToastGate({
+  windowMs = BLOCKED_SEND_TOAST_WINDOW_MS,
+  toastEveryReason = false,
+}: { windowMs?: number; toastEveryReason?: boolean } = {}) {
   const lastShownAt = new Map<SendBlockedReason, number>();
   return (reason: SendBlockedReason, now = Date.now()): boolean => {
-    if (!TOASTED_REASONS.has(reason)) return false;
+    if (!toastEveryReason && !COMPOSER_TOASTED_REASONS.has(reason)) return false;
     const last = lastShownAt.get(reason);
     if (last !== undefined && now - last < windowMs) return false;
     lastShownAt.set(reason, now);

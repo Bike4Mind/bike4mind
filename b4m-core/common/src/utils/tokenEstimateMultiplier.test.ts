@@ -25,6 +25,8 @@ const CLAUDE_CATALOGUE: Array<[ChatModels, number]> = [
   [ChatModels.CLAUDE_4_5_OPUS_BEDROCK, 1.09],
   [ChatModels.CLAUDE_4_5_SONNET, 1.09],
   [ChatModels.CLAUDE_4_5_SONNET_BEDROCK, 1.09],
+  [ChatModels.CLAUDE_5_5_HAIKU, 1.5],
+  [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 1.5],
   [ChatModels.CLAUDE_4_5_HAIKU, 1.09],
   [ChatModels.CLAUDE_4_5_HAIKU_BEDROCK, 1.09],
   [ChatModels.CLAUDE_4_1_OPUS, 1],

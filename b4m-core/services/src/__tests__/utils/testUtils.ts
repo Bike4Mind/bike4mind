@@ -173,6 +173,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findIdsByDataLakeTag: vi.fn(),
   findLiveMembersByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
+  listOwnedBeforeId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),
 });
 
@@ -218,6 +219,9 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     populateMessageCounts: vi.fn(),
     countByUserId: vi.fn(),
     countActiveVoiceSessionsByUserId: vi.fn(),
+    findStaleVoiceHolds: vi.fn(),
+    claimVoiceHold: vi.fn(),
+    restoreVoiceHold: vi.fn(),
   });
 
 export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepository> =>

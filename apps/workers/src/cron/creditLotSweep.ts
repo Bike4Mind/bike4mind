@@ -1,20 +1,7 @@
 /**
- * Credit Lot Sweep
- *
- * Reconciles the CreditLot parallel ledger against each holder's
- * `currentCredits`: recomputes cumulative consumption and attributes it to
- * lots soonest-to-expire-first, then expires (decrements + audits) whatever
- * remains unassigned on lots past their `expiresAt`.
- *
- * `currentCredits` is never gated by this sweep - it is read-and-decrement
- * only, on the stale-remainder path. Lots never gate a charge.
- *
- * Idempotent by construction: once a stale lot's `consumedAssigned` reaches
- * `amount`, its remainder is 0 and re-running the sweep is a no-op for that
- * lot. See CreditLotTypes.ts / creditLotAssignment.ts for the invariant.
- *
- * Schedule: daily
- * Enabled: production + dev
+ * Reconciles lifetime lot consumption and expires unassigned stale credits.
+ * Holder balance, expiry audit and lot assignments commit together.
+ * See CreditLotTypes.ts and creditLotAssignment.ts for the accounting invariant.
  */
 
 import { Context } from 'aws-lambda';
@@ -28,6 +15,7 @@ import {
   creditTransactionRepository,
   organizationRepository,
   userRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { CreditHolderType, ICreditHolderMethods } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
@@ -63,59 +51,72 @@ export async function processHolder(
   now: Date,
   logger: Logger
 ): Promise<{ expiredLots: number; expiredCredits: number }> {
-  const holderMethods = HOLDER_METHODS_BY_TYPE[ownerType];
-  const holder = await holderMethods.findById(ownerId);
-  if (!holder || holder.currentCredits <= 0) {
-    return { expiredLots: 0, expiredCredits: 0 };
-  }
-
-  const lots = await creditLotRepository.findByOwner(ownerId, ownerType);
-  if (lots.length === 0) {
-    return { expiredLots: 0, expiredCredits: 0 };
-  }
-
-  const consumption = creditService.computeConsumption(lots, holder.currentCredits);
-  const assigned = creditService.assignConsumptionFIFO(lots, consumption);
-
-  let remainingBalance = holder.currentCredits;
-  let expiredLots = 0;
-  let expiredCredits = 0;
-
-  for (const { lot, consumedAssigned, remaining } of assigned) {
-    const isStale = lot.expiresAt.getTime() <= now.getTime();
-    let finalConsumedAssigned = consumedAssigned;
-
-    if (isStale && remaining > 0) {
-      const dec = Math.min(remaining, remainingBalance);
-      if (dec > 0) {
-        await creditService.subtractCredits(
-          {
-            type: 'generic_deduct',
-            ownerId,
-            ownerType,
-            credits: dec,
-            reason: 'credit_expiry',
-            description: `Credit lot ${lot.id} (source: ${lot.source}) expired ${lot.expiresAt.toISOString()}`,
-          },
-          {
-            db: { creditTransactions: creditTransactionRepository },
-            creditHolderMethods: holderMethods,
-          }
-        );
-        remainingBalance -= dec;
-        expiredCredits += dec;
-        expiredLots++;
+  const { expiredLots, expiredCredits } = await withTransaction(
+    async () => {
+      const holderMethods = HOLDER_METHODS_BY_TYPE[ownerType];
+      const holder = await holderMethods.findById(ownerId);
+      if (!holder || holder.currentCredits <= 0) {
+        return { expiredLots: 0, expiredCredits: 0 };
       }
-      // Mark fully realized regardless of the clamp above - a partial decrement
-      // (balance ran dry mid-run) still retires the lot; the clamp exists to
-      // protect currentCredits, not to keep the lot "pending" forever.
-      finalConsumedAssigned = lot.amount;
-    }
 
-    if (finalConsumedAssigned !== lot.consumedAssigned) {
-      await creditLotRepository.update({ id: lot.id, consumedAssigned: finalConsumedAssigned });
-    }
-  }
+      const lots = await creditLotRepository.findByOwner(ownerId, ownerType);
+      if (lots.length === 0) {
+        return { expiredLots: 0, expiredCredits: 0 };
+      }
+
+      const consumption = creditService.computeConsumption(lots, holder.currentCredits);
+      const assigned = creditService.assignConsumptionFIFO(lots, consumption);
+
+      let remainingBalance = holder.currentCredits;
+      let expiredLots = 0;
+      let expiredCredits = 0;
+
+      for (const { lot, consumedAssigned } of assigned) {
+        const isStale = lot.expiresAt.getTime() <= now.getTime();
+        // Live assignments can reverse on a refund; only a stale-run stamp settles them.
+        let finalConsumedAssigned = isStale && lot.settledAt ? lot.amount : consumedAssigned;
+        const remaining = lot.amount - finalConsumedAssigned;
+
+        if (isStale && remaining > 0) {
+          const dec = Math.min(remaining, remainingBalance);
+          if (dec > 0) {
+            await creditService.subtractCredits(
+              {
+                type: 'generic_deduct',
+                ownerId,
+                ownerType,
+                credits: dec,
+                reason: 'credit_expiry',
+                description: `Credit lot ${lot.id} (source: ${lot.source}) expired ${lot.expiresAt.toISOString()}`,
+              },
+              {
+                db: { creditTransactions: creditTransactionRepository },
+                creditHolderMethods: holderMethods,
+              }
+            );
+            remainingBalance -= dec;
+            expiredCredits += dec;
+            expiredLots++;
+          }
+          // Mark fully realized regardless of the clamp above - a partial decrement
+          // (balance ran dry mid-run) still retires the lot; the clamp exists to
+          // protect currentCredits, not to keep the lot "pending" forever.
+          finalConsumedAssigned = lot.amount;
+        }
+
+        if (finalConsumedAssigned !== lot.consumedAssigned || (isStale && !lot.settledAt)) {
+          const updated = await creditLotRepository.update({
+            id: lot.id,
+            consumedAssigned: finalConsumedAssigned,
+            ...(isStale && !lot.settledAt ? { settledAt: now } : {}),
+          });
+          if (!updated) throw new Error('Failed to update credit lot');
+        }
+      }
+      return { expiredLots, expiredCredits };
+    },
+    { logger }
+  );
 
   if (expiredLots > 0) {
     logger.info(`[CreditLotSweep] Expired ${expiredLots} lot(s) for ${ownerType} ${ownerId}`, {
@@ -126,12 +127,7 @@ export async function processHolder(
   return { expiredLots, expiredCredits };
 }
 
-export async function handler(event: never, context: Context) {
-  const logger = new Logger().withMetadata(contextToLogs(context));
-
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
-  logger.log('[CreditLotSweep] Connected to database');
-
+export async function runCreditLotSweep(logger = new Logger()) {
   const now = new Date();
   let holdersProcessed = 0;
   let holdersFailed = 0;
@@ -174,12 +170,16 @@ export async function handler(event: never, context: Context) {
   );
 
   return {
-    statusCode: 200,
-    body: JSON.stringify({
-      holdersProcessed,
-      holdersFailed,
-      expiredLots: totalExpiredLots,
-      expiredCredits: totalExpiredCredits,
-    }),
+    holdersProcessed,
+    holdersFailed,
+    expiredLots: totalExpiredLots,
+    expiredCredits: totalExpiredCredits,
   };
+}
+
+export async function handler(event: never, context: Context) {
+  const logger = new Logger().withMetadata(contextToLogs(context));
+  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
+  logger.log('[CreditLotSweep] Connected to database');
+  return { statusCode: 200, body: JSON.stringify(await runCreditLotSweep(logger)) };
 }

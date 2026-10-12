@@ -1,22 +1,21 @@
 import { useInbox } from '@client/app/contexts/InboxContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAcceptDocument, useGetUserInvites, useRefuseDocument } from '@client/app/hooks/data/invites';
-import CheckIcon from '@mui/icons-material/Check';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import ConstructionOutlinedIcon from '@mui/icons-material/ConstructionOutlined';
-import DoDisturbIcon from '@mui/icons-material/DoDisturb';
 import GroupIcon from '@mui/icons-material/Group';
 import HomeIcon from '@mui/icons-material/Home';
 import NoteAltOutlinedIcon from '@mui/icons-material/NoteAltOutlined';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import SentimentSatisfied from '@mui/icons-material/SentimentSatisfied';
 import HubIconIcon from '@mui/icons-material/Hub';
-import { Avatar, Box, IconButton, LinearProgress, List, Typography, Tooltip, Divider } from '@mui/joy';
+import { Avatar, Box, Button, LinearProgress, List, Typography, Divider } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import React, { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@mui/joy/styles';
 import { IInviteDocumentWithDetails, InviteType } from '@bike4mind/common';
-import { red, teal } from '@client/app/utils/themes/colors';
+import { teal } from '@client/app/utils/themes/colors';
 
 type GroupedInvite = {
   id: string;
@@ -27,6 +26,11 @@ type GroupedInvite = {
   description?: string;
   username?: string;
 };
+
+// Chat in a shared project or notebook bills the member who sends (or the organization they pick),
+// never the inviter - see payerNoteText in components/Session/CreditPayerNote.tsx.
+export const SHARED_USAGE_BILLING_NOTE =
+  'Answers you get there are billed to you or your selected organization, not the inviter.';
 
 const DOCUMENT_ICONS = {
   FabFile: <PsychologyIcon />,
@@ -40,6 +44,7 @@ const DOCUMENT_ICONS = {
 const Invites: React.FC = () => {
   const { currentUser } = useUser();
   const userEmail = currentUser?.email;
+  const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const theme = useTheme();
   const [loading, setLoading] = React.useState<boolean>(false);
   const [removed, setRemoved] = React.useState<string[]>([]);
@@ -179,76 +184,46 @@ const Invites: React.FC = () => {
         {DOCUMENT_ICONS[groupedInvite.type as keyof typeof DOCUMENT_ICONS]}
       </Avatar>
       <Box flex={1} minWidth={0}>
-        <Tooltip title={groupedInvite.name} placement="top-start">
-          <Typography
-            sx={{
-              fontWeight: 400,
-              fontSize: '16px',
-              mb: 0.5,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {groupedInvite.name}
-          </Typography>
-        </Tooltip>
+        <Typography
+          title={groupedInvite.name}
+          sx={{ fontWeight: 400, fontSize: '16px', mb: 0.5, overflowWrap: 'anywhere' }}
+        >
+          {groupedInvite.name}
+        </Typography>
         {groupedInvite.description && (
-          <Tooltip title={groupedInvite.description} placement="top-start">
-            <Typography
-              sx={{
-                fontSize: '13px',
-                color: 'text.primary',
-                mb: 0.5,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {groupedInvite.description}
-            </Typography>
-          </Tooltip>
+          <Typography sx={{ fontSize: '13px', color: 'text.primary', mb: 0.5, overflowWrap: 'anywhere' }}>
+            {groupedInvite.description}
+          </Typography>
+        )}
+        {enforceCredits && (groupedInvite.type === InviteType.Project || groupedInvite.type === InviteType.Session) && (
+          <Typography data-testid="invite-billing-note" level="body-xs" sx={{ color: 'text.tertiary' }}>
+            {SHARED_USAGE_BILLING_NOTE}
+          </Typography>
         )}
       </Box>
-      <Box display="flex" flexDirection="row" gap={1}>
-        <IconButton
+      <Box display="flex" flexDirection="row" gap={1} flexShrink={0}>
+        <Button
           data-testid="invite-refuse-btn"
-          variant={'soft'}
-          size="lg"
+          variant="outlined"
+          size="sm"
+          color="danger"
+          aria-label={`Decline invitation to ${groupedInvite.name}`}
           disabled={allLoading || removed.includes(groupedInvite.id)}
-          color={'danger'}
           onClick={() => handleRefuseDocument(groupedInvite)}
-          sx={{
-            borderRadius: '8px',
-            width: '24px !important',
-            height: '24px !important',
-            minWidth: '24px !important',
-            minHeight: '24px !important',
-            border: '1px solid',
-            borderColor: red[600],
-          }}
         >
-          <DoDisturbIcon sx={{ width: '10px', height: '10px', color: red[600] }} />
-        </IconButton>
-        <IconButton
+          Decline
+        </Button>
+        <Button
           data-testid="invite-accept-btn"
-          variant={'soft'}
-          size="lg"
+          variant="solid"
+          size="sm"
+          color="primary"
+          aria-label={`Accept invitation to ${groupedInvite.name}`}
           disabled={allLoading || removed.includes(groupedInvite.id)}
-          color={'success'}
           onClick={() => handleAcceptDocument(groupedInvite)}
-          sx={{
-            borderRadius: '8px',
-            width: '24px !important',
-            height: '24px !important',
-            minWidth: '24px !important',
-            minHeight: '24px !important',
-            border: '1px solid',
-            borderColor: teal[600],
-          }}
         >
-          <CheckIcon sx={{ width: '10px', height: '10px', color: teal[600] }} />
-        </IconButton>
+          Accept
+        </Button>
       </Box>
     </Box>
   );

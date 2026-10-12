@@ -42,9 +42,6 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     slackEventBus,
     imageProcessor,
   ],
-  logging: {
-    retention: '3 days',
-  },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.

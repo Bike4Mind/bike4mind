@@ -133,7 +133,9 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    */
   addMemberRaisingSeats(
     organizationId: string,
-    member: IOrganizationDocument['users'][number]
+    member: IOrganizationDocument['users'][number],
+    /** The resolved `teamPlanMaxSeats` setting; defaults to ORGANIZATION_SUBSCRIPTION_MAX_SEATS. */
+    maxSeats?: number
   ): Promise<IOrganizationDocument | null>;
 
   /**

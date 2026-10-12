@@ -2,7 +2,8 @@
 import { getVideoGenerationContract, NotFoundError } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { findOwnVideoJob } from '@server/videoGenerations/findOwnVideoJob';
-import { mapperDeps, perUserRateLimit } from '@server/videoGenerations/routeDeps';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
+import { mapperDeps } from '@server/videoGenerations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const handler = nextRouteForContract(getVideoGenerationContract, {

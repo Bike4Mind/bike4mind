@@ -46,6 +46,8 @@ The "Sync Latest" button triggers an immediate sync of the latest modal from the
 
 Set the `WHATS_NEW_FEED_URL` environment variable to the https URL of another deployment's `GET /api/v1/whats-new` to serve its release notes in the What's New slider. They are served ahead of local release notes, and the slider falls back to local release notes when the upstream feed fails.
 
+The URL may instead point at a [JSON Feed](https://jsonfeed.org) document, such as the `whats-new.json` a marketing site publishes for its own What's New page. Each item becomes one slide: its title, its `content_text` (or `summary` when text is blank), its first tag as the label and its `date_published` as the date. Items without a date are skipped, and entries are cursor-paginated newest first. A JSON Feed may live on this deployment's own domain; this deployment's own `/api/v1/whats-new` route is refused both directly and as a redirect target, since fetching it would recurse.
+
 ## Active Modals
 
 The Active Modals section displays all local What's New modals, partitioned into two groups:

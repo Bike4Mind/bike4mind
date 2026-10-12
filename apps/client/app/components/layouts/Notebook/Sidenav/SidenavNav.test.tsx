@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import type { ComponentType } from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -18,7 +18,13 @@ const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock, navIte
   useGearsNavSignalMock: vi.fn(),
   useVideoModelsMock: vi.fn(),
   // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
-  navItems: [] as Array<{ path: string; label: string; icon?: ComponentType; requireEntitlement?: string }>,
+  navItems: [] as Array<{
+    path: string;
+    label: string;
+    icon?: ComponentType;
+    requireEntitlement?: string;
+    sidebar?: boolean;
+  }>,
   entitlements: [] as string[],
 }));
 
@@ -52,10 +58,16 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string, options?: { count?: number }) => {
-      const value = fallback ?? key;
-      return options?.count === undefined ? value : value.replace('{{count}}', String(options.count));
+    t: (key: string, fallbackOrOptions?: string | Record<string, unknown>, maybeOptions?: Record<string, unknown>) => {
+      const options = typeof fallbackOrOptions === 'object' ? fallbackOrOptions : maybeOptions;
+      const plural = options?.count === undefined ? undefined : options.count === 1 ? 'one' : 'other';
+      const fallback =
+        typeof fallbackOrOptions === 'string'
+          ? fallbackOrOptions
+          : ((plural && options?.[`defaultValue_${plural}`]) ?? options?.defaultValue);
+      return String(fallback ?? key).replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options?.[name]));
     },
+    i18n: { language: 'en' },
   }),
 }));
 vi.mock('..', () => ({ useNotebookLayout: () => vi.fn() }));
@@ -64,10 +76,10 @@ import SidenavNav from './SidenavNav';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-function renderNav() {
+function renderNav(section?: 'pinned' | 'scroll' | 'all') {
   return render(
     <CssVarsProvider theme={appTheme}>
-      <SidenavNav />
+      <SidenavNav section={section} />
     </CssVarsProvider>
   );
 }
@@ -77,7 +89,7 @@ const hearthRow = () => screen.queryByTestId('sidenav-nav-hearth');
 beforeEach(() => {
   vi.clearAllMocks();
   useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
-  useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 0 });
+  useGearsNavSignalMock.mockReturnValue({ startHere: false, startHereCredits: 0, claimableCount: 0 });
   useVideoModelsMock.mockReturnValue({ data: [] });
   navItems.length = 0;
   entitlements.length = 0;
@@ -118,20 +130,32 @@ describe('SidenavNav Gears row tag', () => {
     expect(rewards()).not.toBeInTheDocument();
   });
 
-  it('says Start here while Getting Started is unfinished', () => {
-    useGearsNavSignalMock.mockReturnValue({ startHere: true, claimableCount: 0 });
+  it('says Start here, with the credits on offer, while Getting Started is unfinished', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 0 });
     renderNav();
-    expect(startHere()).toHaveTextContent('Start here');
+    expect(startHere()).toHaveTextContent(`Start here, +${(6500).toLocaleString('en')} credits`);
+  });
+
+  it('says credit, not credits, for a single one', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 1, claimableCount: 0 });
+    renderNav();
+    expect(startHere()).toHaveTextContent(/^Start here, \+1 credit$/);
+  });
+
+  it('falls back to a bare Start here when the gears left pay nothing', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 0, claimableCount: 0 });
+    renderNav();
+    expect(startHere()).toHaveTextContent(/^Start here$/);
   });
 
   it('counts the rewards waiting', () => {
-    useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 3 });
+    useGearsNavSignalMock.mockReturnValue({ startHere: false, startHereCredits: 0, claimableCount: 3 });
     renderNav();
     expect(rewards()).toHaveTextContent('Claim 3');
   });
 
   it('a waiting reward replaces Start here rather than sitting beside it', () => {
-    useGearsNavSignalMock.mockReturnValue({ startHere: true, claimableCount: 2 });
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 2 });
     renderNav();
     expect(rewards()).toBeInTheDocument();
     expect(startHere()).not.toBeInTheDocument();
@@ -185,5 +209,89 @@ describe('SidenavNav Bob row', () => {
     navItems.push({ path: '/bob', label: 'Bob' });
     renderNav();
     expect(bobRow()).toContainElement(screen.getByTestId('Diversity3OutlinedIcon'));
+  });
+});
+
+describe('SidenavNav overlay-contributed sidebar rows', () => {
+  const contributedRow = () => screen.queryByTestId('sidenav-nav-premium-launch');
+
+  it('draws no row when no overlay contributes one (open-core build)', () => {
+    renderNav();
+    expect(screen.queryByTestId(/^sidenav-nav-premium-/)).not.toBeInTheDocument();
+  });
+
+  it('draws a nav item that opts into the sidebar, with its label and gate', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', requireEntitlement: 'launch:pro', sidebar: true });
+    renderNav();
+    expect(contributedRow()).not.toBeInTheDocument();
+
+    entitlements.push('launch:pro');
+    renderNav();
+    expect(contributedRow()).toHaveTextContent('Launch Pad');
+  });
+
+  it('leaves a nav item that does not opt in to the More flyout', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad' });
+    renderNav();
+    expect(contributedRow()).not.toBeInTheDocument();
+  });
+
+  it('uses the contributed icon, falling back to a stock glyph', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', sidebar: true });
+    renderNav();
+    expect(contributedRow()).toContainElement(screen.getByTestId('ExtensionOutlinedIcon'));
+
+    navItems.length = 0;
+    navItems.push({
+      path: '/launch',
+      label: 'Launch Pad',
+      sidebar: true,
+      icon: () => <svg data-testid="contributed-sidebar-icon" />,
+    });
+    renderNav();
+    expect(screen.getAllByTestId('sidenav-nav-premium-launch').at(-1)).toContainElement(
+      screen.getByTestId('contributed-sidebar-icon')
+    );
+  });
+
+  it('does not draw Bob twice when its nav item opts in too', () => {
+    navItems.push({ path: '/bob', label: 'Bob', sidebar: true });
+    renderNav();
+    expect(screen.getAllByTestId('sidenav-nav-bob')).toHaveLength(1);
+    expect(screen.queryByTestId('sidenav-nav-premium-bob')).not.toBeInTheDocument();
+  });
+
+  // The pinned section is items.slice(0, 2), so a contributed row placed among the conditional core
+  // rows would take the second slot for any user who sees none of them, and push Files Manager out.
+  it('never takes the pinned slot, even when it is the only conditional row', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', sidebar: true });
+
+    renderNav('pinned');
+    expect(screen.getByTestId('sidenav-nav-new-chat')).toBeInTheDocument();
+    expect(screen.getByTestId('sidenav-nav-files')).toBeInTheDocument();
+    expect(contributedRow()).not.toBeInTheDocument();
+  });
+
+  it('sits directly after Files Manager', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', sidebar: true });
+    const rowIds = (container: HTMLElement) =>
+      within(container)
+        .getAllByRole('button')
+        .map(row => row.getAttribute('data-testid'))
+        .filter(id => id?.startsWith('sidenav-nav-'));
+
+    const all = rowIds(renderNav().container);
+    expect(all.indexOf('sidenav-nav-premium-launch')).toBe(all.indexOf('sidenav-nav-files') + 1);
+
+    // Files Manager is the last pinned row here, so the contributed row heads the scrolling section.
+    expect(rowIds(renderNav('scroll').container)[0]).toBe('sidenav-nav-premium-launch');
+  });
+
+  it('draws one row for paths that differ only in punctuation, so no key or test id repeats', () => {
+    navItems.push({ path: '/a-b', label: 'First', sidebar: true }, { path: '/a/b', label: 'Second', sidebar: true });
+    renderNav();
+    const rows = screen.getAllByTestId('sidenav-nav-premium-a-b');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent('First');
   });
 });

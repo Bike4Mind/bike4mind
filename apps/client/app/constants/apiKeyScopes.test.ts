@@ -7,7 +7,9 @@ import {
   DEDICATED_FLOW_SCOPES,
   ADMIN_ONLY_API_KEY_SCOPES,
   NON_MINTABLE_API_KEY_SCOPES,
-  OPTI_API_KEY_SCOPES,
+  GATED_API_KEY_SCOPES,
+  isApiKeyScopeOffered,
+  type ApiKeyScopeAccess,
   genericApiKeyScopesFor,
 } from './apiKeyScopes';
 
@@ -58,7 +60,7 @@ describe('apiKeyScopes catalog', () => {
     // commissions billable work must not carry one - otherwise a "Read-only" or "Read & write" key
     // silently gains the ability to spend. Table, not one-off asserts, so a future spend scope
     // (the way `datalake:query` joined `optihashi:compute`) has to be added here to pass.
-    const spendScopes = [ApiKeyScope.OPTIHASHI_COMPUTE, ApiKeyScope.DATALAKE_QUERY];
+    const spendScopes = [ApiKeyScope.OPTIHASHI_COMPUTE, ApiKeyScope.DATALAKE_QUERY, ApiKeyScope.AI_DECIDE];
     for (const scope of spendScopes) {
       expect(scope.endsWith(':read'), `${scope} must not end in :read`).toBe(false);
       expect(scope.endsWith(':write'), `${scope} must not end in :write`).toBe(false);
@@ -152,31 +154,66 @@ describe('apiKeyScopes vs the shared CONFINED_API_KEY_SCOPES', () => {
   });
 });
 
+const ALL_ACCESS: ApiKeyScopeAccess = { hasOptiAccess: true, hasOverwatchAccess: true, hearthEnabled: true };
+const NO_ACCESS: ApiKeyScopeAccess = { hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false };
+const gatedBy = (flag: keyof ApiKeyScopeAccess) =>
+  (Object.entries(GATED_API_KEY_SCOPES) as [ApiKeyScope, keyof ApiKeyScopeAccess][])
+    .filter(([, gate]) => gate === flag)
+    .map(([scope]) => scope);
+
 describe('genericApiKeyScopesFor', () => {
-  it('returns every generic scope with Opti access', () => {
-    expect(genericApiKeyScopesFor(true)).toBe(GENERIC_MODAL_API_KEY_SCOPES);
+  it('returns every generic scope with every product', () => {
+    expect(genericApiKeyScopesFor(ALL_ACCESS)).toBe(GENERIC_MODAL_API_KEY_SCOPES);
   });
 
-  it('returns the same filtered list on every call without Opti access', () => {
+  it('returns the same filtered list on every call for the same access', () => {
     // The New-Key modal re-seeds its selection on a reference change, so a fresh array per call would reset it on every render.
-    expect(genericApiKeyScopesFor(false)).toBe(genericApiKeyScopesFor(false));
+    expect(genericApiKeyScopesFor({ ...NO_ACCESS })).toBe(genericApiKeyScopesFor({ ...NO_ACCESS }));
   });
 
-  it('drops only the premium scopes without Opti access', () => {
-    const values = genericApiKeyScopesFor(false).map(s => s.value);
-    for (const scope of OPTI_API_KEY_SCOPES) expect(values).not.toContain(scope);
-    expect(values).toHaveLength(GENERIC_MODAL_API_KEY_SCOPES.length - OPTI_API_KEY_SCOPES.size);
+  it('drops only the gated product scopes without any product', () => {
+    const values = genericApiKeyScopesFor(NO_ACCESS).map(s => s.value);
+    const gated = GENERIC_MODAL_API_KEY_SCOPES.filter(s => GATED_API_KEY_SCOPES[s.value]);
+    for (const { value } of gated) expect(values).not.toContain(value);
+    expect(values).toHaveLength(GENERIC_MODAL_API_KEY_SCOPES.length - gated.length);
+    expect(values).toContain(ApiKeyScope.ME_READ);
   });
 
-  it('registers every optihashi:* catalog scope as premium', () => {
-    const optihashiScopes = USER_API_KEY_SCOPES.map(s => s.value).filter(v => v.startsWith('optihashi:'));
-    expect(optihashiScopes.length).toBeGreaterThan(0);
-    for (const scope of optihashiScopes) expect(OPTI_API_KEY_SCOPES.has(scope)).toBe(true);
+  it.each([
+    ['hasOptiAccess', [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE]],
+    [
+      'hasOverwatchAccess',
+      [ApiKeyScope.OVERWATCH_READ, ApiKeyScope.MARKETING_REPORTS_READ, ApiKeyScope.MARKETING_REPORTS_WRITE],
+    ],
+    ['hearthEnabled', [ApiKeyScope.HEARTH_READ, ApiKeyScope.HEARTH_WRITE]],
+  ] as const)('%s alone opens exactly its own scopes', (flag, scopes) => {
+    expect(gatedBy(flag).sort()).toEqual([...scopes].sort());
+    const values = genericApiKeyScopesFor({ ...NO_ACCESS, [flag]: true }).map(s => s.value);
+    for (const scope of scopes) expect(values).toContain(scope);
+    for (const scope of Object.keys(GATED_API_KEY_SCOPES) as ApiKeyScope[]) {
+      if (!(scopes as readonly ApiKeyScope[]).includes(scope)) expect(values).not.toContain(scope);
+    }
+  });
+
+  it('registers every optihashi:*, hearth:*, overwatch:* and marketing-reports:* catalog scope as gated', () => {
+    const productScopes = USER_API_KEY_SCOPES.map(s => s.value).filter(v =>
+      /^(optihashi|hearth|overwatch|marketing-reports):/.test(v)
+    );
+    expect(productScopes.length).toBeGreaterThan(0);
+    for (const scope of productScopes) expect(GATED_API_KEY_SCOPES[scope]).toBeDefined();
   });
 
   it('names no premium route paths in the premium scope docs', () => {
-    for (const scope of USER_API_KEY_SCOPES.filter(s => OPTI_API_KEY_SCOPES.has(s.value))) {
+    for (const scope of USER_API_KEY_SCOPES.filter(s => GATED_API_KEY_SCOPES[s.value] === 'hasOptiAccess')) {
       for (const endpoint of scope.endpoints) expect(endpoint).not.toMatch(/\/api\//);
     }
+  });
+});
+
+describe('isApiKeyScopeOffered', () => {
+  it('offers an ungated scope to anyone and a gated one only with its product', () => {
+    expect(isApiKeyScopeOffered(ApiKeyScope.READ_FILES, NO_ACCESS)).toBe(true);
+    expect(isApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, NO_ACCESS)).toBe(false);
+    expect(isApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, { ...NO_ACCESS, hearthEnabled: true })).toBe(true);
   });
 });

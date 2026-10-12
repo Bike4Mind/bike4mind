@@ -15,8 +15,15 @@ import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
-import { createFileUploadContract, getFileContract } from './files.contract';
+import {
+  createFileUploadContract,
+  getFileContract,
+  listFilesContract,
+  updateFileContract,
+  deleteFileContract,
+} from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
+import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract } from './quest.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
@@ -44,6 +51,13 @@ import {
   updateProjectContract,
   deleteProjectContract,
 } from './projects.contract';
+import {
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
+} from './agents.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -71,7 +85,12 @@ export const CONTRACTS: readonly EndpointContract[] = [
   editImageContract,
   createFileUploadContract,
   getFileContract,
+  listFilesContract,
+  updateFileContract,
+  deleteFileContract,
   createEmbeddingsContract,
+  createDecisionContract,
+  listDecisionModelsContract,
   getQuestContract,
   createSessionContract,
   listSessionsContract,
@@ -95,4 +114,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createProjectContract,
   updateProjectContract,
   deleteProjectContract,
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
 ];

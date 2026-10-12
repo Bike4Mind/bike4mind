@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
+import type { VideoToolConfig } from '@bike4mind/services/llm/tools';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 
 describe('buildSubagentToolConfig', () => {
@@ -50,6 +51,17 @@ describe('buildSubagentToolConfig', () => {
   it('omits audio_generation when audioConfig is undefined so the tool uses its built-in defaults', () => {
     const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', audioConfig: undefined });
     expect(result.audio_generation).toBeUndefined();
+  });
+
+  it('threads videoConfig into video_generation', () => {
+    const videoConfig: VideoToolConfig = { usableModels: [], createJob: vi.fn() };
+    const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', videoConfig });
+    expect(result.video_generation).toBe(videoConfig);
+  });
+
+  it('omits video_generation when there is no video config, so the tool is not offered', () => {
+    expect(buildSubagentToolConfig({ videoConfig: null }).video_generation).toBeUndefined();
+    expect(buildSubagentToolConfig({}).video_generation).toBeUndefined();
   });
 
   it('threads imageUrlSigningSecret into web_search config so subagent web_search cards can verify', () => {
