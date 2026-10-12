@@ -38,11 +38,17 @@ export const validateAgainstCapabilities = (
   if (!caps.modes.includes(request.mode)) {
     return fail('unsupported_mode', `${caps.displayName} does not support ${request.mode}`);
   }
-  if (request.mode === 'image_to_video' && !request.inputImageFileId) {
+  const hasFileInput = Boolean(request.inputImageFileId);
+  const hasGeneratedInput = Boolean(request.inputGeneratedImageKey);
+  if (request.mode === 'image_to_video' && !hasFileInput && !hasGeneratedInput) {
     return fail('missing_input_image', 'image_to_video requires inputImageFileId');
   }
-  if (request.mode === 'text_to_video' && request.inputImageFileId) {
-    return fail('unexpected_input_image', 'inputImageFileId is only valid for image_to_video');
+  if (hasFileInput && hasGeneratedInput) {
+    return fail('unexpected_input_image', 'set exactly one of inputImageFileId and inputGeneratedImageKey');
+  }
+  if (request.mode === 'text_to_video' && (hasFileInput || hasGeneratedInput)) {
+    const field = hasFileInput ? 'inputImageFileId' : 'inputGeneratedImageKey';
+    return fail('unexpected_input_image', `${field} is only valid for image_to_video`);
   }
   if (!isDurationAllowed(request.durationSeconds, caps.duration)) {
     return fail(

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { DataLakeConfig } from '@bike4mind/common';
 
 /**
  * The multi-lake browse resolves its own scope from the lakes the caller can reach and hands it to
@@ -67,6 +68,12 @@ const DYNAMIC_LAKE_DOC = {
   fileTagPrefix: 'handbook:',
   createdByUserId: 'creator-9',
 };
+
+const COLLIDING_LAKE = {
+  id: 'dyn-lake-2',
+  datalakeTag: 'datalake:org2:handbook',
+  fileTagPrefix: 'handbook:',
+} as DataLakeConfig;
 
 // This is a real static-registry id (STATIC_LAKE_IDS), so its prefix is the OPEN arm - a bare,
 // un-ANDed bypass, and its scope must never reach `lakeMemberships` in a multi-lake query.
@@ -143,6 +150,37 @@ describe('queryDataLakeArticles scope plumbing', () => {
       { kind: 'owned', datalakeTag: 'datalake:org1:handbook', fileTagPrefix: 'handbook:', creatorUserId: 'creator-9' },
     ]);
     expect(serverOptions.dataLakeTagPrefixes).toEqual([]);
+  });
+
+  it('restricts a selected tag to its lake even when another lake has the same full tag', async () => {
+    findByDatalakeTags.mockResolvedValue([
+      DYNAMIC_LAKE_DOC,
+      { datalakeTag: COLLIDING_LAKE.datalakeTag, fileTagPrefix: 'handbook:', createdByUserId: 'creator-10' },
+    ]);
+
+    await queryDataLakeArticles(req, [DYNAMIC_LAKE, COLLIDING_LAKE], {
+      lakeId: DYNAMIC_LAKE.id,
+      tags: 'handbook:policy',
+    });
+
+    const { params, serverOptions } = callArgs();
+    expect(params.filters.tags).toEqual(['handbook:policy']);
+    expect(serverOptions).toMatchObject({
+      dataLakeTags: [DYNAMIC_LAKE.datalakeTag],
+      lakeMemberships: [expect.objectContaining({ creatorUserId: 'creator-9' })],
+      restrictToDataLake: true,
+    });
+    expect(findByDatalakeTags).toHaveBeenCalledWith([DYNAMIC_LAKE.datalakeTag]);
+  });
+
+  it('returns no articles for an unknown or malformed selected lake id', async () => {
+    expect(await queryDataLakeArticles(req, [DYNAMIC_LAKE], { lakeId: 'other-lake' })).toEqual({
+      data: [], total: 0, hasMore: false,
+    });
+    expect(await queryDataLakeArticles(req, [DYNAMIC_LAKE], { lakeId: [''] })).toEqual({
+      data: [], total: 0, hasMore: false,
+    });
+    expect(h.search).not.toHaveBeenCalled();
   });
 
   it('cannot have its scope influenced by the query string', async () => {

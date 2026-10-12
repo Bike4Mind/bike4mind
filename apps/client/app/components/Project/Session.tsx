@@ -66,15 +66,25 @@ const ProjectSession: FC<ProjectSessionProps> = ({ session, projectId }) => {
         {isEditing ? (
           <SessionRenameInput session={session} initialValue={title} onSuccess={() => setIsEditing(false)} size="sm" />
         ) : (
-          <Box
-            sx={{
-              fontSize: '18px',
-              lineHeight: '18px',
-              color: 'text.primary',
-            }}
+          <Link
+            to="/notebooks/$id"
+            params={{ id: session.id }}
+            search={{ projectId }}
+            data-testid="project-session-title-link"
+            style={{ textDecoration: 'none', color: 'inherit' }}
           >
-            {title}
-          </Box>
+            <Box
+              sx={{
+                fontSize: '18px',
+                lineHeight: '18px',
+                color: 'text.primary',
+                overflowWrap: 'anywhere',
+                '&:hover': { textDecoration: 'underline' },
+              }}
+            >
+              {title}
+            </Box>
+          </Link>
         )}
         <Box
           fontSize="14px"

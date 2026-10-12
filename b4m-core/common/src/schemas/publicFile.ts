@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 
 /**
- * Public wire schemas for `POST /api/v1/files` (start an upload) and
- * `GET /api/v1/files/{id}` (read one file back, with a download URL).
+ * Public wire schemas for the `/api/v1/files` endpoints: start an upload, list, read one file back
+ * (with a download URL), update and delete.
  *
  * A deliberately narrow projection of the FabFile document the SPA-internal
  * `/api/files/*` routes return: no owner, sharing, tag, or chunking fields, so
@@ -64,3 +65,30 @@ export const FileResponseSchema = z.object({
 });
 
 export type FileResponse = z.infer<typeof FileResponseSchema>;
+
+/** A list item: the file without its download fields, so a page never presigns N URLs. */
+export const FileSummarySchema = FileResponseSchema.omit({ download_url: true, download_url_expires_at: true });
+
+export type FileSummary = z.infer<typeof FileSummarySchema>;
+
+export const ListFilesQuerySchema = PaginationQuerySchema.extend({
+  /** Case-insensitive substring match on the file name. Not part of the cursor: resend it with every page. */
+  search: z.string().min(1).max(200).optional(),
+});
+
+export type ListFilesQuery = z.infer<typeof ListFilesQuerySchema>;
+
+export const ListFilesResponseSchema = paginatedResponseSchema(FileSummarySchema);
+
+export type ListFilesResponse = z.infer<typeof ListFilesResponseSchema>;
+
+/** Omitted fields are left unchanged; unknown fields are rejected. */
+export const UpdateFileRequestSchema = z
+  .object({
+    file_name: z.string().trim().min(1).max(255).optional(),
+    /** An empty string clears the notes. */
+    notes: z.string().max(10_000).optional(),
+  })
+  .strict();
+
+export type UpdateFileRequest = z.infer<typeof UpdateFileRequestSchema>;

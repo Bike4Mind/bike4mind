@@ -2,10 +2,13 @@ import { Box, Typography, Divider } from '@mui/joy';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
 import { blackAlpha } from '@client/app/utils/themes/colors';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
 interface PlanCardProps {
   name: string;
   credits?: number;
+  /** "About N answers" line for `credits`; omitted when there is no priced reference model. */
+  answersEstimate?: string | null;
   description: string;
   price?: number;
   interval?: string;
@@ -25,6 +28,7 @@ interface PlanCardProps {
 const PlanCard = ({
   name,
   credits,
+  answersEstimate,
   description,
   price,
   interval,
@@ -77,6 +81,7 @@ const PlanCard = ({
       >
         {isPopular && (
           <Box
+            data-testid="plan-card-popular-badge"
             sx={{
               bgcolor: 'primary.500',
               color: 'white',
@@ -111,8 +116,13 @@ const PlanCard = ({
       </Box>
       <Typography sx={{ mb: '20px', fontSize: '24px', lineHeight: '24px' }}>{name}</Typography>
       {credits && (
-        <Typography level="body-md" sx={{ mb: '32px', color: 'neutral.500' }}>
-          {t('subscription_modal.credits_per_month', { credits: credits.toLocaleString() })}
+        <Typography level="body-md" sx={{ mb: answersEstimate ? '8px' : '32px', color: 'neutral.500' }}>
+          {t('subscription_modal.credits_per_month', { credits: formatCreditAmount(credits) })}
+        </Typography>
+      )}
+      {credits && answersEstimate && (
+        <Typography level="body-sm" data-testid="plan-card-answers-estimate" sx={{ mb: '32px', color: 'neutral.500' }}>
+          {answersEstimate}
         </Typography>
       )}
       <Typography level="body-md" sx={{ mb: '24px', color: 'neutral.400' }}>
@@ -128,7 +138,7 @@ const PlanCard = ({
       )}
 
       {isCurrentPlan && currentPlanDetails && !currentPlanDetails.canceledAt && (
-        <Box sx={{ height: '95px', mb: '16px' }}>
+        <Box sx={{ mb: '16px' }}>
           <Box
             sx={{
               fontSize: '14px',
@@ -145,7 +155,6 @@ const PlanCard = ({
                 textAlign: 'center',
                 fontSize: '14px',
                 lineHeight: '14px',
-                mb: '17px',
               }}
             >
               {/* A delinquent plan still renews on paper, so saying so would read as
@@ -156,7 +165,6 @@ const PlanCard = ({
                     date: dayjs(currentPlanDetails.periodEndsAt).format('MMM D, YYYY'),
                   })}
             </Typography>
-            <Box sx={{ fontSize: '16px', lineHeight: '16px', textAlign: 'center' }}>****</Box>
           </Box>
         </Box>
       )}

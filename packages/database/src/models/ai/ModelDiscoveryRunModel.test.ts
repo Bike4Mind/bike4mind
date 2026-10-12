@@ -38,11 +38,12 @@ describe('ModelDiscoveryRunRepository', () => {
   it('separates the newest run from the newest successful one, per host', async () => {
     await ModelDiscoveryRun.create(run({ startedAt: new Date('2026-07-01T00:00:00Z'), status: 'ok' }));
     await ModelDiscoveryRun.create(run({ startedAt: new Date('2026-07-02T00:00:00Z'), status: 'failed' }));
+    await ModelDiscoveryRun.create(run({ startedAt: new Date('2026-07-02T12:00:00Z'), status: 'partial' }));
     await ModelDiscoveryRun.create(
       run({ startedAt: new Date('2026-07-03T00:00:00Z'), status: 'ok', host: 'selfhost' })
     );
 
-    expect((await modelDiscoveryRunRepository.latestRun('hosted'))?.status).toBe('failed');
+    expect((await modelDiscoveryRunRepository.latestRun('hosted'))?.status).toBe('partial');
     expect((await modelDiscoveryRunRepository.lastSuccessfulRun('hosted'))?.startedAt).toEqual(
       new Date('2026-07-01T00:00:00Z')
     );

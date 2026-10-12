@@ -32,9 +32,18 @@ vi.mock('@server/services/publish', () => ({
   checkPublishQuota: () => ({ ok: true }),
 }));
 
-import handler, { deriveTitle } from '../reply';
+import handler, { deriveTitle, truncateAtWord } from '../reply';
 
 describe('deriveTitle', () => {
+  it('cuts a long first line at a word boundary with an ellipsis', () => {
+    const line = 'Here is a long answer about everyday conversation habits '.repeat(5).trim();
+    const title = deriveTitle(line);
+    expect(title.length).toBeLessThanOrEqual(120);
+    expect(title.endsWith('...')).toBe(true);
+    expect(line.startsWith(title.slice(0, -3))).toBe(true);
+    expect(line.charAt(title.length - 3)).toBe(' ');
+  });
+
   it('uses the first prose line, stripped of markdown heading markers', () => {
     expect(deriveTitle('# Hello world\n\nmore text')).toBe('Hello world');
   });
@@ -56,6 +65,16 @@ describe('deriveTitle', () => {
     const title = deriveTitle('<artifact type="text/html" title="Real Title"><label>x</label></artifact>');
     expect(title).not.toContain('<artifact');
     expect(title).toBe('Real Title');
+  });
+});
+
+describe('truncateAtWord', () => {
+  it('returns short text unchanged', () => {
+    expect(truncateAtWord('short title', 120)).toBe('short title');
+  });
+
+  it('hard-cuts a single unbroken token that has no usable word boundary', () => {
+    expect(truncateAtWord('x'.repeat(200), 20)).toBe(`${'x'.repeat(17)}...`);
   });
 });
 

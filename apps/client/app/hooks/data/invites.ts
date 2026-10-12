@@ -184,11 +184,13 @@ export const useCancelInvite = (callbacks: {
   onSettled?: () => void;
 }) => {
   return useMutation({
-    mutationFn: async (params: { id: string; type: InviteType; email?: string }) => {
+    mutationFn: async (params: { id: string; type: InviteType; email?: string; userId?: string }) => {
       // Deliberately the raw InviteType, not the lowercase alias GET/POST use: static routes such
       // as pages/api/projects/[id]/invites.ts shadow the [type] catch-all and register no DELETE,
       // so an aliased path would 404. The catch-all accepts either form.
-      await api.delete(`/api/${params.type}/${params.id}/invites`, { data: { email: params.email } });
+      await api.delete(`/api/${params.type}/${params.id}/invites`, {
+        data: { email: params.email, userId: params.userId },
+      });
     },
     onSuccess: () => {
       if (callbacks.onSuccess) callbacks.onSuccess();

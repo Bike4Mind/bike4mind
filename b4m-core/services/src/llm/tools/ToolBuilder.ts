@@ -17,6 +17,7 @@ import { z } from 'zod';
 import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
+import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
 import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import { ToolDefinition, type ToolContext } from './base/types';
 import { validateUserCredits, validateMusicCredits, validateAudioCredits } from './base/utils';
@@ -114,6 +115,8 @@ export interface ToolBuilderConfig {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
+  attachedFileIds?: ToolContext['attachedFileIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
@@ -124,6 +127,8 @@ export interface ToolBuilderConfig {
   sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
+  /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+  sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   logger: Logger;
@@ -325,13 +330,22 @@ export function applyQuestStatusChanges(
         ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
         : winner;
     }
+    // Tool results number their own sources 1., 2., so once any tool citable lands a [N] is ambiguous;
+    // dropping the forced-retrieval stamps makes the client's citationMarkersLinkable gate fail safe.
+    const finalCitables = changedPromptMeta.citables?.length
+      ? dedupedCitables.map(citable => {
+          if (citable.metadata?.citationIndex === undefined) return citable;
+          const { citationIndex: _stamp, ...metadata } = citable.metadata;
+          return { ...citable, metadata };
+        })
+      : dedupedCitables;
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = materializePromptMetaSession(
       {
         ...quest.promptMeta,
         ...changedPromptMeta,
-        citables: dedupedCitables,
+        citables: finalCitables,
         // Omit the key entirely when neither side has warnings, so an untouched quest is not
         // given an empty array it never had.
         ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
@@ -622,6 +636,21 @@ export class ToolBuilder {
   }
 
   /**
+   * Write new video job ids straight onto the stored quest. Otherwise only the ~10s streaming
+   * heartbeat persists them, so a chat process dying in that window leaves a running, billed
+   * job with no card in the chat. The in-memory quest already carries the ids
+   * (applyQuestStatusChanges), so later whole-quest saves keep them. A failed write is logged,
+   * never thrown: the job exists and is billed, so failing the tool call would only hide it.
+   */
+  private async persistVideoJobIds(questId: string, jobIds: string[]): Promise<void> {
+    try {
+      await this.deps.db.quests.addVideoJobIds(questId, jobIds);
+    } catch (err) {
+      this.deps.logger.error(`[videoJobIds] failed to persist ${jobIds.join(',')} on quest ${questId}:`, err);
+    }
+  }
+
+  /**
    * Reserve credits for a started image_generation/edit_image call (onToolStart). Image
    * cost is known up front from the model + n/size/quality, so it reserves at start
    * (unlike music, which reserves on delivery in settleMusicCredits). One reservation per
@@ -649,7 +678,8 @@ export class ToolBuilder {
       modelInfo,
       n || 1,
       // Runtime tool args are untyped strings; the calculator narrows by model backend.
-      { model: toolModel, size, quality } as CostInput,
+      // edit_image sends its one source image as input; image_generation sends none.
+      { model: toolModel, size, quality, inputImageCount: toolName === 'edit_image' ? 1 : 0 } as CostInput,
       this.deps.logger,
       organization
     );
@@ -739,20 +769,18 @@ export class ToolBuilder {
         let schemas = server.toolSchemas;
 
         // If cached schemas are missing, attempt a live fetch so the LLM still gets
-        // the tools for this request rather than silently ignoring the server.
-        if (!schemas?.length) {
+        // the tools for this request rather than silently ignoring the server. A marker
+        // younger than the TTL means the empty result is confirmed, so skip the fetch.
+        if (!schemas?.length && shouldLiveFetchTools(server)) {
           try {
             logger.info(`🛠️ [MCP] No cached tool schemas for ${server.name} - fetching live`);
             const client = await this.deps.getMcpClient(server);
             const liveTools = await client.getTools();
-            if (Array.isArray(liveTools) && liveTools.length > 0) {
+            if (Array.isArray(liveTools)) {
               schemas = liveTools;
-              // Persist so future requests don't need a live fetch
-              await this.deps.db.mcpServers.update({
-                id: server.id,
-                tools: liveTools.map((t: { name: string }) => t.name),
-                toolSchemas: liveTools,
-              });
+              // Persist so future requests don't need a live fetch. Written for an empty
+              // result too - that is the "confirmed zero tools" state the marker encodes.
+              await this.deps.db.mcpServers.update(buildMcpToolCacheUpdate(server.id, liveTools));
               logger.info(`🛠️ [MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`);
             }
           } catch (fetchError) {
@@ -835,11 +863,13 @@ export class ToolBuilder {
         entitlementKeys: this.deps.entitlementKeys,
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
+        attachedFileIds: this.deps.attachedFileIds,
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
         sessionReaderConsentDatalakeTags: this.deps.sessionReaderConsentDatalakeTags,
         sessionLakeScopeExplicit: this.deps.sessionLakeScopeExplicit,
+        sessionIncludeLibraryFiles: this.deps.sessionIncludeLibraryFiles,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         organizationId: organization?.id,
         apiKeyId: this.deps.apiKeyId,
@@ -860,6 +890,7 @@ export class ToolBuilder {
           // images) instead of overwriting them wholesale - see
           // applyQuestStatusChanges.
           applyQuestStatusChanges(quest, changes as Partial<IChatHistoryItemDocument>, this.deps.user.id);
+          if (changes.videoJobIds?.length) await this.persistVideoJobIds(quest.id, changes.videoJobIds);
           await this.deps.sendStatusUpdate(quest, status ?? null);
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

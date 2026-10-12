@@ -57,6 +57,7 @@ describe('useCreateDataLakeSession', () => {
       {
         name: 'New Notebook',
         forceKnowledgeRetrieval: true,
+        includeLibraryFiles: false,
         retrievalTags: ['datalake:research', 'datalake:legal'],
         lakeScopeExplicit: true,
       },
@@ -79,6 +80,7 @@ describe('useCreateDataLakeSession', () => {
       {
         name: 'New Notebook',
         forceKnowledgeRetrieval: true,
+        includeLibraryFiles: false,
       },
       { timeout: 60_000 }
     );
@@ -98,6 +100,7 @@ describe('useCreateDataLakeSession', () => {
       {
         name: 'New Notebook',
         forceKnowledgeRetrieval: true,
+        includeLibraryFiles: false,
         retrievalTags: ['datalake:research'],
         lakeScopeExplicit: true,
         knowledgeIds: ['file-1'],
@@ -118,7 +121,12 @@ describe('useCreateDataLakeSession', () => {
 
     expect(apiPost).toHaveBeenCalledWith(
       '/api/sessions/create',
-      { name: 'New Notebook', forceKnowledgeRetrieval: true, agentIds: ['agent-1', 'agent-2'] },
+      {
+        name: 'New Notebook',
+        forceKnowledgeRetrieval: true,
+        includeLibraryFiles: false,
+        agentIds: ['agent-1', 'agent-2'],
+      },
       { timeout: 60_000 }
     );
   });

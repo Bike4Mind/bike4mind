@@ -9,6 +9,11 @@ import {
 import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import {
+  assertProjectsReadScope,
+  assertProjectsWriteScope,
+  PROJECTS_READ_OR_WRITE_SCOPES,
+} from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
 import { ActivityType } from '@client/config/activities';
@@ -27,9 +32,11 @@ const addSessionIdsBodySchema = z.object({ sessionIds: sessionIdsArray.min(1) })
 // API-key reachable, so DELETE stays as lenient as the sibling files.ts route.
 const removeSessionIdsBodySchema = z.object({ sessionIds: sessionIdsArray });
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either projects scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
   .get(
     asyncHandler<{ id: string }>(async (req, res) => {
+      assertProjectsReadScope(req);
       const { id } = req.query as { id: string };
       const sessions = await projectService.listSessions(
         req.user.id,
@@ -49,6 +56,7 @@ const handler = baseApi()
   )
   .post(
     asyncHandler<{ id: string }>(async (req, res) => {
+      assertProjectsWriteScope(req);
       const { id } = req.query as { id: string };
       const { sessionIds } = addSessionIdsBodySchema.parse(req.body);
 
@@ -122,6 +130,7 @@ const handler = baseApi()
   )
   .delete(
     asyncHandler<{ id: string }>(async (req, res) => {
+      assertProjectsWriteScope(req);
       const { id } = req.query as { id: string };
       const { sessionIds } = removeSessionIdsBodySchema.parse(req.body);
 

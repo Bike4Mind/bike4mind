@@ -241,6 +241,24 @@ describe('POST /api/v1/video-generations', () => {
     expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 
+  // The generated-image input is the chat agent's alone; the public body has no field that reaches it.
+  it.each(['inputGeneratedImageKey', 'input_generated_image_key'])(
+    'rejects a generated-image key sent as %s (422) before creating a job',
+    async field => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = post({
+        model: 'gemini-omni-1.1-flash',
+        prompt: 'p',
+        mode: 'image_to_video',
+        [field]: '86cdc650-43d2-416e-aca6-23ff4fe23081.png',
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData()).toMatchObject({ error: expect.stringContaining(`Unrecognized key: "${field}"`) });
+      expect(h.createVideoJob).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects camelCase field names (422) rather than silently applying the catalog default', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', durationSeconds: 3 });

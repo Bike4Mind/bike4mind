@@ -110,6 +110,8 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
     await done;
 
     expect(h.assertLakeWriteAccess).toHaveBeenCalledTimes(1);
+    // By id only: a slug skips a deleted lake and would resolve the next lake sharing it.
+    expect(h.assertLakeWriteAccess.mock.calls[0][3]).toEqual({ idOnly: true });
     // Count deliberately not pinned: the handler asserts the scope inline (so the source scan in
     // dataLakeApiKeyScopeCoverage.test.ts can see it) and `loadFindingForLake` asserts it again for
     // any future caller. Both land on this spy; what matters is that the gate ran, not how often.

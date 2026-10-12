@@ -1,5 +1,7 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import {
   agentRepository,
   agentOpsSettingsRepository,
@@ -7,7 +9,7 @@ import {
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { IAgent, IMessage } from '@bike4mind/common';
-import { NotFoundError, ForbiddenError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
+import { ForbiddenError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { assertSystemPromptGenerationAllowed } from '@client/server/agents/systemPromptRateLimit';
@@ -88,7 +90,9 @@ const createAgentMetadataForPrompt = (agent: IAgent): string => {
   return JSON.stringify(agentData, null, 2);
 };
 
-const handler = baseApi().post<Request<{ id: string }, GenerateSystemPromptResponse, {}>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
+  Request<{ id: string }, GenerateSystemPromptResponse, {}>
+>(async (req, res) => {
   const { id } = req.query;
   const userId = req.user!.id;
 
@@ -99,14 +103,7 @@ const handler = baseApi().post<Request<{ id: string }, GenerateSystemPromptRespo
 
   // Find the agent
   const agent = await agentRepository.findById(id);
-  if (!agent) {
-    throw new NotFoundError('Agent not found');
-  }
-
-  // Check ownership
-  if (agent.userId !== userId) {
-    throw new ForbiddenError("You don't have permission to modify this agent");
-  }
+  assertAgentAccess(agent, userId, 'own');
 
   try {
     // Get agent operations settings

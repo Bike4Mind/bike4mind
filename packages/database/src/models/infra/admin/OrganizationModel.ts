@@ -277,14 +277,19 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * `ORGANIZATION_SUBSCRIPTION_MAX_SEATS`, wedging every later `setSeats`. At the ceiling the add
    * matches no doc and returns null - the caller routes that to the same 'at-capacity' outcome the
    * Stripe path already uses (an admin is alerted to add seats), rather than raising past the ceiling.
+   * `maxSeats` is the caller-resolved `teamPlanMaxSeats` setting; the constant is only the fallback.
    */
-  async addMemberRaisingSeats(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
+  async addMemberRaisingSeats(
+    organizationId: string,
+    member: IUserShare,
+    maxSeats: number = ORGANIZATION_SUBSCRIPTION_MAX_SEATS
+  ): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
         deletedAt: null,
         'users.userId': { $ne: member.userId },
-        $expr: { $lt: [{ $size: '$users' }, ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1] },
+        $expr: { $lt: [{ $size: '$users' }, maxSeats - 1] },
       },
       [
         {

@@ -32,6 +32,12 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import {
+  ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+  TEAM_PLAN_SEATS_HARD_LIMIT,
+} from '../constants/organization';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -267,6 +273,7 @@ export const SettingKeySchema = z.enum([
   'EnableKnowledgeBaseSearch',
   'DefaultChunkSize',
   'DefaultAPIModel',
+  'recommendedModelIds',
   'AutoNameNotebook',
   'FormatPromptTemplate',
   'ArtifactEmissionPrompt',
@@ -392,6 +399,11 @@ export const SettingKeySchema = z.enum([
   'allowOpenRegistration',
   'blockDisposableEmails',
   'defaultFreeCredits',
+  'teamPlanMinSeats',
+  'teamPlanMaxSeats',
+  'teamPlanCreditsPerSeat',
+  'lowCreditsThreshold',
+  'syntheticUserEmailDomains',
 
   // GOOGLE CALENDAR SETTINGS
   'enableGoogleCalendar',
@@ -465,6 +477,8 @@ export const SettingKeySchema = z.enum([
   'voiceSessionTranscriptionModel',
   'voiceSessionVadType',
   'voiceSessionVadEagerness',
+
+  'OrgFeedbackSummaryModel',
 
   // EMAIL ANALYSIS SETTINGS
   'EnableEmailAnalysis',
@@ -545,6 +559,7 @@ export const SettingKeySchema = z.enum([
 
   // VIDEO GENERATION
   'videoGeneration',
+  'agentVideoClipsPerRun',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -615,6 +630,8 @@ export const OrchestrationDefaultsSchema = z.object({
     'music_generation',
     'audio_generation',
     'excel_generation',
+    // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
+    'video_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
     // they are strictly safer than the storage-backed tools above. Without
@@ -852,6 +869,26 @@ interface BaseSetting {
    * adding this field changes no existing consumer.
    */
   scope?: SettingScopeConfig;
+  /**
+   * A blank save DELETES the platform row instead of storing the declared default, so the setting
+   * reads as unset again (see `isBlankSettingValue` and apps/client/pages/api/settings/update.ts).
+   * Only for a setting whose consumer treats unset differently from its default's own number.
+   */
+  clearDeletesRow?: boolean;
+  /** What a `clearDeletesRow` setting resolves to while unset, shown by the admin UI in place of a value. */
+  unsetLabel?: string;
+}
+
+/** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
+export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
+
+/**
+ * "No stored choice", for a setting of ANY type (the scoped resolver applies this to every key, not
+ * just numbers): a missing, null or whitespace-only stored value. A number setting's schema rewrites
+ * one into the declared default, which is exactly why a stored default must not read as a choice of it.
+ */
+export function isBlankSettingValue(raw: unknown): boolean {
+  return raw == null || (typeof raw === 'string' && raw.trim() === '');
 }
 
 function makeStringSetting(
@@ -988,7 +1025,7 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
     // substitutes only on the raw value it receives, so chaining it outside would feed the
     // rewritten undefined into z.coerce.number() and fail with a NaN instead of defaulting.
     schema: z.preprocess(
-      val => (val === null || (typeof val === 'string' && val.trim() === '') ? undefined : val),
+      val => (isBlankSettingValue(val) ? undefined : val),
       numberSchema.prefault(config.defaultValue ?? 0)
     ),
   };
@@ -1050,9 +1087,9 @@ export enum ServerStatusEnum {
 
 // Logo Settings Schema
 export const LogoSettingsSchema = z.object({
-  customLogoUrl: z.string().optional().prefault(''),
-  customDarkLogoUrl: z.string().optional().prefault(''),
-  useBothLogos: z.boolean().optional().prefault(false),
+  customLogoUrl: z.string().prefault(''),
+  customDarkLogoUrl: z.string().prefault(''),
+  useBothLogos: z.boolean().prefault(false),
 });
 
 export type LogoSettings = z.infer<typeof LogoSettingsSchema>;
@@ -1891,6 +1928,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'enforceCredits', order: 2 },
       { key: 'billOperationalUsage', order: 3 },
       { key: 'enableTeamPlan', order: 4 },
+      { key: 'teamPlanMinSeats', order: 5 },
+      { key: 'teamPlanMaxSeats', order: 6 },
+      { key: 'teamPlanCreditsPerSeat', order: 7 },
+      { key: 'lowCreditsThreshold', order: 8 },
     ],
   },
   KNOWLEDGE: {
@@ -2040,6 +2081,21 @@ export const settingsMap = {
     order: 1,
     // publicSafe: read by LLMContext at startup; a model name is not sensitive (M2.5).
     publicSafe: true,
+  }),
+  recommendedModelIds: makeObjectSetting<string[]>({
+    key: 'recommendedModelIds',
+    name: 'Recommended Model IDs',
+    // Empty means "follow DefaultAPIModel", so a fresh deploy recommends only the default model
+    // and an admin who changes that setting sees the change here too. Resolved client-side by
+    // resolveRecommendedModelIds (apps/client/app/utils/recommendedModels.ts).
+    defaultValue: [],
+    description:
+      'Model IDs pinned in a "Recommended" group at the top of the model picker, in display order. Unknown or inaccessible IDs are skipped. Empty recommends the Default API Model.',
+    category: 'AI',
+    order: 2,
+    // The picker renders for every user, and a list of model ids is not sensitive.
+    userReadable: true,
+    schema: z.array(z.string()),
   }),
   openaiDemoKey: makeStringSetting({
     key: 'openaiDemoKey',
@@ -3142,10 +3198,76 @@ export const settingsMap = {
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
+    // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
+    userReadable: true,
     name: 'Default Free Credits',
     defaultValue: 0,
     description:
       'Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup — an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this — their hard ceiling of real model cost is roughly credits ÷ 1500 USD.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  teamPlanMinSeats: makeNumberSetting({
+    key: 'teamPlanMinSeats',
+    // Read by the create-team and billing UIs for non-admin org owners.
+    userReadable: true,
+    name: 'Team Plan Minimum Seats',
+    defaultValue: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+    int: true,
+    min: 1,
+    max: TEAM_PLAN_SEATS_HARD_LIMIT,
+    description:
+      'Fewest seats a paid team subscription can be bought with. Enforced at checkout, on seat changes from Stripe and on admin conversion to paid. Admin grants may still go down to 1. If set above the maximum seats, the maximum wins.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  teamPlanMaxSeats: makeNumberSetting({
+    key: 'teamPlanMaxSeats',
+    userReadable: true,
+    name: 'Team Plan Maximum Seats',
+    defaultValue: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+    int: true,
+    min: 1,
+    max: TEAM_PLAN_SEATS_HARD_LIMIT,
+    description:
+      'Most seats any team can hold (owner + members + pending invites). Enforced at checkout, on every seat change, on admin grants and on the partner-signup auto-raise. Lowering it below a team that is already larger does not remove anyone; that team can only be set down to this cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  teamPlanCreditsPerSeat: makeNumberSetting({
+    key: 'teamPlanCreditsPerSeat',
+    name: 'Team Plan Credits Per Seat',
+    defaultValue: ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits added to a team pool per paid seat each billing cycle (and per seat-month on admin team grants). Applies to invoices issued after the change; credits already granted are not adjusted.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    // The Team plan card quotes the pool size to every signed-in user.
+    userReadable: true,
+  }),
+  lowCreditsThreshold: makeNumberSetting({
+    key: 'lowCreditsThreshold',
+    // The credit chip and low-credit warnings read this for every signed-in user.
+    userReadable: true,
+    name: 'Low Credit Warning Threshold',
+    defaultValue: LOW_CREDITS_THRESHOLD_DEFAULT,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Below this many credits a user sees the low-credit warning state. Set to 0 to show warnings only once credits run out.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  syntheticUserEmailDomains: makeStringSetting({
+    key: 'syntheticUserEmailDomains',
+    name: 'Synthetic User Email Domains',
+    defaultValue: '',
+    description:
+      'Comma-separated email domains whose new signups are flagged synthetic (test personas) and excluded from funnel analytics. Accounts whose username starts with "persona-" are always flagged. Applies at signup only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3828,22 +3950,26 @@ export const settingsMap = {
     description:
       'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
       'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
-      `gate - the relative floor above does the ranking. LEAVE IT AT ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} UNLESS YOU HAVE MEASURED ` +
-      'YOUR OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so ' +
-      `while this reads ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} the server ignores it and applies the floor measured for whichever model ` +
-      `your documents are actually embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
+      'gate - the relative floor above does the ranking. LEAVE IT UNSET UNLESS YOU HAVE MEASURED YOUR ' +
+      'OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so while ' +
+      'unset the server applies the floor measured for whichever model your documents are actually ' +
+      `embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
       'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
-      'applies). Set any other value and the server uses exactly that, in every space, which is ' +
-      'yours to get right: 75 against text-embedding-3-small sits above that band entirely and ' +
-      'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
-      'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
-      'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
-      'embedding model.',
+      `applies). While unset the field is blank; ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} is the ada-002 value. Any value you save, ` +
+      `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} included, is used exactly, in every space, which is yours to get right: 75 ` +
+      'against text-embedding-3-small sits above that band entirely and returns nothing on every ' +
+      'query. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
+      'inside your band decides a lot - on one measured corpus 74 / 75 / 76 swung recall 91% / 65% / ' +
+      '40% - and the same 75 that is a cliff on one lake rejects nothing at all on another. ' +
+      'Re-measure after changing the embedding model.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,
     // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+    // Unset resolves per embedding space; a stored value, 75 included, is honored in every space.
+    clearDeletesRow: true,
+    unsetLabel: 'per embedding space',
   }),
   forcedRetrievalSpreadFloorPct: makeNumberSetting({
     key: 'forcedRetrievalSpreadFloorPct',
@@ -4266,6 +4392,15 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 10,
     schema: RapidReplySettingsSchema,
+  }),
+  OrgFeedbackSummaryModel: makeStringSetting({
+    key: 'OrgFeedbackSummaryModel',
+    name: 'Organization Feedback Summary Model',
+    defaultValue: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
+    description: 'The AI model used for organization feedback summaries. The selected provider must be configured.',
+    options: CHAT_MODELS,
+    category: 'AI',
+    order: 199,
   }),
   EnableEmailAnalysis: makeBooleanSetting({
     key: 'EnableEmailAnalysis',
@@ -4813,6 +4948,19 @@ export const settingsMap = {
     order: 145,
     schema: VideoGenerationSettingsSchema,
   }),
+  agentVideoClipsPerRun: makeNumberSetting({
+    key: 'agentVideoClipsPerRun',
+    name: 'Agent Video Clips Per Run',
+    defaultValue: 2,
+    min: 0,
+    int: true,
+    description:
+      'Most video_generation clips one agent-mode run may start, counted across the run and all of its subagents. 0 removes the tool from agent mode. Each clip still holds and settles its own credits.',
+    category: 'AI',
+    order: 146,
+    // Consumed by apps/client/server/queueHandlers/agentExecutor.videoToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',
     name: 'Enable Model Discovery',
@@ -4984,7 +5132,7 @@ export const SEARCH_BUDGET_SETTING_KEYS = [
  * Every setting the forced-retrieval merge resolves, in one list - the sibling of
  * {@link SEARCH_BUDGET_SETTING_KEYS} for the other read that resolves settings for one retrieval
  * turn. `readForcedRetrievalSettings` (ChatCompletionFeatures.ts, b4m-core/services) resolves these
- * through `resolveScopedSettingValues`, and the guard in settings.test.ts loops this list to assert
+ * through `resolveScopedSettingEntries`, and the guard in settings.test.ts loops this list to assert
  * none of them declares a Lake rung: one turn scans an uncapped SET of lakes into a single pool, so
  * no single lake can key a narrower rung (#2572).
  *

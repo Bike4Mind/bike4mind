@@ -66,6 +66,8 @@ BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
 ```
 
+**Organization feedback summaries** - set **Organization Feedback Summary Model** (`OrgFeedbackSummaryModel`) in Admin Settings to an available model for your configured provider. The default remains Claude 4.5 Haiku via Bedrock. To run without Bedrock, explicitly select another provider's model, for example Claude 4.5 Haiku with `ANTHROPIC_API_KEY` available to the worker. The job uses the system provider credentials, not the requesting user's key. An unavailable selected model fails the job instead of silently choosing another model. Completed-job replay delivers completion again without generating or uploading another summary. Generation is capped at 2,000 output tokens; provider retries can still add cost.
+
 **No API keys? Run local models instead.** You can skip every provider key and run open-weight models (Qwen, Llama, etc.) locally via Ollama, with nothing leaving your machine. See [Local models with Ollama](#local-models-with-ollama-no-api-keys) below.
 
 ## 3. Bring up the stack
@@ -74,7 +76,7 @@ BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
 ```
 
-This pulls the app image and starts it alongside MongoDB, MinIO, ElasticMQ, and Mailpit. When it's healthy, open:
+This pulls the app image, builds MinIO and its `mc` client from pinned upstream source, and starts the app alongside MongoDB, MinIO, ElasticMQ, and Mailpit. The first object-storage build needs network access to public GitHub source, Go modules, Docker Hub base images, and Debian packages; no MinIO registry credentials are required. Allow several minutes for the first build. Later starts reuse the local images. When it's healthy, open:
 
 ```
 http://localhost:3000
@@ -96,7 +98,7 @@ Working from a checkout and want to run your own edits (or a freshly pulled `mai
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d --build
 ```
 
-`--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, and `worker` - before starting; the pure-image backing services (Mongo, MinIO, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+`--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, `worker`, MinIO, and its `mc` client - before starting; the pure-image backing services (Mongo, ElasticMQ, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
 
 > **Upgrading: rebuild the `ws` gateway in lockstep with the app.** The `ws` gateway is built from source (there is no published image for it), while the app is pulled by default. The browser and the gateway share a connection contract (the browser sends its realtime credential as a `?ticket=` query the gateway must forward), so a version skew between them breaks realtime for every browser silently - the socket is simply rejected. A pull-only upgrade (`docker compose ... pull && ... up -d`) refreshes the published `app` image but leaves the already-built `ws` container at its old version. When you move to a new version, `git pull` your checkout and bring the stack up with `--build` (which rebuilds `ws` too), or rebuild the gateway explicitly with `docker compose -f compose.selfhost.yaml build ws`.
 
@@ -107,6 +109,21 @@ docker compose -f compose.selfhost.yaml ps                      # services Up / 
 curl -s -o /dev/null -w '%{http_code}\n' localhost:3000         # expect 200
 docker compose -f compose.selfhost.yaml logs -f app             # follow app logs (Ctrl-C to stop)
 ```
+
+### Object-storage builds, updates, and rollback
+
+MinIO and `mc` use the unmodified upstream releases and verified source commits listed in [selfhost/minio/README.md](selfhost/minio/README.md). Their Go toolchains and Debian bases are pinned by digest for both amd64 and arm64. Debian package downloads are not frozen, so these are repeatable source builds, not a promise of byte-identical images.
+
+To build just object storage before the first start:
+
+```bash
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost build minio createbuckets
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d minio createbuckets
+```
+
+For updates, record the current checkout commit with `git rev-parse HEAD`, back up the `minio-data` volume, update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
+
+To roll back the container code, restore the previous checkout commit and repeat the same build and start commands. Keep the data volume. Before downgrading across MinIO versions, check upstream storage-format compatibility; restoring the corresponding backup may be necessary. Do not use `docker compose down -v` for an update or rollback.
 
 ### Frontend dev mode (host `next dev`)
 
@@ -818,6 +835,27 @@ Publishing stages each bundle under a temporary `drafts/` prefix in the artifact
 
 Notebook exports are written under `exports/` in the FabFile bucket and downloaded via a short-lived signed URL; `createbuckets` sets a MinIO lifecycle rule that expires them after 1 day. On a different S3 backend, add an equivalent 1-day rule on the `exports/` prefix of that bucket.
 
+### Browser downloads from a private object store
+
+QuestMaster ZIP exports opt into `S3Storage.getSignedUrl` with `audience: 'browser'`. With the default container endpoint, the returned URL contains the internal MinIO hostname, which a browser cannot resolve. Set the optional `S3_PRESIGN_ENDPOINT` in the environment of both the app and workers to the S3 API origin the browser can reach. `AWS_ENDPOINT_URL_S3` stays on the private backend endpoint for uploads, metadata reads, downloads and default server-side signed URLs. `S3_PRESIGN_ENDPOINT` must be an absolute HTTP or HTTPS URL. If the signing override is unset, the existing signing behavior is unchanged.
+
+The app adds the configured HTTP or HTTPS origin to its browser connection, image and media policy. Paths and query parameters are normalized to the origin; invalid values are omitted with a diagnostic naming `S3_PRESIGN_ENDPOINT`. Other policy directives and the default policy when unset remain unchanged. The object store must still provide appropriate CORS headers for cross-origin browser requests.
+
+For the local Compose evaluation stack, MinIO's API is already published on loopback port 9000. Add this to `.env.selfhost`, then recreate the app and worker services so both receive the new environment:
+
+```bash
+AWS_ENDPOINT_URL_S3=http://minio:9000
+S3_PRESIGN_ENDPOINT=http://localhost:9000
+```
+
+If `MINIO_HOST_PORT` is changed, use that host port in `S3_PRESIGN_ENDPOINT`. The signing origin is the API port, not MinIO's console port 9001.
+
+For the Kubernetes evaluation chart, follow the [chart installation guide](selfhost/kubernetes/README.md). Its default `config.S3_PRESIGN_ENDPOINT` and MinIO API port-forward match `http://localhost:19000`; override the config value for the browser's actual object-store origin.
+
+For a remote browser, use a trusted HTTPS S3 API origin that routes to the same backend and bucket namespace. A reverse proxy must preserve the signed host, path and query. Sign that origin directly; changing the hostname of an already signed URL invalidates its signature. Keep the backing service private, and configure the object store's CORS policy for the browser origin if using cross-origin fetches or PUT uploads.
+
+This override covers only explicit browser-audience calls to `S3Storage.getSignedUrl`, currently the two QuestMaster ZIP completion paths. Default callers, including server-side file and image fetchers, retain the private endpoint. Routes that construct their own S3 client and call the SDK presigner directly do not use this override; it does not establish parity for every file upload or download path.
+
 ## Share your instance with friends (secure internet exposure)
 
 The self-host stack is built for local, single-host use: it comes up on `localhost` with no authentication on its backing services. To let a few trusted people reach it, you have two supported paths (and a no-third-party variant of the first):
@@ -972,7 +1010,16 @@ Caddy provisions a Let's Encrypt certificate for `B4M_DOMAIN` on first start (th
 docker compose -f compose.selfhost.yaml -f compose.caddy.yaml logs -f caddy
 ```
 
-**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, uncomment the `/api/ai/v1/*` route in `selfhost/caddy/Caddyfile` and set `CHAT_COMPLETION_PUBLIC_URL=https://chat.example.com` in `.env.selfhost`.
+**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, add this route **inside** the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (the commented sample at the bottom of the file), and change `CHAT_COMPLETION_PUBLIC_URL` to `https://chat.example.com` in `.env.selfhost`:
+
+```caddyfile
+@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
+handle @completions {
+	reverse_proxy chatcompletion:8080
+}
+```
+
+It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @completions` loses to the catch-all `handle`, and the paths 404 from the app. Caddy reads the file only at startup, so recreate it afterwards (along with `app`, which reads `.env.selfhost`): `docker compose -f compose.selfhost.yaml -f compose.caddy.yaml --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app`.
 
 **Running on a non-standard port (80/443 already in use).** The standard 80/443 above is recommended whenever it is available - it gets an auto-renewing trusted cert with no browser warning. If another service already owns 80/443 on this host (or your router forwards them elsewhere), you can run Caddy on a spare port instead, with a cert tradeoff: Let's Encrypt's HTTP-01 and TLS-ALPN-01 challenges only answer on the standard 80/443 of the domain's IP, so on a spare port you cannot get an auto cert that way.
 
@@ -992,7 +1039,7 @@ It **does not**: enable Mongo authentication, change your MinIO credentials, con
 
 Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts (including publishing and sharing artifact bundles - uploads proxy through the app, so MinIO stays internal). It includes **realtime streaming**: the `ws` gateway + `subscriber-fanout` services stream chat replies token-by-token and push live document updates (notebooks, sync) without a page refresh - the same WebSocket experience as the hosted app, with no AWS API Gateway. It also includes **background enrichment and offline RAG**: the `worker` service runs the queue consumers and scheduler, so notebook auto-naming, summaries, tagging, memento creation, research tasks, and automatic file chunking + embedding all work (embeddings can run fully offline via a local Ollama embedder - see "Offline RAG"). Known gaps today:
 
-- **Image moderation on upload** - the hosted upload path runs AWS Rekognition; self-host skips it (no AWS), so uploaded images are not content-scanned.
+- **Image moderation on upload** - the hosted upload path checks images with AWS Rekognition; self-host skips that check (no AWS), so uploaded images are not content-scanned. When `ImageModerationEnabled` is on (the default) each upload still gets its type check as it lands: the bytes are sniffed, not the declared type trusted. A file is served once that resolves, within seconds.
 - **Hosted-service features** - billing, entitlements, and premium overlays are not part of the open core; see the [open/closed boundary](./CONTRIBUTING.md#the-openclosed-boundary). Overlay mount points are empty in this repo and `pnpm install` behaves accordingly; the mechanism is documented under [premium overlays and the tracked lockfile](./CONTRIBUTING.md#premium-overlays-and-the-tracked-lockfile).
 - **Python artifacts need internet** - the in-browser Python runtime (Pyodide) is fetched from a public CDN, so running a Python artifact needs internet unless you point `PYODIDE_BASE_URL` at a local mirror (see below).
 
@@ -1034,6 +1081,14 @@ HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the
 An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
 
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
+
+### Daily credit-lot expiry
+
+The worker reconciles credit-lot consumption and expires unassigned stale credits at 04:00 UTC, using the same sweep as the hosted cron. The shared sweep groups holders in 500-holder pages and isolates failures per holder. It requires MongoDB transactions; the supplied Compose Mongo runs as a replica set. Standalone Mongo fails closed without a nontransactional fallback. No model provider, CloudWatch or hosted database reconnect is invoked by the local task.
+
+Each holder is read again inside its transaction, including retries. Balance deductions, expiry ledger entries and lot assignments commit together; a failed write rolls them all back. Concurrent attempts on the same holder retry from its fresh balance. An optional settledAt stamp distinguishes stale-run retirement from provisional live FIFO assignments. Refunds can lower unexpired assignments; once stamped, replay preserves the retired lot and its original stamp. Historical unmarked lots are recalculated from the current balance on their first stale run; no settlement is inferred from consumedAssigned and no backfill runs. Other successfully processed holders retain their committed results. After all holders have been visited, the scheduler catches a partial-failure error and logs the task as failed; no retry occurs until the next 04:00 UTC slot. The hosted handler retains its existing 200 response and per-holder counts. The sweep does not delete holders, lots or transactions.
+
+There is no startup run. Starting after 04:00 waits until the next day; an exact-boundary start runs that slot. Delayed ticks coalesce missed days, and an active local run does not overlap. Shutdown waits within the worker's existing grace period; an interrupted holder transaction cannot commit partially. This schedule has no cross-worker scheduler lock, although per-holder transactions protect its accounting writes. A restart after today's boundary does not retry the missed daily slot.
 
 ### Daily lake health trends
 
@@ -1173,4 +1228,82 @@ Startup verifies that the source queue redrives to the configured DLQ after thre
 
 Plain export artifacts use the requesting user, plan and export job ID as their stable identity. A replay rechecks plan access and reuses an existing ZIP even after midnight or a goal edit. A metadata lookup failure emits the existing failed progress status even when the queue will retry; a later successful attempt can still deliver the download. Only a definitive missing-object response allows generation; metadata permission/network failures and failed download notification remain retryable. The hosted dispatcher shares this new key scheme. Already-created legacy date/goal-named artifacts are not migrated: replay after an upgrade may generate a new scoped artifact and leave the legacy object. There is no durable plain-export receipt or concurrent exactly-once guarantee: a failure before artifact upload, or competing workers, can repeat model work. Organization summaries retain their existing persisted completion, active-window release and completed-replay behavior.
 
-Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test:integration server/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.
+Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.
+
+## Kubernetes evaluation package
+
+For an independent package using the current application and worker entrypoints, see [the Kubernetes self-host guide](selfhost/kubernetes/README.md). It runs on portable Kubernetes, including EKS, with retained database/object/queue volumes and explicit image references. It is an evaluation deployment; complete workflow parity and production readiness remain separate validation work.
+
+### Background capability inventory guard
+
+The scripts unit suite checks hosted background triggers against
+`packages/scripts/src/selfhostParityPolicy.ts`. It is a static wiring guard: it parses
+source without running SST, and proves nothing about runtime behaviour. New or changed
+declarations, stale policy entries and changed mapped local registrations require review.
+Mapped imports must resolve; boot-path checks are syntactic inside `main` and registered
+callbacks, not proof that runtime gates are enabled. It includes disabled/conditional
+schedules, shared function targets and dead-letter infrastructure; a DLQ is not another
+application workflow.
+
+Covered shapes (inventory kind in brackets):
+
+- `sst.aws.Queue` and `aws.sqs.Queue` with their `subscribe()` consumers (`queue`)
+- `sst.aws.Cron`, including shared Function `job` targets (`schedule`)
+- `sst.aws.Bus` `subscribe()` / `subscribeQueue()` (`event`)
+- bucket `notify()` notifications to a Function or queue (`notification`)
+- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`)
+- `aws.ses.ReceiptRule` (`sesRule`)
+- `aws.cloudwatch.LogSubscriptionFilter` (`logSubscription`)
+- `aws.sns.TopicSubscription` and `sst.aws.SnsTopic` `subscribe()` (`snsSubscription`)
+- standalone `sst.aws.Function` that no covered trigger targets and that has no `url` (`function`)
+- `sst.aws.Service` (`service`)
+
+A Function that a covered trigger delivers to is inventoried under that trigger. A declaration
+built inside a named factory with a computed name (for example one log subscription per log
+group) is identified by its factory site; computed queue and schedule names fail, because
+local registrations are matched by that name.
+
+Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
+reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
+(HTTP Functions, web/router/WebSocket surfaces, topics and buses whose subscriptions are
+covered, alarms, dashboards, IAM policies, deploy-time invocations, network and WAF plumbing,
+and infrastructure contributed by private overlays). A constructor that is neither covered nor
+listed fails the guard.
+
+Run the focused guard with:
+
+```bash
+pnpm --filter @bike4mind/scripts exec vitest run src/selfhostParityInventory.test.ts
+```
+
+A failing guard reports the declaration identity, current declaration/local fingerprint
+and changed AWS signals. Inspect the corresponding infra declaration, referenced cadence
+and stage gates, selected registration/route and its imports before updating the policy.
+Copy the reported fingerprint only after that review; keep the gap linked to its capability's
+roadmap epic, or a reviewed wiring mapping. Do not automatically regenerate the policy to
+clear CI. Fingerprints follow referenced handler, job, schedule, stage, link and permission
+inputs but not environment, logging, VPC or sizing option values, so adding a key to a shared
+environment constant does not invalidate every entry.
+
+Review each changed record before updating its fingerprint. `portable` means checked
+registration or routing only: it proves the mapped local symbol exists and is reachable from
+`main`, not that it is behaviourally equivalent to the hosted handler. Required
+resource/provider configuration and outcome proof remain separate. `pending` is a gap or
+capability decision linked to a shared roadmap epic (one for schedules, one for every other
+kind), not a per-gap issue. A
+`pending` queue or schedule that a self-host file now registers under the hosted name is
+reported as `Gap now has local wiring - review`. The infrastructure records excluded as
+separate workflows still require the associated consumer's broker configuration and recovery
+proof.
+
+A hosted handler whose source file is missing fails the guard by name and path. The only
+accepted absence is a handler generated from a private overlay into the gitignored
+`apps/client/server/premium-generated/` directory.
+
+AWS signals cover known exclusive hosted permissions and direct handler SDK imports.
+They are review flags, not proof that AWS is required: a configured provider or portable
+adapter can satisfy the capability. Compatible S3/SQS SDK use is not flagged as exclusive.
+The guard does not analyze arbitrary transitive dependencies or discover every application
+feature. Unsupported dynamic declaration names/options fail rather than disappear.
+Passing this static guard does not prove browser workflows, runtime configuration,
+retry/recovery behavior, actual timed effects or production parity.

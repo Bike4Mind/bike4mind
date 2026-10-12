@@ -66,7 +66,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
               )}
             </Box>
             <Typography level="body-sm" color="neutral">
-              {organization.personal ? 'Personal Organization' : 'Team Organization'}
+              {organization.personal ? 'Personal team' : 'Shared team'}
             </Typography>
           </Box>
         </Box>
@@ -157,7 +157,7 @@ const OrganizationListPage: FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
 
-  useDocumentTitle('Organizations');
+  useDocumentTitle('Teams');
 
   const filteredOrganizations = organizations?.filter(
     org =>
@@ -170,7 +170,7 @@ const OrganizationListPage: FC = () => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography level="h2">{t('organization.organizations')}</Typography>
-          <ContextHelpButton helpId="features/organizations-teams" tooltipText="Learn about Organizations" />
+          <ContextHelpButton helpId="features/organizations-teams" tooltipText="Learn about Teams" />
         </Box>
         <Button startDecorator={<AddIcon />} color="primary" onClick={openCreateTeamModal}>
           {t('organization.create')}

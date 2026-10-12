@@ -15,8 +15,15 @@ import React, {
   createContext,
   ComponentProps,
 } from 'react';
-import ReactMarkdown, { ExtraProps } from 'react-markdown';
+import ReactMarkdown, { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
 import { createMarkdownComponents } from './markdown/markdownComponents';
+import {
+  CITATION_MARKER_TAG,
+  CitationMarker,
+  shouldLinkCitationMarkers,
+  ReplyCitablesContext,
+  remarkCitationMarkers,
+} from './markdown/inlineCitations';
 import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
@@ -45,12 +52,18 @@ import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
-import { IAgent, GENERATED_AUDIO_EXTENSION_RE, GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
+import {
+  IAgent,
+  GENERATED_AUDIO_EXTENSION_RE,
+  GENERATED_IMAGE_EXTENSION_RE,
+  MCP_ACTION_REPLACED_ERROR_CODE,
+} from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
+import { z } from 'zod';
 import { useConfig } from '@client/app/hooks/data/settings';
 import {
   hasCompleteOpeningTag,
@@ -61,7 +74,7 @@ import {
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { extractReplies, extractThinking } from '@client/app/utils/replyUtils';
+import { extractReplies, extractThinking } from '@client/shared/replyUtils';
 import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
@@ -80,7 +93,7 @@ import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
 import LocationMap from './LocationMap';
 import { LOCATION_MAP_LANGUAGE, placesFromCitables } from './parseLocationMap';
-import type { WebSearchPlace } from '@bike4mind/common';
+import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
@@ -128,6 +141,8 @@ const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
   const replyComplete = useContext(ReplyCompleteContext);
   return <SearchResultCards content={content} replyComplete={replyComplete} />;
 };
+
+const NO_CITABLES: readonly CitableSource[] = [];
 
 // The web_search places of the reply being rendered, keyed by place id - the only source of map
 // pins. Context for the same identity-stability reason as ReplyCompleteContext above.
@@ -727,14 +742,40 @@ interface PendingActionButtonsProps {
   sessionId?: string;
 }
 
-const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
-  const storageKey = messageId ? `mcp-confirm-${messageId}` : null;
+const pendingActionErrorSchema = z.object({
+  error: z.string().optional(),
+  errorCode: z.string().optional(),
+});
+
+function getPendingActionError(error: unknown, fallbackMessage: string): { message: string; isReplaced: boolean } {
+  if (isAxiosError(error)) {
+    const parsedResponse = pendingActionErrorSchema.safeParse(error.response?.data);
+    const responseData = parsedResponse.success ? parsedResponse.data : undefined;
+    return {
+      message: responseData?.error || error.message,
+      isReplaced: error.response?.status === 409 && responseData?.errorCode === MCP_ACTION_REPLACED_ERROR_CODE,
+    };
+  }
+
+  return {
+    message: error instanceof Error ? error.message : fallbackMessage,
+    isReplaced: false,
+  };
+}
+
+export const PendingActionButtons: FC<PendingActionButtonsProps> = props => (
+  <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
+);
+
+const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
+  const storageKey = messageId ? `mcp-confirm-${messageId}-${pendingAction.ts}` : null;
   const storedData = storageKey && typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) : null;
   const parsedData = storedData ? JSON.parse(storedData) : null;
 
   const [isLoading, setIsLoading] = useState(false);
   const [isConfirmed, setIsConfirmed] = useState(() => parsedData?.status === 'confirmed');
   const [isCancelled, setIsCancelled] = useState(() => parsedData?.status === 'cancelled');
+  const [isReplaced, setIsReplaced] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string; url?: string } | null>(
     () => parsedData?.result || null
   );
@@ -754,6 +795,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         questId: messageId,
         sessionId,
         confirmed: true,
+        pendingActionTs: pendingAction.ts,
       });
       setIsConfirmed(true);
       setResult(response.data);
@@ -762,11 +804,10 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         sessionStorage.setItem(storageKey, JSON.stringify(dataToStore));
       }
     } catch (error: unknown) {
-      const message = isAxiosError(error)
-        ? error.response?.data?.error || error.message
-        : error instanceof Error
-          ? error.message
-          : 'Failed to execute action';
+      const { message, isReplaced } = getPendingActionError(error, 'Failed to execute action');
+      if (isReplaced) {
+        setIsReplaced(true);
+      }
       setResult({
         success: false,
         message,
@@ -784,6 +825,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         questId: messageId,
         sessionId,
         confirmed: false,
+        pendingActionTs: pendingAction.ts,
       });
       setIsCancelled(true);
       const cancelResult = { success: true, message: 'Action cancelled' };
@@ -793,11 +835,10 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
         sessionStorage.setItem(storageKey, JSON.stringify(dataToStore));
       }
     } catch (error: unknown) {
-      const message = isAxiosError(error)
-        ? error.response?.data?.error || error.message
-        : error instanceof Error
-          ? error.message
-          : 'Failed to cancel action';
+      const { message, isReplaced } = getPendingActionError(error, 'Failed to cancel action');
+      if (isReplaced) {
+        setIsReplaced(true);
+      }
       setResult({
         success: false,
         message,
@@ -807,10 +848,14 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
     }
   };
 
-  if (isConfirmed || isCancelled) {
+  if (isConfirmed || isCancelled || isReplaced) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'background.level1' }}>
-        <Typography level="body-sm" sx={{ color: result?.success ? 'success.plainColor' : 'danger.plainColor' }}>
+        <Typography
+          level="body-sm"
+          sx={{ color: result?.success ? 'success.plainColor' : 'danger.plainColor' }}
+          data-testid="mcp-confirm-result"
+        >
           {result?.message || (isConfirmed ? 'Action completed' : 'Action cancelled')}
         </Typography>
         {result?.url && (
@@ -874,6 +919,11 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
           Cancel
         </Button>
       </Stack>
+      {result && !result.success && (
+        <Typography level="body-sm" sx={{ mt: 1, color: 'danger.plainColor' }} data-testid="mcp-confirm-error">
+          {result.message}
+        </Typography>
+      )}
     </Box>
   );
 };
@@ -1263,6 +1313,17 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
+  // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search
+  // highlighting matches across it) rather than one element per marker.
+  const linksCitationMarkers = shouldLinkCitationMarkers(promptMeta?.citables ?? NO_CITABLES, !!completed);
+  const replyRemarkPlugins = useMemo(
+    (): ReactMarkdownOptions['remarkPlugins'] => [
+      remarkGfmNoSingleTilde,
+      [remarkMath, { singleDollarTextMath: false }],
+      ...(linksCitationMarkers ? [remarkCitationMarkers] : []),
+    ],
+    [linksCitationMarkers]
+  );
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1771,47 +1832,47 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           <div className="b4m-md">
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
-                                <ReactMarkdown
-                                  components={{
-                                    ...markdownComponents,
-                                    code: codeComponent,
-                                    img: ({ alt, src, title }) => {
-                                      if (!src) {
-                                        return null;
-                                      }
+                                <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
+                                  <ReactMarkdown
+                                    components={{
+                                      ...markdownComponents,
+                                      code: codeComponent,
+                                      img: ({ alt, src, title }) => {
+                                        if (!src) {
+                                          return null;
+                                        }
 
-                                      const srcStr = typeof src === 'string' ? src : '';
-                                      if (
-                                        srcStr.startsWith('/mnt/') ||
-                                        srcStr.startsWith('/tmp/') ||
-                                        srcStr.startsWith('file://') ||
-                                        srcStr.startsWith('sandbox:') ||
-                                        srcStr.includes('/mnt/data/')
-                                      ) {
-                                        return null;
-                                      }
+                                        const srcStr = typeof src === 'string' ? src : '';
+                                        if (
+                                          srcStr.startsWith('/mnt/') ||
+                                          srcStr.startsWith('/tmp/') ||
+                                          srcStr.startsWith('file://') ||
+                                          srcStr.startsWith('sandbox:') ||
+                                          srcStr.includes('/mnt/data/')
+                                        ) {
+                                          return null;
+                                        }
 
-                                      return (
-                                        <ImageContainer
-                                          src={srcStr}
-                                          index={0}
-                                          totalImages={1}
-                                          images={[srcStr]}
-                                          onSendMessage={onSendMessage}
-                                        />
-                                      );
-                                    },
-                                    a: link,
-                                  }}
-                                  remarkPlugins={[
-                                    remarkGfmNoSingleTilde,
-                                    [remarkMath, { singleDollarTextMath: false }],
-                                  ]}
-                                  rehypePlugins={[rehypeKatex]}
-                                  remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                                >
-                                  {mathReadyContent}
-                                </ReactMarkdown>
+                                        return (
+                                          <ImageContainer
+                                            src={srcStr}
+                                            index={0}
+                                            totalImages={1}
+                                            images={[srcStr]}
+                                            onSendMessage={onSendMessage}
+                                          />
+                                        );
+                                      },
+                                      a: link,
+                                      [CITATION_MARKER_TAG]: CitationMarker,
+                                    }}
+                                    remarkPlugins={replyRemarkPlugins}
+                                    rehypePlugins={[rehypeKatex]}
+                                    remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                                  >
+                                    {mathReadyContent}
+                                  </ReactMarkdown>
+                                </ReplyCitablesContext.Provider>
                               </ReplyPlacesContext.Provider>
                             </ReplyCompleteContext.Provider>
                           </div>
@@ -1831,9 +1892,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
 
-      {/* Below the reply, not above it. The [N] markers are plain text in the body, so a list
-          above it means reading forward to the marker and then scrolling BACK past the answer
-          to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
+      {/* Below the reply, not above it. A reader who does not click an inline [N] marker resolves
+          it here, so a list above it means reading forward to the marker and then scrolling BACK
+          past the answer to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
           above pushed text the reader had already started reading down the page.
 
           After the expand control, which belongs to the reply body it truncates, and before

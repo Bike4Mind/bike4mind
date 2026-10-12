@@ -37,20 +37,25 @@ export const START_HERE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
  *   only project does not bring the tag back. The age cap is what keeps it from
  *   becoming permanent for someone who never publishes an artifact, and from
  *   appearing at once for every existing user when it ships.
+ * - `startHereCredits`: what those undone Getting Started gears pay between
+ *   them, so the tag can show the reward before the page is opened. Zero
+ *   whenever `startHere` is off.
  * - `claimableCount`: how many rewards are waiting to be taken.
  *
- * Both are empty while the status loads, so neither flickers in and out.
+ * All are empty while the status loads, so nothing flickers in and out.
  */
-export function useGearsNavSignal(): { startHere: boolean; claimableCount: number } {
+export function useGearsNavSignal(): { startHere: boolean; startHereCredits: number; claimableCount: number } {
   const { gears } = useVisibleGears();
   const createdAt = useUser(s => s.currentUser?.createdAt);
   // Read once per mount: render must stay pure, and a 30-day window has no
   // need to tick while the app is open.
   const [now] = useState(() => Date.now());
+  const undone = isBrandNewAccount(createdAt, now, START_HERE_WINDOW_MS)
+    ? gears.filter(g => isGettingStarted(g) && !g.unlocked && !g.claimed)
+    : [];
   return {
-    startHere:
-      isBrandNewAccount(createdAt, now, START_HERE_WINDOW_MS) &&
-      gears.some(g => isGettingStarted(g) && !g.unlocked && !g.claimed),
+    startHere: undone.length > 0,
+    startHereCredits: undone.reduce((sum, g) => sum + g.credits, 0),
     claimableCount: gears.filter(g => g.claimable).length,
   };
 }
@@ -62,5 +67,8 @@ export type GearsMenuDot = 'claim' | 'start' | null;
  * row's tag while the sidenav is closed behind it. Same precedence as the tag: a
  * reward to claim wins over Start here.
  */
-export const gearsMenuDot = ({ startHere, claimableCount }: ReturnType<typeof useGearsNavSignal>): GearsMenuDot =>
+export const gearsMenuDot = ({
+  startHere,
+  claimableCount,
+}: Pick<ReturnType<typeof useGearsNavSignal>, 'startHere' | 'claimableCount'>): GearsMenuDot =>
   claimableCount > 0 ? 'claim' : startHere ? 'start' : null;

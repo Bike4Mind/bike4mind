@@ -10,6 +10,27 @@ import { SubscriptionCallbackFunction } from '../hooks/useCollection';
 import { useWebsocket } from '@/app/contexts/WebsocketContext';
 import { uniqBy } from 'lodash';
 
+type CacheTimestamp = Date | string | number;
+
+// Client-clock timestamps are not authoritative. Keep this marker on local placeholders
+// and patches until a timestamped server document replaces them.
+export type Optimistic<T> = T & { _optimistic: true };
+
+const getCacheTimestamp = (entry: { updatedAt?: CacheTimestamp; lastUpdated?: CacheTimestamp }): number | null => {
+  const value = entry.updatedAt ?? entry.lastUpdated;
+  return value ? new Date(value).getTime() : null;
+};
+
+const mergeCacheEntry = <T extends { updatedAt?: CacheTimestamp; lastUpdated?: CacheTimestamp; _optimistic?: boolean }>(
+  existing: T,
+  incoming: T
+): T => {
+  const merged = { ...existing, ...incoming };
+  // Timestamp-less client patches must not make a client-clock timestamp authoritative.
+  if (!incoming._optimistic && getCacheTimestamp(incoming) !== null) delete merged._optimistic;
+  return merged;
+};
+
 /**
  * This function is used to update the cached data that exists in the react-query cache.
  * It handles updating both infinite queries and regular queries, supporting write and delete operations.
@@ -120,7 +141,12 @@ const updateAllQueryDataAsync = <
  * timestamp recalculation.
  */
 export const updateSingleQueryDataFast = <
-  T extends { id: string; updatedAt?: Date | string | number; lastUpdated?: Date | string | number },
+  T extends {
+    id: string;
+    updatedAt?: Date | string | number;
+    lastUpdated?: Date | string | number;
+    _optimistic?: boolean;
+  },
 >(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
@@ -131,11 +157,12 @@ export const updateSingleQueryDataFast = <
     canCreateAt?: (queryKey: readonly unknown[], data: T) => boolean;
   }
 ) => {
-  // Fallback-aware timestamp getter (prefers updatedAt, falls back to lastUpdated)
-  const getTs = (obj: any): number | null => {
-    const v = obj?.updatedAt ?? obj?.lastUpdated;
-    return v ? new Date(v).getTime() : null;
-  };
+  // Client and server clocks cannot be compared while the cached entry remains optimistic.
+  const shouldApplyUpdate = (existing: T, existingUpdatedAt: number | null, newUpdatedAt: number | null) =>
+    (existing._optimistic && !data._optimistic) ||
+    !existingUpdatedAt ||
+    !newUpdatedAt ||
+    newUpdatedAt >= existingUpdatedAt;
 
   queryClient.setQueryData<InfiniteData<{ data: T[] }, { page: number }> | T[] | T | PaginatedResponse<T>>(
     queryKey,
@@ -147,7 +174,7 @@ export const updateSingleQueryDataFast = <
         (options.canCreateAt?.(queryKey, data) ?? true);
 
       // Pre-calculate timestamp once instead of in loops.
-      const newUpdatedAt = getTs(data);
+      const newUpdatedAt = getCacheTimestamp(data);
       const cacheTime = Date.now();
 
       if ('pages' in currentData) {
@@ -167,11 +194,11 @@ export const updateSingleQueryDataFast = <
             if (itemIndex >= 0) {
               itemFound = true;
               const existingItem = page.data[itemIndex];
-              const existingUpdatedAt = getTs(existingItem);
+              const existingUpdatedAt = getCacheTimestamp(existingItem);
 
-              if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
+              if (shouldApplyUpdate(existingItem, existingUpdatedAt, newUpdatedAt)) {
                 const updatedData = [...page.data];
-                updatedData[itemIndex] = { ...existingItem, ...data, cachedUpdate: cacheTime } as any;
+                updatedData[itemIndex] = { ...mergeCacheEntry(existingItem, data), cachedUpdate: cacheTime } as any;
                 return { ...page, data: updatedData };
               }
             }
@@ -205,10 +232,10 @@ export const updateSingleQueryDataFast = <
 
           if (itemIndex >= 0) {
             const existingItem = currentData.data[itemIndex];
-            const existingUpdatedAt = getTs(existingItem);
+            const existingUpdatedAt = getCacheTimestamp(existingItem);
 
-            if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
-              updatedData[itemIndex] = { ...existingItem, ...data, cachedUpdate: cacheTime } as any;
+            if (shouldApplyUpdate(existingItem, existingUpdatedAt, newUpdatedAt)) {
+              updatedData[itemIndex] = { ...mergeCacheEntry(existingItem, data), cachedUpdate: cacheTime } as any;
             }
           } else if (allowCreate) {
             updatedData = [{ ...data, cachedUpdate: cacheTime } as any, ...currentData.data];
@@ -228,10 +255,10 @@ export const updateSingleQueryDataFast = <
 
           if (itemIndex >= 0) {
             const existingItem = currentData[itemIndex];
-            const existingUpdatedAt = getTs(existingItem);
+            const existingUpdatedAt = getCacheTimestamp(existingItem);
 
-            if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
-              updatedData[itemIndex] = { ...existingItem, ...data } as any;
+            if (shouldApplyUpdate(existingItem, existingUpdatedAt, newUpdatedAt)) {
+              updatedData[itemIndex] = mergeCacheEntry(existingItem, data);
             }
           } else if (allowCreate) {
             updatedData = [data, ...currentData];
@@ -239,10 +266,10 @@ export const updateSingleQueryDataFast = <
           return updatedData;
         }
       } else if ((currentData as any).id === (data as any).id) {
-        const existingUpdatedAt = getTs(currentData as any);
+        const existingUpdatedAt = getCacheTimestamp(currentData as T);
 
-        if (!existingUpdatedAt || !newUpdatedAt || newUpdatedAt >= existingUpdatedAt) {
-          return { ...(currentData as any), ...(data as any) };
+        if (shouldApplyUpdate(currentData as T, existingUpdatedAt, newUpdatedAt)) {
+          return mergeCacheEntry(currentData as T, data);
         }
       }
 
@@ -521,7 +548,12 @@ export const setOptimisticQueryData = async <T extends { id: string }>(
 
 // Replace optimistic temp data with the real data (including the new id).
 export const replaceQueryData = async <
-  T extends { id: string; updatedAt?: Date | string | number; lastUpdated?: Date | string | number },
+  T extends {
+    id: string;
+    updatedAt?: Date | string | number;
+    lastUpdated?: Date | string | number;
+    _optimistic?: boolean;
+  },
 >(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
@@ -541,7 +573,8 @@ export const replaceQueryData = async <
         if (itemIndex >= 0) {
           const existing = page.data.find(item => item.id === replaceId);
           const updatedData = [...page.data];
-          updatedData[itemIndex] = { ...existing, ...data, id: data.id }; // Make sure id is changed
+          const updatedItem = { ...mergeCacheEntry(existing as T, data), id: data.id };
+          updatedData[itemIndex] = updatedItem;
           return { ...page, data: uniqBy(updatedData, 'id') };
         }
         return page;

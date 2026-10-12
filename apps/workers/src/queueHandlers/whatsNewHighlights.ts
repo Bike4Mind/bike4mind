@@ -1,5 +1,4 @@
 import {
-  ModalModel,
   AdminSettings,
   slackDevWorkspaceRepository,
   apiKeyRepository,
@@ -7,7 +6,8 @@ import {
 } from '@bike4mind/database';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { WhatsNewHighlightsPayloadSchema } from '@server/whatsNew/whatsNewHighlights.types';
-import type { WhatsNewHighlightsConfig, ModalForHighlights } from '@server/whatsNew/whatsNewHighlights.types';
+import type { WhatsNewHighlightsConfig, HighlightsRunStatus } from '@server/whatsNew/whatsNewHighlights.types';
+import { loadHighlightsReleaseNotes, parseHighlightsEndDate } from '@server/whatsNew/releaseNoteHighlights';
 import {
   buildHighlightsPrompt,
   createSlackBlocks,
@@ -23,12 +23,68 @@ import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
 import { decryptToken } from '@server/security/tokenEncryption';
 
 const SETTING_NAME = 'whatsNewHighlightsConfig';
-const WHATS_NEW_MODAL_TAG = 'whats-new';
 
 // LLM configuration
 const MAX_RESPONSE_SIZE = 100000; // 100KB limit for highlights (longer than modals)
 const LLM_TIMEOUT_MS = 120000; // 2 minutes timeout for LLM generation
 const DEFAULT_LLM_MODEL = ChatModels.GPT4o_MINI;
+
+/** Posts a headline + detail notice in place of the highlights. No-ops without Slack ids or a bot token. */
+async function postHighlightsNotice(
+  target: { slackChannelId?: string; slackTeamId?: string; correlationId: string },
+  headline: string,
+  detail: string,
+  logger: Logger
+): Promise<void> {
+  const { slackChannelId, slackTeamId, correlationId } = target;
+  if (!slackChannelId || !slackTeamId) return;
+
+  try {
+    const workspace = await slackDevWorkspaceRepository.findBySlackTeamIdWithToken(slackTeamId);
+    if (!workspace?.slackBotToken) return;
+
+    const blocks = [
+      {
+        type: 'header',
+        text: { type: 'plain_text', text: "What's New Weekly Highlights", emoji: true },
+      },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*${headline}*\n\n${detail}` },
+      },
+      {
+        type: 'context',
+        elements: [{ type: 'mrkdwn', text: `Correlation ID: \`${correlationId}\`` }],
+      },
+    ];
+
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${decryptToken(workspace.slackBotToken)}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel: slackChannelId,
+        text: headline,
+        blocks,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+
+    const result = (await response.json()) as { ok: boolean; error?: string };
+    if (result.ok) {
+      logger.log('Posted highlights notice to Slack');
+    } else {
+      logger.warn('Failed to post highlights notice to Slack', { error: result.error });
+    }
+  } catch (slackError) {
+    logger.warn('Failed to send highlights notice to Slack', {
+      error: slackError instanceof Error ? slackError.message : String(slackError),
+    });
+  }
+}
 
 /**
  * Queue handler for generating What's New weekly highlights and posting to Slack
@@ -93,7 +149,7 @@ async function processHighlightsGeneration(
   const { correlationId, environment, slackChannelId, slackTeamId } = payload;
 
   // 1. CALCULATE DATE RANGE
-  const endDate = payload.endDate ? new Date(payload.endDate) : new Date();
+  const endDate = payload.endDate ? parseHighlightsEndDate(payload.endDate) : new Date();
   const startDate = payload.startDate
     ? new Date(payload.startDate)
     : new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -105,77 +161,36 @@ async function processHighlightsGeneration(
 
   logger.log('Date range for highlights', { startDate: dateRange.start, endDate: dateRange.end });
 
-  // 2. FETCH MODALS FROM DATABASE
-  logger.log("Fetching What's New modals from database...");
+  // 2. FETCH RELEASE NOTES
+  const releaseNotes = await loadHighlightsReleaseNotes({ start: startDate, end: endDate }, logger);
+  if (releaseNotes.kind === 'disabled') {
+    logger.log('Release notes are disabled - skipping highlights generation');
+    await updateSettingsStatus('skipped', undefined, correlationId);
+    await postHighlightsNotice(
+      { slackChannelId, slackTeamId, correlationId },
+      `Weekly highlights skipped for ${dateRange.start} - ${dateRange.end}: release notes are disabled.`,
+      'Enable release notes (or fix their config) in the Release Notes admin tab to resume weekly highlights.',
+      logger
+    );
+    return;
+  }
+  const modals = releaseNotes.entries;
 
-  const modals = await ModalModel.find({
-    tags: { $in: [WHATS_NEW_MODAL_TAG, 'whatsNew'] },
-    enabled: true,
-    createdAt: { $gte: startDate, $lte: endDate },
-  })
-    .sort({ createdAt: -1 })
-    .select('title subtitle description createdAt startDate priority')
-    .lean<ModalForHighlights[]>();
-
-  logger.log(`Found ${modals.length} What's New modals`, {
-    modalIds: modals.map(m => m._id.toString()),
+  logger.log(`Found ${modals.length} published release notes`, {
+    releaseNoteIds: modals.map(m => m._id),
   });
 
   if (modals.length === 0) {
-    logger.log('No modals found for the date range - posting warning to Slack');
+    logger.log('No release notes published in the date range - posting warning to Slack');
     await updateSettingsStatus('no_modals', undefined, correlationId);
 
-    // Post warning to Slack so the team always gets a Saturday message (M8)
-    if (slackChannelId && slackTeamId) {
-      try {
-        const workspace = await slackDevWorkspaceRepository.findBySlackTeamIdWithToken(slackTeamId);
-        if (workspace?.slackBotToken) {
-          const warningBlocks = [
-            {
-              type: 'header',
-              text: { type: 'plain_text', text: "What's New Weekly Highlights", emoji: true },
-            },
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: `*No What's New modals found* for ${dateRange.start} — ${dateRange.end}.\n\nThis may indicate daily modal generation is not running. Check the admin panel for generation health status.`,
-              },
-            },
-            {
-              type: 'context',
-              elements: [{ type: 'mrkdwn', text: `Correlation ID: \`${correlationId}\`` }],
-            },
-          ];
-
-          const response = await fetch('https://slack.com/api/chat.postMessage', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${workspace.slackBotToken}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              channel: slackChannelId,
-              text: `No What's New modals found for ${dateRange.start} — ${dateRange.end}. Daily generation may not be running.`,
-              blocks: warningBlocks,
-              unfurl_links: false,
-              unfurl_media: false,
-            }),
-          });
-
-          const result = (await response.json()) as { ok: boolean; error?: string };
-          if (result.ok) {
-            logger.log('Posted no-modals warning to Slack');
-          } else {
-            logger.warn('Failed to post no-modals warning to Slack', { error: result.error });
-          }
-        }
-      } catch (slackError) {
-        logger.warn('Failed to send no-modals Slack warning', {
-          error: slackError instanceof Error ? slackError.message : String(slackError),
-        });
-      }
-    }
+    // Post a warning in place of the highlights so an empty week is still visible in Slack
+    await postHighlightsNotice(
+      { slackChannelId, slackTeamId, correlationId },
+      `No release notes were published for ${dateRange.start} - ${dateRange.end}.`,
+      'If releases shipped this week, check the Release Notes admin tab for notes that are hidden or still scheduled.',
+      logger
+    );
 
     return;
   }
@@ -202,7 +217,7 @@ async function processHighlightsGeneration(
 
   logger.log('Built highlights prompt', {
     promptLength: prompt.length,
-    modalCount: modals.length,
+    releaseNoteCount: modals.length,
     usingCustomTemplate: !!customTemplate,
   });
 
@@ -306,7 +321,7 @@ async function processHighlightsGeneration(
   logger.log('====================================');
   logger.log('Summary:', {
     duration: `${duration}ms`,
-    modalsProcessed: modals.length,
+    releaseNotesProcessed: modals.length,
     highlightsLength: responseText.length,
     postedToSlack: !!(slackChannelId && slackTeamId),
   });
@@ -540,7 +555,7 @@ async function getHighlightsConfig(): Promise<WhatsNewHighlightsConfig | null> {
  * Update settings with generation status
  */
 async function updateSettingsStatus(
-  status: 'success' | 'failed' | 'no_modals',
+  status: HighlightsRunStatus,
   highlights: string | undefined,
   correlationId: string
 ): Promise<void> {

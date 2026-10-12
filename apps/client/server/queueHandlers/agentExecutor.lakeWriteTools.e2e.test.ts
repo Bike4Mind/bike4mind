@@ -50,6 +50,13 @@ describe('agentExecutor toolDeps wiring', () => {
     expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*organizationId: child\.organizationId,/);
   });
 
+  // Both are optional on ToolContext.db, so dropping either typechecks and edit_image then refuses
+  // the owner's own generated-image keys with only a logged warning.
+  it('wires the generated-image owner lookup into both the main and the subagent toolDeps', () => {
+    expect(source.match(/findAllByIds: sessionRepository\.findAllByIds\.bind\(sessionRepository\),/g)).toHaveLength(2);
+    expect(source.match(/quests: questRepository,/g)).toHaveLength(2);
+  });
+
   it('forwards the run API key to both toolDeps and to every child it spawns', () => {
     expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*apiKeyId: execution\.apiKeyId,/);
     expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*apiKeyId: child\.apiKeyId,/);

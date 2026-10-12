@@ -32,6 +32,7 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { useAdminTools } from '@client/app/hooks/useAdminTools';
 import { useStableCallback } from '@client/app/hooks/useStableCallback';
 import ChatHistory from '@client/app/components/Session/ChatHistory';
+import ReplyAnnouncer from '@client/app/components/Session/ReplyAnnouncer';
 import ActiveAgentExecutions from '@client/app/components/Session/AgentExecution/ActiveAgentExecutions';
 import PendingApprovalBeacon from '@client/app/components/Session/AgentExecution/PendingApprovalBeacon';
 import ReplyStatus from '@client/app/components/common/ReplyStatus';
@@ -42,6 +43,7 @@ import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSession
 import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
 import { shouldShowEmptySessionSplash } from './emptySessionSplashGate';
+import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { buildChatHistory } from './buildChatHistory';
 import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
 import { useSessionReconnectProbe } from './AgentExecution/useSessionReconnectProbe';
@@ -282,18 +284,21 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   const [historyLines] = useState<number>(INFINITE_VALUE);
   const liveAI = useAdvancedAISettings(state => state.liveAI);
   const { sendJsonMessage } = useWebsocket();
+  // Read-only hides the controls in MessageContent and ImageContainer; these guards keep any
+  // remaining path (a stale menu, a programmatic call) from sending or mutating anyway.
+  const readOnly = useSessionReadOnly();
 
   // useCallback is not enough here as it won't work when calling react query hooks
   // Using only useCallback will cause ChatHistory component to rerender every time chatCompletion is being streamed
   const onDelete = useStableCallback(async (messageData: IChatHistoryItem) => {
-    if (!messageData?.id) return;
+    if (readOnly || !messageData?.id) return;
     deleteQuest.mutate({ sessionId: messageData.sessionId, id: messageData.id });
   });
 
   // useCallback is not enough here as it won't work when calling react query hooks
   // Using only useCallback will cause ChatHistory component to rerender every time chatCompletion is being streamed
   const handlePinToggle = useStableCallback(async (messageData: IChatHistoryItem) => {
-    if (!messageData.id) return;
+    if (readOnly || !messageData.id) return;
     const newPinnedState = !messageData.pinned;
 
     updateQuest.mutate({
@@ -310,6 +315,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   const sendMessage = useStableCallback(
     async (messageData: Partial<IChatHistoryItem>, options: SendMessageOptions = { isRetry: false }) => {
       const { isRetry, isImageEdit, isVariation, correctsQuestId } = options;
+      if (readOnly) return;
       if (!sessionId) return;
       if (!messageData.prompt) return;
       if (isRetry && !messageData.id) return;
@@ -491,6 +497,11 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           }}
         >
           <ScrollToBottomButton isAtBottom={isAtBottom} scrollerRef={scrollerElementRef} />
+          <ReplyAnnouncer
+            sessionId={sessionId}
+            activeStreamingQuestId={activeStreamingQuestId}
+            chatHistory={flattenQuests}
+          />
           {/* Surfaces a pending agent permission request at the bottom (the inline PermissionCard
               can scroll far out of view in a long/streaming transcript). */}
           <PendingApprovalBeacon sessionId={sessionId} scrollerRef={scrollerElementRef} />

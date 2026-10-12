@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/fab-pipeline",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -60,7 +60,7 @@
     "unpdf": "^1.6.2",
     "voyageai": "^0.4.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "peerDependencies": {
     "mongoose": "^8.22.1"

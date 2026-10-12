@@ -32,6 +32,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import React, { useEffect, useState, useRef } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
+import { dismissOtcCodeSentToast, toastOtcCodeSent } from './otcToast';
 import useGetLogo from '../hooks/useGetLogo';
 import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
@@ -205,7 +206,7 @@ const Register: React.FC = () => {
       setPendingToken(result.pendingToken);
       setCurrentStep('otc');
       startResendCooldown();
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
     } catch (error: unknown) {
       const serverMsg: string = (error as Record<string, string>)?.message || '';
       setCreateError(serverMsg || t('auth.errors.registrationFailed'));
@@ -217,7 +218,7 @@ const Register: React.FC = () => {
     try {
       const result = await sendOTC({ email: submittedData.email });
       setPendingToken(result.pendingToken);
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to resend code';
@@ -346,6 +347,7 @@ const Register: React.FC = () => {
         acceptedPolicyVersion: CURRENT_POLICY_VERSION,
         ageAttestation: submittedData.confirmAdult,
       });
+      dismissOtcCodeSentToast();
 
       // The email may already have an account - the server then answers with the LOGIN
       // shapes, including MFA challenges. Without these branches the code below would set
@@ -467,9 +469,12 @@ const Register: React.FC = () => {
           sx={theme => ({
             maxWidth: '420px',
             width: '100%',
+            boxSizing: 'border-box',
             mx: 'auto',
             my: 'auto',
             py: '32px',
+            // disableGutters drops the side margins; a phone needs them back.
+            px: { xs: '16px', sm: 0 },
             backgroundColor: theme.palette.background.panel,
           })}
         >
@@ -582,13 +587,13 @@ const Register: React.FC = () => {
                 {/* eslint-disable-next-line react-hooks/refs -- react-hook-form's handleSubmit uses refs internally */}
                 <form className="register-form" data-testid="register-form" onSubmit={handleSubmit(onSubmit)}>
                   <Box sx={{ '& .MuiInput-root': { '--Input-minHeight': '40px' } }}>
-                    <Stack direction="row" spacing={2}>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                       <FormControl
                         className="register-username-control"
                         size="sm"
                         required
                         id="username"
-                        sx={{ width: '50%' }}
+                        sx={{ width: { xs: '100%', sm: '50%' } }}
                       >
                         <FormLabel
                           className="register-username-label"
@@ -627,7 +632,12 @@ const Register: React.FC = () => {
                           {serverUsernameError || (usernameShowError ? t('auth.fieldErrors.invalidUsername') : '')}
                         </Typography>
                       </FormControl>
-                      <FormControl className="register-email-control" size="sm" id="email" sx={{ width: '50%' }}>
+                      <FormControl
+                        className="register-email-control"
+                        size="sm"
+                        id="email"
+                        sx={{ width: { xs: '100%', sm: '50%' } }}
+                      >
                         <FormLabel className="register-email-label" id="email-label" sx={{ opacity: '0.5' }}>
                           {t('auth.email')}
                         </FormLabel>
@@ -810,7 +820,9 @@ const Register: React.FC = () => {
                   variant="outlined"
                   name="otc-code"
                   type="text"
-                  inputMode="numeric"
+                  // Joy's Input forwards autoComplete to the <input> but not inputMode (that lands on the
+                  // root div), so the numeric keypad hint has to go through the input slot.
+                  slotProps={{ input: { inputMode: 'numeric', pattern: '[0-9]*' } }}
                   placeholder="000000"
                   value={otcCode}
                   onChange={e => {

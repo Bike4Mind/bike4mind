@@ -5,8 +5,12 @@ import {
   CreateFileUploadResponseSchema,
   FileIdParamSchema,
   FileResponseSchema,
+  FileSummarySchema,
+  ListFilesQuerySchema,
+  ListFilesResponseSchema,
+  UpdateFileRequestSchema,
 } from '../../schemas/publicFile';
-import { ApiErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 /**
  * File upload and read-back for integrators - the input half of any flow that takes a file id
@@ -17,6 +21,11 @@ import { ApiErrorSchema } from '../../schemas/chat';
  * shape, and LEGACY_PUBLIC_PATHS is frozen. Both doors share their logic with the internal
  * routes (apps/client/server/files/), so the gates cannot drift apart.
  */
+// Write does not imply read for files, as on the SPA-internal /api/files doors
+// (apps/client/server/files/fileScopes.ts): both doors reach the same file, so they must agree.
+const READ_FORBIDDEN = 'The API key lacks `files:read`.';
+const WRITE_FORBIDDEN = 'The API key lacks `files:write`.';
+
 export const createFileUploadContract = defineEndpoint({
   method: 'post',
   path: '/api/v1/files',
@@ -96,6 +105,7 @@ export const getFileContract = defineEndpoint({
         created_at: '2026-09-29T12:00:00.000Z',
       },
     },
+    403: { description: READ_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: 'No file with that id is visible to the caller.', schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
@@ -104,4 +114,115 @@ export const getFileContract = defineEndpoint({
     streaming: false,
     body: {},
   },
+});
+
+export const listFilesContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/files',
+  operationId: 'listFiles',
+  summary: 'List files',
+  description:
+    'Lists the files you own, newest first, excluding archived and deleted ones. Files shared with you are not ' +
+    'listed, though `GET /api/v1/files/{id}` resolves them by id: listing shares would need access ' +
+    'checks that cannot be paged by cursor. Items carry no `download_url`; fetch a file by id for its ' +
+    'bytes. `search` keeps only files whose name contains it, ignoring case; results stay newest ' +
+    'first with no relevance ranking. Cursor-paginated (see the pagination convention): pass ' +
+    '`next_cursor` back as `cursor`, with the same `search`, until it is `null`. Safe (GET) requests ' +
+    'are exempt from the per-day API-key quota; only the per-minute burst limit applies. ' +
+    'Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.',
+  tags: ['Files'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.READ_FILES],
+  queryParams: ListFilesQuerySchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: {
+      description: 'One page of files, newest first by `id`.',
+      schema: ListFilesResponseSchema,
+      example: {
+        data: [
+          {
+            id: '<fileId>',
+            file_name: 'reference.png',
+            mime_type: 'image/png',
+            file_size: 482133,
+            moderation_status: 'clean',
+            created_at: '2026-09-29T12:00:00.000Z',
+          },
+        ],
+        next_cursor: null,
+      },
+    },
+    403: { description: READ_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    422: {
+      description:
+        '`limit` or `search` is out of range, or `cursor` is malformed or was issued by a different ' +
+        'endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given.',
+      schema: ApiErrorSchema,
+    },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
+});
+
+const UPDATE_EXAMPLE = { file_name: 'q3-notes.pdf' };
+
+export const updateFileContract = defineEndpoint({
+  method: 'patch',
+  path: '/api/v1/files/{id}',
+  operationId: 'updateFile',
+  summary: 'Update a file',
+  description:
+    'Renames a file you can edit or changes its notes: a file you own, or one shared with you with ' +
+    'edit (`update`) permission. Omitted fields are left unchanged. Unknown body fields are rejected. ' +
+    'The response is the file summary, with no `download_url`: fetch the bytes from ' +
+    '`GET /api/v1/files/{id}`, which requires `files:read`.',
+  tags: ['Files'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_FILES],
+  pathParams: FileIdParamSchema,
+  request: UpdateFileRequestSchema,
+  requestExample: UPDATE_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The updated file summary.', schema: FileSummarySchema },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: {
+      description:
+        'No file with that id is yours to edit. A file you cannot edit, one that does not exist and a ' +
+        'malformed id are all reported as 404, so file ids cannot be probed through this endpoint.',
+      schema: ApiErrorSchema,
+    },
+    422: { description: 'Request body failed validation.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: UPDATE_EXAMPLE },
+});
+
+export const deleteFileContract = defineEndpoint({
+  method: 'delete',
+  path: '/api/v1/files/{id}',
+  operationId: 'deleteFile',
+  summary: 'Delete a file',
+  description:
+    'Deletes a file you own and frees its storage. On a file shared with you it removes only your ' +
+    "access (an unshare): the owner's file is kept.",
+  tags: ['Files'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_FILES],
+  pathParams: FileIdParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    204: { description: 'The file was deleted, or your access to it was removed.', noBody: true },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: {
+      description:
+        'No file with that id is yours or shared with you directly (a file you reach only through a ' +
+        'group or a data lake cannot be deleted here). A file that does not exist and a malformed id ' +
+        'are both reported as 404.',
+      schema: ApiErrorSchema,
+    },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false },
 });

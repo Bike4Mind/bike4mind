@@ -93,7 +93,7 @@ function createSearxng() {
       retries: 3,
     },
     logging: {
-      retention: '3 days',
+      retention: $app.stage === 'production' ? '1 month' : '1 week',
     },
     transform: {
       service: args => {

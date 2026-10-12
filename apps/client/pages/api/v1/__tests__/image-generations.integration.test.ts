@@ -109,7 +109,7 @@ vi.mock('@server/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
 
-vi.mock('@server/queueHandlers/imageGeneration', () => ({
+vi.mock('@server/imageGenerations/imageGeneration', () => ({
   getImageGeneration: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
 }));
 
@@ -202,6 +202,28 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(res._getJSONData()).toMatchObject({ quest: { id: 'quest-1' } });
     expect(GenerateImageResponseSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('strips server-owned fields from the returned session', async () => {
+    mockGetOrCreateSession.mockResolvedValue({
+      sessionId: 'sess-1',
+      asyncPromises: [],
+      session: {
+        id: 'sess-1',
+        systemPromptText: 'secret prompt',
+        preauthorizedLakeIds: ['lake-1'],
+        origin: { channel: 'api', apiKeyId: 'k1' },
+      },
+    });
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    const { session } = res._getJSONData();
+    expect(session).toMatchObject({ id: 'sess-1', origin: { channel: 'api' } });
+    expect(session).not.toHaveProperty('systemPromptText');
+    expect(session).not.toHaveProperty('preauthorizedLakeIds');
+    expect(session.origin).not.toHaveProperty('apiKeyId');
   });
 
   describe('referenceImageFabFileIds', () => {

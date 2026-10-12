@@ -21,6 +21,7 @@ import { createS3Client } from './createS3Client';
 
 export class S3Storage extends BaseStorage {
   private s3: S3Client;
+  private presignS3: S3Client;
 
   constructor(
     private bucketName: string,
@@ -48,6 +49,25 @@ export class S3Storage extends BaseStorage {
         requestTimeout: 60000, // 1 minute
       }),
     });
+
+    const presignEndpoint = process.env.S3_PRESIGN_ENDPOINT?.trim();
+    if (presignEndpoint) {
+      try {
+        const url = new URL(presignEndpoint);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported protocol');
+      } catch {
+        throw new Error('S3_PRESIGN_ENDPOINT must be an absolute HTTP or HTTPS URL');
+      }
+    }
+    // Browser signing is opt-in; server consumers keep the private endpoint.
+    this.presignS3 = presignEndpoint
+      ? createS3Client({
+          region: this.region,
+          credentials: this.s3.config.credentials,
+          endpoint: presignEndpoint,
+          forcePathStyle: true,
+        })
+      : this.s3;
   }
 
   /**
@@ -144,18 +164,20 @@ export class S3Storage extends BaseStorage {
     method: 'get' | 'put' = 'get',
     {
       expiresIn = 3600,
+      audience,
       ACL,
       ContentType,
       ResponseContentDisposition,
     }: {
       expiresIn?: number;
+      audience?: 'browser';
       ACL?: ObjectCannedACL;
       ContentType?: string;
       ResponseContentDisposition?: string;
     } = {}
   ): Promise<string> {
     return await getSignedUrl(
-      this.s3,
+      audience === 'browser' ? this.presignS3 : this.s3,
       method !== 'get'
         ? new PutObjectCommand({
             Bucket: this.bucketName,

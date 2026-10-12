@@ -1,0 +1,5 @@
+apiVersion: v2
+name: bike4mind-selfhost
+version: 0.1.0
+description: Portable single-replica Bike4Mind evaluation stack
+type: application

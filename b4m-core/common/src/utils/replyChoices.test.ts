@@ -10,8 +10,10 @@ import {
   formatChoiceReply,
   formatChoicesBlock,
   parseChoiceKey,
+  questReplyText,
   stripChoicesFromReplies,
 } from './replyChoices';
+import { joinReplySlots } from './streamVisibility';
 
 const two = [
   { label: 'Reformulate', description: 'Re-formulate with all three pools.' },
@@ -398,6 +400,29 @@ describe('stripChoicesFromReplies', () => {
         outcome: { status: 'absent' },
       });
     }
+  });
+});
+
+describe('questReplyText', () => {
+  it('joins the visible slots with no separator, hiding reasoning and the choices block', () => {
+    const replies = ['<think>plan</think>Checking. ', `The answer.\n\n${block(JSON.stringify(two))}`];
+    expect(questReplyText({ reply: 'Checking. ', replies })).toBe('Checking. The answer.');
+  });
+
+  it('joins with the given joiner, skipping slots with no visible text', () => {
+    const replies = ['Run:\n```bash\necho hi\n```', '<think>x</think>', 'Done.'];
+    expect(questReplyText({ replies }, joinReplySlots)).toBe('Run:\n```bash\necho hi\n```\n\nDone.');
+  });
+
+  it('falls back to the stored reply when no slot has visible text', () => {
+    expect(questReplyText({ reply: 'Model is not available', replies: ['<think>x</think>', '  '] })).toBe(
+      'Model is not available'
+    );
+  });
+
+  it('is null when there is neither visible slot text nor a stored reply', () => {
+    expect(questReplyText({ reply: null, replies: [] })).toBeNull();
+    expect(questReplyText({})).toBeNull();
   });
 });
 

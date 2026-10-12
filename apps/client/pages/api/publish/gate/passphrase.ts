@@ -6,6 +6,7 @@ import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';
 import { setGateProofCookie } from '@server/services/publish/publishGateToken';
 import { checkLock, recordFailure, clear } from '@server/services/publish/passphraseLockout';
+import { loadLiveOwner } from '@server/services/publish/loadLiveOwner';
 
 /**
  * POST /api/publish/gate/passphrase - verify a passphrase for a gated published
@@ -29,6 +30,7 @@ const BodySchema = z.object({
 
 type GatedLean = {
   publicId: string;
+  ownerId: string;
   accessGate?: { kind: 'passphrase' | 'domain'; passphraseHash?: string | null } | null;
 } | null;
 
@@ -60,10 +62,15 @@ const handler = baseApi({ auth: false })
     // with a path-collision error (500 on every call, so no passphrase gate could
     // ever be unlocked). passphraseHash is select:false, hence the leading `+`.
     const artifact = await PublishedArtifact.findOne(query)
-      .select('publicId accessGate.kind +accessGate.passphraseHash')
+      .select('publicId ownerId accessGate.kind +accessGate.passphraseHash')
       .lean<GatedLean>();
 
     if (!artifact || artifact.accessGate?.kind !== 'passphrase' || !artifact.accessGate.passphraseHash) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    // The serve route 404s a page whose owner is deleted, banned or suspended; answer the same here
+    // so the gate cannot confirm such a page exists.
+    if (!(await loadLiveOwner(artifact.ownerId))) {
       return res.status(404).json({ error: 'Not found' });
     }
 

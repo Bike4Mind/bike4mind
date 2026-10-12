@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
   mutateAsync: vi.fn(),
   shareDocumentOptions: null as { onError?: (error: unknown) => void } | null,
+  shareData: undefined as { link: string } | undefined,
+  cancelInvite: vi.fn(),
+  confirm: vi.fn(),
   currentUser: { id: 'u1', email: 'me@test.com', username: 'me' } as {
     id: string;
     email: string;
@@ -24,8 +27,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/invites', () => ({
   useShareDocument: (options: { onError?: (error: unknown) => void }) => {
     mocks.shareDocumentOptions = options;
-    return { mutate: vi.fn(), mutateAsync: mocks.mutateAsync, data: undefined };
+    return { mutate: vi.fn(), mutateAsync: mocks.mutateAsync, data: mocks.shareData };
   },
+  useCancelInvite: () => ({ mutate: mocks.cancelInvite, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useUserRevokeSharing: () => ({ mutate: vi.fn() }),
@@ -34,7 +38,7 @@ vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
   useCopyToClipboard: () => ({ copied: false, handleCopyToClipboard: vi.fn() }),
 }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({
-  useConfirmation: () => vi.fn(),
+  useConfirmation: () => mocks.confirm,
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: mocks.currentUser }),
@@ -49,13 +53,20 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const renderModal = (files?: IFabFileDocument[]) =>
+const renderModal = (files?: IFabFileDocument[], ownerId = 'u1') =>
   render(
     <TestWrapper>
       {files ? (
         <ShareDocumentModal files={files} type={InviteType.FabFile} open onClose={vi.fn()} />
       ) : (
-        <ShareDocumentModal id="notebook-1" name="My Notebook" type={InviteType.Session} open onClose={vi.fn()} />
+        <ShareDocumentModal
+          id="notebook-1"
+          name="My Notebook"
+          type={InviteType.Session}
+          ownerId={ownerId}
+          open
+          onClose={vi.fn()}
+        />
       )}
     </TestWrapper>
   );
@@ -71,6 +82,7 @@ const rejectWith = (error: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.mutateAsync.mockResolvedValue({});
+  mocks.shareData = undefined;
   mocks.currentUser = { id: 'u1', email: 'me@test.com', username: 'me' };
 });
 
@@ -91,6 +103,42 @@ describe('ShareModal - By Link tab', () => {
   it('enables the Generate button with an empty Description (description is not required)', () => {
     renderModal();
     expect(screen.getByTestId('share-modal-submit-button')).not.toBeDisabled();
+  });
+
+  it('says who can open the link', () => {
+    renderModal();
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      'Anyone with the link can open this notebook after signing in'
+    );
+  });
+
+  it('shows the whole generated link as text next to a labelled copy button', () => {
+    const link = 'https://app.example.com/share/0123456789abcdef0123456789abcdef';
+    mocks.shareData = { link };
+    renderModal();
+    expect(screen.getByTestId('share-modal-generated-link')).toHaveTextContent(link);
+    expect(screen.getByTestId('share-modal-copy-button')).toHaveAccessibleName('Copy link');
+  });
+
+  it('turns off links for the document only after confirmation', async () => {
+    renderModal();
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('share-modal-turn-off-links-button'));
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(mocks.cancelInvite).not.toHaveBeenCalled();
+    mocks.confirm.mock.calls[0][0].onOk();
+    expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'notebook-1', type: InviteType.Session });
+  });
+
+  it('offers no off switch to a sharee, since the cancel route is owner-only', () => {
+    renderModal(undefined, 'someone-else');
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
+  });
+
+  it('offers no off switch for a bulk share', () => {
+    renderModal([{ id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument]);
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
   });
 });
 

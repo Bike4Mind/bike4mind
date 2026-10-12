@@ -197,6 +197,9 @@ export interface IChatHistoryItem {
   /** Ids of the video generation jobs this quest started */
   videoJobIds?: string[];
 
+  /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentVideoClip). */
+  agentVideoClipsClaimed?: number;
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
@@ -710,6 +713,12 @@ export interface ISession {
    */
   lakeScopeExplicit?: boolean;
   /**
+   * Whether a lake-scoped chat also grounds on the user's own library (owned, shared and group
+   * files) alongside the lake. Unset falls back to "only when no lake is named", which is the
+   * pre-existing behavior; resolve it through effectiveIncludeLibraryFiles, never read it raw.
+   */
+  includeLibraryFiles?: boolean;
+  /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
    * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its
    * own canManageLake check, as a write separate from session creation. Never part of
@@ -922,6 +931,16 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     data: Partial<ISessionDocument> & { id: string },
     opts?: { includeGlobalWrite?: boolean }
   ) => Promise<ISessionDocument | null>;
+  /**
+   * updateWithUpdateAccess that adds `knowledgeIds` ($addToSet) rather than replacing the stored list,
+   * so a concurrent detach is not undone by a caller's stale read.
+   */
+  addKnowledgeIdsWithUpdateAccess: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<Omit<ISessionDocument, 'knowledgeIds'>> & { id: string },
+    knowledgeIds: string[],
+    opts?: { includeGlobalWrite?: boolean }
+  ) => Promise<ISessionDocument | null>;
   upsertByOpenaiConversationId: <Txn>(
     openaiConversationId: string,
     update: Partial<ISession>,
@@ -1118,4 +1137,25 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The count of active voice sessions
    */
   countActiveVoiceSessionsByUserId: (userId: string) => Promise<number>;
+
+  /**
+   * Oldest-first sessions whose voice credit hold was reserved before `startedBefore` and never
+   * settled, at most `limit` of them.
+   */
+  findStaleVoiceHolds: (
+    startedBefore: Date,
+    limit: number
+  ) => Promise<Array<{ id: string; userId: string; voiceReservedCredits: number; voiceSessionStartedAt: Date }>>;
+
+  /**
+   * Atomically clear the voice hold that started at `startedAt`. Resolves true for the single
+   * caller that cleared it, false when it was already settled or replaced by a newer call.
+   */
+  claimVoiceHold: (sessionId: string, startedAt: Date) => Promise<boolean>;
+
+  /**
+   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, so it can be settled
+   * again. Resolves false (and writes nothing) when the session already holds a newer call.
+   */
+  restoreVoiceHold: (sessionId: string, voiceReservedCredits: number, startedAt: Date) => Promise<boolean>;
 }

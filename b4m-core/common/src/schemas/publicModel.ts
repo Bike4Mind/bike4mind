@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ModelBackend, type ModelInfo } from '../models';
+import { getTextModelCreditsPer1M } from '../pricing';
 import type { ImageModelCapabilities, ImageSizing } from '../utils/imageCapabilities';
 import { OpenAIImageQualitySchema } from './openai';
 import { paginatedResponseSchema } from './pagination';
@@ -9,7 +10,8 @@ import { paginatedResponseSchema } from './pagination';
  *
  * Deliberately narrower than `ModelInfo`: every field here is one an integrator can pin, so
  * internal catalog fields (`adapterFamily`, `dispatchProfile`, `rank`, `pricing`, `logoFile`)
- * stay off the wire. The legacy `GET /api/models` keeps serving the full internal type to the
+ * stay off the wire. Price is published only as the credits billing charges, never the provider's
+ * USD cost behind them. The legacy `GET /api/models` keeps serving the full internal type to the
  * SPA and CLI. Wire fields are snake_case (CONVENTIONS.md section 2).
  */
 
@@ -66,6 +68,18 @@ export const PublicImageCapabilitiesSchema = z.object({
   }),
 });
 
+export const PublicModelCreditsPer1MTokensSchema = z.object({
+  input: z.number().describe('Credits per 1M input tokens.'),
+  output: z.number().describe('Credits per 1M output tokens.'),
+  cached_input: z
+    .number()
+    .nullable()
+    .describe(
+      'Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are ' +
+        'not billed separately, so they cost the `input` rate.'
+    ),
+});
+
 export const PublicModelSchema = z.object({
   id: z.string().describe('Pass as `model` on the generation endpoints.'),
   name: z.string(),
@@ -83,12 +97,17 @@ export const PublicModelSchema = z.object({
   image: PublicImageCapabilitiesSchema.nullable().describe(
     'Size rules and supported parameters. Present on image models only; null for every other type.'
   ),
+  credits_per_1m_tokens: PublicModelCreditsPer1MTokensSchema.nullable().describe(
+    'What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by ' +
+      'cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model.'
+  ),
 });
 
 export const ListModelsResponseSchema = paginatedResponseSchema(PublicModelSchema);
 
 export type PublicImageCapabilities = z.infer<typeof PublicImageCapabilitiesSchema>;
 export type PublicModel = z.infer<typeof PublicModelSchema>;
+export type PublicModelCreditsPer1MTokens = z.infer<typeof PublicModelCreditsPer1MTokensSchema>;
 
 type PublicImageSizing = PublicImageCapabilities['sizing'];
 
@@ -164,5 +183,11 @@ export function toPublicModel(model: ModelInfo): PublicModel {
     deprecation_date: model.deprecationDate ?? null,
     replaced_by: model.replacedBy ?? null,
     image: model.image ? toPublicImageCapabilities(model.image) : null,
+    credits_per_1m_tokens: toPublicCreditsPer1M(model),
   };
+}
+
+function toPublicCreditsPer1M(model: ModelInfo): PublicModelCreditsPer1MTokens | null {
+  const rates = getTextModelCreditsPer1M(model);
+  return rates ? { input: rates.input, output: rates.output, cached_input: rates.cachedInput } : null;
 }

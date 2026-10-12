@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.85",
+  "version": "0.1.86",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -58,7 +58,10 @@
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "backfill:session-image-count": "tsx src/backfill-session-image-count.ts",
+    "backfill:orphaned-published-artifacts": "tsx src/backfill-orphaned-published-artifacts.ts",
+    "backfill:show-credits-used": "tsx src/backfill-show-credits-used.ts",
     "repair:bedrock-profile-absence": "tsx src/repair-bedrock-profile-absence.ts",
+    "repair:stale-organization-pointers": "tsx src/repair-stale-organization-pointers.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
     "count-tokens-probe": "tsx count-tokens-probe.ts",
     "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
@@ -79,7 +82,6 @@
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/services": "workspace:*",
     "@bike4mind/utils": "workspace:*",
-    "@faker-js/faker": "^10.5.0",
     "@inquirer/prompts": "^8.5.2",
     "axios": "1.20.0",
     "bcryptjs": "^3.0.3",
@@ -93,7 +95,7 @@
     "sst": "4.17.1",
     "typescript": "^5.9.3",
     "yargs": "^18.1.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.6",

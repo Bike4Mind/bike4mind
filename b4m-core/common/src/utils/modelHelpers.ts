@@ -240,11 +240,8 @@ export const IMAGES_PER_EDIT_REQUEST = 1;
 
 /**
  * Reference ("style anchor") images a single gpt-image request may carry, on top of the
- * primary input image. OpenAI's images.edit accepts up to 16 for the gpt-image family, but
- * the cap here is deliberately lower: OpenAIImageCostCalculator prices output only (tier x
- * size) and image credits are never reconciled after the call, so every input image OpenAI
- * bills as input tokens is unbilled margin. At 4 that leak is a rounding error; at 16 it is
- * roughly a free high-tier render per request. Raise it only together with an input-image
- * term in OpenAIImageCostCalculator.
+ * primary input image: 15 references + the primary = OpenAI's documented 16-image images.edit
+ * limit for the gpt-image family. Each one is billed as input tokens, which the credit hold
+ * prices through OpenAIImageCostCalculator.getInputImageCost - keep the two together.
  */
-export const MAX_REFERENCE_IMAGES = 4;
+export const MAX_REFERENCE_IMAGES = 15;

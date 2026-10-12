@@ -8,9 +8,9 @@ export const WhatsNewHighlightsPayloadSchema = z.object({
   correlationId: z.string(),
   /** Environment where highlights are being generated */
   environment: z.enum(['dev', 'production']),
-  /** Start date for modal query (YYYY-MM-DD format) */
+  /** Start date for the release-note query (YYYY-MM-DD format) */
   startDate: z.string().optional(),
-  /** End date for modal query (YYYY-MM-DD format) */
+  /** End date for the release-note query (YYYY-MM-DD format, inclusive of the whole day) */
   endDate: z.string().optional(),
   /** Slack channel ID to post highlights to */
   slackChannelId: z.string().optional(),
@@ -45,11 +45,14 @@ export interface WhatsNewHighlightsConfig {
   /** Last generated highlights content (for preview) */
   lastHighlights?: string;
   /** Last generation status */
-  lastStatus?: 'success' | 'failed' | 'no_modals';
+  lastStatus?: HighlightsRunStatus;
 }
 
+/** `no_modals` means no release notes were published in the range; the stored value predates release notes. */
+export type HighlightsRunStatus = 'success' | 'failed' | 'no_modals' | 'skipped';
+
 /**
- * Modal data structure for highlights generation
+ * One entry the highlights prompt summarizes (a release note, see `releaseNoteHighlights.ts`)
  */
 export interface ModalForHighlights {
   _id: string;

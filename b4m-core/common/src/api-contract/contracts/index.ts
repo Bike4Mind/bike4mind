@@ -4,6 +4,7 @@ import { startAgentExecutionContract, getAgentExecutionContract } from './agentE
 import { sessionUpdateContract } from './sessionUpdate.contract';
 import { sessionGetContract } from './sessionGet.contract';
 import { sessionDeleteContract } from './sessionDelete.contract';
+import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
 import { synthesizeSpeechContract } from './tts.contract';
@@ -14,11 +15,19 @@ import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
-import { createFileUploadContract, getFileContract } from './files.contract';
+import {
+  createFileUploadContract,
+  getFileContract,
+  listFilesContract,
+  updateFileContract,
+  deleteFileContract,
+} from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
+import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract } from './quest.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
+import { listWhatsNewContract } from './whatsNew.contract';
 import {
   listDataLakesContract,
   getDataLakeContract,
@@ -35,6 +44,20 @@ import {
   listVideoModelsContract,
 } from './videoGeneration.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
+import {
+  listProjectsContract,
+  getProjectContract,
+  createProjectContract,
+  updateProjectContract,
+  deleteProjectContract,
+} from './projects.contract';
+import {
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
+} from './agents.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -49,6 +72,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   sessionGetContract,
   sessionUpdateContract,
   sessionDeleteContract,
+  sessionCloneContract,
   executeToolContract,
   createCompletionContract,
   synthesizeSpeechContract,
@@ -61,7 +85,12 @@ export const CONTRACTS: readonly EndpointContract[] = [
   editImageContract,
   createFileUploadContract,
   getFileContract,
+  listFilesContract,
+  updateFileContract,
+  deleteFileContract,
   createEmbeddingsContract,
+  createDecisionContract,
+  listDecisionModelsContract,
   getQuestContract,
   createSessionContract,
   listSessionsContract,
@@ -79,4 +108,15 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listVoicesContract,
   createVoiceSessionContract,
   endVoiceSessionContract,
+  listWhatsNewContract,
+  listProjectsContract,
+  getProjectContract,
+  createProjectContract,
+  updateProjectContract,
+  deleteProjectContract,
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
 ];

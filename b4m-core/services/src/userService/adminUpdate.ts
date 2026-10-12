@@ -248,8 +248,17 @@ export async function adminUpdateUser(
   if (newOrg) {
     await sendFriendRequestsToOrgMembers(userId, newOrg, db);
 
-    const updatedUsers = [...newOrg.users, { userId: user.id, permissions: [Permission.read] }];
-    await db.organizations.update({ id: newOrg.id, users: updatedUsers });
+    // The owner holds a seat without a row, and a target already in users[] keeps one row (read
+    // merged in) rather than gaining a duplicate.
+    if (String(newOrg.userId) !== user.id) {
+      const existing = newOrg.users.find(userDetail => userDetail.userId === user.id);
+      const permissions = [...new Set([...(existing?.permissions ?? []), Permission.read])];
+      const updatedUsers = [
+        ...newOrg.users.filter(userDetail => userDetail.userId !== user.id),
+        { userId: user.id, permissions },
+      ];
+      await db.organizations.update({ id: newOrg.id, users: updatedUsers });
+    }
   }
 
   await db.users.update(writeData);

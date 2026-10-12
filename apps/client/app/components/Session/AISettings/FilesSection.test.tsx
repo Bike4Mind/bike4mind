@@ -169,15 +169,29 @@ describe('FilesSection message-scoped files', () => {
     expect(screen.queryByTestId('files-section-promote-btn-m1')).toBeNull();
   });
 
-  it('refuses to promote an image that has not cleared moderation', () => {
-    // A knowledgeIds entry follows the file into clones, exports and the project
-    // fan-out, so an unscanned or blocked image must never acquire one.
+  it('lets the shared writer reject an unscanned image without reporting success', async () => {
     messageFiles = [{ ...fab('m1', 'shot.png', 'me', 'image/png'), moderationStatus: 'pending' } as IFabFileDocument];
+    mockAdd.mockResolvedValueOnce(false);
     renderPanel();
 
-    fireEvent.click(screen.getByTestId('files-section-promote-btn-m1'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('files-section-promote-btn-m1'));
+    });
 
-    expect(mockAdd).not.toHaveBeenCalled();
+    expect(mockAdd).toHaveBeenCalledWith('s1', messageFiles[0]);
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('reports success when the shared writer accepts the file', async () => {
+    messageFiles = [{ ...fab('m1', 'shot.png', 'me', 'image/png'), moderationStatus: 'clean' } as IFabFileDocument];
+    mockAdd.mockResolvedValueOnce(true);
+    renderPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('files-section-promote-btn-m1'));
+    });
+
+    expect(mockToastSuccess).toHaveBeenCalledOnce();
   });
 
   it('promotes an image once it has cleared moderation', () => {

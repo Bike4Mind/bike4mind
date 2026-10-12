@@ -67,6 +67,7 @@ describe('snipSession', () => {
       corpusGroundingMode: 'retrieve',
       retrievalExcludeFilenameMarkers: ['draft'],
       retrievalVectorizedOnly: true,
+      includeLibraryFiles: false,
       forceKnowledgeRetrieval: true,
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
@@ -79,7 +80,29 @@ describe('snipSession', () => {
         corpusGroundingMode: 'retrieve',
         retrievalExcludeFilenameMarkers: ['draft'],
         retrievalVectorizedOnly: true,
+        includeLibraryFiles: false,
       })
+    );
+  });
+
+  // Create-only (not in SessionUpdateRequestSchema), so a snip that drops them can never get them back.
+  it('carries the source session systemPromptText, temperature and maxToolCalls onto the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      systemPromptText: 'Answer like a pirate.',
+      temperature: 0.2,
+      maxToolCalls: 7,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ systemPromptText: 'Answer like a pirate.', temperature: 0.2, maxToolCalls: 7 })
     );
   });
 

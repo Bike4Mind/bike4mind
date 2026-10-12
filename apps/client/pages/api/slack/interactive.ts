@@ -39,6 +39,7 @@ import {
   refreshAppHomeForAdmin,
   IMAGE_GEN_MODEL_ACTION_ID,
   getImageModelDisplayName,
+  parseConfirmationButtonValue,
   type ViewSubmissionPayload,
   type ViewSubmissionResponse,
 } from '@bike4mind/slack';
@@ -677,11 +678,11 @@ async function handleInteractiveAction(
         }
         // Execute and send result via response_url for reliable update
         if (response_url) {
-          const confirmResult = await handleConfirmAction(dbUser, action.value);
+          const confirmResult = await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value));
           await sendSlackResponse(response_url, confirmResult);
           return {}; // Empty response since we sent via response_url
         }
-        return await handleConfirmAction(dbUser, action.value);
+        return await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value));
 
       case 'cancel_action':
         // Handle cancel button click - use response_url for reliable update
@@ -697,11 +698,11 @@ async function handleInteractiveAction(
           };
         }
         if (response_url) {
-          const cancelResult = await handleCancelAction(dbUser, action.value);
+          const cancelResult = await handleCancelAction(dbUser, parseConfirmationButtonValue(action.value));
           await sendSlackResponse(response_url, cancelResult);
           return {}; // Empty response since we sent via response_url
         }
-        return await handleCancelAction(dbUser, action.value);
+        return await handleCancelAction(dbUser, parseConfirmationButtonValue(action.value));
 
       case 'modal_confirm_att_del': {
         Logger.info('[Slack Interactive] Modal delete button clicked', {
@@ -1269,7 +1270,10 @@ async function handleImageModelSelection(
 /**
  * Handle confirm button click - execute the action from questId
  */
-async function handleConfirmAction(dbUser: any, questId: string): Promise<any> {
+async function handleConfirmAction(
+  dbUser: any,
+  { questId, pendingActionTs }: { questId: string; pendingActionTs?: number }
+): Promise<any> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-confirm' } });
 
   logger.info('[Slack Interactive] Processing confirm action', {
@@ -1277,7 +1281,7 @@ async function handleConfirmAction(dbUser: any, questId: string): Promise<any> {
     questId,
   });
 
-  const result = await executePendingAction(questId, dbUser, logger);
+  const result = await executePendingAction(questId, dbUser, logger, pendingActionTs);
 
   return {
     text: result.success ? result.message : `❌ ${result.message}`,
@@ -1289,13 +1293,16 @@ async function handleConfirmAction(dbUser: any, questId: string): Promise<any> {
 /**
  * Handle cancel button click - clears pendingAction from the Quest
  */
-async function handleCancelAction(_dbUser: any, questId: string): Promise<any> {
+async function handleCancelAction(
+  _dbUser: any,
+  { questId, pendingActionTs }: { questId: string; pendingActionTs?: number }
+): Promise<any> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-cancel' } });
 
-  const result = await cancelPendingActionOnQuest(questId, logger);
+  const result = await cancelPendingActionOnQuest(questId, logger, pendingActionTs);
 
   return {
-    text: `👍 ${result.message}`,
+    text: `${result.success ? '\u{1F44D}' : '\u274C'} ${result.message}`,
     replace_original: true,
     response_type: 'in_channel',
   };

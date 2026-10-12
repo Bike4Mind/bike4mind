@@ -17,6 +17,8 @@ const mockClearPendingGate = vi.fn();
 const mockApprovePendingPermission = vi.fn();
 const mockDenyPendingPermission = vi.fn();
 const mockRememberDecision = vi.fn();
+const mockFindActiveBySessionId = vi.fn();
+const mockUpdateConnectionId = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -29,6 +31,8 @@ vi.mock('@bike4mind/database', () => ({
     clearPendingGate: (...args: unknown[]) => mockClearPendingGate(...args),
     approvePendingPermission: (...args: unknown[]) => mockApprovePendingPermission(...args),
     denyPendingPermission: (...args: unknown[]) => mockDenyPendingPermission(...args),
+    findActiveBySessionId: (...args: unknown[]) => mockFindActiveBySessionId(...args),
+    updateConnectionId: (...args: unknown[]) => mockUpdateConnectionId(...args),
   },
   sessionToolApprovalRepository: {
     rememberDecision: (...args: unknown[]) => mockRememberDecision(...args),
@@ -677,5 +681,66 @@ describe('start command credential threading', () => {
 
     const input = vi.mocked(startAgentExecution).mock.calls[0][0];
     expect(input.apiKeyInfo).toBeUndefined();
+  });
+});
+
+describe('reconnect command', () => {
+  const reconnectEvent = (target: { executionId?: string; sessionId?: string }) => ({
+    requestContext: { connectionId: 'conn-1', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({ accessToken: 'jwt', action: 'agent_execute', command: 'reconnect', ...target }),
+  });
+
+  const sentPayloads = () =>
+    mockApiGwSend.mock.calls.map(([cmd]) => JSON.parse((cmd as { input: { Data: Buffer } }).input.Data.toString()));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiGwSend.mockResolvedValue(undefined);
+    vi.mocked(verifyApiKey).mockRejectedValue(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1' } as never);
+  });
+
+  it('echoes the execution sessionId on a found run, so the client never has to correlate', async () => {
+    mockFindActiveBySessionId.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
+
+    expect(sentPayloads()).toEqual([
+      expect.objectContaining({
+        action: 'reconnect_result',
+        found: true,
+        executionId: 'exec-1',
+        sessionId: 'session-1',
+      }),
+    ]);
+  });
+
+  it('echoes the stored sessionId when asked by executionId alone', async () => {
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()[0]).toMatchObject({ found: true, sessionId: 'session-1' });
+  });
+
+  it('sends a bare found:false when no run exists', async () => {
+    mockFindActiveBySessionId.mockResolvedValueOnce(null);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
+
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
+  });
+
+  it("does not disclose another user's run, its id or its session", async () => {
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, userId: 'someone-else', status: 'running' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
+    expect(mockUpdateConnectionId).not.toHaveBeenCalled();
   });
 });

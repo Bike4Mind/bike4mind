@@ -42,7 +42,7 @@ const registerUserSchema = z.object({
       colorDepth: z.number(),
       pixelDepth: z.number(),
       devicePixelRatio: z.number(),
-      ip: z.string().optional().prefault(''),
+      ip: z.string().prefault(''),
       location: z.string().optional(),
     })
     .optional(),
@@ -310,7 +310,7 @@ export const registerUser = async (
     googleDrive: null,
     photoUrl: null,
     lastCreditsPurchasedAt: null,
-    showCreditsUsed: false,
+    showCreditsUsed: true,
     preferredVoice: null,
     preferredReasoningEffort: 'auto',
 

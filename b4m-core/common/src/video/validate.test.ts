@@ -86,6 +86,29 @@ describe('validateAgainstCapabilities', () => {
     });
   });
 
+  it('accepts a generated image key as the image_to_video input', () => {
+    expect(
+      validateAgainstCapabilities({ ...base, mode: 'image_to_video', inputGeneratedImageKey: 'k.png' }, rangeCaps)
+    ).toMatchObject({ ok: true });
+  });
+
+  it('rejects image_to_video with both a file id and a generated key', () => {
+    expect(
+      validateAgainstCapabilities(
+        { ...base, mode: 'image_to_video', inputImageFileId: 'f1', inputGeneratedImageKey: 'k.png' },
+        rangeCaps
+      )
+    ).toMatchObject({ ok: false, code: 'unexpected_input_image' });
+  });
+
+  it('rejects a generated image key on text_to_video', () => {
+    expect(validateAgainstCapabilities({ ...base, inputGeneratedImageKey: 'k.png' }, rangeCaps)).toMatchObject({
+      ok: false,
+      code: 'unexpected_input_image',
+      message: 'inputGeneratedImageKey is only valid for image_to_video',
+    });
+  });
+
   it('rejects an audio toggle when the model does not make audio optional', () => {
     expect(validateAgainstCapabilities({ ...base, audio: false, durationSeconds: 4 }, discreteCaps)).toMatchObject({
       ok: false,

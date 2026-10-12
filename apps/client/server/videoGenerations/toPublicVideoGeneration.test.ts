@@ -58,6 +58,20 @@ const succeeded = (location: 'files' | 'generated') =>
   });
 
 describe('toPublicVideoGeneration', () => {
+  it('never echoes the generated-image key of an agent job', async () => {
+    const key = '86cdc650-43d2-416e-aca6-23ff4fe23081.png';
+    const agentJob = job({
+      source: 'agent',
+      payload: {
+        ...job().payload,
+        request: { ...job().payload.request, mode: 'image_to_video', inputGeneratedImageKey: key },
+      },
+    });
+    const view = await toPublicVideoGeneration(agentJob, { sign: vi.fn(), now: () => new Date() });
+    expect(JSON.stringify(view)).not.toContain(key);
+    expect(VideoGenerationSchema.safeParse(view).success).toBe(true);
+  });
+
   const now = () => new Date('2026-10-06T00:02:00Z');
 
   it('renders an in-flight job without output and validates against the published schema', async () => {

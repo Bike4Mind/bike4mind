@@ -1,4 +1,5 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import {
   citationTagDescription,
   CitableSource,
@@ -18,7 +19,12 @@ import {
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
-import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import {
+  LIBRARY_OFF_NO_LAKE_MESSAGE,
+  admittedAttachmentIds,
+  resolveSessionLakeAccess,
+  sessionExcludesLibrary,
+} from '../../base/resolveSessionLakeAccess';
 import {
   lakeMembershipsFrom,
   warnIfManyLakeMemberships,
@@ -656,11 +662,15 @@ async function trySemanticKbSearch(
     // `includeShared: true` alongside these, so emptying them leaves the caller's own and shared
     // files as the corpus - which is exactly the intent, and keeps their whole library rankable.
     const { dataLakeTags, dataLakeTagPrefixes, lakes, lakeViewComplete } = await resolveSessionLakeAccess(context);
+    // Library off: only lake arms and the chat's own attachments may match. With neither, the
+    // keyword arm reports the empty corpus (an ownership query with zero arms would throw on
+    // restrictToDataLake).
+    const excludesLibrary = await sessionExcludesLibrary(context);
+    const admitFileIds = admittedAttachmentIds(context, excludesLibrary);
     // No accessible data lake - keyword search owns the user's own files. EXCEPT when the lakes
-    // were suppressed deliberately: there the caller does have a corpus worth ranking (their own
-    // files), and falling through to the metadata-only keyword arm would lose content search over
-    // it entirely. Left intact for the genuinely lake-less caller so their behaviour is unchanged.
-    if (dataLakeTags.length === 0 && !context.suppressLakeArms) return NO_SEMANTIC_RESULT;
+    // were suppressed deliberately, or library-off admits attachments: there the caller has a corpus
+    // worth ranking, and the metadata-only keyword arm would lose content search over it.
+    if (dataLakeTags.length === 0 && !context.suppressLakeArms && !admitFileIds.length) return NO_SEMANTIC_RESULT;
 
     const ceiling = resolvePassageCeiling(bounds.rawMaxResults, bounds.defaultResults, budgets.kbResultTokenBudget);
     // Widen the candidate pool when either adaptive knob is on: minScore is re-applied CLIENT-side
@@ -671,6 +681,13 @@ async function trySemanticKbSearch(
     const topK = Math.max(ceiling, adaptive ? KB_SEARCH_MAX_RESULTS : 0, KB_SEARCH_CANDIDATE_FLOOR);
 
     const lakeMemberships = lakeMembershipsFrom(lakes);
+    if (
+      excludesLibrary &&
+      !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&
+      !admitFileIds.length
+    ) {
+      return NO_SEMANTIC_RESULT;
+    }
     warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:semantic');
     const search = await semanticDataLakeSearch(
       {
@@ -688,6 +705,8 @@ async function trySemanticKbSearch(
         // Without this the arm below returns empty for a suppressed session and the turn silently
         // falls to metadata-only keyword search - see ownFilesOnly.
         ownFilesOnly: context.suppressLakeArms === true,
+        restrictToDataLake: excludesLibrary,
+        admitFileIds,
         budgets,
         vectorSearchEnabled,
         // Per-lake supersession collapse - `lakes` is only ever an attribution source here, never a
@@ -811,10 +830,11 @@ async function trySemanticKbSearch(
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
-      // semanticDataLakeSearch's file search is a MIXED corpus (includeShared: true, no
-      // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside
-      // the lake arms), same as the keyword arm below - a hit with no recoverable tag may be the
-      // caller's own private file, so this must NOT fall back to the full scope.
+      // semanticDataLakeSearch's file search can be a MIXED corpus (includeShared: true, and unless
+      // the library is off collectScopedFiles ORs the caller's own/shared files in alongside the
+      // lake arms; even off, attached files are admitted), same as the keyword arm below - a hit
+      // with no recoverable tag may be the caller's own private file, so this must NOT fall back to
+      // the full scope.
       lakeIds: attributeAccessedLakeIds(
         ranked.map(r => r.fileTags),
         lakes,
@@ -1397,6 +1417,25 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Same degraded-read rule as the semantic arm's origin lakes.
             keywordArmOriginLakes = lakeViewComplete === false ? undefined : lakes;
             const lakeMemberships = lakeMembershipsFrom(lakes);
+            const excludesLibrary = await sessionExcludesLibrary(context);
+            const admitFileIds = admittedAttachmentIds(context, excludesLibrary);
+            if (
+              excludesLibrary &&
+              !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&
+              !admitFileIds.length
+            ) {
+              await context.statusUpdate({
+                promptMeta: {
+                  retrieval: {
+                    attempted: true,
+                    outcome: 'no_lakes',
+                    surfaces: ['knowledgeBaseSearch'],
+                    dataLakeTags: [],
+                  },
+                },
+              } as any);
+              return LIBRARY_OFF_NO_LAKE_MESSAGE;
+            }
             warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:keyword-fallback');
             searchResults = await context.db.fabfiles.search(
               context.userId,
@@ -1427,6 +1466,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 dataLakeTags,
                 dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
                 lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
+                restrictToDataLake: excludesLibrary,
+                admitFileIds,
                 excludeContent: true, // Search only needs metadata — content fetched via retrieve tool
                 // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                 ...(context.retrievalFilter ?? {}),

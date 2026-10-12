@@ -15,7 +15,7 @@ import {
   AlignmentType,
 } from 'docx';
 import { DocxColors, DocxFontSizes, DocxSpacing, DocxBorderSizes } from './docxStyles';
-import { getSubQuestStatusIcon, getSubQuestStatusLabel } from './subQuestStatusPresentation';
+import { getSubQuestStatusIcon, getSubQuestStatusLabel } from '@client/shared/subQuestStatusPresentation';
 
 function slugifyGoal(goal: string): string {
   return goal

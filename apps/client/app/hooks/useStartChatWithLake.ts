@@ -98,6 +98,7 @@ export function useStartChatWithLakes() {
           name: 'New Notebook',
           retrievalTags: params.retrievalTags,
           forceKnowledgeRetrieval: true,
+          includeLibraryFiles: false,
           corpusGroundingMode: params.groundingMode,
           ...(params.preauthorizedLakeIds?.length ? { preauthorizedLakeIds: params.preauthorizedLakeIds } : {}),
         },

@@ -70,6 +70,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       // takes createSession's "explicit wins" arm, so it costs no DB read.
       retrievalTags: session.retrievalTags,
       lakeScopeExplicit: session.lakeScopeExplicit,
+      includeLibraryFiles: session.includeLibraryFiles,
       // Carried so a persisted opt-out (`false`) survives the copy: createSession reads an explicit
       // lake scope as forced retrieval, and omitting this would turn that opt-out back ON here.
       // An ABSENT flag is deliberately left to that implication rather than pinned to `false`, so a
@@ -78,6 +79,9 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
       // Create-only (not in SessionUpdateRequestSchema), so a copy that drops them can never get them back.
       citationStyle: session.citationStyle,
+      systemPromptText: session.systemPromptText,
+      temperature: session.temperature,
+      maxToolCalls: session.maxToolCalls,
       corpusGroundingMode: session.corpusGroundingMode,
       retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
       retrievalVectorizedOnly: session.retrievalVectorizedOnly,

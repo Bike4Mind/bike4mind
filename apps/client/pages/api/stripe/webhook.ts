@@ -19,6 +19,7 @@ import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunnin
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
+import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 
@@ -99,35 +100,23 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       } else {
         req.logger.info(`Adding ${intent.metadata.credits} credits to user ${user.id}`);
 
-        // Records the CreditTransaction (idempotent on stripePaymentIntentId),
-        // then atomically $inc's the balance and stamps the pack lot. Replaces a
-        // former read-modify-$set of the whole user doc, which reverted any concurrent
-        // balance write. (The unique stripePaymentIntentId index already blocked
-        // double-crediting on Stripe retries: createTransaction rethrew the E11000 before
-        // the increment. The $inc additionally makes the balance update itself atomic.)
-        await creditService.addCredits(
+        // Ledger row and balance commit together, so an existing row means the credits really
+        // landed and a redelivery can be acknowledged.
+        const outcome = await grantCreditPurchase(
           {
-            type: 'purchase',
-            ownerId: user.id,
-            ownerType: CreditHolderType.User,
-            amount: intent.amount,
+            userId: user.id,
+            paymentIntentId: intent.id,
             credits: Number(intent.metadata.credits),
-            status: CreditPurchaseStatus.Completed,
-            stripePaymentIntentId: intent.id,
+            amount: intent.amount,
             packageId: intent.metadata.packageId,
-            metadata: {
-              environment: intent.metadata.environment,
-              paymentMethod: intent.payment_method_types?.[0],
-            },
+            environment: intent.metadata.environment,
+            paymentMethod: intent.payment_method_types?.[0],
           },
-          {
-            db: {
-              creditTransactions: creditTransactionRepository,
-              creditLots: creditLotRepository,
-            },
-            creditHolderMethods: userRepository,
-          }
+          req.logger
         );
+        if (outcome === 'already_granted') {
+          req.logger.info(`Credits for intent ${intent.id} already granted, acknowledging redelivery`);
+        }
       }
       break;
     }

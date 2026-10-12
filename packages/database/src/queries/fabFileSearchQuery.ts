@@ -6,6 +6,7 @@ import {
   type DataLakeMembershipScope,
   type FabFileTypeFilter,
 } from '@bike4mind/common';
+import { isObjectIdOrHexString } from 'mongoose';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
@@ -166,6 +167,11 @@ export function buildOwnershipConditions(
      */
     restrictToDataLake?: boolean;
     /**
+     * File ids admitted under `restrictToDataLake` alongside the lake arms, each still required to
+     * pass the caller's own/shared/group access: the files attached to a library-off chat.
+     */
+    admitFileIds?: string[];
+    /**
      * One arm per accessible lake's membership scope - the SAME predicate the whole-lake writes
      * use, so any caller of this builder (the single-lake browse, and retrieval) lists/matches
      * exactly what an archive or a permanent delete would act on. Each arm's prefix is anchored
@@ -248,6 +254,12 @@ export function buildOwnershipConditions(
   // In lake-scoped mode, start with NO broad ownership arms - only the lake tag/prefix arms
   // below select files, so a single-lake view can't fall back to "all files the user owns".
   const conditions: object[] = options?.restrictToDataLake ? [] : [...baseAccess];
+
+  // Attached ids come from request bodies; a malformed one would make the whole query throw a CastError.
+  const admitFileIds = options?.admitFileIds?.filter(id => isObjectIdOrHexString(id)) ?? [];
+  if (options?.restrictToDataLake && admitFileIds.length) {
+    conditions.push({ $and: [{ _id: { $in: admitFileIds } }, { $or: baseAccess }] });
+  }
 
   conditions.push(
     ...buildLakeArms({
@@ -365,6 +377,8 @@ export interface FabFileSearchParams {
     lakeMemberships?: DataLakeMembershipScope[];
     /** Single-lake view: return only this lake's files, not all owned files - see buildOwnershipConditions. */
     restrictToDataLake?: boolean;
+    /** See buildOwnershipConditions.admitFileIds. */
+    admitFileIds?: string[];
     /**
      * Treat the restrictToFileIds allow-list as the SOLE authorization: skip the
      * ownership/sharing predicate entirely, so files curated into a server-resolved
@@ -517,6 +531,7 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       dataLakeTags: options.dataLakeTags,
       dataLakeTagPrefixes: options.dataLakeTagPrefixes,
       restrictToDataLake: options.restrictToDataLake,
+      admitFileIds: options.admitFileIds,
       lakeMemberships: options.lakeMemberships,
     });
     andConditions.push({ $or: ownershipConds });

@@ -67,3 +67,40 @@ export const ReleaseNotesConfigSchema = z.object({
   slackChannelId: z.string().optional(),
 });
 export type ReleaseNotesConfig = z.infer<typeof ReleaseNotesConfigSchema>;
+
+/**
+ * Parses the stored `releaseNotesConfig` admin setting, which may arrive as a JSON string. An absent
+ * setting parses to the defaults (disabled). Shared by the workers generator and the client routes.
+ */
+export function parseReleaseNotesConfig(raw: unknown) {
+  let value: unknown = raw ?? {};
+  if (typeof raw === 'string') {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      value = undefined;
+    }
+  }
+  return ReleaseNotesConfigSchema.safeParse(value);
+}
+
+/**
+ * A release note as GET /api/v1/whats-new serves it. An allowlist: provenance (sourcePrs, deployedSha),
+ * workflow state (status, editedAt) and storage fields never reach the public wire.
+ */
+export const PublicReleaseNoteSchema = z.object({
+  id: z.string(),
+  release_tag: z.string(),
+  headline: z.string(),
+  summary: z.string(),
+  // ISO 8601; the instant the note became visible, and the list's sort key.
+  published_at: z.string(),
+  items: z.array(
+    z.object({
+      category: ReleaseNoteCategorySchema,
+      text: z.string(),
+      importance: z.number().int().min(1).max(3),
+    })
+  ),
+});
+export type PublicReleaseNote = z.infer<typeof PublicReleaseNoteSchema>;

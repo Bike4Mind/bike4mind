@@ -1118,6 +1118,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByUserId(userId: string): Promise<IFabFileDocument[]>;
 
+  /** One newest-first page of the user's own live, unarchived files; see FabFileRepository. */
+  listOwnedBeforeId(
+    userId: string,
+    options: { beforeId?: string; limit: number; search?: string }
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
   /**
    * Sum the `fileSize` of every non-deleted file a user owns, via an aggregate
    * so no documents are hydrated. A missing or null `fileSize` counts as 0.
@@ -1260,6 +1266,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[]; // Include files tagged with these datalake: meta-tags
       dataLakeTagPrefixes?: string[]; // OPEN static-registry prefixes (e.g. 'opti:') — ownership-bypass by design
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
+      admitFileIds?: string[]; // With restrictToDataLake: attached files admitted beside the lake arms, still access-checked
       /**
        * One arm per lake's membership scope, matching the whole-lake writes exactly. Server-
        * supplied only: each scope names the creator whose OWNED files its prefix arm matches, so
@@ -1341,8 +1348,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
+      restrictToDataLake?: boolean;
     }
-  ): Promise<{ tag: string; count: number }[]>;
+  ): Promise<{ tag: string; count: number; fileCount: number }[]>;
 
   /**
    * Count unique data-lake FILES (not tag occurrences) under the same scoping as

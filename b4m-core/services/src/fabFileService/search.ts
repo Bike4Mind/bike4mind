@@ -7,6 +7,10 @@ import {
 import { z } from 'zod';
 import { generateSignedUrl, GetFabFileAdapter } from './get';
 
+// `GET /api/files` has no contract, so this schema's request quirks (all-or-nothing nested
+// objects, coerced booleans, the 20-value `[]` limit) are mirrored in the "List Files" section of
+// apps/client/app/components/admin/content/apiReferenceContent.ts - keep both in sync and drop
+// that section once a files contract lands.
 const searchFabFilesSchema = z.object({
   search: z.string().optional(),
   filters: z

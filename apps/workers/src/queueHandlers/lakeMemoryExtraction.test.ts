@@ -17,8 +17,7 @@ const extractMock = vi.fn();
 const sendToQueueMock = vi.fn();
 const setLakeMemoryCursorMock = vi.fn();
 
-// Pass the inner handler straight through so the test drives it directly, skipping connectDB and the
-// warmer-invocation shortcut that the real wrapper performs.
+// Pass the inner handler straight through so the test drives it directly, skipping connectDB.
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (handler: (e: SQSEvent, c: Context, l: unknown) => Promise<unknown>) => (e: SQSEvent, c: Context) =>

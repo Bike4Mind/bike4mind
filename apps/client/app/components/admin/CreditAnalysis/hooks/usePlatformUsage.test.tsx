@@ -19,8 +19,6 @@ const responseFor = (days: number): IPlatformUsageDashboardResponse => ({
   byConsumer: [],
   byModel: [],
   totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
-  endpoints: null,
-  endpointWindowDays: days,
 });
 
 const renderUsageHook = (initialFilters: PlatformUsageFilters) => {

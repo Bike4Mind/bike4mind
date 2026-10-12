@@ -5,7 +5,7 @@ import { pushChatMessage, updateSessionToServer } from '@client/app/utils/sessio
 import { getOrFetchSession } from '@client/app/hooks/data/sessions';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
-import { visibleReplyForExport } from '@client/app/utils/replyUtils';
+import { visibleReplyForExport } from '@client/shared/replyUtils';
 import { toast } from 'sonner';
 import { IFabFileDocument, ISessionDocument, IChatHistoryItem, IAgent } from '@bike4mind/common';
 import React, {
@@ -89,6 +89,12 @@ export interface SessionsProviderProps {
 interface SessionWorkBenchstate {
   workBenchFiles: IFabFileDocument[];
   fabFiles: IFabFileDocument[];
+  /**
+   * True once workBenchFiles holds the session's persisted knowledgeIds. Writers that send
+   * the bucket as a full-replace knowledgeIds list must wait for it - before hydration an
+   * empty bucket would erase every existing pin (see useNotebookContextFiles).
+   */
+  hydrated: boolean;
 }
 
 interface WorkBenchStore {
@@ -105,16 +111,19 @@ interface WorkBenchStore {
     files: IFabFileDocument[] | ((prev: IFabFileDocument[]) => IFabFileDocument[])
   ) => void;
   deleteFabFile: (sessionId: string, fileId: string) => void;
+  setWorkBenchHydrated: (sessionId: string, hydrated: boolean) => void;
   clearAllSessions: () => void;
 
   // Selectors
   getWorkBenchFiles: (sessionId: string) => IFabFileDocument[];
   getFabFiles: (sessionId: string) => IFabFileDocument[];
+  isWorkBenchHydrated: (sessionId: string) => boolean;
 }
 
 const DEFAULT_SESSION_STATE: SessionWorkBenchstate = {
   workBenchFiles: [],
   fabFiles: [],
+  hydrated: false,
 };
 
 export const useWorkBenchStore = create<WorkBenchStore>((set, get) => ({
@@ -183,6 +192,19 @@ export const useWorkBenchStore = create<WorkBenchStore>((set, get) => ({
     });
   },
 
+  setWorkBenchHydrated: (sessionId: string, hydrated: boolean) => {
+    set(state => {
+      const currentState = state.sessionStates[sessionId] || { ...DEFAULT_SESSION_STATE };
+      if (currentState.hydrated === hydrated) return state;
+      return {
+        sessionStates: {
+          ...state.sessionStates,
+          [sessionId]: { ...currentState, hydrated },
+        },
+      };
+    });
+  },
+
   clearAllSessions: () => {
     set({ sessionStates: {} });
   },
@@ -196,6 +218,8 @@ export const useWorkBenchStore = create<WorkBenchStore>((set, get) => ({
     const state = get().sessionStates[sessionId];
     return state?.fabFiles || [];
   },
+
+  isWorkBenchHydrated: (sessionId: string) => get().sessionStates[sessionId]?.hydrated ?? false,
 }));
 
 const EMPTY_FILES: never[] = [];
@@ -215,6 +239,7 @@ export const useWorkBenchActions = () => {
       setWorkBenchFiles: state.setWorkBenchFiles,
       setFabFiles: state.setFabFiles,
       deleteFabFile: state.deleteFabFile,
+      setWorkBenchHydrated: state.setWorkBenchHydrated,
       clearAllSessions: state.clearAllSessions,
     }))
   );
@@ -315,7 +340,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
   const [filesMetaDataVersion, setFilesMetaDataVersion] = useState<number>(0);
 
   const [workBenchAgents, setWorkBenchAgents] = useState<IAgent[]>([]);
-  const { initializeSession, setWorkBenchFiles } = useWorkBenchActions();
+  const { initializeSession, setWorkBenchFiles, setWorkBenchHydrated } = useWorkBenchActions();
 
   // Auto-disable expensive tools when switching notebooks
   const { setLLM, tools, isQuestMasterEnabled } = useLLM(
@@ -574,6 +599,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
       // Clear the previous session's workbench files AND agents BEFORE switching
       if (currentSessionId) {
         setWorkBenchFiles(currentSessionId, []);
+        setWorkBenchHydrated(currentSessionId, false);
       }
 
       setWorkBenchAgents([]);
@@ -605,7 +631,15 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
         });
       }
     },
-    [currentSessionId, currentUserId, queryClient, currentUserLastNotebookId, setWorkBenchFiles, initializeSession]
+    [
+      currentSessionId,
+      currentUserId,
+      queryClient,
+      currentUserLastNotebookId,
+      setWorkBenchFiles,
+      setWorkBenchHydrated,
+      initializeSession,
+    ]
   );
 
   // Whether the context's session copy can be BELIEVED about having no knowledge files: every
@@ -628,7 +662,10 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
         .then(fetched => {
           if (seq !== hydrationSeqRef.current) return;
           setWorkBenchFiles(sessionId, fetched);
+          setWorkBenchHydrated(sessionId, true);
         })
+        // A failed fetch leaves the bucket unhydrated on purpose: adds stay refused rather
+        // than persisting a partial list over the real one.
         .catch(console.error);
     } else if (currentSessionId && knowledgeFieldTrustworthy) {
       // Zero the workbench only when the emptiness is trustworthy (see the flag above): a doc
@@ -636,8 +673,18 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
       // which can adopt the session before the create response does - and zeroing on it wipes
       // files the store legitimately holds (the Data Lake mint writes the opened file there).
       setWorkBenchFiles(currentSessionId, []);
+      // A null currentSession is "not loaded yet", not "no files" - only a loaded doc vouches.
+      if (currentSession?.id === currentSessionId) setWorkBenchHydrated(currentSessionId, true);
     }
-  }, [currentSession?.knowledgeIds, fetchFiles, currentSessionId, setWorkBenchFiles, knowledgeFieldTrustworthy]);
+  }, [
+    currentSession?.knowledgeIds,
+    currentSession?.id,
+    fetchFiles,
+    currentSessionId,
+    setWorkBenchFiles,
+    setWorkBenchHydrated,
+    knowledgeFieldTrustworthy,
+  ]);
 
   // AUTO-DISABLE EXPENSIVE TOOLS: Disable Deep Research and QuestMaster when SWITCHING notebooks (A->B)
   // This prevents accidental expensive operations when users change context

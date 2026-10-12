@@ -1,7 +1,18 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeRepository, fabFileRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
+import {
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  fabFileRepository,
+  orgGitHubLakeConnectionRepository,
+  withTransaction,
+} from '@bike4mind/database';
+import { dataLakeService } from '@bike4mind/services';
+import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
   buildGitHubLakeAuthorizeUrl,
@@ -11,7 +22,8 @@ import {
   toGitHubLakeConnectionResponse,
 } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { verifyOrgAccess, verifyOrgAdminRead } from '@server/utils/orgAccess';
-import { NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { isLakeIngestable } from '@bike4mind/common';
 import { Request } from 'express';
 
 /**
@@ -27,13 +39,52 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
   return conn;
 }
 
+const StartGitHubConnectBody = z.object({ ensureConnectorFed: z.boolean().optional() }).strict();
+
+/**
+ * Switches a curated lake to connector-fed through the same gates and audited service as PUT
+ * /api/data-lakes/:id plus the connect status re-check, so the switch lands in the config history
+ * like any other origin edit. Keep in sync with PUT /api/data-lakes/[id]: a gate added there must be
+ * added here.
+ */
+async function switchLakeToConnectorFed(req: Request, lakeId: string) {
+  const ctx = await toAccessContext(req);
+  const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+  await withTransaction(async () => {
+    const lake = await dataLakeService.assertLakeAccess(lakeId, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
+    dataLakeService.assertLakeWritable(lake);
+    // resolveConnectableLake checked the status outside this transaction, so an archive committing in
+    // between would otherwise flip the lake to connector-fed with an audit row (the later steps refuse).
+    if (!isLakeIngestable(lake.status)) {
+      throw new BadRequestError(`Cannot connect a GitHub repository to a data lake in '${lake.status}' status`);
+    }
+    await dataLakeService.updateDataLake(
+      actor,
+      lake.id,
+      { origin: 'connector-fed' },
+      {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      }
+    );
+  });
+}
+
 /**
  * GET    /api/data-lakes/:id/github-connection -> { connection: IOrgGitHubLakeConnectionResponse | null,
  *        canManage: boolean } (always false for a personal lake: GitHub lakes are org-only, so there is nothing to manage)
  * POST   /api/data-lakes/:id/github-connection -> { authorizeUrl } (starts the connect, see
  *        buildGitHubLakeAuthorizeUrl. The callback page relays GitHub's return to POST
  *        /api/data-lakes/github-callback; the picker then lists .../repositories and binds via
- *        .../complete)
+ *        .../complete). Body `{ ensureConnectorFed: true }` switches a curated lake to connector-fed
+ *        once every start check has passed and the authorize URL is ready to return, so a refused
+ *        start writes nothing and there is no client-side revert to race a concurrent connect.
  * DELETE /api/data-lakes/:id/github-connection -> 202 { success, queued } (disables the connection
  *        and queues the purge of what it ingested, 409 while a sync is live; the row stays, reading
  *        `disconnecting`, until the purge releases it - see requestGitHubLakeDisconnect), or 204
@@ -67,12 +118,23 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
+    // An API key can never finish the connect (no browser to carry the nonce cookie back).
+    if (req.apiKeyInfo) {
+      throw new ForbiddenError('Connecting a GitHub repository requires a signed-in session, not an API key');
+    }
     const { id } = req.query as { id: string };
+    // `|| {}`: a bodyless POST (the plain start) arrives as an empty string, not an object.
+    const { ensureConnectorFed = false } = StartGitHubConnectBody.parse(req.body || {});
     const config = requireGitHubLakeAppConfig(getGitHubLakeAppConfig());
-    const { lakeId } = await resolveConnectableLake(req.user, id);
-    return res.json({
-      authorizeUrl: buildGitHubLakeAuthorizeUrl(res, config, { userId: req.user.id, dataLakeId: lakeId }),
-    });
+    const { lakeId, curated } = await resolveConnectableLake(req.user, id, { allowCurated: ensureConnectorFed });
+    // Mint before the switch: buildGitHubLakeAuthorizeUrl can still throw (a deployment missing APP_URL
+    // or JWT_SECRET), and a start that hands out no URL must leave the lake curated. A refused switch
+    // still replaces this browser's pending-flow nonce, same as any later start.
+    const authorizeUrl = buildGitHubLakeAuthorizeUrl(res, config, { userId: req.user.id, dataLakeId: lakeId });
+    if (curated) {
+      await switchLakeToConnectorFed(req, lakeId);
+    }
+    return res.json({ authorizeUrl });
   })
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);

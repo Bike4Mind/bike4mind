@@ -19,7 +19,9 @@ import {
   fabFileRepository,
   generationJobRepository,
   organizationRepository,
+  questRepository,
   scopedSettingsRepository,
+  sessionRepository,
   usageEventRepository,
   User,
   userRepository,
@@ -27,7 +29,12 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { fabFilesService, modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
-import { createVideoJobHandler, type CreateVideoJobDeps, type VideoJobDeps } from '@bike4mind/services/videoJobs';
+import {
+  callerOwnsGeneratedImage,
+  createVideoJobHandler,
+  type CreateVideoJobDeps,
+  type VideoJobDeps,
+} from '@bike4mind/services/videoJobs';
 import { ClientMessageSender, getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   createVideoProviderRegistry,
@@ -151,8 +158,12 @@ const resolveApiKey: VideoJobDeps['resolveApiKey'] = async (providerId, userId) 
   return usableApiKey(selectProviderKey(providerId, keys));
 };
 
-// Owner-only on purpose: the image becomes provider input, and a shared file is not the requester's to send out.
-export const loadInputImage: VideoJobDeps['loadInputImage'] = async (userId, fileId) => {
+// Owner-only on purpose for both kinds: the image becomes provider input, and a shared image is not the
+// requester's to send out.
+export const loadInputImage: VideoJobDeps['loadInputImage'] = async (userId, ref) =>
+  ref.kind === 'file' ? loadInputFabFile(userId, ref.id) : loadInputGeneratedImage(userId, ref.key);
+
+const loadInputFabFile = async (userId: string, fileId: string) => {
   // The id is caller-supplied; a malformed one would throw a CastError from the query instead of reading as missing.
   if (!isValidObjectId(fileId)) return null;
   const fabFile = await fabFileRepository.findByIdAndUserId(fileId, userId);
@@ -162,6 +173,27 @@ export const loadInputImage: VideoJobDeps['loadInputImage'] = async (userId, fil
   if (!isImageServeable(fabFile)) return null;
   const bytes = await getFilesStorage().download(fabFile.filePath);
   return { bytes, mimeType: fabFile.mimeType };
+};
+
+// Keyed by the extensions GENERATED_IMAGE_KEY_RE admits; callerOwnsGeneratedImage refuses any other key first.
+const GENERATED_IMAGE_MIME_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+};
+
+// Same ownership rule as edit_image (callerOwnsGeneratedImage), and like edit_image no moderation gate
+// here: this trusts that whatever wrote the key into quest.images moderated it (image_generation and
+// edit_image do, before upload).
+const loadInputGeneratedImage = async (userId: string, key: string) => {
+  const lookup = { userId, quests: questRepository, sessions: sessionRepository, logger };
+  if (!(await callerOwnsGeneratedImage(key, lookup))) return null;
+  const mimeType = GENERATED_IMAGE_MIME_TYPES[key.slice(key.lastIndexOf('.') + 1)];
+  if (!mimeType) return null;
+  const bytes = await getGeneratedImageStorage().download(key);
+  return { bytes, mimeType };
 };
 
 export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, bytes, contentType, signal }) => {

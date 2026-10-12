@@ -19,7 +19,7 @@ import {
   ICompletionOptions,
   ICompletionOptionTools,
 } from './backend';
-import { Ollama, Message as OllamaMessage, ModelResponse, Options as OllamaOptions, Tool, ToolCall } from 'ollama';
+import { Ollama, Message as OllamaMessage, Options as OllamaOptions, Tool, ToolCall } from 'ollama';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
@@ -40,6 +40,24 @@ interface NormalizedToolCall {
   /** JSON-stringified arguments. */
   arguments: string;
   id: string;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  modified_at: Date;
+  model: string;
+  size: number;
+  digest: string;
+  details: {
+    parent_model: string;
+    format: string;
+    family: string;
+    families: string[];
+    parameter_size: string;
+    quantization_level: string;
+  };
+  expires_at: Date;
+  size_vram: number;
 }
 
 export class OllamaBackend implements ICompletionBackend {
@@ -875,12 +893,12 @@ export class OllamaBackend implements ICompletionBackend {
     });
   }
 
-  async listModels(): Promise<ModelResponse[]> {
+  async listModels(): Promise<OllamaModelInfo[]> {
     try {
       this._logger.debug('[OllamaBackend] Listing models from Ollama');
       const response = await this._api.list();
       this._logger.debug('[OllamaBackend] Models listed from Ollama:', response.models);
-      return response.models;
+      return response.models; // fails the build if an ollama upgrade stops fitting OllamaModelInfo
     } catch (error: any) {
       this._logger.error('[OllamaBackend] Error listing models from Ollama:', error);
       if (error.message?.includes('ECONNREFUSED') || error.message?.includes('Failed to fetch')) {

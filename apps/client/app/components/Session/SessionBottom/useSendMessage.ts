@@ -79,6 +79,7 @@ import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
+import { shouldBlurComposerAfterSend } from './composerFocus';
 
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
@@ -720,12 +721,15 @@ export function useSendMessage({
       supportsTools: !!currentModelInfo?.supportsTools,
       toolsOverride: options?.toolsOverride,
       skipAutoOffers,
+      deniedTools: currentSession?.disabledTools,
     });
     if (refused) {
       setSubmitting(false);
       options?.onRefused?.();
       return;
     }
+    // Tool-directed send: see LLMCommandArgs.skipRapidReply.
+    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0;
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
     // models: for image models "vision" is irrelevant - image-input capability is handled by
@@ -796,6 +800,7 @@ export function useSendMessage({
           organizationId,
           researchMode,
           skipAutoOffers,
+          skipRapidReply,
           agentMode: effectiveAgentMode,
           deepResearchConfig,
           imageConfig: imageSettings,
@@ -842,6 +847,7 @@ export function useSendMessage({
           organizationId,
           researchMode,
           skipAutoOffers,
+          skipRapidReply,
           deepResearchConfig,
           imageConfig: imageSettings,
           audioConfig: audioSettings,
@@ -1224,10 +1230,11 @@ export function useSendMessage({
 
     clearFiles();
 
-    // Hide keyboard after sending message (mobile)
-    setTimeout(() => {
-      lexicalInputRef.current?.blur();
-    }, 100);
+    if (shouldBlurComposerAfterSend()) {
+      setTimeout(() => {
+        lexicalInputRef.current?.blur();
+      }, 100);
+    }
   };
 
   // Latest-ref so the exported `handleSendClick` below can be permanently

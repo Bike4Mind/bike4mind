@@ -7,6 +7,7 @@ import {
   PRESENCE_PAYLOAD_SCHEMA_NAME,
   PRESENCE_SURFACES,
   presencePayloadSchema,
+  presencePayloadWithDefaults,
   type PresencePayload,
 } from './presence';
 
@@ -53,6 +54,23 @@ describe('presencePayloadSchema', () => {
     const parsed = presencePayloadSchema.safeParse({ surface: 'some-future-gateway', slug: 'amber-otter' });
     expect(parsed.success).toBe(true);
     expect(parsed.data?.surface).toBe('some-future-gateway');
+  });
+});
+
+describe('presencePayloadWithDefaults', () => {
+  // THE contract of the wrapper over the bare shape, and the reason the write
+  // route and the projection share it: a post carrying no payload at all must
+  // still refresh lastSeen rather than being rejected into a skipped write.
+  it('reads a null or undefined payload as an empty object', () => {
+    expect(presencePayloadWithDefaults.parse(null)).toEqual({});
+    expect(presencePayloadWithDefaults.parse(undefined)).toEqual({});
+  });
+
+  // Only nullish means "no payload". A present-but-unreadable value must still
+  // fail, so a malformed body cannot masquerade as a contentless one.
+  it('still rejects a present but unreadable payload', () => {
+    expect(presencePayloadWithDefaults.safeParse(0).success).toBe(false);
+    expect(presencePayloadWithDefaults.safeParse({ activity: 'x' }).success).toBe(false);
   });
 });
 

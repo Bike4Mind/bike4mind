@@ -11,7 +11,7 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryFunction } from './cron';
+import { modelDiscoveryCronEnabled, modelDiscoveryFunction, modelDiscoveryStalenessFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
@@ -97,6 +97,36 @@ if (isMonitoredStage) {
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AgentExecutor',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Ungranted Credit Purchases
+   *
+   * Fires when the daily reconciliation finds a succeeded Stripe credit purchase with no
+   * purchase transaction. The Slack post from the cron is best-effort; this alarm is the
+   * signal that cannot fail quietly. The metric is emitted once a day (0 when clean), so
+   * the period is one day.
+   *
+   * Metric emitted by: apps/workers/src/cron/creditPurchaseReconciliation.ts
+   * Namespace: Lumina5/CreditPurchases / UngrantedPurchases
+   */
+  new aws.cloudwatch.MetricAlarm('ungrantedCreditPurchases', {
+    name: `${$app.name}-${$app.stage}-ungranted-credit-purchases`,
+    alarmDescription: 'Stripe credit purchase succeeded but no credits were granted',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'UngrantedPurchases',
+    namespace: 'Lumina5/CreditPurchases',
+    dimensions: { Stage: $app.stage },
+    period: 86400, // matches the daily cron
+    statistic: 'Maximum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'CreditPurchases',
       Severity: 'High',
     },
   });
@@ -797,6 +827,59 @@ if (isMonitoredStage) {
       Severity: 'High',
     },
   });
+
+  /**
+   * Alarm: Model Discovery no successful run (dead-man's switch)
+   *
+   * An independent check reads the last completed hosted 'ok' run every 15
+   * minutes. Partial runs do not refresh it. An independent schedule is needed
+   * because CloudWatch can reuse older healthy data beyond a missing 24h
+   * window when the watched discovery cron stops.
+   *
+   * Metric emitted by: apps/workers/src/cron/modelDiscoveryStaleness.ts
+   * Namespace: Lumina5/ModelDiscovery / NoSuccessfulRun
+   */
+  if (modelDiscoveryCronEnabled) {
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryNoSuccessfulRun', {
+      name: `${$app.name}-${$app.stage}-model-discovery-no-successful-run`,
+      alarmDescription: 'No completed successful hosted model discovery run in 24h',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'NoSuccessfulRun',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 1800, // Two independent checks per period; any stale check breaches.
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'breaching',
+      dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryStalenessCheckErrors', {
+      name: `${$app.name}-${$app.stage}-model-discovery-staleness-check-errors`,
+      alarmDescription: 'Model discovery staleness check failed; watchdog data may be unavailable',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: {
+        FunctionName: modelDiscoveryStalenessFunction.name,
+      },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: Model Discovery Lambda Errors

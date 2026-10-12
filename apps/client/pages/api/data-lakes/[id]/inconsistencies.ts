@@ -235,7 +235,7 @@ async function enqueueModelDetection(lakeId: string, ctx: AccessContext, res: Re
   // the lake doc and the retry re-reads live grants. The cap and the enqueue are external and run
   // after commit, because the callback re-runs on retry.
   const lake = await withTransaction(async () => {
-    const gated = await dataLakeService.assertLakeWriteAccess(lakeId, ctx, gateDeps);
+    const gated = await dataLakeService.assertLakeWriteAccess(lakeId, ctx, gateDeps, { idOnly: true });
 
     // A lease held means a run is already reading this lake. Only a fast, honest rejection for the
     // human clicking twice - the claim that actually excludes a concurrent run is in the handler,
@@ -307,7 +307,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     // Gated before detection so a stranger never triggers the scan; re-gated inside the transaction
     // below, which is what serializes the writes against a concurrent grant revoke.
-    const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps);
+    const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps, { idOnly: true });
 
     // The year is passed in rather than read inside the detector so the same corpus always produces
     // the same report - a stored result an owner already reviewed has to be comparable to the next.
@@ -344,7 +344,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // the lake doc and the retry re-reads live grants. The `update` below is itself a lake-doc write,
     // so no separate `touchIfStable` is needed. Nothing external runs in the callback (it re-runs on retry).
     const stored = await withTransaction(async () => {
-      await dataLakeService.assertLakeWriteAccess(lake.id, ctx, gateDeps);
+      await dataLakeService.assertLakeWriteAccess(lake.id, ctx, gateDeps, { idOnly: true });
       const { failed } = await dataLakeService.recordLakeFindings(
         lake.id,
         allFindings,

@@ -7,9 +7,23 @@ export enum ApiKeyScope {
   READ_FILES = 'files:read',
   WRITE_FILES = 'files:write',
   AI_GENERATE = 'ai:generate',
+  /**
+   * Only the Decisions API (`POST /api/v1/decisions`, `GET /api/v1/decision-models`): typed questions answered
+   * with probabilities. `ai:generate` also opens these routes. Not confined, so like `me:read` it also passes
+   * scope-less routes; an image sent by `file_id` additionally needs `files:read`.
+   */
+  AI_DECIDE = 'ai:decide',
   AI_CHAT = 'ai:chat',
   READ_PROJECTS = 'projects:read',
   WRITE_PROJECTS = 'projects:write',
+  /** List and read the key owner's agents (and agents shared with them). */
+  READ_AGENTS = 'agents:read',
+  /**
+   * Create, update, delete and fund agents, manage their embed keys, and run the
+   * agent-authoring assistants (description/avatar/system-prompt/field generation),
+   * which spend the owner's credits on the agent's behalf.
+   */
+  WRITE_AGENTS = 'agents:write',
   /** Authorizes only the cc-bridge WS actions (cc_agent_register /
    *  cc_agent_event / cc_agent_disconnect). Keys with this scope CANNOT
    *  call chat/completions - a leaked bridge key has the narrow blast
@@ -372,12 +386,12 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
   /**
-   * Inserts the document then recounts active keys for the same (userId, pool).
-   * Returns the document when the count is within `cap`; revokes the just-inserted
-   * document and returns 'at_cap' when it would exceed `cap`. Deterministic
-   * tie-breaking (oldest `cap` keys survive by createdAt/id sort) prevents the
-   * both-rollback corner case that arises when two concurrent callers both insert
-   * and both naively undo their own key.
+   * Inserts the document, then recounts active keys for the same (userId, pool).
+   * Returns the document when the count is within `cap`; otherwise hard-deletes its
+   * own insert and returns 'at_cap'. Every caller that counts over the cap yields,
+   * because `createdAt` is stamped client-side and so cannot rank concurrent inserts
+   * that commit out of order. The cap is therefore never exceeded, at the cost that
+   * simultaneous creates at `cap - 1` may all be rejected and have to be retried.
    */
   createIfUnderCap: (
     doc: Parameters<IUserApiKeyRepository['create']>[0],

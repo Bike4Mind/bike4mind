@@ -58,6 +58,26 @@ describe('sharingService - refuseWholeInvite', () => {
     expect(db.fabFiles.shareable.findShareAccessById).not.toHaveBeenCalled();
   });
 
+  it('lets a named recipient decline when their stored email differs only in case', async () => {
+    const invite = {
+      id: '65a1f77bcf86cd7994390001',
+      type: InviteType.Project,
+      documentId: 'doc-1',
+      remaining: 1,
+      recipients: { pending: ['me@example.com'], accepted: [], refused: [] },
+    };
+    db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
+
+    await refuseWholeInvite({ ...user, email: 'Me@Example.com' }, { id: invite.id }, { db } as any);
+
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: invite.id,
+      remaining: 0,
+      recipients: { pending: [], accepted: [], refused: ['Me@Example.com'] },
+    });
+    expect(db.projects.shareable.findShareAccessById).not.toHaveBeenCalled();
+  });
+
   it('denies a non-recipient without share authority on the underlying document', async () => {
     db.invites.findById.mockResolvedValue({
       id: '65a1f77bcf86cd7994390001',

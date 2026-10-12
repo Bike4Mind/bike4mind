@@ -46,6 +46,7 @@ import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.gener
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
+import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
 import { accessibleBy } from '@casl/mongoose';
@@ -56,7 +57,7 @@ import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
-import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
@@ -315,15 +316,13 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   if (requestBody.enableSlackTools) {
     externalTools = { ...slackToolDefinitions };
 
-    // Add confirm/cancel tools only when the tools array includes them
-    if (requestBody.tools?.includes('confirm_pending_action')) {
+    // Add the cancel tool only when the tools array includes it
+    if (requestBody.tools?.includes('cancel_pending_action')) {
       const pendingTools = createPendingActionToolDefs({
         sessionId: params.sessionId,
-        executePendingAction,
         cancelPendingAction: cancelPendingActionOnQuest,
         findQuestWithPendingAction: (sessionId: string) =>
           Quest.findOne({ sessionId, pendingAction: { $exists: true } }).sort({ createdAt: -1 }),
-        findUserById: (userId: string) => User.findById(userId),
       });
       Object.assign(externalTools, pendingTools);
     }
@@ -344,6 +343,11 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     logger,
     externalTools,
     videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
+  });
+
+  await recordFirstChatValue({
+    user,
+    loadQuest: () => questRepository.findById(params.questId),
   });
 
   return;

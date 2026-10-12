@@ -296,6 +296,74 @@ describe('sharingService - createInvite (recipient resolution)', () => {
     expect((invite as any).isLinkOnly).toBe(false);
   });
 
+  describe('typedRecipients', () => {
+    it('records an address the inviter typed, matched case-insensitively', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'Friend@Example.com', username: 'friend' }]);
+
+      const invite = await createFabFile(['friend@example.com']);
+
+      expect((invite as any).typedRecipients).toEqual(['friend@example.com']);
+    });
+
+    it('does not record an address resolved from a username', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'friend@example.com', username: 'friend' }]);
+
+      const invite = await createFabFile(['friend']);
+
+      expect((invite as any).recipients.pending).toEqual(['friend@example.com']);
+      expect((invite as any).typedRecipients).toEqual([]);
+    });
+
+    it('does not record an address resolved from a user id', async () => {
+      db.users.findByIds = vi.fn(async () => [{ id: 'user-id-123', email: 'member@x.com', username: 'member' }]);
+
+      const invite = await createProject(['user-id-123']);
+
+      expect((invite as any).recipients.pending).toEqual(['member@x.com']);
+      expect((invite as any).typedRecipients).toEqual([]);
+    });
+
+    it('records only the typed entry when a project invite mixes an id and an address', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'typed@x.com', username: 'typed' }]);
+      db.users.findByIds = vi.fn(async () => [{ id: 'user-id-123', email: 'member@x.com', username: 'member' }]);
+
+      const invite = await createProject(['typed@x.com', 'user-id-123']);
+
+      expect((invite as any).typedRecipients).toEqual(['typed@x.com']);
+    });
+  });
+
+  describe('project invite to an address with no account', () => {
+    it('keeps the typed address, normalized, as a pending recipient', async () => {
+      const invite = await createProject([' New.Person@Example.com ']);
+
+      expect((invite as any).recipients.pending).toEqual(['new.person@example.com']);
+      expect((invite as any).typedRecipients).toEqual(['new.person@example.com']);
+      expect((invite as any).remaining).toBe(1);
+    });
+
+    it('stores the account email once when the typed address does belong to an account', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'Friend@Example.com', username: 'friend' }]);
+
+      const invite = await createProject(['friend@example.com']);
+
+      expect((invite as any).recipients.pending).toEqual(['Friend@Example.com']);
+    });
+
+    it('does not let a self-set username that looks like the address claim the invite', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'impostor@x.com', username: 'victim@x.com' }]);
+
+      const invite = await createProject(['victim@x.com']);
+
+      expect((invite as any).recipients.pending).toEqual(['victim@x.com']);
+    });
+
+    it('still refuses a recipient that is neither a known id nor a valid address', async () => {
+      await expect(createProject(['not-an-email@'])).rejects.toBeInstanceOf(BadRequestError);
+      expect(db.invites.create).not.toHaveBeenCalled();
+    });
+  });
+
   it('throws rather than minting a Project invite whose recipients all fail to resolve', async () => {
     db.users.findAllByEmailsOrUsernames = vi.fn(async () => []);
     db.users.findByIds = vi.fn(async () => []);

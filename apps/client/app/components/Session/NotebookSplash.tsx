@@ -16,10 +16,12 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ISessionDocument } from '@bike4mind/common';
+import { formatGreeting } from './formatGreeting';
 import type { SkyGreetingResponse } from '@client/pages/api/sky-greeting/index';
 import { brandAlpha, gray } from '@client/app/utils/themes/colors';
 import { APP_NAME } from '@client/config/general';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
+import NewUserWelcome from './NewUserWelcome';
 
 // Shake animation for the magic 8-ball logo
 const shakeAnimation = keyframes`
@@ -668,8 +670,7 @@ const NotebookSplash: React.FC = () => {
   }));
 
   const greeting = useMemo(() => {
-    const name = currentUser?.name?.split(' ')[0] || currentUser?.username || 'there';
-    return `${getTimeOfDayGreeting()}, ${name}`;
+    return formatGreeting(getTimeOfDayGreeting(), currentUser?.name, currentUser?.username);
   }, [currentUser]);
 
   // Handle card clicks - pre-fill the input
@@ -847,6 +848,8 @@ const NotebookSplash: React.FC = () => {
           )}
         </Box>
       </Box>
+
+      <NewUserWelcome />
 
       {/* Prompt Cards */}
       {settings.showSplashCards &&

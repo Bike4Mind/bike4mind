@@ -6,7 +6,7 @@ import { adminSettingsRepository, releaseNoteRepository, slackDevWorkspaceReposi
 import { getSettingsByNames } from '@bike4mind/utils';
 import {
   ChatModels,
-  ReleaseNotesConfigSchema,
+  parseReleaseNotesConfig,
   type ReleaseNote,
   ReleaseNotesJobPayloadSchema,
   type ReleaseNotesConfig,
@@ -47,16 +47,7 @@ const isLegacyPayload = (body: unknown): boolean =>
 
 async function loadConfig(logger: Logger): Promise<ReleaseNotesConfig | null> {
   const settings = await getSettingsByNames([SETTING_NAME], { adminSettings: adminSettingsRepository }, { logger });
-  const raw: unknown = settings[SETTING_NAME];
-  let value: unknown = raw ?? {};
-  if (typeof raw === 'string') {
-    try {
-      value = JSON.parse(raw);
-    } catch {
-      value = undefined;
-    }
-  }
-  const parsed = ReleaseNotesConfigSchema.safeParse(value);
+  const parsed = parseReleaseNotesConfig(settings[SETTING_NAME]);
   if (!parsed.success) {
     logger.warn(`[releaseNotes] ${SETTING_NAME} is malformed; treating as disabled`, { issues: parsed.error.issues });
     return null;

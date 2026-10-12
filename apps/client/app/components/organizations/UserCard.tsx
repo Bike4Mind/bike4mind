@@ -98,8 +98,8 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
 
   const handleLeaveOrganization = useCallback(async () => {
     confirm({
-      title: 'Leave Organization',
-      description: 'Are you sure you want to leave this organization?',
+      title: 'Leave Team',
+      description: 'Are you sure you want to leave this team?',
       type: 'danger',
       onOk: async () => {
         await leaveOrganization({ organizationId });
@@ -168,7 +168,9 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
                   cancelInvite({
                     id: organizationId,
                     type: InviteType.Organization,
-                    email: user.email || undefined,
+                    // By id: the pending-users list carries no address for non-admins, and a cancel
+                    // naming nobody would cancel every open invite to the organization.
+                    userId: user.id,
                   }),
               })
             }
@@ -177,7 +179,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           </MenuItem>
         )}
         {!isOwner && canRevoke && <MenuItem onClick={() => handleRemoveMember(user.id)}>Revoke Access</MenuItem>}
-        {!isOwner && canLeave && <MenuItem onClick={handleLeaveOrganization}>Leave Organization</MenuItem>}
+        {!isOwner && canLeave && <MenuItem onClick={handleLeaveOrganization}>Leave Team</MenuItem>}
       </Menu>
     </Dropdown>
   );
@@ -189,12 +191,12 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       title={`Monthly credit limit for ${user.name}`}
       description={
         organization.maxCreditsPerMember == null
-          ? 'Overrides the organization default, which is currently no limit.'
+          ? 'Overrides the team default, which is currently no limit.'
           : `Overrides the organization default of ${formatMemberCredits(organization.maxCreditsPerMember)} credits per month.`
       }
       currentValue={creditUsage?.isOverride ? creditUsage.cap : null}
       allowZero
-      clearLabel="Use organization default"
+      clearLabel="Use team default"
       saving={setOverride.isPending}
       onSave={maxCredits => setOverride.mutateAsync({ organizationId, userId: user.id, maxCredits })}
     />

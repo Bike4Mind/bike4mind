@@ -613,6 +613,36 @@ export interface IUser extends ICreditHolder {
    * Used to enforce a 72-hour cooldown against cancel-and-resubscribe credit farming.
    */
   lastCreditGrantAt?: Date | null;
+
+  /**
+   * Campaign touches the browser carried at signup, written once and only with attribution consent
+   * (apps/client server/analytics/funnel.ts). Absent when there was no consented touch.
+   */
+  acquisition?: IUserAcquisition | null;
+
+  /**
+   * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so
+   * synthetic traffic never reaches conversion metrics.
+   */
+  isSynthetic?: boolean;
+
+  /** When the user first got a completed chat answer; set once, drives the first_value event. */
+  firstValueAt?: Date | null;
+}
+
+export interface IUserAcquisitionTouch {
+  source: string;
+  medium?: string;
+  campaign?: string;
+  content?: string;
+}
+
+export interface IUserAcquisition {
+  firstTouch?: IUserAcquisitionTouch;
+  lastTouch?: IUserAcquisitionTouch;
+  /** How the account was created (`otc`, `google`, `github`, ...). */
+  signupMethod: string;
+  capturedAt: Date;
 }
 
 export interface IOAuthCredentials {
@@ -648,6 +678,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * cannot mistake it for a single-user operation.
    */
   removeGroupsFromAllUsers: (groupIds: string[]) => Promise<void>;
+  /** Null `organizationId` on EVERY user pointing at the org (used when the org is deleted). */
+  clearOrganizationPointer: (organizationId: string) => Promise<void>;
   /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */

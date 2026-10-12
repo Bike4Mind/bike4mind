@@ -7,6 +7,7 @@ import {
   isVideoModelEnabled,
   validateAgainstCapabilities,
   VideoGenerationRequestSchema,
+  videoInputImageRef,
   type IGenerationJob,
   type IGenerationJobDocument,
   type VideoGenerationRequest,
@@ -60,9 +61,10 @@ export async function createVideoJob(
   const validation = validateAgainstCapabilities(request, caps);
   if (!validation.ok) return { ok: false, status: 422, code: validation.code, message: validation.message };
 
-  // Fails fast on someone else's (or a missing) file; the handler loads it again at submit.
-  if (request.mode === 'image_to_video' && request.inputImageFileId) {
-    const image = await deps.loadInputImage(input.user.id, request.inputImageFileId);
+  // Fails fast on someone else's (or a missing) image; the handler loads it again at submit.
+  const inputImage = request.mode === 'image_to_video' ? videoInputImageRef(request) : null;
+  if (inputImage) {
+    const image = await deps.loadInputImage(input.user.id, inputImage);
     if (!image) return { ok: false, status: 404, code: 'input_image_not_found', message: 'Input image not found' };
   }
 

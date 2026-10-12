@@ -35,6 +35,14 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
   if (!connection.enabled) {
     return { label: 'Paused', title: `Syncing ${repo} is paused while the lake is archived`, color: 'neutral' };
   }
+  // Access lost is its own chip: a re-sync cannot fix it until the user restores access on GitHub.
+  if (connection.status === 'access_lost') {
+    return {
+      label: 'Access lost',
+      title: `GitHub repository ${repo}: the App can no longer read it${detail}. Fix access on GitHub, then re-sync.`,
+      color: 'danger',
+    };
+  }
   // 'error' stays re-syncable (claimForSync admits it), so the copy offers a retry before a reconnect.
   if (connection.status === 'error') {
     return {

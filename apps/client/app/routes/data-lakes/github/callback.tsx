@@ -62,6 +62,10 @@ const GitHubLakeCallbackPage = () => {
         toast.error(step.message);
         land(handoff?.dataLakeId, false);
         return;
+      case 'repaired':
+        toast.info('GitHub access updated. Use Re-sync on the lake to resume syncing.');
+        land(undefined, false);
+        return;
       case 'resume':
         if (step.notice) toast.info(step.notice);
         land(step.dataLakeId, true);

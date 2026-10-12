@@ -8,9 +8,9 @@
  * With no arguments every scenario runs; name scenarios to re-record only those (a billed scenario that
  * failed should be re-run alone, not with the rest).
  *
- * Use an "AIza"-format key. As of 2026-10-06, GET and cancel on a background interaction return
- * 400 "Multiple authentication credentials received" for "AQ."-prefixed keys (a provider-side bug; the
- * same key can create interactions and GET synchronous ones), so polling fails after the submit is billed.
+ * "AQ."-prefixed auth keys work. From 2026-10-04 to 2026-10-08 a provider-side bug made GET and cancel on a
+ * background interaction return 400 "Multiple authentication credentials received" for them; the adapter
+ * still retries an unexpected poll 400 rather than failing an already-billed job.
  */
 import { writeFileSync } from 'node:fs';
 import { deflateSync, crc32 } from 'node:zlib';

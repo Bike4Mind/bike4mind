@@ -98,7 +98,7 @@ export function createThinkMarkerEscaper(): ThinkMarkerEscaper {
  * The visible remainder of one reply slot, with hidden reasoning removed.
  *
  * This is the rule the chat transcript renders by - `extractReplies` in
- * apps/client/app/utils/replyUtils.ts calls straight into it, so the two cannot drift.
+ * apps/client/shared/replyUtils.ts calls straight into it, so the two cannot drift.
  * Anything deriving "did the user see something yet" (latency metrics in particular) must
  * use this and not a looser non-empty check: a metric built on a looser rule reports text
  * as seen while the UI is still hiding it.
@@ -175,8 +175,8 @@ export type ReasoningChannel = 'never' | 'opt-in' | 'always';
  *
  * Set by the adapter at the emit site, where the distinction is still known; downstream the
  * frames are indistinguishable strings. Purely additive - adapters emit exactly what they
- * always did, and first-party surfaces that want reasoning or artifact frames keep getting
- * them. Only {@link buildPublicSSEEvent} acts on it.
+ * always did. buildSSEEvent drops reasoning text (none of its callers shows reasoning);
+ * buildPublicSSEEvent also drops tool-artifact text.
  */
 export type StreamChannel =
   /** A thinking/reasoning block, including the marker chunks that bracket it. */

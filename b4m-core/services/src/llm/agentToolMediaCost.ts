@@ -32,7 +32,13 @@ export function estimateGeneratedMediaUsd(toolName: string, data: unknown, model
       const modelInfo = models.find(m => m.id === d.model);
       if (!modelInfo) return 0;
       // Runtime tool args are untyped strings; the calculator narrows by model backend.
-      const input = { model: d.model, size: d.size, quality: d.quality } as CostInput;
+      // Must match ToolBuilder.reserveImageCredits: edit_image bills its one source image.
+      const input = {
+        model: d.model,
+        size: d.size,
+        quality: d.quality,
+        inputImageCount: toolName === 'edit_image' ? 1 : 0,
+      } as CostInput;
       return estimateImageCredits(modelInfo, d.n || 1, input).usdCost;
     }
     case 'music_generation': {

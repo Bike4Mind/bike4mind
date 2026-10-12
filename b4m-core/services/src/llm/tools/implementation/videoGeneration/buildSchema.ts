@@ -57,6 +57,13 @@ export function buildVideoToolSchema(usableModels: readonly [VideoModelId, ...Vi
       .string()
       .optional()
       .describe('Id of an uploaded image file to animate (image-to-video). Omit for text-to-video.'),
+    inputGeneratedImageKey: z
+      .string()
+      .optional()
+      .describe(
+        'Id of an image you generated earlier in this conversation, to animate it (image-to-video). Use the EXACT ' +
+          'id listed under "Recently generated images". Set this or inputImageFileId, never both.'
+      ),
   });
   const description = [
     'Start generating a short video clip. Returns immediately with a job id; the clip renders in the background',

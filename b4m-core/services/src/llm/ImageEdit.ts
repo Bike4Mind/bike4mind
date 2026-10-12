@@ -84,11 +84,10 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
     .number()
     .min(BFL_SAFETY_TOLERANCE.MIN)
     .max(BFL_SAFETY_TOLERANCE.MAX)
-    .optional()
     .prefault(BFL_SAFETY_TOLERANCE.DEFAULT),
-  prompt_upsampling: z.boolean().optional().prefault(false),
+  prompt_upsampling: z.boolean().prefault(false),
   seed: z.number().nullable().optional(),
-  output_format: ImageOutputFormatSchema.nullable().optional().prefault('png'),
+  output_format: ImageOutputFormatSchema.nullable().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
@@ -299,7 +298,7 @@ export class ImageEditService {
   private async validateUserCredits(
     user: IUserDocument,
     model: string,
-    imageParams: Pick<ImageEditBody, 'size' | 'quality'>,
+    imageParams: Pick<ImageEditBody, 'size' | 'quality'> & { inputImageCount?: number },
     logger: Logger,
     organization?: IOrganizationDocument | null
   ) {
@@ -558,7 +557,8 @@ export class ImageEditService {
         const { requiredCredits, usdCost } = await this.validateUserCredits(
           user,
           model,
-          { size, quality },
+          // The primary image plus the de-duped references; the mask is not an input image.
+          { size, quality, inputImageCount: 1 + new Set(referenceImageFabFileIds ?? []).size },
           logger,
           organization
         );

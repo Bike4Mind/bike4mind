@@ -4,8 +4,12 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@server/utils/errors';
 import { MIME_TO_EXTENSION, TRANSCRIBE_UPLOAD_PREFIX } from '@server/utils/transcribeConstants';
+import {
+  assertTranscriptionCredits,
+  estimateTranscriptionCost,
+  MIN_TRANSCRIPTION_USD_PER_MINUTE,
+} from '@server/utils/transcriptionCost';
 import { speechToTextService } from '@bike4mind/services';
-import { userRepository } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
@@ -36,16 +40,17 @@ const handler = baseApi().post(
     }
     // fileSize is validated by the schema for fail-fast UX; the authoritative
     // size check is S3's content-length-range policy condition below.
-    const { mimeType } = parsed.data;
+    const { mimeType, fileSize } = parsed.data;
 
     // Credit precheck so we don't issue an upload URL for users who can't pay.
-    // The transcribe endpoint re-checks credits at consumption time - this is
-    // a fail-fast UX guard, not the authoritative check.
-    const user = await userRepository.findById(userId);
-    if (!user) throw new BadRequestError('User not found');
-    if ((user.currentCredits ?? 0) <= 0) {
-      throw new BadRequestError('Insufficient credits for transcription');
-    }
+    // The transcribe endpoint re-checks credits at consumption time against the
+    // S3-attested size and the resolved backend - this is a fail-fast UX guard
+    // on the client-declared size, priced at the cheapest backend so it never
+    // refuses what that check admits.
+    await assertTranscriptionCredits(
+      userId,
+      estimateTranscriptionCost(fileSize, MIN_TRANSCRIPTION_USD_PER_MINUTE).credits
+    );
 
     const fileKey = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/${uuidv4()}.${MIME_TO_EXTENSION[mimeType]}`;
 

@@ -19,9 +19,8 @@ export function useSessionReconnectProbe(sessionId: string | null | undefined): 
   // The probe effect depends ONLY on `sessionId`. `reconnect` is read
   // through a ref because the dispatcher is memoised over `sendJsonMessage`,
   // which churns whenever the access token refreshes - putting `reconnect`
-  // in the deps would re-probe on each refresh, each call enqueueing another
-  // `pendingReconnects` entry and scrambling the FIFO matching with
-  // `reconnect_result` events. The sync effect keeps the ref current
+  // in the deps would re-probe (a server round-trip plus a full snapshot
+  // rebuild) on every refresh. The sync effect keeps the ref current
   // without writing during render.
   const reconnectRef = useRef(reconnect);
   useEffect(() => {

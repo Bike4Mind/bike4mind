@@ -28,9 +28,13 @@ export async function loadFindingForLake(
   assertDataLakeWriteScope(req);
   const { ctx } = params;
 
-  const lake = await dataLakeService.assertLakeWriteAccess(params.lakeId, ctx, {
-    db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-  });
+  // By id only: a slug skips a deleted lake and would rule on the next lake sharing it.
+  const lake = await dataLakeService.assertLakeWriteAccess(
+    params.lakeId,
+    ctx,
+    { db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository } },
+    { idOnly: true }
+  );
 
   const finding = await dataLakeFindingRepository.findById(params.findingId);
   if (!finding || finding.lakeId !== lake.id) throw new NotFoundError('Finding not found');

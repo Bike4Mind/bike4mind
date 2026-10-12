@@ -8,7 +8,7 @@ import Typography from '@mui/joy/Typography';
 import { APP_NAME } from '@client/config/general';
 import { loadMetaPixel } from '@client/app/utils/metaPixel';
 import { loadRedditPixel } from '@client/app/utils/redditPixel';
-import { CONSENT_KEY, resolveConsent } from '@client/app/utils/consentRegion';
+import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app/utils/consentRegion';
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
 
 type Consent = 'granted' | 'denied';
@@ -35,10 +35,17 @@ function recordPageOnGrant() {
   gtag('event', 'page_view');
 }
 
-/** Point the trackers at a consent state. Deliberately does not persist it, so an
- * auto-allow is re-derived each load rather than freezing the answer for someone
- * who travels. */
+/** Point the trackers at a consent state. Deliberately does not persist it as a DECISION, so
+ * an auto-allow is re-derived each load rather than freezing the answer for someone who
+ * travels. The cookie published below is not that: it caches the resolution this load reached
+ * so the server can read it, is rewritten every load, and is cleared when the resolution goes
+ * back to 'unset' - see publishResolvedConsent. */
 function activateConsent(value: Consent) {
+  // Before the trackers, so a handler that beats them still sees the right answer. The server
+  // cannot read localStorage, and an OAuth signup is credited by a request, not by this page.
+  // This is also what carries a later withdrawal (Cookie settings -> Decline) to the server.
+  publishResolvedConsent(value);
+
   if (typeof gtag !== 'undefined') {
     gtag('consent', 'update', { analytics_storage: value });
     if (value === 'granted') recordPageOnGrant();
@@ -77,6 +84,10 @@ export function CookieConsentBanner() {
   useEffect(() => {
     const consent = resolveConsent();
     if (consent === 'unset') {
+      // No decision anywhere: withdraw any cookie a previous load published, so a visitor who
+      // carried an auto-allow into the opt-in region is suppressed server-side while they are
+      // being asked here, rather than attributed off a resolution that no longer holds.
+      publishResolvedConsent('unset');
       setAsking(true);
       return;
     }

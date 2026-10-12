@@ -30,7 +30,7 @@ import {
 } from '@bike4mind/database';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
-import { createCompletionContract } from '@bike4mind/common';
+import { createCompletionContract, resolveRequestClient } from '@bike4mind/common';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@server/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
@@ -172,7 +172,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           });
         } else {
           logger.info('[CLI_LLM] Authenticated via JWT', { userId });
-          await checkRateLimit(userId, source, { client: headers['user-agent'] ?? headers['x-b4m-client'] });
+          await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
         }
       } catch (rateLimitError) {
         write(

@@ -62,6 +62,7 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { orgIdOfAccount } from '@client/app/components/datalake/lakeSourceShared';
 
 /**
  * The server's own refusal text, if it sent one. The body key is `error`, per
@@ -102,7 +103,7 @@ function isPermissionRejection(error: unknown): boolean {
  */
 export function activeOrgId(): string | undefined {
   const { selectedAccount } = useSelectedAccount.getState();
-  return selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+  return orgIdOfAccount(selectedAccount);
 }
 
 // ── Lake catalog & lifecycle ────────────────────────────────────────────────
@@ -661,7 +662,7 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
 
 /**
  * Updates an existing data lake configuration. `notifySuccess: false` drops the success toast for a
- * write the user did not ask for directly (e.g. GitHubConnectAction undoing its own origin switch).
+ * write whose caller raises its own (e.g. DataLakeSettingsModal's follow-up write).
  */
 export function useUpdateDataLake({ notifySuccess = true }: { notifySuccess?: boolean } = {}) {
   const queryClient = useQueryClient();
@@ -2103,6 +2104,7 @@ export function useAddFilesToLake() {
 
 export interface DataLakeArticlesParams {
   id?: string;
+  lakeId?: string[];
   tags?: string[];
   search?: string;
   page?: number;
@@ -2113,15 +2115,18 @@ export interface DataLakeArticlesParams {
 
 /** Response shape for the tag-counts endpoint. */
 export interface DataLakeTagCountsResponse {
-  /** Tag-occurrence sums that drive the Data Lake Explorer's tag tree. */
-  tagCounts: { tag: string; count: number }[];
+  /**
+   * One row per tag-tree path (ancestors included) driving the Data Lake Explorer's tag tree:
+   * `count` is files tagged with exactly `tag`, `fileCount` distinct files at or under it. See
+   * countDataLakeTagsByPrefix.
+   */
+  tagCounts: { tag: string; count: number; fileCount: number }[];
   /** Distinct-file counts: combined total + per-prefix breakdown (keyed by lake tag prefix, e.g. 'opti:'). */
   uniqueArticleCounts: { total: number; byPrefix: Record<string, number> };
   /**
    * Distinct live files per lake, keyed by `datalakeTag`. This is the number to show for a
    * LAKE: it counts membership, so it stays truthful for files that carry no taxonomy tag and
-   * counts a multi-tagged file once. The prefix/occurrence counts above still drive the tag
-   * tree's branches.
+   * counts a multi-tagged file once. `tagCounts` above still drives the tag tree's branches.
    */
   lakeFileCounts: Record<string, number>;
   /**
@@ -2171,6 +2176,33 @@ export function useGetDataLakeTagCounts(source: DataLakeBrowseSource = 'opti') {
       const response = await api.get<DataLakeTagCountsResponse>(`${browseBase(source)}/tag-counts`);
       return response.data;
     },
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 5,
+  });
+}
+
+/** Response shape for the tag-counts endpoint when scoped to selected lakes (`?lakeId=`). */
+export interface DataLakeScopedTagCountsResponse {
+  tagCounts: { tag: string; count: number; fileCount: number }[];
+}
+
+/**
+ * Tag-tree counts for the selected lakes only, counted server-side over their membership. The
+ * unscoped payload is merged by prefix, and two creators' lakes may share a prefix, so it cannot
+ * be narrowed to one lake on the client. Disabled for an empty selection.
+ */
+export function useGetScopedDataLakeTagCounts(source: DataLakeBrowseSource, lakeIds: readonly string[]) {
+  return useQuery({
+    queryKey: dataLakeKeys.tagCountsScoped(source, lakeIds),
+    queryFn: async () => {
+      const search = new URLSearchParams();
+      for (const id of lakeIds) search.append('lakeId', id);
+      const response = await api.get<DataLakeScopedTagCountsResponse>(
+        `${browseBase(source)}/tag-counts?${search.toString()}`
+      );
+      return response.data;
+    },
+    enabled: lakeIds.length > 0,
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
   });

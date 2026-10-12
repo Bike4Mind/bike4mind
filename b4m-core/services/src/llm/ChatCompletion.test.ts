@@ -624,7 +624,8 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       const call = (service as any).buildOptimizedFeatures.mock.calls[0];
-      expect(call[call.length - 1]).toEqual(['datalake:x']);
+      // Reader-consent tags sit just before the trailing includeLibraryFiles argument.
+      expect(call[call.length - 2]).toEqual(['datalake:x']);
     });
 
     it('forced-retrieval door: withholds retrievalTags when the acting user is not the session owner', async () => {
@@ -635,7 +636,8 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       const call = (service as any).buildOptimizedFeatures.mock.calls[0];
-      expect(call[call.length - 1]).toBeUndefined();
+      // Reader-consent tags sit just before the trailing includeLibraryFiles argument.
+      expect(call[call.length - 2]).toBeUndefined();
     });
 
     it('tool door: forwards sessionReaderConsentDatalakeTags only when the acting user owns the session', async () => {
@@ -678,6 +680,78 @@ describe('ChatCompletionProcess', () => {
 
       expect(capturedDeps.sessionReaderConsentDatalakeTags).toBeUndefined();
       buildMcpToolsSpy.mockRestore();
+    });
+  });
+
+  // The library-off flag and the attached-file allow-list must reach BOTH doors from a real turn;
+  // the feature/tool unit tests construct their own arguments and would stay green without these.
+  describe('library-off plumbing at both doors', () => {
+    const captureToolDeps = () => {
+      const originalBuildMcpTools = ToolBuilder.prototype.buildMcpTools;
+      const captured: { deps?: any } = {};
+      const spy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockImplementation(function (this: any, args: any) {
+        captured.deps = this.deps;
+        return originalBuildMcpTools.call(this, args);
+      });
+      return { captured, restore: () => spy.mockRestore() };
+    };
+
+    it('forced-retrieval door: passes the resolved library flag as the trailing argument', async () => {
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = true;
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBe(false);
+    });
+
+    it('forced-retrieval door: Data Lakes off resolves a stored false to true', async () => {
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = false;
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBe(true);
+    });
+
+    it('tool door: forwards sessionIncludeLibraryFiles and the session attachments as attachedFileIds', async () => {
+      const { captured, restore } = captureToolDeps();
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = true;
+      mockSession.knowledgeIds = ['k1'];
+      const body = { ...wireMinimalTurn(), fabFileIds: ['f1'], messageFileIds: ['m1'] };
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        expect(captured.deps.sessionIncludeLibraryFiles).toBe(false);
+        expect([...captured.deps.attachedFileIds].sort()).toEqual(['f1', 'k1', 'm1']);
+      } finally {
+        restore();
+      }
+    });
+
+    it('tool door: Data Lakes off resolves a stored false to true', async () => {
+      const { captured, restore } = captureToolDeps();
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = false;
+      const body = wireMinimalTurn();
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        expect(captured.deps.sessionIncludeLibraryFiles).toBe(true);
+      } finally {
+        restore();
+      }
     });
   });
 
@@ -1830,6 +1904,63 @@ describe('ChatCompletionProcess', () => {
         await runTurn();
 
         expect(mockQuest.replies.at(-1)).toBe(`\n\n${TRUNCATED_ANSWER_NOTICE}`);
+      });
+
+      describe('turn ended by a tool flagged endsTurnAfterText', () => {
+        const navTool = (endsTurnAfterText: boolean) => ({
+          toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} },
+          endsTurnAfterText,
+        });
+
+        // The adapter streams the answer, runs the tool, and ends the turn on 'tool_use'.
+        async function answerThenNavigate(cb: Emit) {
+          const toolsUsed: Array<Record<string, unknown>> = [];
+          await cb(['Here is the answer.'], { toolsUsed });
+          toolsUsed.push({ name: 'navigate_view', arguments: '{}', id: 't1' });
+          await cb([], { toolsUsed, stopReason: 'tool_use' });
+        }
+
+        afterEach(() => vi.restoreAllMocks());
+
+        it('adds no notice when every tool of the last round is flagged', async () => {
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([navTool(true)] as any); // any: minimal tool shape
+          setupTurn(answerThenNavigate);
+
+          await runTurn();
+
+          expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+          expect(mockQuest.replies.join('')).toContain('Here is the answer.');
+        });
+
+        it('still adds the notice when the tool is not flagged', async () => {
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([navTool(false)] as any); // any: minimal tool shape
+          setupTurn(answerThenNavigate);
+
+          await runTurn();
+
+          expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+        });
+
+        // Accepted residual: an OpenAI-family mixed round reports a native per-round
+        // 'tool_use' and the adapter recurses; if the follow-up reports no stop reason, the
+        // sticky 'tool_use' plus a flagged last tool suppresses the notice on an empty answer.
+        it('adds no notice when a mixed round leaves a stale tool_use and the follow-up is empty', async () => {
+          const searchTool = { toolSchema: { name: 'web_search', description: 'search', parameters: {} } };
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([searchTool, navTool(true)] as any); // any: minimal tool shape
+          setupTurn(async cb => {
+            const toolsUsed: Array<Record<string, unknown>> = [];
+            await cb(['Let me look that up.'], { toolsUsed });
+            toolsUsed.push({ name: 'web_search', arguments: '{}', id: 't1' });
+            toolsUsed.push({ name: 'navigate_view', arguments: '{}', id: 't2' });
+            await cb([], { toolsUsed, stopReason: 'tool_use' });
+            await cb(['\n\n'], { toolsUsed });
+            await cb([], { toolsUsed });
+          });
+
+          await runTurn();
+
+          expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+        });
       });
 
       it('adds no notice to a plain answer with no tool calls', async () => {

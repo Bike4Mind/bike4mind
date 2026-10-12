@@ -27,7 +27,7 @@ type PurgeableConnectionFile = Parameters<typeof dataLakeService.purgeDataLakeCo
  * purgeDataLakeConnectionFiles. A connection-scoped subset of the lake, not the lake itself: a
  * sibling connection's files and any manually-uploaded file in the same lake are untouched.
  *
- * Used by GitHub's disconnect and revoke doors (the DELETE route and queueHandlers/githubLakeRevoke.ts);
+ * Used by GitHub's disconnect and revoke doors (the DELETE route and apps/workers/src/queueHandlers/githubLakeRevoke.ts);
  * Drive's purge runs in slices in queueHandlers/driveDisconnectPurge.ts. Unsliced by default; with
  * `sliceSize` it sweeps at most that many files (the finder is handed `sliceSize + 1` as its limit)
  * and reports whether any remain, so a queue consumer can re-enqueue for the rest.

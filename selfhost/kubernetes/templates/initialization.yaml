@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-buckets-{{ include "b4m.initRevision" . }}
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: initialize}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      restartPolicy: Never
+      containers:
+        - name: initialize
+          image: {{ required "images.mc is required" .Values.images.mc | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: [/bin/sh, /scripts/buckets.sh]
+          {{ include "b4m.env" . | nindent 10 }}
+            - name: INITIALIZATION_REVISION
+              value: {{ include "b4m.initRevision" . | quote }}
+            - name: LOCAL_OBJECTSTORE_ENDPOINT
+              value: http://{{ .Release.Name }}-minio:9000
+          resources: {{ .Values.resources.backing | toJson }}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ .Release.Name }}-scripts

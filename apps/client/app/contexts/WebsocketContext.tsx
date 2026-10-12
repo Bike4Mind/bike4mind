@@ -1,6 +1,6 @@
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { ReadyState, useBaseWebsocket } from 'react-use-websocket';
 import { HeartbeatAction, IMessageDataToClient, IMessageDataToServer } from '@bike4mind/common';
 import { create } from 'zustand';
@@ -8,8 +8,24 @@ import { useShallow } from 'zustand/react/shallow';
 import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 import { probeIdentity } from '@client/app/utils/sessionBootstrap';
 import { WEBSOCKET_TICKET_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
+import {
+  ALREADY_FINISHED,
+  isWsChunkEnvelope,
+  WS_CHUNK_TTL_MS,
+  WsChunkReassembler,
+} from '@client/app/utils/wsChunkReassembler';
 
 export { ReadyState };
+
+// Frames that never arrived (socket down, or a chunked push lost part-way) leave cached lists
+// stale, so refetch the quest lists on screen (active queries only).
+const refetchAfterLostFrames = (queryClient: QueryClient) =>
+  void queryClient.invalidateQueries({ queryKey: ['quests', 'session'] });
+
+const reportLostChunkedMessage = (queryClient: QueryClient, reason: string) => {
+  console.warn('[WebSocket] Lost a chunked message:', reason);
+  refetchAfterLostFrames(queryClient);
+};
 
 /**
  * Validates that a WebSocket URL is usable for connection.
@@ -117,6 +133,22 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   const lastMessageAtRef = useRef(0);
   const probeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastProbeAtRef = useRef(0);
+  // Parts of a fanout-chunked push only ever arrive on one connection, so every open/close clears it.
+  const chunkReassemblerRef = useRef<WsChunkReassembler | null>(null);
+  chunkReassemblerRef.current ??= new WsChunkReassembler({
+    onDiscard: reason => reportLostChunkedMessage(queryClient, reason),
+  });
+  // TTL eviction otherwise only runs when another chunk frame arrives, which may never happen
+  // after a push whose remaining parts were lost.
+  const chunkSweepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armChunkSweep = () => {
+    if (chunkSweepTimerRef.current) return;
+    chunkSweepTimerRef.current = setTimeout(() => {
+      chunkSweepTimerRef.current = null;
+      chunkReassemblerRef.current?.sweep();
+      if (chunkReassemblerRef.current?.pendingCount) armChunkSweep();
+    }, WS_CHUNK_TTL_MS);
+  };
 
   // Map the action being listened for to the callbacks that want to hear about it
   const listeners = useRef(new Map<string, ((message: IMessageDataToClient) => Promise<void>)[]>());
@@ -173,11 +205,13 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       console.log('ws connected');
       openedThisAttemptRef.current = true;
       reconnectExhaustedRef.current = false;
+      chunkReassemblerRef.current?.clear();
     },
     onClose(event: CloseEvent) {
       console.log('ws disconnected', event.code, event.reason);
       const openedThisAttempt = openedThisAttemptRef.current;
       openedThisAttemptRef.current = false;
+      chunkReassemblerRef.current?.clear();
 
       if (
         shouldProbeOnFailedWsConnect({
@@ -234,7 +268,17 @@ export const WebsocketProvider = ({ children, url }: Props) => {
         }
 
         // Distribute everything else
-        const data = JSON.parse(rawData);
+        let data = JSON.parse(rawData);
+
+        if (isWsChunkEnvelope(data)) {
+          const result = chunkReassemblerRef.current?.accept(data);
+          if (result?.kind === 'pending') armChunkSweep();
+          if (result?.kind === 'dropped' && result.reason !== ALREADY_FINISHED) {
+            reportLostChunkedMessage(queryClient, result.reason);
+          }
+          if (result?.kind !== 'complete') return;
+          data = JSON.parse(result.payload);
+        }
 
         // support subscribers
         const actionListeners = listeners.current.get(data.action);
@@ -275,6 +319,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   useEffect(() => {
     return () => {
       didUnmount.current = true;
+      if (chunkSweepTimerRef.current) clearTimeout(chunkSweepTimerRef.current);
     };
   }, []);
 
@@ -367,7 +412,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   }, [probeLiveness]);
 
   // Catch-up after a reconnect: frames sent while the socket was down are gone for good, so
-  // refetch the quest lists on screen once (active queries only). An incomplete turn then
+  // refetch once (see refetchAfterLostFrames). An incomplete turn then
   // resolves from the refreshed cache via useStreamingMessageMerge, which works even for a new
   // notebook's first turn. Skipped for the first connect, which has nothing to catch up.
   const hasOpenedRef = useRef(false);
@@ -375,7 +420,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   useEffect(() => {
     const isOpen = readyState === ReadyState.OPEN;
     if (isOpen && !wasOpenRef.current && hasOpenedRef.current) {
-      void queryClient.invalidateQueries({ queryKey: ['quests', 'session'] });
+      refetchAfterLostFrames(queryClient);
     }
     if (isOpen) hasOpenedRef.current = true;
     wasOpenRef.current = isOpen;

@@ -37,6 +37,32 @@ export function decodeCursor(cursor: string, scope: string): string {
   return payload.data.after;
 }
 
+const OBJECT_ID = /^[0-9a-f]{24}$/;
+
+/** Position in a list ordered by (timestamp, ObjectId) descending, where timestamps can tie. */
+export type TimeIdKeyset = { at: Date; id: string };
+
+export function encodeTimeIdCursor(scope: string, { at, id }: TimeIdKeyset): string {
+  return encodeCursor(scope, `${at.toISOString()}|${id}`);
+}
+
+/** Throws a 422 unless the cursor carries a canonical ISO timestamp and a 24-hex ObjectId. */
+export function decodeTimeIdCursor(cursor: string, scope: string): TimeIdKeyset {
+  const after = decodeCursor(cursor, scope);
+  const [iso, id, ...rest] = after.split('|');
+  const at = new Date(iso);
+  if (
+    rest.length > 0 ||
+    id === undefined ||
+    !OBJECT_ID.test(id) ||
+    Number.isNaN(at.getTime()) ||
+    at.toISOString() !== iso
+  ) {
+    throw new UnprocessableEntityError('Invalid cursor');
+  }
+  return { at, id };
+}
+
 export type CursorPage<T> = { items: T[]; nextCursor: string | null };
 
 /** One page of `items`, ordered by `id`, starting after the id carried by `cursor`. */

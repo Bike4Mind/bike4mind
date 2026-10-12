@@ -4,9 +4,13 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@server/utils/errors';
 import { TRANSCRIBE_UPLOAD_PREFIX } from '@server/utils/transcribeConstants';
+import {
+  assertTranscriptionCredits,
+  estimateTranscriptionCost,
+  transcriptionUsdPerMinute,
+} from '@server/utils/transcriptionCost';
 import { speechToTextService, creditService } from '@bike4mind/services';
 import { Resource } from 'sst';
-import { usdToCredits } from '@bike4mind/utils';
 import { type ILogger } from '@bike4mind/observability';
 import { CreditHolderType } from '@bike4mind/common';
 import { userRepository, creditTransactionRepository, usageEventRepository } from '@bike4mind/database';
@@ -15,16 +19,6 @@ import { z } from 'zod';
 const TranscribeRequestSchema = z.object({
   fileKey: z.string().min(1),
 });
-
-// File size is used as a proxy for duration since the actual duration is not
-// available pre-transcription. PCM baseline (16-bit 16kHz mono) is multiplied
-// by COMPRESSION_FACTOR as a conservative factor to account for compressed
-// formats (MP3, OGG, WebM) that can be 10-20x smaller than PCM for the same
-// duration. This intentionally over-charges slightly to avoid free usage.
-const COMPRESSION_FACTOR = 5;
-const PCM_BYTES_PER_MINUTE = 16000 * 2 * 60;
-const AWS_USD_PER_MINUTE = 0.024;
-const OPENAI_USD_PER_MINUTE = 0.006;
 
 const s3Client = new S3Client();
 const bucketName = Resource.appFilesBucket.name;
@@ -76,11 +70,8 @@ const handler = baseApi().post(
         throw new BadRequestError('Speech model not configured. Please configure a speech model in admin settings.');
       }
 
-      const user = await userRepository.findById(userId);
-      if (!user) throw new BadRequestError('User not found');
-      if ((user.currentCredits ?? 0) <= 0) {
-        throw new BadRequestError('Insufficient credits for transcription');
-      }
+      const cost = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(speechModelInfo.backend));
+      await assertTranscriptionCredits(userId, cost.credits);
 
       const apiKey = await getEffectiveApiKeyByBackend(userId || 'system', speechModelInfo.backend);
       if (!apiKey && speechModelInfo.backend !== 'aws') {
@@ -123,10 +114,10 @@ interface DeductArgs {
 }
 
 async function deductTranscriptionCredits({ userId, backend, contentLength, logger }: DeductArgs): Promise<void> {
-  const durationMinutes = (contentLength * COMPRESSION_FACTOR) / PCM_BYTES_PER_MINUTE;
-  const usdPerMinute = backend === 'aws' ? AWS_USD_PER_MINUTE : OPENAI_USD_PER_MINUTE;
-  const costUsd = durationMinutes * usdPerMinute;
-  const credits = usdToCredits(costUsd);
+  const { durationMinutes, costUsd, credits } = estimateTranscriptionCost(
+    contentLength,
+    transcriptionUsdPerMinute(backend)
+  );
   if (credits <= 0) return;
 
   const sessionId = `transcribe-${userId}-${Date.now()}`;

@@ -169,7 +169,7 @@ describe('UserApiKeyRepository.createIfUnderCap', () => {
     await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(3);
   });
 
-  it('keeps exactly cap keys when two concurrent inserts race at cap - 1', async () => {
+  it('never exceeds cap when two concurrent inserts race at cap - 1', async () => {
     const cap = 3;
     // Seed cap - 1 active keys so both concurrent calls see room and both insert.
     for (let i = 0; i < cap - 1; i++) {
@@ -196,9 +196,48 @@ describe('UserApiKeyRepository.createIfUnderCap', () => {
       userApiKeyRepository.createIfUnderCap(docA, cap, 'standard'),
       userApiKeyRepository.createIfUnderCap(docB, cap, 'standard'),
     ]);
-    // Exactly one must succeed and one must be at_cap, landing at exactly cap active keys.
+    // At most one can succeed; if both inserts land before either counts, both yield.
     const atCapCount = [resultA, resultB].filter(r => r === 'at_cap').length;
-    expect(atCapCount).toBe(1);
+    expect(atCapCount).toBeGreaterThanOrEqual(1);
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(cap - atCapCount + 1);
+  });
+
+  it('rejects an older-stamped key that commits after a newer one already took the last slot', async () => {
+    const cap = 3;
+    for (let i = 0; i < cap - 1; i++) {
+      await createKey({ userId, expiresAt: future() });
+    }
+    // A is stamped first but commits second (separate pooled connections reorder commits).
+    const stampedA = new Date(Date.now() - 1000);
+    const resultB = await userApiKeyRepository.createIfUnderCap(
+      {
+        userId,
+        name: 'b',
+        keyHash: 'hb',
+        keyPrefix: 'b4m_live_cicuB002',
+        scopes: [ApiKeyScope.AI_GENERATE],
+        metadata: { createdFrom: 'dashboard' as const },
+      },
+      cap,
+      'standard'
+    );
+    expect(resultB).not.toBe('at_cap');
+    // createdAt is absent from the create param type but has to be stamped before the
+    // insert, so the cast is narrowed to the spread and the literal stays type-checked.
+    const docA: Parameters<typeof userApiKeyRepository.createIfUnderCap>[0] = {
+      userId,
+      name: 'a',
+      keyHash: 'ha',
+      keyPrefix: 'b4m_live_cicuA002',
+      scopes: [ApiKeyScope.AI_GENERATE],
+      metadata: { createdFrom: 'dashboard' as const },
+    };
+    const resultA = await userApiKeyRepository.createIfUnderCap(
+      { ...docA, createdAt: stampedA } as typeof docA,
+      cap,
+      'standard'
+    );
+    expect(resultA).toBe('at_cap');
     await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(cap);
   });
 

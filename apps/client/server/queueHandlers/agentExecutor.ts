@@ -57,7 +57,7 @@ import {
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
-import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel } from '@bike4mind/common';
+import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel, libraryFlagForScope } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import {
   getLlmByModel,
@@ -97,7 +97,7 @@ import {
 } from '@bike4mind/services/llm';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd, sessionService } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
-import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
+import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -130,7 +130,7 @@ import {
   makeDagDispatcher,
   onDagNodeTerminal,
 } from './agentExecutorDag';
-import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
+import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services/llm';
 import type { ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
@@ -153,7 +153,7 @@ import {
   DELEGATION_TOOLS,
   runHasAttachments,
 } from './agentExecutor.sessionToolPolicy';
-import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
+import { toUserFacingFailureMessage } from '@server/utils/agentFailureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
 // spend fold, #630) lives in its own side-effect-free module so the guard and the
@@ -170,6 +170,11 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
+import {
+  attachVideoJobsToRunQuest,
+  buildAgentVideoToolConfig,
+  getAgentVideoToolConfigDeps,
+} from './agentExecutor.videoToolConfig';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -705,6 +710,24 @@ export function buildInProcessCreditCapCheck(
 const AGENT_SYSTEM_PROMPT_RESERVE = 4000;
 
 /**
+ * Every file attached to a run: message files, session files and session knowledge. Shared by
+ * attachment materialization and the tool deps' attachedFileIds so the two cannot drift; mirrors
+ * ChatCompletionProcess's attachedFileIds union for a chat turn.
+ */
+export function attachedFileIdsForRun(
+  execution: { messageFileIds?: string[]; sessionFabFileIds?: string[] } | undefined,
+  sessionKnowledgeIds: string[] | undefined
+): string[] {
+  return Array.from(
+    new Set([
+      ...(execution?.messageFileIds ?? []),
+      ...(execution?.sessionFabFileIds ?? []),
+      ...(sessionKnowledgeIds ?? []),
+    ])
+  );
+}
+
+/**
  * Resolve this run's attachment ids and extract their content, using the SAME extractor the chat
  * path uses so an agent turn gets the raw-content fallback, cosine excerpting, truncation notices
  * and image blocks that a chat turn gets.
@@ -729,9 +752,7 @@ async function materializeAttachmentsForRun(args: {
 }) {
   const { execution, sessionKnowledgeIds, scope, lakeAccess, modelInfo, apiKeyTable, logger } = args;
 
-  const requestedIds = Array.from(
-    new Set([...(execution.messageFileIds ?? []), ...(execution.sessionFabFileIds ?? []), ...sessionKnowledgeIds])
-  );
+  const requestedIds = attachedFileIdsForRun(execution, sessionKnowledgeIds);
   if (requestedIds.length === 0) return undefined;
 
   // A model we cannot size gives no honest budget, and guessing one would inline against a window
@@ -1611,6 +1632,7 @@ async function processExecution(
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
+      sessionIncludeLibraryFiles: libraryFlagForScope(session),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
@@ -1622,6 +1644,7 @@ async function processExecution(
       // passthrough. Until then an agent delegated from a personal-corpus session searches the
       // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       inlinedAttachmentIds,
+      attachedFileIds: attachedFileIdsForRun(execution, session.knowledgeIds),
       fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
@@ -1655,8 +1678,13 @@ async function processExecution(
         // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
         // no-ops for every agent-mode run: context.db.sessions was undefined here, so an agent
         // session's imageCount never moved even though the tools ran and the images landed on
-        // the Quest via persistRunAsQuest.
-        sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
+        // the Quest via persistRunAsQuest. `quests` + `findAllByIds` are edit_image's owner lookup for
+        // generated-image keys (resolveOwnedGeneratedImageUrl); without them those keys are refused.
+        sessions: {
+          incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository),
+          findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
+        },
+        quests: questRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -1720,6 +1748,11 @@ async function processExecution(
     let pendingSideEffects: { type: string; payload: unknown }[] = [];
     const allSideEffects: { type: string; payload: unknown }[] = [];
 
+    const runQuestId = resolveExecutionQuestId({
+      startPayloadQuestId: startPayload?.questId,
+      executionLinkedQuestId: execution.linkedQuestId,
+    });
+
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async (changes, status) => {
         if (changes?.images?.length) {
@@ -1727,6 +1760,8 @@ async function processExecution(
             if (!generatedImages.includes(img)) generatedImages.push(img);
           }
         }
+        // In-process subagents share these callbacks, so their clips land here too.
+        await attachVideoJobsToRunQuest(changes?.videoJobIds, runQuestId, questRepository, logger);
         if (changes?.promptMeta?.retrieval) {
           retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }
@@ -1783,10 +1818,7 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
-      questId: resolveExecutionQuestId({
-        startPayloadQuestId: startPayload?.questId,
-        executionLinkedQuestId: execution.linkedQuestId,
-      }),
+      questId: runQuestId,
       onSubagentCredits: credits => {
         logger.info(`[Credits] Subagent used ${credits} credits`);
       },
@@ -1839,6 +1871,16 @@ async function processExecution(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
+      videoConfig: await buildAgentVideoToolConfig(
+        {
+          userId: execution.userId,
+          organizationId: execution.organizationId,
+          apiKeyId: execution.apiKeyId,
+          questId: runQuestId,
+          toolEnabled: profileEnabledTools.includes('video_generation'),
+        },
+        getAgentVideoToolConfigDeps(logger)
+      ),
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
@@ -3415,6 +3457,10 @@ async function processSubagentDispatch(
 
     // Build the full tool set - same as the top-level path. The orchestrator filters
     // these per agentDef.allowedTools/deniedTools.
+    // The parent run's message and workbench files; the child row carries none of its own.
+    const parentRun = child.parentExecutionId
+      ? await agentExecutionRepository.findById(child.parentExecutionId)
+      : undefined;
     const toolDeps: ToolBuilderDeps = {
       userId: child.userId,
       user: user as IUserDocument,
@@ -3436,6 +3482,9 @@ async function processSubagentDispatch(
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
+      sessionIncludeLibraryFiles: libraryFlagForScope(session),
+      // Without it a library-off session's delegated agent cannot open the files attached to it.
+      attachedFileIds: attachedFileIdsForRun(parentRun ?? undefined, session.knowledgeIds),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
@@ -3472,7 +3521,12 @@ async function processSubagentDispatch(
         ...lakeWriteToolDb,
         // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
         // no-ops for every image a delegated subagent generates (same gap as the top-level path).
-        sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
+        // `quests` + `findAllByIds`: edit_image's generated-image owner lookup, as on the top-level path.
+        sessions: {
+          incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository),
+          findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
+        },
+        quests: questRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),
@@ -3559,6 +3613,8 @@ async function processSubagentDispatch(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
+      // No videoConfig: this path offers no native tools (see the buildSharedTools call below), and
+      // the per-run cap lives in agentExecutor.videoToolConfig.ts for when it does.
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 

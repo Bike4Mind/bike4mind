@@ -213,6 +213,7 @@ These are enforced in review; the full rationale for each lives in [CLAUDE.md](.
 
 **Documentation**
 - User-facing features and API changes should update `docs-site/docs/` (Docusaurus markdown with frontmatter). Beware MDX escaping — a bare `<` followed by text breaks the build.
+- Building an external app on Bike4Mind (sign-in, per-user billing)? See [Building an app on Bike4Mind](docs-site/docs/developers/building-on-b4m.md).
 
 ## Git workflow: fork → branch → PR
 

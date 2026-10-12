@@ -2,6 +2,7 @@ import { IInviteDocument, InviteType, IProjectDocument } from '@bike4mind/common
 import { useDeleteInvite, useGetProjectInvites } from '@client/app/hooks/data/invites';
 import { useLeaveProject } from '@client/app/hooks/data/projects';
 import { useGetUsers, useUserRevokeSharing } from '@client/app/hooks/data/user';
+import type { ISharerInviteView } from '@client/app/utils/invitesAPICalls';
 import { Box, CircularProgress, Stack, Typography, IconButton, Tooltip } from '@mui/joy';
 import { redAlpha, red, brandAlpha } from '@client/app/utils/themes/colors';
 import { useQueryClient } from '@tanstack/react-query';
@@ -16,6 +17,13 @@ import { updateAllQueryData, useSubscribeCollection } from '@client/app/utils/re
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import LogoutIcon from '@mui/icons-material/Logout';
+
+// An entry the viewer did not type comes back as a user id named in recipientUsers (or a masked
+// address), so show the name where there is one.
+const pendingRecipientLabel = (invite: ISharerInviteView) => {
+  const names = new Map((invite.recipientUsers ?? []).map(user => [user.userId, user.name]));
+  return (invite.recipients?.pending ?? []).map(entry => names.get(entry) ?? entry).join(',');
+};
 
 const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> = ({ project, ownerId }) => {
   const navigate = useNavigate();
@@ -65,17 +73,11 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
   const filteredPendingInvites = useMemo(() => {
     if (!search) return pendingInvites;
 
-    return pendingInvites.filter(invite => {
-      const recipients = (invite.recipients?.pending || []).join(',').toLowerCase();
-      return recipients.includes(search.toLowerCase());
-    });
+    return pendingInvites.filter(invite => pendingRecipientLabel(invite).toLowerCase().includes(search.toLowerCase()));
   }, [pendingInvites, search]);
 
   const debouncedInvalidateUsers = useMemo(() => {
-    return debounce(
-      () => queryClient.invalidateQueries({ queryKey: getUserKey }),
-      500
-    );
+    return debounce(() => queryClient.invalidateQueries({ queryKey: getUserKey }), 500);
   }, [queryClient, getUserKey]);
 
   // Subscribe to the invites collection to invalidate the query whenever a new invite is received.
@@ -83,21 +85,19 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
     'invites',
     useMemo(() => (project?.id ? { documentId: project.id, type: InviteType.Project } : null), [project.id]),
     useCallback<SubscriptionCallbackFunction<IInviteDocument>>(
-      (type, data) => {
-        // Only invalidate if it's a new document that's not already in our cache
+      type => {
+        // Refetch rather than write the event's document: the subscription withholds `recipients`
+        // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
         switch (type) {
           case 'insert':
           case 'update':
-            updateAllQueryData(queryClient, 'invites', 'write', data);
-            debouncedInvalidateUsers();
-            break;
           case 'delete':
-            updateAllQueryData(queryClient, 'invites', 'delete', data);
+            queryClient.invalidateQueries({ queryKey: ['invites', 'projects', project.id] });
             debouncedInvalidateUsers();
             break;
         }
       },
-      [debouncedInvalidateUsers, queryClient]
+      [debouncedInvalidateUsers, project.id, queryClient]
     )
   );
 
@@ -224,8 +224,8 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
                   <UserCard
                     key={invite.id}
                     user={{
-                      name: (invite.recipients?.pending || []).join(',') || '',
-                      email: (invite.recipients?.pending || []).join(',') || '',
+                      name: pendingRecipientLabel(invite),
+                      email: pendingRecipientLabel(invite),
                       photoUrl: null,
                       id: invite.documentId,
                     }}

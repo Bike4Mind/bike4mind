@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
     setMfaPendingTokens: vi.fn(),
     forceLogoutTokens: vi.fn(),
   },
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
   // Empty for every suite but the Cookie settings one, so the legal sentence stays hidden and
   // the checkbox's Privacy Policy link is the only one on the page.
   websiteUrl: '',
@@ -288,6 +288,18 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     }
   });
 
+  it('puts the numeric keypad and one-time-code hints on the code <input> itself', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+
+    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+
+    const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
+    expect(otcInput).toHaveAttribute('inputmode', 'numeric');
+    expect(otcInput).toHaveAttribute('autocomplete', 'one-time-code');
+  });
+
   it('does not advance to the username step when open registration is disabled', async () => {
     const user = userEvent.setup();
     mocks.verifyOTC.mockResolvedValueOnce({
@@ -306,6 +318,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     await user.click(screen.getByTestId('login-verify-btn'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
+    expect(mocks.toast.dismiss).toHaveBeenCalledWith('otc-code-sent');
     // Must NOT strand the user on the username step, and must not create a session.
     expect(screen.queryByTestId('login-register-username-input')).not.toBeInTheDocument();
     expect(mocks.setCurrentUser).not.toHaveBeenCalled();

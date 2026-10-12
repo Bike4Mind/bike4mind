@@ -1,7 +1,7 @@
 import { ModelInfo } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { isAxiosError } from 'axios';
-import { ApiKeyTable, getLlmByModel, ICompletionBackend } from '../llm';
+import { getLlmByModel, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
 
 /**
  * Fallback attempt result
@@ -216,6 +216,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-6',
     'gpt-5',
   ],
+  'claude-haiku-5-5': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'claude-opus-5-5': [
     'claude-opus-5',
     'claude-opus-4-8',
@@ -252,7 +253,13 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
   ],
   'global.anthropic.claude-fable-5-1': ['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'gpt-5'],
   'global.anthropic.claude-fable-5': ['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'gpt-5'],
-  'global.anthropic.claude-opus-5-5': ['claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5'],
+  'global.anthropic.claude-opus-5-5': [
+    'claude-opus-5-5',
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'gpt-5',
+  ],
   'global.anthropic.claude-opus-5': ['claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5'],
   'global.anthropic.claude-opus-4-7': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'gpt-5'],
   'global.anthropic.claude-opus-4-6-v1': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
@@ -262,6 +269,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-5-20250929',
     'gpt-5',
   ],
+  'global.anthropic.claude-haiku-5-5': ['claude-haiku-5-5', 'claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'global.anthropic.claude-sonnet-5-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],

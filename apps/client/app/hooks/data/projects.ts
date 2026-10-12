@@ -10,7 +10,7 @@ import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 // Set true to use mock projects for UI testing
 const USE_MOCK_PROJECTS = false;
 
-export const useGetJoinedProjects = (userId: string) => {
+export const useGetJoinedProjects = (userId: string, options: { enabled?: boolean; staleTime?: number } = {}) => {
   return useQuery({
     queryKey: ['joined-projects', userId],
     queryFn: async () => {
@@ -33,7 +33,8 @@ export const useGetJoinedProjects = (userId: string) => {
         return [];
       }
     },
-    enabled: !!userId,
+    enabled: !!userId && (options.enabled ?? true),
+    staleTime: options.staleTime,
   });
 };
 

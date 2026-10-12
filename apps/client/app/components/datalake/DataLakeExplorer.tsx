@@ -19,7 +19,10 @@ import { useDataLakeSurface } from '@client/app/components/datalake/surfaceToken
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
+import { rejectUnscannedImage, useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
+import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
+import useSetIncludeLibraryFiles from '@client/app/hooks/useSetIncludeLibraryFiles';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
 import useSessionLayout, { openFileInChatViewer, setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
@@ -28,6 +31,7 @@ import {
   useGetDataLakeArticles,
   useGetDataLakesWithRetrievability,
   useGetDataLakeTagCounts,
+  useGetScopedDataLakeTagCounts,
   useGetDataLakeUncategorizedFiles,
   useRemoveFileFromDataLake,
 } from '@client/app/hooks/data/dataLakes';
@@ -42,7 +46,7 @@ import { RemoveFileFromLakeCopy } from '@client/app/components/DataLakeWizard/Re
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { toast } from 'sonner';
-import type { IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
+import { type IFabFileDocument, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 /**
  * The Data Lake surface: a browse tree beside a chat (main app + premium /opti). File rows carry
@@ -176,6 +180,11 @@ export default function DataLakeExplorer({
   const pendingLakeTags = usePendingLakeScope(s => s.lakeTags);
   const setPendingLakeTags = usePendingLakeScope(s => s.setLakeTags);
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const { addToNotebookContext } = useNotebookContextFiles();
+  const activeNotebook = useActiveNotebook();
+  // Primitives, not the object: useActiveNotebook returns a fresh object every render.
+  const activeNotebookOnScreen = activeNotebook.onScreen;
+  const activeNotebookSessionId = activeNotebook.onScreen ? activeNotebook.sessionId : null;
   // Files currently attached to the chat's prompt - drives the tree's persistent highlight, so a
   // file stays marked "already added" regardless of which action attached it (View or the menu's
   // Attach) or how far the user has since navigated the tree (#1693).
@@ -230,14 +239,45 @@ export default function DataLakeExplorer({
     [setWorkBenchFiles]
   );
 
+  // Resolves whether the file was newly attached. An existing session must persist
+  // knowledgeIds: a workbench-only add rides one send as fabFileIds, then drops out of context.
+  // A freshly minted session was created already holding the file, so the workbench suffices.
+  // Mid notebook switch (route on B, currentSessionId still A) there is no safe target yet.
+  // The docked overlay chat is outside the notebook routes, so its current session is the target.
+  // An explicit gesture, so project propagation keeps its default (as in FilesSection).
+  const attachToSession = useCallback(
+    async (file: IFabFileDocument): Promise<boolean> => {
+      if (chatEmbedded && !activeNotebookOnScreen) {
+        toast.info('Wait for the notebook to finish opening, then attach the file.');
+        return false;
+      }
+      const sessionId = chatEmbedded ? activeNotebookSessionId : currentSessionId;
+      // The shared writer refuses an optimistic id and an unscanned image itself.
+      if (sessionId) return addToNotebookContext(sessionId, file);
+      // Session creation stores knowledgeIds directly, bypassing the shared writer's scan guard.
+      if (rejectUnscannedImage(file)) return false;
+      const createdSessionId = await ensureSessionId(file);
+      if (!createdSessionId) return false;
+      return addToWorkBench(createdSessionId, file);
+    },
+    [
+      activeNotebookOnScreen,
+      activeNotebookSessionId,
+      chatEmbedded,
+      currentSessionId,
+      addToNotebookContext,
+      ensureSessionId,
+      addToWorkBench,
+    ]
+  );
+
   const attachFileToChat = useCallback(
     async (file: IFabFileDocument) => {
-      const sessionId = await ensureSessionId(file);
-      if (!sessionId) return;
-      addToWorkBench(sessionId, file);
-      toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
+      // A rejected add was already rolled back and surfaced by the hook.
+      const added = await attachToSession(file).catch(() => false);
+      if (added) toast.success(`"${file.fileName.replace(/\.[^/.]+$/, '')}" is now available to this whole notebook`);
     },
-    [ensureSessionId, addToWorkBench]
+    [attachToSession]
   );
 
   // View opens the file in the KnowledgeViewer on both hosts - and ONLY that. It must not
@@ -274,6 +314,8 @@ export default function DataLakeExplorer({
     isError: lakesError,
     refetch: refetchLakes,
   } = useGetDataLakesWithRetrievability(currentSessionId);
+  const lakeFileTagPrefixes = useMemo(() => lakes?.map(l => l.fileTagPrefix) ?? [], [lakes]);
+  const libraryFiles = useSetIncludeLibraryFiles(lakeFileTagPrefixes);
   const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
   const currentUserId = useUser(s => s.currentUser?.id);
   const canDeleteFile = useCallback((file: IFabFileDocument) => resolveManageableLake(file, lakes) != null, [lakes]);
@@ -370,15 +412,32 @@ export default function DataLakeExplorer({
   // Add files action) addresses ONE lake, so they are offered only when the scope names one.
   const soleSelectedLake = selectedLakes.length === 1 ? selectedLakes[0] : null;
 
-  // Scoping lives in scopeTagCountsToLakes (pure + unit-tested, including the prefix-containment
-  // assumption it rests on) rather than inline here.
+  // A selected lake's tree comes from its own server-side count over its membership: the unscoped
+  // payload is merged by prefix, and prefixes are unique only per creator, so another creator's
+  // same-prefix lake cannot be filtered out of it here. The unscoped query still feeds the picker
+  // counts, totals and uncategorized buckets. No keepPreviousData: it would draw the previous
+  // lake's tree under the new lake's name.
+  const selectedLakeIdList = useMemo(() => selectedLakes.map(l => l.id), [selectedLakes]);
+  const {
+    data: scopedTagCountsData,
+    isLoading: scopedTagCountsLoading,
+    isError: scopedTagCountsError,
+  } = useGetScopedDataLakeTagCounts(source, selectedLakeIdList);
+  const isLakeSelection = selectedLakes.length > 0;
+  const treeCountsLoading = tagCountsLoading || (isLakeSelection && scopedTagCountsLoading);
+  const treeCountsError = tagCountsError || (isLakeSelection && scopedTagCountsError);
+  // scopeTagCountsToLakes stays applied over the scoped result as a belt (see its docblock).
   const scopedTagCounts = useMemo(
-    () => scopeTagCountsToLakes(tagCountsData?.tagCounts ?? [], selectedLakes),
-    [tagCountsData, selectedLakes]
+    () =>
+      scopeTagCountsToLakes(
+        (isLakeSelection ? scopedTagCountsData?.tagCounts : tagCountsData?.tagCounts) ?? [],
+        selectedLakes
+      ),
+    [isLakeSelection, scopedTagCountsData, tagCountsData, selectedLakes]
   );
 
-  // Truthful distinct-file count (the tree's fileCounts are tag-occurrence sums, which
-  // overcount multi-tagged articles ~2x). Follows the lake scope so it describes what is on screen.
+  // Distinct lake members, which unlike the tree also counts files carrying no taxonomy tag.
+  // Follows the lake scope so it describes what is on screen.
   // Sums across a multi-lake scope, which overcounts a file that sits in two of them. It feeds
   // only isScopeEmpty below - a zero/non-zero test that an overcount cannot flip - and is never
   // shown, unlike the picker's trigger count, which withholds itself for exactly this reason.
@@ -391,7 +450,7 @@ export default function DataLakeExplorer({
    *  from scopedTagCounts (pre-seed) rather than the tree below, so seeding an empty lake's row
    *  in a populated scope can never flip this - it must stay exactly the "is there really
    *  nothing here" test DataLakeTreeEmptyState's variants key off. */
-  const isScopeEmpty = !tagCountsLoading && !tagCountsError && totalArticles === 0 && scopedTagCounts.length === 0;
+  const isScopeEmpty = !treeCountsLoading && !treeCountsError && totalArticles === 0 && scopedTagCounts.length === 0;
 
   // Seeds a zero-count root for every lake in scope that has no tagged files yet, so a freshly
   // restored/emptied lake still gets a row instead of vanishing from a tree built purely from tag
@@ -476,7 +535,7 @@ export default function DataLakeExplorer({
 
   // Phase 2: Fetch articles only when there's a tag at this breadcrumb to filter by (paginated)
   const { data: leafArticlesResult, isLoading: leafLoading } = useGetDataLakeArticles(
-    leafTag ? { tags: [leafTag], limit: 50 } : null,
+    leafTag ? { tags: [leafTag], limit: 50, ...(isLakeSelection ? { lakeId: selectedLakeIdList } : {}) } : null,
     source
   );
   const leafArticles = leafTag ? (leafArticlesResult?.data ?? []) : [];
@@ -657,10 +716,10 @@ export default function DataLakeExplorer({
           onViewFile={handleViewFile}
           canDeleteFile={canDeleteFile}
           onDeleteFile={handleDeleteFile}
-          isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0) || bucketBusy}
+          isLoading={treeCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0) || bucketBusy}
           // A failed bucket read must not render as an empty bucket: the row the user just
           // clicked promised a count, so "No articles found" would read as "they are gone".
-          isError={tagCountsError || bucketFailed}
+          isError={treeCountsError || bucketFailed}
           title={rootLabel ?? copy.rootLabel}
           onManage={onManage}
           onCreateLake={onCreateLake}
@@ -685,17 +744,28 @@ export default function DataLakeExplorer({
                 onCreate={onCreateLake}
                 onDiscover={onDiscover}
               />
-              {soleSelectedLake && <SelectedLakeHeader lake={soleSelectedLake} />}
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
-                  tree cannot report, since it stays browsable so the user can get back out. */}
-              {(selectedLakes.length > 1 || isNoLakeScope) && (
+                  tree cannot report, since it stays browsable so the user can get back out. The
+                  all-lakes scope shows it once a session exists, so its My files choice is visible. */}
+              {(selectedLakes.length > 0 || isNoLakeScope || currentSession) && (
                 <ActiveLakeScopeStrip
                   lakes={selectedLakes}
+                  allLakes={selectedLakes.length === 0 && !isNoLakeScope}
                   onClear={() => handleSelectLakes([])}
                   // From the resolved lakes, not the raw ids, so a stale id is dropped on the way.
                   onRemove={lakeId => handleSelectLakes(selectedLakes.filter(l => l.id !== lakeId).map(l => l.id))}
+                  library={
+                    currentSession
+                      ? {
+                          included: libraryFiles.included,
+                          pending: libraryFiles.isPending,
+                          onToggle: libraryFiles.toggle,
+                        }
+                      : undefined
+                  }
                 />
               )}
+              {soleSelectedLake && <SelectedLakeHeader lake={soleSelectedLake} />}
             </>
           }
           emptySlot={

@@ -286,6 +286,29 @@ describe('video job end to end with the test provider', () => {
     );
   });
 
+  it('loads a generated-image input by its key at create and again at submit', async () => {
+    const loadInputImage = vi
+      .fn<VideoJobDeps['loadInputImage']>()
+      .mockResolvedValue({ bytes: Buffer.from('gen'), mimeType: 'image/webp' });
+    const base = new TestVideoProvider();
+    const submit = vi.fn<VideoProvider['submit']>((req, inputs, ctx) => base.submit(req, inputs, ctx));
+    const t = setup({ loadInputImage, providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    const key = '86cdc650-43d2-416e-aca6-23ff4fe23081.webp';
+    const created = await createVideoJob(
+      { user, request: { ...request(), mode: 'image_to_video', inputGeneratedImageKey: key }, source: 'agent' },
+      t.deps
+    );
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(loadInputImage).toHaveBeenCalledTimes(2);
+    expect(loadInputImage).toHaveBeenNthCalledWith(2, user.id, { kind: 'generated', key });
+    expect(submit).toHaveBeenCalledWith(
+      expect.anything(),
+      { inputImage: { bytes: Buffer.from('gen'), mimeType: 'image/webp' } },
+      expect.anything()
+    );
+  });
+
   it('fails with input_image_not_found when the image disappears before submit', async () => {
     const loadInputImage = vi
       .fn<VideoJobDeps['loadInputImage']>()

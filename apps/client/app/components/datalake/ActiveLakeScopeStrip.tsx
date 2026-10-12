@@ -1,26 +1,27 @@
 import { Fragment, type ReactNode } from 'react';
 import { Box, Chip, ChipDelete, Stack, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
+import AddIcon from '@mui/icons-material/Add';
+import CheckIcon from '@mui/icons-material/Check';
 import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
 import { isUnsearchable, UnsearchableLakeIcon } from './lakeRetrievability';
 import { useDataLakeSurface } from './surfaceTokens';
 import { isDraftLake, DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
 
 /**
- * Names every lake the chat is currently grounded on, for the multi-lake scope the picker trigger
- * can only report as a number (#3042). The whole point of narrowing to a subset is knowing which
- * subset, and "3 lakes" on a collapsed dropdown does not answer that - a user who cannot see the
- * set without reopening the menu cannot tell a deliberate scope from a stale one.
+ * Names everything the chat is currently grounded on: every scoped lake, which the picker trigger
+ * can only report as a number (#3042), and whether the caller's own and shared files ("My files")
+ * are searched alongside them. A user who cannot see the set without reopening the menu cannot tell
+ * a deliberate scope from a stale one.
  *
- * Takes the strip slot under the picker that SelectedLakeHeader occupies for a single-lake scope;
- * the two are mutually exclusive, so the card never grows a second header. It deliberately
- * carries no lake-level ACTIONS, unlike that header: every one of them (Add files, Configure,
- * Connect Drive) addresses one lake, and a row of them per chip is how a compact strip turns into
- * a second manager panel. The per-chip remove is a SCOPE edit, not a lake action, so it belongs.
+ * Renders for every scope - one lake, several, all lakes (`allLakes`) and none. For a single lake
+ * SelectedLakeHeader sits below it with that lake's ACTIONS only; the strip carries none, since
+ * every one of them addresses one lake and a row per chip would turn it into a second manager
+ * panel. The per-chip remove and the My files chip are SCOPE edits, so they belong.
  *
- * `onRemove` receives one lake id; the host computes the next set. The strip only renders for a
- * scope of two or more, so a remove always leaves at least one lake - it can never silently widen
- * the scope to all lakes, which is what an empty set means.
+ * `onRemove` receives one lake id; the host computes the next set. Remove is offered only while two
+ * or more lakes are scoped, so it can never silently widen the scope to all lakes, which is what an
+ * empty set means. `library` is omitted until a session exists, since there is nothing to write to.
  *
  * An EMPTY `lakes` is the deliberate no-lake scope, not "nothing to show": the strip is what makes
  * that state visible and escapable, since the tree stays browsable (the user has to be able to
@@ -28,12 +29,16 @@ import { isDraftLake, DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
  */
 export default function ActiveLakeScopeStrip({
   lakes,
+  allLakes = false,
   onClear,
   onRemove,
+  library,
 }: {
   lakes: RetrievabilityLabeledDataLake[];
+  allLakes?: boolean;
   onClear: () => void;
   onRemove?: (lakeId: string) => void;
+  library?: { included: boolean; pending: boolean; onToggle: () => void };
 }) {
   const { copy } = useDataLakeSurface();
   // A lake chat cannot search is selected but grounds nothing, so it gets its own group rather than
@@ -43,7 +48,7 @@ export default function ActiveLakeScopeStrip({
   for (const lake of lakes) {
     (isUnsearchable(lake) ? unsearchableLakes : groundedLakes).push(lake);
   }
-  const showGrounded = lakes.length === 0 || groundedLakes.length > 0;
+  const showGrounded = allLakes || lakes.length === 0 || groundedLakes.length > 0;
   const allUnsearchable = !showGrounded;
 
   // Clears back to every reachable lake. The picker can do this too (its "All data lakes" row), but
@@ -69,7 +74,8 @@ export default function ActiveLakeScopeStrip({
   );
 
   const removeDecorator = (lake: RetrievabilityLabeledDataLake) =>
-    onRemove && (
+    onRemove &&
+    lakes.length > 1 && (
       <ChipDelete
         onDelete={() => onRemove(lake.id)}
         aria-label={`Remove ${lake.name} from scope`}
@@ -91,7 +97,18 @@ export default function ActiveLakeScopeStrip({
         <>
           {/* Warning, not neutral: a chat that retrieves from nothing looks identical to one that
               simply found no match, and the colour is the only thing separating them at a glance. */}
-          {lakes.length === 0 && (
+          {allLakes && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={{ fontSize: '11px' }}
+              data-testid="datalake-active-scope-all"
+            >
+              {copy.allLakesLabel}
+            </Chip>
+          )}
+          {!allLakes && lakes.length === 0 && (
             <Chip
               size="sm"
               variant="soft"
@@ -154,18 +171,41 @@ export default function ActiveLakeScopeStrip({
     });
   }
 
+  const libraryChip = library && (
+    <Tooltip
+      size="sm"
+      title={library.included ? 'Stop searching your own and shared files' : 'Also search your own and shared files'}
+    >
+      <Chip
+        size="sm"
+        variant={library.included ? 'solid' : 'soft'}
+        color="primary"
+        disabled={library.pending}
+        onClick={library.onToggle}
+        startDecorator={library.included ? <CheckIcon sx={{ fontSize: 14 }} /> : <AddIcon sx={{ fontSize: 14 }} />}
+        sx={{ fontSize: '11px' }}
+        slotProps={{
+          action: { 'data-testid': 'datalake-active-scope-myfiles-chip', 'aria-pressed': library.included },
+        }}
+      >
+        My files
+      </Chip>
+    </Tooltip>
+  );
+
   return (
     <Box
       data-testid="datalake-active-scope-strip"
       sx={{ px: '12px', pt: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}
     >
-      {/* The clear chip trails whichever group renders last. */}
+      {/* My files and the clear chip trail whichever group renders last. */}
       {groups.map((group, i) => (
         <Fragment key={group.key}>
           {group.heading}
           <Stack direction="row" alignItems="center" gap={0.5} flexWrap="wrap" data-testid={group.testId}>
             {group.chips}
-            {i === groups.length - 1 && clearChip}
+            {i === groups.length - 1 && libraryChip}
+            {i === groups.length - 1 && !allLakes && clearChip}
           </Stack>
         </Fragment>
       ))}

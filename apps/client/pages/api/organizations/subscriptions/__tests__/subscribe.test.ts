@@ -71,6 +71,14 @@ vi.mock('@server/integrations/stripe/callbackUrl', async importOriginal => {
 });
 vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'test' } }));
 
+const mockGetTeamPlanSettings = vi.hoisted(() =>
+  vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 }))
+);
+vi.mock('@server/services/teamPlanSettings', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/services/teamPlanSettings')>()),
+  getTeamPlanSettings: mockGetTeamPlanSettings,
+}));
+
 const mockSessionsCreate = vi.fn();
 const mockCreateCustomer = vi.fn();
 vi.mock('@server/integrations/stripe/stripe', () => ({
@@ -183,6 +191,18 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     expect(args.cancel_url).toBe(CALLBACK_URL);
   });
 
+  it('pins the session to USD with Adaptive Pricing off, whatever the visitor location', async () => {
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).toMatchObject({
+      currency: 'usd',
+      adaptive_pricing: { enabled: false },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
   // The #1424 clamp: minSeats = min(max(MIN, members + 1), MAX). Both bounds need a fixture
   // where they actually bite - with the default one-member org the floor coincides with MIN,
   // so asserting `minimum: MIN` passes even if the whole expression is deleted.
@@ -213,6 +233,27 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
       maximum: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  it('bounds checkout by the admin-configured teamPlanMinSeats/teamPlanMaxSeats', async () => {
+    mockGetTeamPlanSettings.mockResolvedValueOnce({ minSeats: 2, maxSeats: 20, creditsPerSeat: 50000 });
+    const { req, res } = makeReq();
+    (req as Record<string, unknown>).body = { ...(req as { body: object }).body, quantity: 2 };
+
+    await (handler as HandlerFn)(req, res);
+
+    const args = mockSessionsCreate.mock.calls[0][0] as { line_items: { adjustable_quantity: unknown }[] };
+    expect(args.line_items[0].adjustable_quantity).toEqual({ enabled: true, minimum: 2, maximum: 20 });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects a quantity outside the configured range before touching Stripe', async () => {
+    mockGetTeamPlanSettings.mockResolvedValueOnce({ minSeats: 5, maxSeats: 20, creditsPerSeat: 50000 });
+    const { req, res } = makeReq();
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow(/Seats must be between 5 and 20/);
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+    expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
   });
 
   it('creates a customer with no org lookup on the new-organization branch', async () => {
@@ -546,5 +587,69 @@ describe('POST /api/organizations/subscriptions/subscribe - request-shape and id
     expect(args.customer).toBe('cus_org');
     expect(args.subscription_data.metadata).toMatchObject({ newOrganizationName: 'Brand New Org' });
     expect(args.subscription_data.metadata).not.toHaveProperty('organizationId');
+  });
+});
+
+describe('POST /api/organizations/subscriptions/subscribe - acquisition attribution', () => {
+  const enc = (v: unknown) => encodeURIComponent(JSON.stringify(v));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
+    mockVerifyOrgOwner.mockResolvedValue({ id: 'org_1', name: 'Org One', users: [{ userId: 'user_1' }] });
+    mockAttachOrgStripeCustomer.mockResolvedValue('cus_org');
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  const metadataOf = () => mockSessionsCreate.mock.calls[0][0].subscription_data.metadata as Record<string, string>;
+
+  it('carries the same acq_* keys as individual checkout, alongside the org metadata', async () => {
+    const { req, res } = makeReq();
+    (req as Record<string, Record<string, unknown>>).body.attributionConsent = true;
+    req.headers.cookie = `b4m_app_first_touch=${enc({ source: 'widgets', medium: 'teaser' })}; b4m_last_touch=${enc({ source: 'email' })}`;
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(metadataOf()).toEqual({
+      userId: 'user_1',
+      stage: 'test',
+      ownerType: SubscriptionOwnerType.Organization,
+      organizationId: 'org_1',
+      acq_first_source: 'widgets',
+      acq_first_medium: 'teaser',
+      acq_last_source: 'email',
+    });
+  });
+
+  it.each([false, undefined])('attaches no attribution without explicit consent (%s)', async consent => {
+    const { req, res } = makeReq();
+    (req as Record<string, Record<string, unknown>>).body.attributionConsent = consent;
+    req.headers.cookie = `b4m_app_first_touch=${enc({ source: 'widgets' })}`;
+    (req as Record<string, Record<string, unknown>>).user.acquisition = { firstTouch: { source: 'reddit' } };
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(Object.keys(metadataOf()).filter(k => k.startsWith('acq_'))).toEqual([]);
+  });
+
+  it("falls back to the owner's stored signup touches when the browser has none", async () => {
+    const { req, res } = makeReq();
+    (req as Record<string, Record<string, unknown>>).body.attributionConsent = true;
+    (req as Record<string, Record<string, unknown>>).user.acquisition = {
+      firstTouch: { source: 'reddit' },
+      lastTouch: { source: 'blog' },
+    };
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(metadataOf()).toMatchObject({ acq_first_source: 'reddit', acq_last_source: 'blog' });
+  });
+
+  it('records the checkout surface', async () => {
+    const { req, res } = makeReq();
+    (req as Record<string, Record<string, unknown>>).body.surface = 'team_invite';
+    await (handler as HandlerFn)(req, res);
+    expect(metadataOf().checkout_surface).toBe('team_invite');
   });
 });

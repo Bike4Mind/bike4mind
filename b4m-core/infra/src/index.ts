@@ -23,9 +23,10 @@ export {
   expireNoncurrentVersionsAfterDays,
   RETAINED_BUCKET_STAGES,
 } from './bucketFactory.js';
-export type { FunctionDefaultsOptions, FunctionDefaultArgs } from './functionFactory.js';
+export type { FunctionDefaultsOptions, FunctionDefaultArgs, FunctionLogging } from './functionFactory.js';
 export {
   buildFunctionDefaults,
+  resolveDefaultLogging,
   stageGatedConcurrency,
   DEFAULT_FUNCTION_RUNTIME,
   DEFAULT_LOG_RETENTION,

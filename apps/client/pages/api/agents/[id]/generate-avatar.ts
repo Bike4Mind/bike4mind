@@ -1,10 +1,10 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { agentRepository, imageModerationIncidentRepository } from '@bike4mind/database';
 import { ImageModels, IAgent, ModelInfo } from '@bike4mind/common';
 import {
-  NotFoundError,
-  ForbiddenError,
   BadRequestError,
   getSettingsByNames,
   getSettingsMap,
@@ -121,7 +121,9 @@ const downloadImageBuffer = async (imageUrl: string): Promise<Buffer> => {
   return Buffer.from(response.data);
 };
 
-const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, AgentAvatarRequest>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
+  Request<{ id: string }, AgentAvatarResponse, AgentAvatarRequest>
+>(async (req, res) => {
   const { id } = req.query;
   const userId = req.user!.id;
   const { imageModel: userImageModel } = req.body;
@@ -133,14 +135,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
 
   // Find the agent
   const agent = await agentRepository.findById(id);
-  if (!agent) {
-    throw new NotFoundError('Agent not found');
-  }
-
-  // Check ownership
-  if (agent.userId !== userId) {
-    throw new ForbiddenError("You don't have permission to modify this agent");
-  }
+  assertAgentAccess(agent, userId, 'own');
 
   // Cheap early refusal: checkStorageLimit does no DB I/O (b4m-core/utils/src/user.ts),
   // it only reads fields already on req.user, so an already-over-quota user is turned

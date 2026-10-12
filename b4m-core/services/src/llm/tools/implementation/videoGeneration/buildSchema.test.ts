@@ -26,6 +26,14 @@ describe('buildVideoToolSchema', () => {
     expect(schema.shape.inputImageFileId.description).toMatch(/uploaded/i);
   });
 
+  it('points inputGeneratedImageKey at the exact id from the recently generated images note', () => {
+    const { schema } = buildVideoToolSchema(['test-video']);
+    const description = schema.shape.inputGeneratedImageKey.description ?? '';
+    expect(description).toContain('Recently generated images');
+    expect(description).toMatch(/EXACT/);
+    expect(description).toMatch(/never both/);
+  });
+
   it('converts to JSON Schema with the usable model ids as the model enum', () => {
     const { schema } = buildVideoToolSchema(['test-video', 'grok-imagine-video-1.5']);
     const jsonSchema = z.toJSONSchema(schema) as { properties: { model: { enum: string[] } } };

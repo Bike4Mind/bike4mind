@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -14,12 +14,25 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useCreateTeamDev: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
+type PlansState = {
+  data: Array<{ id: string; unit_amount: number }> | undefined;
+  isLoading: boolean;
+  isError: boolean;
+};
+const defaultPlans = (): PlansState => ({
+  data: [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }],
+  isLoading: false,
+  isError: false,
+});
+let plansState: PlansState = defaultPlans();
+
 vi.mock('@client/app/hooks/data/stripe', () => ({
-  useGetSubscriptionPlans: () => ({
-    data: [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }],
-    isLoading: false,
-    isError: false,
-  }),
+  useGetSubscriptionPlans: () => plansState,
+}));
+
+const seatLimits = vi.hoisted(() => ({ current: { minSeats: 3, maxSeats: 7 } }));
+vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
+  useTeamSeatLimits: () => seatLimits.current,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -30,7 +43,52 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 describe('CreateTeamModal', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
+    plansState = defaultPlans();
     useCreateTeamModal.setState({ isOpen: true });
+  });
+
+  it('shows the admin-configured seat range', () => {
+    render(
+      <TestWrapper>
+        <CreateTeamModal />
+      </TestWrapper>
+    );
+
+    expect(screen.getByText(/Team size must be between 3 and 7/)).toBeTruthy();
+  });
+
+  describe('with seat settings that change after mount', () => {
+    afterEach(() => {
+      seatLimits.current = { minSeats: 3, maxSeats: 7 };
+    });
+
+    it('keeps the picked size inside a seat range that loads after mount', () => {
+      const { rerender } = render(
+        <TestWrapper>
+          <CreateTeamModal />
+        </TestWrapper>
+      );
+      expect(screen.getByText('3')).toBeTruthy();
+
+      // Settings arrive with a higher floor than the default the modal was mounted with.
+      seatLimits.current = { minSeats: 5, maxSeats: 7 };
+      rerender(
+        <TestWrapper>
+          <CreateTeamModal />
+        </TestWrapper>
+      );
+      expect(screen.getByText('5')).toBeTruthy();
+
+      // ...and a ceiling below the current pick.
+      seatLimits.current = { minSeats: 2, maxSeats: 2 };
+      rerender(
+        <TestWrapper>
+          <CreateTeamModal />
+        </TestWrapper>
+      );
+      expect(screen.getByText('2')).toBeTruthy();
+      expect(screen.getByText(/Total Price: \$20\/month/)).toBeTruthy();
+    });
   });
 
   it('submits only once when Create Team is double-clicked rapidly', async () => {
@@ -59,5 +117,53 @@ describe('CreateTeamModal', () => {
 
     resolveSubmit({ sessionUrl: 'https://stripe.example/checkout' });
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+  });
+
+  const renderModal = () =>
+    render(
+      <TestWrapper>
+        <CreateTeamModal />
+      </TestWrapper>
+    );
+
+  it('shows the live per-seat price times the seat count', () => {
+    renderModal();
+
+    // Read the size back rather than assuming the seat floor, which the admin settings can move.
+    const seats = Number(screen.getByTestId('create-team-size-value').textContent);
+    expect(seats).toBeGreaterThan(0);
+    expect(screen.getByTestId('create-team-price-value').textContent).toBe(`Total Price: $${seats * 10}/month`);
+  });
+
+  it('blocks checkout instead of quoting $0 when the team price is missing from Stripe', async () => {
+    plansState = { data: [{ id: 'price_some_other_plan', unit_amount: 3000 }], isLoading: false, isError: false };
+    renderModal();
+
+    expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
+    expect(screen.queryByTestId('create-team-price-value')).toBeNull();
+    expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+  });
+
+  it('does not sit on a loading skeleton forever when the plans query is disabled', () => {
+    plansState = { data: undefined, isLoading: false, isError: false };
+    renderModal();
+
+    expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
+  });
+
+  it('keeps a failed checkout request from escaping the click handler', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    mutateAsync.mockRejectedValue(new Error('stripe down'));
+    renderModal();
+
+    const user = userEvent.setup({ delay: null });
+    await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+    await user.click(screen.getByTestId('create-team-submit-btn'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
   });
 });

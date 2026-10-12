@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { VoiceOutputFormat, TTS_MAX_INPUT_CHARS } from '@bike4mind/common';
+import { VoiceOutputFormat, TTS_DEFAULT_MODEL, TTS_MAX_INPUT_CHARS } from '@bike4mind/common';
 import { AIVoiceService, CONTENT_TYPE_BY_FORMAT, VoiceSynthesisOptions, VoiceSynthesisResult } from './AIVoiceService';
 
 const BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech/';
@@ -13,7 +13,7 @@ const DEFAULT_VOICE = '21m00Tcm4TlvDq8ikWAM';
 // (multilingual v2). We don't send model_id in that case (preserving behavior),
 // but we must bill *something*, so we attribute the call to this model. It is
 // also the higher-priced tier, so an unspecified model bills conservatively.
-const DEFAULT_BILLING_MODEL = 'eleven_multilingual_v2';
+const DEFAULT_BILLING_MODEL = TTS_DEFAULT_MODEL.elevenlabs;
 
 // ElevenLabs takes an `output_format` enum rather than a bare extension. Only
 // the formats it actually supports are mapped; unsupported ones fail loudly

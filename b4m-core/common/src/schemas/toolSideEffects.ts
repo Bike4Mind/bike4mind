@@ -122,7 +122,6 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   notebook_status: 'none',
   share_curated_file: 'external',
   notebook_new: 'external',
-  confirm_pending_action: 'external',
   cancel_pending_action: 'external',
 
   // Premium overlay

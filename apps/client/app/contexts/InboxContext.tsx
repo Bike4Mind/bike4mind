@@ -45,15 +45,11 @@ export const InboxProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     [queryClient]
   );
 
-  const inviteCallback = useCallback(
-    (type: string, data: IInviteDocument) => {
-      const operation = type === 'delete' ? type : 'write';
-      updateAllQueryData(queryClient, 'invites', operation, data, {
-        keysAllowedToCreate: [['invites', 'inbox']],
-      });
-    },
-    [queryClient]
-  );
+  // Refetch rather than write the event's document: the subscription withholds `recipients` from
+  // non-admins (server/websocket/dataSubscribeFieldLimits.ts), and the inbox filters on it.
+  const inviteCallback = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['invites', 'inbox'] });
+  }, [queryClient]);
 
   useSubscribeCollection<IInboxDocument>(
     'inboxes',

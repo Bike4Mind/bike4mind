@@ -67,6 +67,8 @@ pnpm turbo:test        # run tests
 
 Project layout: `apps/client` (Next.js SPA + pages API backend), `packages/cli` (interactive CLI + ReAct agent), `b4m-core/*` (the `@bike4mind/*` engine packages), `packages/database` (Mongoose models + migrations). Realtime WebSocket fanout ships as a separate `@bike4mind/subscriber-fanout` image. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide.
 
+Building an app that signs users in with Bike4Mind and bills AI usage to their accounts? See [Building an app on Bike4Mind](docs-site/docs/developers/building-on-b4m.md).
+
 ## Contributing
 
 Contributions are welcome — fork → topic branch → PR → squash-merge. All contributors sign a lightweight CLA on their first PR (you keep your copyright). Start with [CONTRIBUTING.md](./CONTRIBUTING.md) and our [Code of Conduct](./CODE_OF_CONDUCT.md). Questions and self-hosting help go in [Discussions](https://github.com/bike4mind/bike4mind/discussions).

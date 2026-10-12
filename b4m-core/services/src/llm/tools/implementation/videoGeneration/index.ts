@@ -33,12 +33,13 @@ const toRequest = (args: VideoToolArgs) => {
   const caps = VIDEO_MODEL_CATALOG[args.model];
   return {
     model: args.model,
-    mode: args.inputImageFileId ? 'image_to_video' : 'text_to_video',
+    mode: args.inputImageFileId || args.inputGeneratedImageKey ? 'image_to_video' : 'text_to_video',
     prompt: args.prompt,
     durationSeconds: args.durationSeconds ?? caps.defaults.durationSeconds,
     aspectRatio: args.aspectRatio ?? caps.defaults.aspectRatio,
     resolution: args.resolution ?? caps.defaults.resolution,
     ...(args.inputImageFileId ? { inputImageFileId: args.inputImageFileId } : {}),
+    ...(args.inputGeneratedImageKey ? { inputGeneratedImageKey: args.inputGeneratedImageKey } : {}),
   };
 };
 
@@ -68,6 +69,10 @@ export const videoGenerationTool: ToolDefinition = {
     return {
       toolFn: async (parameters?: unknown) => {
         const args = schema.parse(parameters);
+        // Checked here too (createVideoJob refuses it as well) so the model gets a message naming its own fields.
+        if (args.inputImageFileId && args.inputGeneratedImageKey) {
+          return 'Video generation failed (invalid_request): set inputImageFileId or inputGeneratedImageKey, not both.';
+        }
         const request = toRequest(args);
         const result = await config.createJob({
           user: { id: context.userId, organizationId: context.organizationId ?? null },

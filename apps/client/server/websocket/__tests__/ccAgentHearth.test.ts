@@ -146,6 +146,7 @@ function appendedEvent() {
       schema: string;
       payload: Record<string, unknown> & { activity?: { reason?: string }; slug?: string };
     };
+    origin?: string;
   };
 }
 
@@ -247,6 +248,7 @@ describe('cc_agent_register dual-write', () => {
     expect(appended.kind).toBe('presence');
     expect(appended.channelId).toBe('ch-default');
     expect(appended.actorId).toBe('actor-1');
+    expect(appended.origin).toBe('api-key');
     expect(hearthRepositoryMock.ensureChannelByName).toHaveBeenCalledWith(USER, 'agents');
     // The slug alone, and the shared presence schema: the hook covering this
     // same session composes the identical actor name and writes the identical
