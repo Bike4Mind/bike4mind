@@ -441,6 +441,24 @@ describe('ApiClient.fetch (the transport handed to @bike4mind/sdk)', () => {
     expect(await response.text()).toBe('data: [DONE]\n\n');
   });
 
+  it('passes the abort signal to axios, so cancelling a turn closes the stream socket', async () => {
+    const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
+    let seen: InternalAxiosRequestConfig | undefined;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      seen = config;
+      return Promise.resolve(respond(config, 200, Readable.from([Buffer.from('data: [DONE]\n\n')])));
+    }) as AxiosAdapter;
+    const controller = new AbortController();
+
+    await client.fetch('http://localhost:3000/api/ai/v1/completions', {
+      method: 'POST',
+      headers: { accept: 'text/event-stream' },
+      signal: controller.signal,
+    });
+
+    expect(seen?.signal).toBe(controller.signal);
+  });
+
   it('rethrows a failure with no response (a timeout) as the axios error', async () => {
     const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
     client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>

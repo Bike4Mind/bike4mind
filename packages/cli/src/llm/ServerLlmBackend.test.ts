@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { PassThrough, Readable } from 'stream';
+import { AxiosError } from 'axios';
 import { ServerLlmBackend } from './ServerLlmBackend';
 import type { ApiClient } from '../auth/ApiClient';
 import type { CompletionRequest } from './streamTransport';
@@ -73,6 +74,27 @@ describe('ServerLlmBackend SSE transport (open)', () => {
     });
     await expect(collect(backend)).rejects.toThrow('403 Forbidden: Request blocked');
   });
+
+  // Both strings are matched by isLlmUnavailableError (utils/handoff.ts) to decide fallback.
+  it.each([
+    ['connect ECONNREFUSED 127.0.0.1:3000', 'ECONNREFUSED', 'Cannot connect to Bike4Mind server'],
+    ['socket hang up', 'ECONNRESET', 'Failed to complete LLM request: socket hang up'],
+  ])(
+    'maps a no-response transport failure (%s), keeping the wording handoff.ts matches on',
+    async (cause, code, wording) => {
+      const backend = new ServerLlmBackend({
+        apiClient: {
+          baseURL: 'http://localhost:3000',
+          fetch: async () => {
+            // ApiClient.fetch rethrows a failure with no response as the axios error.
+            throw new AxiosError(cause, code);
+          },
+        } as unknown as ApiClient,
+        model: 'test-model',
+      });
+      await expect(collect(backend)).rejects.toThrow(wording);
+    }
+  );
 
   it('ends quietly when aborted mid-stream', async () => {
     const stream = new PassThrough();
