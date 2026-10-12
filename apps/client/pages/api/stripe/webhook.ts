@@ -7,11 +7,12 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { CreditHolderType, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
+import { CreditHolderType, CreditPurchaseEvents, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config, isDevelopment } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { StripeEvents } from '@server/utils/eventBus';
 import { BadRequestError } from '@server/utils/errors';
 import { customerExists, CustomerType, isStripeConfigured, stripe } from '@server/integrations/stripe/stripe';
@@ -74,44 +75,58 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   switch (event.type) {
     case 'payment_intent.succeeded': {
       const intent = event.data.object;
-      if (!intent.customer) {
-        req.logger.debug(`Ignoring intent without customer: ${intent.id}`);
-        break;
-      }
-
-      const customerId = typeof intent.customer === 'string' ? intent.customer : intent.customer.id;
-      const user = await userRepository.findByStripeCustomerId(customerId);
-      if (!user) {
-        req.logger.debug(`no such user with stripe ID: ${intent.customer}`);
-        break;
-      }
+      const customerId = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
+      const trace = { paymentIntentId: intent.id, metadataUserId: intent.metadata?.userId };
 
       if (intent.object !== 'payment_intent') {
         req.logger.debug(`Ignoring non-invoice webhook: ${intent.object}`);
-      } else if (intent.metadata?.environment !== Resource.App.stage) {
+        break;
+      }
+      if (intent.metadata?.environment !== Resource.App.stage) {
         req.logger.debug(
           `Ignoring webhook for wrong environment: ${intent.metadata?.environment}, wanted ${Resource.App.stage}`
         );
-      } else if (!intent.metadata?.credits || Number(intent.metadata.credits) < 1) {
+        break;
+      }
+      if (!intent.metadata?.credits || Number(intent.metadata.credits) < 1) {
         // Subscription-related payment intents don't carry credits metadata
         // and are handled via invoice.payment_succeeded instead
         req.logger.debug(`Ignoring intent without credits: ${intent.id}`);
-      } else {
-        req.logger.info(`Adding ${intent.metadata.credits} credits to user ${user.id}`);
+        break;
+      }
 
-        // Records the CreditTransaction (idempotent on stripePaymentIntentId),
-        // then atomically $inc's the balance and stamps the pack lot. Replaces a
-        // former read-modify-$set of the whole user doc, which reverted any concurrent
-        // balance write. (The unique stripePaymentIntentId index already blocked
-        // double-crediting on Stripe retries: createTransaction rethrew the E11000 before
-        // the increment. The $inc additionally makes the balance update itself atomic.)
+      req.logger.info('[CreditPurchase] Webhook received', { step: 'webhook_received', ...trace });
+
+      // The customer is the primary link; the server-set metadata.userId covers an intent whose
+      // customer is no longer on the user (e.g. after a customer.deleted).
+      const user =
+        (customerId ? await userRepository.findByStripeCustomerId(customerId) : null) ??
+        (intent.metadata?.userId ? await userRepository.findById(intent.metadata.userId) : null);
+      if (!user) {
+        // A paid intent with no purchaser is money taken with no credits granted. Logged loudly
+        // here; the creditPurchaseReconciliation cron also alerts on it.
+        req.logger.error('[CreditPurchase] No user for paid credit intent, credits not granted', {
+          step: 'grant_failed',
+          ...trace,
+        });
+        break;
+      }
+
+      const credits = Number(intent.metadata.credits);
+      // Records the CreditTransaction (idempotent on stripePaymentIntentId),
+      // then atomically $inc's the balance and stamps the pack lot. Replaces a
+      // former read-modify-$set of the whole user doc, which reverted any concurrent
+      // balance write. (The unique stripePaymentIntentId index already blocked
+      // double-crediting on Stripe retries: createTransaction rethrew the E11000 before
+      // the increment. The $inc additionally makes the balance update itself atomic.)
+      try {
         await creditService.addCredits(
           {
             type: 'purchase',
             ownerId: user.id,
             ownerType: CreditHolderType.User,
             amount: intent.amount,
-            credits: Number(intent.metadata.credits),
+            credits,
             status: CreditPurchaseStatus.Completed,
             stripePaymentIntentId: intent.id,
             packageId: intent.metadata.packageId,
@@ -128,7 +143,40 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             creditHolderMethods: userRepository,
           }
         );
+      } catch (err: unknown) {
+        // Duplicate key (code 11000) = a redelivery of an intent already granted
+        if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
+          req.logger.info('[CreditPurchase] Credits already granted for intent', {
+            step: 'already_granted',
+            userId: user.id,
+            ...trace,
+          });
+          break;
+        }
+        throw err;
       }
+
+      req.logger.info('[CreditPurchase] Credits granted', {
+        step: 'credits_granted',
+        userId: user.id,
+        credits,
+        amount: intent.amount,
+        ...trace,
+      });
+      await logEventSafe(
+        {
+          type: CreditPurchaseEvents.CREDITS_GRANTED,
+          userId: user.id,
+          metadata: {
+            paymentIntentId: intent.id,
+            amount: intent.amount,
+            credits,
+            ...(intent.metadata.packageId && { packageId: intent.metadata.packageId }),
+          },
+        },
+        undefined,
+        req.logger
+      );
       break;
     }
 

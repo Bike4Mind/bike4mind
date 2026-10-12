@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ForbiddenError } from '@server/utils/errors';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
+import { CreditPurchaseEvents } from '@bike4mind/common';
 
 // baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,6 +30,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockCreateCustomer = vi.fn();
 const mockPaymentIntentsCreate = vi.fn();
+const mockCustomersDel = vi.fn();
 vi.mock('@server/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
   CustomerType: { User: 'user' },
@@ -36,7 +38,15 @@ vi.mock('@server/integrations/stripe/stripe', () => ({
     paymentIntents: {
       create: (...args: unknown[]) => mockPaymentIntentsCreate(...args),
     },
+    customers: {
+      del: (...args: unknown[]) => mockCustomersDel(...args),
+    },
   },
+}));
+
+const mockLogEventSafe = vi.fn();
+vi.mock('@server/utils/analyticsLog', () => ({
+  logEventSafe: (...args: unknown[]) => mockLogEventSafe(...args),
 }));
 
 const mockHandlePerCredit = vi.fn();
@@ -67,6 +77,7 @@ function makeReq(body: unknown, userOverrides: Record<string, unknown> = {}) {
     disputePending: false,
     ...userOverrides,
   };
+  (req as Record<string, unknown>).logger = { info: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
@@ -84,6 +95,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       metadata: { credits: 500, pricePerCredit: '0.01' },
     });
     mockPaymentIntentsCreate.mockResolvedValue({ client_secret: 'cs_test_abc', id: 'pi_1' });
+    mockCustomersDel.mockResolvedValue({ id: 'cus_new', deleted: true });
   });
 
   it('creates a payment intent for a non-subscribed user buying a package', async () => {
@@ -93,7 +105,11 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
 
     expect(mockPaymentIntentsCreate).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
-    expect(res._getData()).toEqual({ clientSecret: 'cs_test_abc', publishableKey: 'pk_test_123' });
+    expect(res._getData()).toEqual({
+      clientSecret: 'cs_test_abc',
+      publishableKey: 'pk_test_123',
+      paymentIntentId: 'pi_1',
+    });
   });
 
   it('creates a payment intent for a non-subscribed user buying per-credit', async () => {
@@ -118,7 +134,65 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     expect(mockCreateCustomer).toHaveBeenCalledTimes(1);
     expect(mockUserUpdate).toHaveBeenCalledTimes(1);
     expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'user_1', stripeCustomerId: 'cus_new' });
+    expect(mockPaymentIntentsCreate).toHaveBeenCalledWith(expect.objectContaining({ customer: 'cus_new' }));
+    expect(mockCustomersDel).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
+  });
+
+  it('deletes and never persists a new customer when the payment intent cannot be created', async () => {
+    mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+    mockPaymentIntentsCreate.mockRejectedValue(new Error('stripe down'));
+    const { req, res } = makeReq(
+      { transactionType: TransactionType.Package, packageId: CreditPackageId.A },
+      { stripeCustomerId: null }
+    );
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow('stripe down');
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(mockCustomersDel).toHaveBeenCalledWith('cus_new');
+    expect(mockLogEventSafe).not.toHaveBeenCalled();
+  });
+
+  it('never deletes an existing customer when the payment intent cannot be created', async () => {
+    mockPaymentIntentsCreate.mockRejectedValue(new Error('stripe down'));
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.A });
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow('stripe down');
+    expect(mockCustomersDel).not.toHaveBeenCalled();
+  });
+
+  it('creates no customer when the purchase cannot be priced', async () => {
+    mockHandlePerCredit.mockRejectedValue(new Error('pricePerCredit setting missing'));
+    const { req, res } = makeReq(
+      { transactionType: TransactionType.PerCredit, credits: 500 },
+      { stripeCustomerId: null }
+    );
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow('pricePerCredit setting missing');
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+  });
+
+  it('records a PII-free checkout-started marker keyed by the payment intent id', async () => {
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.A });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockLogEventSafe).toHaveBeenCalledTimes(1);
+    const [event] = mockLogEventSafe.mock.calls[0];
+    expect(event).toEqual({
+      type: CreditPurchaseEvents.CHECKOUT_STARTED,
+      userId: 'user_1',
+      metadata: {
+        paymentIntentId: 'pi_1',
+        transactionType: TransactionType.Package,
+        amount: 1000,
+        credits: 10000,
+        packageId: CreditPackageId.A,
+      },
+    });
+    expect(JSON.stringify(event)).not.toContain('buyer@example.com');
+    expect(JSON.stringify(event)).not.toContain('cs_test_abc');
   });
 
   it('blocks a user with an open payment dispute before creating any payment intent', async () => {

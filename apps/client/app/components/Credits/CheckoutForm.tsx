@@ -1,17 +1,38 @@
-import { FC, useCallback, useEffect, useState } from 'react';
+import { FC, useCallback, useEffect, useRef, useState } from 'react';
 import { PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { Button } from '@mui/joy';
+import type { CreditPurchaseConfirmOutcome } from '@bike4mind/common';
+
+export interface ConfirmResult {
+  outcome: CreditPurchaseConfirmOutcome;
+  errorType?: string;
+  errorCode?: string;
+  declineCode?: string;
+}
 
 interface ICheckoutFormProps {
   clientSecret: string;
   onPayment: () => void;
+  onConfirmResult?: (result: ConfirmResult) => void;
 }
 
-const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
+function toOutcome(status: string | undefined): CreditPurchaseConfirmOutcome {
+  return status === 'succeeded' || status === 'processing' || status === 'requires_action' ? status : 'unknown';
+}
+
+const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfirmResult }) => {
   const stripe = useStripe();
   const elements = useElements();
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Callers pass an inline onPayment, so the status effect below re-runs on every parent render;
+  // without this an in-page success would re-announce itself each time.
+  const paidRef = useRef(false);
+  const notifyPaid = useCallback(() => {
+    if (paidRef.current) return;
+    paidRef.current = true;
+    onPayment();
+  }, [onPayment]);
 
   // Retrieve purchase status from Stripe
   useEffect(() => {
@@ -21,7 +42,7 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
       switch (paymentIntent?.status) {
         case 'succeeded':
           setMessage('Payment succeeded!');
-          onPayment();
+          notifyPaid();
           break;
         case 'processing':
           setMessage('Your payment is processing.');
@@ -34,7 +55,7 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
           break;
       }
     });
-  }, [clientSecret, onPayment, stripe]);
+  }, [clientSecret, notifyPaid, stripe]);
 
   const handleSubmit: (event: React.MouseEvent<HTMLButtonElement>) => void = useCallback(
     async e => {
@@ -45,24 +66,43 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
 
       setIsLoading(true);
 
-      const { error } = await stripe.confirmPayment({
+      // 'if_required' keeps card payments in-page so the result is observable here; methods that
+      // need a redirect (e.g. iDEAL) still go to return_url and are traced by the webhook instead.
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
           return_url: window.location.toString(),
         },
+        redirect: 'if_required',
       });
 
-      // Only reached if confirmPayment errors immediately; otherwise Stripe redirects the
-      // customer to return_url (some methods like iDEAL redirect via an intermediate site first).
-      if (error.type === 'card_error' || error.type === 'validation_error') {
-        setMessage(error.message ?? null);
+      if (error) {
+        onConfirmResult?.({
+          outcome: 'error',
+          errorType: error.type,
+          errorCode: error.code,
+          declineCode: error.decline_code,
+        });
+        if (error.type === 'card_error' || error.type === 'validation_error') {
+          setMessage(error.message ?? null);
+        } else {
+          setMessage('An unexpected error occurred.');
+        }
       } else {
-        setMessage('An unexpected error occurred.');
+        onConfirmResult?.({ outcome: toOutcome(paymentIntent?.status) });
+        if (paymentIntent?.status === 'succeeded') {
+          setMessage('Payment succeeded!');
+          notifyPaid();
+        } else if (paymentIntent?.status === 'processing') {
+          setMessage('Your payment is processing.');
+        } else {
+          setMessage('Something went wrong.');
+        }
       }
 
       setIsLoading(false);
     },
-    [elements, stripe]
+    [elements, notifyPaid, onConfirmResult, stripe]
   );
 
   return (
@@ -70,6 +110,7 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
       <PaymentElement id="payment-element" className="checkout-payment-element" options={{ layout: 'tabs' }} />
       <Button
         className="checkout-submit-button"
+        data-testid="checkout-submit-btn"
         disabled={isLoading || !stripe || !elements}
         id="submit"
         onClick={handleSubmit}

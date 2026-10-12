@@ -1,12 +1,16 @@
+import { CreditPurchaseConfirmOutcome, CreditPurchaseEvents } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { PaymentPayload, TransactionType } from '@client/lib/credits/types';
 import { Button } from '@mui/joy';
 import { loadStripe, Stripe } from '@stripe/stripe-js';
-import { FC, useCallback, useEffect, useMemo, useState } from 'react';
+import { isAxiosError } from 'axios';
+import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import PaymentModal from './PaymentModal';
+import type { ConfirmResult } from './CheckoutForm';
 import { getErrorMessage } from '@client/app/utils/error';
 
 interface IPaymentButtonProps {
@@ -17,12 +21,18 @@ interface IPaymentButtonProps {
  * Buy-credits button with a two-phase open: pressing it sets `wantOpen`, which triggers
  * a fetch of the client secret from the backend; once fetched it sets `open`, which loads
  * StripeJS and shows the CheckoutForm payment pop-over.
+ *
+ * Each step is recorded as a CreditPurchaseEvents analytics event keyed by the payment intent id,
+ * so a "paid and got nothing" claim can be traced through to the webhook's grant.
  */
 const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ...rest }) => {
   const [wantOpen, setWantOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const { mutate: logEvent } = useLogEvent();
+  const paymentIntentIdRef = useRef<string | null>(null);
+  const lastOutcomeRef = useRef<CreditPurchaseConfirmOutcome | undefined>(undefined);
   const pricePerCredit = useGetSettingsValue('pricePerCredit');
   const hasPricePerCredit = typeof pricePerCredit === 'number';
   const isPricePerCreditSettingRequired = rest.transactionType === TransactionType.PerCredit && !hasPricePerCredit;
@@ -40,12 +50,44 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
     }
   }, [rest]);
 
+  const handleStart = useCallback(() => {
+    logEvent({
+      type: CreditPurchaseEvents.CHECKOUT_REQUESTED,
+      metadata: {
+        transactionType: rest.transactionType,
+        ...(rest.transactionType === TransactionType.Package && { packageId: rest.packageId }),
+        ...(rest.transactionType === TransactionType.PerCredit && { credits: rest.credits }),
+      },
+    });
+    setWantOpen(true);
+  }, [logEvent, rest]);
+
+  const handleConfirmResult = useCallback(
+    (result: ConfirmResult) => {
+      lastOutcomeRef.current = result.outcome;
+      const paymentIntentId = paymentIntentIdRef.current;
+      if (!paymentIntentId) return;
+      logEvent({ type: CreditPurchaseEvents.PAYMENT_CONFIRM_RESULT, metadata: { paymentIntentId, ...result } });
+    },
+    [logEvent]
+  );
+
   const handleClose = useCallback(() => {
+    const paymentIntentId = paymentIntentIdRef.current;
+    const lastOutcome = lastOutcomeRef.current;
+    if (paymentIntentId && lastOutcome !== 'succeeded' && lastOutcome !== 'processing') {
+      logEvent({
+        type: CreditPurchaseEvents.PAYMENT_ABANDONED,
+        metadata: { paymentIntentId, ...(lastOutcome && { lastOutcome }) },
+      });
+    }
+    paymentIntentIdRef.current = null;
+    lastOutcomeRef.current = undefined;
     setWantOpen(false);
     setOpen(false);
     setStripePromise(null);
     setClientSecret(null);
-  }, []);
+  }, [logEvent]);
 
   // On button open, start the payment process by fetching the client secret
   useEffect(() => {
@@ -58,6 +100,13 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
             setStripePromise(loadStripe(response.data.publishableKey));
           }
           if (response.data.clientSecret) {
+            if (response.data.paymentIntentId) {
+              paymentIntentIdRef.current = response.data.paymentIntentId;
+              logEvent({
+                type: CreditPurchaseEvents.PAYMENT_FORM_OPENED,
+                metadata: { paymentIntentId: response.data.paymentIntentId },
+              });
+            }
             setClientSecret(response.data.clientSecret);
             // Open the payment pop-over
             setOpen(true);
@@ -65,6 +114,13 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
         })
         .catch(error => {
           console.error('Failed to start payment', error);
+          logEvent({
+            type: CreditPurchaseEvents.CHECKOUT_START_FAILED,
+            metadata: {
+              transactionType: rest.transactionType,
+              ...(isAxiosError(error) && error.response && { httpStatus: error.response.status }),
+            },
+          });
           toast.error(getErrorMessage(error));
           setWantOpen(false);
         });
@@ -73,7 +129,7 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
       setClientSecret(null);
       setOpen(false);
     }
-  }, [wantOpen, open, rest, stripePromise]);
+  }, [wantOpen, open, rest, stripePromise, logEvent]);
 
   if (isPricePerCreditSettingRequired) {
     return <>Missing pricePerCredit Admin Setting!</>;
@@ -83,7 +139,8 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
     <>
       <Button
         className="credits-modal-payment-button"
-        onClick={() => setWantOpen(true)}
+        data-testid="credits-purchase-btn"
+        onClick={handleStart}
         disabled={wantOpen || open || isPricePerCreditSettingRequired}
       >
         Purchase
@@ -97,6 +154,7 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
           clientSecret={clientSecret}
           productName={productName}
           onPayment={onPayment}
+          onConfirmResult={handleConfirmResult}
         />
       )}
     </>
