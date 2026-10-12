@@ -661,6 +661,9 @@ describe('reviewed repository inventory', () => {
         inventory.some(item => item.kind === kind),
         kind
       ).toBe(true);
-    expect(validateParityPolicy(inventory, selfhostParityPolicy, sourceFiles)).toEqual([]);
+    expect(
+      validateParityPolicy(inventory, selfhostParityPolicy, sourceFiles),
+      'Review each record, then update packages/scripts/src/selfhostParityPolicy.ts; see SELF_HOST.md "Background capability inventory guard"'
+    ).toEqual([]);
   });
 });
