@@ -52,27 +52,27 @@ Bike4Mind supports a wide range of state-of-the-art AI models for text generatio
 Anthropic models are available via both the Anthropic API and AWS Bedrock. Your administrator determines which backend is active for your organization.
 
 #### Claude Fable Series
-- **Claude Fable 5** — Anthropic's most capable model, built for complex long-running agentic tasks, with 1M context and adaptive reasoning. Generally available and selectable in the model picker. Its safety classifiers may decline some requests (targeting cybersecurity and research-biology content); when that happens the request transparently continues on Claude 4.8 Opus rather than failing.
+- **Claude Fable 5** — Anthropic's most capable model, built for complex long-running agentic tasks, with 1M context and adaptive reasoning. Generally available and selectable in the model picker. Its safety classifiers may decline some requests (targeting cybersecurity and research-biology content); when that happens the request transparently continues on Claude Opus 4.8 rather than failing.
 
 #### Claude 4.8 Series
-- **Claude 4.8 Opus** — Latest generally available Claude flagship, 1M context window with adaptive reasoning
+- **Claude Opus 4.8** — Latest generally available Claude flagship, 1M context window with adaptive reasoning
 
 #### Claude 4.7 Series
-- **Claude 4.7 Opus** — High-capability reasoning and analysis, 1M context window with adaptive reasoning
+- **Claude Opus 4.7** — High-capability reasoning and analysis, 1M context window with adaptive reasoning
 
 #### Claude 4.6 Series
-- **Claude 4.6 Opus** — Powerful reasoning and analysis, 1M context window
-- **Claude 4.6 Sonnet** — Enhanced coding, analysis, and complex reasoning with improved speed and efficiency
+- **Claude Opus 4.6** — Powerful reasoning and analysis, 1M context window
+- **Claude Sonnet 4.6** — Enhanced coding, analysis, and complex reasoning with improved speed and efficiency
 
 #### Claude 4.5 Series
-- **Claude 4.5 Opus** — Top-tier reasoning and analysis
-- **Claude 4.5 Sonnet** — Balanced performance and cost
-- **Claude 4.5 Haiku** — Fast and lightweight with large output capacity
+- **Claude Opus 4.5** — Top-tier reasoning and analysis
+- **Claude Sonnet 4.5** — Balanced performance and cost
+- **Claude Haiku 4.5** — Fast and lightweight with large output capacity
 
 #### Claude 4 Series
-- **Claude 4.1 Opus** — Enhanced Claude 4 with improved performance
-- **Claude 4 Opus** — Powerful reasoning and analysis
-- **Claude 4 Sonnet** — Balanced model with competitive pricing
+- **Claude Opus 4.1** — Enhanced Claude 4 with improved performance
+- **Claude Opus 4** — Powerful reasoning and analysis
+- **Claude Sonnet 4** — Balanced model with competitive pricing
 
 #### Claude 3 Series
 - **Claude 3.7 Sonnet** — Most advanced Claude 3.x model with thinking support
@@ -80,7 +80,7 @@ Anthropic models are available via both the Anthropic API and AWS Bedrock. Your 
 - **Claude 3.5 Haiku** — Fast and lightweight
 - **Claude 3 Opus** — Original top-tier Claude model
 
-Claude 3.x through 4.5 models (and Claude 4.6 Sonnet) support a 200K token context window. Claude 4.6 Opus and the newer Opus models (4.7, 4.8) and Claude Fable 5 support a 1M token context window.
+Claude 3.x through 4.5 models (and Claude Sonnet 4.6) support a 200K token context window. Claude Opus 4.6 and the newer Opus models (4.7, 4.8) and Claude Fable 5 support a 1M token context window.
 
 ### Google Gemini Models
 
@@ -225,21 +225,21 @@ Controls response length:
 ## Model Selection Best Practices
 
 ### For General Use
-- **GPT-4o Mini** or **Claude 4.5 Haiku**: Best balance of cost and performance
+- **GPT-4o Mini** or **Claude Haiku 4.5**: Best balance of cost and performance
 - **Gemini 2.5 Flash**: Fast responses for simple queries
 
 ### For Complex Tasks
-- **Claude 4.8 Opus** or **GPT-5.5**: Deep analysis and reasoning
+- **Claude Opus 4.8** or **GPT-5.5**: Deep analysis and reasoning
 - **O3** or **O4 Mini**: Mathematical and logical problems
 - **Gemini 2.5 Pro**: Massive document analysis (2M context)
 
 ### For Creative Writing
-- **Claude 4.5 Sonnet**: Nuanced creative output
+- **Claude Sonnet 4.5**: Nuanced creative output
 - **GPT-5**: Large context for long-form content
 - Temperature: 0.8-1.2
 
 ### For Code Generation
-- **Claude 4.5 Sonnet** or **GPT-4.1**: Excellent code comprehension
+- **Claude Sonnet 4.5** or **GPT-4.1**: Excellent code comprehension
 - **DeepSeek R1**: Strong reasoning for complex code tasks
 - Temperature: 0.3-0.5
 
@@ -258,7 +258,7 @@ Different models support different context lengths:
 | GPT-5.5 | ~1M tokens | Long documents, latest flagship |
 | GPT-5.4 | ~1M tokens | Long documents, deep analysis |
 | GPT-5 / 5.1 / 5.2 (incl. GPT-5 Mini/Nano), GPT-5.4 Mini/Nano | 400K tokens | Long documents |
-| Claude 4.6 Opus / Claude 4.7 Opus / Claude 4.8 Opus / Claude Fable 5 | 1M tokens | Largest Claude context |
+| Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8 / Claude Fable 5 | 1M tokens | Largest Claude context |
 | Claude (3.x–4.5, 4.6 Sonnet) | 200K tokens | Extensive analysis |
 | Gemini 2.5 Pro | 2M tokens | Largest documents |
 | Gemini 3.x / 2.5 Flash | 1M tokens | Large documents, fast |
@@ -276,10 +276,10 @@ Different models support different context lengths:
 4. **Choose the right model tier** for the task complexity
 
 ### Model Cost Tiers
-- **Economy**: GPT-4o Mini, Claude 4.5 Haiku, Gemini Flash, Grok 3 Mini Fast
-- **Standard**: GPT-4.1, Claude 4.5 Sonnet, Gemini 2.5 Flash, Grok 3
-- **Premium**: GPT-5, Claude 4.5 Opus, Gemini 2.5 Pro, Grok 4
-- **Ultra**: O3, Claude 4.6 Opus / Claude 4.7 Opus / Claude 4.8 Opus, GPT-5.5
+- **Economy**: GPT-4o Mini, Claude Haiku 4.5, Gemini Flash, Grok 3 Mini Fast
+- **Standard**: GPT-4.1, Claude Sonnet 4.5, Gemini 2.5 Flash, Grok 3
+- **Premium**: GPT-5, Claude Opus 4.5, Gemini 2.5 Pro, Grok 4
+- **Ultra**: O3, Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8, GPT-5.5
 
 ## API Keys & Custom Models
 

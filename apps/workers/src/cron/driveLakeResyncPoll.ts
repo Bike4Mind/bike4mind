@@ -18,25 +18,24 @@
  * Schedule: hourly. Enabled: production + dev. Capped per run so a large fleet drains across runs.
  */
 
-import { adminSettingsRepository, connectDB, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
+import { connectDB, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import {
+  DRIVE_LAKE_POLL_INTERVAL_MS,
+  readDriveLakePollFlags,
+} from '@server/integrations/google/drive/drivePollSchedule';
 import { Config } from '@server/utils/config';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'driveLakeResyncPoll' } });
 
-// A connection is re-polled at most this often. Folder content does not change second-to-second, so
-// a several-hour cadence catches same-day edits/deletes while keeping Drive API load modest. The
-// ingest handler stamps `lastPolledAt` on every run, so this is measured from the last actual sync.
-const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
 // How long a connection may go on incremental pulls alone before the next poll forces a FULL folder
 // re-walk. Drive's changes feed is per-FILE: dragging a subfolder into or out of the connected root
 // mutates only that folder's own `parents` and emits no records for the files underneath it, so no
 // number of incremental pulls will ever reclassify them. A periodic re-walk is the reconcile behind
 // that gap - it bounds how far the lake can drift from Drive, and it also backstops any single change
-// an incremental run had to leave unresolved. Sized well above POLL_INTERVAL_MS so the overwhelming
+// an incremental run had to leave unresolved. Sized well above DRIVE_LAKE_POLL_INTERVAL_MS so the overwhelming
 // majority of polls stay O(1), and a connection self-heals within a day rather than on a human's click.
 const FULL_WALK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -53,16 +52,14 @@ export async function handler() {
   const stage = Resource.App.stage;
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
 
-  // Parent feature gate, then the poll-specific opt-in. Either off => enqueue nothing (stays dark).
-  const featureOn = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
-  const pollOn = await adminSettingsRepository.getSettingsValue('EnableDataLakeDrivePoll');
+  const { featureOn, pollOn } = await readDriveLakePollFlags();
   if (!featureOn || !pollOn) {
-    logger.info('[driveLakeResyncPoll] disabled; skipping', { featureOn: !!featureOn, pollOn: !!pollOn });
+    logger.info('[driveLakeResyncPoll] disabled; skipping', { featureOn, pollOn });
     return { statusCode: 200, body: JSON.stringify({ enqueued: 0, disabled: true }) };
   }
 
   const now = Date.now();
-  const cutoff = new Date(now - POLL_INTERVAL_MS);
+  const cutoff = new Date(now - DRIVE_LAKE_POLL_INTERVAL_MS);
   const fullWalkCutoff = now - FULL_WALK_INTERVAL_MS;
   const due = await orgGoogleDriveConnectionRepository.findDueForPoll(cutoff, MAX_ENQUEUE_PER_RUN);
 

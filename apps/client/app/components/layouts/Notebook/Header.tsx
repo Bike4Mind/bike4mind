@@ -41,6 +41,7 @@ const NotebookHeader = () => {
 
   return (
     <Sheet
+      component="header"
       className="notebook-header-container"
       sx={{
         display: { xs: 'flex', sm: 'none' },

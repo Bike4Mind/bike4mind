@@ -69,7 +69,8 @@ body {
   top: 7px;
   left: 8px;
   color: var(--joy-palette-chatbox-messageInputColor);
-  opacity: 0.6;
+  /* 0.6 measured 3.6:1 in light mode; 0.75 clears 4.5:1 in both modes. */
+  opacity: 0.75;
   font-family: 'Libre Franklin', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   font-size: 16px;
   font-weight: 400;
@@ -487,10 +488,11 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
   transition: border-color 0.2s ease-in-out !important;
 }
 
-/* Set placeholder color to text.tertiary */
+/* Keep placeholder text at the token's tested contrast, including Inputs with local opacity rules. */
 [class*='JoyInput'] input::placeholder,
 [class*='JoyTextarea'] textarea::placeholder {
   color: var(--joy-palette-text-tertiary) !important;
+  opacity: 1 !important;
 }
 
 /* Remove Joy UI focus effect for Select components */

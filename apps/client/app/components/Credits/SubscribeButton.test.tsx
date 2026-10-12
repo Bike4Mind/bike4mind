@@ -38,16 +38,26 @@ const subRow = (overrides: Partial<IUserSubscription> = {}) =>
     ...overrides,
   }) as unknown as IUserSubscription;
 
-const renderButton = (subscriptions: IUserSubscription[], priceId = 'price_pro') =>
+const renderButton = (subscriptions: IUserSubscription[], priceId = 'price_pro', planName?: string) =>
   render(
     <TestWrapper>
-      <SubscribeButton priceId={priceId} cancellableSubscriptions={subscriptions} />
+      <SubscribeButton priceId={priceId} cancellableSubscriptions={subscriptions} planName={planName} />
     </TestWrapper>
   );
 
 describe('SubscribeButton', () => {
   beforeEach(() => {
     cancelMutate.mockReset();
+  });
+
+  it.each([
+    ['no plan', [] as IUserSubscription[], 'Subscribe to Professional'],
+    ['this plan', [subRow()], 'Cancel Professional subscription'],
+    ['another plan', [subRow({ priceId: 'price_other' })], 'Change subscription to Professional'],
+  ])('names the plan it acts on for a screen reader (holding %s)', (_label, subs, name) => {
+    renderButton(subs, 'price_pro', 'Professional');
+
+    expect(screen.getByRole('button', { name })).toBeEnabled();
   });
 
   // The issue's repro, as far as this component is concerned: a dunned row in the list
