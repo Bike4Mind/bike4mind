@@ -52,6 +52,8 @@ vi.mock('./manager/FinishSourceConnectBanner', () => ({ default: () => null }));
 // The repository picker has its own suite (GitHubRepositoryPickerModal.test.tsx) and reaches
 // react-query hooks this suite does not mock; here it is only mounted-once wiring, not behavior.
 vi.mock('./manager/GitHubRepositoryPickerModal', () => ({ default: () => null }));
+// Its own suite (DriveLakeResyncResume.test.tsx); it reads the user store this suite mocks as a hook.
+vi.mock('./manager/DriveLakeResyncResume', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {

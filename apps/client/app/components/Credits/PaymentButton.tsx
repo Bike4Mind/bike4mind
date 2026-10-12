@@ -12,9 +12,12 @@ import { toast } from 'sonner';
 import PaymentModal from './PaymentModal';
 import type { ConfirmResult } from './CheckoutForm';
 import { getErrorMessage } from '@client/app/utils/error';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
 interface IPaymentButtonProps {
   onPayment: () => void;
+  /** Accessible name naming what this buys; the visible label is a bare "Purchase". */
+  ariaLabel?: string;
 }
 
 /*
@@ -25,7 +28,7 @@ interface IPaymentButtonProps {
  * Each step is recorded as a CreditPurchaseEvents analytics event keyed by the payment intent id,
  * so a "paid and got nothing" claim can be traced through to the webhook's grant.
  */
-const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ...rest }) => {
+const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ariaLabel, ...rest }) => {
   const [wantOpen, setWantOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(null);
@@ -40,10 +43,10 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
   const productName = useMemo(() => {
     switch (rest.transactionType) {
       case TransactionType.PerCredit:
-        return `${rest.credits.toLocaleString()} Credits`;
+        return `${formatCreditAmount(rest.credits)} Credits`;
       case TransactionType.Package: {
         const packageInfo = CREDIT_PACKAGES[rest.packageId];
-        return `${packageInfo.credits.toLocaleString()} Credits Package`;
+        return `${formatCreditAmount(packageInfo.credits)} Credits Package`;
       }
       default:
         return 'Unknown Subscription Plan';
@@ -140,6 +143,7 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ..
       <Button
         className="credits-modal-payment-button"
         data-testid="credits-purchase-btn"
+        aria-label={ariaLabel}
         onClick={handleStart}
         disabled={wantOpen || open || isPricePerCreditSettingRequired}
       >

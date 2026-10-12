@@ -123,6 +123,7 @@ export function getLlmByModel(
         case ChatModels.CLAUDE_FABLE_5_1_BEDROCK:
         case ChatModels.CLAUDE_5_OPUS_BEDROCK:
         case ChatModels.CLAUDE_5_5_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_5_5_HAIKU_BEDROCK:
           backend = new AnthropicBedrockBackend();
           break;
         case ChatModels.LLAMA3_INSTRUCT_8B_V1:

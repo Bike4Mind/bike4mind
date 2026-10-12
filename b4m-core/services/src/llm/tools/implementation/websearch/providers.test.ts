@@ -356,6 +356,108 @@ describe('SerpAPI geo-targeting', () => {
   });
 });
 
+describe('outgoing search request logging', () => {
+  const FAKE_KEY = 'fake-serp-key-1234567890';
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  const loggedRequest = (spy: ReturnType<typeof vi.spyOn>, message: string) =>
+    (
+      spy.mock.calls.find(([msg]) => String(msg).includes(message))?.[1] as
+        { request?: Record<string, string> } | undefined
+    )?.request;
+  const allLoggedText = () => JSON.stringify([...logSpy.mock.calls, ...errorSpy.mock.calls]);
+
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue(FAKE_KEY);
+    logSpy = vi.spyOn(Logger.globalInstance, 'log').mockImplementation(() => undefined);
+    errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('logs the SerpAPI query, result count, recency and geo-targeting, never the key', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [] }));
+
+    await serpApiSearch(adapters, 'job shop scheduling', 10, { recencyDays: 30 });
+
+    expect(loggedRequest(logSpy, 'WebSearch Tool: SerpAPI response')).toEqual({
+      q: 'job shop scheduling',
+      num: '10',
+      tbs: 'qdr:m',
+      location: 'United States',
+      gl: 'us',
+    });
+    expect(allLoggedText()).not.toContain(FAKE_KEY);
+  });
+
+  it('logs no geo-targeting for a query that names its own place', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [] }));
+
+    await serpApiSearch(adapters, 'coffee in Tokyo', 3, { locationInQuery: true });
+
+    expect(loggedRequest(logSpy, 'WebSearch Tool: SerpAPI response')).toEqual({ q: 'coffee in Tokyo', num: '3' });
+  });
+
+  it('logs the request on a failed SerpAPI attempt, never the key', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ error: 'Invalid API key' }, false, 401));
+
+    await expect(serpApiSearch(adapters, 'job shop scheduling', 5, { maxAttempts: 1 })).rejects.toThrow();
+    fetchMock.mockRejectedValue(new Error('boom'));
+    await expect(serpApiSearch(adapters, 'job shop scheduling', 5, { maxAttempts: 1 })).rejects.toThrow('boom');
+
+    for (const message of ['WebSearch Tool: API error details:', 'WebSearch Tool: SerpAPI request failed:']) {
+      expect(loggedRequest(errorSpy, message)).toMatchObject({ q: 'job shop scheduling', num: '5' });
+    }
+    expect(allLoggedText()).not.toContain(FAKE_KEY);
+  });
+
+  it('logs the SearXNG query, recency, limit and hit count on success', async () => {
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        results: [
+          { url: 'https://a.com', title: 'A', content: 'a' },
+          { url: 'https://b.com', title: 'B', content: 'b' },
+        ],
+      })
+    );
+
+    await createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5, { recencyDays: 30 });
+
+    expect(logSpy).toHaveBeenCalledWith('WebSearch Tool: SearXNG response', {
+      status: 200,
+      request: { q: 'job shop scheduling', time_range: 'month', limit: 5 },
+      hits: 2,
+    });
+  });
+
+  it('logs the SearXNG request on a non-OK response', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 500));
+
+    await createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5, { recencyDays: 30 });
+
+    expect(loggedRequest(errorSpy, 'WebSearch Tool: SearXNG error')).toEqual({
+      q: 'job shop scheduling',
+      time_range: 'month',
+      limit: 5,
+    });
+  });
+
+  it('logs the SearXNG request when the fetch throws', async () => {
+    fetchMock.mockRejectedValue(new Error('boom'));
+
+    await createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5);
+
+    expect(errorSpy).toHaveBeenCalledWith('❌ WebSearch Tool: SearXNG request failed:', {
+      request: { q: 'job shop scheduling', limit: 5 },
+      error: 'boom',
+    });
+  });
+});
+
 describe('resolveWebSearchProvider precedence', () => {
   it('forces SearXNG when the admin choice is searxng and a URL is set', async () => {
     mockGetProvider.mockResolvedValue('searxng');

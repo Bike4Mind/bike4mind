@@ -84,6 +84,26 @@ describe('OrgGoogleDriveConnectionModel - credential handling', () => {
     expect(withCreds?.oauthRefreshToken).toBe('enc-new');
   });
 
+  it('updateCredential recovers a connection parked in needs_reconnect so it can be claimed again', async () => {
+    const created = await OrgGoogleDriveConnection.create({ ...base, oauthRefreshToken: 'enc-old' });
+    const claim = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    expect(claim).not.toBeNull();
+    await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, claim!, 'folder gone', 'needs_reconnect');
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('needs_reconnect');
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBeNull();
+
+    const updated = await orgGoogleDriveConnectionRepository.updateCredential(
+      created.id,
+      org('org-1'),
+      'enc-new',
+      'user-2'
+    );
+
+    expect(updated?.status).toBe('connected');
+    expect(updated?.lastError ?? null).toBeNull();
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).not.toBeNull();
+  });
+
   it('updateCredential writes the credential but does NOT heal a syncing connection (no claim flip)', async () => {
     // A Re-sync issued while an ingest is in flight must not flip 'syncing' -> 'connected', or
     // claimForSync would let the re-triggered run claim on top of the live one (duplicate ingest).
@@ -363,6 +383,28 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, claimToken!, null);
     expect(released?.status).toBe('connected');
     expect(released?.lastError).toBeNull();
+  });
+
+  it('releaseSyncClaim parks the connection in needs_reconnect and drops it from the poll scan', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    const claimToken = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(
+      created.id,
+      claimToken!,
+      'folder gone',
+      'needs_reconnect'
+    );
+    expect(released?.status).toBe('needs_reconnect');
+
+    const stored = await OrgGoogleDriveConnection.findById(created.id);
+    expect(stored?.status).toBe('needs_reconnect');
+    expect(stored?.lastError).toBe('folder gone');
+    expect(stored?.ingestClaimToken).toBeUndefined();
+    expect(stored?.activeIngestBatchId).toBeUndefined();
+
+    const due = await orgGoogleDriveConnectionRepository.findDueForPoll(new Date(Date.now() + 60 * 60 * 1000), 10);
+    expect(due.map(d => d.id)).not.toContain(created.id);
   });
 
   it('releaseSyncClaim is guarded: it never clobbers a terminal status set under the claim', async () => {

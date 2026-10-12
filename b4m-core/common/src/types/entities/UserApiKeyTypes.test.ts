@@ -21,6 +21,7 @@ const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.READ_FILES,
   ApiKeyScope.WRITE_FILES,
   ApiKeyScope.AI_GENERATE,
+  ApiKeyScope.AI_DECIDE,
   ApiKeyScope.AI_CHAT,
   ApiKeyScope.READ_PROJECTS,
   ApiKeyScope.WRITE_PROJECTS,
