@@ -8,7 +8,7 @@ import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useConfig } from '@client/app/hooks/data/settings';
-import { filterToolsForDisplay } from '@client/app/utils/toolMapping';
+import { filterToolsForDisplay, isToolDenied } from '@client/app/utils/toolMapping';
 import { useIsMobile, useIsTablet } from '@client/app/hooks/useIsMobile';
 import { Casino as CasinoIcon, Tag as TagIcon } from '@mui/icons-material';
 import { useShallow } from 'zustand/react/shallow';
@@ -105,11 +105,14 @@ const AISettings: FC<AISettingsProps> = ({
 
   const primaryTools = ['web_search', 'web_fetch', 'image_generation'] as const;
   // Indicators must agree with the Tools picker: a tool whose key is missing renders
-  // off there, so it must not show an icon or feed the "+N" badge here either. The
-  // raw `tools` still goes to ToolsButton below - that array is what handleToggleTool
-  // reads and rewrites, so filtering it would drop preferences on the next toggle.
-  const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability);
+  // off there, and one the session denies is not listed at all, so neither may show an
+  // icon or feed the "+N" badge here. The raw `tools` still goes to ToolsButton below -
+  // that array is what handleToggleTool reads and rewrites, so filtering it would drop
+  // preferences on the next toggle.
+  const disabledTools = currentSession?.disabledTools;
+  const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability, disabledTools);
   const activePrimaryTools = primaryTools.filter(tool => displayTools.includes(tool));
+  const isImageGenerationDenied = isToolDenied('image_generation', disabledTools);
   const isThinkingActive = thinking?.enabled ?? false;
   // Integrations that actually reach this turn. "Only tools I pick" withholds every
   // non-agent-only MCP tool server-side (`offerOnlyNamedTools` in sharedToolBuilder), so
@@ -207,6 +210,7 @@ const AISettings: FC<AISettingsProps> = ({
           enabledMcpServers={activeMcpServers}
           availableMcpServers={availableMcpServers}
           setTools={newTools => setLLM({ tools: newTools })}
+          disabledTools={disabledTools}
         />
 
         {/* Agents */}
@@ -252,7 +256,7 @@ const AISettings: FC<AISettingsProps> = ({
         {isImageTemplatesEnabled && isImageModel(model) && <ImageTemplateControls />}
 
         {/* Prompt Builder (guided prompt construction; generation models only) */}
-        {isPromptBuilderEnabled && isImageGenerationModel(model) && (
+        {isPromptBuilderEnabled && isImageGenerationModel(model) && !isImageGenerationDenied && (
           <Tooltip title={showPromptBuilderHint ? 'New: build image prompts here' : 'Prompt Builder'}>
             <Badge
               size="sm"
@@ -281,9 +285,9 @@ const AISettings: FC<AISettingsProps> = ({
 
         {!isTablet && (
           <>
-            {/* Dice Roll Icon. Raw `tools` on purpose: dice_roll needs no API key, so
-                it has no toolAvailability entry and can never be key-gated. */}
-            {tools.includes('dice_roll') && (
+            {/* Dice Roll Icon. displayTools, not raw `tools`: dice_roll needs no API key, so only
+                a session denylist can filter it out, and then the panel hides its row too. */}
+            {displayTools.includes('dice_roll') && (
               <Tooltip title="Roll Dice">
                 <IconButton
                   variant={'outlined'}
@@ -321,6 +325,7 @@ const AISettings: FC<AISettingsProps> = ({
         setStream={setStream}
         voiceOver={voiceOver || false}
         onRollDice={onRollDice}
+        disabledTools={disabledTools}
       />
 
       {isPromptBuilderEnabled && <PromptBuilderModal />}

@@ -15,8 +15,15 @@ import React, {
   createContext,
   ComponentProps,
 } from 'react';
-import ReactMarkdown, { ExtraProps } from 'react-markdown';
+import ReactMarkdown, { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
 import { createMarkdownComponents } from './markdown/markdownComponents';
+import {
+  CITATION_MARKER_TAG,
+  CitationMarker,
+  shouldLinkCitationMarkers,
+  ReplyCitablesContext,
+  remarkCitationMarkers,
+} from './markdown/inlineCitations';
 import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
@@ -86,7 +93,7 @@ import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
 import LocationMap from './LocationMap';
 import { LOCATION_MAP_LANGUAGE, placesFromCitables } from './parseLocationMap';
-import type { WebSearchPlace } from '@bike4mind/common';
+import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
@@ -134,6 +141,8 @@ const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
   const replyComplete = useContext(ReplyCompleteContext);
   return <SearchResultCards content={content} replyComplete={replyComplete} />;
 };
+
+const NO_CITABLES: readonly CitableSource[] = [];
 
 // The web_search places of the reply being rendered, keyed by place id - the only source of map
 // pins. Context for the same identity-stability reason as ReplyCompleteContext above.
@@ -1304,6 +1313,17 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
+  // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search
+  // highlighting matches across it) rather than one element per marker.
+  const linksCitationMarkers = shouldLinkCitationMarkers(promptMeta?.citables ?? NO_CITABLES, !!completed);
+  const replyRemarkPlugins = useMemo(
+    (): ReactMarkdownOptions['remarkPlugins'] => [
+      remarkGfmNoSingleTilde,
+      [remarkMath, { singleDollarTextMath: false }],
+      ...(linksCitationMarkers ? [remarkCitationMarkers] : []),
+    ],
+    [linksCitationMarkers]
+  );
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1812,47 +1832,47 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           <div className="b4m-md">
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
-                                <ReactMarkdown
-                                  components={{
-                                    ...markdownComponents,
-                                    code: codeComponent,
-                                    img: ({ alt, src, title }) => {
-                                      if (!src) {
-                                        return null;
-                                      }
+                                <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
+                                  <ReactMarkdown
+                                    components={{
+                                      ...markdownComponents,
+                                      code: codeComponent,
+                                      img: ({ alt, src, title }) => {
+                                        if (!src) {
+                                          return null;
+                                        }
 
-                                      const srcStr = typeof src === 'string' ? src : '';
-                                      if (
-                                        srcStr.startsWith('/mnt/') ||
-                                        srcStr.startsWith('/tmp/') ||
-                                        srcStr.startsWith('file://') ||
-                                        srcStr.startsWith('sandbox:') ||
-                                        srcStr.includes('/mnt/data/')
-                                      ) {
-                                        return null;
-                                      }
+                                        const srcStr = typeof src === 'string' ? src : '';
+                                        if (
+                                          srcStr.startsWith('/mnt/') ||
+                                          srcStr.startsWith('/tmp/') ||
+                                          srcStr.startsWith('file://') ||
+                                          srcStr.startsWith('sandbox:') ||
+                                          srcStr.includes('/mnt/data/')
+                                        ) {
+                                          return null;
+                                        }
 
-                                      return (
-                                        <ImageContainer
-                                          src={srcStr}
-                                          index={0}
-                                          totalImages={1}
-                                          images={[srcStr]}
-                                          onSendMessage={onSendMessage}
-                                        />
-                                      );
-                                    },
-                                    a: link,
-                                  }}
-                                  remarkPlugins={[
-                                    remarkGfmNoSingleTilde,
-                                    [remarkMath, { singleDollarTextMath: false }],
-                                  ]}
-                                  rehypePlugins={[rehypeKatex]}
-                                  remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                                >
-                                  {mathReadyContent}
-                                </ReactMarkdown>
+                                        return (
+                                          <ImageContainer
+                                            src={srcStr}
+                                            index={0}
+                                            totalImages={1}
+                                            images={[srcStr]}
+                                            onSendMessage={onSendMessage}
+                                          />
+                                        );
+                                      },
+                                      a: link,
+                                      [CITATION_MARKER_TAG]: CitationMarker,
+                                    }}
+                                    remarkPlugins={replyRemarkPlugins}
+                                    rehypePlugins={[rehypeKatex]}
+                                    remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                                  >
+                                    {mathReadyContent}
+                                  </ReactMarkdown>
+                                </ReplyCitablesContext.Provider>
                               </ReplyPlacesContext.Provider>
                             </ReplyCompleteContext.Provider>
                           </div>
@@ -1872,9 +1892,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
 
-      {/* Below the reply, not above it. The [N] markers are plain text in the body, so a list
-          above it means reading forward to the marker and then scrolling BACK past the answer
-          to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
+      {/* Below the reply, not above it. A reader who does not click an inline [N] marker resolves
+          it here, so a list above it means reading forward to the marker and then scrolling BACK
+          past the answer to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
           above pushed text the reader had already started reading down the page.
 
           After the expand control, which belongs to the reply body it truncates, and before
