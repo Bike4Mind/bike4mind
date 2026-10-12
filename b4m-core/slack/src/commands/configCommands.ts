@@ -86,6 +86,8 @@ export function formatModelName(modelId: string): string {
     'global.anthropic.claude-opus-4-8': 'Claude Opus 4.8',
     'global.anthropic.claude-opus-4-7': 'Claude Opus 4.7',
     'claude-opus-4-6': 'Claude Opus 4.6',
+    'claude-haiku-5-5': 'Claude Haiku 5.5',
+    'global.anthropic.claude-haiku-5-5': 'Claude Haiku 5.5',
     'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
     'gpt-4.1': 'GPT-4.1',
     'gpt-4.1-mini': 'GPT-4.1 Mini',
