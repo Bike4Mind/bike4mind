@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface OtcRateLimitError {
   code?: string;
@@ -12,6 +13,10 @@ export interface OtcRateLimit {
   initialSeconds: number;
   /** Returns true when the error was a 429 with a wait and the countdown started. */
   handleError: (error: unknown) => boolean;
+  /** True when the server wait exceeded the client cap, so the announced duration would understate it. */
+  capped: boolean;
+  /** Message for a failed send: a client "try again" string for Retry-After 0, else the server message or fallback. */
+  errorMessage: (error: unknown, fallback: string) => string;
   clear: () => void;
 }
 
@@ -35,6 +40,8 @@ export function waitMinutes(totalSeconds: number): number | null {
 export function useOtcRateLimit(): OtcRateLimit {
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [initialSeconds, setInitialSeconds] = useState(0);
+  const [capped, setCapped] = useState(false);
+  const { t } = useTranslation();
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stop = useCallback(() => {
@@ -48,6 +55,7 @@ export function useOtcRateLimit(): OtcRateLimit {
     stop();
     setSecondsLeft(0);
     setInitialSeconds(0);
+    setCapped(false);
   }, [stop]);
 
   const handleError = useCallback(
@@ -56,11 +64,13 @@ export function useOtcRateLimit(): OtcRateLimit {
       if (code !== 'CLIENT_ERROR_429') return false;
       // Retry-After: 0 means "retry now" (lost a concurrent-send race), so no lockout; the caller shows the server message.
       if (retryAfterSeconds === 0) return false;
-      const wait =
+      const requested =
         typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0
-          ? Math.min(Math.ceil(retryAfterSeconds), MAX_WAIT_SECONDS)
+          ? Math.ceil(retryAfterSeconds)
           : FALLBACK_WAIT_SECONDS;
+      const wait = Math.min(requested, MAX_WAIT_SECONDS);
       stop();
+      setCapped(requested > MAX_WAIT_SECONDS);
       setInitialSeconds(wait);
       setSecondsLeft(wait);
       timerRef.current = setInterval(() => {
@@ -68,6 +78,7 @@ export function useOtcRateLimit(): OtcRateLimit {
           if (prev <= 1) {
             stop();
             setInitialSeconds(0);
+            setCapped(false);
             return 0;
           }
           return prev - 1;
@@ -78,5 +89,14 @@ export function useOtcRateLimit(): OtcRateLimit {
     [stop]
   );
 
-  return { secondsLeft, initialSeconds, handleError, clear };
+  const errorMessage = useCallback(
+    (error: unknown, fallback: string): string => {
+      const { code, retryAfterSeconds, message } = (error ?? {}) as OtcRateLimitError & { message?: string };
+      if (code === 'CLIENT_ERROR_429' && retryAfterSeconds === 0) return t('auth.rateLimitRetryNow');
+      return message || fallback;
+    },
+    [t]
+  );
+
+  return { secondsLeft, initialSeconds, capped, errorMessage, handleError, clear };
 }

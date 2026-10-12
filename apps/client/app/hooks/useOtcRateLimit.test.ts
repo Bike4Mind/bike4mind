@@ -56,6 +56,30 @@ describe('useOtcRateLimit', () => {
     expect(result.current.secondsLeft).toBe(3600);
   });
 
+  it('flags a wait above the cap so the notice does not promise a duration', () => {
+    const { result } = renderHook(() => useOtcRateLimit());
+    act(() => {
+      result.current.handleError({ code: 'CLIENT_ERROR_429', retryAfterSeconds: 7200 });
+    });
+    expect(result.current.capped).toBe(true);
+    act(() => {
+      result.current.handleError({ code: 'CLIENT_ERROR_429', retryAfterSeconds: 30 });
+    });
+    expect(result.current.capped).toBe(false);
+  });
+
+  it('replaces the server "please wait" message when Retry-After is 0', () => {
+    const { result } = renderHook(() => useOtcRateLimit());
+    const error = {
+      code: 'CLIENT_ERROR_429',
+      retryAfterSeconds: 0,
+      message: 'Please wait before requesting another code.',
+    };
+    expect(result.current.errorMessage(error, 'x')).toBe('auth.rateLimitRetryNow');
+    expect(result.current.errorMessage({ code: 'CLIENT_ERROR_500', message: 'boom' }, 'x')).toBe('boom');
+    expect(result.current.errorMessage({}, 'fallback')).toBe('fallback');
+  });
+
   it('restarts rather than stacking timers on a second 429', () => {
     const { result } = renderHook(() => useOtcRateLimit());
     act(() => {

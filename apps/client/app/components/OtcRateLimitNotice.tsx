@@ -4,16 +4,19 @@ import { waitMinutes } from '@client/app/hooks/useOtcRateLimit';
 
 interface OtcRateLimitNoticeProps {
   initialSeconds: number;
+  /** Server wait exceeded the client cap, so show a vague message rather than a wrong duration. */
+  capped?: boolean;
   testId: string;
 }
 
 /** Announced once when a code request is rate limited; the live countdown lives on the Continue button. */
-export default function OtcRateLimitNotice({ initialSeconds, testId }: OtcRateLimitNoticeProps) {
+export default function OtcRateLimitNotice({ initialSeconds, capped = false, testId }: OtcRateLimitNoticeProps) {
   const { t } = useTranslation();
   if (initialSeconds <= 0) return null;
   const minutes = waitMinutes(initialSeconds);
-  const message =
-    minutes === null
+  const message = capped
+    ? t('auth.rateLimitedLater')
+    : minutes === null
       ? t('auth.rateLimitedSeconds', { count: initialSeconds })
       : t('auth.rateLimitedMinutes', { count: minutes });
 

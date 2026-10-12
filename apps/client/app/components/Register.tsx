@@ -215,8 +215,7 @@ const Register: React.FC = () => {
       toastOtcCodeSent(t('auth.codeSent'));
     } catch (error: unknown) {
       if (rateLimit.handleError(error)) return;
-      const serverMsg: string = (error as Record<string, string>)?.message || '';
-      setCreateError(serverMsg || t('auth.errors.registrationFailed'));
+      setCreateError(rateLimit.errorMessage(error, t('auth.errors.registrationFailed')));
     }
   };
 
@@ -229,7 +228,7 @@ const Register: React.FC = () => {
       startResendCooldown();
     } catch (error) {
       if (rateLimit.handleError(error)) return;
-      const errorMessage = (error as { message?: string })?.message || 'Failed to resend code';
+      const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
     }
   };
@@ -805,6 +804,7 @@ const Register: React.FC = () => {
                       </Button>
                       <OtcRateLimitNotice
                         initialSeconds={rateLimit.initialSeconds}
+                        capped={rateLimit.capped}
                         testId="register-rate-limit-alert"
                       />
                     </FormControl>
@@ -919,7 +919,11 @@ const Register: React.FC = () => {
                     : t('auth.resendCode')}
                 </Link>
               </Box>
-              <OtcRateLimitNotice initialSeconds={rateLimit.initialSeconds} testId="register-otc-rate-limit-alert" />
+              <OtcRateLimitNotice
+                initialSeconds={rateLimit.initialSeconds}
+                capped={rateLimit.capped}
+                testId="register-otc-rate-limit-alert"
+              />
 
               <Box sx={{ display: 'flex', justifyContent: 'center', mt: '12px' }}>
                 <Link

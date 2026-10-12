@@ -242,7 +242,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       // so read .message off either shape - otherwise real server messages like the OTC
       // rate-limit's "try again in N seconds" collapse into "An unexpected error occurred".
       if (rateLimit.handleError(error)) return;
-      const errorMessage = (error as { message?: string })?.message || 'An unexpected error occurred';
+      const errorMessage = rateLimit.errorMessage(error, 'An unexpected error occurred');
       toast.error(errorMessage);
     } finally {
       setIsCheckingStrategy(false);
@@ -259,7 +259,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     } catch (error) {
       // Same plain-object rejection shape as handleEmailSubmit above.
       if (rateLimit.handleError(error)) return;
-      const errorMessage = (error as { message?: string })?.message || 'Failed to resend code';
+      const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
     }
   };
@@ -556,6 +556,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     setAcceptPolicies(false);
     setConfirmAdult(false);
     setPendingToken(null);
+    rateLimit.clear();
   };
 
   if (isLoggedIn) {
@@ -832,7 +833,11 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                         : t('auth.continue')}
                   </Typography>
                 </Button>
-                <OtcRateLimitNotice initialSeconds={rateLimit.initialSeconds} testId="login-rate-limit-alert" />
+                <OtcRateLimitNotice
+                  initialSeconds={rateLimit.initialSeconds}
+                  capped={rateLimit.capped}
+                  testId="login-rate-limit-alert"
+                />
                 <Typography
                   data-testid="login-no-password-hint"
                   level="body-xs"
@@ -972,7 +977,11 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                       : t('auth.resendCode')}
                   </Link>
                 </Box>
-                <OtcRateLimitNotice initialSeconds={rateLimit.initialSeconds} testId="login-otc-rate-limit-alert" />
+                <OtcRateLimitNotice
+                  initialSeconds={rateLimit.initialSeconds}
+                  capped={rateLimit.capped}
+                  testId="login-otc-rate-limit-alert"
+                />
               </form>
             )}
 
