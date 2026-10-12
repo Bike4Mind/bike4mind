@@ -159,6 +159,8 @@ const Register: React.FC = () => {
     };
   }, []);
 
+  const resendBlockedSeconds = Math.max(resendCooldown, rateLimit.secondsLeft);
+
   const startResendCooldown = () => {
     // Match the server-side OTC_SEND_COOLDOWN_MS (30s) in /api/otc/send so the client
     // countdown doesn't block a resend the server would already allow.
@@ -197,6 +199,7 @@ const Register: React.FC = () => {
   useBrandingSettings();
 
   const onSubmit = async (data: RegisterFormData) => {
+    if (rateLimit.secondsLeft > 0) return;
     setCreateError(null);
     setServerUsernameError(null);
     setServerEmailError(null);
@@ -218,14 +221,15 @@ const Register: React.FC = () => {
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0 || !submittedData) return;
+    if (resendCooldown > 0 || rateLimit.secondsLeft > 0 || !submittedData) return;
     try {
       const result = await sendOTC({ email: submittedData.email });
       setPendingToken(result.pendingToken);
       toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to resend code';
+      if (rateLimit.handleError(error)) return;
+      const errorMessage = (error as { message?: string })?.message || 'Failed to resend code';
       toast.error(errorMessage);
     }
   };
@@ -904,15 +908,18 @@ const Register: React.FC = () => {
                   sx={{
                     fontWeight: 500,
                     fontSize: '14px',
-                    cursor: resendCooldown > 0 ? 'default' : 'pointer',
-                    opacity: resendCooldown > 0 ? 0.5 : 1,
+                    cursor: resendBlockedSeconds > 0 ? 'default' : 'pointer',
+                    opacity: resendBlockedSeconds > 0 ? 0.5 : 1,
                     transition: 'color 0.2s ease-in-out, opacity 0.2s ease-in-out',
-                    '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
+                    '&:hover': { textDecoration: resendBlockedSeconds > 0 ? 'none' : 'underline' },
                   }}
                 >
-                  {resendCooldown > 0 ? `${t('auth.resendCode')} (${resendCooldown}s)` : t('auth.resendCode')}
+                  {resendBlockedSeconds > 0
+                    ? `${t('auth.resendCode')} (${formatCountdown(resendBlockedSeconds)})`
+                    : t('auth.resendCode')}
                 </Link>
               </Box>
+              <OtcRateLimitNotice initialSeconds={rateLimit.initialSeconds} testId="register-otc-rate-limit-alert" />
 
               <Box sx={{ display: 'flex', justifyContent: 'center', mt: '12px' }}>
                 <Link

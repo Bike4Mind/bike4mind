@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, within, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -465,5 +465,36 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
     expect(screen.getByTestId('login-continue-btn')).toBeDisabled();
     expect(screen.getByTestId('login-continue-btn')).toHaveTextContent('auth.retryIn');
     expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it('shows the same notice, not a toast, when resending a code is rate limited', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.sendOTC.mockResolvedValueOnce({ pendingToken: 'ptok-1' }).mockRejectedValueOnce({
+        message: 'Rate limit exceeded',
+        code: 'CLIENT_ERROR_429',
+        retryAfterSeconds: 120,
+      });
+      renderLogin();
+
+      await user.type(textboxIn('login-email-input'), 'someone@test.com');
+      await user.click(screen.getByTestId('login-continue-btn'));
+      await screen.findByTestId('login-resend-btn');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31000);
+      });
+      await user.click(screen.getByTestId('login-resend-btn'));
+
+      const alert = await screen.findByTestId('login-otc-rate-limit-alert');
+      expect(alert).toHaveAttribute('role', 'alert');
+      expect(screen.getByTestId('login-resend-btn')).toHaveTextContent('2:00');
+      expect(mocks.toast.error).not.toHaveBeenCalled();
+
+      await user.click(screen.getByTestId('login-resend-btn'));
+      expect(mocks.sendOTC).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

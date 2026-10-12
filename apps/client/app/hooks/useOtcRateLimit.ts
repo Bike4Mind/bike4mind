@@ -16,6 +16,8 @@ export interface OtcRateLimit {
 }
 
 const FALLBACK_WAIT_SECONDS = 60;
+// Bounds a bogus header so the button never shows a multi-day countdown; the server still enforces the real wait.
+const MAX_WAIT_SECONDS = 3600;
 
 /** Formats a wait as "m:ss" for the button countdown. */
 export function formatCountdown(totalSeconds: number): string {
@@ -54,7 +56,7 @@ export function useOtcRateLimit(): OtcRateLimit {
       if (code !== 'CLIENT_ERROR_429') return false;
       const wait =
         typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0
-          ? Math.ceil(retryAfterSeconds)
+          ? Math.min(Math.ceil(retryAfterSeconds), MAX_WAIT_SECONDS)
           : FALLBACK_WAIT_SECONDS;
       stop();
       setInitialSeconds(wait);

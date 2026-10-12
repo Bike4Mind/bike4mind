@@ -195,6 +195,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }, 1000);
   };
 
+  const resendBlockedSeconds = Math.max(resendCooldown, rateLimit.secondsLeft);
+
   const handleEmailSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
     e.preventDefault();
     const trimmedEmail = email.trim();
@@ -248,7 +250,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0) return;
+    if (resendCooldown > 0 || rateLimit.secondsLeft > 0) return;
     try {
       const sendResult = await sendOTC({ email: email.trim() });
       setPendingToken(sendResult.pendingToken);
@@ -256,6 +258,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       startResendCooldown();
     } catch (error) {
       // Same plain-object rejection shape as handleEmailSubmit above.
+      if (rateLimit.handleError(error)) return;
       const errorMessage = (error as { message?: string })?.message || 'Failed to resend code';
       toast.error(errorMessage);
     }
@@ -953,20 +956,23 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   <Link
                     className="resend-code-link"
                     data-testid="login-resend-btn"
-                    color={resendCooldown > 0 ? 'neutral' : 'primary'}
+                    color={resendBlockedSeconds > 0 ? 'neutral' : 'primary'}
                     onClick={handleResendCode}
                     sx={{
                       fontWeight: 500,
                       fontSize: '14px',
-                      color: resendCooldown > 0 ? 'text.tertiary' : undefined,
-                      cursor: resendCooldown > 0 ? 'default' : 'pointer',
+                      color: resendBlockedSeconds > 0 ? 'text.tertiary' : undefined,
+                      cursor: resendBlockedSeconds > 0 ? 'default' : 'pointer',
                       transition: 'color 0.2s ease-in-out',
-                      '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
+                      '&:hover': { textDecoration: resendBlockedSeconds > 0 ? 'none' : 'underline' },
                     }}
                   >
-                    {resendCooldown > 0 ? `${t('auth.resendCode')} (${resendCooldown}s)` : t('auth.resendCode')}
+                    {resendBlockedSeconds > 0
+                      ? `${t('auth.resendCode')} (${formatCountdown(resendBlockedSeconds)})`
+                      : t('auth.resendCode')}
                   </Link>
                 </Box>
+                <OtcRateLimitNotice initialSeconds={rateLimit.initialSeconds} testId="login-otc-rate-limit-alert" />
               </form>
             )}
 
