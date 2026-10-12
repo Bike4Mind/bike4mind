@@ -66,12 +66,38 @@ describe('useVisibleGears', () => {
 describe('useGearsNavSignal', () => {
   it('flags nothing while the status loads', () => {
     withGears(undefined);
-    expect(signal()).toEqual({ startHere: false, claimableCount: 0 });
+    expect(signal()).toEqual({ startHere: false, startHereCredits: 0, claimableCount: 0 });
   });
 
   it('says Start here while a Getting Started gear is undone', () => {
     withGears([gear('projects', 'destination', { unlocked: true }), gear('published', 'destination')]);
     expect(signal().startHere).toBe(true);
+  });
+
+  it('totals the credits still to earn on Getting Started, and nothing else', () => {
+    withGears([
+      gear('projects', 'destination', { credits: 1000 }),
+      gear('published', 'destination', { credits: 5000 }),
+      gear('models', 'skill', { credits: 500 }),
+      gear('files', 'destination', { credits: 1000, unlocked: true }),
+      gear('agents', 'destination', { credits: 1000, claimed: true }),
+      gear('image', 'skill', { credits: 250 }),
+    ]);
+    expect(signal()).toMatchObject({ startHere: true, startHereCredits: 6500 });
+  });
+
+  it('leaves a done-but-unclaimed Getting Started gear out of the credits, and counts it as claimable', () => {
+    withGears([
+      gear('projects', 'destination', { credits: 1000, unlocked: true, claimable: true }),
+      gear('published', 'destination', { credits: 5000 }),
+    ]);
+    expect(signal()).toEqual({ startHere: true, startHereCredits: 5000, claimableCount: 1 });
+  });
+
+  it('shows no Start here credits once the account is too old for the tag', () => {
+    signedUpDaysAgo(31);
+    withGears([gear('published', 'destination', { credits: 5000 })]);
+    expect(signal().startHereCredits).toBe(0);
   });
 
   it('counts the lead skill (Model Explorer) as Getting Started, but no other skill', () => {
@@ -101,7 +127,7 @@ describe('useGearsNavSignal', () => {
   it('keeps counting claimable rewards for an old account', () => {
     signedUpDaysAgo(400);
     withGears([gear('image', 'skill', { claimable: true })]);
-    expect(signal()).toEqual({ startHere: false, claimableCount: 1 });
+    expect(signal()).toEqual({ startHere: false, startHereCredits: 0, claimableCount: 1 });
   });
 
   it('treats a paid gear as done even after its unlock lapses', () => {
@@ -121,7 +147,7 @@ describe('useGearsNavSignal', () => {
       gear('image', 'skill', { claimable: true }),
       gear('video', 'skill', { claimed: true }),
     ]);
-    expect(signal()).toEqual({ startHere: false, claimableCount: 2 });
+    expect(signal()).toEqual({ startHere: false, startHereCredits: 0, claimableCount: 2 });
   });
 });
 

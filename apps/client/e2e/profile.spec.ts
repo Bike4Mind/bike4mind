@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
+import { isGettingStarted } from '../lib/gears/tabs';
 import editUserData from './fixtures/edit-user.json';
 
 const testUser = editUserData[0];
@@ -159,5 +160,29 @@ test.describe('Profile - Agent connect', () => {
     const body = await res.text();
     expect(body).toContain('## Authentication');
     expect(body).toContain('B4M_API_KEY');
+  });
+});
+
+// Relies on this spec user having no claimable gear: anything here that unlocks one
+// (e.g. creating an API key) swaps the Start here tag for Claim and breaks this test.
+test.describe('Sidenav - Gears', () => {
+  test('new account sees the Getting Started reward on the Gears row', async ({ page, basePage }) => {
+    const statusResponse = page.waitForResponse(r => r.url().includes('/api/gears/status') && r.ok());
+    await page.goto('/');
+    await page.waitForLoadState('domcontentloaded');
+    await basePage.dismissModals();
+    const { gears } = (await (await statusResponse).json()) as {
+      gears: { key: string; kind: 'destination' | 'skill'; credits: number; unlocked: boolean; claimed?: boolean }[];
+    };
+    // Upper bound only: feature flags can hide a Getting Started gear from the sum.
+    const undoneCredits = gears
+      .filter(g => isGettingStarted(g) && !g.unlocked && !g.claimed)
+      .reduce((sum, g) => sum + g.credits, 0);
+
+    const tag = page.getByTestId('sidenav-gears-start-here');
+    await expect(tag).toHaveText(/^Start here, \+[\d.,\s\u00a0\u202f]+ credits?$/, { timeout: TIMEOUTS.VISIBLE });
+    const shown = Number((await tag.textContent())!.replace(/\D/g, ''));
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThanOrEqual(undoneCredits);
   });
 });
