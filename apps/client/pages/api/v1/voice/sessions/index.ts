@@ -271,6 +271,10 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       });
       if (enforceCredits) {
         if ((req.user?.currentCredits ?? 0) < reservedCredits) {
+          req.logger.warn(
+            '[voice-v2/sessions] insufficient credits for a fresh hold; abandoning provisioned provider session',
+            { sessionId: session.id, providerConversationId }
+          );
           throw insufficientCreditsError(
             `Insufficient credits for voice session (requires ~${reservedCredits} credits)`
           );
