@@ -59,6 +59,8 @@ export interface DataLakeResearchPanelProps {
   pendingProposals?: number;
   /** Relevance-judge models, already ordered and labelled by `researchJudgeModelOptions`. */
   modelOptions: ResearchModelOption[];
+  /** True while the model catalog is still being fetched, so an empty `modelOptions` is not yet a verdict. */
+  modelsLoading?: boolean;
   /** The "no model chosen" option's label, naming what the run falls back to. */
   defaultModelLabel?: string;
   isCreating?: boolean;
@@ -270,21 +272,29 @@ const PRESET_LABEL: Record<ResearchPresetId, string> = {
 
 /**
  * A preset's model as the draft holds it: '' (the default judge) when this deployment does not offer
- * it. An empty catalog is one still loading, not one offering nothing, so it keeps the preset's model.
+ * it. While the catalog is still loading nothing can be ruled out, so the preset's model is kept; a
+ * catalog that failed to load or came back empty offers nothing.
  */
-const presetDraftModel = (preset: ResearchPreset, offered: ReadonlyMap<string, string>): string =>
-  preset.model && (offered.size === 0 || offered.has(preset.model)) ? preset.model : '';
+const presetDraftModel = (
+  preset: ResearchPreset,
+  offered: ReadonlyMap<string, string>,
+  modelsLoading: boolean
+): string => (preset.model && (modelsLoading || offered.has(preset.model)) ? preset.model : '');
 
-const applyPreset = (draft: ConfigDraft, id: ResearchPresetId, offered: ReadonlyMap<string, string>): ConfigDraft => {
+const applyPreset = (
+  draft: ConfigDraft,
+  id: ResearchPresetId,
+  offered: ReadonlyMap<string, string>,
+  modelsLoading: boolean
+): ConfigDraft => {
   // Re-picking the preset already in effect must not rewrite "1" as "1.00" and read as an unsaved edit.
-  if (matchingPreset(draft, offered) === id) return draft;
+  if (matchingPreset(draft, offered, modelsLoading) === id) return draft;
   const preset = RESEARCH_PRESETS[id];
   return {
     ...draft,
-    model: presetDraftModel(preset, offered),
+    model: presetDraftModel(preset, offered, modelsLoading),
     maxResults: String(preset.maxResults),
     maxProposals: String(preset.maxProposals),
-    // Same formatting as `draftFromConfig`, so the draft matches a saved config's baseline.
     costCeilingUsd: microUsdToUsdDraftInput(preset.costCeilingMicroUsd),
   };
 };
@@ -293,14 +303,18 @@ const applyPreset = (draft: ConfigDraft, id: ResearchPresetId, offered: Readonly
  * The preset whose levers the draft would save, or null for Custom. Compared on what `draftToInput`
  * would submit, so "0.050" and "0.05" are the same ceiling and a blank model is the default judge.
  */
-const matchingPreset = (draft: ConfigDraft, offered: ReadonlyMap<string, string>): ResearchPresetId | null => {
+const matchingPreset = (
+  draft: ConfigDraft,
+  offered: ReadonlyMap<string, string>,
+  modelsLoading: boolean
+): ResearchPresetId | null => {
   const input = draftToInput(draft);
   const judge = input.model || RESEARCH_RELEVANCE_MODEL_DEFAULT;
   return (
     RESEARCH_PRESET_IDS.find(id => {
       const preset = RESEARCH_PRESETS[id];
       return (
-        judge === (presetDraftModel(preset, offered) || RESEARCH_RELEVANCE_MODEL_DEFAULT) &&
+        judge === (presetDraftModel(preset, offered, modelsLoading) || RESEARCH_RELEVANCE_MODEL_DEFAULT) &&
         input.maxResults === preset.maxResults &&
         input.maxProposals === preset.maxProposals &&
         input.costCeilingMicroUsd === preset.costCeilingMicroUsd
@@ -335,10 +349,11 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
 const presetSummary = (
   id: ResearchPresetId,
   offered: ReadonlyMap<string, string>,
+  modelsLoading: boolean,
   defaultModelLabel: string
 ): string => {
   const preset = RESEARCH_PRESETS[id];
-  const model = presetDraftModel(preset, offered);
+  const model = presetDraftModel(preset, offered, modelsLoading);
   return (
     `${model ? (offered.get(model) ?? model) : defaultModelLabel} judge \u00b7 up to ` +
     `${pluralize(preset.maxResults, 'search result')} and ${pluralize(preset.maxProposals, 'proposal')} ` +
@@ -548,6 +563,7 @@ export function DataLakeResearchPanel({
   error,
   pendingProposals,
   modelOptions,
+  modelsLoading = false,
   defaultModelLabel = 'Default',
   isCreating,
   savingConfigId,
@@ -610,7 +626,7 @@ export function DataLakeResearchPanel({
     const loaded = draftFromConfig(config);
     setDraft(loaded);
     setDraftBaseline(loaded);
-    setAdvancedOpen(matchingPreset(loaded, modelLabelById) === null || hasNonPresetLeverSet(loaded));
+    setAdvancedOpen(matchingPreset(loaded, modelLabelById, modelsLoading) === null || hasNonPresetLeverSet(loaded));
     setEditingId(config.id);
     formSession.current += 1;
   };
@@ -659,12 +675,13 @@ export function DataLakeResearchPanel({
   // A saved model this picker no longer lists (retired, disabled, filtered) must still render as
   // selected, or the Select shows blank and a save silently keeps a model nobody can see.
   const orphanModelId = draft.model && !modelLabelById.has(draft.model) ? draft.model : null;
-  const activePreset = matchingPreset(draft, modelLabelById);
+  const activePreset = matchingPreset(draft, modelLabelById, modelsLoading);
   // Every validated field lives in the advanced section, so an error must never be folded out of sight.
   const hasErrors = Object.keys(errors).length > 0;
-  const showAdvanced = advancedOpen || hasErrors;
+  // An orphan is only a verdict once the catalog has loaded; before that it would unfold and then refold.
+  const showAdvanced = advancedOpen || hasErrors || (!!orphanModelId && !modelsLoading);
   const presetSummaryText = activePreset
-    ? presetSummary(activePreset, modelLabelById, defaultModelLabel)
+    ? presetSummary(activePreset, modelLabelById, modelsLoading, defaultModelLabel)
     : 'Custom settings. Adjust them under Advanced settings.';
 
   return (
@@ -865,25 +882,32 @@ export function DataLakeResearchPanel({
 
             <FormControl size="sm">
               <FormLabel>Depth and cost</FormLabel>
-              <ToggleButtonGroup
-                size="sm"
-                value={activePreset ?? 'custom'}
-                onChange={(_e, value) => {
-                  if (!value) return;
-                  if (value === 'custom') setAdvancedOpen(true);
-                  else setDraft(prev => applyPreset(prev, value as ResearchPresetId, modelLabelById));
-                }}
-                data-testid="datalake-research-preset-picker"
-              >
-                {RESEARCH_PRESET_IDS.map(id => (
-                  <Button key={id} value={id} data-testid={`datalake-research-preset-${id}`}>
-                    {PRESET_LABEL[id]}
-                  </Button>
-                ))}
-                <Button value="custom" data-testid="datalake-research-preset-custom">
-                  Custom
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                <ToggleButtonGroup
+                  size="sm"
+                  value={activePreset}
+                  onChange={(_e, value) => {
+                    if (!value) return;
+                    setDraft(prev => applyPreset(prev, value, modelLabelById, modelsLoading));
+                  }}
+                  data-testid="datalake-research-preset-picker"
+                >
+                  {RESEARCH_PRESET_IDS.map(id => (
+                    <Button key={id} value={id} data-testid={`datalake-research-preset-${id}`}>
+                      {PRESET_LABEL[id]}
+                    </Button>
+                  ))}
+                </ToggleButtonGroup>
+                <Button
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  onClick={() => setAdvancedOpen(true)}
+                  data-testid="datalake-research-customize-btn"
+                >
+                  Customize
                 </Button>
-              </ToggleButtonGroup>
+              </Stack>
               <FormHelperText data-testid="datalake-research-preset-summary">{presetSummaryText}</FormHelperText>
             </FormControl>
 
@@ -893,15 +917,16 @@ export function DataLakeResearchPanel({
               color="neutral"
               aria-expanded={showAdvanced}
               aria-controls="datalake-research-advanced"
-              disabled={hasErrors}
-              onClick={() => setAdvancedOpen(!showAdvanced)}
+              aria-disabled={hasErrors}
+              onClick={() => {
+                if (!hasErrors) setAdvancedOpen(!showAdvanced);
+              }}
               sx={{ alignSelf: 'flex-start' }}
               data-testid="datalake-research-advanced-toggle"
             >
               {showAdvanced ? 'Hide advanced settings' : 'Advanced settings'}
             </Button>
 
-            {/* Kept mounted while folded so a typed value survives folding and unfolding. */}
             <Stack
               id="datalake-research-advanced"
               spacing={1.5}

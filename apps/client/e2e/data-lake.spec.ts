@@ -508,7 +508,9 @@ test.describe('Data Lake - research presets', () => {
     await expect(summary).toContainText('$1.00 ceiling');
 
     await dataLakePage.fillMuiInput(modal.getByTestId('datalake-research-max-results-input'), '30');
-    await expect(preset('custom')).toHaveAttribute('aria-pressed', 'true');
+    for (const id of ['quick', 'standard', 'deep']) {
+      await expect(preset(id)).toHaveAttribute('aria-pressed', 'false');
+    }
     await expect(summary).toContainText('Custom settings');
   });
 

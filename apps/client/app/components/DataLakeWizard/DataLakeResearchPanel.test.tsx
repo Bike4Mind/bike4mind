@@ -78,7 +78,7 @@ const handlers = () => ({
 
 const renderPanel = (props: Partial<React.ComponentProps<typeof DataLakeResearchPanel>> = {}) => {
   const spies = handlers();
-  const { unmount } = render(
+  const panel = (overrides: Partial<React.ComponentProps<typeof DataLakeResearchPanel>>) => (
     <Wrapper>
       <DataLakeResearchPanel
         configs={[]}
@@ -88,10 +88,16 @@ const renderPanel = (props: Partial<React.ComponentProps<typeof DataLakeResearch
         modelOptions={[{ id: 'gpt-4.1-mini', label: 'GPT-4.1 mini' }]}
         {...spies}
         {...props}
+        {...overrides}
       />
     </Wrapper>
   );
-  return { ...spies, unmount };
+  const { unmount, rerender } = render(panel({}));
+  return {
+    ...spies,
+    unmount,
+    rerender: (overrides: Partial<React.ComponentProps<typeof DataLakeResearchPanel>>) => rerender(panel(overrides)),
+  };
 };
 
 beforeEach(() => vi.clearAllMocks());
@@ -862,6 +868,20 @@ describe('DataLakeResearchPanel', () => {
     ];
     const pressed = (id: string) => screen.getByTestId(`datalake-research-preset-${id}`).getAttribute('aria-pressed');
     const advanced = () => screen.getByTestId('datalake-research-advanced');
+    const noPresetPressed = () => ['quick', 'standard', 'deep'].every(id => pressed(id) !== 'true');
+    const deepConfig = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) =>
+      config({
+        model: ChatModels.GPT4_1,
+        maxResults: 50,
+        maxProposals: 25,
+        costCeilingMicroUsd: 1_000_000,
+        minRelevance: RESEARCH_MIN_RELEVANCE_DEFAULT,
+        recencyDays: undefined,
+        allowedDomains: [],
+        blockedDomains: [],
+        proposedTags: [],
+        ...overrides,
+      });
     const fillRequired = () => {
       fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
       fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
@@ -936,14 +956,14 @@ describe('DataLakeResearchPanel', () => {
 
       fireEvent.change(screen.getByTestId('datalake-research-max-results-input'), { target: { value: '12' } });
 
-      expect(pressed('custom')).toBe('true');
-      expect(pressed('quick')).toBe('false');
+      expect(noPresetPressed()).toBe(true);
+      expect(screen.getByTestId('datalake-research-preset-summary').textContent).toMatch(/^Custom settings/);
     });
 
-    it('unfolds the advanced levers when Custom is picked', () => {
+    it('unfolds the advanced levers from the Customize button', () => {
       renderPanel({ modelOptions: offered });
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
-      fireEvent.click(screen.getByTestId('datalake-research-preset-custom'));
+      fireEvent.click(screen.getByTestId('datalake-research-customize-btn'));
 
       expect(advanced()).toBeVisible();
       expect(screen.getByTestId('datalake-research-advanced-toggle').getAttribute('aria-expanded')).toBe('true');
@@ -975,7 +995,7 @@ describe('DataLakeResearchPanel', () => {
       renderPanel({ modelOptions: offered, configs: [config({ maxResults: 12 })] });
       fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
 
-      expect(pressed('custom')).toBe('true');
+      expect(noPresetPressed()).toBe(true);
       expect(advanced()).toBeVisible();
     });
 
@@ -1009,13 +1029,93 @@ describe('DataLakeResearchPanel', () => {
     });
 
     it('keeps Deep on its own judge while the model catalog is still loading', () => {
-      const spies = renderPanel({ modelOptions: [] });
+      const spies = renderPanel({ modelOptions: [], modelsLoading: true });
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
       fillRequired();
       fireEvent.click(screen.getByTestId('datalake-research-preset-deep'));
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
 
       expect(spies.onCreate).toHaveBeenCalledWith(expect.objectContaining({ model: ChatModels.GPT4_1 }));
+    });
+
+    it('falls back to the default judge for Deep when the loaded catalog is empty', () => {
+      const spies = renderPanel({ modelOptions: [], modelsLoading: false });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fillRequired();
+      fireEvent.click(screen.getByTestId('datalake-research-preset-deep'));
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledWith(expect.objectContaining({ model: null, maxResults: 50 }));
+    });
+
+    it('shows Custom with Advanced open when the catalog loads without the saved model', () => {
+      const { rerender } = renderPanel({ modelOptions: [], modelsLoading: true, configs: [deepConfig()] });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect(pressed('deep')).toBe('true');
+      expect(advanced()).not.toBeVisible();
+
+      rerender({ modelOptions: [offered[0]], modelsLoading: false, configs: [deepConfig()] });
+
+      expect(noPresetPressed()).toBe(true);
+      expect(advanced()).toBeVisible();
+    });
+
+    it('leaves Advanced folded when only the schedule changes', () => {
+      renderPanel({ modelOptions: offered });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-cadence-select'));
+      fireEvent.click(screen.getByRole('option', { name: 'Weekly' }));
+
+      expect(screen.getByTestId('datalake-research-cadence-select').textContent).toBe('Weekly');
+      expect(advanced()).not.toBeVisible();
+    });
+
+    it('opens folded when the only non-default lever is a backlog limit that is not in use', () => {
+      renderPanel({
+        modelOptions: offered,
+        configs: [
+          config({
+            model: undefined,
+            maxResults: 10,
+            maxProposals: 5,
+            costCeilingMicroUsd: 50_000,
+            recencyDays: undefined,
+            allowedDomains: [],
+            blockedDomains: [],
+            proposedTags: [],
+            minRelevance: RESEARCH_MIN_RELEVANCE_DEFAULT,
+            cadence: 'off',
+            reviewBacklogLimit: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT + 7,
+          }),
+        ],
+      });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect(pressed('quick')).toBe('true');
+      expect(advanced()).not.toBeVisible();
+    });
+
+    it('reads a default-judge config at Deep levers as Deep only when GPT-4.1 is not offered', () => {
+      const { unmount } = renderPanel({ modelOptions: [offered[0]], configs: [deepConfig({ model: undefined })] });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect(pressed('deep')).toBe('true');
+      unmount();
+
+      renderPanel({ modelOptions: offered, configs: [deepConfig({ model: undefined })] });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect(noPresetPressed()).toBe(true);
+    });
+
+    it('keeps the advanced toggle focusable but inert while a field is invalid', () => {
+      renderPanel({ modelOptions: offered });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-max-results-input'), { target: { value: '999' } });
+      const toggle = screen.getByTestId('datalake-research-advanced-toggle');
+
+      expect(toggle.getAttribute('aria-disabled')).toBe('true');
+      expect(toggle).not.toBeDisabled();
+      fireEvent.click(toggle);
+      expect(advanced()).toBeVisible();
     });
 
     it('keeps an invalid advanced field in view even when folded', () => {
