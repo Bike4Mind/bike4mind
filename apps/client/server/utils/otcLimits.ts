@@ -39,6 +39,24 @@ export function normalizeOtcEmail(value: unknown): string | undefined {
   return email || undefined;
 }
 
+/**
+ * The inbox an address delivers to, for limit keys only (never for account identity): a bomber can
+ * otherwise rotate plus-tags, Gmail dots, or compatibility-form characters to get a fresh per-email
+ * budget for the same inbox. Folding more than strictly needed only makes a limit stricter.
+ */
+export function otcLimitMailbox(email: string): string {
+  const folded = email.normalize('NFKC').toLowerCase();
+  const at = folded.lastIndexOf('@');
+  if (at <= 0) return folded;
+  let local = folded.slice(0, at);
+  let domain = folded.slice(at + 1).replace(/\.+$/, '');
+  if (domain === 'googlemail.com') domain = 'gmail.com';
+  const plus = local.indexOf('+');
+  if (plus > 0) local = local.slice(0, plus);
+  if (domain === 'gmail.com') local = local.replace(/\./g, '');
+  return `${local}@${domain}`;
+}
+
 /** Hashed so cache keys never carry a raw email address. */
 export function otcEmailKey(email: string): string {
   return createHash('sha256').update(email).digest('hex').slice(0, 32);
@@ -80,7 +98,7 @@ export const otcCounterLimit =
 
 export const emailSubject = (req: Parameters<RequestHandler>[0]): string | undefined => {
   const email = normalizeOtcEmail(req.body?.email);
-  return email ? otcEmailKey(email) : undefined;
+  return email ? otcEmailKey(otcLimitMailbox(email)) : undefined;
 };
 
 export const ipSubject = (req: Parameters<RequestHandler>[0]): string => getClientIp(req);
@@ -97,7 +115,7 @@ export const otcDistinctEmailsPerIpLimit = (): RequestHandler => async (req, res
 
   const { limit, windowMs } = OTC_LIMITS.send.perIpDistinctEmails;
   const ip = getClientIp(req);
-  const pairKey = `otc-limit:ip-email-seen:${ip}:${otcEmailKey(email)}`;
+  const pairKey = `otc-limit:ip-email-seen:${ip}:${otcEmailKey(otcLimitMailbox(email))}`;
 
   const seen = await cacheRepository.tryIncrementWithinLimitFixedWindow(pairKey, 1, windowMs);
   if (!seen.success) return next();

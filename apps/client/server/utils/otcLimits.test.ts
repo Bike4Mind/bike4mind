@@ -24,6 +24,7 @@ import {
   otcCounterLimit,
   otcDistinctEmailsPerIpLimit,
   otcEmailKey,
+  otcLimitMailbox,
 } from './otcLimits';
 
 const makeReq = (email?: unknown) => ({ body: { email } }) as unknown as Request;
@@ -51,6 +52,28 @@ describe('otcCounterLimit', () => {
     );
     expect(key).not.toContain('example.com');
     expect(next).toHaveBeenCalledWith();
+  });
+
+  it('counts plus-tag, Gmail-dot and compatibility-form variants of one inbox on the same key', async () => {
+    const mw = otcCounterLimit({ bucket: 'send-email', ...OTC_LIMITS.send.perEmail, subject: emailSubject });
+    for (const variant of [
+      'victim@gmail.com',
+      'V.i.c.t.i.m@gmail.com',
+      'victim+bomb1@gmail.com',
+      'vic.tim+x@googlemail.com',
+      'victim@gmail.com.',
+      '\uff56ictim@gmail.com',
+    ]) {
+      await mw(makeReq(variant), makeRes(), vi.fn());
+    }
+
+    const keys = new Set(mocks.tryIncrement.mock.calls.map(([key]) => key));
+    expect(keys).toEqual(new Set([`otc-limit:send-email:${otcEmailKey('victim@gmail.com')}`]));
+  });
+
+  it('folds plus-tags on any domain but keeps dots significant outside Gmail', () => {
+    expect(otcLimitMailbox('first.last+tag@example.com')).toBe('first.last@example.com');
+    expect(otcLimitMailbox('first.last@example.com')).not.toBe(otcLimitMailbox('firstlast@example.com'));
   });
 
   it('rejects a per-email send over the limit with 429 and Retry-After', async () => {
