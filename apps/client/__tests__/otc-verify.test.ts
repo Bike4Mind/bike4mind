@@ -63,6 +63,10 @@ vi.mock('@bike4mind/common', async () => {
 });
 
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
+    tryAddWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 0, expiresAt: new Date() })),
+  },
   userRepository: {
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
     update: (...a: unknown[]) => mockUpdate(...a),
@@ -104,11 +108,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: () => () => {} }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { createAccessToken: () => ({ accessToken: 'access', refreshToken: 'refresh' }) },
 }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
