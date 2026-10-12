@@ -13,8 +13,9 @@
  * --apply would credit it alongside the increment that is about to land.
  *
  * Flags:
- *   --stamp-since <iso>    required: when the reliable purchase stamp reached this stage (deploy
- *                          time of the change behind RELIABLE_PURCHASE_STAMP_MERGED_AT)
+ *   --stamp-since <iso>    required, UTC, e.g. 2026-09-25T10:00:00Z: when the reliable purchase stamp
+ *                          reached this stage (deploy time of the change behind
+ *                          RELIABLE_PURCHASE_STAMP_MERGED_AT)
  *   --apply                write the repairs
  *   --report <path>        write every audited purchase to a JSON file. It holds user and payment
  *                          intent ids, so keep it outside the repo.
@@ -49,7 +50,10 @@ function parseFlags() {
     strict: true,
   });
   const rawStampSince = values['stamp-since'];
-  if (rawStampSince === undefined) throw new Error('--stamp-since <iso> is required');
+  if (rawStampSince === undefined) throw new Error('--stamp-since <iso> is required (UTC, e.g. 2026-09-25T10:00:00Z)');
+  if (!/(Z|[+-]\d{2}:\d{2})$/i.test(rawStampSince)) {
+    throw new Error(`--stamp-since needs an explicit UTC offset (e.g. 2026-09-25T10:00:00Z): ${rawStampSince}`);
+  }
   const stampSince = new Date(rawStampSince);
   if (Number.isNaN(stampSince.getTime())) throw new Error(`--stamp-since is not a date: ${rawStampSince}`);
   // pnpm runs the script from the package directory; resolve against where the operator stood.

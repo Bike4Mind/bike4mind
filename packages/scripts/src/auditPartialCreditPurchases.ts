@@ -159,14 +159,9 @@ export async function auditPartialCreditPurchases(options: AuditOptions): Promis
   }
   log(`Purchase stamp cutoff: ${stampSince.toISOString()}`);
 
-  const stampByOwner = new Map<string, Date | null>();
-  const stampOf = async (ownerId: string) => {
-    if (!stampByOwner.has(ownerId)) {
-      const user = await User.findById(ownerId).select({ lastCreditsPurchasedAt: 1 }).lean();
-      stampByOwner.set(ownerId, user?.lastCreditsPurchasedAt ?? null);
-    }
-    return stampByOwner.get(ownerId) ?? null;
-  };
+  // Read per row, not cached: a row committed after an owner's stamp was read would otherwise look ungranted.
+  const stampOf = async (ownerId: string) =>
+    (await User.findById(ownerId).select({ lastCreditsPurchasedAt: 1 }).lean())?.lastCreditsPurchasedAt ?? null;
 
   const rows = CreditTransaction.find({ type: 'purchase', stripePaymentIntentId: { $type: 'string' } })
     .sort({ createdAt: 1 })
