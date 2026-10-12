@@ -20,6 +20,7 @@ import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunnin
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
+import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 
@@ -113,49 +114,28 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       }
 
       const credits = Number(intent.metadata.credits);
-      // Records the CreditTransaction (idempotent on stripePaymentIntentId),
-      // then atomically $inc's the balance and stamps the pack lot. Replaces a
-      // former read-modify-$set of the whole user doc, which reverted any concurrent
-      // balance write. (The unique stripePaymentIntentId index already blocked
-      // double-crediting on Stripe retries: createTransaction rethrew the E11000 before
-      // the increment. The $inc additionally makes the balance update itself atomic.)
-      try {
-        await creditService.addCredits(
-          {
-            type: 'purchase',
-            ownerId: user.id,
-            ownerType: CreditHolderType.User,
-            amount: intent.amount,
-            credits,
-            status: CreditPurchaseStatus.Completed,
-            stripePaymentIntentId: intent.id,
-            packageId: intent.metadata.packageId,
-            metadata: {
-              environment: intent.metadata.environment,
-              paymentMethod: intent.payment_method_types?.[0],
-            },
-          },
-          {
-            db: {
-              creditTransactions: creditTransactionRepository,
-              creditLots: creditLotRepository,
-            },
-            creditHolderMethods: userRepository,
-          }
-        );
-      } catch (err: unknown) {
-        // Duplicate stripePaymentIntentId = a redelivery of an intent already granted. Any other
-        // duplicate key is a real failure and must still 500 so Stripe retries.
-        const dup = err as { code?: number; keyPattern?: Record<string, number> } | null;
-        if (dup?.code === 11000 && dup.keyPattern?.stripePaymentIntentId === 1) {
-          req.logger.info('[CreditPurchase] Credits already granted for intent', {
-            step: 'already_granted',
-            userId: user.id,
-            ...trace,
-          });
-          break;
-        }
-        throw err;
+      // Ledger row and balance commit together (grantCreditPurchase), so 'already_granted' means
+      // the credits really landed and a redelivery can be acknowledged. Any other failure rolled
+      // back whole and throws, so Stripe retries.
+      const outcome = await grantCreditPurchase(
+        {
+          userId: user.id,
+          paymentIntentId: intent.id,
+          credits,
+          amount: intent.amount,
+          packageId: intent.metadata.packageId,
+          environment: intent.metadata.environment,
+          paymentMethod: intent.payment_method_types?.[0],
+        },
+        req.logger
+      );
+      if (outcome === 'already_granted') {
+        req.logger.info('[CreditPurchase] Credits already granted for intent', {
+          step: 'already_granted',
+          userId: user.id,
+          ...trace,
+        });
+        break;
       }
 
       req.logger.info('[CreditPurchase] Credits granted', {
