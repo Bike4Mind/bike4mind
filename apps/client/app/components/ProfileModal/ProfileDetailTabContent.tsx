@@ -112,6 +112,7 @@ const AboutTabContent = () => {
 
             <Tooltip title={t('profile.buy_credits')} placement="top">
               <IconButton
+                aria-label={t('profile.buy_credits')}
                 className="profile-detail-tab-action-button"
                 size="sm"
                 variant="outlined"

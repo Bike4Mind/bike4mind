@@ -321,6 +321,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
                       }}
                     >
                       <IconButton
+                        aria-label="Close files"
                         size="sm"
                         variant="plain"
                         color="neutral"

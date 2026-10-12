@@ -72,6 +72,7 @@ const ProfileDetailSection = ({ userId, extra, canEdit, email }: ProfileDetailSe
       </Avatar>
       {currentUser?.id === userId && (
         <IconButton
+          aria-label="Change profile photo"
           className="profile-detail-avatar-upload-button"
           onClick={() => setIsUploadModalOpen(true)}
           size="sm"
