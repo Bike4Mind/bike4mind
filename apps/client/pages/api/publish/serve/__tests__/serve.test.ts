@@ -716,6 +716,18 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     expect(data).not.toContain('<title>&lt;artifact');
   });
 
+  it('strips markdown markers from a stored reply title', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({ title: 'Session 1 Recap: *Tides of the Drowned Crown*', renderedBody: 'Recap body' })
+    );
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>Session 1 Recap: Tides of the Drowned Crown</title>');
+    expect(data).not.toContain('*Tides');
+  });
+
   it('serves the ?a= sub-document as a sandboxed HTML doc that runs the artifact JS in isolation', async () => {
     mockArtifactFindOne.mockReturnValue(htmlReply());
     const { res, promise } = run(['r', 'rhtml'], { a: '0' });

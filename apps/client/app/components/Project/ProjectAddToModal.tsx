@@ -1,6 +1,21 @@
 import { IProjectDocument } from '@bike4mind/common';
-import { useAddFilesToProject, useAddSessionsToProject, useSearchProjects } from '@client/app/hooks/data/projects';
-import { Autocomplete, Box, Button, CircularProgress, Modal, ModalClose, ModalDialog } from '@mui/joy';
+import {
+  useAddFilesToProject,
+  useAddSessionsToProject,
+  useCreateProject,
+  useSearchProjects,
+} from '@client/app/hooks/data/projects';
+import {
+  Autocomplete,
+  Box,
+  Button,
+  CircularProgress,
+  Input,
+  Modal,
+  ModalClose,
+  ModalDialog,
+  Typography,
+} from '@mui/joy';
 import { FC, ReactNode, useMemo, useState, createContext, useContext, useRef, useEffect } from 'react';
 import { debounce } from 'lodash';
 
@@ -82,6 +97,7 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   const [selectedProject, setSelectedProject] = useState<IProjectDocument | null>(null);
   const [search, setSearch] = useState('');
   const [inputValue, setInputValue] = useState('');
+  const [newProjectName, setNewProjectName] = useState('');
 
   const debouncedSearch = useMemo(
     () =>
@@ -101,17 +117,22 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
       setSearch('');
       setInputValue('');
       setSelectedProject(null);
+      setNewProjectName('');
     }
   }, [isOpen]);
 
+  // isOpen, not `open`: the render-prop caller (file browser) leaves `open` undefined and drives
+  // the internal state instead, so keying on `open` left its list permanently empty.
   const { data: projectResults, isLoading: isSearching } = useSearchProjects(
     search,
     {},
     { by: 'updatedAt', direction: 'desc' },
-    { enabled: open }
+    { enabled: isOpen }
   );
 
   const projects = projectResults?.pages.flatMap(page => page.data) ?? [];
+  // Only an unfiltered empty result means "no projects"; an empty search just found no match.
+  const hasNoProjects = !!projectResults && !isSearching && !search && projects.length === 0;
 
   const addFileMutation = useAddFilesToProject({
     onSuccess: () => {
@@ -132,6 +153,23 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
       setIsLoading(false);
     },
   });
+
+  const createProject = useCreateProject({
+    onSuccess: () => {
+      setOpen?.(false);
+      setOpenModal(false);
+    },
+  });
+
+  const handleCreate = () => {
+    const name = newProjectName.trim();
+    if (!name) return;
+    createProject.mutate({
+      name,
+      description: '',
+      ...(dataType === 'file' ? { fileIds: [dataId] } : { sessionIds: [dataId] }),
+    });
+  };
 
   const handleAdd = async () => {
     if (!selectedProject) return;
@@ -169,46 +207,88 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
               <Box fontSize="20px" lineHeight="20px" className="project-add-to-modal-title">
                 Add to Project
               </Box>
-              <Box display="flex" flexDirection="column" gap="16px" className="project-add-to-modal-form">
-                <Autocomplete
-                  placeholder="Search projects..."
-                  loading={isSearching}
-                  options={projects}
-                  value={selectedProject}
-                  inputValue={inputValue}
-                  onChange={(_event, newValue) => setSelectedProject(newValue)}
-                  onInputChange={(_event, value) => {
-                    setInputValue(value);
-                    debouncedSearch(value);
+              {hasNoProjects ? (
+                <Box
+                  display="flex"
+                  flexDirection="column"
+                  gap="16px"
+                  className="project-add-to-modal-empty"
+                  data-testid="project-add-to-modal-empty"
+                  component="form"
+                  onSubmit={(event: React.FormEvent) => {
+                    event.preventDefault();
+                    handleCreate();
                   }}
-                  getOptionLabel={option => option.name}
-                  slotProps={{
-                    loading: {
-                      children: <CircularProgress size="sm" className="project-add-to-modal-search-progress" />,
-                    },
-                  }}
-                  className="project-add-to-modal-autocomplete"
-                />
-                <Box display="flex" justifyContent="flex-end" gap="8px" className="project-add-to-modal-actions">
-                  <Button
-                    variant="outlined"
-                    onClick={handleClose}
-                    disabled={isLoading}
-                    color="neutral"
-                    className="project-add-to-modal-cancel-button"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={handleAdd}
-                    disabled={isLoading || !selectedProject}
-                    loading={isLoading}
-                    className="project-add-to-modal-add-button"
-                  >
-                    Add
-                  </Button>
+                >
+                  <Typography level="body-md">
+                    No projects yet. Create one and this {dataType === 'file' ? 'file' : 'notebook'} goes straight into
+                    it.
+                  </Typography>
+                  <Input
+                    autoFocus
+                    placeholder="Project name"
+                    value={newProjectName}
+                    onChange={event => setNewProjectName(event.target.value)}
+                    slotProps={{
+                      input: { 'aria-label': 'Project name', 'data-testid': 'project-add-to-modal-name-input' },
+                    }}
+                  />
+                  <Box display="flex" justifyContent="flex-end" gap="8px">
+                    <Button variant="outlined" color="neutral" onClick={handleClose} disabled={createProject.isPending}>
+                      Cancel
+                    </Button>
+                    <Button
+                      type="submit"
+                      loading={createProject.isPending}
+                      disabled={!newProjectName.trim()}
+                      data-testid="project-add-to-modal-create-btn"
+                    >
+                      Create project
+                    </Button>
+                  </Box>
                 </Box>
-              </Box>
+              ) : (
+                <Box display="flex" flexDirection="column" gap="16px" className="project-add-to-modal-form">
+                  <Autocomplete
+                    placeholder="Search projects..."
+                    loading={isSearching}
+                    options={projects}
+                    value={selectedProject}
+                    inputValue={inputValue}
+                    onChange={(_event, newValue) => setSelectedProject(newValue)}
+                    onInputChange={(_event, value) => {
+                      setInputValue(value);
+                      debouncedSearch(value);
+                    }}
+                    getOptionLabel={option => option.name}
+                    slotProps={{
+                      loading: {
+                        children: <CircularProgress size="sm" className="project-add-to-modal-search-progress" />,
+                      },
+                    }}
+                    className="project-add-to-modal-autocomplete"
+                  />
+                  <Box display="flex" justifyContent="flex-end" gap="8px" className="project-add-to-modal-actions">
+                    <Button
+                      variant="outlined"
+                      onClick={handleClose}
+                      disabled={isLoading}
+                      color="neutral"
+                      className="project-add-to-modal-cancel-button"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleAdd}
+                      disabled={isLoading || !selectedProject}
+                      loading={isLoading}
+                      className="project-add-to-modal-add-button"
+                    >
+                      Add
+                    </Button>
+                  </Box>
+                </Box>
+              )}
             </Box>
           </ModalDialog>
         </Modal>

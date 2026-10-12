@@ -4,6 +4,7 @@ import { Quest, PublishedArtifact, Session } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
 import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
+import { stripInlineMarkdown } from '@server/services/publish/plainTitle';
 
 /**
  * POST /api/publish/reply - publish a single assistant reply as a public viewer
@@ -187,7 +188,7 @@ const handler = baseApi().post(async (req, res) => {
 });
 
 /**
- * First non-empty markdown line (stripped of leading #/*), capped, as a title. Embedded
+ * First non-empty markdown line (stripped of leading #/* and inline markdown), capped, as a title. Embedded
  * `<artifact>` blocks are removed first so a reply that LEADS with an artifact doesn't take
  * the raw `<artifact ...>` wrapper tag as its title (#708); if the reply is nothing but an
  * artifact, fall back to the artifact's own title attribute.
@@ -199,7 +200,10 @@ export function deriveTitle(markdown: string): string {
     .map(l => l.trim())
     .find(Boolean);
   if (firstLine) {
-    const cleaned = truncateAtWord(firstLine.replace(/^#+\s*/, '').replace(/^[*_>-]+\s*/, ''), TITLE_MAX);
+    const cleaned = truncateAtWord(
+      stripInlineMarkdown(firstLine.replace(/^#+\s*/, '')).replace(/^[*_>-]+\s*/, ''),
+      TITLE_MAX
+    );
     if (cleaned) return cleaned;
   }
   const named = artifacts.find(a => a.title && a.title !== 'Untitled Artifact');

@@ -33,6 +33,7 @@ import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
 import { requestHasGateProof } from '@server/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { stripInlineMarkdown } from '@server/services/publish/plainTitle';
 import {
   buildBundleScriptSrc,
   escapeHtml,
@@ -205,6 +206,10 @@ function runShim(
 const APP_HOST_SRC = PUBLISH_HOST ? `https://${PUBLISH_HOST}` : '';
 // Brand-driven fallback for shared-artifact titles; neutral when APP_NAME is unset.
 const SHARED_FALLBACK_TITLE = process.env.APP_NAME ? `Shared from ${process.env.APP_NAME}` : 'Shared';
+// A reply's title is cut from its markdown, so rows saved before deriveTitle stripped markers still
+// carry them; strip on read too. Fabfile and bundle titles are names, so they are left verbatim.
+const plainTitle = (title: string, kind: string): string =>
+  kind === 'reply' ? stripInlineMarkdown(title) || SHARED_FALLBACK_TITLE : title;
 const withAppHost = (base: string) => (APP_HOST_SRC ? `${base} ${APP_HOST_SRC}` : base);
 const ASSET_CSP = [
   "default-src 'none'",
@@ -580,7 +585,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       const body =
         exportFormat === 'md'
           ? buildMarkdownExport(
-              artifact.title || SHARED_FALLBACK_TITLE,
+              plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact.source.kind),
               artifact.description,
               replyBodyForExport(artifact)
             )
@@ -964,7 +969,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   const shareMeta =
     !isShare && isOpenPublic
       ? prepareShareMeta({
-          title: artifact.title || SHARED_FALLBACK_TITLE,
+          title: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact.source.kind),
           description: artifact.description,
           bodyForExcerpt: indexHtml,
           canonicalUrl: `${docOrigin}${canonicalPath}`,
@@ -1516,7 +1521,7 @@ function sendRawArtifact(
   viewer: { id?: string } | undefined,
   userAgent?: string
 ): void {
-  const title = artifact.title || SHARED_FALLBACK_TITLE;
+  const title = plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact.source.kind);
   const description = artifact.description?.trim();
   const parts = [`# ${title}`];
   if (description) parts.push('', description);
@@ -1784,7 +1789,7 @@ function renderViewerPage(
     } else {
       contentHtml = `${article}${artifacts.map((a, i) => block(a, i)).join('\n')}`;
     }
-    displayTitle = cleanViewerTitle(artifact.title, artifacts);
+    displayTitle = plainTitle(cleanViewerTitle(artifact.title, artifacts), 'reply');
   } else {
     // Fabfile: a file is literal text, not markdown prose, so the non-artifact remainder stays an
     // escaped <pre> (no marked). Only EXPLICIT <artifact> blocks are extracted (parseArtifacts via
