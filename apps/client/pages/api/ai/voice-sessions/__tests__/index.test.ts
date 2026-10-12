@@ -63,6 +63,7 @@ vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: () => '
 import voiceSessionsHandler from '@pages/api/ai/voice-sessions';
 import errorHandler from '@server/middlewares/errorHandler';
 import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
+import { sessionRepository } from '@bike4mind/database';
 
 /** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
 async function callRoute(body: Record<string, unknown> = {}) {
@@ -200,5 +201,18 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockClaimVoiceHold).not.toHaveBeenCalled();
     expect(mockIncrementCredits).not.toHaveBeenCalled();
+  });
+
+  // The billed-credits marker is how the stale-hold sweep and settlePriorVoiceHold tell a realtime
+  // hold from an ElevenLabs one; without it a live call would be swept on the short window.
+  it('opens the new hold with the realtime billed-credits marker', async () => {
+    mockGetSession.mockResolvedValueOnce(openHoldSession);
+    mockClaimVoiceHold.mockResolvedValueOnce({ billedCredits: 30 });
+
+    await callRoute({ sessionId: 'session-1' });
+
+    expect(vi.mocked(sessionRepository.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'session-1', voiceBilledCredits: 0 })
+    );
   });
 });
