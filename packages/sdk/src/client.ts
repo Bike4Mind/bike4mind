@@ -164,13 +164,17 @@ export function createClient(options: ClientOptions) {
     return send(method, path, args as RequestArgs);
   }
 
-  /** Any spec operation, typed from the spec; returns the parsed JSON body (`undefined` for an empty one). */
+  /** Any spec operation, typed from the spec; returns the parsed JSON body (`undefined` for an empty one). A non-JSON 2xx body throws. */
   async function call<K extends OperationId>(operationId: K, ...rest: ArgsTuple<K>): Promise<JsonResponse<K>> {
     const response = await raw(operationId, ...rest);
     const text = await response.text();
-    return (
-      text && /json/i.test(response.headers.get('content-type') ?? '') ? JSON.parse(text) : undefined
-    ) as JsonResponse<K>;
+    const contentType = response.headers.get('content-type') ?? '';
+    if (text && !/json/i.test(contentType)) {
+      throw new Error(
+        `${operationId} returned ${contentType || 'a non-JSON body'}; use raw() or the tts/music/soundEffects helpers`
+      );
+    }
+    return (text ? JSON.parse(text) : undefined) as JsonResponse<K>;
   }
 
   async function pollQuest(questId: string, poll: PollOptions = {}): Promise<Quest> {
@@ -228,7 +232,9 @@ export function createClient(options: ClientOptions) {
 
     /**
      * Stream `POST /api/ai/v1/completions` as parsed events. A non-2xx before the stream throws `B4mApiError`; a
-     * server `{ type: 'error' }` event is yielded, not thrown. `url` overrides the path (absolute URLs as-is).
+     * server `{ type: 'error' }` event is yielded, not thrown. A stream that ends without `[DONE]` and without an
+     * error event throws. `url` overrides the path (absolute URLs as-is) and receives the same `Authorization`
+     * header, so pass only an origin you trust.
      */
     async *completions(
       body: JsonBody<'createCompletion'>,
@@ -240,15 +246,21 @@ export function createClient(options: ClientOptions) {
         headers: { accept: 'text/event-stream', ...opts.headers },
       });
       if (!response.body) return;
-      for await (const data of parseSse(response.body, opts.signal)) {
+      let sawDone = false;
+      let sawError = false;
+      for await (const data of parseSse(response.body, opts.signal, () => {
+        sawDone = true;
+      })) {
         let event: CompletionStreamEvent;
         try {
           event = JSON.parse(data) as CompletionStreamEvent;
         } catch {
           continue;
         }
+        if (event.type === 'error') sawError = true;
         yield event;
       }
+      if (!sawDone && !sawError) throw new Error('completion stream ended before [DONE]');
     },
 
     /** `POST /api/chat`, queued (the default): the turn's outcome is on the returned handle's `poll()`. */
