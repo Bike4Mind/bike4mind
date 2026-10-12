@@ -6,6 +6,7 @@ import { WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME, parseWebSearchResults } from
 import { stripControl } from '../mcp/names';
 import type { ToolContext, ToolDefinition, WebContext } from './types';
 import { MAX_TOOL_OUTPUT_CHARS, optionalNumber, requireString } from './types';
+import { STOPPED_WHILE_QUEUED, WEB_SEARCH_TURN_BUDGET, webSearchCacheKey, type WebSearchTurn } from './webSearchLimits';
 
 /**
  * web_search and web_fetch, run on the Bike4Mind server like the CLI's (packages/cli ToolRouter
@@ -27,7 +28,10 @@ const NOT_CONFIGURED = /^Web search is not configured\b/;
 
 const SIGNED_OUT = 'Web search and fetch need a signed-in Bike4Mind session. Ask the user to sign in again.';
 
-export function webContextFor(api: Pick<AuthenticatedApiClient, 'post'>): WebContext {
+export function webContextFor(
+  api: Pick<AuthenticatedApiClient, 'post'>,
+  options: { searches?: WebSearchTurn; log?: (line: string) => void } = {}
+): WebContext {
   const post = async (path: string, body: object, signal: AbortSignal, timeout: number) => {
     const response = await api.post<{ result?: unknown }>(path, body, { signal, timeout });
     if (typeof response?.result !== 'string') throw new Error('The server returned no result.');
@@ -36,6 +40,7 @@ export function webContextFor(api: Pick<AuthenticatedApiClient, 'post'>): WebCon
   return {
     search: (body, signal) => post('/api/tools/web-search', body, signal, SEARCH_TIMEOUT_MS),
     fetch: (body, signal) => post('/api/tools/web-fetch', body, signal, FETCH_TIMEOUT_MS),
+    ...options,
   };
 }
 
@@ -44,20 +49,44 @@ function requireWeb(context: ToolContext): WebContext {
   return context.web;
 }
 
+/**
+ * What a stalled provider or a dropped connection looks like by the time it reaches here, in the
+ * server's error body or the client's own. The words mean nothing to a user, so they are swapped
+ * for one sentence and kept in the main-process log.
+ */
+const STALLED = /fetch failed|timed? ?out|timeout|ETIMEDOUT|ECONNRESET|socket hang up|UND_ERR/i;
+const STALLED_STATUS = new Set([502, 503, 504]);
+
+export const SEARCH_STALLED = 'The search provider did not respond in time. Try again, or narrow the query.';
+
+function stalledFetch(host: string): string {
+  return `${host} did not respond in time. Try again, or read another source.`;
+}
+
 /** A server failure as one sentence the model can relay, never a raw axios dump. */
-function describeFailure(error: unknown, action: string): Error {
+function describeFailure(error: unknown, action: string, stalled: string, log?: (line: string) => void): Error {
   if (isCancel(error)) return new Error(`Stopped: the turn was interrupted before the ${action} finished.`);
   const name = error instanceof Error ? error.name : '';
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === STOPPED_WHILE_QUEUED) return new Error(message);
   if (name === 'SessionRevokedError' || name === 'NotAuthenticatedError') return new Error(SIGNED_OUT);
-  if (!isAxiosError(error))
-    return new Error(`The ${action} failed: ${error instanceof Error ? error.message : String(error)}`);
-  const status = error.response?.status;
-  const body = (error.response?.data ?? {}) as { error?: unknown; message?: unknown };
+  const status = isAxiosError(error) ? error.response?.status : undefined;
+  const body = (isAxiosError(error) ? (error.response?.data ?? {}) : {}) as { error?: unknown; message?: unknown };
   const raw = typeof body.error === 'string' ? body.error : typeof body.message === 'string' ? body.message : '';
   const detail = oneLine(raw, 300);
+  const code = isAxiosError(error) ? error.code : undefined;
   if (status === 401 || status === 403) return new Error(SIGNED_OUT);
   if (status === 429) return new Error(`The ${action} was rate limited by the server. Try again later.`);
-  if (error.code === 'ECONNABORTED') return new Error(`The ${action} timed out.`);
+  if (
+    code === 'ECONNABORTED' ||
+    (status !== undefined && STALLED_STATUS.has(status)) ||
+    STALLED.test(detail) ||
+    (!detail && STALLED.test(message))
+  ) {
+    log?.(`WEB: ${action} stalled: ${oneLine(detail || message, 300)}${status ? ` (HTTP ${status})` : ''}`);
+    return new Error(stalled);
+  }
+  if (!isAxiosError(error)) return new Error(`The ${action} failed: ${message}`);
   if (detail) return new Error(`The ${action} failed: ${detail}`);
   return new Error(status ? `The ${action} failed with HTTP ${status}.` : `The ${action} failed: ${error.message}`);
 }
@@ -91,7 +120,10 @@ export const webSearch: ToolDefinition = {
     name: WEB_SEARCH_TOOL_NAME,
     description:
       'Search the web using Google Search API to FIND pages about a topic. Use this when you need to find URLs or search for information. DO NOT use this if the user provides a specific URL - use web_fetch instead to read the full content. ' +
-      'Prefer this and web_fetch over the browser for quick lookups; keep the browser for interactive pages, logins and screenshots.',
+      'Prefer this and web_fetch over the browser for quick lookups; keep the browser for interactive pages, logins and screenshots. ' +
+      'Send one well-formed query, read its results, then refine if needed - do not fire several variations at once. ' +
+      'To learn more about a result, web_fetch its URL rather than searching again. ' +
+      `A turn allows at most ${WEB_SEARCH_TURN_BUDGET} searches, and repeating a query reuses its earlier results.`,
     parameters: {
       type: 'object',
       properties: {
@@ -113,11 +145,32 @@ export const webSearch: ToolDefinition = {
     const requested = optionalNumber(input, 'num_results');
     const numResults = requested === undefined ? undefined : Math.min(10, Math.max(1, Math.round(requested)));
 
+    const send = () => web.search({ query, ...(numResults ? { num_results: numResults } : {}) }, context.signal);
     let text: string;
     try {
-      text = await web.search({ query, ...(numResults ? { num_results: numResults } : {}) }, context.signal);
+      if (!web.searches) {
+        text = await send();
+      } else {
+        const outcome = await web.searches.search({
+          key: webSearchCacheKey(query, numResults),
+          signal: context.signal,
+          send,
+          cacheable: answer => !NOT_CONFIGURED.test(answer.trim()),
+          onQueued: () => context.report?.progress('Waiting for another web search to finish...'),
+          onStarted: () => context.report?.progress('Searching the web...'),
+        });
+        if (outcome.kind === 'exhausted') {
+          context.report?.label('Search budget for this turn used up');
+          return (
+            `Not searched: this turn has already used its ${WEB_SEARCH_TURN_BUDGET} web searches. ` +
+            'Answer from the results you already have, or ask the user whether to search more.'
+          );
+        }
+        if (outcome.kind === 'reused') context.report?.label(`Reused earlier results: ${query}`);
+        text = outcome.text;
+      }
     } catch (error) {
-      throw describeFailure(error, 'web search');
+      throw describeFailure(error, 'web search', SEARCH_STALLED, web.log);
     }
 
     // Passed through as the server said it, unframed: it is the server's own sentence, and the
@@ -266,7 +319,7 @@ export const webFetch: ToolDefinition = {
     try {
       text = await web.fetch({ url: url.toString(), ...(offset ? { offset } : {}) }, context.signal);
     } catch (error) {
-      throw describeFailure(error, `fetch of ${url.hostname}`);
+      throw describeFailure(error, `fetch of ${url.hostname}`, stalledFetch(url.hostname), web.log);
     }
 
     const body = capFetchedChunk(text, offset ?? 0, MAX_TOOL_OUTPUT_CHARS - FRAME_ROOM);

@@ -22,6 +22,7 @@ import type { MediaStore } from '../media/MediaStore';
 import type { VideoJobScheduler } from '../media/VideoJobScheduler';
 import type { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
+import type { WebSearchTurn } from './webSearchLimits';
 
 /**
  * What the server-backed generation tools need, and nothing else.
@@ -88,6 +89,10 @@ export interface ExploreContext extends ExploreTarget {
 export interface WebContext {
   search(body: { query: string; num_results?: number }, signal: AbortSignal): Promise<string>;
   fetch(body: { url: string; offset?: number }, signal: AbortSignal): Promise<string>;
+  /** The turn's budget, slots and cache; see webSearchLimits.ts. Absent, every search is sent. */
+  searches?: WebSearchTurn;
+  /** The main-process log, for the raw reason behind a failure the tool result words plainly. */
+  log?: (line: string) => void;
 }
 
 /**

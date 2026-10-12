@@ -3,7 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { toolsForRequest } from './registry';
 import type { ToolContext, WebContext } from './types';
 import { MAX_TOOL_OUTPUT_CHARS } from './types';
-import { capFetchedChunk, frameWebContent, parseFetchUrl, webContextFor, webFetch, webSearch } from './webTools';
+import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './webSearchLimits';
+import {
+  SEARCH_STALLED,
+  capFetchedChunk,
+  frameWebContent,
+  parseFetchUrl,
+  webContextFor,
+  webFetch,
+  webSearch,
+} from './webTools';
 
 const SEARCH_TEXT = [
   "Here's what I found from searching the web:",
@@ -126,6 +135,138 @@ describe('web_search', () => {
     const out = await webSearch.run({ query: 'q' }, context({ search: async () => 'x'.repeat(200_000) }));
     expect(out.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
     expect(out).toMatch(/<<<end web-content [0-9a-f]{12}>>>$/);
+  });
+});
+
+describe('web_search limits', () => {
+  function limited(limiter = new WebSearchLimiter(), search = vi.fn(async () => SEARCH_TEXT)) {
+    const label = vi.fn();
+    const progress = vi.fn();
+    const ctx: ToolContext = {
+      ...context({ search }),
+      report: { label, progress } as never,
+    };
+    ctx.web!.searches = limiter.turn('s1');
+    return { ctx, label, progress, search };
+  }
+
+  it('answers past the turn budget without asking the server, and labels the row', async () => {
+    const { ctx, label, search } = limited();
+    for (let i = 0; i < WEB_SEARCH_TURN_BUDGET; i++) await webSearch.run({ query: `q${i}` }, ctx);
+    const out = await webSearch.run({ query: 'one more' }, ctx);
+    expect(search).toHaveBeenCalledTimes(WEB_SEARCH_TURN_BUDGET);
+    expect(out).toMatch(/already used its 5 web searches/);
+    expect(out).toMatch(/ask the user whether to search more/);
+    expect(label).toHaveBeenCalledWith('Search budget for this turn used up');
+  });
+
+  it('reuses an identical query, framed afresh, and says so on the row', async () => {
+    const limiter = new WebSearchLimiter();
+    const first = limited(limiter);
+    await webSearch.run({ query: 'Vitest  watch', num_results: 4 }, first.ctx);
+    const second = limited(limiter);
+    const out = await webSearch.run({ query: 'vitest watch ', num_results: 4 }, second.ctx);
+    expect(second.search).not.toHaveBeenCalled();
+    expect(second.label).toHaveBeenCalledWith('Reused earlier results: vitest watch');
+    expect(out).toMatch(/^Web search results for "vitest watch" \(2 results\)\./);
+  });
+
+  it('searches again for a different result count', async () => {
+    const limiter = new WebSearchLimiter();
+    await webSearch.run({ query: 'q', num_results: 3 }, limited(limiter).ctx);
+    const second = limited(limiter);
+    await webSearch.run({ query: 'q', num_results: 5 }, second.ctx);
+    expect(second.search).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not keep the "not configured" answer, so a fixed server is asked again', async () => {
+    const limiter = new WebSearchLimiter();
+    const message = 'Web search is not configured: set a key.';
+    await webSearch.run(
+      { query: 'q' },
+      limited(
+        limiter,
+        vi.fn(async () => message)
+      ).ctx
+    );
+    const second = limited(limiter);
+    await webSearch.run({ query: 'q' }, second.ctx);
+    expect(second.search).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a queued search as waiting, then as searching', async () => {
+    let release!: () => void;
+    const held = new Promise<string>(resolve => {
+      release = () => resolve(SEARCH_TEXT);
+    });
+    const { ctx, progress } = limited(
+      new WebSearchLimiter(),
+      vi.fn(() => held)
+    );
+    const runs = ['a', 'b', 'c'].map(query => webSearch.run({ query }, ctx));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(progress).toHaveBeenCalledWith('Waiting for another web search to finish...');
+    release();
+    await Promise.all(runs);
+    expect(progress).toHaveBeenLastCalledWith('Searching the web...');
+  });
+
+  it('reports a search stopped in the queue as stopped, not failed', async () => {
+    const controller = new AbortController();
+    const { ctx } = limited(
+      new WebSearchLimiter(),
+      vi.fn(() => new Promise<string>(() => undefined))
+    );
+    const stopping = { ...ctx, signal: controller.signal };
+    void webSearch.run({ query: 'a' }, ctx);
+    void webSearch.run({ query: 'b' }, ctx);
+    const queued = webSearch.run({ query: 'c' }, stopping);
+    controller.abort();
+    await expect(queued).rejects.toThrow(/^Stopped: /);
+  });
+});
+
+describe('web search failures', () => {
+  function failing(error: unknown) {
+    const log = vi.fn();
+    const ctx = context({
+      search: async () => {
+        throw error;
+      },
+    });
+    ctx.web!.log = log;
+    return { ctx, log };
+  }
+
+  it.each([
+    ['a server body saying fetch failed', axiosFailure(500, { error: 'Web search failed: fetch failed' })],
+    ['a server body saying it timed out', axiosFailure(500, { error: 'SerpAPI request timed out after 10000ms' })],
+    ['a gateway timeout', axiosFailure(504, '')],
+    ['the client timeout', new AxiosError('timeout of 30000ms exceeded', 'ECONNABORTED')],
+    ['a bare fetch failure', new TypeError('fetch failed')],
+  ])('words %s plainly and logs the raw reason', async (_, error) => {
+    const { ctx, log } = failing(error);
+    const run = webSearch.run({ query: 'q' }, ctx);
+    await expect(run).rejects.toThrow(SEARCH_STALLED);
+    await run.catch((thrown: Error) => expect(thrown.message).not.toMatch(/fetch failed/i));
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^WEB: web search stalled: /));
+  });
+
+  it('keeps other server errors as they were', async () => {
+    const { ctx, log } = failing(axiosFailure(500, { error: 'quota exhausted' }));
+    await expect(webSearch.run({ query: 'q' }, ctx)).rejects.toThrow('The web search failed: quota exhausted');
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('words a stalled page fetch by its host', async () => {
+    const ctx = context({
+      fetch: async () => {
+        throw axiosFailure(500, { error: 'fetch failed' });
+      },
+    });
+    await expect(webFetch.run({ url: 'https://example.com/a' }, ctx)).rejects.toThrow(
+      'example.com did not respond in time. Try again, or read another source.'
+    );
   });
 });
 

@@ -42,8 +42,10 @@ function WebLink({ url, children, testId }: { url: string; children: string; tes
 /** "3 results" beside a search row's label, where it cannot be ellipsized away. */
 export function WebResultCount({ call }: { call: ChatToolCall }) {
   const hits = useWebSearchHits(call);
-  // A label is how the tool says no search happened ("not configured"); a count would contradict it.
-  if (call.name !== WEB_SEARCH_TOOL_NAME || call.status !== 'done' || !call.preview || call.label) return null;
+  // A label with no results is how the tool says no search happened ("not configured", budget
+  // spent); a count would contradict it. A reused search is labelled too, and does have results.
+  if (call.name !== WEB_SEARCH_TOOL_NAME || call.status !== 'done' || !call.preview) return null;
+  if (call.label && hits.length === 0) return null;
   return (
     <Typography level="body-sm" textColor="text.tertiary" sx={{ flex: '0 0 auto' }} data-testid="chat-tool-row-count">
       {hits.length === 1 ? '1 result' : `${hits.length} results`}

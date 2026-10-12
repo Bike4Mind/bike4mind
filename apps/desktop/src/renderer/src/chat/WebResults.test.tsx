@@ -132,6 +132,15 @@ describe('a web search row', () => {
     expect(byTestId('chat-tool-detail-result')[0].textContent).toBe(preview);
   });
 
+  it('says a reused search was reused and still counts and lists its results', () => {
+    const call = search({ label: 'Reused earlier results: vitest watch' });
+    act(() => root.render(<ToolCallList calls={[call]} onRespond={() => undefined} />));
+    expect(byTestId('chat-tool-row-label')[0].textContent).toBe('Reused earlier results: vitest watch');
+    expect(byTestId('chat-tool-row-count')[0].textContent).toBe('2 results');
+    openRow();
+    expect(byTestId('chat-tool-web-result-link')).toHaveLength(2);
+  });
+
   it('asks to read a page rather than to run a command', () => {
     const gated: ChatToolCall = {
       id: 'f2',
