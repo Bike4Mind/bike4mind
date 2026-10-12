@@ -19,10 +19,11 @@ const state = vi.hoisted(() => ({
   failTransaction: false,
 }));
 
+const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+
 const sendToClient = vi.hoisted(() => vi.fn());
 vi.mock('@server/websocket/utils', () => ({
-  withWebSocketContext: (handler: (...args: unknown[]) => unknown) => (event: unknown) =>
-    handler(event, {}, { info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  withWebSocketContext: (handler: (...args: unknown[]) => unknown) => (event: unknown) => handler(event, {}, logger),
   sendToClient,
 }));
 vi.mock('@server/websocket/connectionScope', () => ({ connectionHoldsScope: () => true }));
@@ -57,8 +58,12 @@ vi.mock('@bike4mind/database', () => ({
     createTransaction: async (_type: string, data: { credits: number; transactionId?: string }) => {
       if (state.failTransaction) throw new Error('mongo blip');
       if (data.transactionId && state.transactions.some(t => t.transactionId === data.transactionId)) return null;
-      state.transactions.push(data);
-      return data;
+      const row = { ...data, id: `tx-${state.transactions.length + 1}` };
+      state.transactions.push(row);
+      return row;
+    },
+    delete: async (id: string) => {
+      state.transactions = state.transactions.filter(t => (t as { id?: string }).id !== id);
     },
   },
   sessionRepository: {
@@ -138,6 +143,7 @@ describe('voiceSessionEnded realtime billing', () => {
     state.failIncrement = false;
     state.failTransaction = false;
     sendToClient.mockClear();
+    logger.error.mockClear();
   });
 
   it('bills every response of a multi-turn call, then refunds the unused hold at the end', async () => {
@@ -284,6 +290,24 @@ describe('voiceSessionEnded realtime billing', () => {
 
     expect(state.session.voiceSessionStartedAt).toBeNull();
     expect(charged()).toBe(35);
+  });
+
+  it('undoes the ledger row and billed total when a response debit fails, so a retry bills it once', async () => {
+    await send(70, 'resp-1');
+    state.failIncrement = true;
+
+    await expect(send(50, 'resp-2')).rejects.toThrow('mongo blip');
+
+    expect(state.transactions.map(t => t.credits)).toEqual([-70]);
+    expect(state.session.voiceBilledCredits).toBe(70);
+    expect(charged()).toBe(HOLD);
+    expect(logger.error).not.toHaveBeenCalled();
+
+    state.failIncrement = false;
+    await send(50, 'resp-2');
+
+    expect(state.transactions.map(t => t.credits)).toEqual([-70, -50]);
+    expect(charged()).toBe(120);
   });
 
   it('charges a response frame against a hold without the realtime marker from the balance', async () => {

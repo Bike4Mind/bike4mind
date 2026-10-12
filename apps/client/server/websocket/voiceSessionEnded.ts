@@ -113,18 +113,41 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       return { statusCode: 200 };
     }
     const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
-    const billedBefore = startedAt
-      ? await sessionRepository.addVoiceBilledCredits(session.id, startedAt, actualCredits)
-      : null;
-    // Only the part past the hold leaves the balance now; the hold already covers the rest. With the
-    // hold already closed (a close frame that overtook this one) the whole response is charged.
-    const fromBalance =
-      billedBefore === null
-        ? actualCredits
-        : Math.max(0, billedBefore + actualCredits - (session.voiceReservedCredits ?? 0)) -
-          Math.max(0, billedBefore - (session.voiceReservedCredits ?? 0));
-    if (fromBalance > 0) {
-      await userRepository.incrementCredits(user.id, -fromBalance);
+    let billedBefore: number | null = null;
+    try {
+      billedBefore = startedAt
+        ? await sessionRepository.addVoiceBilledCredits(session.id, startedAt, actualCredits)
+        : null;
+      // Only the part past the hold leaves the balance now; the hold already covers the rest. With the
+      // hold already closed (a close frame that overtook this one) the whole response is charged.
+      const fromBalance =
+        billedBefore === null
+          ? actualCredits
+          : Math.max(0, billedBefore + actualCredits - (session.voiceReservedCredits ?? 0)) -
+            Math.max(0, billedBefore - (session.voiceReservedCredits ?? 0));
+      if (fromBalance > 0) {
+        await userRepository.incrementCredits(user.id, -fromBalance);
+      }
+    } catch (billingError) {
+      // The ledger row is this response's replay gate, so a row left behind would make a retried
+      // frame a no-op and the response would never be charged. Undo the row and the billed total.
+      const billed = billedBefore !== null && startedAt;
+      const [unbilled, unrecorded] = await Promise.allSettled([
+        billed ? sessionRepository.addVoiceBilledCredits(session.id, startedAt, -actualCredits) : null,
+        creditTransactionRepository.delete(recorded.id),
+      ]);
+      // A null from the revert means the hold was claimed meanwhile, with this response counted in it.
+      const undone =
+        unrecorded.status === 'fulfilled' && unbilled.status === 'fulfilled' && (!billed || unbilled.value !== null);
+      if (!undone) {
+        logger.error('voiceSessionEnded: response billing failed and could not be undone', {
+          sessionId,
+          userId: user.id,
+          responseId,
+          actualCredits,
+        });
+      }
+      throw billingError;
     }
     if (billedBefore !== null) {
       holdLeft = Math.max(0, (session.voiceReservedCredits ?? 0) - billedBefore - actualCredits);
