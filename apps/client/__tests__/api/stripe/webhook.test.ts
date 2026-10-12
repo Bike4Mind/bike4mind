@@ -109,6 +109,15 @@ vi.mock('@server/billing/grantCreditPurchase', () => ({
   grantCreditPurchase: (...args: unknown[]) => mockGrantCreditPurchase(...args),
 }));
 
+// The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with an
+// ingest key for one made-up product.
+const mockEmitProductEvent = vi.fn();
+vi.mock('@server/analytics/emitActiveEvent', () => ({
+  HOST_PRODUCT_ID: 'bike4mind',
+  emitProductEvent: (...args: unknown[]) => mockEmitProductEvent(...args),
+  ingestKeyFor: (p: string) => (p === 'widgets' ? 'key' : undefined),
+}));
+
 const mockEmitMetric = vi.fn();
 vi.mock('@server/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
@@ -153,6 +162,7 @@ vi.mock('@bike4mind/common', async importOriginal => {
 
 // Imports after mocks
 import { CreditPurchaseEvents, CreditPurchaseStatus } from '@bike4mind/common';
+import { stableEventId } from '@server/analytics/signupEvents';
 
 // Load the module to trigger mock capture
 // This import triggers `baseApi().post(handler)` which populates capturedHandler
@@ -235,6 +245,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockGrantCreditPurchase.mockResolvedValue('granted');
     mockClawbackCreditLotsByStripeRef.mockResolvedValue(undefined);
     mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
+    mockEmitProductEvent.mockResolvedValue(undefined);
   });
 
   describe('payment_intent.succeeded', () => {
@@ -292,6 +303,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
 
       await expect(invokeWebhookWithEvent(packEvent)).rejects.toThrow('balance write failed');
       expect(mockLogEventSafe).not.toHaveBeenCalled();
+      expect(mockEmitProductEvent).not.toHaveBeenCalled();
     });
 
     it('records the grant against the payment intent once credits are added', async () => {
@@ -367,6 +379,77 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
 
       expect(mockFindByStripeCustomerId).not.toHaveBeenCalled();
       expect(mockAddCredits).not.toHaveBeenCalled();
+    });
+
+    describe('credit to the source product', () => {
+      const buyer = { ...mockUser, acquisition: { firstTouch: { source: 'widgets', campaign: 'launch' } } };
+      const paidPack = {
+        ...packEvent,
+        data: { object: { ...packEvent.data.object, amount_received: 999, currency: 'usd' } },
+      };
+
+      it('credits the pack to the product named by the stored touches, keyed on the payment intent', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+
+        const { res } = await invokeWebhookWithEvent(paidPack);
+
+        expect(mockEmitProductEvent).toHaveBeenCalledTimes(1);
+        expect(mockEmitProductEvent).toHaveBeenCalledWith({
+          productId: 'widgets',
+          event: 'purchase',
+          eventId: stableEventId('purchase', 'widgets', 'pi_pack'),
+          reportFailure: true,
+          userId: 'user123',
+          utm: { source: 'widgets', campaign: 'launch' },
+          metadata: { touch: 'first', attribution: 'self-reported', kind: 'credits', value: 9.99, currency: 'USD' },
+        });
+        expect(res.status).toHaveBeenCalledWith(200);
+      });
+
+      it('sends the same eventId on a redelivery, so the receiver keeps one event', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+        await invokeWebhookWithEvent(paidPack);
+        mockGrantCreditPurchase.mockResolvedValue('already_granted');
+        await invokeWebhookWithEvent(paidPack);
+
+        const ids = mockEmitProductEvent.mock.calls.map(([c]) => c.eventId);
+        expect(ids).toHaveLength(2);
+        expect(ids[1]).toBe(ids[0]);
+      });
+
+      it('sends nothing for a buyer with no stored touches or a synthetic buyer', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+        await invokeWebhookWithEvent(paidPack);
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer, isSynthetic: true });
+        await invokeWebhookWithEvent(paidPack);
+
+        expect(mockEmitProductEvent).not.toHaveBeenCalled();
+      });
+
+      it('sends nothing for an intent from another environment or without credits', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+        const object = paidPack.data.object;
+        await invokeWebhookWithEvent({
+          ...paidPack,
+          data: { object: { ...object, metadata: { environment: 'prod' } } },
+        });
+        await invokeWebhookWithEvent({
+          ...paidPack,
+          data: { object: { ...object, metadata: { ...object.metadata, credits: '0' } } },
+        });
+
+        expect(mockEmitProductEvent).not.toHaveBeenCalled();
+      });
+
+      it('still acknowledges the delivery when the emit rejects', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+        mockEmitProductEvent.mockRejectedValue(new Error('ingest down'));
+
+        const { res } = await invokeWebhookWithEvent(paidPack);
+
+        expect(mockEmitProductEvent).toHaveBeenCalledTimes(1);
+        expect(res.status).toHaveBeenCalledWith(200);
+      });
     });
   });
 

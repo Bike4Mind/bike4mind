@@ -21,6 +21,7 @@ import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
+import { emitPurchaseForSourceProducts } from '@server/analytics/signupEvents';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 
@@ -129,6 +130,19 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         },
         req.logger
       );
+
+      // Credit the pack to the product the buyer came through, from the touches stored at
+      // signup. Sent on a redelivery too: the eventId is keyed on the payment intent, so the
+      // receiver keeps one event, and a first attempt that timed out gets another chance.
+      // Never throws, so it cannot fail a delivery whose credits already landed.
+      await emitPurchaseForSourceProducts({
+        user,
+        paymentId: intent.id,
+        kind: 'credits',
+        amountMinor: intent.amount_received ?? intent.amount,
+        currency: intent.currency,
+      });
+
       if (outcome === 'already_granted') {
         req.logger.info('[CreditPurchase] Credits already granted for intent', {
           step: 'already_granted',

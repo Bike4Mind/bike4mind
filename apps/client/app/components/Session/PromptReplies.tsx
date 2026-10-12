@@ -66,7 +66,6 @@ import { isAxiosError } from 'axios';
 import { z } from 'zod';
 import { useConfig } from '@client/app/hooks/data/settings';
 import {
-  hasCompleteOpeningTag,
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
@@ -87,7 +86,7 @@ import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
-import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
+import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
 
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
@@ -1362,23 +1361,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
         preprocessedContent = preprocessedContent.substring(0, artifactIndex).trim();
       }
     } else if (isTruncatedArtifact) {
-      // Completed but truncated mid-artifact. Target the LAST opening tag - that's the
-      // dangling one; any earlier artifacts are already closed and must be left intact.
-      // If that opening tag is complete (has a closing `>`), best-effort close the
-      // artifact so the partial parses into a previewable/downloadable card (a truncation
-      // banner is rendered above it). If the opening tag itself was cut off mid-attribute,
-      // drop the partial from that tag onward so no raw HTML leaks into the bubble.
-      const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
-      const tail = artifactIndex !== -1 ? preprocessedContent.substring(artifactIndex) : '';
-      if (hasCompleteOpeningTag(tail)) {
-        preprocessedContent = `${preprocessedContent.trimEnd()}\n</artifact>`;
-      } else {
-        // Opening tag truncated mid-attribute - nothing renderable. Log the dropped
-        // length so mid-attribute truncations are observable if they occur in prod.
-        console.warn(`[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars)`);
-        preprocessedContent =
-          artifactIndex === -1 ? preprocessedContent : preprocessedContent.substring(0, artifactIndex).trim();
-      }
+      preprocessedContent = repairTruncatedArtifact(preprocessedContent);
     }
 
     // Parse explicit <artifact> tags, then promote any bare/fenced HTML document left in the

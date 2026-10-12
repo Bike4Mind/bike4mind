@@ -36,18 +36,17 @@ import {
   fabFilesService,
   recordOperationalUsage,
 } from '@bike4mind/services';
-import { getEmbeddingModelCost } from '@bike4mind/common';
+import { getEmbeddingModelCost, provenancePayloadShape } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
   completedBatchStatus,
   deferFailureIfRetryable,
-} from '@server/queueHandlers/dataLakeBatchProgress';
+} from '@server/dataLakes/dataLakeBatchProgress';
 import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackIndexingComplete';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
-import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
 import { makeDataLakeSpendNotifier } from '@server/utils/dataLakeSpendNotifier';
-import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';

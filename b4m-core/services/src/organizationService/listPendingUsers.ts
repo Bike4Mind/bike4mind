@@ -1,6 +1,7 @@
 import { IInviteRepository, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { get } from './get';
 
 const listPendingUsersSchema = z.object({
   organizationId: z.string(),
@@ -30,13 +31,7 @@ export const listPendingUsers = async (
   adapters: ListPendingUsersAdapters
 ) => {
   const { organizationId } = secureParameters(parameters, listPendingUsersSchema);
-  let organization = await adapters.db.organizations.shareable.findAccessibleById(user, organizationId);
-  if (!organization && user.isAdmin) {
-    organization = await adapters.db.organizations.findById(organizationId);
-  }
-  if (!organization) {
-    throw new NotFoundError('Organization not found');
-  }
+  await get(user, { id: organizationId }, adapters);
 
   const inviteDocs = await adapters.db.invites.findAllByDocumentId(organizationId);
   if (!inviteDocs) {
