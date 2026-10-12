@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { extendTheme } from '@mui/joy/styles';
-import { components, getThemeConfig } from './themePrimitives';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { getThemeConfig } from './themePrimitives';
 
 /**
  * WCAG AA for body text is 4.5:1. Each text token is measured against every surface the app sets
@@ -80,25 +82,24 @@ describe('text token contrast', () => {
     expect(failures).toEqual([]);
   });
 
-  it.each(MODES)('%s: input and textarea placeholders reach 4.5:1', mode => {
+  it.each(MODES)('%s: Joy input and textarea placeholders reach 4.5:1', mode => {
     const palette = theme.colorSchemes[mode].palette as unknown as Palette;
-    const opacity = [
-      components.JoyInput.styleOverrides.root['--Input-placeholderOpacity'],
-      components.JoyTextarea.styleOverrides.root['--Textarea-placeholderOpacity'],
-    ];
-    const rgba = (alpha: number) => {
-      const [r, g, b] = parse(palette.text.primary);
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-    };
-    const failures = opacity.flatMap(alpha =>
-      (['background.body', 'background.surface', 'background.surface2'] as const).map(surface => ({
-        alpha,
-        surface,
-        ratio: contrast(rgba(alpha), surfaceColor(palette, surface)),
-      }))
-    )
+    const css = readFileSync(path.resolve(process.cwd(), 'app/globals.css'), 'utf8');
+    const placeholderSelector =
+      /\[class\*='JoyInput'\] input::placeholder,\s*\[class\*='JoyTextarea'\] textarea::placeholder\s*\{([^}]+)\}/;
+    const rule = css.match(placeholderSelector)?.[1];
+    if (!rule) throw new Error('Joy placeholder CSS rule is missing');
+    const token = rule?.match(/color:\s*var\(--joy-palette-text-([\w]+)\)\s*!important/)?.[1];
+    const opacity = Number(rule?.match(/opacity:\s*([\d.]+)\s*!important/)?.[1]);
+    if (!token || !Number.isFinite(opacity)) throw new Error('Joy placeholder color or opacity is missing');
+    const [r, g, b, tokenAlpha] = parse(palette.text[token]);
+    const foreground = `rgba(${r}, ${g}, ${b}, ${tokenAlpha * opacity})`;
+    const failures = SURFACES.map(surface => ({
+      surface,
+      ratio: contrast(foreground, surfaceColor(palette, surface)),
+    }))
       .filter(({ ratio }) => ratio < AA_TEXT)
-      .map(({ alpha, surface, ratio }) => `placeholder at ${alpha} on ${surface}: ${ratio.toFixed(2)}`);
+      .map(({ surface, ratio }) => `placeholder on ${surface}: ${ratio.toFixed(2)}`);
     expect(failures).toEqual([]);
   });
 

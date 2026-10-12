@@ -420,12 +420,8 @@ export const components = {
       },
     },
   },
-  // Joy's default 0.64 placeholder opacity lands near 3:1; 0.85 of text.primary clears 4.5:1.
   JoyInput: {
     styleOverrides: {
-      root: {
-        '--Input-placeholderOpacity': 0.85,
-      },
       input: {
         color: 'var(--joy-palette-text-primary)',
       },
@@ -433,9 +429,6 @@ export const components = {
   },
   JoyTextarea: {
     styleOverrides: {
-      root: {
-        '--Textarea-placeholderOpacity': 0.85,
-      },
       textarea: {
         color: 'var(--joy-palette-text-primary)',
       },

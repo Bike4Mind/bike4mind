@@ -488,10 +488,11 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
   transition: border-color 0.2s ease-in-out !important;
 }
 
-/* Set placeholder color to text.tertiary */
+/* Keep placeholder text at the token's tested contrast, including Inputs with local opacity rules. */
 [class*='JoyInput'] input::placeholder,
 [class*='JoyTextarea'] textarea::placeholder {
   color: var(--joy-palette-text-tertiary) !important;
+  opacity: 1 !important;
 }
 
 /* Remove Joy UI focus effect for Select components */
