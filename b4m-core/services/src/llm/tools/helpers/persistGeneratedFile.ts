@@ -1,5 +1,6 @@
-import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { FabFileSourceType, KnowledgeType, type GeneratedAssetMetadata } from '@bike4mind/common';
 import { createFabFile } from '../../../fabFileService/create';
+import { saveGeneratedAsset, type SaveGeneratedAssetResult } from '../../../generatedAssets';
 import type { ToolContext } from '../base/types';
 
 /**
@@ -80,4 +81,32 @@ export async function persistGeneratedFileAsFabFile(
   } catch (err) {
     logger.error('[persistGeneratedFileAsFabFile] failed to persist generated file (non-fatal)', err);
   }
+}
+
+/**
+ * saveGeneratedAsset for an in-chat tool: the ToolContext supplies the adapters and the notebook link. Missing
+ * adapters (some non-chat harnesses) skip the save rather than fail the tool.
+ */
+export async function saveGeneratedAssetFromTool(
+  context: ToolContext,
+  asset: { bytes: Buffer; contentType: string; generation: GeneratedAssetMetadata }
+): Promise<SaveGeneratedAssetResult> {
+  const { sessionId, questId, userId, db, storage, logger } = context;
+  if (!db.fabfiles || !db.users || !db.adminSettings || !db.dataLakes) {
+    logger.warn('[saveGeneratedAssetFromTool] missing db adapters - skipping save');
+    return { saved: false, reason: 'error' };
+  }
+
+  return saveGeneratedAsset(
+    { userId, ...asset, sessionId, questId },
+    {
+      db: { fabFiles: db.fabfiles, adminSettings: db.adminSettings, users: db.users, dataLakes: db.dataLakes },
+      storage: {
+        upload: (path, content, options) => storage.upload(content, path, options),
+        generateSignedUrl: (path, expireInSeconds, type) =>
+          storage.getSignedUrl(path, type ?? 'get', { expiresIn: expireInSeconds }),
+      },
+      logger,
+    }
+  );
 }

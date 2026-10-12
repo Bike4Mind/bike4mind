@@ -3,12 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   findByIdAndUserId: vi.fn(),
   findOne: vi.fn(),
-  createFabFile: vi.fn(),
   download: vi.fn(),
   upload: vi.fn(),
   generatedDownload: vi.fn(),
   findSessionIdsByImage: vi.fn(),
   findAllByIds: vi.fn(),
+  saveGeneratedAssetToFiles: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'https://ws.example.test' } } }));
@@ -26,10 +26,9 @@ vi.mock('@bike4mind/database', async importOriginal => {
     sessionRepository: { findAllByIds: mocks.findAllByIds },
   };
 });
-vi.mock('@bike4mind/services', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/services')>();
-  return { ...actual, fabFilesService: { ...actual.fabFilesService, createFabFile: mocks.createFabFile } };
-});
+vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+  saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
+}));
 
 import { loadInputImage, saveToFiles } from './wiring';
 
@@ -108,98 +107,46 @@ describe('loadInputImage for a generated image', () => {
 });
 
 describe('saveToFiles', () => {
-  const params = {
-    userId: 'user1',
-    jobId: 'job1',
-    bytes: Buffer.from('mp4'),
-    contentType: 'video/mp4',
-    prompt: 'p',
-    signal: new AbortController().signal,
-  };
   beforeEach(() => vi.resetAllMocks());
 
-  it('returns the existing file for the job without creating another', async () => {
-    mocks.findOne.mockResolvedValue({ id: 'f1', filePath: 'generated-video/x.mp4' });
-    await expect(saveToFiles(params)).resolves.toEqual({ saved: true, fileId: 'f1', s3Key: 'generated-video/x.mp4' });
-    expect(mocks.createFabFile).not.toHaveBeenCalled();
-    expect(mocks.upload).not.toHaveBeenCalled();
+  it('delegates to saveGeneratedAssetToFiles with the job params and returns its result', async () => {
+    const params = {
+      userId: 'user1',
+      bytes: Buffer.from('mp4'),
+      contentType: 'video/mp4',
+      generation: { generator: 'video' as const, provider: 'veo', modelId: 'm', jobId: 'job1', prompt: 'p' },
+      signal: new AbortController().signal,
+    };
+    const result = { saved: true as const, fileId: 'f1', s3Key: 'generated-video/x.mp4', fileName: 'video-job1.mp4' };
+    mocks.saveGeneratedAssetToFiles.mockResolvedValue(result);
+    await expect(saveToFiles(params)).resolves.toBe(result);
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledTimes(1);
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(params, expect.anything());
   });
 
-  it('creates the file when none exists for the job', async () => {
-    mocks.findOne.mockResolvedValue(null);
-    mocks.createFabFile.mockResolvedValue({ id: 'f2', filePath: 'generated-video/y.mp4' });
-    await expect(saveToFiles(params)).resolves.toEqual({ saved: true, fileId: 'f2', s3Key: 'generated-video/y.mp4' });
+  it('passes a not-saved result through unchanged', async () => {
+    mocks.saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'storage_limit' });
+    await expect(
+      saveToFiles({
+        userId: 'u',
+        bytes: Buffer.from('v'),
+        contentType: 'video/mp4',
+        generation: { generator: 'video', provider: 'veo', jobId: 'j', prompt: 'p' },
+        signal: new AbortController().signal,
+      })
+    ).resolves.toEqual({ saved: false, reason: 'storage_limit' });
   });
 
-  // The FabFile extension map lists no video containers, so the provider's claimed type must outrank the name.
-  it('stores the clip under its own extension with the claimed type taking precedence', async () => {
-    mocks.findOne.mockResolvedValue(null);
-    mocks.createFabFile.mockResolvedValue({ id: 'f3', filePath: 'generated-video/z.webm' });
-    await saveToFiles({ ...params, contentType: 'video/webm' });
-    const [, input, adapters] = mocks.createFabFile.mock.calls[0];
-    expect(input).toMatchObject({ fileName: 'video-job1.webm', mimeType: 'video/webm' });
-    expect(adapters).toMatchObject({ mimeTypePrecedence: 'claim-first' });
-  });
-
-  it('refuses a non-video content type without creating a file', async () => {
-    mocks.findOne.mockResolvedValue(null);
-    await expect(saveToFiles({ ...params, contentType: 'text/html' })).resolves.toEqual({
-      saved: false,
-      reason: 'error',
-    });
-    expect(mocks.createFabFile).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['storage limit exceeded', 'storage_limit'],
-    ['File size exceeds maximum file size', 'file_too_large'],
-    ['something else broke', 'error'],
-  ])('maps the failure "%s" to %s', async (message, reason) => {
-    mocks.findOne.mockResolvedValue(null);
-    mocks.createFabFile.mockRejectedValue(new Error(message));
-    await expect(saveToFiles(params)).resolves.toEqual({ saved: false, reason });
-  });
-});
-
-describe('saveToFiles signal', () => {
-  beforeEach(() => vi.resetAllMocks());
-  const input = (signal: AbortSignal) => ({
-    userId: 'u1',
-    jobId: 'j1',
-    bytes: Buffer.from('v'),
-    contentType: 'video/mp4',
-    prompt: 'p',
-    signal,
-  });
-
-  it('forwards the step signal to the Files upload', async () => {
-    const controller = new AbortController();
-    mocks.findOne.mockResolvedValue(null);
-    mocks.upload.mockResolvedValue('generated-video/x.mp4');
-    mocks.createFabFile.mockImplementation(
-      async (_userId: string, _file: unknown, deps: { storage: { upload: (...a: unknown[]) => Promise<string> } }) => {
-        await deps.storage.upload('generated-video/x.mp4', Buffer.from('v'), { ContentType: 'video/mp4' });
-        return { id: 'f1', filePath: 'generated-video/x.mp4' };
-      }
-    );
-    await expect(saveToFiles(input(controller.signal))).resolves.toEqual({
-      saved: true,
-      fileId: 'f1',
-      s3Key: 'generated-video/x.mp4',
-    });
-    expect(mocks.upload).toHaveBeenCalledWith(
-      Buffer.from('v'),
-      'generated-video/x.mp4',
-      { ContentType: 'video/mp4' },
-      controller.signal
-    );
-  });
-
-  it('rethrows an abort instead of reporting an ordinary save failure', async () => {
-    const controller = new AbortController();
-    controller.abort();
-    mocks.findOne.mockResolvedValue(null);
-    mocks.createFabFile.mockRejectedValue(new Error('This operation was aborted'));
-    await expect(saveToFiles(input(controller.signal))).rejects.toThrow('aborted');
+  it('lets an abort propagate instead of reporting an ordinary save failure', async () => {
+    mocks.saveGeneratedAssetToFiles.mockRejectedValue(new Error('This operation was aborted'));
+    await expect(
+      saveToFiles({
+        userId: 'u',
+        bytes: Buffer.from('v'),
+        contentType: 'video/mp4',
+        generation: { generator: 'video', provider: 'veo', jobId: 'j', prompt: 'p' },
+        signal: new AbortController().signal,
+      })
+    ).rejects.toThrow('aborted');
   });
 });
