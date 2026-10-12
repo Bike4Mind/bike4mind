@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   session: null as unknown as FakeSession,
   balance: 0,
   transactions: [] as Array<{ credits: number; transactionId?: string }>,
+  // Runs just before a claim, to stand in for another settler that got there first.
+  beforeClaim: null as null | (() => void),
 }));
 
 const sendToClient = vi.hoisted(() => vi.fn());
@@ -63,6 +65,7 @@ vi.mock('@bike4mind/database', () => ({
       return before;
     },
     claimVoiceHold: async (_id: string, startedAt: Date) => {
+      state.beforeClaim?.();
       if (state.session.voiceSessionStartedAt?.getTime() !== startedAt.getTime()) return null;
       const billedCredits = state.session.voiceBilledCredits ?? null;
       state.session = {
@@ -116,6 +119,7 @@ describe('voiceSessionEnded realtime billing', () => {
     };
     state.balance = STARTING_BALANCE - HOLD;
     state.transactions = [];
+    state.beforeClaim = null;
     sendToClient.mockClear();
   });
 
@@ -217,6 +221,30 @@ describe('voiceSessionEnded realtime billing', () => {
     await send(1);
 
     expect(charged()).toBe(realtimeCreditsFloor(HOLD, 45 * 60));
+  });
+
+  // The claim is what stops this frame, a replay, the end endpoint and the stale hold sweep from
+  // each refunding the same hold. If it stops gating the credit writes the failure is silent.
+  it('moves no credits and records nothing when another settler claimed the hold first', async () => {
+    const newerCall = new Date();
+    state.beforeClaim = () => {
+      state.session.voiceSessionStartedAt = newerCall;
+    };
+
+    await send(0);
+
+    expect(state.balance).toBe(STARTING_BALANCE - HOLD);
+    expect(state.transactions).toHaveLength(0);
+    expect(state.session.voiceSessionStartedAt).toBe(newerCall);
+  });
+
+  it('settles a close only once when the frame is replayed', async () => {
+    await send(30);
+    const afterClose = { balance: state.balance, transactions: state.transactions.length };
+
+    await send(30);
+
+    expect({ balance: state.balance, transactions: state.transactions.length }).toEqual(afterClose);
   });
 
   it("ignores frames from a user the notebook is shared with, so the owner's hold is never theirs", async () => {

@@ -982,6 +982,13 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
     }
   }, [sessionId, connectionStatus, connect]);
 
+  // Best effort: closing or reloading the tab never runs React teardown, so settle the hold as the
+  // page goes away. A crash still sends nothing; the stale-hold sweep reclaims that hold.
+  useEffect(() => {
+    window.addEventListener('pagehide', settleUnsettledHold);
+    return () => window.removeEventListener('pagehide', settleUnsettledHold);
+  }, [settleUnsettledHold]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {

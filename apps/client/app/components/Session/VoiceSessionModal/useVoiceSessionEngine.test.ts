@@ -425,6 +425,16 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     stops.forEach(stop => expect(stop).toHaveBeenCalledTimes(1));
   });
 
+  it('settles the hold when the tab is closed mid-call, which runs no React teardown', async () => {
+    await connectAndConnected();
+
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+
+    expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+  });
+
   it('settles an unsettled hold on unmount, and a failing socket does not break teardown', async () => {
     const view = await connectAndConnected();
     sendJsonMessage.mockImplementationOnce(() => {
