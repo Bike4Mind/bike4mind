@@ -499,6 +499,32 @@ describe('runLakeResearch', () => {
       );
     });
 
+    it('logs at most ten hostnames, passes an unparseable url through raw, and names the lead when it serves', async () => {
+      const lead = {
+        name: 'serpapi',
+        search: vi.fn(async () =>
+          Array.from({ length: 12 }, (_, i) => ({
+            title: `T${i}`,
+            url: i === 2 ? 'not a url' : `https://h${i}.example/p`,
+            snippet: 's',
+          }))
+        ),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
+      searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      const call = (logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.find(
+        ([msg]) => msg === '[lakeResearch] search'
+      );
+      expect(call?.[1]).toMatchObject({ provider: 'serpapi', hits: 12 });
+      const hosts = (call?.[1] as { hosts: string[] }).hosts;
+      expect(hosts).toHaveLength(10);
+      expect(hosts[2]).toBe('not a url');
+      expect(hosts[0]).toBe('h0.example');
+    });
+
     it('fails the run naming both providers when both fail', async () => {
       const backup = {
         name: 'searxng',
