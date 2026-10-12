@@ -25,7 +25,7 @@ const REPORTED_SESSIONS_KEY = 'b4m-reported-checkout-sessions';
  * Best-effort by design - if storage is unavailable, GA4 still dedupes on
  * transaction_id.
  */
-function claimSessionForReporting(sessionId: string): boolean {
+export function claimSessionForReporting(sessionId: string): boolean {
   try {
     const raw = window.sessionStorage.getItem(REPORTED_SESSIONS_KEY);
     const reported: string[] = raw ? JSON.parse(raw) : [];
