@@ -5,7 +5,7 @@
  * The executor threads a connectionId through every step emitter, checkpoint handoff
  * and subagent dispatch, so making it optional would ripple through all of them for no
  * behavioural gain. A sentinel keeps those signatures unchanged and gives the emitter
- * one place to short-circuit (`createWsSender` in `queueHandlers/agentExecutor.ts`)
+ * one place to short-circuit (`createWsSender` in `apps/workers/src/queueHandlers/agentExecutor.ts`)
  * instead of failing - and swallowing - a PostToConnection call on every step.
  *
  * Not a valid API Gateway connection id, so it can never collide with a real peer.

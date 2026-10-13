@@ -9,6 +9,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { toast } from 'sonner';
+import { getServerErrorField } from '@client/app/utils/error';
 import SectionContainer from '../SectionContainer';
 
 // Display-only placeholder domain shown when the deployment has not configured a platform
@@ -56,7 +57,7 @@ const EmailIntegrationSection = () => {
     },
     onError: error => {
       console.error('Failed to update email settings:', error);
-      toast.error('Failed to update email settings');
+      toast.error(getServerErrorField(error) || 'Failed to update email settings');
     },
   });
 

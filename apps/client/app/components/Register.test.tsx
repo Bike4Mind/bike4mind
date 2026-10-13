@@ -115,6 +115,21 @@ describe('Register - field errors and rate limiting', () => {
     expect(input).toHaveAttribute('aria-describedby', alert.id);
   });
 
+  it('ties the inline username error to the input with aria-describedby and role=alert', async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    const input = within(screen.getByTestId('register-username-input')).getByRole('textbox');
+    await user.type(input, 'bad name!');
+    await user.tab();
+
+    const alert = screen.getByTestId('register-username-error');
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveTextContent('auth.fieldErrors.invalidUsername');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveAttribute('aria-describedby', alert.id);
+  });
+
   it('shows an alert and disables Continue with a countdown when the code request is rate limited', async () => {
     const user = userEvent.setup();
     mocks.sendOTC.mockRejectedValueOnce({

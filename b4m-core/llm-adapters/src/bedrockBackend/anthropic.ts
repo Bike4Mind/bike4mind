@@ -27,7 +27,7 @@ import { BaseBedrockBackend } from './base';
 import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
-import { buildThinkingParams } from '../thinkingParams';
+import { buildThinkingParams, planReasoningEffort } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
 import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
@@ -1001,6 +1001,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           body.temperature = result.temperature;
         }
         delete body.top_p;
+      } else if (options.reasoningEffort) {
+        const plan = planReasoningEffort(model, currentModelInfo, options.reasoningEffort, maxTokens);
+        if (plan.kind !== 'default') body.thinking = plan.thinking;
+        if (plan.kind === 'adaptive') body.output_config = plan.output_config;
+        if (plan.kind === 'budget') {
+          if (plan.temperature === 'delete') delete body.temperature;
+          else body.temperature = plan.temperature;
+          delete body.top_p;
+        }
       }
     }
 

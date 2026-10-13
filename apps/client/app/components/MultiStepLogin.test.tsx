@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import en from '@client/app/locales/en.json';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import MultiStepLogin from './MultiStepLogin';
@@ -444,6 +445,35 @@ describe('MultiStepLogin - Cookie settings link', () => {
 
     expect(screen.getByText(/By continuing, you agree to our/)).toBeInTheDocument();
     expect(screen.getByTestId('login-cookie-settings-link')).toBeInTheDocument();
+  });
+});
+
+// The email step must tell a returning user that a one-time code is emailed, so they do not go
+// looking for a password field or a forgot-password link that this flow does not have.
+describe('MultiStepLogin - passwordless email step copy', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+  });
+
+  it('tells the user a one-time code is emailed and offers no password or forgot-password affordance', () => {
+    renderLogin();
+
+    // The i18n mock echoes the key, so the subtitle's rendered text is its translation key. Pinning
+    // the key proves the email step still renders auth.signInOrCreate; the value is checked below.
+    expect(screen.getByText('auth.signInOrCreate')).toBeInTheDocument();
+
+    // The copy behind that key names the emailed code and claims no password.
+    expect(en.auth.signInOrCreate).toMatch(/one-time code/i);
+    expect(en.auth.signInOrCreate).not.toMatch(/password|forgot/i);
+
+    // The email step exposes no password field and no forgot-password link.
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    expect(screen.queryByText(/forgot/i)).toBeNull();
+    // Accessible-name queries also catch an icon-only control labelled through aria-label.
+    expect(screen.queryByRole('link', { name: /forgot/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /forgot/i })).toBeNull();
   });
 });
 

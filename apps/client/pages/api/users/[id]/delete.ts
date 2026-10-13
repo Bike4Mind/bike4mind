@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
+import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { EmailEvents } from '@server/utils/eventBus';
 import { toSafeUser, type IUserDocument, type IUserRepository } from '@bike4mind/common';
 import { purgeDeletedUserData } from '@server/services/purgeDeletedUserData';
@@ -45,7 +46,7 @@ const handler = baseApi().delete(
                     to: mailTo,
                     subject: 'User Deletion Notification',
                     body: `
-              <p>Admin user: ${admin.name} User deleted: *${user.name}* *${user.email}*</p>
+              <p>Admin user: ${escapeHtml(admin.name ?? '')} User deleted: *${escapeHtml(user.name ?? '')}* *${escapeHtml(user.email ?? '')}*</p>
               `,
                   })
                 )

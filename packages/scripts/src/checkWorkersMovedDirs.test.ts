@@ -22,6 +22,11 @@ const MOVED = [
     from: 'apps/client/server/security/attackSimulation/probes',
     to: 'apps/workers/src/security/attackSimulation/probes',
   },
+  // A subdirectory of queueHandlers, which the per-stem check below cannot see.
+  {
+    from: 'apps/client/server/queueHandlers/agentExecutorUtils',
+    to: 'apps/workers/src/queueHandlers/agentExecutorUtils',
+  },
 ] as const;
 
 /**
@@ -37,6 +42,8 @@ const MOVED_MODULES = [
     from: 'apps/client/server/queueHandlers',
     to: 'apps/workers/src/queueHandlers',
     stems: [
+      'agentExecutor',
+      'agentExecutorDag',
       'agentProactiveMessage',
       'createZipBuffer',
       'dataLakeBatchRetryGating',
@@ -73,6 +80,7 @@ const MOVED_MODULES = [
       'sreFix',
       'sreJob',
       'sreRevision',
+      'toolBuilderDeps',
       'vectorizeStrandRecovery',
       'webhookDelivery',
       'whatsNewGeneration',
@@ -164,6 +172,8 @@ describe('directories and modules moved out of apps/client/server stay moved', (
         'apps/workers/src/security/alertProcessor.handler',
         // infra/cron.ts
         'apps/workers/src/security/attackSimulation/runner.handler',
+        // infra/agentExecutor.ts; the Lambda and the continuation subscriber share this export.
+        'apps/workers/src/queueHandlers/agentExecutor.handler',
       ])
     );
     const stale = handlers

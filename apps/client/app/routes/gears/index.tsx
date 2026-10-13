@@ -616,7 +616,7 @@ const GearsPage = () => {
                   // The same token the soft chip paints its own text with.
                   sx={{ mt: '16px', fontSize: '13px', color: 'warning.softColor' }}
                 >
-                  Once someone else opens your artifact link, you can claim {creditText(gear)}.
+                  Once someone else opens your artifact link while signed in, you can claim {creditText(gear)}.
                 </Typography>
               )}
               {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}

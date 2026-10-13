@@ -1434,7 +1434,7 @@ const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
 //   - MAX_CHECKPOINT_DEPTH    = 50: hard ceiling; Lambda refuses to process and marks the execution failed
 //
 // Message schema: { kind: 'continuation', executionId, connectionId, checkpointDepth }
-// Handler:        apps/client/server/queueHandlers/agentExecutor.ts → processExecution()
+// Handler:        apps/workers/src/queueHandlers/agentExecutor.ts -> processExecution()
 const agentContinuationQueueDLQ = new sst.aws.Queue('agentContinuationQueueDLQ', {
   transform: {
     queue: {

@@ -44,7 +44,7 @@ const FORWARDERS = new Map<string, string>([
     'Runs the queued quest-start body as-is; the Slack invoke() that queued it set authOrigin.',
   ],
   [
-    'apps/client/server/queueHandlers/agentExecutor.latticeTools.ts',
+    'apps/workers/src/queueHandlers/agentExecutor.latticeTools.ts',
     "Spreads the executor's own ToolBuilderDeps, whose authOrigin is required by type.",
   ],
 ]);

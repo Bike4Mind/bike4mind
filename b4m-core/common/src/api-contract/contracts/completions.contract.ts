@@ -3,7 +3,7 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
 // (the barrel drags in @bike4mind/hearth, unbuilt in the CI openapi job).
 import { CompletionRequestSchema, CompletionStreamEventSchema } from '../../schemas/cliCompletions';
-import { ApiErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, InsufficientCreditsErrorSchema, ProviderNotConfiguredErrorSchema } from '../../schemas/chat';
 
 /**
  * Contract for POST /api/ai/v1/completions - the public streaming completions
@@ -12,6 +12,9 @@ import { ApiErrorSchema } from '../../schemas/chat';
  * adapter - the handler derives its request schema + auth from this contract via
  * resolveContractAuth, but owns the stream itself. See the api-contract README:
  * an SSE transport adapter is deferred until a second streaming endpoint exists.
+ *
+ * 401, the scope 403 and 405 are injected by registerContract; 405 cannot be declared
+ * here because it is outside the conventions' status table.
  */
 export const createCompletionContract = defineEndpoint({
   method: 'post',
@@ -19,10 +22,9 @@ export const createCompletionContract = defineEndpoint({
   operationId: 'createCompletion',
   summary: 'Create a chat completion',
   description:
-    'OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), ' +
-    'regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying ' +
-    '`usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status ' +
-    'stays 200 and failures arrive as an in-band `error` event. The terminal event carries ' +
+    'OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream ' +
+    '(`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` ' +
+    'events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries ' +
     '`stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note ' +
     'that omitting `max_tokens` on the request lets the server size the output ceiling for the ' +
     'model (recommended for reasoning models, which spend thinking tokens inside that ceiling). ' +
@@ -30,13 +32,17 @@ export const createCompletionContract = defineEndpoint({
     'OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a ' +
     '`source`) form and are translated to whatever the target model speaks. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
-    'BILLING FAILURES. Headers are flushed before authentication or pricing, so unlike the JSON ' +
-    'surfaces this endpoint has no pre-stream `422` + `errorCode: "insufficient_credits"` to pair ' +
-    'with: credit exhaustion ALWAYS arrives as the in-band `error` event, whether it is caught by ' +
-    'the reservation before the first token or by settlement mid-generation. Branch on that ' +
-    "event's `code` (`insufficient_credits` - buy credits; `spend_cap_exceeded` - the owner is " +
-    'solvent but this key hit its admin-set ceiling, so raise the cap), never on `message`, which ' +
-    'is prose and may change. `code` is absent on unclassified failures.',
+    'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
+    'a real HTTP status, before any stream opens: malformed JSON or an unknown or retired `model` `400`, a bad ' +
+    'credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB ' +
+    '`413`, a body that fails schema validation `422`, insufficient credits `422` with ' +
+    '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model ' +
+    'whose provider is not configured on this deployment `503` with `errorCode: "provider_not_configured"` (retryable). ' +
+    'Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band ' +
+    "`error` event. Branch on that event's `code`, never on `message`, which is prose and may change: " +
+    '`insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider ' +
+    'refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and ' +
+    '`provider_error` for any other provider failure. Treat `code` as optional.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -60,7 +66,26 @@ export const createCompletionContract = defineEndpoint({
         stopReason: 'end_turn',
       },
     },
-    400: { description: 'Malformed JSON body (rejected before the stream opens).', schema: ApiErrorSchema },
+    400: { description: 'Malformed JSON body, or a `model` outside the catalog.', schema: ApiErrorSchema },
+    413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },
+    422: {
+      description:
+        'The body failed schema validation, or the caller cannot afford the request ' +
+        '(`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap).',
+      schema: InsufficientCreditsErrorSchema,
+    },
+    429: {
+      description: 'Rate limit exceeded.',
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
+    500: { description: 'Internal error before the stream opened.', schema: ApiErrorSchema },
+    503: {
+      description:
+        "Temporarily unavailable: the model's provider is not configured on this deployment " +
+        '(`errorCode: "provider_not_configured"`), or the database is unreachable (no `errorCode`). Retry later.',
+      schema: ProviderNotConfiguredErrorSchema,
+    },
   },
   codeSample: {
     authToken: 'b4m_live_<key>',

@@ -4861,6 +4861,104 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('reasoningEffort preference', () => {
+    const modelInfo = (id: string, backend: ModelBackend) => ({
+      id,
+      type: 'text' as const,
+      name: id,
+      backend,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      can_stream: false,
+      pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    });
+
+    const succeeds = () =>
+      vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi!']);
+      });
+
+    const arrange = (primary: ReturnType<typeof modelInfo>) => {
+      (service as any).user = { ...mockUser, preferredReasoningEffort: 'high' };
+      mockQuest.promptMeta.model = { name: primary.id, backend: primary.backend };
+      mockedGetAvailableModels.mockResolvedValue([primary]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      return {
+        ...startQuestParams,
+        params: { ...startQuestParams.params, model: primary.id },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+    };
+
+    it('passes the preferred effort to a GPT model', async () => {
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT5,
+      });
+      const body = arrange(modelInfo(ChatModels.GPT5, ModelBackend.OpenAI));
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(complete.mock.calls[0][2].reasoningEffort).toBe('high');
+    });
+
+    it('withholds the preferred effort from a Claude model', async () => {
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET,
+      });
+      const body = arrange(modelInfo(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic));
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(complete.mock.calls[0][2].reasoningEffort).toBeUndefined();
+    });
+
+    it('decides per attempt: a GPT primary gets the effort, the Claude fallback does not', async () => {
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      const primaryComplete = vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+      mockedGetLlmByModel.mockReturnValue({
+        complete: primaryComplete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT5,
+      });
+      const fallbackComplete = succeeds();
+      mockedGetLlmWithFallback
+        .mockResolvedValueOnce({
+          model: modelInfo(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic),
+          backend: {
+            complete: fallbackComplete,
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: ChatModels.CLAUDE_5_SONNET,
+          },
+          attempt: 1,
+        } as any)
+        .mockResolvedValue(null);
+      const body = arrange(modelInfo(ChatModels.GPT5, ModelBackend.OpenAI));
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(primaryComplete.mock.calls[0][2].reasoningEffort).toBe('high');
+      expect(fallbackComplete).toHaveBeenCalledTimes(1);
+      expect(fallbackComplete.mock.calls[0][2].reasoningEffort).toBeUndefined();
+    });
+  });
+
   // Proves the route branch, not just the pure predicate: the offer signal a still-chunking
   // attachment produces at the `hasAttachedKnowledge` computation inside process() (#1163).
   describe('knowledge-tool gating for a still-chunking attachment (#1163)', () => {

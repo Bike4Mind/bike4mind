@@ -37,6 +37,9 @@ const RUN = `itest-${Date.now().toString(36)}`;
 const USER_ID = `${RUN}-user`;
 const SESSION_ID = `${RUN}-session`;
 const QUEST_CREATED_AT_MS = 1_700_000_000_000;
+// Fixture ids are not real documents, so each call skips the per-user reference guard; everything
+// below it (real artifactService.create, real Mongo indexes) still runs.
+const SKIP_SOURCE_REFS_GUARD = async () => {};
 
 // Quiet logger: this script asserts on database state, not on log output.
 const logs: string[] = [];
@@ -79,6 +82,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-1`,
+    sourceRefsGuard: SKIP_SOURCE_REFS_GUARD,
     logger,
   });
   check('one artifacts row', (await rowsForQuest(q1)) === 1, `got ${await rowsForQuest(q1)}`);
@@ -117,6 +121,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-2`,
+    sourceRefsGuard: SKIP_SOURCE_REFS_GUARD,
     logger,
   });
   const after2 = await rowsForQuest(q2);
@@ -139,6 +144,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-3`,
+    sourceRefsGuard: SKIP_SOURCE_REFS_GUARD,
     logger,
   };
   await persistAgentArtifacts({ ...common, replyText: `Done.\n\n${artifact('probe-natural')}` });
@@ -163,6 +169,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-4`,
+    sourceRefsGuard: SKIP_SOURCE_REFS_GUARD,
     logger,
   };
   await persistAgentArtifacts(common4);
@@ -190,6 +197,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-5`,
+    sourceRefsGuard: SKIP_SOURCE_REFS_GUARD,
     logger,
   };
   await persistAgentArtifacts({ ...common5, replyText: artifact('probe-trade-a', 'A') });
