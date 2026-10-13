@@ -7,7 +7,10 @@ import { getThemeConfig } from '../../utils/themes';
 const h = vi.hoisted(() => ({
   createFabFileOnServerWithUpload: vi.fn(),
   moderateFabFileNow: vi.fn(),
+  toastError: vi.fn(),
 }));
+
+vi.mock('sonner', () => ({ toast: { error: h.toastError, success: vi.fn() } }));
 
 vi.mock('@client/app/utils/filesAPICalls', () => ({
   createFabFileOnServerWithUpload: h.createFabFileOnServerWithUpload,
@@ -48,12 +51,12 @@ describe('ImageContainer edit flow', () => {
     );
     fireEvent.click(screen.getAllByTestId('image-edit-btn')[0]);
     fireEvent.click(await screen.findByTestId('stub-masker-save'));
-    await waitFor(() => expect(onSendMessage).toHaveBeenCalled());
   };
 
   it('scans the mask before dispatching the edit', async () => {
     const onSendMessage = vi.fn(async () => {});
     await renderAndSave(onSendMessage);
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalled());
 
     expect(h.moderateFabFileNow).toHaveBeenCalledWith('mask1');
     expect(h.moderateFabFileNow.mock.invocationCallOrder[0]).toBeLessThan(onSendMessage.mock.invocationCallOrder[0]);
@@ -63,14 +66,21 @@ describe('ImageContainer edit flow', () => {
     );
   });
 
-  it.each(['pending', 'blocked'])(
-    'still dispatches when the scan reports %s, leaving the server gate to decide',
-    async status => {
-      h.moderateFabFileNow.mockResolvedValue(status);
-      const onSendMessage = vi.fn(async () => {});
-      await renderAndSave(onSendMessage);
+  it('still dispatches when the scan reports pending, leaving the server gate to wait and decide', async () => {
+    h.moderateFabFileNow.mockResolvedValue('pending');
+    const onSendMessage = vi.fn(async () => {});
+    await renderAndSave(onSendMessage);
 
-      expect(onSendMessage).toHaveBeenCalledTimes(1);
-    }
-  );
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalledTimes(1));
+    expect(h.toastError).not.toHaveBeenCalled();
+  });
+
+  it('stops with an error toast, without dispatching, when the scan reports blocked', async () => {
+    h.moderateFabFileNow.mockResolvedValue('blocked');
+    const onSendMessage = vi.fn(async () => {});
+    await renderAndSave(onSendMessage);
+
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith(expect.stringContaining('blocked by moderation')));
+    expect(onSendMessage).not.toHaveBeenCalled();
+  });
 });
