@@ -1003,6 +1003,7 @@ export class ChatCompletionProcess {
   private publishTelemetryAlert?: IChatCompletionServiceOptions['publishTelemetryAlert'];
   private telemetryHmacSecret?: string;
   private gpcSignalDetected: boolean = false;
+  private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
   private verbose: boolean = false;
@@ -2463,19 +2464,7 @@ export class ChatCompletionProcess {
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
             // must never mask the block, so its own failure is swallowed with a warning.
             if (moderationError instanceof FlaggedContentError) {
-              try {
-                const decision = await applyModerationHit({
-                  users: this.db.users,
-                  userId: this.user.id,
-                  hit: { at: new Date(), categories: moderationError.categories, source: 'openai', questId },
-                });
-                logger.warn(
-                  `🚦 [Moderation] User ${this.user.id} flagged (${moderationError.categories.join(', ')}); ` +
-                    `${decision.hitsInWindow} hit(s) in window → status ${decision.status}`
-                );
-              } catch (recordError) {
-                logger.error(`🚦 [Moderation] Failed to record moderation hit for user ${this.user.id}:`, recordError);
-              }
+              await this.recordModerationHit('openai', moderationError, questId, logger);
             }
             throw moderationError;
           }
@@ -2489,25 +2478,10 @@ export class ChatCompletionProcess {
           if (guardrailId) {
             const guardrailVersion = getSettingsValue('BedrockGuardrailVersion', defaultAdminSettings) || 'DRAFT';
             try {
-              await new BedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
+              await this.getBedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
             } catch (moderationError) {
               if (moderationError instanceof FlaggedContentError) {
-                try {
-                  const decision = await applyModerationHit({
-                    users: this.db.users,
-                    userId: this.user.id,
-                    hit: { at: new Date(), categories: moderationError.categories, source: 'bedrock', questId },
-                  });
-                  logger.warn(
-                    `🚦 [Moderation] User ${this.user.id} flagged by Bedrock Guardrails (${moderationError.categories.join(', ')}); ` +
-                      `${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
-                  );
-                } catch (recordError) {
-                  logger.error(
-                    `🚦 [Moderation] Failed to record Bedrock moderation hit for user ${this.user.id}:`,
-                    recordError
-                  );
-                }
+                await this.recordModerationHit('bedrock', moderationError, questId, logger);
               }
               throw moderationError;
             }
@@ -7120,5 +7094,38 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       fileNotices,
       attachmentDelivery,
     };
+  }
+
+  private async recordModerationHit(
+    source: 'openai' | 'bedrock',
+    error: FlaggedContentError,
+    questId: string,
+    logger: Logger
+  ): Promise<void> {
+    try {
+      const decision = await applyModerationHit({
+        users: this.db.users,
+        userId: this.user.id,
+        hit: { at: new Date(), categories: error.categories, source, questId },
+      });
+      logger.warn(
+        `🚦 [Moderation] User ${this.user.id} flagged by ${source} (${error.categories.join(', ')}); ` +
+          `${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
+      );
+    } catch (recordError) {
+      logger.error(`🚦 [Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
+    }
+  }
+
+  private getBedrockGuardrailsService(
+    guardrailId: string,
+    guardrailVersion: string,
+    logger: Logger
+  ): BedrockGuardrailsService {
+    const key = `${guardrailId}:${guardrailVersion}`;
+    if (!this._bedrockSvc.has(key)) {
+      this._bedrockSvc.set(key, new BedrockGuardrailsService(guardrailId, guardrailVersion, logger));
+    }
+    return this._bedrockSvc.get(key)!;
   }
 }

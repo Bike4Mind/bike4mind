@@ -70,6 +70,32 @@ export class BedrockGuardrailsService implements ModerationService {
         for (const filter of assessment.contentPolicy?.filters ?? []) {
           if (filter.action === 'BLOCKED' && filter.type) categories.push(filter.type);
         }
+        for (const word of assessment.wordPolicy?.customWords ?? []) {
+          if (word.action === 'BLOCKED' && word.match) categories.push(`word:${word.match}`);
+        }
+        for (const word of assessment.wordPolicy?.managedWordLists ?? []) {
+          if (word.action === 'BLOCKED' && word.type) categories.push(`word:${word.type}`);
+        }
+        for (const pii of assessment.sensitiveInformationPolicy?.piiEntities ?? []) {
+          if (pii.action === 'BLOCKED' && pii.type) categories.push(`pii:${pii.type}`);
+        }
+        for (const re of assessment.sensitiveInformationPolicy?.regexes ?? []) {
+          if (re.action === 'BLOCKED' && re.name) categories.push(`regex:${re.name}`);
+        }
+        for (const grounding of assessment.contextualGroundingPolicy?.filters ?? []) {
+          if (grounding.action === 'BLOCKED' && grounding.type) categories.push(`grounding:${grounding.type}`);
+        }
+      }
+      // GUARDRAIL_INTERVENED is also raised for non-blocking actions (e.g. PII anonymization).
+      // Only throw when at least one policy entry was actually BLOCKED.
+      if (categories.length === 0) {
+        this.logger.info(
+          'Bedrock Guardrails intervened with no BLOCKED entries (e.g. PII anonymization); allowing prompt',
+          {
+            guardrailId: this.guardrailId,
+          }
+        );
+        return;
       }
       this.logger.error('Prompt flagged by Bedrock Guardrails:', { guardrailId: this.guardrailId, categories });
       throw new FlaggedContentError(
