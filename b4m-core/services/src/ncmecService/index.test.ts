@@ -26,7 +26,8 @@ describe('submitNcmecReport', () => {
     process.env.B4M_SELF_HOST = 'false';
 
     // Return success for both /submit and /finish by default.
-    fetchSpy = vi.fn()
+    fetchSpy = vi
+      .fn()
       .mockResolvedValueOnce({
         ok: true,
         text: async () => '<response><reportId>RPT-001</reportId></response>',
@@ -49,18 +50,21 @@ describe('submitNcmecReport', () => {
   });
 
   it('throws when espId is not-configured', async () => {
-    await expect(submitNcmecReport({ ...TEST_CREDS, espId: 'not-configured' }, BASE_INPUT))
-      .rejects.toThrow('NCMEC credentials not configured');
+    await expect(submitNcmecReport({ ...TEST_CREDS, espId: 'not-configured' }, BASE_INPUT)).rejects.toThrow(
+      'NCMEC credentials not configured'
+    );
   });
 
   it('throws when apiKey is not-configured', async () => {
-    await expect(submitNcmecReport({ ...TEST_CREDS, apiKey: 'not-configured' }, BASE_INPUT))
-      .rejects.toThrow('NCMEC credentials not configured');
+    await expect(submitNcmecReport({ ...TEST_CREDS, apiKey: 'not-configured' }, BASE_INPUT)).rejects.toThrow(
+      'NCMEC credentials not configured'
+    );
   });
 
   it('throws when espId is empty', async () => {
-    await expect(submitNcmecReport({ ...TEST_CREDS, espId: '' }, BASE_INPUT))
-      .rejects.toThrow('NCMEC credentials not configured');
+    await expect(submitNcmecReport({ ...TEST_CREDS, espId: '' }, BASE_INPUT)).rejects.toThrow(
+      'NCMEC credentials not configured'
+    );
   });
 
   it('POSTs /submit to the test host when useSandbox=true', async () => {
@@ -101,7 +105,8 @@ describe('submitNcmecReport', () => {
   });
 
   it('trims whitespace from the parsed reportId', async () => {
-    fetchSpy.mockReset()
+    fetchSpy
+      .mockReset()
       .mockResolvedValueOnce({ ok: true, text: async () => '<response><reportId>  RPT-TRIM  </reportId></response>' })
       .mockResolvedValueOnce({ ok: true, text: async () => '' });
     const result = await submitNcmecReport(TEST_CREDS, BASE_INPUT);
@@ -116,7 +121,9 @@ describe('submitNcmecReport', () => {
   });
 
   it('throws plain Error (not NcmecRejectedError) when /submit response XML is missing reportId', async () => {
-    fetchSpy.mockReset().mockResolvedValueOnce({ ok: true, text: async () => '<response><status>ok</status></response>' });
+    fetchSpy
+      .mockReset()
+      .mockResolvedValueOnce({ ok: true, text: async () => '<response><status>ok</status></response>' });
     const err = await submitNcmecReport(TEST_CREDS, BASE_INPUT).catch(e => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(NcmecRejectedError);
@@ -124,7 +131,8 @@ describe('submitNcmecReport', () => {
   });
 
   it('throws NcmecFinishFailedError (not NcmecRejectedError) when /finish returns a non-2xx status', async () => {
-    fetchSpy.mockReset()
+    fetchSpy
+      .mockReset()
       .mockResolvedValueOnce({ ok: true, text: async () => '<response><reportId>RPT-FAIL</reportId></response>' })
       .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Internal Error' });
     const err = await submitNcmecReport(TEST_CREDS, BASE_INPUT).catch(e => e);
@@ -133,6 +141,17 @@ describe('submitNcmecReport', () => {
     expect(err.message).toContain('NCMEC /finish error 500');
     // reportId is on the error so callers can persist it for manual recovery.
     expect(err.reportId).toBe('RPT-FAIL');
+  });
+
+  it('throws NcmecFinishFailedError carrying the reportId when the /finish fetch rejects (timeout)', async () => {
+    fetchSpy
+      .mockReset()
+      .mockResolvedValueOnce({ ok: true, text: async () => '<response><reportId>RPT-77</reportId></response>' })
+      .mockRejectedValueOnce(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+    const err = await submitNcmecReport(TEST_CREDS, BASE_INPUT).catch(e => e);
+    expect(err).toBeInstanceOf(NcmecFinishFailedError);
+    expect(err.reportId).toBe('RPT-77');
+    expect(err.message).toContain('TimeoutError');
   });
 
   it('XML-escapes userId in the report body', async () => {

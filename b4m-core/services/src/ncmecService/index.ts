@@ -72,9 +72,7 @@ function xmlEscape(s: string): string {
 
 function buildSubmitXml(credentials: NcmecCredentials, input: NcmecReportInput): string {
   // Rekognition stores confidence in the 0-100 range (not 0-1); format directly.
-  const labelsSummary = input.labels
-    .map(l => `${xmlEscape(l.name)} (${l.confidence.toFixed(1)}%)`)
-    .join(', ');
+  const labelsSummary = input.labels.map(l => `${xmlEscape(l.name)} (${l.confidence.toFixed(1)}%)`).join(', ');
 
   // XML per NCMEC CyberTipline ESP API (report.cybertip.org/ispws/documentation/).
   // <reporter> is the reporting ESP (reportingPerson required with email).
@@ -140,8 +138,11 @@ export class NcmecFinishFailedError extends Error {
  * Throws NcmecRejectedError when NCMEC explicitly rejects /submit (non-2xx): the caller
  * may safely roll back the incident to 'pending_review'.
  *
- * Throws plain Error for unknown outcomes (timeout, network error, missing reportId):
- * the caller must NOT roll back -- NCMEC may have already received the submission.
+ * Throws NcmecFinishFailedError for any /finish failure (non-2xx, timeout, network error):
+ * it carries the reportId, and the caller must NOT roll back.
+ *
+ * Throws plain Error for other unknown outcomes (/submit timeout or network error, missing
+ * reportId): the caller must NOT roll back -- NCMEC may have already received the submission.
  */
 export async function submitNcmecReport(
   credentials: NcmecCredentials,
@@ -193,16 +194,23 @@ export async function submitNcmecReport(
   // /finish takes a form parameter 'id' (application/x-www-form-urlencoded), not XML.
   // NcmecFinishFailedError carries the reportId so the caller can persist it for manual
   // recovery within NCMEC's 24-hour window; the caller must NOT roll back.
+  // Any failure here (non-2xx, timeout, network error) must carry the reportId.
   const finishBody = new URLSearchParams({ id: reportId }).toString();
-  const finishResponse = await fetch(`${baseUrl}/finish`, {
-    method: 'POST',
-    headers: { Authorization: authHeader, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: finishBody,
-    signal: fetchTimeout,
-  });
+  let finishResponse: Response;
+  try {
+    finishResponse = await fetch(`${baseUrl}/finish`, {
+      method: 'POST',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: finishBody,
+      signal: fetchTimeout,
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    throw new NcmecFinishFailedError(`NCMEC /finish failed for reportId ${reportId}: ${reason}`, reportId);
+  }
 
   if (!finishResponse.ok) {
-    const text = await finishResponse.text();
+    const text = await finishResponse.text().catch(() => '');
     throw new NcmecFinishFailedError(
       `NCMEC /finish error ${finishResponse.status} for reportId ${reportId}: ${text.slice(0, 300)}`,
       reportId
