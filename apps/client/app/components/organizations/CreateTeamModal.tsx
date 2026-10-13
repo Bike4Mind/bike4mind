@@ -1,14 +1,11 @@
 import { useSubscribeTeamPlan, useCreateTeamDev } from '@client/app/hooks/data/subscriptions';
-import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
-import AddIcon from '@mui/icons-material/Add';
-import RemoveIcon from '@mui/icons-material/Remove';
+import { useTeamPlanAvailable, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
 import {
   Box,
   Button,
   FormControl,
   FormLabel,
-  IconButton,
   Input,
   Modal,
   ModalClose,
@@ -20,6 +17,8 @@ import { useState, useRef } from 'react';
 import { create } from 'zustand';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useMemo } from 'react';
+import SeatCountInput from './SeatCountInput';
+import ContactSalesNote from './ContactSalesNote';
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 
@@ -40,7 +39,11 @@ const CreateTeamModal = () => {
   // Mounted app-wide before settings load, so the initial pick can fall outside a range that arrives
   // later; clamp on read so the stepper, the total and the checkout quantity match what the API accepts.
   const [requestedTeamSize, setTeamSize] = useState(minSeats);
-  const teamSize = Math.min(Math.max(requestedTeamSize, minSeats), maxSeats);
+  const teamSize = Math.min(Math.max(Math.round(requestedTeamSize), minSeats), maxSeats);
+  const [isTeamSizeInvalid, setIsTeamSizeInvalid] = useState(false);
+  const teamPlanAvailable = useTeamPlanAvailable();
+  // The dev endpoint never touches Stripe (and throws outside development), so the flag only gates the Stripe path.
+  const teamPlanClosed = !isDevelopment && !teamPlanAvailable;
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const createTeamDev = useCreateTeamDev();
   const plans = useGetSubscriptionPlans();
@@ -60,14 +63,6 @@ const CreateTeamModal = () => {
     setTeamName('');
     setTeamSize(minSeats);
     close();
-  };
-
-  const handleIncreaseTeamSize = () => {
-    setTeamSize(Math.min(teamSize + 1, maxSeats));
-  };
-
-  const handleDecreaseTeamSize = () => {
-    setTeamSize(Math.max(teamSize - 1, minSeats));
   };
 
   const handleSubmit = async () => {
@@ -128,36 +123,22 @@ const CreateTeamModal = () => {
 
         <FormControl>
           <FormLabel className="create-team-form-label">Team Size</FormLabel>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }} className="create-team-size-control">
-            <IconButton
-              variant="outlined"
-              color="neutral"
-              disabled={teamSize <= minSeats || isLoading || hasError}
-              onClick={handleDecreaseTeamSize}
-              className="create-team-size-decrease"
-            >
-              <RemoveIcon />
-            </IconButton>
-            <Typography
-              sx={{ minWidth: '40px', textAlign: 'center' }}
-              className="create-team-size-value"
-              data-testid="create-team-size-value"
-            >
-              {teamSize}
+          <SeatCountInput
+            value={teamSize}
+            min={minSeats}
+            max={maxSeats}
+            onChange={setTeamSize}
+            onInvalidChange={setIsTeamSizeInvalid}
+            disabled={isLoading || hasError || teamPlanClosed}
+            ariaLabel="Team size"
+            testId="create-team-size-value"
+            classNamePrefix="create-team-size"
+          />
+          {!isTeamSizeInvalid && (
+            <Typography level="body-xs" sx={{ mt: 0.5 }} className="create-team-size-note">
+              Team size must be between {minSeats} and {maxSeats} members
             </Typography>
-            <IconButton
-              variant="outlined"
-              color="neutral"
-              onClick={handleIncreaseTeamSize}
-              disabled={isLoading || hasError || teamSize >= maxSeats}
-              className="create-team-size-increase"
-            >
-              <AddIcon />
-            </IconButton>
-          </Box>
-          <Typography level="body-xs" sx={{ mt: 0.5 }} className="create-team-size-note">
-            Team size must be between {minSeats} and {maxSeats} members
-          </Typography>
+          )}
           <Box sx={{ mt: 1 }} className="create-team-price-container">
             {isLoading ? (
               <Skeleton variant="text" width={140} level="body-sm" className="create-team-price-loading">
@@ -178,14 +159,23 @@ const CreateTeamModal = () => {
               </Typography>
             )}
           </Box>
+          <ContactSalesNote testIdPrefix="create-team" />
         </FormControl>
+
+        {teamPlanClosed && (
+          <Typography level="body-sm" color="warning" data-testid="create-team-unavailable">
+            {TEAM_PLAN_UNAVAILABLE_MESSAGE}
+          </Typography>
+        )}
 
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }} className="create-team-actions">
           <Button variant="outlined" color="neutral" onClick={handleClose} className="create-team-cancel-button">
             Cancel
           </Button>
           <Button
-            disabled={!teamName.trim() || teamSize < minSeats || isLoading || hasError}
+            disabled={
+              !teamName.trim() || isTeamSizeInvalid || teamSize < minSeats || isLoading || hasError || teamPlanClosed
+            }
             onClick={handleSubmit}
             loading={isSubmitting}
             className="create-team-submit-button"

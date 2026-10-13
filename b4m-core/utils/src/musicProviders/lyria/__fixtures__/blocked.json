@@ -1,0 +1,29 @@
+{
+  "scenario": "blocked",
+  "recordedAt": "2026-10-13T03:50:58.674Z",
+  "exchanges": [
+    {
+      "name": "generate",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "lyria-3.5",
+          "input": "<redacted:blocked-prompt>"
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "error": {
+            "message": "Input blocked: The prompt could not be submitted. The prompt contains sensitive words that violate Google's [Generative AI Prohibited Use policy](https://policies.google.com/terms/generative-ai/use-policy). Try rephrasing the prompt.",
+            "code": "prohibited_content"
+          }
+        }
+      }
+    }
+  ]
+}

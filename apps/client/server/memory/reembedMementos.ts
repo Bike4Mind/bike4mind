@@ -166,6 +166,9 @@ const MAX_EMBEDDER_BUILD_ATTEMPTS = 2;
  * MAX_EMBEDDER_BUILD_ATTEMPTS times. `embedderError` carries the last build failure (each attempt is
  * recorded in `errors`), so a caller reports the real cause rather than assuming a missing key. A dry
  * run makes no provider call and no write, and its counts mean "would".
+ *
+ * The chain is read without vectors (~8KB each); only the stamped full-width candidates' ciphertext is
+ * fetched, since a truncation is the one arm that decrypts a vector.
  */
 export async function migrateLedgerVectorsForPrincipal(
   target: { principal: Principal; ownerUserId: string },
@@ -189,7 +192,9 @@ export async function migrateLedgerVectorsForPrincipal(
   const keys = createKeyProvider(memoryPrincipalKeyRepository);
   const dek = await keys.getDek(principal);
 
-  const events = await memoryLedgerRepository.listChain(principal.kind, principal.id, ownerUserId);
+  const events = await memoryLedgerRepository.listChain(principal.kind, principal.id, ownerUserId, {
+    withEmbeddings: false,
+  });
   const stats = {
     total: events.length,
     alreadyCurrent: 0,
@@ -209,6 +214,23 @@ export async function migrateLedgerVectorsForPrincipal(
   // No key means the principal was crypto-shredded: there is nothing readable to migrate, and that is
   // the correct end state, not an error.
   if (!dek) return stats;
+
+  const withVector = new Set(
+    await memoryLedgerRepository.listHashesWithEmbedding(principal.kind, principal.id, ownerUserId)
+  );
+  const candidates = events.filter(
+    e => !e.shredded && e.kind !== 'retract' && withVector.has(e.hash) && e.embeddingModel === MEMENTO_EMBEDDING_MODEL
+  );
+  const vectors = new Map(
+    (
+      await memoryLedgerRepository.listEmbeddings(
+        principal.kind,
+        principal.id,
+        ownerUserId,
+        candidates.map(e => e.hash)
+      )
+    ).map(e => [e.hash, e])
+  );
 
   const limit = opts.limit ?? Infinity;
   // Built on the first embed only, so a principal with no provider key still gets its free truncations.
@@ -231,7 +253,7 @@ export async function migrateLedgerVectorsForPrincipal(
       continue;
     }
 
-    const hasVector = Boolean(event.embeddingCipher && event.embeddingIv && event.embeddingTag);
+    const hasVector = withVector.has(event.hash);
     if (hasVector && event.embeddingModel === MEMENTO_EMBEDDING_ID) {
       stats.alreadyCurrent += 1;
       continue;
@@ -239,11 +261,14 @@ export async function migrateLedgerVectorsForPrincipal(
 
     try {
       let vector: number[] | null = null;
-      if (hasVector && event.embeddingModel === MEMENTO_EMBEDDING_MODEL) {
+      // Only truncation candidates are in `vectors`. One missing from it vanished between reads and
+      // falls through to a re-embed, as an empty decrypt does.
+      const stored = vectors.get(event.hash);
+      if (stored) {
         const full = decryptVector(dek, {
-          cipher: event.embeddingCipher!,
-          iv: event.embeddingIv!,
-          tag: event.embeddingTag!,
+          cipher: stored.embeddingCipher!,
+          iv: stored.embeddingIv!,
+          tag: stored.embeddingTag!,
         });
         if (full?.length) vector = toMementoVector(full);
       }
@@ -254,6 +279,25 @@ export async function migrateLedgerVectorsForPrincipal(
         break;
       }
       if (opts.dryRun) {
+        // Probe credential availability so dry-run noProviderKey/embedderUnavailable counts
+        // match what an execute run would report. The build resolves DB-held keys only --
+        // no provider call is made. The same service/unavailable/buildAttempts state machine
+        // is reused so the probe only fires once per principal.
+        if (!vector && !service && !unavailable) {
+          try {
+            service = await createMementoEmbeddingService(ownerUserId);
+          } catch (err) {
+            buildAttempts += 1;
+            stats.embedderError = err instanceof Error ? err.message : String(err);
+            stats.errors.push(`owner ${ownerUserId}: ${stats.embedderError}`);
+            if (err instanceof MissingEmbeddingCredentialError) unavailable = 'noProviderKey';
+            else if (buildAttempts >= MAX_EMBEDDER_BUILD_ATTEMPTS) unavailable = 'embedderUnavailable';
+          }
+        }
+        if (!vector && !service) {
+          stats[unavailable ?? 'embedderUnavailable'] += 1;
+          continue;
+        }
         stats[arm] += 1;
         if (!vector) stats.providerCalls += 1;
         continue;

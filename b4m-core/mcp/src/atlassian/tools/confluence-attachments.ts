@@ -213,7 +213,7 @@ export function registerConfluenceAttachmentTools(server: McpServer) {
             title: string;
             version?: { number: number };
             body?: { storage?: { value: string } };
-          }>(`/pages/${pageId}`, { 'body-format': 'storage' });
+          }>(`/pages/${encodeURIComponent(pageId)}`, { 'body-format': 'storage' });
           const currentBody = rawPage.body?.storage?.value || '';
           const currentVersion = rawPage.version?.number;
           const resolvedMime = result.mediaType || detectConfluenceMimeType(filename);
@@ -227,7 +227,7 @@ export function registerConfluenceAttachmentTools(server: McpServer) {
           const updatedBody = currentBody + '\n' + attachmentMacro;
 
           if (typeof currentVersion === 'number') {
-            await api.put(`/pages/${pageId}`, {
+            await api.put(`/pages/${encodeURIComponent(pageId)}`, {
               id: pageId,
               title: rawPage.title,
               body: { value: updatedBody, representation: 'storage' },

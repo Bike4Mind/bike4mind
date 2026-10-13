@@ -96,7 +96,6 @@ function makeReqRes(cookie?: string) {
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   mockJwtVerify.mockReturnValue({
     email: EMAIL,
-    otcHash: 'hash',
     attempts: 0,
     exp: Math.floor(Date.now() / 1000) + 600,
     jti: 'jti-1',
@@ -115,7 +114,7 @@ describe('/api/otc/verify - trusted device', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     for (const key of Object.keys(settingsValues)) delete settingsValues[key];
-    mockValidateNonce.mockResolvedValue(true);
+    mockValidateNonce.mockResolvedValue('hash');
     mockFindByEmail.mockResolvedValue({ id: 'user-1', tokenVersion: 3, emailVerified: true });
     mockConsumeTrustedDevice.mockResolvedValue(null);
     mockUserHasMFA.mockReturnValue(true);
@@ -191,7 +190,7 @@ describe('/api/otc/verify - trusted device', () => {
   });
 
   it('still requires a valid emailed code - a trusted device alone is not a credential', async () => {
-    mockValidateNonce.mockResolvedValue(false); // replayed / bad pending token
+    mockValidateNonce.mockResolvedValue(null); // replayed / bad pending token
     mockConsumeTrustedDevice.mockResolvedValue(LIVE_TRUST);
     const { req, res } = makeReqRes('b4m_td=abc.def');
 

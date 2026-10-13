@@ -1,5 +1,6 @@
 export abstract class BaseStorage {
   abstract upload(input: string | Buffer, destination: string, options: any): Promise<string>;
+  abstract uploadFile(localPath: string, destination: string, options?: Record<string, unknown>): Promise<string>;
   abstract download(path: string): Promise<Buffer>;
   abstract delete(path: string): Promise<void>;
   abstract getSignedUrl(

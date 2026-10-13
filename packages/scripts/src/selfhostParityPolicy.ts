@@ -619,7 +619,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'schedule:infra/cron.ts:attackSimulationCron',
-    '86ba6e388c31d7bf2618976c62d6688a83cbd25407ecc913253d6b6cba56b43e'
+    'ca1059603efb233b53b1392b15d08d992c160fbeaa5b320b40e66b1816006ab5'
   ),
   gap('schedule:infra/cron.ts:CloudSecurityScan', '59885b8bae50fcf16de5d40ddfbdccd02759cc654e66eb4fb835ab9da98994ce'),
   wired('schedule:infra/cron.ts:creditLotSweep', 'edefcd966023f5e25978ccd7cebbf356bdcfc670a9731184d50a4411cbee7f15', {
@@ -780,7 +780,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ]),
   gap(
     'schedule:infra/securityAlerts.ts:SecurityAlertsSchedule',
-    'ba1da4d07cacea76f0543639e4a89aa2b76a78664ff0592e61a77acafd919c8a',
+    'efd2f6c3a776b574e28c9472db6e42678865e8adb14506bff608a6fbc8ce0ca6',
     ['events:PutEvents']
   ),
   gap(

@@ -79,6 +79,11 @@ vi.mock('@server/services/teamPlanSettings', async importOriginal => ({
   getTeamPlanSettings: mockGetTeamPlanSettings,
 }));
 
+const mockGetSettingsValue = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: { getSettingsValue: (...args: unknown[]) => mockGetSettingsValue(...args) },
+}));
+
 const mockSessionsCreate = vi.fn();
 const mockCreateCustomer = vi.fn();
 vi.mock('@server/integrations/stripe/stripe', () => ({
@@ -110,6 +115,7 @@ function makeReq(callbackUrl = CALLBACK_URL) {
 describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true); // enableTeamPlan on
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]); // no live org subscription
     // No stripeCustomerId: the route must therefore reach attachOrgStripeCustomer, which is what
@@ -124,6 +130,48 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
     mockAttachOrgStripeCustomer.mockResolvedValue('cus_org');
     mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  describe('enableTeamPlan gate', () => {
+    it.each([false, undefined, null, 1])('refuses a new Team checkout when the flag is %s', async flag => {
+      mockGetSettingsValue.mockResolvedValue(flag);
+      const { req, res } = makeReq();
+
+      await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+        constructor: BadRequestError,
+        statusCode: HttpStatus.BadRequest,
+        message: 'Team plans are not available right now.',
+      });
+
+      expect(mockGetSettingsValue).toHaveBeenCalledWith('enableTeamPlan');
+      expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
+      expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
+      expect(mockCreateCustomer).not.toHaveBeenCalled();
+      expect(mockSessionsCreate).not.toHaveBeenCalled();
+    });
+
+    it('refuses a brand-new-team checkout (organizationData) the same way', async () => {
+      mockGetSettingsValue.mockResolvedValue(false);
+      const { req, res } = makeReq();
+      const body = req.body as Record<string, unknown>;
+      delete body.organizationId;
+      body.organizationData = { name: 'New Team' };
+
+      await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+        message: 'Team plans are not available right now.',
+      });
+      expect(mockCreateCustomer).not.toHaveBeenCalled();
+      expect(mockSessionsCreate).not.toHaveBeenCalled();
+    });
+
+    it('proceeds to the Stripe checkout when the flag is on', async () => {
+      const { req, res } = makeReq();
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+      expect(res.statusCode).toBe(200);
+    });
   });
 
   it('rejects a callbackUrl on a disallowed origin', async () => {
@@ -295,6 +343,7 @@ describe('POST /api/organizations/subscriptions/subscribe - duplicate subscripti
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true); // enableTeamPlan on
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
     mockVerifyOrgOwner.mockResolvedValue({
@@ -351,6 +400,7 @@ describe('POST /api/organizations/subscriptions/subscribe - duplicate subscripti
       await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
         constructor: BadRequestError,
         statusCode: HttpStatus.BadRequest,
+        message: 'An active subscription already exists for this organization',
       });
 
       expect(mockSessionsCreate).not.toHaveBeenCalled();
@@ -385,6 +435,7 @@ describe('POST /api/organizations/subscriptions/subscribe - organization owner g
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true); // enableTeamPlan on
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
     mockVerifyOrgOwner.mockResolvedValue({
@@ -494,6 +545,7 @@ describe('POST /api/organizations/subscriptions/subscribe - request-shape and id
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true); // enableTeamPlan on
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
     mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
@@ -595,6 +647,7 @@ describe('POST /api/organizations/subscriptions/subscribe - acquisition attribut
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true); // enableTeamPlan on
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
     mockVerifyOrgOwner.mockResolvedValue({ id: 'org_1', name: 'Org One', users: [{ userId: 'user_1' }] });

@@ -904,3 +904,40 @@ describe('extractWebhookEventType', () => {
     expect(extractWebhookEventType({ webhookEvent: '' })).toBeNull();
   });
 });
+
+describe('issue links in Slack output', () => {
+  const malformedKey = 'PROJ-1|label>';
+
+  const linkTargets = (blocks: unknown[]): string[] => JSON.stringify(blocks).match(/https?:\/\/[^"|>\\]+/g) ?? [];
+
+  it('links a well-formed issue key in every formatter', () => {
+    const outputs = [
+      formatIssueEventForSlack(makeIssueEvent(), SITE_URL),
+      formatCommentEventForSlack(makeCommentEvent(), SITE_URL),
+      formatGenericEventForSlack('custom_event', { issue: { key: 'PROJ-123', fields: { summary: 's' } } }, SITE_URL),
+    ];
+
+    for (const output of outputs) {
+      expect(linkTargets(output.blocks)).toContain(`${SITE_URL}/browse/PROJ-123`);
+      expect(output.blocks.some(b => b.type === 'actions')).toBe(true);
+    }
+  });
+
+  it('renders a malformed issue key as text with no link or button', () => {
+    const issueEvent = makeIssueEvent();
+    issueEvent.issue.key = malformedKey;
+    const commentEvent = makeCommentEvent();
+    commentEvent.issue.key = malformedKey;
+    const outputs = [
+      formatIssueEventForSlack(issueEvent, SITE_URL),
+      formatCommentEventForSlack(commentEvent, SITE_URL),
+      formatGenericEventForSlack('custom_event', { issue: { key: malformedKey, fields: { summary: 's' } } }, SITE_URL),
+    ];
+
+    for (const output of outputs) {
+      expect(JSON.stringify(output.blocks)).not.toContain('/browse/');
+      expect(output.blocks.some(b => b.type === 'actions')).toBe(false);
+      expect(JSON.stringify(output.blocks)).toContain('PROJ-1|label&gt;');
+    }
+  });
+});

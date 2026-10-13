@@ -8,6 +8,7 @@ Background work that used to live under `apps/client/server`, moved here one cat
 | `src/cron/` | Scheduled handlers (sweeps, reconcilers, reports) and the LiveOps/SecOps triage SQS workers | Lambdas declared in `infra/cron.ts` and `infra/queues.ts`; some sweeps also run as self-host scheduled tasks |
 | `src/jobs/` | DataSyncer: seeds a preview stage with staging config on its first deploy | Lambda declared in `infra/dataSyncer.ts` |
 | `src/emailIngestion/` | Inbound email parser and analyzer SQS consumers | Lambdas declared in `infra/emailIngestion.ts` |
+| `src/security/` | Security alert processor and Active Defense attack-simulation runner | Lambdas declared in `infra/securityAlerts.ts` and `infra/cron.ts` |
 | `src/selfhost/` | Self-host worker runner: SQS long-poll loop, scheduler, and event dispatch | The `worker` service in `compose.selfhost.yaml` |
 | `src/agentExecutor/` | Self-host agent executor: HTTP + SQS consumer that runs agent starts and resumes | The `agentexecutor` service in `compose.selfhost.yaml` |
 

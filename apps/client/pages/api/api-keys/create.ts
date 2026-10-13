@@ -1,4 +1,4 @@
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository } from '@bike4mind/database';
@@ -14,7 +14,7 @@ const handler = baseApi().post(async (req, res) => {
     },
   });
 
-  await logEvent(
+  await logEventSafe(
     {
       userId,
       type: ApiKeyEvents.CREATE_API_KEY,
@@ -25,7 +25,9 @@ const handler = baseApi().post(async (req, res) => {
         type: newApiKey.type,
       },
     },
-    { ability: req.ability }
+    { ability: req.ability },
+    req.logger,
+    `API key ${newApiKey.id}`
   );
 
   return res.status(200).json(newApiKey);

@@ -104,8 +104,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // the checkboxes gate the Create account button.
   const [acceptPolicies, setAcceptPolicies] = useState(false);
   const [confirmAdult, setConfirmAdult] = useState(false);
-  // Signed pending token from /api/otc/send - carries the hashed code + nonce and is
-  // required by /api/otc/verify. Re-issued (attempt-tracked) on each wrong code.
+  // Signed pending token from /api/otc/send - references the pending code by nonce (jti) and
+  // is required by /api/otc/verify. Re-issued (attempt-tracked) on each wrong code.
   const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [isCheckingStrategy, setIsCheckingStrategy] = useState(false);
 

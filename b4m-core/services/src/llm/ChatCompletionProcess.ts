@@ -63,6 +63,7 @@ import {
   ForbiddenError,
   TooManyRequestsError,
   OpenaiModerationsService,
+  BedrockGuardrailsService,
   FlaggedContentError,
   processFabFilesServer,
   processUrlsFromPrompt,
@@ -1002,6 +1003,7 @@ export class ChatCompletionProcess {
   private publishTelemetryAlert?: IChatCompletionServiceOptions['publishTelemetryAlert'];
   private telemetryHmacSecret?: string;
   private gpcSignalDetected: boolean = false;
+  private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
   private verbose: boolean = false;
@@ -2462,19 +2464,7 @@ export class ChatCompletionProcess {
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
             // must never mask the block, so its own failure is swallowed with a warning.
             if (moderationError instanceof FlaggedContentError) {
-              try {
-                const decision = await applyModerationHit({
-                  users: this.db.users,
-                  userId: this.user.id,
-                  hit: { at: new Date(), categories: moderationError.categories, source: 'openai', questId },
-                });
-                logger.warn(
-                  `🚦 [Moderation] User ${this.user.id} flagged (${moderationError.categories.join(', ')}); ` +
-                    `${decision.hitsInWindow} hit(s) in window → status ${decision.status}`
-                );
-              } catch (recordError) {
-                logger.error(`🚦 [Moderation] Failed to record moderation hit for user ${this.user.id}:`, recordError);
-              }
+              await this.recordModerationHit('openai', moderationError, questId, logger);
             }
             throw moderationError;
           }
@@ -2484,11 +2474,29 @@ export class ChatCompletionProcess {
             }ms`
           );
         } else {
-          logger.info(
-            `⏱️ [${
-              Date.now() - processStartTime
-            }ms] Skipping OpenAI moderation - no OpenAI key available for model ${model}`
-          );
+          const guardrailId = getSettingsValue('BedrockGuardrailId', defaultAdminSettings);
+          if (guardrailId) {
+            const guardrailVersion = getSettingsValue('BedrockGuardrailVersion', defaultAdminSettings) || 'DRAFT';
+            try {
+              await this.getBedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
+            } catch (moderationError) {
+              if (moderationError instanceof FlaggedContentError) {
+                await this.recordModerationHit('bedrock', moderationError, questId, logger);
+              }
+              throw moderationError;
+            }
+            logger.info(
+              `⏱️ [${Date.now() - processStartTime}ms] Bedrock Guardrails check completed in ${
+                Date.now() - moderationStartTime
+              }ms`
+            );
+          } else {
+            logger.info(
+              `⏱️ [${
+                Date.now() - processStartTime
+              }ms] Skipping moderation - configure openaiDemoKey or BedrockGuardrailId to cover keyless users`
+            );
+          }
         }
       }
 
@@ -2952,6 +2960,7 @@ export class ChatCompletionProcess {
         user: this.user,
         db: this.db,
         entitlementKeys,
+        authOrigin: parsedBody.authOrigin,
         apiKeyId: parsedBody.apiKeyId,
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
@@ -7086,5 +7095,38 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       fileNotices,
       attachmentDelivery,
     };
+  }
+
+  private async recordModerationHit(
+    source: 'openai' | 'bedrock',
+    error: FlaggedContentError,
+    questId: string,
+    logger: Logger
+  ): Promise<void> {
+    try {
+      const decision = await applyModerationHit({
+        users: this.db.users,
+        userId: this.user.id,
+        hit: { at: new Date(), categories: error.categories, source, questId },
+      });
+      logger.warn(
+        `🚦 [Moderation] User ${this.user.id} flagged by ${source} (${error.categories.join(', ')}); ` +
+          `${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
+      );
+    } catch (recordError) {
+      logger.error(`🚦 [Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
+    }
+  }
+
+  private getBedrockGuardrailsService(
+    guardrailId: string,
+    guardrailVersion: string,
+    logger: Logger
+  ): BedrockGuardrailsService {
+    const key = `${guardrailId}:${guardrailVersion}`;
+    if (!this._bedrockSvc.has(key)) {
+      this._bedrockSvc.set(key, new BedrockGuardrailsService(guardrailId, guardrailVersion, logger));
+    }
+    return this._bedrockSvc.get(key)!;
   }
 }
