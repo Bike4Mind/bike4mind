@@ -47,8 +47,14 @@ vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
 }));
 
+const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/utils/auth/oauthSourceTag', () => ({
+  stampOAuthSourceTag: (...a: any[]) => mockStampSourceTag(...a),
+}));
+
 // Import after mocks are registered.
 import { logEvent } from '@server/utils/analyticsLog';
+import { verifyStateToken } from '@server/auth/jwtStateStore';
 import handler from '@pages/api/auth/[strategy]/callback';
 
 function makeReqRes(headers: Record<string, string> = {}) {
@@ -293,5 +299,26 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     // a suppressed visitor. The account is recorded in Mongo by the REGISTER log above, which
     // is a different system.
     expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+  });
+});
+
+describe('[strategy]/callback - OAuth client source tag', () => {
+  it('stamps a new account with the clientId from the verified state token', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce({ valid: true, payload: { clientId: 'b4m_sat_0123abcd' } } as any);
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined);
+    expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', 'b4m_sat_0123abcd');
+  });
+
+  it('never stamps a returning user, even when the state names a client', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce({ valid: true, payload: { clientId: 'b4m_sat_0123abcd' } } as any);
+    await runCallback(null, { id: 'u-old', isBanned: false }, undefined);
+    expect(mockStampSourceTag).not.toHaveBeenCalled();
+  });
+
+  it('passes no clientId when the state token does not verify', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce({ valid: false, reason: 'invalid', message: 'bad' } as any);
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined);
+    expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', undefined);
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success/);
   });
 });

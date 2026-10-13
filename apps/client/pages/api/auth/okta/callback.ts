@@ -43,6 +43,7 @@ import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/c
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -443,6 +444,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       const baseUsername = deriveOAuthUsername(username ?? null, name, emailForNewAccount);
       user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
       Logger.debug('[Okta Callback] Created new user:', user.id);
+      await stampOAuthSourceTag(user.id, stateResult.payload.clientId);
     }
 
     // Parity with verifyCallback.ts, which omits the password hash from the user
