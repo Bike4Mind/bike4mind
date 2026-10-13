@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { submitNcmecReport, NcmecRejectedError, NcmecFinishFailedError } from './index';
+import { submitNcmecReport, finishNcmecReport, NcmecRejectedError, NcmecFinishFailedError } from './index';
 
 const TEST_CREDS = {
   espId: 'esp-test-id',
@@ -113,11 +113,19 @@ describe('submitNcmecReport', () => {
     expect(result.reportId).toBe('RPT-TRIM');
   });
 
-  it('throws NcmecRejectedError when /submit returns a non-2xx status', async () => {
+  it('throws NcmecRejectedError when /submit returns a 4xx status', async () => {
     fetchSpy.mockReset().mockResolvedValue({ ok: false, status: 401, text: async () => 'Unauthorized' });
     const err = await submitNcmecReport(TEST_CREDS, BASE_INPUT).catch(e => e);
     expect(err).toBeInstanceOf(NcmecRejectedError);
     expect(err.message).toContain('NCMEC /submit error 401');
+  });
+
+  it('throws plain Error (not NcmecRejectedError) when /submit returns a 5xx status', async () => {
+    fetchSpy.mockReset().mockResolvedValue({ ok: false, status: 503, text: async () => 'Service Unavailable' });
+    const err = await submitNcmecReport(TEST_CREDS, BASE_INPUT).catch(e => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(NcmecRejectedError);
+    expect(err.message).toContain('NCMEC /submit error 503');
   });
 
   it('throws plain Error (not NcmecRejectedError) when /submit response XML is missing reportId', async () => {
@@ -177,6 +185,16 @@ describe('submitNcmecReport', () => {
     expect(xml).toContain('file-789');
   });
 
+  it('gives /submit and /finish independent 25s timeouts (separate AbortSignal objects)', async () => {
+    // Both calls succeed; verify that two distinct fetch calls were made.
+    await submitNcmecReport(TEST_CREDS, BASE_INPUT);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const submitSignal = (fetchSpy.mock.calls[0][1] as RequestInit).signal as AbortSignal;
+    const finishSignal = (fetchSpy.mock.calls[1][1] as RequestInit).signal as AbortSignal;
+    // Distinct signal objects: a slow /submit cannot starve /finish of its budget.
+    expect(submitSignal).not.toBe(finishSignal);
+  });
+
   it('uses <report> as the root element, <reportingPerson>/<email> for the ESP, and <espIdentifier> for the suspect', async () => {
     await submitNcmecReport(TEST_CREDS, BASE_INPUT);
     const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
@@ -189,5 +207,42 @@ describe('submitNcmecReport', () => {
     expect(xml).toContain('<email>esp-contact@example.com</email>');
     expect(xml).not.toContain('<reportingEsp>');
     expect(xml).not.toContain('<cybertiplineReport>');
+  });
+});
+
+describe('finishNcmecReport', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  const savedEnv: Record<string, string | undefined> = {};
+  const TRACKED = ['B4M_SELF_HOST'] as const;
+
+  beforeEach(() => {
+    for (const k of TRACKED) savedEnv[k] = process.env[k];
+    process.env.B4M_SELF_HOST = 'false';
+    fetchSpy = vi.fn().mockResolvedValue({ ok: true, text: async () => '' });
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const k of TRACKED) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
+  it('POSTs to /finish with the reportId as a form parameter', async () => {
+    await finishNcmecReport(TEST_CREDS, 'RPT-RETRY-001');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/finish');
+    expect((opts.headers as Record<string, string>)['Content-Type']).toBe('application/x-www-form-urlencoded');
+    expect(opts.body as string).toBe('id=RPT-RETRY-001');
+  });
+
+  it('throws NcmecFinishFailedError on non-2xx', async () => {
+    fetchSpy.mockReset().mockResolvedValue({ ok: false, status: 500, text: async () => 'Internal Error' });
+    const err = await finishNcmecReport(TEST_CREDS, 'RPT-RETRY-002').catch(e => e);
+    expect(err).toBeInstanceOf(NcmecFinishFailedError);
+    expect(err.reportId).toBe('RPT-RETRY-002');
   });
 });

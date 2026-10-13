@@ -266,3 +266,24 @@ export class PermissionDeniedError extends Error {
     this.name = 'PermissionDeniedError';
   }
 }
+
+/**
+ * Thrown by FabFile hard-delete methods when a file has moderationStatus 'blocked'.
+ * Blocked files are legal-hold evidence (18 U.S.C. section 2258A) and must not be
+ * destroyed. The data-lake sweep and purge callers catch this and skip the file instead
+ * of re-throwing for DLQ retry.
+ *
+ * Lives in @bike4mind/common (not @bike4mind/database) because it is thrown in
+ * packages/database and caught in b4m-core/services, which does not depend on the
+ * database package. The isLegalHoldError guard handles any cross-realm instanceof edge.
+ */
+export class LegalHoldError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LegalHoldError';
+  }
+}
+
+export function isLegalHoldError(err: unknown): err is LegalHoldError {
+  return Boolean(err && (err instanceof LegalHoldError || (err as Error).name === 'LegalHoldError'));
+}

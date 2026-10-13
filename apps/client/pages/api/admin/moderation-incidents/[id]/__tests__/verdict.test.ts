@@ -9,6 +9,7 @@ const mockUpdateReviewStatus = vi.fn();
 const mockResolveConfirmedCsam = vi.fn();
 const mockSetNcmecReportId = vi.fn();
 const mockSubmitNcmecReport = vi.fn();
+const mockFinishNcmecReport = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {
@@ -38,6 +39,7 @@ vi.mock('@bike4mind/services', () => {
   return {
     ncmecService: {
       submitNcmecReport: (...args: unknown[]) => mockSubmitNcmecReport(...args),
+      finishNcmecReport: (...args: unknown[]) => mockFinishNcmecReport(...args),
       NcmecRejectedError,
       NcmecFinishFailedError,
     },
@@ -324,6 +326,56 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       await runHandler(makeReq({ verdict: 'requeue' }), res);
 
       expect(res.status).toHaveBeenCalledWith(409);
+    });
+  });
+
+  // ------------------------------------------------------------------ retry_finish (recovery)
+  describe('verdict: retry_finish', () => {
+    it('calls /finish with the stored reportId and marks the incident reported', async () => {
+      const incident = { ...CLAIMED_INCIDENT, reviewStatus: 'confirmed_csam', ncmecReportId: 'RPT-STORED' };
+      mockFindById.mockResolvedValue(incident);
+      mockFinishNcmecReport.mockResolvedValue(undefined);
+      mockResolveConfirmedCsam.mockResolvedValue({ ...incident, reviewStatus: 'reported' });
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+
+      expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', { status: 'reported', ncmecReportId: 'RPT-STORED' });
+      expect(res.status).toHaveBeenCalledWith(200);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { ok: boolean; ncmecReportId: string };
+      expect(body.ncmecReportId).toBe('RPT-STORED');
+    });
+
+    it('returns 409 when the incident is not in confirmed_csam', async () => {
+      mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'reported' });
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+
+      expect(mockFinishNcmecReport).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(409);
+    });
+
+    it('returns 409 when the incident has no stored reportId', async () => {
+      mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'confirmed_csam' }); // no ncmecReportId
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+
+      expect(mockFinishNcmecReport).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(409);
+    });
+
+    it('returns 502 when /finish fails', async () => {
+      mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'confirmed_csam', ncmecReportId: 'RPT-STORED' });
+      mockFinishNcmecReport.mockRejectedValue(new Error('NCMEC /finish error 500: Internal Error'));
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+
+      expect(mockResolveConfirmedCsam).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(502);
     });
   });
 

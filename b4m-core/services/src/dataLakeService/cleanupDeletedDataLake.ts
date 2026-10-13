@@ -11,6 +11,7 @@ import type {
   IFabFileRepository,
   IFabFileChunkRepository,
 } from '@bike4mind/common';
+import { isLegalHoldError } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
@@ -312,7 +313,7 @@ export const cleanupDeletedDataLake = async (
           await db.fabFileChunks.deleteManyByFabFileId(id);
         }
       } catch (err) {
-        if ((err as Error).message?.includes('legal hold')) {
+        if (isLegalHoldError(err)) {
           logger?.warn('[dataLake] skipping blocked file in sweep (legal hold)', { fabFileId: id });
           return;
         }

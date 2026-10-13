@@ -6,14 +6,15 @@ import { imageModerationIncidentRepository } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
 
 /**
- * Admin-only paginated list of image-moderation incidents that need attention.
+ * Admin-only work-queue endpoint for image-moderation incidents that need attention.
  *
  * Returns two sets:
  *   - incidents with reviewStatus absent or 'pending_review' (unreviewed), oldest first.
  *   - incidents stuck in 'confirmed_csam' for more than 10 minutes (NCMEC submission had
  *     an unknown outcome -- the admin should verify with NCMEC before retrying).
  *
- * Operator loop: GET `?limit=N` until both arrays are shorter than limit.
+ * Drain the queue by calling GET `?limit=N`, processing the returned incidents, then
+ * repeating until both arrays come back shorter than limit.
  */
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),

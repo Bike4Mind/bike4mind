@@ -9,6 +9,7 @@ import type {
   ILakeConfigChangeEventRepository,
   ISessionRepository,
 } from '@bike4mind/common';
+import { isLegalHoldError } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
@@ -292,7 +293,7 @@ export const purgeDataLakeDocument = async (
     try {
       deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
     } catch (err) {
-      if ((err as Error).message?.includes('legal hold')) {
+      if (isLegalHoldError(err)) {
         logger?.warn('[dataLake] blocked file cannot be purged (legal hold)', { fabFileId: file.id });
         // deletedByThisCall stays false: no quota refund, no onPurged - intentional.
       } else {

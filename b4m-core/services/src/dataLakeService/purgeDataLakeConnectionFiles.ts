@@ -8,6 +8,7 @@ import type {
   ISessionRepository,
   IUserRepository,
 } from '@bike4mind/common';
+import { isLegalHoldError } from '@bike4mind/common';
 import {
   bestEffortAdjustOwnerStorage,
   groupStorageDeltaByOwner,
@@ -182,7 +183,7 @@ export const purgeDataLakeConnectionFiles = async (
           try {
             deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
           } catch (err) {
-            if ((err as Error).message?.includes('legal hold')) {
+            if (isLegalHoldError(err)) {
               logger?.warn('[dataLake] skipping blocked file in connection purge (legal hold)', { fabFileId: file.id });
               return;
             }

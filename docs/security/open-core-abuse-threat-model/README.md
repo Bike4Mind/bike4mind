@@ -99,16 +99,23 @@ than an explicit `'false'` uses the test host, so a missing value cannot post to
 - On NCMEC failure, the verdict route distinguishes two outcomes:
   - **Rejected** (`NcmecRejectedError`, non-2xx on `/submit`): no tip was filed; the route
     rolls back `confirmed_csam` -> `pending_review` and returns 502.
-  - **Unknown** (timeout, network error, `/finish` failure, or missing `reportId`): NCMEC
-    may have already received the submission; the route does NOT roll back and leaves the
-    incident in `confirmed_csam`. After 10 minutes it surfaces in the `staleConfirmedCsam`
-    list returned by `GET /api/admin/moderation-incidents`. Once verified with NCMEC, use
-    `POST /api/admin/moderation-incidents/:id/verdict` with `{ verdict: "mark_reported",
-    ncmecReportId }` or `{ verdict: "requeue" }` to resolve. Both recovery verdicts only
-    act on a claim older than 10 minutes, so a live submission cannot be resolved under it.
-    Any `/finish` failure stores the issued `ncmecReportId` on the incident; `requeue` is
-    then refused (409), because that report must be finalized with NCMEC within 24 hours
-    and closed with `mark_reported`, not filed a second time.
+  - **Unknown** (timeout, network error, or missing `reportId` in 2xx): NCMEC may have
+    already received the submission; the route does NOT roll back and leaves the incident
+    in `confirmed_csam`. After 10 minutes it surfaces in the `staleConfirmedCsam` list.
+  - **FinishFailed** (`NcmecFinishFailedError`): `/submit` succeeded but `/finish` failed
+    (non-2xx or network error). The `reportId` is persisted on the incident. Use
+    `{ verdict: "retry_finish" }` to re-call `/finish` within NCMEC's 24-hour window.
+    If that window has passed, use `{ verdict: "mark_reported", ncmecReportId }` to close
+    the incident after verifying with NCMEC. `requeue` is refused (409) when a `reportId`
+    is stored, because that report must be finalized -- not filed a second time.
+
+  Recovery verdicts (all via `POST /api/admin/moderation-incidents/:id/verdict`):
+
+  | Verdict | When to use |
+  |---|---|
+  | `mark_reported` | Operator confirmed with NCMEC that the tip was received; supply `ncmecReportId`. |
+  | `requeue` | Operator confirmed with NCMEC that no tip was filed; moves back to `pending_review`. |
+  | `retry_finish` | `/finish` failed but reportId is stored; re-calls `/finish` within NCMEC's 24-hour window. |
 
 **Before going live:** validate the exact XML schema, element names, and endpoint paths with
 your NCMEC ESP representative. Run a full end-to-end test against the NCMEC test host

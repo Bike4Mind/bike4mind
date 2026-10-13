@@ -7,6 +7,7 @@
  * in one outer try/catch. This test exercises the injected-function path specifically.
  */
 import { describe, it, expect, vi } from 'vitest';
+import { LegalHoldError } from '@bike4mind/common';
 import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
 
 // Minimal ManageActor -- the permission check is bypassed via resumesStartedGeneration.
@@ -59,7 +60,7 @@ function buildDb(overrides: Record<string, unknown> = {}) {
 describe('cleanupDeletedDataLake - legal-hold skip (F3)', () => {
   it('completes the sweep and skips a blocked file when deleteFileAndChunks throws the legal-hold error', async () => {
     const db = buildDb();
-    const legalHoldError = new Error(
+    const legalHoldError = new LegalHoldError(
       "Cannot hard-delete FabFile file-blocked: moderationStatus is 'blocked' (legal hold)"
     );
     const deleteFileAndChunks = vi.fn().mockRejectedValue(legalHoldError);

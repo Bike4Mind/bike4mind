@@ -27,6 +27,7 @@ import {
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
   type FabFileTypeFilter,
+  LegalHoldError,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -3252,7 +3253,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       .lean();
     if (blocked.length > 0) {
       const ids = blocked.map(d => String(d._id)).join(', ');
-      throw new Error(`Cannot hard-delete FabFiles with moderationStatus 'blocked' (legal hold): ${ids}`);
+      throw new LegalHoldError(`Cannot hard-delete FabFiles with moderationStatus 'blocked' (legal hold): ${ids}`);
     }
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
     // The moderationStatus guard here is the belt to the pre-check's suspenders.
@@ -3276,7 +3277,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       .setOptions({ includeDeleted: true })
       .lean();
     if (candidate?.moderationStatus === 'blocked') {
-      throw new Error(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
+      throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
     }
     for (;;) {
       const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
@@ -3320,7 +3321,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         .setOptions({ includeDeleted: true })
         .lean();
       if (existing?.moderationStatus === 'blocked') {
-        throw new Error(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
+        throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
       }
       return false;
     }

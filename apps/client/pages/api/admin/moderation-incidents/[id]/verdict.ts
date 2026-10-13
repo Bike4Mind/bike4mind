@@ -58,6 +58,7 @@ const bodySchema = z.union([
   z.object({ verdict: z.literal('false_positive') }),
   z.object({ verdict: z.literal('mark_reported'), ncmecReportId: z.string().min(1) }),
   z.object({ verdict: z.literal('requeue') }),
+  z.object({ verdict: z.literal('retry_finish') }),
 ]);
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req: Request, res) => {
@@ -103,6 +104,35 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
     req.logger.info(`[Moderation] incident ${incidentId} requeued from confirmed_csam by admin=${req.user.id}`);
     return res.status(200).json({ ok: true });
+  }
+
+  if (body.verdict === 'retry_finish') {
+    // Re-call /finish for an incident that is stuck in confirmed_csam with a stored reportId.
+    // The report was accepted by NCMEC (a prior /submit succeeded) but /finish failed.
+    // NCMEC holds unfinished reports for 24 hours; retrying /finish is safe and idempotent.
+    const incident = await imageModerationIncidentRepository.findById(incidentId);
+    if (!incident || incident.reviewStatus !== 'confirmed_csam') {
+      return res.status(409).json({ error: 'Incident is not in confirmed_csam state' });
+    }
+    if (!incident.ncmecReportId) {
+      return res.status(409).json({ error: 'Incident has no stored reportId; use mark_reported or requeue instead' });
+    }
+    const credentials = resolveNcmecCredentials();
+    if (!isNcmecConfigured(credentials)) {
+      return res.status(503).json({ error: 'NCMEC credentials not configured -- set NCMEC_ESP_ID, NCMEC_API_KEY and NCMEC_ESP_EMAIL via sst secret set' });
+    }
+    try {
+      await ncmecService.finishNcmecReport(credentials, incident.ncmecReportId);
+    } catch (err) {
+      req.logger.error(`[NCMEC] retry_finish failed for incident ${incidentId}, reportId=${incident.ncmecReportId}: ${(err as Error).message}`);
+      return res.status(502).json({ error: `NCMEC /finish retry failed: ${(err as Error).message}` });
+    }
+    req.logger.info(`[NCMEC] retry_finish succeeded for incident ${incidentId}, reportId=${incident.ncmecReportId}; marking reported`);
+    await imageModerationIncidentRepository.resolveConfirmedCsam(incidentId, {
+      status: 'reported',
+      ncmecReportId: incident.ncmecReportId,
+    });
+    return res.status(200).json({ ok: true, ncmecReportId: incident.ncmecReportId });
   }
 
   if (body.verdict === 'confirmed_csam') {

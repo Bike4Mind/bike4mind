@@ -164,7 +164,8 @@ export async function submitNcmecReport(
 
   // 25 seconds: safely below the typical 30-second Lambda timeout while still giving NCMEC
   // time to respond. A timeout throws AbortError (unknown outcome -- do not rollback).
-  const fetchTimeout = AbortSignal.timeout(25_000);
+  // Each call gets its own signal: a slow /submit does not shorten the /finish budget.
+  const submitTimeout = AbortSignal.timeout(25_000);
 
   // Step 1: Submit the report and receive a reportId.
   const submitXml = buildSubmitXml(credentials, input);
@@ -172,14 +173,19 @@ export async function submitNcmecReport(
     method: 'POST',
     headers: { Authorization: authHeader, 'Content-Type': 'text/xml; charset=utf-8' },
     body: submitXml,
-    signal: fetchTimeout,
+    signal: submitTimeout,
   });
 
   if (!submitResponse.ok) {
     const text = await submitResponse.text();
-    // Non-2xx: NCMEC explicitly rejected the submission -- no report was filed. The caller
-    // can safely roll back the incident to 'pending_review'.
-    throw new NcmecRejectedError(`NCMEC /submit error ${submitResponse.status}: ${text.slice(0, 300)}`);
+    if (submitResponse.status >= 400 && submitResponse.status < 500) {
+      // 4xx: NCMEC explicitly rejected the submission -- no report was filed. The caller
+      // can safely roll back the incident to 'pending_review'.
+      throw new NcmecRejectedError(`NCMEC /submit error ${submitResponse.status}: ${text.slice(0, 300)}`);
+    }
+    // 5xx: gateway or server error -- outcome ambiguous; NCMEC may have already stored the
+    // report. Do not throw NcmecRejectedError; the caller must not roll back.
+    throw new Error(`NCMEC /submit error ${submitResponse.status}: ${text.slice(0, 300)}`);
   }
 
   const submitText = await submitResponse.text();
@@ -194,15 +200,43 @@ export async function submitNcmecReport(
   // /finish takes a form parameter 'id' (application/x-www-form-urlencoded), not XML.
   // NcmecFinishFailedError carries the reportId so the caller can persist it for manual
   // recovery within NCMEC's 24-hour window; the caller must NOT roll back.
-  // Any failure here (non-2xx, timeout, network error) must carry the reportId.
+  await callFinish(baseUrl, authHeader, reportId);
+  return { reportId };
+}
+
+/**
+ * Call /finish for a reportId that was obtained in a prior /submit.
+ *
+ * Used both as the second step of `submitNcmecReport` and as the `retry_finish` recovery
+ * verdict, which calls /finish again on a reportId that was previously stored after a
+ * failed /finish attempt. A failed /finish does NOT invalidate the report -- NCMEC holds
+ * it for 24 hours -- so retrying is safe.
+ *
+ * Throws NcmecFinishFailedError on non-2xx or on a network error (AbortError, TypeError)
+ * so the caller always has a reportId to persist for manual recovery.
+ */
+export async function finishNcmecReport(
+  credentials: NcmecCredentials,
+  reportId: string
+): Promise<void> {
+  const { espId, apiKey, useSandbox } = credentials;
+  const baseUrl = useSandbox !== false ? NCMEC_TEST_URL : NCMEC_PRODUCTION_URL;
+  const authHeader = `Basic ${Buffer.from(`${espId}:${apiKey}`).toString('base64')}`;
+  await callFinish(baseUrl, authHeader, reportId);
+}
+
+async function callFinish(baseUrl: string, authHeader: string, reportId: string): Promise<void> {
+  const finishTimeout = AbortSignal.timeout(25_000);
   const finishBody = new URLSearchParams({ id: reportId }).toString();
+  // Wrap the fetch: any network error (AbortError, TypeError) must also carry the reportId
+  // so the caller can persist it for manual recovery within NCMEC's 24-hour window.
   let finishResponse: Response;
   try {
     finishResponse = await fetch(`${baseUrl}/finish`, {
       method: 'POST',
       headers: { Authorization: authHeader, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: finishBody,
-      signal: fetchTimeout,
+      signal: finishTimeout,
     });
   } catch (err) {
     const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
@@ -216,6 +250,4 @@ export async function submitNcmecReport(
       reportId
     );
   }
-
-  return { reportId };
 }
