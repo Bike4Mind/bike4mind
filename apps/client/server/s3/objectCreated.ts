@@ -1,6 +1,5 @@
 import {
   adminSettingsRepository,
-  changeStorageSize,
   dataLakeBatchRepository,
   FabFile,
   imageModerationIncidentRepository,
@@ -15,7 +14,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@server/utils/storage';
 import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
-import { claimStorageCharge } from '@server/s3/storageCharge';
+import { chargeUploadedObject } from '@server/s3/storageCharge';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
@@ -193,7 +192,7 @@ export const func = withContext(async (event, context, logger) => {
         moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
       }
 
-      if (await claimStorageCharge(metadata._id, uploadedAt, session)) changeStorageSize(user, object.size);
+      await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, session);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;
