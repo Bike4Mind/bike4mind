@@ -26,11 +26,13 @@ async function main() {
   const mongoURI = process.env.MONGODB_URI ?? Config.MONGODB_URI;
   await connectDB(mongoURI.replace('%STAGE%', Resource.App.stage));
 
+  const maxArg = maxFlag >= 0 ? process.argv[maxFlag + 1] : undefined;
+  // A typo must not silently fall back to the default on a run that deletes objects.
+  if (maxFlag >= 0 && !Number.isFinite(Number(maxArg))) throw new Error(`--max needs a number, got "${maxArg}"`);
   const configured =
-    maxFlag >= 0
-      ? process.argv[maxFlag + 1]
-      : (await getSettingsByNames(['AiEditVersionRetention'], { adminSettings: adminSettingsRepository }))
-          .AiEditVersionRetention;
+    maxArg ??
+    (await getSettingsByNames(['AiEditVersionRetention'], { adminSettings: adminSettingsRepository }))
+      .AiEditVersionRetention;
   const maxEditedVersions = resolveAiEditVersionRetention(configured);
 
   console.log(`Mode: ${dryRun ? 'DRY RUN (no writes)' : 'APPLY'}; keeping v1 + last ${maxEditedVersions} edits`);
