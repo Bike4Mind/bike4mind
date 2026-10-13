@@ -580,7 +580,7 @@ describe('WebsocketProvider - catch-up refetch after a reconnect', () => {
     expect(h.queryClient.invalidateQueries).not.toHaveBeenCalled();
   });
 
-  it('refetches the quest lists once when the socket comes back', () => {
+  it('refetches the quest lists and invites once when the socket comes back', () => {
     h.readyState = 1;
     const { rerender } = render(element());
     h.readyState = 3;
@@ -591,8 +591,9 @@ describe('WebsocketProvider - catch-up refetch after a reconnect', () => {
     rerender(element());
     rerender(element());
 
-    expect(h.queryClient.invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledTimes(2);
     expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session'] });
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['invites'] });
   });
 });
 
