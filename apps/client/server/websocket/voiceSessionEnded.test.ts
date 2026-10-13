@@ -209,7 +209,7 @@ describe('voiceSessionEnded realtime billing', () => {
   it('keeps the hold open across responses, so a reconnect reuses it instead of taking a second one', async () => {
     await send(30, 'resp-1');
 
-    expect(shouldReuseVoiceHold(true, state.session)).toBe(true);
+    expect(shouldReuseVoiceHold(true, state.session, true)).toBe(true);
     expect(state.balance).toBe(STARTING_BALANCE - HOLD);
   });
 
@@ -271,7 +271,7 @@ describe('voiceSessionEnded realtime billing', () => {
     const atClose = charged();
 
     // A reconnect must reserve afresh, and further responses are charged from the balance.
-    expect(shouldReuseVoiceHold(true, state.session)).toBe(false);
+    expect(shouldReuseVoiceHold(true, state.session, true)).toBe(false);
     await send(25, 'resp-after-close');
     expect(charged()).toBe(atClose + 25);
   });

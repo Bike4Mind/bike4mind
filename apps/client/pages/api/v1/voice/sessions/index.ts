@@ -150,7 +150,8 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   // whole call (against MAX_SESSION_SECONDS). Without this, every mobile reconnect
   // would burn another full reserve that's never refunded. Guarded by an explicit
   // live hold so a stray flag can't skip a real charge.
-  const reuseHold = shouldReuseVoiceHold(isReconnect, session);
+  // ElevenLabs: only a hold without the realtime marker.
+  const reuseHold = shouldReuseVoiceHold(isReconnect, session, false);
   // Decided before signing so the token names the hold this call bills against.
   const holdStartedAt =
     reuseHold && session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : new Date();

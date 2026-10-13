@@ -199,6 +199,21 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
     expect(mockIncrementCredits).not.toHaveBeenCalled();
   });
 
+  it('settles an ElevenLabs hold and reserves afresh on a reconnect, never reusing it', async () => {
+    const { voiceBilledCredits: _marker, ...elevenLabsHold } = openHoldSession;
+    mockGetSession.mockResolvedValueOnce(elevenLabsHold);
+    mockClaimVoiceHold.mockResolvedValueOnce({ billedCredits: null });
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockClaimVoiceHold).toHaveBeenCalledWith('session-1', priorStartedAt);
+    expect(mockIncrementCredits.mock.calls.at(-1)?.[1]).toBeLessThan(0);
+    expect(vi.mocked(sessionRepository.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'session-1', voiceBilledCredits: 0 })
+    );
+  });
+
   // The billed-credits marker is how the stale-hold sweep and settlePriorVoiceHold tell a realtime
   // hold from an ElevenLabs one; without it a live call would be swept on the short window.
   it('opens the new hold with the realtime billed-credits marker', async () => {

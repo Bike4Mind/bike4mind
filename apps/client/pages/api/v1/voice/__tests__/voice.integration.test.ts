@@ -405,6 +405,29 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.sessionUpdate).not.toHaveBeenCalled();
   });
 
+  it('settles a realtime hold and reserves afresh on a reconnect, never reusing it', async () => {
+    const startedAt = new Date(Date.now() - 60_000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      userId: 'user-1',
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+      // Realtime marker: this hold settles on the realtime floor, not ElevenLabs time.
+      voiceBilledCredits: 0,
+    });
+    const { res, run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
+    expect(mocks.incrementCredits).toHaveBeenLastCalledWith('user-1', -RESERVED_CREDITS);
+    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
+    );
+    const [claims] = mocks.signVoiceSessionToken.mock.calls[0] as [{ voiceHoldStartedAt?: string }];
+    expect(claims.voiceHoldStartedAt).not.toBe(startedAt.toISOString());
+  });
+
   it('records the reservation on a fresh connect', async () => {
     const { res, run } = fireSessions();
     await run();
