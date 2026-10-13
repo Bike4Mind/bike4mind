@@ -6,6 +6,11 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
+vi.mock('@server/utils/errors', () => ({
+  ForbiddenError: class ForbiddenError extends Error {},
+  UnauthorizedError: class UnauthorizedError extends Error {},
+}));
+
 import { assertAccountStateUsable } from './assertAccountStateUsable';
 
 describe('assertAccountStateUsable', () => {
