@@ -4,7 +4,7 @@ import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { UiNavigationEvents } from '@bike4mind/common';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import InboxBadge from '@client/app/components/inbox/Badge';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
@@ -212,7 +212,7 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
       <Chip
         size="sm"
         variant="plain"
-        startDecorator={<Bike4MindIcon size="12" />}
+        startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)' }} />}
         sx={theme => ({
           alignSelf: 'flex-start',
           backgroundColor: 'transparent',
@@ -220,7 +220,7 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
           px: 0,
           fontSize: '13px',
           gap: '6px',
-          // Bike4MindIcon fills with var(--Icon-color); tint it tertiary.
+          // CreditIcon reads var(--Icon-color); tint it tertiary.
           '--Icon-color': theme.palette.text.tertiary,
         })}
       >
@@ -489,7 +489,7 @@ const ProfileMenu = () => {
           {isCreditsEnabled && (
             <MenuRow
               testId="profile-menu-credits"
-              icon={<Bike4MindIcon size="18" />}
+              icon={<CreditIcon sx={{ fontSize: 18, color: 'var(--Icon-color)' }} />}
               label={t('credits.title', 'Credits')}
               onClick={() => {
                 logEvent.mutate({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });

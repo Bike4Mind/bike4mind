@@ -34,7 +34,7 @@ import { ModelBackend, ModelInfo, resolveModelName, usdToCredits } from '@bike4m
 import { dedupePricingRows, textModelPriceCells } from './modelPricingRows';
 import SectionContainer from './SectionContainer';
 import { TYPE } from './settingsStyles';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import { computeBurnStats, MIN_DAYS_FOR_PROJECTION } from './creditBurnRate';
 
@@ -633,7 +633,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                   />
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: '4px' }}>
-                  <Bike4MindIcon size="20" />
+                  <CreditIcon sx={{ fontSize: 20, color: 'var(--Icon-color)' }} />
                   <Typography level={TYPE.statValue} sx={{ color: 'text.primary' }}>
                     {currentUser?.currentCredits?.toLocaleString() || 0}
                   </Typography>
@@ -653,7 +653,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                   />
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: '4px' }}>
-                  <Bike4MindIcon size="20" />
+                  <CreditIcon sx={{ fontSize: 20, color: 'var(--Icon-color)' }} />
                   <Typography level={TYPE.statValue} sx={{ color: 'text.primary' }}>
                     {Math.max(0, Math.round(burnRate)).toLocaleString()}
                   </Typography>
@@ -1134,13 +1134,13 @@ const CreditAnalyticsTabContent: React.FC = () => {
                           <td>{renderPriceTier(model)}</td>
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Bike4MindIcon size="14" />
+                              <CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />
                               <Typography level="body-sm">{inputCost}</Typography>
                             </Box>
                           </td>
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Bike4MindIcon size="14" />
+                              <CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />
                               <Typography level="body-sm">{outputCost}</Typography>
                             </Box>
                           </td>
@@ -1240,7 +1240,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                           <td>{renderPriceTier(model)}</td>
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Bike4MindIcon size="14" />
+                              <CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />
                               <Typography level="body-sm">{inputCost}</Typography>
                             </Box>
                           </td>
