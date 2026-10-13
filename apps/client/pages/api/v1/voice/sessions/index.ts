@@ -144,6 +144,17 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   }
   const resolvedSessionId = session.id;
 
+  // A reconnect re-attaches to a session that still holds a live reservation from
+  // the original connect. Reuse that hold: skip the second deduction and keep the
+  // original voiceSessionStartedAt, so the single end-reconciliation covers the
+  // whole call (against MAX_SESSION_SECONDS). Without this, every mobile reconnect
+  // would burn another full reserve that's never refunded. Guarded by an explicit
+  // live hold so a stray flag can't skip a real charge.
+  const reuseHold = shouldReuseVoiceHold(isReconnect, session);
+  // Decided before signing so the token names the hold this call bills against.
+  const holdStartedAt =
+    reuseHold && session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : new Date();
+
   // Sign a session-bound token the proxy verifies on every turn. The browser
   // forwards it to ElevenLabs; the proxy trusts only these claims, never raw
   // request-body fields, so the proxy URL can't be used to impersonate a user.
@@ -156,6 +167,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       sessionId: String(resolvedSessionId),
       reasoningModelId,
       apiKeyId: req.apiKeyInfo?.keyId,
+      voiceHoldStartedAt: holdStartedAt.toISOString(),
     },
     SESSION_TOKEN_TTL_SECONDS
   );
@@ -167,14 +179,6 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
 
   const estimate = transport.estimateCost(MAX_SESSION_SECONDS);
   const reservedCredits = estimate.creditsToReserve;
-
-  // A reconnect re-attaches to a session that still holds a live reservation from
-  // the original connect. Reuse that hold: skip the second deduction and keep the
-  // original voiceSessionStartedAt, so the single end-reconciliation covers the
-  // whole call (against MAX_SESSION_SECONDS). Without this, every mobile reconnect
-  // would burn another full reserve that's never refunded. Guarded by an explicit
-  // live hold so a stray flag can't skip a real charge.
-  const reuseHold = shouldReuseVoiceHold(isReconnect, session);
 
   // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
   if (!reuseHold) {
@@ -221,11 +225,10 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   // A reconnect leaves the original reservation record untouched so end-reconciliation
   // measures the full call duration, not just the post-reconnect segment.
   if (!reuseHold) {
-    const voiceSessionStartedAt = new Date();
     await sessionRepository.update({
       id: session.id,
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt,
+      voiceSessionStartedAt: holdStartedAt,
       voiceConnectedAt: null,
       voiceLastActivityAt: null,
     });

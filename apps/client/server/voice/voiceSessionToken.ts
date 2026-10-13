@@ -22,6 +22,9 @@ export const VoiceSessionContextSchema = z.object({
   // The `b4m_live_` key that minted the token, when one did. The proxy forwards it to the turn's
   // tools (ToolContext.apiKeyId), which is how a scope-gated tool tells a key turn from a session.
   apiKeyId: z.string().min(1).optional(),
+  // ISO start of the credit hold this call bills against, so its activity marks only that hold.
+  // Optional: tokens minted before the claim existed still verify until they expire.
+  voiceHoldStartedAt: z.string().datetime().optional(),
 });
 
 export type VoiceSessionContext = z.infer<typeof VoiceSessionContextSchema>;

@@ -1190,9 +1190,10 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
 
   /**
    * Record that the session's open voice call is connected and alive at `at`: sets
-   * voiceConnectedAt the first time and advances voiceLastActivityAt. A no-op without an open hold.
+   * voiceConnectedAt the first time and advances voiceLastActivityAt. With `holdStartedAt`, only the
+   * hold that started then is touched. A no-op without a matching open hold.
    */
-  recordVoiceActivity: (sessionId: string, at: Date) => Promise<void>;
+  recordVoiceActivity: (sessionId: string, at: Date, holdStartedAt?: Date | null) => Promise<void>;
 
   /**
    * Atomically clear the voice hold that started at `startedAt`. Resolves, for the single caller

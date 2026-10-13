@@ -99,15 +99,16 @@ async function reconcileVoiceSession(sessionId: string | null): Promise<void> {
 const VOICE_HEARTBEAT_MS = 30_000;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-function reportVoiceActivity(sessionId: string): void {
-  api.post(`/api/voice/v2/sessions/${sessionId}/activity`, {}).catch(() => {});
+// The session token names the hold this call bills against, so a beat never marks a newer one.
+function reportVoiceActivity(sessionId: string, sessionToken: string): void {
+  api.post(`/api/voice/v2/sessions/${sessionId}/activity`, { sessionToken }).catch(() => {});
 }
 
-function startHeartbeat(sessionId: string | null): void {
+function startHeartbeat(sessionId: string | null, sessionToken: string): void {
   stopHeartbeat();
   if (!sessionId) return;
-  reportVoiceActivity(sessionId);
-  heartbeatTimer = setInterval(() => reportVoiceActivity(sessionId), VOICE_HEARTBEAT_MS);
+  reportVoiceActivity(sessionId, sessionToken);
+  heartbeatTimer = setInterval(() => reportVoiceActivity(sessionId, sessionToken), VOICE_HEARTBEAT_MS);
 }
 
 function stopHeartbeat(): void {
@@ -251,7 +252,7 @@ async function establishConnection(
         // drop gets its own full set of retries.
         reconnectAttempts = 0;
         clearReconnectTimer();
-        startHeartbeat(activeSessionId);
+        startHeartbeat(activeSessionId, bootstrap.clientBootstrap.sessionToken);
         set({ phase: 'connected', errorMessage: null });
       },
       onDisconnect: details => {

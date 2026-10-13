@@ -415,6 +415,28 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1');
   });
 
+  it("names the call's hold in its session token, so its activity marks only that hold", async () => {
+    const { run } = fireSessions();
+    await run();
+    const [update] = mocks.sessionUpdate.mock.calls[0] as [{ voiceSessionStartedAt: Date }];
+    const [claims] = mocks.signVoiceSessionToken.mock.calls[0] as [{ voiceHoldStartedAt?: string }];
+    expect(claims.voiceHoldStartedAt).toBe(update.voiceSessionStartedAt.toISOString());
+  });
+
+  it('names the reused hold in the token of a reconnect', async () => {
+    const startedAt = new Date(Date.now() - 60_000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+    });
+    const { run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
+    await run();
+    const [claims] = mocks.signVoiceSessionToken.mock.calls[0] as [{ voiceHoldStartedAt?: string }];
+    expect(claims.voiceHoldStartedAt).toBe(startedAt.toISOString());
+  });
+
   it('settles an earlier call left open before a fresh connect overwrites its hold', async () => {
     const startedAt = new Date(Date.now() - 20 * 60 * 1000);
     mocks.findByIdAndUserId.mockResolvedValue({

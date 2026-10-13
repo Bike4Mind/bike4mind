@@ -236,7 +236,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   // ElevenLabs calling the proxy with a valid token is server-to-server proof the call is live
   // (it also calls on user silence), so it marks the hold connected without trusting the browser.
   // Fire-and-forget: it must not delay the turn's first token.
-  sessionRepository.recordVoiceActivity(sessionCtx.sessionId, new Date()).catch(err => {
+  const holdStartedAt = sessionCtx.voiceHoldStartedAt ? new Date(sessionCtx.voiceHoldStartedAt) : null;
+  sessionRepository.recordVoiceActivity(sessionCtx.sessionId, new Date(), holdStartedAt).catch(err => {
     req.logger.warn({ err }, '[voice-v2/llm-proxy] failed to record voice activity');
   });
 

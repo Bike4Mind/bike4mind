@@ -696,8 +696,10 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     }));
   }
 
-  async recordVoiceActivity(sessionId: string, at: Date) {
-    const openHold = { _id: sessionId, voiceSessionStartedAt: { $ne: null } };
+  async recordVoiceActivity(sessionId: string, at: Date, holdStartedAt?: Date | null) {
+    // Keyed on the hold's start when the signal names it, so a call still running elsewhere can
+    // never mark a newer hold on the same session connected.
+    const openHold = { _id: sessionId, voiceSessionStartedAt: holdStartedAt ?? { $ne: null } };
     await this.sessionModel.updateOne({ ...openHold, voiceConnectedAt: null }, { $set: { voiceConnectedAt: at } });
     await this.sessionModel.updateOne(openHold, { $max: { voiceLastActivityAt: at } });
   }

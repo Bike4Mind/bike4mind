@@ -208,7 +208,22 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
   it("marks the token's session connected and alive on every verified turn", async () => {
     await handler(makeReq() as never, makeRes() as never);
 
-    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date));
+    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), null);
+  });
+
+  it('marks only the hold its token names', async () => {
+    const holdStartedAt = '2026-10-12T12:00:00.000Z';
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: holdStartedAt,
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), new Date(holdStartedAt));
   });
 
   it('records nothing for a turn whose token does not verify', async () => {

@@ -133,6 +133,19 @@ describe('sessionRepository voice holds', () => {
     expect(stale).toMatchObject({ voiceConnectedAt: first, voiceLastActivityAt: later });
   });
 
+  it('leaves a newer hold untouched by activity from the hold it replaced', async () => {
+    const oldStart = minutesAgo(10);
+    const newStart = minutesAgo(2);
+    const id = await seed('call', 100, newStart);
+
+    await sessionRepository.recordVoiceActivity(id, minutesAgo(1), oldStart);
+    expect(await Session.findById(id).lean()).toMatchObject({ voiceConnectedAt: null, voiceLastActivityAt: null });
+
+    const at = minutesAgo(1);
+    await sessionRepository.recordVoiceActivity(id, at, newStart);
+    expect(await Session.findById(id).lean()).toMatchObject({ voiceConnectedAt: at, voiceLastActivityAt: at });
+  });
+
   it('records no activity without an open hold, and a claim clears the markers', async () => {
     const startedAt = minutesAgo(10);
     const id = await seed('call', 100, startedAt);

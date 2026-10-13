@@ -133,7 +133,7 @@ describe('useConversationalVoice — auto-reconnect', () => {
     expect(activityCalls()).toHaveLength(0);
 
     onConnect();
-    expect(activityCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/activity']);
+    expect(activityCalls()).toEqual([['/api/voice/v2/sessions/s1/activity', { sessionToken: 'tok-1' }]]);
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(activityCalls()).toHaveLength(3);
