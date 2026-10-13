@@ -9,15 +9,10 @@ import {
   type IEmbedBranding,
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
-import {
-  userApiKeyService,
-  cacheService,
-  userService,
-  isTokenVersionCurrent,
-  isTokenTypeAcceptable,
-} from '@bike4mind/services';
+import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
+import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 import { z } from 'zod';
 
@@ -225,30 +220,6 @@ async function assertOwnerAccountUsable(userId: string): Promise<void> {
     throw new UnauthorizedError('User not found or banned');
   }
   assertAccountStateUsable(user);
-}
-
-/**
- * The account-state checks of {@link assertOwnerAccountUsable} against an already-loaded
- * user, so the JWT path (verifyJwtToken, which already holds the user) can apply the same
- * gate without a second lookup. One helper so the two entry points can't drift.
- *
- * Which conditions block comes from `userService.accountBlockReasons`, the single definition
- * shared with the admin update and the Stripe dispute path. The error classes and messages
- * below are this client's mapping and must follow that list's precedence.
- */
-export function assertAccountStateUsable(user: IUserDocument): void {
-  switch (userService.accountBlockReasons(user)[0]) {
-    case 'banned':
-      throw new UnauthorizedError('User not found or banned');
-    case 'disputePending':
-      throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
-    case 'suspended':
-      throw new ForbiddenError(
-        'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
-      );
-    default:
-      return;
-  }
 }
 
 /**

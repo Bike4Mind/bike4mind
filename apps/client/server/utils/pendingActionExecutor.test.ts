@@ -7,9 +7,11 @@ import { JIRA_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 vi.mock('@bike4mind/database', () => ({
   Quest: { findById: vi.fn(), findOneAndUpdate: vi.fn(), findByIdAndUpdate: vi.fn() },
   FabFile: { findById: vi.fn() },
+  Session: { findById: vi.fn() },
 }));
 
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
 vi.mock('@server/integrations/github/github-repo-helper', () => ({ getSelectedRepositoriesForMcp: vi.fn() }));
 
 vi.mock('@bike4mind/slack', () => {
@@ -24,10 +26,16 @@ vi.mock('@bike4mind/slack', () => {
   };
 });
 
-import { Quest } from '@bike4mind/database';
+import { Quest, Session } from '@bike4mind/database';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
-import { cancelPendingActionOnQuest, executePendingAction, TOKEN_EXPIRATION_MS } from './pendingActionExecutor';
+import {
+  cancelPendingActionOnQuest,
+  executePendingAction,
+  isPendingActionRequester,
+  TOKEN_EXPIRATION_MS,
+} from './pendingActionExecutor';
 
 const QUEST_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
 
@@ -47,6 +55,7 @@ describe('executePendingAction', () => {
     vi.clearAllMocks();
     ts = Date.now();
     storePendingAction({ tool: 'create_issue', params: { owner: 'o', repo: 'r', title: 't' }, ts });
+    vi.mocked(isFeatureEnabled).mockResolvedValue(true);
     vi.mocked(Quest.findOneAndUpdate).mockResolvedValue({} as never);
     vi.mocked(getSelectedRepositoriesForMcp).mockResolvedValue(['o/r']);
     vi.mocked(invokeMcpHandler).mockResolvedValue({
@@ -56,6 +65,17 @@ describe('executePendingAction', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('refuses to run any pending action while the MCP admin flag is off', async () => {
+    vi.mocked(isFeatureEnabled).mockResolvedValue(false);
+
+    const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+    expect(result.success).toBe(false);
+    expect(isFeatureEnabled).toHaveBeenCalledWith('EnableMCPServer');
+    expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
   it('claims the stored action before invoking the tool and marks the call as button-initiated', async () => {
@@ -187,5 +207,57 @@ describe('cancelPendingActionOnQuest', () => {
     expect(result.success).toBe(true);
     expect(Quest.findByIdAndUpdate).toHaveBeenCalledWith(QUEST_ID, { $unset: { pendingAction: 1 } });
     expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('isPendingActionRequester', () => {
+  const SESSION_ID = 'cccccccccccccccccccccccc';
+
+  function storeQuest(quest: { sessionId: string; requesterId?: string } | null, sessionOwnerId: string | null) {
+    const questDoc = quest && {
+      sessionId: quest.sessionId,
+      ...(quest.requesterId ? { promptMeta: { session: { userId: quest.requesterId } } } : {}),
+    };
+    vi.mocked(Quest.findById).mockReturnValue({ select: () => Promise.resolve(questDoc) } as never);
+    vi.mocked(Session.findById).mockReturnValue({
+      select: () => Promise.resolve(sessionOwnerId === null ? null : { userId: sessionOwnerId }),
+    } as never);
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('is true for the turn requester even when someone else owns the session', async () => {
+    storeQuest({ sessionId: SESSION_ID, requesterId: 'user-1' }, 'owner-2');
+
+    await expect(isPendingActionRequester(QUEST_ID, 'user-1')).resolves.toBe(true);
+    expect(Session.findById).not.toHaveBeenCalled();
+  });
+
+  it('is false for the session owner when another user made the request', async () => {
+    storeQuest({ sessionId: SESSION_ID, requesterId: 'user-1' }, 'owner-2');
+
+    await expect(isPendingActionRequester(QUEST_ID, 'owner-2')).resolves.toBe(false);
+  });
+
+  it('falls back to the session owner for a quest with no recorded requester', async () => {
+    storeQuest({ sessionId: SESSION_ID }, 'user-1');
+
+    await expect(isPendingActionRequester(QUEST_ID, 'user-1')).resolves.toBe(true);
+    await expect(isPendingActionRequester(QUEST_ID, 'user-2')).resolves.toBe(false);
+    expect(Session.findById).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it.each([
+    ['the quest is missing', null, 'user-1'],
+    ['the session is missing', { sessionId: SESSION_ID }, null],
+  ])('is false when %s', async (_label, quest, sessionOwnerId) => {
+    storeQuest(quest, sessionOwnerId);
+
+    await expect(isPendingActionRequester(QUEST_ID, 'user-1')).resolves.toBe(false);
+  });
+
+  it('is false for a malformed quest id without querying', async () => {
+    await expect(isPendingActionRequester('not-an-id', 'user-1')).resolves.toBe(false);
+    expect(Quest.findById).not.toHaveBeenCalled();
   });
 });

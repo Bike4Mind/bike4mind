@@ -2,6 +2,7 @@ import { Connection, User, wsConnectTicketRepository } from '@bike4mind/database
 import { ApiKeyScope } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@server/cli/auth';
 import { UnauthorizedError } from '@server/utils/errors';
@@ -90,6 +91,9 @@ async function resolveIdentity(
     if ((decoded as { kind?: string })?.kind === 'oauth') {
       throw new UnauthorizedError('OAuth access tokens are not accepted on the realtime socket');
     }
+    if (decoded?.mfaPending) {
+      throw new UnauthorizedError('MFA verification required');
+    }
     // JWT connections are always version-gated. A legacy token issued before
     // this field existed carries no version and normalizes to 0, mirroring the
     // REST path (auth.ts) so the kill switch still fires for it once the user's
@@ -143,6 +147,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     if (tokenVersion !== undefined && !isTokenVersionCurrent(tokenVersion, user.tokenVersion)) {
       throw new UnauthorizedError('Session expired');
     }
+    assertAccountStateUsable(user);
 
     await Connection.create({
       connectionId: event.requestContext.connectionId,
