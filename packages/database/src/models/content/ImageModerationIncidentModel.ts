@@ -97,6 +97,24 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /**
+   * Returns incidents stuck in 'confirmed_csam' for longer than staleAfterMs (default 10 min).
+   * These are claims where the NCMEC HTTP call had an unknown outcome (timeout, network error)
+   * and the verdict route deliberately left the incident unclaimed for human verification.
+   * The admin should check NCMEC before retrying to avoid duplicate CyberTip submissions.
+   */
+  async findStaleConfirmedCsam(
+    limit: number,
+    staleAfterMs = 10 * 60 * 1000
+  ): Promise<IImageModerationIncidentDocument[]> {
+    const cutoff = new Date(Date.now() - staleAfterMs);
+    return this.model
+      .find({ reviewStatus: 'confirmed_csam', updatedAt: { $lt: cutoff } })
+      .sort({ updatedAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
    * Atomically claim an incident for NCMEC submission. Transitions from absent/pending_review
    * to 'confirmed_csam'. Only one concurrent request can succeed for a given incident; all
    * others get null, preventing duplicate NCMEC filings.

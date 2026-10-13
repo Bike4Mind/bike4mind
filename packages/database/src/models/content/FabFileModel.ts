@@ -3267,6 +3267,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
       throw new Error('Cleanup chunk batch size must be between 1 and 1000');
     }
+    // Guard before the chunk deletion loop: a blocked file with >1000 chunks would otherwise
+    // lose its first chunk batches before hardDeleteOneById fires the legal-hold check inside
+    // the final transaction. Checking here is a belt-and-suspenders measure -- the atomic check
+    // inside hardDeleteOneById still applies -- but it prevents partial chunk destruction.
+    const candidate = await this.fabFileModel
+      .findOne({ _id: fabFileId }, { moderationStatus: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    if (candidate?.moderationStatus === 'blocked') {
+      throw new Error(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
+    }
     for (;;) {
       const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
         .limit(chunkBatchSize + 1)

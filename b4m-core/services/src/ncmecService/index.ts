@@ -105,13 +105,33 @@ function buildFinishXml(reportId: string): string {
 }
 
 /**
+ * NCMEC explicitly rejected the report (HTTP non-2xx on /submit).
+ * A rejection means NCMEC did not accept the submission, so rolling back to
+ * 'pending_review' is safe -- no CyberTip was filed.
+ *
+ * Callers distinguish this from a plain Error, which indicates an unknown outcome
+ * (timeout, network error, missing reportId in a 2xx body): in that case the incident
+ * must remain in 'confirmed_csam' until a human can verify with NCMEC.
+ */
+export class NcmecRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NcmecRejectedError';
+  }
+}
+
+/**
  * Submit a confirmed CSAM incident to the NCMEC CyberTipline.
  *
  * Flow: POST /submit (get reportId) -> POST /finish (finalize).
  * NCMEC deletes unfinished reports 24 hours after /submit; /finish must succeed before
  * the incident is marked 'reported'.
  *
- * Returns the `reportId` that NCMEC assigns. Throws on any API or credential error.
+ * Throws NcmecRejectedError when NCMEC explicitly rejects /submit (non-2xx): the caller
+ * may safely roll back the incident to 'pending_review'.
+ *
+ * Throws plain Error for unknown outcomes (timeout, network error, missing reportId):
+ * the caller must NOT roll back -- NCMEC may have already received the submission.
  */
 export async function submitNcmecReport(
   credentials: NcmecCredentials,
@@ -131,32 +151,43 @@ export async function submitNcmecReport(
   const credential = Buffer.from(`${espId}:${apiKey}`).toString('base64');
   const authHeader = `Basic ${credential}`;
 
+  // 25 seconds: safely below the typical 30-second Lambda timeout while still giving NCMEC
+  // time to respond. A timeout throws AbortError (unknown outcome -- do not rollback).
+  const fetchTimeout = AbortSignal.timeout(25_000);
+
   // Step 1: Submit the report and receive a reportId.
   const submitXml = buildSubmitXml(espId, input);
   const submitResponse = await fetch(`${baseUrl}/submit`, {
     method: 'POST',
     headers: { Authorization: authHeader, 'Content-Type': 'text/xml; charset=utf-8' },
     body: submitXml,
+    signal: fetchTimeout,
   });
 
   if (!submitResponse.ok) {
     const text = await submitResponse.text();
-    throw new Error(`NCMEC /submit error ${submitResponse.status}: ${text.slice(0, 300)}`);
+    // Non-2xx: NCMEC explicitly rejected the submission -- no report was filed. The caller
+    // can safely roll back the incident to 'pending_review'.
+    throw new NcmecRejectedError(`NCMEC /submit error ${submitResponse.status}: ${text.slice(0, 300)}`);
   }
 
   const submitText = await submitResponse.text();
   const match = /<reportId>([^<]+)<\/reportId>/.exec(submitText);
   if (!match) {
+    // 2xx but no parseable reportId -- ambiguous outcome. The caller must NOT roll back.
     throw new Error(`NCMEC /submit response missing reportId: ${submitText.slice(0, 300)}`);
   }
   const reportId = match[1].trim();
 
   // Step 2: Finalize the report. Without /finish, NCMEC deletes it after 24 hours.
+  // We have the reportId at this point. A /finish failure is logged with the reportId so
+  // an operator can manually finalize; the caller should NOT roll back.
   const finishXml = buildFinishXml(reportId);
   const finishResponse = await fetch(`${baseUrl}/finish`, {
     method: 'POST',
     headers: { Authorization: authHeader, 'Content-Type': 'text/xml; charset=utf-8' },
     body: finishXml,
+    signal: fetchTimeout,
   });
 
   if (!finishResponse.ok) {

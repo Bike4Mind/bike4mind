@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { submitNcmecReport } from './index';
+import { submitNcmecReport, NcmecRejectedError } from './index';
 
 const TEST_CREDS = {
   espId: 'esp-test-id',
@@ -106,21 +106,31 @@ describe('submitNcmecReport', () => {
     expect(result.reportId).toBe('RPT-TRIM');
   });
 
-  it('throws when /submit returns a non-2xx status', async () => {
-    fetchSpy.mockReset().mockResolvedValueOnce({ ok: false, status: 401, text: async () => 'Unauthorized' });
-    await expect(submitNcmecReport(TEST_CREDS, BASE_INPUT)).rejects.toThrow('NCMEC /submit error 401');
+  it('throws NcmecRejectedError when /submit returns a non-2xx status', async () => {
+    fetchSpy.mockReset().mockResolvedValue({ ok: false, status: 401, text: async () => 'Unauthorized' });
+    const err = await submitNcmecReport(TEST_CREDS, BASE_INPUT).catch(e => e);
+    expect(err).toBeInstanceOf(NcmecRejectedError);
+    expect(err.message).toContain('NCMEC /submit error 401');
   });
 
-  it('throws when /submit response XML is missing reportId', async () => {
+  it('throws plain Error (not NcmecRejectedError) when /submit response XML is missing reportId', async () => {
     fetchSpy.mockReset().mockResolvedValueOnce({ ok: true, text: async () => '<response><status>ok</status></response>' });
-    await expect(submitNcmecReport(TEST_CREDS, BASE_INPUT)).rejects.toThrow('NCMEC /submit response missing reportId');
+    const err = await submitNcmecReport(TEST_CREDS, BASE_INPUT).catch(e => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(NcmecRejectedError);
+    expect(err.message).toContain('NCMEC /submit response missing reportId');
   });
 
-  it('throws when /finish returns a non-2xx status', async () => {
+  it('throws plain Error (not NcmecRejectedError) when /finish returns a non-2xx status', async () => {
     fetchSpy.mockReset()
       .mockResolvedValueOnce({ ok: true, text: async () => '<response><reportId>RPT-FAIL</reportId></response>' })
       .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Internal Error' });
-    await expect(submitNcmecReport(TEST_CREDS, BASE_INPUT)).rejects.toThrow('NCMEC /finish error 500');
+    const err = await submitNcmecReport(TEST_CREDS, BASE_INPUT).catch(e => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(NcmecRejectedError);
+    expect(err.message).toContain('NCMEC /finish error 500');
+    // reportId is in the message so callers can log it for manual recovery.
+    expect(err.message).toContain('RPT-FAIL');
   });
 
   it('XML-escapes userId in the report body', async () => {

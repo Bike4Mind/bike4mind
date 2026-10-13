@@ -6,10 +6,14 @@ import { imageModerationIncidentRepository } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
 
 /**
- * Admin-only paginated list of unreviewed image-moderation incidents.
+ * Admin-only paginated list of image-moderation incidents that need attention.
  *
- * Returns incidents with reviewStatus absent or 'pending_review', oldest first.
- * Operator loop: GET `?limit=N` until the response array is shorter than limit.
+ * Returns two sets:
+ *   - incidents with reviewStatus absent or 'pending_review' (unreviewed), oldest first.
+ *   - incidents stuck in 'confirmed_csam' for more than 10 minutes (NCMEC submission had
+ *     an unknown outcome -- the admin should verify with NCMEC before retrying).
+ *
+ * Operator loop: GET `?limit=N` until both arrays are shorter than limit.
  */
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -25,8 +29,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req:
     return res.status(400).json({ error: 'Invalid query', details: parsed.error.issues });
   }
 
-  const incidents = await imageModerationIncidentRepository.findPendingReview(parsed.data.limit);
-  return res.status(200).json({ incidents });
+  const { limit } = parsed.data;
+  const [incidents, staleConfirmedCsam] = await Promise.all([
+    imageModerationIncidentRepository.findPendingReview(limit),
+    imageModerationIncidentRepository.findStaleConfirmedCsam(limit),
+  ]);
+  return res.status(200).json({ incidents, staleConfirmedCsam });
 });
 
 export const config = {

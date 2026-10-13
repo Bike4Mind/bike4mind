@@ -11,9 +11,10 @@ import { ForbiddenError } from '@server/utils/errors';
 // process.env.X). Fall back to process.env for local dev and self-host. useSandbox defaults
 // to true so a missing or misconfigured value cannot post to production.
 function resolveNcmecCredentials() {
-  const espId = (Resource as Record<string, { value?: string }>).NCMEC_ESP_ID?.value ?? process.env.NCMEC_ESP_ID ?? '';
-  const apiKey = (Resource as Record<string, { value?: string }>).NCMEC_API_KEY?.value ?? process.env.NCMEC_API_KEY ?? '';
-  const sandboxRaw = (Resource as Record<string, { value?: string }>).NCMEC_USE_SANDBOX?.value ?? process.env.NCMEC_USE_SANDBOX;
+  const res = Resource as unknown as Record<string, { value?: string }>;
+  const espId = res.NCMEC_ESP_ID?.value ?? process.env.NCMEC_ESP_ID ?? '';
+  const apiKey = res.NCMEC_API_KEY?.value ?? process.env.NCMEC_API_KEY ?? '';
+  const sandboxRaw = res.NCMEC_USE_SANDBOX?.value ?? process.env.NCMEC_USE_SANDBOX;
   // Fail safe: anything other than an explicit 'false' uses the test host.
   const useSandbox = sandboxRaw !== 'false';
   return { espId, apiKey, useSandbox };
@@ -73,17 +74,29 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       });
       ncmecReportId = result.reportId;
     } catch (err) {
-      req.logger.error(`[NCMEC] submission failed for incident ${incidentId}: ${(err as Error).message}`);
-      // Roll back to pending_review so the incident re-enters the triage queue for retry.
-      // confirmed_csam is otherwise a terminal dead state if the NCMEC HTTP call fails.
-      await imageModerationIncidentRepository
-        .updateReviewStatus(incidentId, 'pending_review')
-        .catch(rollbackErr =>
-          req.logger.error(
-            `[NCMEC] rollback to pending_review also failed for incident ${incidentId}: ${(rollbackErr as Error).message}`
-          )
-        );
-      return res.status(502).json({ error: `NCMEC submission failed: ${(err as Error).message}` });
+      const isRejected = err instanceof ncmecService.NcmecRejectedError;
+      req.logger.error(
+        `[NCMEC] submission ${isRejected ? 'rejected by NCMEC' : 'unknown outcome'} for incident ${incidentId}: ${(err as Error).message}`
+      );
+      if (isRejected) {
+        // NCMEC explicitly rejected the report (non-2xx on /submit). No CyberTip was filed,
+        // so rolling back to 'pending_review' is safe: the admin can re-triage and retry.
+        await imageModerationIncidentRepository
+          .updateReviewStatus(incidentId, 'pending_review')
+          .catch(rollbackErr =>
+            req.logger.error(
+              `[NCMEC] rollback to pending_review failed for incident ${incidentId}: ${(rollbackErr as Error).message}`
+            )
+          );
+        return res.status(502).json({ error: `NCMEC rejected the report: ${(err as Error).message}` });
+      }
+      // Unknown outcome (timeout, network error, /finish failure, or missing reportId in 2xx
+      // response). NCMEC may have already received the /submit. Do NOT roll back -- leaving the
+      // incident in 'confirmed_csam' ensures a human verifies with NCMEC before re-filing.
+      // Stale confirmed_csam incidents surface in the triage queue after 10 minutes.
+      return res.status(502).json({
+        error: `NCMEC submission outcome unknown: ${(err as Error).message}. Incident left in confirmed_csam -- verify with NCMEC before retrying.`,
+      });
     }
 
     // Log before the DB write: if the write fails, the reportId is still recoverable from logs.
