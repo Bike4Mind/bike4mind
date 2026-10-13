@@ -1,5 +1,10 @@
 import { useMemo } from 'react';
-import { resolveLowCreditsThreshold, resolveTeamPlanSettings, type TeamPlanSettings } from '@bike4mind/common';
+import {
+  resolveLowCreditsThreshold,
+  resolveTeamPlanSettings,
+  settingsMap,
+  type TeamPlanSettings,
+} from '@bike4mind/common';
 import { useGetSettingsValue } from './settings';
 
 /**
@@ -14,6 +19,21 @@ export function useTeamSeatLimits(): Pick<TeamPlanSettings, 'minSeats' | 'maxSea
     const { minSeats, maxSeats } = resolveTeamPlanSettings({ teamPlanMinSeats, teamPlanMaxSeats });
     return { minSeats, maxSeats };
   }, [teamPlanMinSeats, teamPlanMaxSeats]);
+}
+
+/**
+ * Whether NEW Team purchases are open (`enableTeamPlan`). The single client-side gate for every Team
+ * checkout entry point; the server enforces the same flag in pages/api/organizations/subscriptions/subscribe.ts.
+ * Parsed through the setting's own schema (which coerces the string 'true') so client and server agree;
+ * an unloaded or malformed value fails closed. On a malformed value the server falls back to the
+ * setting's `defaultValue`, so the two agree only while that default stays `false`.
+ */
+export function useTeamPlanAvailable(): boolean {
+  const raw = useGetSettingsValue('enableTeamPlan');
+  return useMemo(() => {
+    const parsed = settingsMap.enableTeamPlan.schema.safeParse(raw);
+    return parsed.success && parsed.data === true;
+  }, [raw]);
 }
 
 /** Team-plan credits granted per seat. Admin-only: the setting is not readable by other users. */

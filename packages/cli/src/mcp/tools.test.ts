@@ -5,6 +5,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { B4mApiClient } from './b4mApiClient';
 import { NotAuthenticatedError } from '../auth/ApiClient';
+import { logger } from '../utils/Logger.js';
 import {
   TOOL_NAMES,
   registerTools,
@@ -578,7 +579,7 @@ describe('sendMessage', () => {
     expect(result.notebookId).toBe('echoed-nb');
   });
 
-  it("returns a failed turn's explanation as its reply, as the wait path did", async () => {
+  it('fails a turn that ends type error, naming its errorCode, reason and quest', async () => {
     const getQuest = vi.fn().mockResolvedValue({
       ...doneQuest,
       type: 'error',
@@ -587,9 +588,17 @@ describe('sendMessage', () => {
       replies: ['Not enough credits'],
     });
 
-    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
+    await expect(sendMessage(chatClient(getQuest), { message: 'hi', notebookId: 'nb1' }, noSleep)).rejects.toThrow(
+      'insufficient_credits: Not enough credits (quest q1, notebook nb1)'
+    );
+  });
 
-    expect(result.reply).toBe('Not enough credits');
+  it('fails an errored turn with no errorCode or reply text with a generic reason', async () => {
+    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, type: 'error', reply: null, replies: [] });
+
+    await expect(sendMessage(chatClient(getQuest), { message: 'hi', notebookId: 'nb1' }, noSleep)).rejects.toThrow(
+      /^chat completion failed \(quest q1, notebook nb1\)$/
+    );
   });
 
   it('settles on a failed dispatch, which leaves the quest running with type error', async () => {
@@ -599,10 +608,10 @@ describe('sendMessage', () => {
       .mockResolvedValueOnce({ id: 'q1', status: 'running', type: 'error', reply: 'ChatCompletion dispatch failed' })
       .mockResolvedValue(doneQuest);
 
-    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
-
+    await expect(sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep)).rejects.toThrow(
+      'ChatCompletion dispatch failed (quest q1)'
+    );
     expect(getQuest).toHaveBeenCalledTimes(1);
-    expect(result.reply).toBe('ChatCompletion dispatch failed');
   });
 
   it('hides reasoning, strips the choices block and separates the slots', async () => {
@@ -669,15 +678,92 @@ describe('sendMessage', () => {
     }
   });
 
-  it('treats a stopped quest as finished', async () => {
+  it('fails a stopped turn, carrying its explanation', async () => {
     const getQuest = vi
       .fn()
       .mockResolvedValue({ ...doneQuest, status: 'stopped', reply: 'Stopped by user', replies: ['Stopped by user'] });
 
-    const result = await sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep);
-
+    await expect(sendMessage(chatClient(getQuest), { message: 'hi', notebookId: 'nb1' }, noSleep)).rejects.toThrow(
+      'chat completion was stopped (quest q1, notebook nb1): Stopped by user'
+    );
     expect(getQuest).toHaveBeenCalledTimes(1);
-    expect(result.reply).toBe('Stopped by user');
+  });
+
+  it('fails a stopped turn with no reply text', async () => {
+    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, status: 'stopped', reply: null, replies: [] });
+
+    await expect(sendMessage(chatClient(getQuest), { message: 'hi' }, noSleep)).rejects.toThrow(
+      /^chat completion was stopped \(quest q1\)$/
+    );
+  });
+
+  describe('on cancel', () => {
+    const cancelled = () => {
+      const controller = new AbortController();
+      const getQuest = vi.fn(async () => {
+        controller.abort(new Error('cancelled by client'));
+        return { id: 'q1', status: 'running' };
+      });
+      return { signal: controller.signal, getQuest };
+    };
+
+    it('stops its own quest on the server and rethrows the abort', async () => {
+      const { signal, getQuest } = cancelled();
+      const stopReply = vi.fn().mockResolvedValue({});
+      const client = mockClient({ sendChat: vi.fn().mockResolvedValue(ack), getQuest, stopReply });
+
+      await expect(sendMessage(client, { message: 'hi', notebookId: 'nb1' }, { ...noSleep, signal })).rejects.toThrow(
+        'cancelled by client'
+      );
+      expect(stopReply).toHaveBeenCalledTimes(1);
+      expect(stopReply).toHaveBeenCalledWith('nb1', 'q1');
+    });
+
+    it('logs a failed stop and still rethrows the abort', async () => {
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      try {
+        const { signal, getQuest } = cancelled();
+        const stopReply = vi.fn().mockRejectedValue(new Error('stop 500'));
+        const client = mockClient({
+          sendChat: vi.fn().mockResolvedValue({ ...ack, sessionId: 'nb2' }),
+          getQuest,
+          stopReply,
+        });
+
+        await expect(sendMessage(client, { message: 'hi' }, { ...noSleep, signal })).rejects.toThrow(
+          'cancelled by client'
+        );
+        expect(stopReply).toHaveBeenCalledWith('nb2', 'q1');
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('stop 500'));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('sends no stop when no notebook id is known', async () => {
+      const { signal, getQuest } = cancelled();
+      const stopReply = vi.fn();
+      const client = mockClient({ sendChat: vi.fn().mockResolvedValue(ack), getQuest, stopReply });
+
+      await expect(sendMessage(client, { message: 'hi' }, { ...noSleep, signal })).rejects.toThrow(
+        'cancelled by client'
+      );
+      expect(stopReply).not.toHaveBeenCalled();
+    });
+  });
+
+  it('sends no stop when the poll times out rather than being cancelled', async () => {
+    const stopReply = vi.fn();
+    const client = mockClient({
+      sendChat: vi.fn().mockResolvedValue(ack),
+      getQuest: vi.fn().mockResolvedValue({ id: 'q1', status: 'running' }),
+      stopReply,
+    });
+
+    await expect(
+      sendMessage(client, { message: 'hi', notebookId: 'nb1' }, { ...noSleep, timeoutMs: 0 })
+    ).rejects.toThrow('did not finish');
+    expect(stopReply).not.toHaveBeenCalled();
   });
 
   it('reports each in-flight poll, with the quest it read, until the reply lands', async () => {

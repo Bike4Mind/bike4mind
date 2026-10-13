@@ -173,7 +173,12 @@ describe('/api/otc/send per-email budget', () => {
     resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
     mockConfirmReservation.mockResolvedValue(true);
-    mockSendOTC.mockResolvedValue({ pendingToken: 'pending-token', nonce: 'real-nonce', code: '123456' });
+    mockSendOTC.mockResolvedValue({
+      pendingToken: 'pending-token',
+      nonce: 'real-nonce',
+      otcHash: 'code-hash',
+      code: '123456',
+    });
   });
 
   async function post(email: string, ip: string) {
@@ -324,7 +329,12 @@ describe('/api/otc/send', () => {
     vi.clearAllMocks();
     resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
-    mockSendOTC.mockResolvedValue({ pendingToken: 'pending-token', nonce: 'real-nonce', code: '123456' });
+    mockSendOTC.mockResolvedValue({
+      pendingToken: 'pending-token',
+      nonce: 'real-nonce',
+      otcHash: 'code-hash',
+      code: '123456',
+    });
   });
 
   it('passes cooldownMs 0 to tryReserveSlot when E2E is enabled, and the prod cooldown otherwise', async () => {
@@ -372,7 +382,7 @@ describe('/api/otc/send', () => {
     expect(res._getJSONData()).not.toHaveProperty('pendingToken');
   });
 
-  it('confirms the reservation with the real nonce and returns 200 on the happy path', async () => {
+  it('stores the nonce and code hash server-side and returns only the pending token', async () => {
     const reservedAt = new Date('2026-01-01T00:00:00.000Z');
     mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
     mockConfirmReservation.mockResolvedValue(true);
@@ -380,7 +390,7 @@ describe('/api/otc/send', () => {
 
     await handler(req, res);
 
-    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', undefined);
+    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', undefined);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ pendingToken: 'pending-token' });
   });
@@ -394,6 +404,6 @@ describe('/api/otc/send', () => {
 
     await handler(req, res);
 
-    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', '123456');
+    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', '123456');
   });
 });

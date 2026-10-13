@@ -8,7 +8,7 @@ interface SeatCeilingRaisedLogger {
 }
 
 /** Which path triggered the raise - carried into the alert + audit for traceability. */
-type SeatCeilingRaiseTrigger = 'otc-signup' | 'email-verification' | 'admin-backfill';
+export type SeatCeilingRaiseTrigger = 'otc-signup' | 'email-verification' | 'oauth-signup' | 'admin-backfill';
 
 interface SeatCeilingRaisedParams {
   organizationId: string;

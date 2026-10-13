@@ -75,12 +75,14 @@ These models are being retired by their providers. Move saved notebooks, agents,
 
 | Model | Retirement date |
 |-------|-----------------|
-| Claude Sonnet 4 | 2026-10-14 |
 | Claude Haiku 4.5 (direct Anthropic API) | 2026-10-15 |
-| Gemini 2.5 Pro, Flash, and Flash-Lite | 2026-10-20 |
+| Gemini 2.5 Pro and Flash-Lite | 2026-10-16 |
 | GPT-4, GPT-4 Turbo, GPT-4.1 Nano, o4-mini | 2026-10-23 |
 | Claude Opus 4.5 | 2026-11-24 |
 | Claude Sonnet 4.5 | 2026-11-30 |
+| o3 | 2026-12-11 |
+
+Claude Sonnet 4 (direct Anthropic API) and Gemini 2.5 Flash have already been retired and no longer appear in the model picker. For developers: where a retirement is scheduled, `GET /api/v1/models` (API key with `ai:chat` or `ai:generate`) returns it in `deprecation_date`.
 
 ## Supported Image and Video Models
 
@@ -140,16 +142,15 @@ Controls response length:
 - **Gemini 3.5 Flash Lite**: Very fast responses for simple queries
 
 ### For Complex Tasks
-- **Claude Opus 5.5**, **GPT-6.1 Sol**, or **Claude Fable 5.1**: Deep analysis and reasoning
-- **o3**: Mathematical and logical problems
+- **Claude Opus 5.5**, **GPT-6.1 Sol**, or **Claude Fable 5.1**: Deep analysis, reasoning, and mathematical or logical problems
 
 ### For Creative Writing
 - **Claude Sonnet 5.5**: Nuanced creative output
-- **GPT-5.6**: Long-form content
+- **GPT-5.6 Sol**: Long-form content
 - Temperature: 0.8-1.2
 
 ### For Code Generation
-- **Claude Sonnet 5.5**, **Kimi K2.7 Code**, or **GPT-5.6**: Strong code comprehension
+- **Claude Sonnet 5.5**, **Kimi K2.7 Code**, or **GPT-5.6 Sol**: Strong code comprehension
 - **DeepSeek V4 Pro**: Strong reasoning for complex code tasks
 - Temperature: 0.3-0.5
 
@@ -170,7 +171,7 @@ Controls response length:
 - **Economy**: Claude Haiku 5.5, Gemini 3.5 Flash Lite, DeepSeek Flash
 - **Standard**: Claude Sonnet 5.5, Gemini 3.8 Flash, GPT-5.5
 - **Premium**: Claude Opus 5.5, GPT-6.1 Sol, Gemini 3.1 Pro, Grok 4.7
-- **Ultra**: Claude Fable 5.1, o3
+- **Ultra**: Claude Fable 5.1
 
 ## API Keys & Custom Models
 

@@ -122,16 +122,17 @@ const handler = baseApi({ auth: false })
         throw err;
       });
 
-    // Store the nonce server-side so the verify endpoint can reject replayed tokens.
-    // On non-production stages only (isE2EEnabled - hard-false on production), also persist
-    // the plaintext code so the test-only /api/test/otc-code endpoint can hand it to
-    // Playwright. Production never stores it - only the bcrypt hash lives (in the JWT).
+    // Store the nonce and code hash server-side: verify checks the code against this record and
+    // rejects replayed tokens. On non-production stages only (isE2EEnabled - hard-false on
+    // production), also persist the plaintext code so the test-only /api/test/otc-code endpoint
+    // can hand it to Playwright. Production never stores it - only the bcrypt hash.
     if (result.nonce) {
       const debugCode = isE2EEnabled() ? result.code : undefined;
       const confirmed = await pendingOtcTokenRepository.confirmReservation(
         normalizedEmail,
         reservation.reservedAt,
         result.nonce,
+        result.otcHash,
         debugCode
       );
       if (!confirmed) {

@@ -50,6 +50,8 @@ export interface ToolBuilderDeps {
   entitlementKeys?: string[];
   /** The turn's active organization, forwarded to the tool context (see ToolContext.organizationId). */
   organizationId?: ToolContext['organizationId'];
+  /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
+  authOrigin: ToolContext['authOrigin'];
   /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
   apiKeyId?: ToolContext['apiKeyId'];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
@@ -343,6 +345,7 @@ export function buildSharedTools(
     sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
+    authOrigin,
     apiKeyId,
   } = deps;
 
@@ -367,6 +370,7 @@ export function buildSharedTools(
       sessionIncludeLibraryFiles,
       sessionPreauthorizedLakeIds,
       organizationId,
+      authOrigin,
       apiKeyId,
       questId: callbacks.questId,
       getAbortSignal,
