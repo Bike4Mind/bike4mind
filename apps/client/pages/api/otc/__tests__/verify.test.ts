@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { CreditHolderType } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
@@ -6,16 +6,23 @@ import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 // Middleware is stripped so the handler body runs directly (same pattern as the
 // email/verify suite). baseApi().use(...).use(...).post(fn) must chain and hand back
 // the raw handler.
+// The middleware passed to .use() is recorded so the limiter wiring can be asserted on its own.
+const wiring = vi.hoisted(() => ({ uses: [] as any[] }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: any = { use: () => chain, post: (fn: any) => fn };
+    const chain: any = {
+      use: (mw: any) => {
+        wiring.uses.push(mw);
+        return chain;
+      },
+      post: (fn: any) => fn,
+    };
     return chain;
   },
 }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
@@ -28,7 +35,7 @@ vi.mock('@server/analytics/funnel', () => ({
   emitFunnelEvent: (...a: any[]) => mockEmitFunnelEvent(...a),
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { createAccessToken: () => ({ accessToken: 'a', refreshToken: 'r' }) },
 }));
@@ -50,13 +57,33 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 
 const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
+const mockConsumeOtherCodes = vi.fn();
+const mockTryIncrement = vi.fn(async (_key: string, _limit: number, _ttlMs: number) => ({
+  success: true,
+  count: 1,
+  expiresAt: new Date(Date.now() + 60_000),
+}));
+const mockDecrement = vi.fn();
+const mockTryAdd = vi.fn(async (_key: string, _amount: number, _limit: number, _ttlMs: number) => ({
+  success: true,
+  count: 0,
+  expiresAt: new Date(Date.now() + 60_000),
+}));
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: (...a: any[]) => mockTryIncrement(...a),
+    decrementCounter: (...a: any[]) => mockDecrement(...a),
+    tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a),
+  },
   adminSettingsRepository: { findBySettingName: vi.fn() },
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
   userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a), count: vi.fn(), update: vi.fn() },
-  pendingOtcTokenRepository: { validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a) },
+  pendingOtcTokenRepository: {
+    validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
+    consumeOtherCodes: (...a: any[]) => mockConsumeOtherCodes(...a),
+  },
   authSessionRepository: {},
 }));
 
@@ -78,6 +105,7 @@ vi.mock('@bike4mind/services', () => ({
 import { authSessionService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
+import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
 
 // bike4mind.com is seeded as an internal-staff domain in vitest.setup.ts, so the real
 // registry confers optihashi:pro -> its signup-credit total for this address.
@@ -117,9 +145,197 @@ function makeReqRes(email = DOMAIN_EMAIL) {
 const domainGrantCall = () =>
   mockAddCredits.mock.calls.find(([p]) => p.transactionId === 'domain-grant-credits:user-1');
 
+// Runs every recorded middleware in order, as baseApi would before the route handler.
+async function runMiddleware(req: any, res: any) {
+  for (const mw of wiring.uses) {
+    await new Promise<void>((resolve, reject) => {
+      Promise.resolve(mw(req, res, (err?: unknown) => (err ? reject(err) : resolve()))).catch(reject);
+    });
+  }
+}
+
+describe('/api/otc/verify limiter wiring', () => {
+  it('counts every attempt per IP but leaves the per-email budget to the handler', async () => {
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await runMiddleware(req, res);
+
+    const { perIp } = OTC_LIMITS.verify;
+    expect(mockTryIncrement).toHaveBeenCalledTimes(1);
+    expect(mockTryIncrement).toHaveBeenCalledWith(
+      expect.stringMatching(/^otc-limit:verify-ip:/),
+      perIp.limit,
+      perIp.windowMs
+    );
+  });
+});
+
+describe('/api/otc/verify per-email budget', () => {
+  // makeReqRes requests come from the socket address 127.0.0.1.
+  const budgetKeyFor = (email: string, ip = '127.0.0.1') =>
+    `otc-limit:verify-email-ip:${otcEmailKey(`${email}|${ip}`)}`;
+  const budgetKey = budgetKeyFor(NON_DOMAIN_EMAIL);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+    mockValidateNonce.mockResolvedValue(true);
+    mockVerifyPendingOTC.mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    mockTryAdd.mockImplementation(async () => ({ success: true, count: 0, expiresAt: new Date(Date.now() + 60_000) }));
+  });
+
+  it('does not spend the budget on attempts without a live token for the address', async () => {
+    for (const setup of [
+      () =>
+        mockJwtVerify.mockImplementation(() => {
+          throw new Error('bad signature');
+        }),
+      () => mockValidateNonce.mockResolvedValue(false),
+    ]) {
+      const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+      setup();
+      await expect(handler(req, res)).rejects.toThrow();
+      mockJwtVerify.mockReset();
+      mockValidateNonce.mockResolvedValue(true);
+    }
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.pendingToken = undefined;
+    await expect(handler(req, res)).rejects.toThrow();
+
+    // The unit is reserved up front and handed back once the nonce proves stale.
+    expect(mockDecrement).toHaveBeenCalledTimes(mockTryIncrement.mock.calls.length);
+  });
+
+  it('spends the budget on a wrong guess against a live token', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    const { perEmailPerIp } = OTC_LIMITS.verify;
+    expect(mockTryIncrement).toHaveBeenCalledWith(budgetKey, perEmailPerIp.limit, perEmailPerIp.windowMs);
+  });
+
+  it('charges the exact token address, so alias tokens cannot drain the owner', async () => {
+    const alias = 'nobody+x@example.com';
+    const { req, res } = makeReqRes(alias);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    const { perEmailPerIp } = OTC_LIMITS.verify;
+    expect(mockTryIncrement).toHaveBeenCalledWith(budgetKeyFor(alias), perEmailPerIp.limit, perEmailPerIp.windowMs);
+    expect(mockTryIncrement).not.toHaveBeenCalledWith(budgetKey, expect.anything(), expect.anything());
+  });
+
+  describe('across sources', () => {
+    const ATTACKER_IP = '81.2.69.166';
+    const OWNER_IP = '81.2.69.110';
+    const counts = new Map<string, number>();
+    const window = () => new Date(Date.now() + 60_000);
+
+    beforeEach(() => {
+      counts.clear();
+      mockTryIncrement.mockImplementation(async (key: string, limit: number) => {
+        const count = counts.get(key) ?? 0;
+        if (count + 1 > limit) return { success: false, count, expiresAt: window() };
+        counts.set(key, count + 1);
+        return { success: true, count: count + 1, expiresAt: window() };
+      });
+      mockDecrement.mockImplementation(async (key: string) => {
+        counts.set(key, (counts.get(key) ?? 0) - 1);
+      });
+      mockTryAdd.mockImplementation(async (key: string) => ({
+        success: true,
+        count: counts.get(key) ?? 0,
+        expiresAt: window(),
+      }));
+    });
+
+    const verifyFrom = async (ip: string) => {
+      const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+      (req as any).headers['x-real-ip'] = ip;
+      req.body.username = undefined;
+      await handler(req, res);
+      return res;
+    };
+
+    it('lets the owner verify from another source after an attacker spends its own budget', async () => {
+      const { limit } = OTC_LIMITS.verify.perEmailPerIp;
+      for (let i = 0; i < limit; i++) expect((await verifyFrom(ATTACKER_IP))._getStatusCode()).toBe(422);
+      expect(counts.get(budgetKeyFor(NON_DOMAIN_EMAIL, ATTACKER_IP))).toBe(limit);
+
+      const refused = await verifyFrom(ATTACKER_IP);
+      expect(refused._getStatusCode()).toBe(429);
+      expect(refused.getHeader('Retry-After')).toBeDefined();
+
+      mockVerifyPendingOTC.mockResolvedValue(true);
+      mockFindByEmail.mockResolvedValue(null);
+      const owner = await verifyFrom(OWNER_IP);
+      expect(owner._getStatusCode()).toBe(200);
+    });
+
+    it('still caps each source on its own', async () => {
+      const { limit } = OTC_LIMITS.verify.perEmailPerIp;
+      for (let i = 0; i < limit; i++) await verifyFrom(OWNER_IP);
+
+      const refused = await verifyFrom(OWNER_IP);
+      expect(refused._getStatusCode()).toBe(429);
+      expect(refused.getHeader('Retry-After')).toBeDefined();
+      expect(mockVerifyPendingOTC).toHaveBeenCalledTimes(limit);
+    });
+
+    it('cannot overshoot the limit under concurrent wrong guesses', async () => {
+      const { limit } = OTC_LIMITS.verify.perEmailPerIp;
+      const results = await Promise.all(Array.from({ length: limit + 3 }, () => verifyFrom(OWNER_IP)));
+      const statuses = results.map(r => r._getStatusCode());
+      expect(statuses.filter(c => c === 422)).toHaveLength(limit);
+      expect(statuses.filter(c => c === 429)).toHaveLength(3);
+      expect(mockVerifyPendingOTC).toHaveBeenCalledTimes(limit);
+      expect(counts.get(budgetKeyFor(NON_DOMAIN_EMAIL, OWNER_IP))).toBe(limit);
+    });
+
+    it('refunds a correct code so it leaves the budget untouched', async () => {
+      mockVerifyPendingOTC.mockResolvedValue(true);
+      mockFindByEmail.mockResolvedValue(null);
+      expect((await verifyFrom(OWNER_IP))._getStatusCode()).toBe(200);
+      expect(counts.get(budgetKeyFor(NON_DOMAIN_EMAIL, OWNER_IP))).toBe(0);
+    });
+  });
+
+  it('does not spend the budget on a correct code', async () => {
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue(null);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.username = undefined;
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDecrement).toHaveBeenCalledTimes(mockTryIncrement.mock.calls.length);
+    expect(mockDecrement).toHaveBeenCalledWith(budgetKey);
+  });
+
+  it('refuses with 429 and Retry-After before evaluating a guess once the budget is spent', async () => {
+    mockTryIncrement.mockResolvedValue({
+      success: false,
+      count: OTC_LIMITS.verify.perEmailPerIp.limit,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(res.getHeader('Retry-After')).toBeDefined();
+    expect(mockValidateNonce).not.toHaveBeenCalled();
+    expect(mockVerifyPendingOTC).not.toHaveBeenCalled();
+  });
+});
+
 describe('/api/otc/verify — domain-grant signup credits (Register now flow)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
     mockValidateNonce.mockResolvedValue(true);
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue(null); // new user -> registration branch
@@ -343,6 +559,17 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().user.id).toBe('user-1');
     expect((req as any).logger.error).toHaveBeenCalled();
+  });
+
+  it('still logs the user in when consumeOtherCodes throws, and logs the error', async () => {
+    mockConsumeOtherCodes.mockRejectedValueOnce(new Error('db down'));
+    mockFindByEmail.mockResolvedValue(null);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect((req as any).logger.error).toHaveBeenCalledWith('OTC login consumeOtherCodes failed', expect.any(Error));
   });
 
   it('grants the DB rule signupCredits (per-partner amount) over the env amount', async () => {

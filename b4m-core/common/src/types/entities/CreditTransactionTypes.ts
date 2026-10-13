@@ -173,6 +173,8 @@ export const RealtimeVoiceUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('realtime_voice_usage'),
   model: z.string(),
   sessionId: z.string(),
+  /** Idempotency key for a per-response charge; the unique sparse index rejects a replay. */
+  transactionId: z.string().optional(),
 });
 
 export const ToolUsageTransaction = BaseCreditTransaction.extend({

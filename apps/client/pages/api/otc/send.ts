@@ -2,32 +2,25 @@ import { pendingOtcTokenRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import {
+  OTC_LIMITS,
+  OTC_SEND_EMAIL_BUDGETS,
+  ipSubject,
+  otcCounterLimit,
+  otcDistinctEmailsPerIpLimit,
+  otcEmailBudgetRetryAfter,
+  reserveOtcEmailBudget,
+} from '@server/utils/otcLimits';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl } from '@server/utils/mailer/emailHelpers';
 import { Config, isE2EEnabled } from '@server/utils/config';
 import jwt from 'jsonwebtoken';
 
-/**
- * Minimum time between OTC emails to the same recipient. The per-IP rate limit
- * below caps a single IP, but without a per-recipient cap a rotating-IP botnet
- * could spam any inbox with sign-in codes. This cooldown is keyed on the
- * PendingOtcToken record (written for every /send regardless of account
- * existence), so it throttles uniformly and never reveals whether an account exists.
- */
-const OTC_SEND_COOLDOWN_MS = 30 * 1000;
-
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(
-    rateLimit({
-      // E2E (non-prod only - isE2EEnabled is hard-false on production) draws all sends
-      // from a single shared CI IP, so the per-IP cap is lifted there to let every
-      // OTC-requesting spec run to completion instead of racing a 429.
-      limit: () => (isE2EEnabled() ? Infinity : 5),
-      windowMs: 15 * 60 * 1000, // 5 sends per 15 min per IP
-    })
-  )
+  .use(otcCounterLimit({ bucket: 'send-ip-daily', ...OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'send-ip-total', ...OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
+  .use(otcDistinctEmailsPerIpLimit())
   .post(async (req, res) => {
     const { email } = req.body;
 
@@ -43,7 +36,17 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({ error: 'Invalid email address' });
     }
 
-    // Atomic per-recipient cooldown (enumeration-safe - see OTC_SEND_COOLDOWN_MS).
+    const ipBucket = ipSubject(req);
+    // Per-email budgets are only spent once a code is about to be dispatched (see
+    // OTC_SEND_EMAIL_BUDGETS), so refused requests cannot exhaust the owner's allowance. This read
+    // refuses an over-budget caller before it can touch the address's cooldown below.
+    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
+    if (budgetRetryAfter !== undefined) {
+      res.setHeader('Retry-After', String(budgetRetryAfter));
+      return res.status(429).json({ error: 'Please wait before requesting another code.' });
+    }
+
+    // Atomic per-recipient cooldown (keyed on PendingOtcToken, written for every send, so it never reveals whether an account exists).
     // tryReserveSlot atomically claims a reservation slot for this email; if the
     // cooldown is still active, or a concurrent request already claimed it, it
     // returns allowed:false. This replaces the previous check-then-act (non-atomic)
@@ -53,20 +56,35 @@ const handler = baseApi({ auth: false })
     // reservation is confirmed below with confirmReservation, which still detects
     // (and rejects) a genuinely concurrent resend that would otherwise clobber
     // this one's nonce.
-    const cooldownMs = isE2EEnabled() ? 0 : OTC_SEND_COOLDOWN_MS;
+    const cooldownMs = isE2EEnabled() ? 0 : OTC_LIMITS.send.cooldownMs;
     const reservation = await pendingOtcTokenRepository.tryReserveSlot(normalizedEmail, cooldownMs);
     if (!reservation.allowed) {
       res.setHeader('Retry-After', String(reservation.retryAfterSeconds));
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
 
-    const result = await userService.sendOTC(
-      { email: normalizedEmail },
-      {
-        mailer: {
-          sendOTCEmail: async (toEmail: string, code: string) => {
-            const logoUrl = getLogoUrl();
-            const emailBody = `
+    // The reservation is keyed on the exact address and the budgets on the folded inbox, so concurrent
+    // sends to aliases of one inbox can all pass the read above; this atomic spend is the real bound.
+    const budget = await reserveOtcEmailBudget(normalizedEmail, ipBucket, OTC_SEND_EMAIL_BUDGETS);
+    if ('retryAfter' in budget) {
+      // No code goes out, so hand the cooldown slot back rather than start one for the owner.
+      await pendingOtcTokenRepository.releaseReservation(
+        normalizedEmail,
+        reservation.reservedAt,
+        reservation.previousCreatedAt
+      );
+      res.setHeader('Retry-After', String(budget.retryAfter));
+      return res.status(429).json({ error: 'Please wait before requesting another code.' });
+    }
+
+    const result = await userService
+      .sendOTC(
+        { email: normalizedEmail },
+        {
+          mailer: {
+            sendOTCEmail: async (toEmail: string, code: string) => {
+              const logoUrl = getLogoUrl();
+              const emailBody = `
 <!DOCTYPE html>
 <html>
   <head>
@@ -87,18 +105,22 @@ const handler = baseApi({ auth: false })
     </div>
   </body>
 </html>`;
-            await EmailEvents.Send.publish({
-              to: toEmail,
-              subject: 'Your sign-in code',
-              body: emailBody,
-            });
+              await EmailEvents.Send.publish({
+                to: toEmail,
+                subject: 'Your sign-in code',
+                body: emailBody,
+              });
+            },
           },
-        },
-        signPendingToken: payload => {
-          return jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' });
-        },
-      }
-    );
+          signPendingToken: payload => {
+            return jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' });
+          },
+        }
+      )
+      .catch(async (err: unknown) => {
+        await budget.refund();
+        throw err;
+      });
 
     // Store the nonce server-side so the verify endpoint can reject replayed tokens.
     // On non-production stages only (isE2EEnabled - hard-false on production), also persist
