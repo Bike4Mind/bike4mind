@@ -102,14 +102,11 @@ const SubscriptionModalContent = () => {
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
   const teamPlanAvailable = useTeamPlanAvailable();
   const teamTabReasonId = useId();
-  // The flag can flip off while the Business tab is open: fall back for this render so a Team card is never
-  // purchasable, and drop the stored selection (render-phase, per React's adjust-on-prop-change pattern) so
-  // a later flip back on does not jump the view to Business.
+  // Drop a Business selection when the gate closes (render-phase adjust-on-change, per React's pattern):
+  // React re-runs this render, so no Team card commits and a later flip back on does not jump to Business.
   if (!teamPlanAvailable && selectedTab === SubscriptionModalTabs.Business) {
     setSelectedTab(SubscriptionModalTabs.Personal);
   }
-  const activeTab =
-    selectedTab === SubscriptionModalTabs.Business && !teamPlanAvailable ? SubscriptionModalTabs.Personal : selectedTab;
   const priceMap = useMemo(() => {
     return plans.data?.reduce(
       (acc, plan) => {
@@ -148,10 +145,10 @@ const SubscriptionModalContent = () => {
 
   const availablePlans = useMemo(
     () =>
-      activeTab === SubscriptionModalTabs.Personal
+      selectedTab === SubscriptionModalTabs.Personal
         ? subscriptionPlans.filter(plan => activePlans.find(p => p.id === plan.priceId))
         : [],
-    [activePlans, activeTab, subscriptionPlans]
+    [activePlans, selectedTab, subscriptionPlans]
   );
 
   if (subscriptions.isPending || plans.isPending) {
@@ -193,7 +190,7 @@ const SubscriptionModalContent = () => {
 
       <Box sx={{ mb: '24px', display: 'flex', justifyContent: 'center' }}>
         <Tabs
-          value={activeTab}
+          value={selectedTab}
           onChange={(_, value) => setSelectedTab(value as SubscriptionModalTabs)}
           sx={{
             bgcolor: 'transparent',
@@ -256,7 +253,7 @@ const SubscriptionModalContent = () => {
           gap: '32px',
         }}
       >
-        {activeTab === SubscriptionModalTabs.Personal && (
+        {selectedTab === SubscriptionModalTabs.Personal && (
           <>
             {availablePlans.map(plan => {
               // Active-first per price: a stale delinquent row at this price must not
@@ -297,7 +294,7 @@ const SubscriptionModalContent = () => {
           </>
         )}
 
-        {activeTab === SubscriptionModalTabs.Business && (
+        {selectedTab === SubscriptionModalTabs.Business && (
           <>
             <PlanCard
               name={t('subscription_modal.team')}
