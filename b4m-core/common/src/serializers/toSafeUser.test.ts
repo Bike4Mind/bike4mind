@@ -556,9 +556,8 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
     }
   );
 
-  // authProviders rebuilds an array, not an object, so it needs its own shape check
-  // rather than a CASES entry -- its per-element allowlist is otherwise covered
-  // exhaustively by the dedicated describe block above.
+  // authProviders rebuilds an array, not an object, so it needs its own shape checks rather than a CASES entry.
+  // The redactor's per-element rebuild is checked here; the schema's own strip is checked in the next test.
   it('authProviders array elements keep exactly id and strategy', () => {
     const out = redactUserSecretsForSelf({
       authProviders: [
@@ -567,6 +566,15 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
     } as never)!;
     const provider = (out.authProviders as Array<Record<string, unknown>>)[0];
     expect(Object.keys(provider).sort()).toEqual(['id', 'strategy']);
+  });
+
+  it('selfUserResponseSchema strips raw authProviders elements to id and strategy', () => {
+    const parsed = selfUserResponseSchema.parse({
+      authProviders: [
+        { id: 'p1', strategy: 'okta', accessToken: 'x', oktaIdentityProviderId: 'idp', futureField: 'x' },
+      ],
+    });
+    expect(parsed).toEqual({ authProviders: [{ id: 'p1', strategy: 'okta' }] });
   });
 });
 
