@@ -16,7 +16,7 @@
 
 import { FC } from 'react';
 import { Chip, Tooltip } from '@mui/joy';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useAgentExecutionStore, selectExecution } from '@client/app/stores/useAgentExecutionStore';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 
@@ -59,7 +59,7 @@ const CreditCounter: FC<CreditCounterProps> = ({ executionId }) => {
           px: '8px',
           fontWeight: 500,
         })}
-        startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
+        startDecorator={<CreditIcon sx={{ fontSize: 12 }} />}
       >
         {rounded}
       </Chip>
