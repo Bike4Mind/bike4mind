@@ -416,3 +416,53 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
     expect(row).toEqual(THEIRS);
   });
 });
+
+describe('GET /api/publish/artifacts - reply titles', () => {
+  const withRows = (rows: unknown[]) =>
+    aggregate.mockResolvedValue([{ rows, total: [{ n: rows.length }], byKind: [], byVisibility: [], byGate: [] }]);
+
+  const artifacts = (res: { _getJSONData: () => { artifacts: Array<Record<string, unknown>> } }) =>
+    res._getJSONData().artifacts;
+
+  it('ships the reply body only for reply rows whose title holds a markdown marker', async () => {
+    await run({ mine: 'true' });
+    expect(projectStage().replyTitleBody).toEqual({
+      $cond: [
+        {
+          $and: [
+            { $eq: ['$source.kind', 'reply'] },
+            { $regexMatch: { input: { $ifNull: ['$title', ''] }, regex: '[*_~`\\[]' } },
+          ],
+        },
+        '$renderedBody',
+        '$$REMOVE',
+      ],
+    });
+  });
+
+  it('shows a reply title stored before markers were stripped the way the share page does', async () => {
+    withRows([
+      {
+        publicId: 'r1',
+        ownerId: USER,
+        title: 'Session 1 Recap: *Tides of the Drowned Crown*',
+        replyTitleBody: '## Session 1 Recap: *Tides of the Drowned Crown*\n\nThe party set sail.',
+      },
+    ]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect(row.title).toBe('Session 1 Recap: Tides of the Drowned Crown');
+  });
+
+  it('keeps an explicit reply title verbatim, matching the share page', async () => {
+    withRows([{ publicId: 'r2', ownerId: USER, title: '*Draft* v2', replyTitleBody: 'Some reply body' }]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect(row.title).toBe('*Draft* v2');
+  });
+
+  it('never sends the reply body to the caller', async () => {
+    withRows([{ publicId: 'r3', ownerId: USER, title: 'Recap: *Tides*', replyTitleBody: '# Recap: *Tides*' }]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect('replyTitleBody' in row).toBe(false);
+    expect(row.title).toBe('Recap: Tides');
+  });
+});
