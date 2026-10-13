@@ -101,7 +101,7 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
 
       try {
         const key = historyImportKey(String(req.user.id), source);
-        await new S3Storage(Resource.historyImportBucket.name).upload(spooled.path, key);
+        await new S3Storage(Resource.historyImportBucket.name).uploadFile(spooled.path, key);
         req.logger?.info(`[import-history] proxied upload user=${req.user.id} source=${source} bytes=${spooled.bytes}`);
         return res.status(200).json({ success: true });
       } finally {

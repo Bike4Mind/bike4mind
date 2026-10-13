@@ -76,6 +76,10 @@ class NoOpStorage extends BaseStorage {
     return `/tmp/${destination}`;
   }
 
+  async uploadFile(localPath: string, destination: string, options?: any): Promise<string> {
+    return `/tmp/${destination}`;
+  }
+
   async download(path: string): Promise<Buffer> {
     throw new Error('Download not supported in CLI');
   }
