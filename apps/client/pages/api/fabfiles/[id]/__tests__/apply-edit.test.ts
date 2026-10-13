@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { readFileSync } from 'node:fs';
 
 const { mockFindById, mockFindOneAndUpdate, mockStorage } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
@@ -102,5 +103,17 @@ describe('apply-edit version retention', () => {
 
     await expect(call()).rejects.toThrow('File was modified by another edit');
     expect(mockStorage.delete).not.toHaveBeenCalled();
+  });
+});
+
+// edit.ts runs the same claim-then-delete sequence behind an LLM call too heavy to mock here, so
+// pin the order in its source: a delete hoisted above the claim check would destroy history on a lost claim.
+describe('edit.ts claim-then-delete order', () => {
+  it('deletes trimmed versions only after the claim check', () => {
+    const source = readFileSync(new URL('../edit.ts', import.meta.url), 'utf8');
+    const claimCheck = source.indexOf('if (!claimed)');
+    const deleteCall = source.indexOf('await deleteDroppedVersions(');
+    expect(claimCheck).toBeGreaterThan(-1);
+    expect(deleteCall).toBeGreaterThan(claimCheck);
   });
 });
