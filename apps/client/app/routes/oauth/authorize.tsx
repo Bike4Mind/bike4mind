@@ -4,7 +4,7 @@
  * B4M OAuth 2.0 Authorization endpoint (browser-facing).
  *
  * Flow:
- * 1. External product (VibesWire, VibesTrader...) redirects user here with PKCE params.
+ * 1. An external app (see docs-site/docs/developers/building-on-b4m.md) redirects the user here with PKCE params.
  * 2. If the user is already logged in -> generate auth code -> redirect back to the product.
  *    - First-party clients (and relying-party clients with a remembered consent) redirect
  *      silently. A relying-party client with no covering grant gets an Allow/Deny consent screen

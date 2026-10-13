@@ -109,7 +109,7 @@ export async function createUser(
     organizationId: record?.organizationId ?? null,
     googleDrive: null,
     photoUrl: record?.photoUrl ?? null,
-    showCreditsUsed: false,
+    showCreditsUsed: true,
     preferredVoice: null,
     preferredReasoningEffort: 'auto',
     lastCreditsPurchasedAt: null,

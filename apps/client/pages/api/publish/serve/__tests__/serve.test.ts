@@ -2,14 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { VIEWER_SANDBOX } from '@server/services/publish/viewerSecurity';
 
-const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne, mockUserFindById } = vi.hoisted(() => ({
-  mockArtifactFindOne: vi.fn(),
-  mockProjectFindOne: vi.fn(),
-  mockDownload: vi.fn(),
-  mockUpdateOne: vi.fn(() => Promise.resolve()),
-  // Domain access gates look the viewer's verified email up through User (checkVisibility).
-  mockUserFindById: vi.fn(),
-}));
+const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne, mockUserFindById, mockStarterCredits } =
+  vi.hoisted(() => ({
+    mockArtifactFindOne: vi.fn(),
+    mockProjectFindOne: vi.fn(),
+    mockDownload: vi.fn(),
+    mockUpdateOne: vi.fn(() => Promise.resolve()),
+    // Domain access gates look the viewer's verified email up through User (checkVisibility).
+    mockUserFindById: vi.fn(),
+    mockStarterCredits: vi.fn(() => Promise.resolve(0)),
+  }));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is handler.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -36,6 +38,10 @@ vi.mock('@server/middlewares/optionalJwtAuth', () => ({
 // Rate limiter: pass-through so share-branch requests proceed. rateLimit itself is unit-tested.
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+vi.mock('@server/utils/starterCredits', () => ({
+  getOpenSignupStarterCredits: () => mockStarterCredits(),
 }));
 
 vi.mock('@server/utils/storage', () => ({
@@ -125,7 +131,70 @@ beforeEach(() => {
   mockProjectFindOne.mockReset().mockResolvedValue(null);
   mockDownload.mockReset();
   mockUpdateOne.mockReset().mockResolvedValue(undefined);
-  mockUserFindById.mockReset().mockResolvedValue(null);
+  // Every artifact's owner exists by default; the owner-check tests override this per id.
+  mockUserFindById.mockReset().mockResolvedValue({});
+});
+
+describe('GET /api/publish/serve - owner check', () => {
+  const ownerIs = (doc: unknown) =>
+    mockUserFindById.mockImplementation((id: string) => (id === 'owner1' ? doc : { email: 'v@x.com' }));
+
+  it('serves an artifact whose owner exists', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ source: { kind: 'reply' }, renderedBody: 'Hello' }));
+    ownerIs({ name: 'Ada' });
+
+    const { res, promise } = run(['r', 'pub1']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFindById).toHaveBeenCalledWith('owner1');
+  });
+
+  it('serves an org page handed to its last publisher after the original owner was deleted', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        tier: 'organization',
+        storageKeyPrefix: 'organization/scope123/my-slug/',
+        ownerId: 'teammate1',
+        lastPublishedBy: 'teammate1',
+        source: { kind: 'reply' },
+        renderedBody: 'Hello',
+      })
+    );
+    mockUserFindById.mockImplementation((id: string) => (id === 'owner1' ? null : { name: 'Grace' }));
+
+    const { res, promise } = run(['o', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFindById).toHaveBeenCalledWith('teammate1');
+    expect(mockUserFindById).not.toHaveBeenCalledWith('owner1');
+  });
+
+  it.each([
+    ['deleted', null],
+    ['banned', { isBanned: true }],
+    ['suspended', { moderation: { status: 'suspended' } }],
+  ])('returns 404 for every surface when the owner is %s', async (_label, ownerDoc) => {
+    ownerIs(ownerDoc);
+
+    mockArtifactFindOne.mockReturnValue(bundle({ source: { kind: 'reply' }, renderedBody: 'Hello' }));
+    const reply = run(['r', 'pub1']);
+    await reply.promise;
+    expect(reply.res._getStatusCode()).toBe(404);
+
+    mockArtifactFindOne.mockReturnValue(bundle());
+    const page = run(['u', 'scope123', 'my-slug']);
+    await page.promise;
+    expect(page.res._getStatusCode()).toBe(404);
+
+    mockArtifactFindOne.mockReturnValue(bundle({ shareToken: 'tok' }));
+    const share = run(['a', 'tok']);
+    await share.promise;
+    expect(share.res._getStatusCode()).toBe(404);
+
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/publish/serve - sandboxed bundle', () => {
@@ -574,11 +643,25 @@ describe('GET /api/publish/serve - sign-up prompt honesty (#318)', () => {
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
     expect(data).toContain('id="b4m-gate-panel"');
-    expect(data).toContain('>Sign up<');
+    // One CTA only: the gate card, no header Sign up link and no brand footer card.
+    expect(data).not.toContain('>Sign up<');
     // Honest and non-modal: no scroll lock, no blur/gradient overlay, not a dialog.
     expect(data).not.toContain('overflow:hidden');
     expect(data).not.toContain('b4m-gate-ol');
     expect(data).not.toContain('role="dialog"');
+  });
+
+  it('advertises the starter-credit amount from the setting, and no number when none is granted', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReplyFixture());
+    mockStarterCredits.mockResolvedValueOnce(12000);
+    const withCredits = run(['r', 'r1']);
+    await withCredits.promise;
+    const data = withCredits.res._getData() as string;
+    expect(data).toContain('<span class="b4m-credits-num">12,000</span>');
+
+    const noCredits = run(['r', 'r1']);
+    await noCredits.promise;
+    expect(noCredits.res._getData() as string).not.toContain('class="b4m-credits-num"');
   });
 });
 
@@ -631,6 +714,42 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     const data = res._getData() as string;
     expect(data).toContain('<title>Tip Calculator</title>');
     expect(data).not.toContain('<title>&lt;artifact');
+  });
+
+  it('strips markdown markers from a reply title derived before the write path stripped them', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({
+        title: 'Session 1 Recap: *Tides of the Drowned Crown*',
+        renderedBody: '## Session 1 Recap: *Tides of the Drowned Crown*\n\nRecap body',
+      })
+    );
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>Session 1 Recap: Tides of the Drowned Crown</title>');
+    expect(data).not.toContain('*Tides');
+  });
+
+  it('keeps a caller-supplied reply title verbatim', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({ title: '*Draft* v2', renderedBody: 'Recap body', description: undefined })
+    );
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>*Draft* v2</title>');
+  });
+
+  it('keeps an embedded artifact name verbatim when the viewer falls back to it', async () => {
+    const named = HTML_ARTIFACT.replace('title="Tip Calculator"', 'title="tip_calc_v2 *beta*"');
+    mockArtifactFindOne.mockReturnValue(htmlReply({ title: '', renderedBody: named }));
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>tip_calc_v2 *beta*</title>');
   });
 
   it('serves the ?a= sub-document as a sandboxed HTML doc that runs the artifact JS in isolation', async () => {
@@ -2912,6 +3031,86 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData() as string).not.toContain(GATE);
+  });
+
+  describe('one sign-up CTA per page', () => {
+    // Bytes as already-published artifacts carry them: the brand footer card baked directly in
+    // front of the gate (the test env has no marketing URL, so the renderer omits the card).
+    const FOOTER_CARD =
+      '<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">\n' +
+      '  <a href="https://acme.example/?utm_source=shared-artifact&utm_medium=share-footer&utm_campaign=publish&utm_content=artifact" target="_blank" rel="noopener noreferrer">\n' +
+      '    <span>Try Acme</span>\n' +
+      '  </a>\n' +
+      '</div>';
+    const footerAndGateBytes = async () => {
+      const baked = (await bakedBundleBytes()).toString('utf-8');
+      const gateAt = baked.lastIndexOf('<input type="checkbox" id="b4m-gate-dismiss"');
+      return Buffer.from(baked.slice(0, gateAt) + FOOTER_CARD + baked.slice(gateAt));
+    };
+    const FOOTER_CTA = 'utm_medium=share-footer';
+    const BAR_CTA = '<a class="b4m-bar-cta"';
+
+    it('keeps only the gate in the bundle an anonymous viewer is served', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(await footerAndGateBytes());
+      const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      const data = res._getData() as string;
+      expect(data).toContain(GATE);
+      expect(data).toContain('baked body');
+      expect(data).not.toContain(FOOTER_CTA);
+    });
+
+    it('drops the bar CTA from the wrapper around that bundle, keeping the bar', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(await footerAndGateBytes());
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      const data = res._getData() as string;
+      expect(data).not.toContain(BAR_CTA);
+      expect(data).toContain('<div class="b4m-bar">');
+      expect(data).toContain('class="b4m-bar-report"');
+    });
+
+    it('leaves a signed-in viewer the footer card and the bar CTA, with no gate', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(await footerAndGateBytes());
+      const raw = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' }, raw: true });
+      await raw.promise;
+      const rawData = raw.res._getData() as string;
+      expect(rawData).not.toContain(GATE);
+      expect(rawData).toContain(FOOTER_CTA);
+
+      const page = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
+      await page.promise;
+      expect(page.res._getData() as string).toContain(BAR_CTA);
+    });
+
+    it('keeps only the footer card for an anonymous viewer of a gate-less page that carries one', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(Buffer.from(`<html><body><h1>Hi</h1>${FOOTER_CARD}</body></html>`));
+      const page = run(['u', 'scope123', 'my-slug']);
+      await page.promise;
+      const wrapper = page.res._getData() as string;
+      expect(wrapper).not.toContain(BAR_CTA);
+      expect(wrapper).toContain('class="b4m-bar-report"');
+
+      const isolated = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+      await isolated.promise;
+      const data = isolated.res._getData() as string;
+      expect(data).not.toContain(GATE);
+      expect(data).toContain(FOOTER_CTA);
+    });
+
+    it('keeps the bar CTA for an externally built bundle with neither gate nor footer card', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+      const page = run(['u', 'scope123', 'my-slug']);
+      await page.promise;
+      expect(page.res._getData() as string).toContain(BAR_CTA);
+    });
   });
 
   it('strips the baked gate from a public bundle behind an access gate', async () => {

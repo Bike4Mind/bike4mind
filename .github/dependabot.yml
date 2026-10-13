@@ -1,11 +1,5 @@
 version: 2
 
-registries:
-  npm-private:
-    type: npm-registry
-    url: https://registry.npmjs.org/
-    token: ${{secrets.NPM_TOKEN}}
-
 updates:
   # NPM dependencies (pnpm monorepo - root lockfile covers all workspaces)
   - package-ecosystem: "npm"
@@ -16,19 +10,17 @@ updates:
     # Disable scheduled version updates to prioritize security alerts.
     # Security updates (triggered by alerts) ignore this limit and will still be created.
     open-pull-requests-limit: 0
-    registries:
-      - npm-private
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore"
       include: "scope"
-    ignore:
-      # Pinned to 1.20.1 due to OOM issue in later versions
-      # See: https://github.com/modelcontextprotocol/typescript-sdk/issues/985
-      - dependency-name: "@modelcontextprotocol/sdk"
-        versions: ["> 1.20.1"]
     groups:
+      # One PR per run for all security fixes, instead of one PR per alert.
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
       dev-dependencies:
         patterns:
           - "@types/*"

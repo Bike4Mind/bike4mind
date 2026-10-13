@@ -3,10 +3,12 @@ import {
   IOrgGoogleDriveConnectionDocument,
   IOrgGoogleDriveConnectionRepository,
   IGoogleDriveConnectionHealthUpdate,
+  GoogleDriveReleaseStatus,
   IMongoDocument,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { releaseLakeClaimBestEffort } from './LakeConnectorClaimModel';
 import { randomUUID } from 'crypto';
 
 const MAX_LAST_ERROR_LEN = 500;
@@ -568,7 +570,8 @@ class OrgGoogleDriveConnectionRepository
   async releaseSyncClaim(
     id: string,
     expectedToken: string,
-    lastError: string | null
+    lastError: string | null,
+    status: GoogleDriveReleaseStatus = 'connected'
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     // The chain (if any) is over once the claim goes; leaving the id/token would let an in-flight
     // continuation message adopt a claim nobody holds.
@@ -576,7 +579,7 @@ class OrgGoogleDriveConnectionRepository
       { _id: id, status: 'syncing', ingestClaimToken: expectedToken },
       {
         $set: {
-          status: 'connected',
+          status,
           lastPolledAt: new Date(),
           // Empty-string-to-null matches updateHealth: a caller whose err.message is blank has nothing
           // to report, and storing '' would read as a present error on the client.
@@ -594,7 +597,9 @@ class OrgGoogleDriveConnectionRepository
    */
   async release(id: string, owner: DriveConnectionOwner): Promise<boolean> {
     const res = await this.model.deleteMany({ _id: id, ...ownerFilter(owner) }, { hardDelete: true });
-    return (res?.deletedCount ?? 0) > 0;
+    const deleted = (res?.deletedCount ?? 0) > 0;
+    if (deleted) await releaseLakeClaimBestEffort(id);
+    return deleted;
   }
 }
 

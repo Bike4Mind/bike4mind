@@ -3,6 +3,7 @@ import type {
   ILakeConfigChangeEventDocument,
   ILakeConfigChangeEventRepository,
   ILakeConfigFieldChange,
+  IUserApiKeyRepository,
   IUserRepository,
   LakeConfigHistoryEntry,
   LakeConfigHistoryFieldChange,
@@ -33,11 +34,12 @@ export function clampLakeConfigHistoryLimit(requested?: number): number {
 }
 
 /**
- * Whether an id can be handed to `userRepository.findByIds` at all. That repository converts ids
- * through `convertIds`, whose `new ObjectId(id)` THROWS on anything not 24-hex - which would turn
- * one unresolvable principal into a 500 for the entire history. Config events legitimately carry
- * non-ObjectId principal ids: `recordLakeConfigChange` writes `principalId: 'system'` for a write no
- * principal drove, and an API-key principal carries a key id.
+ * Whether an id can be handed to `userRepository.findByIds` or an `_id: { $in }` query at all. The
+ * former converts ids through `convertIds`, whose `new ObjectId(id)` THROWS on anything not 24-hex,
+ * and the latter throws a CastError - either would turn one unresolvable principal into a 500 for
+ * the entire history. Config events legitimately carry non-ObjectId principal ids:
+ * `recordLakeConfigChange` writes `principalId: 'system'` for a write no principal drove, and an
+ * API-key principal carries a key id.
  *
  * Kept as a local regex rather than importing mongoose (this package must not depend on the DB
  * driver). #1672's `findByIds` hardening makes the same guard redundant at the repository, but this
@@ -110,6 +112,7 @@ export interface AssembleLakeConfigHistoryAdapters {
   db: {
     lakeConfigChangeEvents: Pick<ILakeConfigChangeEventRepository, 'listByLake'>;
     users: Pick<IUserRepository, 'findByIds'>;
+    userApiKeys: Pick<IUserApiKeyRepository, 'find'>;
   };
   /** Page size; clamped through `clampLakeConfigHistoryLimit`. */
   limit?: number;
@@ -166,9 +169,13 @@ export async function assembleLakeConfigHistory(
 
   // One batched name resolution across every id worth looking up. Only USER-kind principals and the
   // on-behalf human are candidates - a system/agent/apiKey principalId names no user record - and
-  // each is shape-checked so a malformed id cannot 500 the view (see isObjectIdShaped).
+  // each is shape-checked so a malformed id cannot 500 the view (see isObjectIdShaped). API-key
+  // principals resolve through their own batch into a separate map, so a key name can never land in
+  // `userNames` or `onBehalfOfName`.
   const userIds = new Set<string>();
+  const keyIds = new Set<string>();
   for (const entry of entries) {
+    if (entry.principalKind === 'apiKey' && isObjectIdShaped(entry.principalId)) keyIds.add(entry.principalId);
     if (entry.principalKind === 'user' && isObjectIdShaped(entry.principalId)) userIds.add(entry.principalId);
     if (entry.onBehalfOfUserId && isObjectIdShaped(entry.onBehalfOfUserId)) userIds.add(entry.onBehalfOfUserId);
     // Identity fields carry user ids as their VALUES, and the transfer row is the one an owner most
@@ -177,15 +184,26 @@ export async function assembleLakeConfigHistory(
     // trip however many rows reference an identity.
     for (const id of identityValueIds(entry.changes)) userIds.add(id);
   }
-  const users = userIds.size > 0 ? await db.users.findByIds(Array.from(userIds)) : [];
+  const [users, keys] = await Promise.all([
+    userIds.size > 0 ? db.users.findByIds(Array.from(userIds)) : [],
+    // The soft-delete plugin's find hook skips deleted keys, so a deleted key falls back to its id.
+    // Do not pass `includeDeleted` here.
+    keyIds.size > 0 ? db.userApiKeys.find({ _id: { $in: Array.from(keyIds) } }) : [],
+  ]);
   const userNameById = new Map(users.map(u => [u.id, userDisplayName(u)]));
+  const keyNameById = new Map(keys.map(k => [k.id, k.name || undefined]));
 
   return {
     lakeId: lake.id,
     lakeName: lake.name,
     entries: entries.map(entry => ({
       ...entry,
-      principalName: entry.principalKind === 'user' ? userNameById.get(entry.principalId) : undefined,
+      principalName:
+        entry.principalKind === 'user'
+          ? userNameById.get(entry.principalId)
+          : entry.principalKind === 'apiKey'
+            ? keyNameById.get(entry.principalId)
+            : undefined,
       onBehalfOfName: entry.onBehalfOfUserId ? userNameById.get(entry.onBehalfOfUserId) : undefined,
     })),
     truncated,

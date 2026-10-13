@@ -13,6 +13,7 @@ import { ApplyTaxonomyRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordTaxonomyTagsApplySkipped } from '@server/utils/cloudwatch';
+import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
 
 // The guarded 'ready' -> 'applying' claim already means only one apply per completed
 // analysis can succeed, but a rejected call still costs a batch + lake lookup, and this
@@ -43,6 +44,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         },
         logger: console,
         metrics: { recordTagsApplySkipped: recordTaxonomyTagsApplySkipped },
+        serializeClaim: serializeLakeClaim,
       }
     );
 

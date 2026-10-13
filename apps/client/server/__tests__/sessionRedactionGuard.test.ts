@@ -65,6 +65,10 @@ const serializesSession = (src: string): boolean => {
     new RegExp(`\\bsession\\s*:\\s*${SESSION_IDENT}\\s*[,}]`),
     // res.json({ ..., session }) - ES shorthand property `session` (followed by , or })
     new RegExp(`${RES_SEND}\\s*\\{[^}]*\\bsession\\b\\s*[,}]`),
+    // const response = { quest, session, ... }; res.json(response) - shorthand `session` in an
+    // object literal built ahead of the send. Anchored on `=`/`return` so a destructure
+    // (`const { session } = ...`, brace before the `=`) does not match.
+    new RegExp(`(?:=|\\breturn)\\s*\\{[^}]*\\bsession\\b\\s*[,}]`),
     // bulk export of raw session docs
     /JSON\.stringify\(\s*notebooks\b/,
   ];
@@ -87,6 +91,18 @@ describe('serializesSession() heuristic', () => {
   it('flags a nested { session } return', () => {
     expect(serializesSession('res.json({ quest, session });')).toBe(true);
     expect(serializesSession('res.json({ session: newSession });')).toBe(true);
+  });
+  it('flags a shorthand session in a response object built before the send', () => {
+    expect(serializesSession('const response = { quest, session, originalPrompt };\nreturn res.json(response);')).toBe(
+      true
+    );
+    expect(serializesSession('return { quest, session };')).toBe(true);
+  });
+  it('does not flag destructuring a session out of a call', () => {
+    expect(serializesSession('const { sessionId, asyncPromises, session } = await getOrCreateSession(args);')).toBe(
+      false
+    );
+    expect(serializesSession('const response = { quest, session: redactSessionForClient(session) };')).toBe(false);
   });
   it('flags status-chained returns (res.status(...).json(...))', () => {
     expect(serializesSession('return res.status(200).json(session);')).toBe(true);

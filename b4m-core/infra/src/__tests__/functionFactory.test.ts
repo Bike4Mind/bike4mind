@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildFunctionDefaults, stageGatedConcurrency } from '../functionFactory.js';
+import { buildFunctionDefaults, resolveDefaultLogging, stageGatedConcurrency } from '../functionFactory.js';
 
 describe('buildFunctionDefaults', () => {
   it('returns the standard runtime/logging defaults with an empty environment', () => {
@@ -35,6 +35,37 @@ describe('buildFunctionDefaults', () => {
     const b = buildFunctionDefaults();
     a.environment.MUTATED = 'true';
     expect(b.environment).toEqual({});
+  });
+});
+
+describe('resolveDefaultLogging', () => {
+  it('fills in the stage default when logging is unset', () => {
+    expect(resolveDefaultLogging(undefined, 'production')).toEqual({ retention: '1 month' });
+    expect(resolveDefaultLogging(undefined, 'dev')).toEqual({ retention: '1 week' });
+  });
+
+  it('adds the stage default to an existing config', () => {
+    expect(resolveDefaultLogging({ format: 'json' }, 'production')).toEqual({ format: 'json', retention: '1 month' });
+    expect(resolveDefaultLogging({ format: 'json' }, 'pr4090')).toEqual({ format: 'json', retention: '1 week' });
+  });
+
+  it('treats only production as the long-retention stage', () => {
+    expect(resolveDefaultLogging({}, 'production')).toEqual({ retention: '1 month' });
+    expect(resolveDefaultLogging({}, 'dev')).toEqual({ retention: '1 week' });
+    expect(resolveDefaultLogging({}, 'shared-dev')).toEqual({ retention: '1 week' });
+  });
+
+  it('leaves an explicit retention untouched', () => {
+    expect(resolveDefaultLogging({ retention: '1 day' }, 'production')).toEqual({ retention: '1 day' });
+  });
+
+  it('leaves a custom log group untouched (SST rejects logGroup + retention)', () => {
+    const logging = { logGroup: '/aws/lambda/x' };
+    expect(resolveDefaultLogging(logging, 'dev')).toBe(logging);
+  });
+
+  it('leaves logging: false untouched', () => {
+    expect(resolveDefaultLogging(false, 'production')).toBe(false);
   });
 });
 

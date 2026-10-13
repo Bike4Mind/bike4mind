@@ -14,7 +14,13 @@ import {
 import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import isEqual from 'lodash/isEqual.js';
 import omit from 'lodash/omit.js';
-import { evaluatePromotion, isDispatchBlocked, type PromotionDecision } from './promotion';
+import {
+  AWAITING_PRICE_REASON,
+  evaluatePromotion,
+  isDispatchBlocked,
+  UNCORROBORATED_PRICE_REASON,
+  type PromotionDecision,
+} from './promotion';
 import type {
   CatalogDiffEntry,
   DiscoveredPrice,
@@ -118,6 +124,8 @@ export interface CatalogWriteInput {
   credentials: DiscoveryCredentials;
   policy: DiscoveryAutoEnablePolicy;
   knownPricedModelIds?: ReadonlySet<string>;
+  /** Models the build's adapter tables price in any unit; changes the denial wording only, never a verdict. */
+  buildPricedModelIds?: ReadonlySet<string>;
   runStartedAt: Date;
   runId?: string;
 }
@@ -582,18 +590,36 @@ function planOne(
       policy: input.policy,
       credentials: input.credentials,
       hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds),
+      awaitingPrice: input.buildPricedModelIds?.has(candidate.modelId)
+        ? 'build-literal'
+        : candidate.pricesByKind.some(entry => entry.kind === 'aggregator')
+          ? 'aggregator-quote'
+          : 'none',
       sourceDisabledReason: sourceDisabledReasonOf(contributed),
     });
     // autoDisabledReason is omitted rather than set to undefined so a promotion
     // reads as a removed key in the diff instead of a key that is still there.
     const withoutReason = omit(record, 'autoDisabledReason');
+    // The uncorroborated wording is read off this run's aggregator fetches, and a
+    // run where every aggregator was skipped for the interval guard or failed would
+    // otherwise flip it back to plain "awaiting price" and append a catalog row for
+    // the wording alone. The wording in force stands unless an aggregator that lists
+    // this model contributed: one that lists it and quoted nothing is a real change.
+    const reasonInForce = base.autoDisabledReason;
+    const keepReasonInForce =
+      !decision.promote &&
+      decision.autoDisabledReason === AWAITING_PRICE_REASON &&
+      reasonInForce === UNCORROBORATED_PRICE_REASON &&
+      !input.contributions.some(
+        contribution => contribution.kind === 'aggregator' && candidate.sourceNames.includes(contribution.name)
+      );
     record = decision.promote
       ? { ...withoutReason, lifecycle: { ...record.lifecycle, status: 'active' }, autoDisabled: false }
       : {
           ...withoutReason,
           lifecycle: { ...record.lifecycle, status: 'discovered' },
           autoDisabled: true,
-          autoDisabledReason: decision.autoDisabledReason,
+          autoDisabledReason: keepReasonInForce ? reasonInForce : decision.autoDisabledReason,
         };
     ownedGroups.add('lifecycle');
     ownedGroups.add('availability');
@@ -827,8 +853,9 @@ export function claimedGroups(
 
 /**
  * Trusted per sec 5.9: a provider's own API, two aggregators inside the
- * agreement band, or a price the catalog already holds. A lone aggregator is a
- * flag, not a price.
+ * agreement band, or a price row in force or an adapter price literal (both
+ * arriving as `knownPricedModelIds`). A lone
+ * aggregator is a flag, not a price; promotion words that denial separately.
  */
 export function hasTrustedPrice(
   candidate: Pick<Candidate, 'modelId' | 'pricesByKind'>,

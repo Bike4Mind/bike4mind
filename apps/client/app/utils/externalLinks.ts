@@ -8,8 +8,8 @@ export const ExternalLinks = {
   terms: getWebsiteUrl('terms-of-service'),
   usagePolicy: getWebsiteUrl('usage-policy'),
   privacy: getWebsiteUrl('privacy'),
-  // AUP/ToS acceptance gate. The marketing-site page for this slug may 404
-  // until the legal text ships; the acceptance mechanism does not depend on the page existing.
+  // AUP/ToS acceptance gate. The marketing site redirects this slug to /usage-policy; the
+  // acceptance mechanism does not depend on the page existing.
   acceptableUse: getWebsiteUrl('acceptable-use'),
   pricing: getWebsiteUrl('pricing'),
   manual: getWebsiteUrl('manual'),
@@ -17,6 +17,9 @@ export const ExternalLinks = {
   blog: getWebsiteUrl('blog'),
   changelog: getWebsiteUrl('changelog'),
   about: getWebsiteUrl('about'),
+  // Same-origin paths, not WEBSITE_URL: each deployment (preview, self-host) serves its own spec.
+  apiDocs: '/api/v1/docs',
+  openApiSpec: '/api/v1/openapi.json',
 };
 
 /**

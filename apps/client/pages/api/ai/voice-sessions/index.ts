@@ -8,7 +8,14 @@ import {
   userRepository,
   questRepository,
 } from '@bike4mind/database';
-import { AiEvents, ApiKeyType, ISessionDocument, redactSessionForClient } from '@bike4mind/common';
+import {
+  AiEvents,
+  ApiKeyType,
+  BadGatewayError,
+  ConflictError,
+  ISessionDocument,
+  redactSessionForClient,
+} from '@bike4mind/common';
 import { apiKeyService, sessionService } from '@bike4mind/services';
 import {
   buildVoiceInstructions,
@@ -20,7 +27,9 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { refundLostVoiceHoldReserve, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
@@ -31,6 +40,17 @@ const CreateSessionBodySchema = z.object({
   // reuse the existing credit hold instead of reserving (and charging) a second time.
   isReconnect: z.boolean().optional(),
 });
+
+// Marked expected so errorHandler logs it at warn: an error-level log reaches the LiveOps alert filter,
+// and a missing or rejected OpenAI key is a handled third-party condition, not a server fault.
+function voiceUnavailableError(extra?: Record<string, unknown>) {
+  const error = new BadGatewayError(VOICE_SESSION_UNAVAILABLE_MESSAGE, {
+    code: VOICE_SESSION_ERROR.unavailable,
+    ...extra,
+  });
+  error.expected = true;
+  return error;
+}
 
 const handler = baseApi().post(async (req, res) => {
   const { sessionId, isReconnect } = CreateSessionBodySchema.parse(req.body);
@@ -77,8 +97,7 @@ const handler = baseApi().post(async (req, res) => {
 
   // Pre-reserve credits for max session duration (60 min x ~$0.77/hr audio)
   // Reservation prevents unbounded post-facto billing for long sessions.
-  const VOICE_RESERVE_USD = 0.77; // ~60 min worst-case cost
-  const reservedCredits = usdToCredits(VOICE_RESERVE_USD);
+  const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
   if (enforceCredits && !isReconnect) {
     const currentCredits = req.user?.currentCredits ?? 0;
     if (currentCredits < reservedCredits) {
@@ -96,6 +115,10 @@ const handler = baseApi().post(async (req, res) => {
     { type: ApiKeyType.openai, nullIfMissing: true },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
+  if (!openaiApiKey) {
+    req.logger.warn('[Voice Session] No OpenAI API key configured');
+    throw voiceUnavailableError();
+  }
 
   let session: ISessionDocument | null = null;
 
@@ -110,6 +133,12 @@ const handler = baseApi().post(async (req, res) => {
         },
       }
     );
+    // The credit hold lives on the session and is settled for, and refunded to, its owner
+    // (server/websocket/voiceSessionEnded.ts, server/voice/settleVoiceHold.ts), so only the owner
+    // may open one. Matches POST /api/v1/voice/sessions, which looks the session up by owner.
+    if (session.userId !== req.user.id) {
+      throw new ForbiddenError('Voice calls can only be started in your own notebooks');
+    }
   } else {
     session = await sessionService.createSession(
       req.user,
@@ -141,7 +170,8 @@ const handler = baseApi().post(async (req, res) => {
   // whole call (including reconnect gaps, against MAX_SESSION_SECONDS). Without
   // this, every mobile reconnect would burn another full reserve that's never
   // refunded. Guarded by an explicit live hold so a stray flag can't skip a real charge.
-  const reuseHold = shouldReuseVoiceHold(isReconnect, session);
+  // Realtime: only a hold carrying the realtime marker.
+  const reuseHold = shouldReuseVoiceHold(isReconnect, session, true);
 
   // Build voice instructions with conversation history context
   const brand = process.env.APP_NAME || '';
@@ -335,6 +365,13 @@ When you get the tool result back, summarize it conversationally for voice.`;
     },
   };
 
+  // The hold read before any credit moves; the new hold is written only over it (or over none).
+  const priorHoldStartedAt = session?.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
+  // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
+  if (!reuseHold && session) {
+    await settlePriorVoiceHold(session);
+  }
+
   // Deduct credits immediately before the API call - all pre-flight checks have passed.
   // Deferral from the original position ensures no pre-flight throw can strand credits.
   // A reconnect reuses the original hold (reuseHold), so it must not deduct again.
@@ -358,12 +395,10 @@ When you get the tool result back, summarize it conversationally for voice.`;
     if (axios.isAxiosError(error)) {
       const responseData = error.response?.data;
       const status = error.response?.status;
-      console.error('[Voice Session] OpenAI Realtime API error:', status, JSON.stringify(responseData));
-      return res.status(status || 500).json({
-        error: 'OpenAI Realtime API error',
-        status,
-        details: responseData,
-      });
+      req.logger.warn('[Voice Session] OpenAI Realtime API error', { upstreamStatus: status, body: responseData });
+      // Never relay OpenAI's status: a 401 from this route makes ApiContext tear down the login
+      // session. A 502 never enters that path, so the user stays signed in.
+      throw voiceUnavailableError({ upstreamStatus: status });
     }
     throw error;
   }
@@ -380,12 +415,23 @@ When you get the tool result back, summarize it conversationally for voice.`;
   // A reconnect leaves the original reservation record untouched so end-reconciliation
   // measures the full call duration, not just the post-reconnect segment.
   if (!reuseHold) {
-    const voiceSessionStartedAt = new Date();
-    await sessionRepository.update({
-      id: session.id,
+    const opened = await sessionRepository.openVoiceHold(session.id, priorHoldStartedAt, {
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt,
+      voiceSessionStartedAt: new Date(),
+      // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
+      realtime: true,
     });
+    if (!opened) {
+      // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
+      if (enforceCredits) {
+        await refundLostVoiceHoldReserve(req.logger, {
+          userId: req.user.id,
+          sessionId: String(session.id),
+          refund: reservedCredits,
+        });
+      }
+      throw new ConflictError('Another voice call on this session started at the same time; retry');
+    }
   }
 
   await logEvent(

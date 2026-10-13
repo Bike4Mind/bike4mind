@@ -35,6 +35,14 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
   if (!connection.enabled) {
     return { label: 'Paused', title: `Syncing ${repo} is paused while the lake is archived`, color: 'neutral' };
   }
+  // Access lost is its own chip: a re-sync cannot fix it until the user restores access on GitHub.
+  if (connection.status === 'access_lost') {
+    return {
+      label: 'Access lost',
+      title: `GitHub repository ${repo}: the App can no longer read it${detail}. Fix access on GitHub, then re-sync.`,
+      color: 'danger',
+    };
+  }
   // 'error' stays re-syncable (claimForSync admits it), so the copy offers a retry before a reconnect.
   if (connection.status === 'error') {
     return {
@@ -71,4 +79,23 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
     title: `GitHub repository ${repo}: unrecognized status ${String(unknownStatus)}`,
     color: 'warning',
   };
+}
+
+type ProgressableGitHubConnection = Pick<DescribableGitHubConnection, 'status' | 'syncStale'> & {
+  fileCount: number;
+  candidateCount: number | null;
+};
+
+/**
+ * A live sync's progress: files indexed so far against the files the sync rules admitted from the
+ * tree. Null when no sync is running. `percent` is null until the sync has read the tree, and is
+ * capped at 100 because a changed file's old copy is retired only after its new one lands.
+ */
+export function describeGitHubSyncProgress(
+  connection: ProgressableGitHubConnection
+): { indexed: number; total: number | null; percent: number | null } | null {
+  if (connection.status !== 'syncing' || connection.syncStale) return null;
+  const total = connection.candidateCount || null;
+  const percent = total === null ? null : Math.min(100, Math.round((connection.fileCount / total) * 100));
+  return { indexed: connection.fileCount, total, percent };
 }

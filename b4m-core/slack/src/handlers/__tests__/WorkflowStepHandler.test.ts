@@ -9,7 +9,8 @@
  * - Slack API error reporting
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { WorkflowStepHandler, FunctionExecutedEvent, WORKFLOW_STEP_CALLBACKS } from '../WorkflowStepHandler';
 
 // Mock DI registry
@@ -26,7 +27,7 @@ vi.mock('../../di/registry', () => ({
       addMessageToSession: mockAddMessageToSession,
     },
     authAbility: { defineAbilitiesFor: vi.fn().mockReturnValue({}) },
-    chatCompletionDefaults: { defaultChatCompletionOptions: {} },
+    chatCompletionDefaults: { defaultChatCompletionOptions: {}, getSharedTokenizer: vi.fn() },
     eventBus: { LLMEvents: { CompletionStart: { publish: vi.fn() } } },
   }),
   getSlackDb: () => ({
@@ -37,10 +38,10 @@ vi.mock('../../di/registry', () => ({
   }),
 }));
 
-vi.mock('@bike4mind/services/llm', () => ({
-  ChatCompletionInvoke: vi.fn().mockImplementation(() => ({
-    invoke: vi.fn().mockResolvedValue({}),
-  })),
+vi.mock('@bike4mind/services/llm/ChatCompletionInvoke', () => ({
+  ChatCompletionInvoke: vi.fn().mockImplementation(function () {
+    return { invoke: vi.fn().mockResolvedValue({}) };
+  }),
 }));
 
 vi.mock('@bike4mind/observability', () => ({
@@ -49,7 +50,9 @@ vi.mock('@bike4mind/observability', () => ({
 
 vi.mock('@bike4mind/utils', () => ({
   createTokenizer: vi.fn().mockReturnValue({}),
-  SQSService: vi.fn().mockImplementation(() => ({})),
+  SQSService: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 
 // Aliases so the test body can reference the DI mocks by their short names
@@ -315,6 +318,24 @@ describe('WorkflowStepHandler', () => {
           response: 'Message sent to notebook.',
         })
       );
+    });
+
+    it('invokes the completion as an internal-origin caller', async () => {
+      vi.mocked(User.findOne).mockResolvedValue(createMockUser({ lastNotebookId: SAVED_NOTEBOOK }));
+      vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
+
+      await handler.handleFunctionExecuted(
+        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
+          user_id: 'U123',
+          message: 'Hello',
+          wait_for_response: false,
+        })
+      );
+
+      // triggerAIProcessing is fire-and-forget, so the invoke lands after the handler resolves.
+      await vi.waitFor(() => expect(vi.mocked(ChatCompletionInvoke).mock.results).toHaveLength(1));
+      const { invoke } = vi.mocked(ChatCompletionInvoke).mock.results[0].value as { invoke: Mock };
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ authOrigin: 'internal' }));
     });
 
     it('should fail when message is missing', async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
-import type { IMongoDocument } from '@bike4mind/common';
+import { ConcurrencyConflictError, type IMongoDocument } from '@bike4mind/common';
 import { BaseRepository, softDeletePlugin } from '@bike4mind/db-core';
 import { createMongoServer } from '../__test__/createMongoServer';
 
@@ -88,6 +88,21 @@ describe('softDeletePlugin update hook', () => {
     const { id } = await seedTombstone();
 
     await expect(repo.updateGuarded({ id: id.toString(), name: 'snap', __v: 0 } as SoftDoc)).resolves.toBeNull();
+  });
+
+  it('repo.updateGuarded with includeDeleted writes a tombstone, and conflicts on a stale __v there', async () => {
+    const { id, deletedAt } = await seedTombstone();
+
+    const written = await repo.updateGuarded({ id: id.toString(), name: 'a', __v: 0 } as SoftDoc, {
+      includeDeleted: true,
+    });
+    expect(written?.name).toBe('a');
+    expect((await rawDoc(id))?.deletedAt).toEqual(deletedAt);
+
+    await expect(
+      repo.updateGuarded({ id: id.toString(), name: 'stale', __v: 0 } as SoftDoc, { includeDeleted: true })
+    ).rejects.toBeInstanceOf(ConcurrencyConflictError);
+    expect((await rawDoc(id))?.name).toBe('a');
   });
 
   it('includeDeleted opts out, as a query option, via setOptions, and through repo.update', async () => {

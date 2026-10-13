@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   setLakeVisibility: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: ['org-1'] })),
@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     setLakeVisibility: h.setLakeVisibility,
   },
@@ -68,7 +68,7 @@ describe('POST /api/data-lakes/[id]/visibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.inTransaction.length = 0;
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', createdByUserId: 'u1', status: 'active' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake-oid-1', createdByUserId: 'u1', status: 'active' });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.setLakeVisibility.mockResolvedValue({ id: 'lake-oid-1', isPublic: false, organizationId: 'org-1' });
     h.resolveActiveOrg.mockResolvedValue('org-1');
@@ -101,7 +101,7 @@ describe('POST /api/data-lakes/[id]/visibility', () => {
   });
 
   it('runs the gates and the write inside ONE transaction, so a retry re-reads the grants', async () => {
-    h.assertLakeAccess.mockImplementation(async () => {
+    h.assertLakeAccessById.mockImplementation(async () => {
       h.inTransaction.push('gate');
       return { id: 'lake-oid-1', createdByUserId: 'u1', status: 'active' };
     });
@@ -130,7 +130,7 @@ describe('POST /api/data-lakes/[id]/visibility', () => {
   });
 
   it('gates on access before writing, so an unreachable lake never reaches the service', async () => {
-    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessById.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
 
     await expect(call(req({ visibility: 'public' }), res)).rejects.toThrow(/not found/i);

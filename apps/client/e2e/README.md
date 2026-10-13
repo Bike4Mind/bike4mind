@@ -43,9 +43,9 @@ Steps:
    ```bash
    curl -s -H "x-e2e-cleanup-secret: $E2E_CLEANUP_SECRET" \
      "https://app.pr<N>.preview.bike4mind.com/api/test/otc-code?email=qa-admin-e2e@test.com"
-   # → {"code":"123456"}
+   # -> {"code":"12345678"}
    ```
-3. Type the 6-digit code → **Verify Code** → you're in.
+3. Type the 8-digit code → **Verify Code** → you're in.
 
 `$E2E_CLEANUP_SECRET` is one shared value, the same on every preview and stable across redeploys — see
 [Environment Variables](#environment-variables) for what it is and how to get it.
@@ -174,6 +174,8 @@ page's context and navigates to `/` to bootstrap the authenticated app. An agent
 by a password/OTC UI round-trip.
 
 `/api/test/create-user` also accepts **no `email`** (omit it or pass `null`) to mint an *emailless* account - the shape an OAuth signup with no provider-verified email produces (see `verifyCallback`'s create path). Such an account cannot receive a login one-time code, so enter it through the returned tokens or **Admin → Login as User**. The username must then end in `-e2e` so cleanup can still find it; the same two-tier rule as emails applies (`qa-emailless-e2e` is standing and never swept, `qa-emailless-12345678-e2e` is reclaimed by the aged sweep).
+
+Every created user gets the predefined tags (`Developer`, `Customer`, `Opti`) prepended to any `tags` you pass. Pass `includePredefinedTags: false` to get exactly the `tags` you pass (or none). That yields a non-developer user only if your `tags` also avoid every `DEVELOPER_USER_TAGS` alias (`b4m-core/common/src/schemas/user.ts`). Only a boolean `false` opts out.
 
 Before setup runs, `global-setup.ts` calls `/api/test/cleanup` to remove stale test users from prior runs. After all tests, `global-teardown.ts` does the same.
 

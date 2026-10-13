@@ -86,6 +86,18 @@ describe('assertContractConventions', () => {
     });
   });
 
+  describe('303 redirects', () => {
+    it('rejects a 303 that does not declare noBody', () => {
+      const responses = { ...contract().responses, 303: { description: 'Redirect.' } as ResponseSpec };
+      expect(() => assertContractConventions([contract({ responses })])).toThrow(/status 303 must declare noBody/);
+    });
+
+    it('accepts a 303 that declares noBody', () => {
+      const responses = { ...contract().responses, 303: { description: 'Redirect.', noBody: true } as ResponseSpec };
+      expect(() => assertContractConventions([contract({ responses })])).not.toThrow();
+    });
+  });
+
   describe('exemptions', () => {
     it('lets a published endpoint keep an off-table status with a stated reason', () => {
       const responses = { ...contract().responses, 402: errorResponse() };

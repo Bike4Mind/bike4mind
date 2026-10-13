@@ -1,16 +1,21 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import WhatsNewSliderModal from '../components/modals/WhatsNewSliderModal';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useGetModals } from '@client/app/hooks/data/modals';
+import { useModalsWithReleaseNotes } from '@client/app/hooks/data/modalsWithReleaseNotes';
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 import { filterModals } from '@client/app/components/modals/modalHelpers';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
 
 type ModalType = 'WhatsNewSlider';
+type TriggerSource = 'manual' | 'auto';
+
+// 2.5 seconds for the user to settle after returning. Exported so the visibility test advances by the
+// real delay rather than a copy of it.
+export const SETTLE_DELAY = 2500;
 
 interface ModalTriggerContextType {
-  triggerModalByTag: (tag: string, modalType?: ModalType) => void;
+  triggerModalByTag: (tag: string, modalType?: ModalType, source?: TriggerSource) => void;
   resetTrigger: () => void;
   tagToTrigger: string | null;
   triggerCounter: number;
@@ -31,18 +36,20 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
   const [tagToTrigger, setTagToTrigger] = useState<string | null>(null);
   const [triggerCounter, setTriggerCounter] = useState<number>(0);
   const [modalType, setModalType] = useState<ModalType | undefined>(undefined);
+  const [triggerSource, setTriggerSource] = useState<TriggerSource>('manual');
 
   // Access modal data and counters for threshold checking
   const currentUser = useUser(s => s.currentUser);
-  const modals = useGetModals();
+  const modals = useModalsWithReleaseNotes();
   const counters = useGetUserActivityCounters(currentUser?.id);
 
   // Get refetch function to refresh modal data when tab becomes visible
   const refetchModals = modals.refetch;
 
-  const triggerModalByTag = useCallback((tag: string, modalType?: ModalType) => {
+  const triggerModalByTag = useCallback((tag: string, modalType?: ModalType, source: TriggerSource = 'manual') => {
     console.log('triggerModalByTag inside of TriggerContext:', tag);
     setModalType(modalType);
+    setTriggerSource(source);
     setTagToTrigger(tag);
     setTriggerCounter(prevCounter => prevCounter + 1);
   }, []);
@@ -56,7 +63,6 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
   // Only triggers if there are modals with 'whats-new' tag that should be shown based on their behavior settings
   useEffect(() => {
     const FIVE_MINUTES = 5 * 60 * 1000;
-    const SETTLE_DELAY = 2500; // 2.5 seconds for user to settle after returning
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
@@ -136,7 +142,7 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
                 return;
               }
 
-              triggerModalByTag('whats-new', 'WhatsNewSlider');
+              triggerModalByTag('whats-new', 'WhatsNewSlider', 'auto');
               localStorage.setItem('whats_new_last_auto_trigger', Date.now().toString());
             } catch (error) {
               console.error('ModalTriggerContext: Failed to refetch modals', error);
@@ -176,7 +182,11 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
   return (
     <ModalTriggerContext.Provider value={contextValue}>
       {tagToTrigger && modalType === 'WhatsNewSlider' && (
-        <WhatsNewSliderModal tagToTrigger={tagToTrigger} key={triggerCounter} />
+        <WhatsNewSliderModal
+          tagToTrigger={tagToTrigger}
+          autoTriggered={triggerSource === 'auto'}
+          key={triggerCounter}
+        />
       )}
       {children}
     </ModalTriggerContext.Provider>

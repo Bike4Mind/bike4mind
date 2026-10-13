@@ -25,10 +25,10 @@ const planResult = (families: string[]) =>
     displayMessage: 'Loaded step 1',
   });
 
-// The schedule/solve tools return a JSON envelope carrying the results markdown in `displayMessage`
-// (see quantumSchedule/quantumSolve). Mirror that exact shape so the guard + digest extractor are
-// exercised against what they actually receive in production -- escaped quotes, escaped newlines --
-// rather than a raw-markdown string the tools never emit.
+// The schedule/solve tools return a JSON envelope carrying the results markdown in `displayMessage`.
+// Mirror that exact shape so the guard + digest extractor are exercised against what they actually
+// receive in production -- escaped quotes, escaped newlines -- rather than a raw-markdown string the
+// tools never emit.
 const envelope = (displayMessage: string, familyId?: string) =>
   JSON.stringify({
     __uiSideEffect: true,

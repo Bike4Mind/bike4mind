@@ -1,8 +1,7 @@
 /**
- * Shared soonest-to-expire-first consumption assignment, used identically by
- * the daily sweep (apps/workers/src/cron/creditLotSweep.ts) and the live
- * GET /api/credits/balance computation. Keeping the math in one place is
- * what makes "computed live" match what the sweep will settle to overnight.
+ * Shared soonest-to-expire-first consumption assignment for the daily sweep
+ * (apps/workers/src/cron/creditLotSweep.ts) and GET /api/credits/balance.
+ * The sweep separately preserves lots explicitly settled by a stale run.
  */
 export interface CreditLotLike {
   amount: number;

@@ -25,7 +25,7 @@ import type { ConventionRule, EndpointContract, ResponseSpec } from './types';
  * cannot be aliased the way a URL or a field can, so an endpoint choosing 402
  * must fail here rather than quietly doubling the vocabulary.
  */
-const ALLOWED_STATUSES = new Set([200, 201, 202, 204, 400, 401, 403, 404, 409, 413, 422, 429, 500, 502, 503]);
+const ALLOWED_STATUSES = new Set([200, 201, 202, 204, 303, 400, 401, 403, 404, 409, 413, 422, 429, 500, 502, 503]);
 
 /** The one version root for new public endpoints (CONVENTIONS.md section 3). */
 const VERSION_ROOT = '/api/v1/';
@@ -311,6 +311,15 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
           'status-table',
           `status ${status} is not in the shared status table.`,
           'Map the condition onto a table status so one condition means one status across the surface.'
+        );
+      }
+
+      if (status === 303 && !('noBody' in spec && spec.noBody)) {
+        fail(
+          contract,
+          'status-table',
+          'status 303 must declare noBody: true.',
+          'A redirect carries no body; set noBody and a Location header.'
         );
       }
 

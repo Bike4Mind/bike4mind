@@ -70,7 +70,7 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
   /**
    * Who drove this delete - forwarded to the membership `removed` events below (see
    * `LakeMembershipChangeOrigin`'s own doc comment). Defaults to `'person'`; the connector ingests
-   * (driveLakeIngest.ts and githubLakeSlice.ts, through queueHandlers/lakeIngestShared.ts) pass `'connector'`.
+   * (driveLakeIngest.ts and githubLakeSlice.ts, through apps/workers/src/queueHandlers/lakeIngestShared.ts) pass `'connector'`.
    */
   origin?: LakeMembershipChangeOrigin;
   /**

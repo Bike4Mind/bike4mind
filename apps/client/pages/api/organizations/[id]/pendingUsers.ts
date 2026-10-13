@@ -17,7 +17,10 @@ const handler = baseApi().get(async (req, res) => {
     }
   );
 
-  return respond(res, safeUsersResponseSchema, toSafeUsers(result, 'same-org'));
+  // Pending invitees were invited by user id and have not joined, so their address is not the
+  // org's to show: org admins included, since they are the ones who minted the invite. Name and
+  // username identify the row, and cancelling one goes by user id. Platform admins keep the email.
+  return respond(res, safeUsersResponseSchema, toSafeUsers(result, req.user!.isAdmin ? 'same-org' : 'public'));
 });
 
 export const config = {

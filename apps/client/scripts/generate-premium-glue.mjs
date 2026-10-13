@@ -15,6 +15,9 @@
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
+ *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
+ *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
+ *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
@@ -39,7 +42,7 @@
  * are unaffected because both link states typecheck clean.
  */
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, realpathSync } from 'node:fs';
 import { resolve, dirname, join, sep, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,19 +55,46 @@ const INFRA_GENERATED_DIR = join(REPO_ROOT, 'infra/premium-generated');
 
 // --- Discover premium packages ---
 
+// True when node_modules/<pkgName> (at either root) resolves to packages/premium/<dir>.
+function pointsAtLink(pkgName, dir) {
+  const target = realpathSync(join(PREMIUM_DIR, dir));
+  return [CLIENT_ROOT, REPO_ROOT].some(root => {
+    try {
+      return realpathSync(join(root, 'node_modules', ...pkgName.split('/'))) === target;
+    } catch {
+      return false; // not linked at this root
+    }
+  });
+}
+
 function discoverPremiumPackages() {
   if (!existsSync(PREMIUM_DIR)) return [];
 
   const packages = [];
-  for (const entry of readdirSync(PREMIUM_DIR, { withFileTypes: true })) {
+  const byName = new Map();
+  // Sorted so the fallback is deterministic when a package name repeats (e.g. a sibling
+  // git worktree of an overlay); importing it twice registers duplicate routes.
+  const entries = readdirSync(PREMIUM_DIR, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const pkgPath = join(PREMIUM_DIR, entry.name, 'package.json');
     if (!existsSync(pkgPath)) continue;
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-      if (pkg.b4mContributions) {
-        packages.push({ name: pkg.name, dir: entry.name, contributions: pkg.b4mContributions });
+      if (!pkg.b4mContributions) continue;
+      const candidate = { name: pkg.name, dir: entry.name, contributions: pkg.b4mContributions };
+      const index = byName.get(pkg.name);
+      if (index === undefined) {
+        byName.set(pkg.name, packages.length);
+        packages.push(candidate);
+        continue;
       }
+      // Several generators key off pkg.dir, so the survivor must be the directory pnpm
+      // actually links; sorted-first only when the link does not point at the newcomer.
+      const kept = packages[index];
+      const [winner, loser] = pointsAtLink(pkg.name, entry.name) ? [candidate, kept] : [kept, candidate];
+      packages[index] = winner;
+      console.warn(`[codegen] skipping ${loser.dir}: package "${pkg.name}" already discovered, keeping ${winner.dir}`);
     } catch {
       // malformed package.json - skip
     }
@@ -98,6 +128,12 @@ function ensureDir(dir) {
 
 function writeFile(path, content) {
   ensureDir(dirname(path));
+  // Rewriting identical files on every start fires watcher events, and sst dev
+  // crashes when it lstats the temp file after the rename has removed it.
+  if (existsSync(path) && readFileSync(path, 'utf8') === content) {
+    console.log(`  unchanged ${path.replace(REPO_ROOT + '/', '')}`);
+    return;
+  }
   // Atomic write: write to a temp file in the same directory, then rename over the
   // real path. A plain writeFileSync truncates the target before writing its new
   // content, so a concurrent reader (e.g. another turbo task's test statically
@@ -355,6 +391,256 @@ export const premiumReplyAccessories: PremiumReplyAccessory[] = [
 ${entries},
 ];
 `
+  );
+}
+
+// --- Generate workspace copy entitlements ---
+
+// Extra entitlements whose holders may keep a fork/snip/clone inside a registered
+// workspace (b4mContributions.workspaceCopyEntitlements, `{ "<workspace id>": [keys] }`).
+// Core cannot name an overlay's workspace, so the overlay declares the table. Pure data,
+// like the localStorage prefixes below: nothing here imports overlay code, so the server
+// enforces it with or without a node_modules link. Both halves are validated, so a
+// malformed table fails the build instead of quietly granting nothing or the wrong thing.
+//
+// A grant is only safe if the workspace's own route and API gates admit the same key: the
+// copy carries the workspace's surface, so it leaves the main list, and a gate that turns
+// its owner away leaves it in no list at all. Those gates live in overlay code this script
+// never reads (the route descriptor's requireEntitlement, or an in-page check), so the
+// package also declares them as data (b4mContributions.workspaceGateEntitlements, same
+// shape: every key the workspace's gates admit) and every grant must appear there. A
+// missing or narrower declaration fails the build rather than passing on trust.
+const WORKSPACE_ID_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+const ENTITLEMENT_KEY_RE = /^[a-z0-9][a-z0-9:_.-]*$/i;
+
+// A grant entry may instead be `{ "key", "label", "sessionHref"? }`: the same grant, plus how the
+// workspace is named and opened for a user who reaches it only through that key, in place of the
+// registry's label and link. Both values reach the UI and the router verbatim, so they are held to
+// shapes that cannot carry anything else.
+const GRANT_LABEL_MAX = 64;
+// One line, no control characters, no leading or trailing whitespace.
+const GRANT_LABEL_RE = /^\S(?:[^\p{Cc}\p{Zl}\p{Zp}]*\S)?$/u;
+const SESSION_ID_SLOT = '{sessionId}';
+// Checked with the slot removed, and the slot may not open the path. The character after the leading
+// slash must start a route segment, which rules out a protocol-relative `//host` (an off-site link)
+// and a bare `/` that every route would match when the client checks the build ships it.
+const GRANT_HREF_RE = /^\/[a-z0-9._~-][a-z0-9._~/?=&%-]*$/i;
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Validated display half of one object-form grant entry, its key lowercased like the bare form.
+function readGrantDisplay(entry, pkg, workspaceId) {
+  const where = `workspaceCopyEntitlements entry for "${workspaceId}" from package "${pkg.name}"`;
+  const { key, label, sessionHref, ...extra } = entry;
+  if (Object.keys(extra).length > 0) {
+    throw new Error(`[codegen] invalid ${where}: unknown field(s) ${JSON.stringify(Object.keys(extra))}`);
+  }
+  if (typeof key !== 'string' || !ENTITLEMENT_KEY_RE.test(key)) {
+    throw new Error(
+      `[codegen] invalid ${where}: key ${JSON.stringify(key)} is not an entitlement key of [A-Za-z0-9:_.-]`
+    );
+  }
+  if (typeof label !== 'string' || label.length > GRANT_LABEL_MAX || !GRANT_LABEL_RE.test(label)) {
+    throw new Error(
+      `[codegen] invalid ${where}: label ${JSON.stringify(label)} must be one trimmed line of at most ` +
+        `${GRANT_LABEL_MAX} characters`
+    );
+  }
+  if (
+    sessionHref !== undefined &&
+    (typeof sessionHref !== 'string' ||
+      sessionHref.split(SESSION_ID_SLOT).length !== 2 ||
+      sessionHref.startsWith(`/${SESSION_ID_SLOT}`) ||
+      !GRANT_HREF_RE.test(sessionHref.replace(SESSION_ID_SLOT, '')))
+  ) {
+    throw new Error(
+      `[codegen] invalid ${where}: sessionHref ${JSON.stringify(sessionHref)} must be a same-origin path ` +
+        `of [A-Za-z0-9._~/?=&%-] starting with a route segment and holding exactly one ${SESSION_ID_SLOT}`
+    );
+  }
+  return { key: key.toLowerCase(), label, ...(sessionHref === undefined ? {} : { sessionHref }) };
+}
+
+// Validated `{ "<workspace id>": [keys] }` table from one package, keys lowercased to match
+// the normalized entitlement list they are compared to. Empty maps when the field is absent.
+// `displays` holds the object-form entries, which only the grant table accepts.
+function readWorkspaceKeyTable(pkg, field, { allowDisplay = false } = {}) {
+  const declared = pkg.contributions[field];
+  const table = new Map();
+  const displays = new Map();
+  if (declared === undefined) return { table, displays };
+  if (!isPlainObject(declared)) {
+    throw new Error(
+      `[codegen] invalid ${field} from package "${pkg.name}": ` +
+        `expected an object of workspace id -> entitlement keys, got ${JSON.stringify(declared)}`
+    );
+  }
+  const expected = allowDisplay
+    ? 'an array of entitlement keys of [A-Za-z0-9:_.-] or { key, label, sessionHref? } objects'
+    : 'an array of entitlement keys of [A-Za-z0-9:_.-]';
+  for (const [workspaceId, entries] of Object.entries(declared)) {
+    if (!WORKSPACE_ID_RE.test(workspaceId)) {
+      throw new Error(
+        `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+          `${JSON.stringify(workspaceId)} is not of [A-Za-z0-9_-]`
+      );
+    }
+    const keysError = () =>
+      new Error(
+        `[codegen] invalid ${field} keys for "${workspaceId}" from package "${pkg.name}": ` +
+          `expected ${expected}, got ${JSON.stringify(entries)}`
+      );
+    if (!Array.isArray(entries)) throw keysError();
+    const keys = [];
+    const shown = [];
+    for (const entry of entries) {
+      if (allowDisplay && isPlainObject(entry)) {
+        const display = readGrantDisplay(entry, pkg, workspaceId);
+        if (shown.some(prior => prior.key === display.key)) {
+          throw new Error(
+            `[codegen] invalid ${field} for "${workspaceId}" from package "${pkg.name}": ` +
+              `${JSON.stringify(display.key)} declares a label more than once`
+          );
+        }
+        shown.push(display);
+        keys.push(display.key);
+        continue;
+      }
+      if (typeof entry !== 'string' || !ENTITLEMENT_KEY_RE.test(entry)) throw keysError();
+      keys.push(entry.toLowerCase());
+    }
+    table.set(workspaceId, [...new Set(keys)]);
+    if (shown.length > 0) displays.set(workspaceId, shown);
+  }
+  return { table, displays };
+}
+
+function generateWorkspaceCopyEntitlements(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumWorkspaceCopyEntitlements.generated.ts');
+  const typeImport = `import type { PremiumWorkspaceCopyEntitlements } from '../premiumContract';`;
+  const displaysOutPath = join(GENERATED_DIR, 'premiumWorkspaceGrantDisplays.generated.ts');
+  const displaysTypeImport = `import type { PremiumWorkspaceGrantDisplays } from '../premiumContract';`;
+
+  const merged = new Map();
+  // workspace id -> [{ display, from }], in package then declaration order.
+  const mergedDisplays = new Map();
+  for (const pkg of packages) {
+    const { table: grants, displays } = readWorkspaceKeyTable(pkg, 'workspaceCopyEntitlements', { allowDisplay: true });
+    const { table: gates } = readWorkspaceKeyTable(pkg, 'workspaceGateEntitlements');
+    for (const [workspaceId, keys] of grants) {
+      const admitted = gates.get(workspaceId) ?? [];
+      const stranded = keys.filter(key => !admitted.includes(key));
+      if (stranded.length > 0) {
+        throw new Error(
+          `[codegen] workspaceCopyEntitlements from package "${pkg.name}" grants ${JSON.stringify(stranded)} ` +
+            `for workspace "${workspaceId}", but its workspaceGateEntitlements["${workspaceId}"] does not admit them. ` +
+            `A copy kept in a workspace whose route or API gate refuses its owner is stranded: it leaves the ` +
+            `main list and opens nowhere. Widen the workspace's gates to admit the key and list it in ` +
+            `workspaceGateEntitlements, or drop the grant.`
+        );
+      }
+      const list = merged.get(workspaceId) ?? [];
+      for (const key of keys) {
+        if (!list.includes(key)) list.push(key);
+      }
+      merged.set(workspaceId, list);
+    }
+    // A key two packages show differently has no right answer, so the build refuses to pick one.
+    for (const [workspaceId, shown] of displays) {
+      const list = mergedDisplays.get(workspaceId) ?? [];
+      for (const display of shown) {
+        const prior = list.find(item => item.display.key === display.key);
+        if (!prior) {
+          list.push({ display, from: pkg.name });
+          continue;
+        }
+        if (prior.display.label !== display.label || prior.display.sessionHref !== display.sessionHref) {
+          throw new Error(
+            `[codegen] workspaceCopyEntitlements for "${workspaceId}" shows ${JSON.stringify(display.key)} ` +
+              `differently in packages "${prior.from}" and "${pkg.name}"; declare its label and sessionHref in one.`
+          );
+        }
+      }
+      mergedDisplays.set(workspaceId, list);
+    }
+  }
+
+  const entries = [...merged].map(
+    ([workspaceId, keys]) => `  ${JSON.stringify(workspaceId)}: [${keys.map(key => JSON.stringify(key)).join(', ')}],`
+  );
+  const body = entries.length === 0 ? '{}' : `{\n${entries.join('\n')}\n}`;
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceCopyEntitlements: PremiumWorkspaceCopyEntitlements = ${body};\n`
+  );
+
+  const displayEntries = [...mergedDisplays].map(
+    ([workspaceId, list]) =>
+      `  ${JSON.stringify(workspaceId)}: [${list.map(item => JSON.stringify(item.display)).join(', ')}],`
+  );
+  const displaysBody = displayEntries.length === 0 ? '{}' : `{\n${displayEntries.join('\n')}\n}`;
+
+  writeFile(
+    displaysOutPath,
+    `${GENERATED_BANNER}\n${displaysTypeImport}\n\nexport const premiumWorkspaceGrantDisplays: PremiumWorkspaceGrantDisplays = ${displaysBody};\n`
+  );
+}
+
+// --- Generate tool display labels ---
+
+// Display names for overlay LLM tools (b4mContributions.toolDisplayLabels, `{ "<tool id>": "Label" }`),
+// so a reply's tool chips never show a raw id. Pure data like the grants above. Labels reach the UI
+// verbatim, so they are held to the grant label's shape.
+const TOOL_ID_RE = /^[a-z0-9][a-z0-9_.-]*$/i;
+
+function generateToolDisplayLabels(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumToolDisplayLabels.generated.ts');
+  const typeImport = `import type { PremiumToolDisplayLabels } from '../premiumContract';`;
+
+  // tool id -> { label, from }
+  const merged = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.toolDisplayLabels;
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) {
+      throw new Error(
+        `[codegen] invalid toolDisplayLabels from package "${pkg.name}": ` +
+          `expected an object of tool id -> label, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [toolId, label] of Object.entries(declared)) {
+      if (!TOOL_ID_RE.test(toolId)) {
+        throw new Error(
+          `[codegen] invalid toolDisplayLabels tool id from package "${pkg.name}": ` +
+            `${JSON.stringify(toolId)} is not of [A-Za-z0-9_.-]`
+        );
+      }
+      if (typeof label !== 'string' || label.length > GRANT_LABEL_MAX || !GRANT_LABEL_RE.test(label)) {
+        throw new Error(
+          `[codegen] invalid toolDisplayLabels label for "${toolId}" from package "${pkg.name}": ` +
+            `${JSON.stringify(label)} must be one trimmed line of at most ${GRANT_LABEL_MAX} characters`
+        );
+      }
+      const prior = merged.get(toolId);
+      if (prior && prior.label !== label) {
+        throw new Error(
+          `[codegen] toolDisplayLabels names "${toolId}" differently in packages "${prior.from}" and ` +
+            `"${pkg.name}"; declare its label in one.`
+        );
+      }
+      if (!prior) merged.set(toolId, { label, from: pkg.name });
+    }
+  }
+
+  const entries = [...merged].map(([toolId, { label }]) => `  ${JSON.stringify(toolId)}: ${JSON.stringify(label)},`);
+  const body = entries.length === 0 ? '{}' : `{\n${entries.join('\n')}\n}`;
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumToolDisplayLabels: PremiumToolDisplayLabels = ${body};\n`
   );
 }
 
@@ -946,5 +1232,7 @@ generateInfraGlue(packages);
 // No-import glue: pure data copied out of package.json, so it imports the overlay
 // not at all and is link-independent for an even simpler reason than the group above.
 generateLocalStorageKeyPrefixes(packages);
+generateWorkspaceCopyEntitlements(packages);
+generateToolDisplayLabels(packages);
 
 console.log('[codegen] done.');

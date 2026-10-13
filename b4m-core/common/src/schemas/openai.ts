@@ -91,6 +91,12 @@ export const OPENAI_IMAGE_QUALITIES = ['standard', 'hd', 'low', 'medium', 'high'
 export const OpenAIImageQualitySchema = z.enum(OPENAI_IMAGE_QUALITIES);
 export type OpenAIImageQuality = z.infer<typeof OpenAIImageQualitySchema>;
 
+/**
+ * DALL-E-era tiers GPT-Image models still accept as aliases, rewritten to 'medium'/'high' by
+ * toGptImageQuality in OpenAIImageService. Accepted, but not advertised as tiers of their own.
+ */
+export const LEGACY_IMAGE_QUALITY_ALIASES = ['standard', 'hd'] as const satisfies readonly OpenAIImageQuality[];
+
 /** The tiers above 'high' that only the gpt-image-2.5 models accept. */
 export const EXTENDED_GPT_IMAGE_QUALITIES = ['xhigh', 'max'] as const satisfies readonly OpenAIImageQuality[];
 export type ExtendedGptImageQuality = (typeof EXTENDED_GPT_IMAGE_QUALITIES)[number];
@@ -166,6 +172,9 @@ export const LEGACY_IMAGE_MODEL_MAP: Record<string, (typeof ALL_IMAGE_MODELS)[nu
   'grok-2-image-gen': ImageModels.GROK_IMAGINE_IMAGE_QUALITY, // intermediate xAI image id -> current id
 };
 
+/** Upper bound on `n` for one image generation request, whichever provider renders it. */
+export const MAX_IMAGES_PER_REQUEST = 10;
+
 export const OpenAIImageGenerationInput = z.object({
   prompt: z.string(),
   model: z.preprocess(
@@ -183,7 +192,7 @@ export const OpenAIImageGenerationInput = z.object({
     // so an all-blank suffix (e.g. "local-image/   ") is rejected.
     z.union([z.enum(ALL_IMAGE_MODELS), z.string().regex(/^local-image\/(?=.*\S)[\w.:/ -]+$/)])
   ),
-  n: z.number().min(1).max(10).optional(),
+  n: z.number().min(1).max(MAX_IMAGES_PER_REQUEST).optional(),
   // 'auto' is valid here and bills at the ceiling tier - see OPENAI_IMAGE_QUALITIES.
   quality: OpenAIImageQualitySchema.optional(),
   response_format: z.enum(['b64_json', 'url']).optional(),

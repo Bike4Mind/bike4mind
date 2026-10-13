@@ -1,8 +1,8 @@
 import OpenAI from 'openai';
-import { VoiceOutputFormat, TTS_MAX_INPUT_CHARS } from '@bike4mind/common';
+import { VoiceOutputFormat, TTS_DEFAULT_MODEL, TTS_MAX_INPUT_CHARS } from '@bike4mind/common';
 import { AIVoiceService, CONTENT_TYPE_BY_FORMAT, VoiceSynthesisOptions, VoiceSynthesisResult } from './AIVoiceService';
 
-const DEFAULT_MODEL = 'tts-1';
+const DEFAULT_MODEL = TTS_DEFAULT_MODEL.openai;
 const DEFAULT_VOICE = 'alloy';
 const DEFAULT_FORMAT: VoiceOutputFormat = 'mp3';
 const MAX_INPUT_CHARS = TTS_MAX_INPUT_CHARS.openai;

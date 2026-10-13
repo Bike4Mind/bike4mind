@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  assertLakeAccessWithGrants: vi.fn(),
+  assertLakeAccessWithGrantsById: vi.fn(),
   grantLakeAccess: vi.fn(),
   revokeLakeAccess: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccessWithGrants: h.assertLakeAccessWithGrants,
+    assertLakeAccessWithGrantsById: h.assertLakeAccessWithGrantsById,
     grantLakeAccess: h.grantLakeAccess,
     revokeLakeAccess: h.revokeLakeAccess,
   },
@@ -59,7 +59,7 @@ const makeRes = () => {
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
 // The gate's own return value, forwarded WHOLE to the service: the resolved document (not the raw
-// id-or-slug from the query) and the active grants the gate read to make its own decision.
+// value from the query) and the active grants the gate read to make its own decision.
 const LAKE = { id: 'lake-oid-1', slug: 'my-lake' };
 const GRANTS = [{ principalType: 'user', principalId: 'u9', role: 'curator' }];
 
@@ -68,14 +68,13 @@ describe('/api/data-lakes/[id]/grants', () => {
     vi.clearAllMocks();
     h.inTransaction.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: [] });
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     h.grantLakeAccess.mockResolvedValue({ principalType: 'user', principalId: 'u2', role: 'reader' });
     h.revokeLakeAccess.mockResolvedValue({ revoked: true });
   });
 
   it('grants against the RESOLVED lake, trimming the principal, and wires the audit repos', async () => {
-    // The gate resolves id-or-slug, so the service must get the resolved lake, not the raw query
-    // value - and the grants the gate already read, so its manage gate does not re-read them.
+    // The service must get the resolved lake, not the raw query value - and the grants the gate already read, so its manage gate does not re-read them.
     const { res, json } = makeRes();
     await call(
       {
@@ -126,7 +125,7 @@ describe('/api/data-lakes/[id]/grants', () => {
     ['DELETE', { id: 'lake1', principalType: 'user', principalId: 'u2' }, undefined, h.revokeLakeAccess],
   ] as const)('%s runs the gate and the door inside ONE transaction', async (method, query, body, door) => {
     // The gate inside the callback is what lets a retry after a concurrent revoke re-read the grants.
-    h.assertLakeAccessWithGrants.mockImplementation(async () => {
+    h.assertLakeAccessWithGrantsById.mockImplementation(async () => {
       h.inTransaction.push('gate');
       return { lake: LAKE, grants: GRANTS };
     });
@@ -245,7 +244,7 @@ describe('/api/data-lakes/[id]/grants', () => {
 
   it('does not reach the service when the caller cannot see the lake', async () => {
     // The gate denies with a not-found-style error, so existence is never disclosed.
-    h.assertLakeAccessWithGrants.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessWithGrantsById.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
     await expect(
       call(

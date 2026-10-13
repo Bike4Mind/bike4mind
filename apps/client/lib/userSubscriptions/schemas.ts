@@ -8,7 +8,14 @@ export const subscriptionPlanSchema = z.object({
   callbackUrl: z.string().url(),
 });
 
+/**
+ * Which UI started a checkout (an upsell surface id, see app/utils/funnelEvents.ts). Recorded on the
+ * Stripe session as `checkout_surface` so a purchase can be traced to the prompt that drove it.
+ */
+export const checkoutSurfaceSchema = z.string().regex(/^[a-z0-9_]{1,40}$/);
+
 export const subscriptionCheckoutSchema = subscriptionPlanSchema.extend({
   // Older callers can still buy, but may not attach attribution without consent.
   attributionConsent: z.boolean().optional(),
+  surface: checkoutSurfaceSchema.optional(),
 });

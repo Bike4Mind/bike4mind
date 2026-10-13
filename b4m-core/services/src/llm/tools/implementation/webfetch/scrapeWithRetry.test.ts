@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { scrapeWithRetry } from './scrapeWithRetry';
-import type FirecrawlApp from '@mendable/firecrawl-js';
+import type { FirecrawlClient } from './firecrawlApp';
 
-const createMockApp = (scrapeUrl: Mock) => ({ scrapeUrl }) as unknown as FirecrawlApp;
+const createMockApp = (scrapeUrl: Mock) => ({ scrapeUrl }) as unknown as FirecrawlClient;
 
 const createMockLogger = () => ({
   info: vi.fn(),

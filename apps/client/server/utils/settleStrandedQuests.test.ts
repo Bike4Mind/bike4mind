@@ -81,7 +81,7 @@ describe('settleStrandedQuests', () => {
     addQuest({ status: 'pending' });
 
     expect(await settle(['exec1'])).toEqual({ settled: 1, failed: false, failedExecutionIds: [] });
-    expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY }]);
+    expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null }]);
   });
 
   it('preserves partial text instead of replacing it with an error', async () => {
@@ -104,7 +104,7 @@ describe('settleStrandedQuests', () => {
 
     await settle(['exec1']);
 
-    expect(updates).toEqual([{ id: 'q1', status: 'done', finishReason: 'abandoned' }]);
+    expect(updates).toEqual([{ id: 'q1', status: 'done', finishReason: 'abandoned', fallbackInfo: null }]);
   });
 
   it('treats tool output alone as content worth preserving', async () => {
@@ -139,8 +139,8 @@ describe('settleStrandedQuests', () => {
     await settle(['exec1', 'exec2']);
 
     expect(updates).toEqual([
-      { id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY },
-      { id: 'q2', status: 'done', type: 'error', reply: ABANDONED_REPLY },
+      { id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null },
+      { id: 'q2', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null },
     ]);
   });
 

@@ -56,6 +56,7 @@ describe('dataLakeKeys parity', () => {
   it('browse surfaces keyed by source discriminator', () => {
     expect(dataLakeKeys.tagCounts('opti')).toEqual(['dataLakeTagCounts', 'opti']);
     expect(dataLakeKeys.tagCountsRoot).toEqual(['dataLakeTagCounts']);
+    expect(dataLakeKeys.tagCountsScoped('opti', ['b', 'a'])).toEqual(['dataLakeTagCounts', 'opti', 'scoped', 'a', 'b']);
     expect(dataLakeKeys.articles('datalakes', { page: 1 })).toEqual(['dataLakeArticles', 'datalakes', { page: 1 }]);
     expect(dataLakeKeys.articlesRoot).toEqual(['dataLakeArticles']);
   });

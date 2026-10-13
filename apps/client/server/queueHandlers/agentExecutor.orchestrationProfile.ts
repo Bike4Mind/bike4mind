@@ -21,8 +21,9 @@
  * `agentExecutor.firstIterationQuery.ts`.
  */
 
-import { buildAgentPersonaPrompt, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
+import { buildAgentPersonaPrompt, pairDataLakeTools, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
 import { buildDefaultOrchestrationProfile } from '@client/app/utils/agentOrchestration';
+import { isHeadlessConnection } from '@server/utils/headlessConnection';
 
 /**
  * Subset of the orchestration fields the executor actually consumes when
@@ -197,6 +198,12 @@ export function pickEffectiveMaxIterations(
  * registered by name; their effective enforcement is the dependency gate in agentExecutor via
  * `delegationOffer`.)
  *
+ * The save tool's lake companions (`pairDataLakeTools`) are paired in only when save survives
+ * the denylist, and the subtraction runs again after, so a denied list/create stays denied.
+ * Pairing never widens an explicit selection - an exclusive or curated agent belt, or a pinned
+ * payload - and create is paired only when `hasApprover`: a headless run has nobody to approve
+ * it, so an unrequested create would end the run on `no_approver`.
+ *
  * NOTE: widening the toolbelt is not widening permissions. A side-effecting tool the union adds
  * still faces the permission gate, whose approval list (`AgentExecution.approvedTools`) is built
  * in `startAgentExecution` from the RAW payload and never from this result. That is also why a
@@ -210,12 +217,54 @@ export function pickEffectiveMaxIterations(
 export function pickEffectiveEnabledTools(
   payloadEnabledTools: string[] | undefined,
   profile: ResolvedOrchestrationProfile,
-  payloadIsAmbient?: boolean
+  opts: { payloadIsAmbient?: boolean; hasApprover?: boolean } = {}
 ): string[] {
+  const { payloadIsAmbient, hasApprover = false } = opts;
   const chosen = chooseToolbelt(payloadEnabledTools, profile, payloadIsAmbient);
-  if (profile.deniedTools.length === 0) return chosen;
   const denied = new Set(profile.deniedTools);
-  return chosen.filter(t => !denied.has(t));
+  const permitted = chosen.filter(t => !denied.has(t));
+  if (!lakeToolsPairable(payloadEnabledTools, profile, payloadIsAmbient)) return permitted;
+  return pairDataLakeTools(permitted, { withCreate: hasApprover }).filter(t => !denied.has(t));
+}
+
+/**
+ * This invocation's toolbelt names before the session policy. A new run resolves them from the
+ * profile and start payload; a continuation has no start payload (the ambient Smart Tools and
+ * their paired companions ride only on it), so it replays `persistedEnabledTools` - the set the
+ * first invocation resolved - minus the profile denials, re-applied as a backstop.
+ * A legacy row with nothing persisted keeps the recompute.
+ */
+export function resolveInvocationEnabledTools(input: {
+  isNewExecution: boolean;
+  persistedEnabledTools: readonly string[] | undefined;
+  persistedProfileDeniedTools: readonly string[] | undefined;
+  payloadEnabledTools: string[] | undefined;
+  payloadIsAmbient: boolean | undefined;
+  profile: ResolvedOrchestrationProfile | undefined;
+  hasApprover: boolean;
+}): string[] {
+  const { profile } = input;
+  if (!input.isNewExecution && input.persistedEnabledTools) {
+    const denied = new Set(profile?.deniedTools ?? input.persistedProfileDeniedTools ?? []);
+    return input.persistedEnabledTools.filter(t => !denied.has(t));
+  }
+  return profile
+    ? pickEffectiveEnabledTools(input.payloadEnabledTools, profile, {
+        payloadIsAmbient: input.payloadIsAmbient,
+        hasApprover: input.hasApprover,
+      })
+    : (input.payloadEnabledTools ?? []);
+}
+
+/** True when the belt is the admin default (optionally unioned with ambient picks), not an explicit selection. */
+function lakeToolsPairable(
+  payloadEnabledTools: string[] | undefined,
+  profile: ResolvedOrchestrationProfile,
+  payloadIsAmbient: boolean | undefined
+): boolean {
+  if (profile.toolsetIsExclusive) return false;
+  if (!profile.isSynthetic && !profile.allowedToolsFromDefaults) return false;
+  return !payloadEnabledTools?.length || payloadIsAmbient === true;
 }
 
 function chooseToolbelt(
@@ -224,8 +273,25 @@ function chooseToolbelt(
   payloadIsAmbient: boolean | undefined
 ): string[] {
   if (!payloadEnabledTools?.length || profile.toolsetIsExclusive) return profile.allowedTools;
-  if (payloadIsAmbient && (profile.isSynthetic || profile.allowedToolsFromDefaults)) {
-    return [...new Set([...payloadEnabledTools, ...profile.allowedTools])];
+  if (payloadIsAmbient) {
+    if (profile.isSynthetic || profile.allowedToolsFromDefaults) {
+      return [...new Set([...payloadEnabledTools, ...profile.allowedTools])];
+    }
+    return profile.allowedTools;
   }
   return payloadEnabledTools;
+}
+
+/** A run has an approver only when it is attached to a live (non-headless) connection. */
+export function hasApprover(connectionId: string | undefined | null): boolean {
+  return !!connectionId && !isHeadlessConnection(connectionId);
+}
+
+/** MCP session-disabled tools: live profile denials win; a continuation without a profile replays the persisted ones. */
+export function mcpSessionDisabledTools(
+  sessionDisabled: readonly string[] | undefined,
+  profileDenied: readonly string[] | undefined,
+  persistedProfileDenied: readonly string[] | undefined
+): string[] {
+  return [...new Set([...(sessionDisabled ?? []), ...(profileDenied ?? persistedProfileDenied ?? [])])];
 }

@@ -8,6 +8,9 @@
  *  - a user tag (tags pass through as keys 1:1, plus comp-tag remap rows), or
  *  - the verified email's domain (domain-grant rows).
  *
+ * Implied-entitlement rows then widen the resolved set (holding one key
+ * confers another), whichever source granted the implying key.
+ *
  * This lib is isomorphic (client + server) - keep it free of `@server/*`
  * imports, mirroring `lib/subscriptions/`.
  */
@@ -40,4 +43,14 @@ export interface TagGrantRow {
 export interface DomainGrantRow {
   domain: string;
   entitlements: EntitlementKey[];
+}
+
+/**
+ * Holding `ifHeld` (from ANY grant source) also grants every key in
+ * `alsoGrant`. Applied once over the fully resolved key set - see
+ * `applyImpliedEntitlements` in `./registry.ts`.
+ */
+export interface ImpliedEntitlementRow {
+  ifHeld: EntitlementKey;
+  alsoGrant: EntitlementKey[];
 }

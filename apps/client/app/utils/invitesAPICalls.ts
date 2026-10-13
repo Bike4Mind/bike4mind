@@ -1,20 +1,18 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { IInviteDocument, IInviteDocumentWithDetails, InviteType } from '@bike4mind/common';
+import { isAxiosError } from 'axios';
 import { isNull, isUndefined, pickBy } from 'lodash';
 
-export const fetchInvite = async (id: string): Promise<IInviteDocumentWithDetails | null> => {
+export const fetchInvite = async (id: string): Promise<IInviteDocumentWithDetails | null | 'expired'> => {
   try {
-    const response = await api.get(`/api/invites/${id}`);
-
-    if (response.status === 200) {
-      return response.data;
-    } else {
-      console.error('Failed fetching Invite');
-      return null;
-    }
+    const { data } = await api.get(`/api/invites/${id}`);
+    return data;
   } catch (error) {
-    console.error('Error fetching Invite:', error);
-    return null;
+    if (isAxiosError(error)) {
+      if (error.response?.status === 404) return null;
+      if (error.response?.status === 410) return 'expired';
+    }
+    throw error;
   }
 };
 
@@ -71,8 +69,15 @@ export interface IGetInvitesRequest {
   page: number;
 }
 
+/**
+ * An invite as the sharer-facing routes return it (server/managers/inviteManager.toSharerInviteViews):
+ * a `recipients` entry the viewer did not type is a user id, named in `recipientUsers`, or a masked
+ * address.
+ */
+export type ISharerInviteView = IInviteDocumentWithDetails & { recipientUsers?: { userId: string; name: string }[] };
+
 export interface IGetInvitesResponse {
-  data: IInviteDocumentWithDetails[];
+  data: ISharerInviteView[];
   totalPages: number;
   total: number;
 }

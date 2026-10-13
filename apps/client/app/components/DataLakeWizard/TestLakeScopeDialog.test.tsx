@@ -11,6 +11,7 @@ type MockLake = {
   name: string;
   datalakeTag: string;
   isOwn?: boolean;
+  ownerDisplayName?: string;
   canPreauthorize?: boolean;
   retrievable?: boolean;
 };
@@ -107,6 +108,34 @@ describe('TestLakeScopeDialog', () => {
 
     expect(screen.getByTestId('test-lake-scope-owner-icon-lake-b')).toBeInTheDocument();
     expect(screen.queryByTestId('test-lake-scope-owner-icon-lake-a')).not.toBeInTheDocument();
+  });
+
+  it('gives the owner icon an accessible name without an svg title', () => {
+    render(
+      <Wrapper>
+        <TestLakeScopeDialog anchorLakeId="lake-a" onClose={vi.fn()} onConfirm={vi.fn()} />
+      </Wrapper>
+    );
+
+    const icon = screen.getByRole('img', { name: 'Owned by another user' });
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
+  it('names the owner in the icon label when the lake carries ownerDisplayName', () => {
+    useGetDataLakesMock.mockReturnValue({
+      data: [{ ...LAKES[1], ownerDisplayName: 'Dana' }],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    render(
+      <Wrapper>
+        <TestLakeScopeDialog anchorLakeId="lake-b" onClose={vi.fn()} onConfirm={vi.fn()} />
+      </Wrapper>
+    );
+
+    const icon = screen.getByRole('img', { name: 'Owned by Dana' });
+    expect(icon.querySelector('title')).toBeNull();
   });
 
   it('disables confirm once every lake is unchecked', async () => {

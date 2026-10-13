@@ -1,0 +1,15 @@
+existingSecret: bike4mind-runtime
+images:
+  app: registry.example.com/bike4mind/app:tested-revision
+  chatcompletion: registry.example.com/bike4mind/chatcompletion:tested-revision
+  ws: registry.example.com/bike4mind/ws:tested-revision
+  subscriberFanout: ghcr.io/bike4mind/subscriber-fanout@sha256:4828b5068540f5ae3043b1c035f91852354ba56498292e4350e6209ef44b1d12
+  minio: registry.example.com/bike4mind/minio:tested-revision
+  mc: registry.example.com/bike4mind/mc:tested-revision
+config:
+  APP_URL: http://localhost:3000
+  WEBSOCKET_URL: ws://localhost:3001
+  CHAT_COMPLETION_PUBLIC_URL: http://localhost:8788
+# agentExecutor:
+#   enabled: true
+#   image: registry.example.com/bike4mind/agentexecutor:tested-revision

@@ -99,6 +99,21 @@ const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFil
         daysAfterInitiation: 1,
       },
     },
+    {
+      // Oversized generated audio handed back as a 1h signed URL (generatedAudioDelivery.ts);
+      // nothing else deletes it. Prefix must stay in sync with GENERATED_AUDIO_OFFLOAD_PREFIX there.
+      id: 'expire-generated-audio-offload',
+      status: 'Enabled',
+      filter: {
+        prefix: 'generated-audio-offload/',
+      },
+      expiration: {
+        days: 1,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+    },
   ],
 });
 
@@ -238,9 +253,6 @@ const appFilesBucketNotification = appFilesBucket.notify({
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
-        logging: {
-          retention: '3 days',
-        },
       },
       events: ['s3:ObjectCreated:*'],
     },
@@ -356,9 +368,6 @@ const uploadCompleteFunction = new sst.aws.Function('HistoryUploadCompleteFuncti
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
-  logging: {
-    retention: '3 days',
-  },
 });
 
 const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunction', {
@@ -368,9 +377,6 @@ const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunct
   vpc: lambdaVpc,
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: '3 days',
   },
   timeout: '5 minutes', // Longer timeout for large imports
   memory: '1024 MB', // More memory for processing

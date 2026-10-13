@@ -9,7 +9,6 @@ import type { IUserDocument } from '@bike4mind/common';
 const mockVerifyMFA = vi.fn();
 vi.mock('@bike4mind/auth/mfaService', () => ({
   verifyMFA: (...a: unknown[]) => mockVerifyMFA(...a),
-  clearFailedAttempts: () => null,
   isUserLockedOut: () => false,
   getLockoutTimeRemaining: () => 0,
 }));

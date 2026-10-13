@@ -57,7 +57,7 @@ const capOrg = {
   id: 'org-1',
   currentCredits: 1000,
   maxCreditsPerMember: 5,
-  userDetails: [{ id: 'user-1', usedCredits: 50 }],
+  userDetails: [{ id: 'user-1', usedCredits: 50, periodStart: new Date() }],
 };
 
 const mockMarkFailed = vi.fn().mockResolvedValue(undefined);
@@ -160,8 +160,16 @@ describe('agentExecutor DAG-node refusal paths fire onDagNodeTerminal', () => {
 
 describe('buildInProcessCreditCapCheck', () => {
   it('re-fetches organization on every call, so it reflects credits billed since the calling entry-gate snapshot', async () => {
-    const notYetCapped = { id: 'org-1', maxCreditsPerMember: 5, userDetails: [{ id: 'user-1', usedCredits: 4 }] };
-    const nowCapped = { id: 'org-1', maxCreditsPerMember: 5, userDetails: [{ id: 'user-1', usedCredits: 5 }] };
+    const notYetCapped = {
+      id: 'org-1',
+      maxCreditsPerMember: 5,
+      userDetails: [{ id: 'user-1', usedCredits: 4, periodStart: new Date() }],
+    };
+    const nowCapped = {
+      id: 'org-1',
+      maxCreditsPerMember: 5,
+      userDetails: [{ id: 'user-1', usedCredits: 5, periodStart: new Date() }],
+    };
     const findById = vi
       .fn()
       .mockResolvedValueOnce(notYetCapped as never)

@@ -1,6 +1,6 @@
 import { Content, GenerationConfig, GoogleGenAI, Part, Tool } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -28,6 +28,7 @@ import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifa
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { withAbortListener } from './withAbortListener';
+import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
 
 type ToolCall = {
@@ -39,6 +40,7 @@ type ToolCall = {
 
 type GeminiPart = {
   text?: string;
+  thought?: boolean; // reasoning part, not answer text
   functionCall?: {
     name?: string;
     args?: Record<string, unknown>;
@@ -65,10 +67,16 @@ export class GeminiBackend implements ICompletionBackend {
   private _api: GoogleGenAI;
   private logger: Logger;
   public currentModel: string = '';
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string, logger?: Logger) {
     this._api = new GoogleGenAI({ apiKey });
     this.logger = logger ?? new Logger();
+  }
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
   }
 
   /**
@@ -556,9 +564,11 @@ export class GeminiBackend implements ICompletionBackend {
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = modelName;
-    const modelInfo = (await this.getModelInfo()).find(model => model.id === modelName);
+    // A catalog-only id (one model discovery promoted) is absent from the literal list,
+    // so fall back to the record getLlmByModel handed over.
+    const modelInfo =
+      (await this.getModelInfo()).find(model => model.id === modelName) ?? this._dispatch.for(modelName);
     if (!modelInfo) {
-      // Unlikely:
       throw new Error(`Model ${modelName} not found`);
     }
 
@@ -656,6 +666,8 @@ export class GeminiBackend implements ICompletionBackend {
     // complete() call further down.
     let turnInputTokens = 0;
     let turnOutputTokens = 0;
+    // This round's visible answer text (thought parts excluded), for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
 
     if (options.stream) {
       try {
@@ -682,6 +694,7 @@ export class GeminiBackend implements ICompletionBackend {
                 // Gemini already sends incremental text deltas, not accumulated text
                 // Accumulate text if multiple parts have text
                 streamedText[i] = (streamedText[i] || '') + part.text;
+                if (!part.thought) streamedRoundText += part.text;
               }
 
               // Check for functionCall in various possible formats
@@ -917,6 +930,28 @@ export class GeminiBackend implements ICompletionBackend {
               }
             }
 
+            if (
+              shouldEndTurnAfterTools(
+                toolCalls.map(tc => tc.name),
+                options.tools,
+                streamedRoundText
+              )
+            ) {
+              this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+                model: modelName,
+                toolsExecuted: toolCalls.map(tc => tc.name),
+              });
+              // Same terminal shape as the no-tool end of turn: accum + this turn's tokens.
+              await (artifactGuard?.callback ?? callback)([], {
+                toolsUsed,
+                inputTokens: accumInputTokens + turnInputTokens,
+                outputTokens: accumOutputTokens + turnOutputTokens,
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // Add newline separator before recursive call to ensure proper markdown rendering
             await callback(['\n\n'], { toolsUsed });
 
@@ -1000,6 +1035,7 @@ export class GeminiBackend implements ICompletionBackend {
           candidate.content?.parts?.forEach((part: GeminiPart) => {
             if (part.text) {
               textParts.push(part.text);
+              if (!part.thought) streamedRoundText += part.text;
             }
             if (part.functionCall) {
               this.registerToolCall(part.functionCall, part, toolCalls, toolsUsed);
@@ -1169,6 +1205,28 @@ export class GeminiBackend implements ICompletionBackend {
               ],
             } as IMessage);
           }
+        }
+
+        if (
+          shouldEndTurnAfterTools(
+            toolCalls.map(tc => tc.name),
+            options.tools,
+            streamedRoundText
+          )
+        ) {
+          this.logger.info('[Tool Execution] Ending turn: answer already sent, only end-of-turn tools ran', {
+            model: modelName,
+            toolsExecuted: toolCalls.map(tc => tc.name),
+          });
+          // Same terminal shape as the no-tool end of turn: accum + this turn's tokens.
+          await (artifactGuard?.callback ?? callback)([], {
+            toolsUsed,
+            inputTokens: accumInputTokens + turnInputTokens,
+            outputTokens: accumOutputTokens + turnOutputTokens,
+            stopReason: 'tool_use',
+          });
+          if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+          return;
         }
 
         // Add newline separator before recursive call to ensure proper markdown rendering

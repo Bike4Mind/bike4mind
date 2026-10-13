@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
-import { visibleReplyForExport } from '@client/app/utils/replyUtils';
+import { visibleReplyForExport } from '@client/shared/replyUtils';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
 import {
   DocxColors,

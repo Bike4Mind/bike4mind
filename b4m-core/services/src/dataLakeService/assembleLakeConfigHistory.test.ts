@@ -39,15 +39,21 @@ const event = (over: Partial<ILakeConfigChangeEventDocument> = {}) =>
 
 const adapters = (
   events: ILakeConfigChangeEventDocument[],
-  over: { findByIds?: ReturnType<typeof vi.fn>; limit?: number } = {}
+  over: { findByIds?: ReturnType<typeof vi.fn>; find?: ReturnType<typeof vi.fn>; limit?: number } = {}
 ) => {
   const listByLake = vi.fn().mockResolvedValue(events);
   const findByIds = over.findByIds ?? vi.fn().mockResolvedValue([]);
+  const find = over.find ?? vi.fn().mockResolvedValue([]);
   return {
     listByLake,
     findByIds,
+    find,
     adapters: {
-      db: { lakeConfigChangeEvents: { listByLake }, users: { findByIds } as never },
+      db: {
+        lakeConfigChangeEvents: { listByLake },
+        users: { findByIds } as never,
+        userApiKeys: { find } as never,
+      },
       limit: over.limit,
       now: new Date('2026-08-18T12:00:00Z'),
     },
@@ -463,6 +469,74 @@ describe('assembleLakeConfigHistory', () => {
       });
       const view = await assembleLakeConfigHistory(lake(), a);
       expect(view.entries[0].principalName).toBeUndefined();
+    });
+  });
+
+  describe('API-key principals', () => {
+    const KEY = '0000000000000000000000aa';
+    const USER = '000000000000000000000001';
+    // Id-sensitive, like the findByIds fakes: only keys whose id was actually asked for come back.
+    const keyFind = (keys: { id: string; name: string }[]) =>
+      vi.fn(async (filter: { _id: { $in: string[] } }) => keys.filter(k => filter._id.$in.includes(k.id)));
+
+    it("resolves an apiKey row to the key's name", async () => {
+      const find = keyFind([{ id: KEY, name: 'CI key' }]);
+      const { adapters: a } = adapters([event({ principalKind: 'apiKey', principalId: KEY })], { find });
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(find).toHaveBeenCalledWith({ _id: { $in: [KEY] } });
+      expect(view.entries[0].principalName).toBe('CI key');
+    });
+
+    it('leaves a deleted or missing key unnamed so the consumer falls back to the raw id', async () => {
+      const { adapters: a } = adapters([event({ principalKind: 'apiKey', principalId: KEY })]);
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(view.entries[0].principalName).toBeUndefined();
+      expect(view.entries[0].principalId).toBe(KEY);
+    });
+
+    it('never hands a malformed key id to find, so it cannot 500 the view', async () => {
+      const { find, adapters: a } = adapters([event({ principalKind: 'apiKey', principalId: 'not-an-oid' })]);
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(find).not.toHaveBeenCalled();
+      expect(view.entries[0].principalName).toBeUndefined();
+    });
+
+    it('skips the key lookup when the window has no apiKey rows', async () => {
+      const { find, adapters: a } = adapters([event()]);
+      await assembleLakeConfigHistory(lake(), a);
+      expect(find).not.toHaveBeenCalled();
+    });
+
+    it('keeps a key name out of userNames and off a user row whose id collides with it', async () => {
+      const find = keyFind([{ id: KEY, name: 'CI key' }]);
+      const { adapters: a } = adapters(
+        [
+          event({ id: 'e1', principalKind: 'apiKey', principalId: KEY, onBehalfOfUserId: KEY }),
+          event({ id: 'e2', principalKind: 'user', principalId: KEY }),
+        ],
+        { find }
+      );
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(view.entries[0].principalName).toBe('CI key');
+      expect(view.entries[0].onBehalfOfName).toBeUndefined();
+      expect(view.entries[1].principalName).toBeUndefined();
+      expect(view.userNames).toEqual({});
+    });
+
+    it('resolves user and apiKey rows side by side, sending findByIds only user ids', async () => {
+      const find = keyFind([{ id: KEY, name: 'CI key' }]);
+      const findByIds = vi.fn().mockResolvedValue([{ id: USER, name: 'Ada' }]);
+      const { adapters: a } = adapters(
+        [
+          event({ id: 'e1', principalKind: 'apiKey', principalId: KEY, onBehalfOfUserId: USER }),
+          event({ id: 'e2', principalKind: 'user', principalId: USER }),
+        ],
+        { find, findByIds }
+      );
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(findByIds).toHaveBeenCalledWith([USER]);
+      expect(view.entries.map(e => e.principalName)).toEqual(['CI key', 'Ada']);
+      expect(view.entries[0].onBehalfOfName).toBe('Ada');
     });
   });
 

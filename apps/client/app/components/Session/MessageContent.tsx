@@ -7,6 +7,7 @@ import PromptReplies from '@client/app/components/Session/PromptReplies';
 import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
 import ReasoningDisclosure from '@client/app/components/Session/AgentExecution/ReasoningDisclosure';
 import AutoRouteBadge from '@client/app/components/Session/AgentExecution/AutoRouteBadge';
+import FallbackModelNote from '@client/app/components/Session/FallbackModelNote';
 import UserPrompt from '@client/app/components/Session/UserPrompt';
 import ResearchModeResponseDisplay from '@client/app/components/Session/ResearchModeResponseDisplay';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
@@ -34,7 +35,7 @@ import React, { lazy, memo, useCallback, useEffect, useMemo, useState, Suspense 
 const TavernArtifactRenderer = lazy(() => import('../tavern/TavernArtifactRenderer'));
 import { useForkSession, useGetSession, useSnipSession } from '@client/app/hooks/data/sessions';
 import { getWorkspaceSurface, type WorkspaceSurface } from '@bike4mind/common';
-import { surfaceRouteExists, useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
+import { surfaceRouteExists, useWorkspacePresenter, useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
 import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
 import { Refresh } from '@mui/icons-material';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -46,6 +47,7 @@ import { useNavigate } from '@tanstack/react-router';
 import BugReportModal from '@client/app/components/BugReportModal';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import { CorrectionComposer } from './CorrectionComposer';
+import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
@@ -67,6 +69,9 @@ import { Article as ArticleIcon } from '@mui/icons-material';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import EditIcon from '@mui/icons-material/Edit';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import { formatAnswerCost } from '@client/app/utils/formatCredits';
+import { answerCostBreakdown, formatCostParts } from '@client/app/utils/answerCostBreakdown';
+import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
@@ -79,7 +84,7 @@ import { useGetQuest, useUpdateQuest } from '@client/app/hooks/data/quests';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { extractReplies } from '@client/app/utils/replyUtils';
+import { extractReplies } from '@client/shared/replyUtils';
 import { detectChatContentType } from '@client/app/utils/contentTypes';
 import { saveToFileAndWorkbench } from '@client/app/utils/fabFileUtils';
 import ToolsUsed from '@client/app/components/Session/ToolsUsed';
@@ -173,6 +178,7 @@ const MessageContent: React.FC<ContentProps> = memo(
     const forkSession = useForkSession();
     const { data: sourceSession } = useGetSession(sessionId);
     const { current: currentWorkspace, copyTargets: forkTargets } = useWorkspaceTargets(sourceSession);
+    const presentWorkspace = useWorkspacePresenter();
     // Destination picked from "Fork into"; null = the source's own workspace (a plain fork).
     const [forkTarget, setForkTarget] = useState<WorkspaceSurface | null>(null);
     const snipSession = useSnipSession();
@@ -275,6 +281,7 @@ const MessageContent: React.FC<ContentProps> = memo(
     const { settings: userSettings } = useUserSettings();
     const contextBreakdownAvailable = !!messageData.id && userSettings.contextTelemetryLevel !== 'none';
     const triggerEdit = useMessageEditMode(s => s.triggerEdit);
+    const readOnly = useSessionReadOnly();
 
     const [isBugReportModalOpen, setIsBugReportModalOpen] = useState(false);
     const [isCorrecting, setIsCorrecting] = useState(false);
@@ -513,7 +520,8 @@ const MessageContent: React.FC<ContentProps> = memo(
           ...(target ? { targetSurface: target.id } : {}),
         });
         // Open the fork in its home workspace; an unregistered or unshipped one keeps the notebook route.
-        const home = getWorkspaceSurface(data?.surface);
+        const registered = getWorkspaceSurface(data?.surface);
+        const home = registered && presentWorkspace(registered);
         if (home && surfaceRouteExists(home) && data?.id) navigate({ href: home.sessionHref(data.id) });
         else navigate({ to: '/notebooks/$id', params: { id: data?.id || '' } });
       } catch (error) {
@@ -608,7 +616,7 @@ const MessageContent: React.FC<ContentProps> = memo(
 
     // Only offered on a turn that actually produced an answer and was persisted: there is nothing
     // to correct on a turn still running, and an optimistic id is not a link anything can resolve.
-    const canCorrect = isPersistedMessage && !isProcessingPrompt && hasShareableReply;
+    const canCorrect = !readOnly && isPersistedMessage && !isProcessingPrompt && hasShareableReply;
 
     const correctAndRetryButton = canCorrect ? (
       <Tooltip title="Tell the assistant what was wrong and get a corrected answer">
@@ -680,6 +688,8 @@ const MessageContent: React.FC<ContentProps> = memo(
       const modelInfo = modelInfoRepo.find(m => m.id === modelName);
       return modelInfo?.name || modelName;
     };
+
+    const costParts = answerCostBreakdown(messageData.promptMeta, getToolDisplayName);
 
     return (
       <Stack
@@ -764,7 +774,7 @@ const MessageContent: React.FC<ContentProps> = memo(
         {showSnipModal && (
           <ConfirmActionModal
             className="session-middle-snip-modal"
-            title="Quickstart Notebook from thisMessage?"
+            title="Quickstart Notebook from this Message?"
             description="Are you sure you want to quickstart a notebook from this message?"
             onGoBackward={() => setShowSnipModal(false)}
             onGoForward={() => {
@@ -779,7 +789,7 @@ const MessageContent: React.FC<ContentProps> = memo(
           <UserPrompt
             prompt={messageData.prompt}
             messageFiles={messageFiles}
-            onEdit={prompt => onSendMessage({ ...messageData, prompt }, { isRetry: true })}
+            onEdit={readOnly ? undefined : prompt => onSendMessage({ ...messageData, prompt }, { isRetry: true })}
             onSendMessage={onSendMessage}
             search={search}
             messageId={messageData.id}
@@ -795,6 +805,8 @@ const MessageContent: React.FC<ContentProps> = memo(
         {(messageData.routingSource === 'classifier' || messageData.routingSource === 'complexity') && (
           <AutoRouteBadge source={messageData.routingSource} />
         )}
+        {/* An error turn has no answer to attribute; recovery paths can leave the record behind. */}
+        {messageData.type !== 'error' && <FallbackModelNote fallbackInfo={messageData.fallbackInfo ?? undefined} />}
         {/* Conditional rendering: Research Mode vs Standard Response */}
         {messageData.researchModeResults && messageData.researchModeResults.length > 0 ? (
           <ResearchModeResponseDisplay
@@ -902,6 +914,8 @@ const MessageContent: React.FC<ContentProps> = memo(
               const disableResearchMode = useLLM.getState().setResearchMode;
               disableResearchMode({ enabled: false });
             }}
+            // Last, so it overrides the handlers above: without them the picker renders no buttons.
+            {...(readOnly && { onSelectResponse: undefined, onDeselectResponse: undefined, onUseModel: undefined })}
           />
         ) : (
           <PromptReplies
@@ -911,15 +925,19 @@ const MessageContent: React.FC<ContentProps> = memo(
             search={search}
             isExpandable={isExpandable}
             messageId={messageData.id}
-            onEdit={(newReply: string) => {
-              if (!messageData.id || !sessionId) return;
-              const update = messageData.reply ? { reply: newReply } : { replies: [newReply] };
-              updateQuest.mutate({
-                sessionId,
-                id: messageData.id,
-                update,
-              });
-            }}
+            onEdit={
+              readOnly
+                ? undefined
+                : (newReply: string) => {
+                    if (!messageData.id || !sessionId) return;
+                    const update = messageData.reply ? { reply: newReply } : { replies: [newReply] };
+                    updateQuest.mutate({
+                      sessionId,
+                      id: messageData.id,
+                      update,
+                    });
+                  }
+            }
           />
         )}
         {/* "Show reasoning" disclosure — only present when this Quest was
@@ -978,7 +996,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             holds; it is only the "the turn you are still thinking about" part that weakens.
             Rendered here rather than inside either action row so the desktop/mobile branches below
             cannot drift into showing it twice or not at all. */}
-        {!isProcessingPrompt && isLastMessage && (
+        {!readOnly && !isProcessingPrompt && isLastMessage && (
           <AnswerFeedbackPrompt
             promptMeta={messageData.promptMeta}
             questId={isPersistedMessage ? messageData.id : undefined}
@@ -1047,20 +1065,23 @@ const MessageContent: React.FC<ContentProps> = memo(
                         borderRadius: '6px',
                       })}
                     >
-                      <MenuItem
-                        onClick={() => {
-                          if (messageData.prompt) {
-                            triggerEdit(messageData.id!, 'prompt');
-                          } else {
-                            triggerEdit(messageData.id!, 'reply');
-                          }
-                        }}
-                      >
-                        <ListItemDecorator>
-                          <EditIcon />
-                        </ListItemDecorator>
-                        Edit
-                      </MenuItem>
+                      {!readOnly && (
+                        <MenuItem
+                          data-testid="message-menu-edit"
+                          onClick={() => {
+                            if (messageData.prompt) {
+                              triggerEdit(messageData.id!, 'prompt');
+                            } else {
+                              triggerEdit(messageData.id!, 'reply');
+                            }
+                          }}
+                        >
+                          <ListItemDecorator>
+                            <EditIcon />
+                          </ListItemDecorator>
+                          Edit
+                        </MenuItem>
+                      )}
                       <MenuItem onClick={handleOpenPromptMetaInspector}>
                         <ListItemDecorator>
                           <HiveIcon />
@@ -1078,39 +1099,49 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Context
                         </MenuItem>
                       )}
-                      <MenuItem onClick={() => onPinToggle(messageData)}>
-                        <ListItemDecorator>
-                          {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
-                        </ListItemDecorator>
-                        {messageData.pinned ? 'Unpin' : 'Pin'}
-                      </MenuItem>
-                      {canUseAdminTools && (
-                        <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
-                          <ListItemDecorator>
-                            <ArticleIcon />
-                          </ListItemDecorator>
-                          Publish
-                        </MenuItem>
+                      {!readOnly && (
+                        <>
+                          <MenuItem data-testid="message-menu-pin" onClick={() => onPinToggle(messageData)}>
+                            <ListItemDecorator>
+                              {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
+                            </ListItemDecorator>
+                            {messageData.pinned ? 'Unpin' : 'Pin'}
+                          </MenuItem>
+                          {canUseAdminTools && (
+                            <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
+                              <ListItemDecorator>
+                                <ArticleIcon />
+                              </ListItemDecorator>
+                              Publish
+                            </MenuItem>
+                          )}
+                          {forkMenuItems}
+                          <MenuItem data-testid="message-menu-quickstart" onClick={() => setShowSnipModal(true)}>
+                            <ListItemDecorator>
+                              <StartIcon />
+                            </ListItemDecorator>
+                            Quickstart
+                          </MenuItem>
+                          <MenuItem
+                            data-testid="message-menu-try-again"
+                            onClick={() => onSendMessage(messageData, { isRetry: true })}
+                          >
+                            <ListItemDecorator>
+                              <Refresh />
+                            </ListItemDecorator>
+                            Try Again
+                          </MenuItem>
+                          <MenuItem
+                            data-testid="message-menu-reprompt"
+                            onClick={() => onSendMessage(messageData, { isVariation: true })}
+                          >
+                            <ListItemDecorator>
+                              <AddIcon />
+                            </ListItemDecorator>
+                            Re-prompt
+                          </MenuItem>
+                        </>
                       )}
-                      {forkMenuItems}
-                      <MenuItem onClick={() => setShowSnipModal(true)}>
-                        <ListItemDecorator>
-                          <StartIcon />
-                        </ListItemDecorator>
-                        Quickstart
-                      </MenuItem>
-                      <MenuItem onClick={() => onSendMessage(messageData, { isRetry: true })}>
-                        <ListItemDecorator>
-                          <Refresh />
-                        </ListItemDecorator>
-                        Try Again
-                      </MenuItem>
-                      <MenuItem onClick={() => onSendMessage(messageData, { isVariation: true })}>
-                        <ListItemDecorator>
-                          <AddIcon />
-                        </ListItemDecorator>
-                        Re-prompt
-                      </MenuItem>
                       <MenuItem onClick={toggleSyntaxHighlight}>
                         <ListItemDecorator>
                           <CodeIcon />
@@ -1123,7 +1154,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                         </ListItemDecorator>
                         Save as {detectChatContentType(messageData.replies?.[0] || '')}
                       </MenuItem>
-                      {isFeatureEnabled('EnableDataLakes') && (
+                      {!readOnly && isFeatureEnabled('EnableDataLakes') && (
                         <MenuItem
                           onClick={() => handleSendReplyToDataLake(messageData)}
                           data-testid="message-send-to-datalake"
@@ -1134,12 +1165,18 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Send to {DATA_LAKE}
                         </MenuItem>
                       )}
-                      <MenuItem onClick={() => handleDelete(messageData)} color="danger">
-                        <ListItemDecorator sx={{ color: 'inherit' }}>
-                          <DeleteOutline />
-                        </ListItemDecorator>
-                        Delete
-                      </MenuItem>
+                      {!readOnly && (
+                        <MenuItem
+                          data-testid="message-menu-delete"
+                          onClick={() => handleDelete(messageData)}
+                          color="danger"
+                        >
+                          <ListItemDecorator sx={{ color: 'inherit' }}>
+                            <DeleteOutline />
+                          </ListItemDecorator>
+                          Delete
+                        </MenuItem>
+                      )}
                     </Menu>
                   </Dropdown>
 
@@ -1151,9 +1188,9 @@ const MessageContent: React.FC<ContentProps> = memo(
                     variant="plain"
                     triggerSx={chatActionButtonSx}
                   />
-                  {reportButton}
+                  {!readOnly && reportButton}
                   {correctAndRetryButton}
-                  {hasShareableReply && shareButton}
+                  {!readOnly && hasShareableReply && shareButton}
 
                   {/* Keep the modals */}
                   <BugReportModal
@@ -1201,20 +1238,23 @@ const MessageContent: React.FC<ContentProps> = memo(
                         borderRadius: '6px',
                       })}
                     >
-                      <MenuItem
-                        onClick={() => {
-                          if (messageData.prompt) {
-                            triggerEdit(messageData.id!, 'prompt');
-                          } else {
-                            triggerEdit(messageData.id!, 'reply');
-                          }
-                        }}
-                      >
-                        <ListItemDecorator>
-                          <EditIcon />
-                        </ListItemDecorator>
-                        Edit
-                      </MenuItem>
+                      {!readOnly && (
+                        <MenuItem
+                          data-testid="message-menu-edit"
+                          onClick={() => {
+                            if (messageData.prompt) {
+                              triggerEdit(messageData.id!, 'prompt');
+                            } else {
+                              triggerEdit(messageData.id!, 'reply');
+                            }
+                          }}
+                        >
+                          <ListItemDecorator>
+                            <EditIcon />
+                          </ListItemDecorator>
+                          Edit
+                        </MenuItem>
+                      )}
                       <MenuItem onClick={handleOpenPromptMetaInspector}>
                         <ListItemDecorator>
                           <HiveIcon />
@@ -1232,39 +1272,49 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Context
                         </MenuItem>
                       )}
-                      <MenuItem onClick={() => onPinToggle(messageData)}>
-                        <ListItemDecorator>
-                          {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
-                        </ListItemDecorator>
-                        {messageData.pinned ? 'Unpin' : 'Pin'}
-                      </MenuItem>
-                      {canUseAdminTools && (
-                        <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
-                          <ListItemDecorator>
-                            <ArticleIcon />
-                          </ListItemDecorator>
-                          Publish
-                        </MenuItem>
+                      {!readOnly && (
+                        <>
+                          <MenuItem data-testid="message-menu-pin" onClick={() => onPinToggle(messageData)}>
+                            <ListItemDecorator>
+                              {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
+                            </ListItemDecorator>
+                            {messageData.pinned ? 'Unpin' : 'Pin'}
+                          </MenuItem>
+                          {canUseAdminTools && (
+                            <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
+                              <ListItemDecorator>
+                                <ArticleIcon />
+                              </ListItemDecorator>
+                              Publish
+                            </MenuItem>
+                          )}
+                          {forkMenuItems}
+                          <MenuItem data-testid="message-menu-quickstart" onClick={() => setShowSnipModal(true)}>
+                            <ListItemDecorator>
+                              <StartIcon />
+                            </ListItemDecorator>
+                            Quickstart
+                          </MenuItem>
+                          <MenuItem
+                            data-testid="message-menu-try-again"
+                            onClick={() => onSendMessage(messageData, { isRetry: true })}
+                          >
+                            <ListItemDecorator>
+                              <Refresh />
+                            </ListItemDecorator>
+                            Try Again
+                          </MenuItem>
+                          <MenuItem
+                            data-testid="message-menu-reprompt"
+                            onClick={() => onSendMessage(messageData, { isVariation: true })}
+                          >
+                            <ListItemDecorator>
+                              <AddIcon />
+                            </ListItemDecorator>
+                            Re-prompt
+                          </MenuItem>
+                        </>
                       )}
-                      {forkMenuItems}
-                      <MenuItem onClick={() => setShowSnipModal(true)}>
-                        <ListItemDecorator>
-                          <StartIcon />
-                        </ListItemDecorator>
-                        Quickstart
-                      </MenuItem>
-                      <MenuItem onClick={() => onSendMessage(messageData, { isRetry: true })}>
-                        <ListItemDecorator>
-                          <Refresh />
-                        </ListItemDecorator>
-                        Try Again
-                      </MenuItem>
-                      <MenuItem onClick={() => onSendMessage(messageData, { isVariation: true })}>
-                        <ListItemDecorator>
-                          <AddIcon />
-                        </ListItemDecorator>
-                        Re-prompt
-                      </MenuItem>
                       <MenuItem onClick={toggleSyntaxHighlight}>
                         <ListItemDecorator>
                           <CodeIcon />
@@ -1277,7 +1327,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                         </ListItemDecorator>
                         Save as {detectChatContentType(messageData.replies?.[0] || '')}
                       </MenuItem>
-                      {isFeatureEnabled('EnableDataLakes') && (
+                      {!readOnly && isFeatureEnabled('EnableDataLakes') && (
                         <MenuItem
                           onClick={() => handleSendReplyToDataLake(messageData)}
                           data-testid="message-send-to-datalake"
@@ -1288,12 +1338,18 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Send to {DATA_LAKE}
                         </MenuItem>
                       )}
-                      <MenuItem onClick={() => handleDelete(messageData)} color="danger">
-                        <ListItemDecorator sx={{ color: 'inherit' }}>
-                          <DeleteOutline />
-                        </ListItemDecorator>
-                        Delete
-                      </MenuItem>
+                      {!readOnly && (
+                        <MenuItem
+                          data-testid="message-menu-delete"
+                          onClick={() => handleDelete(messageData)}
+                          color="danger"
+                        >
+                          <ListItemDecorator sx={{ color: 'inherit' }}>
+                            <DeleteOutline />
+                          </ListItemDecorator>
+                          Delete
+                        </MenuItem>
+                      )}
                     </Menu>
                   </Dropdown>
 
@@ -1305,9 +1361,9 @@ const MessageContent: React.FC<ContentProps> = memo(
                     variant="plain"
                     triggerSx={chatActionButtonSx}
                   />
-                  {reportButton}
+                  {!readOnly && reportButton}
                   {correctAndRetryButton}
-                  {hasShareableReply && shareButton}
+                  {!readOnly && hasShareableReply && shareButton}
 
                   {/* Keep the modals */}
                   <BugReportModal
@@ -1338,10 +1394,26 @@ const MessageContent: React.FC<ContentProps> = memo(
             )}
 
             {adminSettings.enforceCredits &&
-            currentUser?.showCreditsUsed &&
+            currentUser?.showCreditsUsed !== false &&
             !isProcessingPrompt &&
-            messageData.creditsUsed !== undefined ? (
-              <Tooltip title={`Credits Used: ${messageData.creditsUsed ?? 0}`}>
+            typeof messageData.creditsUsed === 'number' ? (
+              <Tooltip
+                title={
+                  costParts.length > 0 ? (
+                    <Box data-testid="credits-used-breakdown">
+                      {costParts.map(part => (
+                        <Box key={`${part.label}|${part.model ?? ''}`}>
+                          {part.label}
+                          {part.model ? ` (${getModelDisplayName(part.model)})` : ''}: {formatAnswerCost(part.credits)}
+                        </Box>
+                      ))}
+                      <Box sx={{ mt: 0.5 }}>You can hide this in your profile.</Box>
+                    </Box>
+                  ) : (
+                    'Credits this answer used. You can hide this in your profile.'
+                  )
+                }
+              >
                 <Chip
                   data-testid="credits-used"
                   size="sm"
@@ -1349,7 +1421,8 @@ const MessageContent: React.FC<ContentProps> = memo(
                   sx={messageMetaChipSx}
                   startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
                 >
-                  {messageData.creditsUsed ?? 0}
+                  {formatAnswerCost(messageData.creditsUsed)}
+                  {costParts.length > 0 && ` (${formatCostParts(costParts)})`}
                 </Chip>
               </Tooltip>
             ) : null}

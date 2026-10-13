@@ -44,6 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   adminSettingsRepository: {},
   fallbackLakeSettingsRepository: {},
+  orgGitHubLakeConnectionRepository: {},
 }));
 
 import '../index';

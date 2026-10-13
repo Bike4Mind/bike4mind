@@ -83,6 +83,50 @@ export interface IMFAConfig {
 }
 
 /**
+ * A WebAuthn credential (passkey) enrolled as an additional MFA method. Lives in its own
+ * collection rather than on `IMFAConfig`: the user model's guard strips any `mfa` write that
+ * lacks the select:false `totpSecret`, which a credential write would routinely trip.
+ * Binary fields are base64url-encoded.
+ */
+export interface IPasskeyCredential {
+  id: string;
+  userId: string;
+  credentialId: string;
+  /** COSE-encoded public key. */
+  publicKey: string;
+  /** Authenticator signature counter; a regression on use signals a cloned authenticator. */
+  counter: number;
+  transports?: string[];
+  deviceType: 'singleDevice' | 'multiDevice';
+  backedUp: boolean;
+  name: string;
+  createdAt: Date;
+  lastUsedAt?: Date;
+}
+
+export type PasskeyChallengePurpose = 'registration' | 'authentication';
+
+export interface IPasskeyCredentialRepository {
+  create(input: Omit<IPasskeyCredential, 'id' | 'createdAt' | 'lastUsedAt'>): Promise<IPasskeyCredential>;
+  listByUser(userId: string): Promise<IPasskeyCredential[]>;
+  countByUser(userId: string): Promise<number>;
+  findByCredentialId(userId: string, credentialId: string): Promise<IPasskeyCredential | null>;
+  recordUse(id: string, counter: number): Promise<void>;
+  /** Returns true when a credential was actually removed (false = unknown id or not this user's). */
+  remove(id: string, userId: string): Promise<boolean>;
+  removeAllForUser(userId: string): Promise<number>;
+}
+
+/**
+ * Server-held WebAuthn challenges. One live challenge per user + purpose; `consume` returns it
+ * at most once, so a captured ceremony response cannot be replayed.
+ */
+export interface IPasskeyChallengeRepository {
+  issue(userId: string, purpose: PasskeyChallengePurpose, challenge: string): Promise<void>;
+  consume(userId: string, purpose: PasskeyChallengePurpose): Promise<string | null>;
+}
+
+/**
  * User preferences that are synced to the database for cross-device persistence.
  * All fields are optional - missing/null means "use default".
  */
@@ -200,8 +244,10 @@ export interface IUser extends ICreditHolder {
   /**
    * Invite-resolved credit amount awaiting proof of email ownership. Set at
    * registration alongside PENDING_FREE_CREDITS_TAG; released (and nulled) by
-   * registerViaOTC or the email-verify route. Null when nothing is pending - the
-   * open-registration path leaves it null and grants `defaultFreeCredits` instead.
+   * userService.releasePendingFreeCredits on OTC registration, email-link verify, first
+   * OTC login, OAuth signup/link, or the backfillPendingFreeCredits script. Null when
+   * nothing is pending - the open-registration path leaves it null and grants
+   * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
   level: UserLevelType;
@@ -569,6 +615,36 @@ export interface IUser extends ICreditHolder {
    * Used to enforce a 72-hour cooldown against cancel-and-resubscribe credit farming.
    */
   lastCreditGrantAt?: Date | null;
+
+  /**
+   * Campaign touches the browser carried at signup, written once and only with attribution consent
+   * (apps/client server/analytics/funnel.ts). Absent when there was no consented touch.
+   */
+  acquisition?: IUserAcquisition | null;
+
+  /**
+   * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so
+   * synthetic traffic never reaches conversion metrics.
+   */
+  isSynthetic?: boolean;
+
+  /** When the user first got a completed chat answer; set once, drives the first_value event. */
+  firstValueAt?: Date | null;
+}
+
+export interface IUserAcquisitionTouch {
+  source: string;
+  medium?: string;
+  campaign?: string;
+  content?: string;
+}
+
+export interface IUserAcquisition {
+  firstTouch?: IUserAcquisitionTouch;
+  lastTouch?: IUserAcquisitionTouch;
+  /** How the account was created (`otc`, `google`, `github`, ...). */
+  signupMethod: string;
+  capturedAt: Date;
 }
 
 export interface IOAuthCredentials {
@@ -604,6 +680,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * cannot mistake it for a single-user operation.
    */
   removeGroupsFromAllUsers: (groupIds: string[]) => Promise<void>;
+  /** Null `organizationId` on EVERY user pointing at the org (used when the org is deleted). */
+  clearOrganizationPointer: (organizationId: string) => Promise<void>;
   /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */

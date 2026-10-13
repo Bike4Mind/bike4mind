@@ -69,6 +69,22 @@ export const cloneSession = async (
     clonedSourceId: session.id,
     // The session's home: without it a copy made inside a product surface lands in the main list.
     surface,
+    // Create-only (not in SessionUpdateRequestSchema), so a copy that drops them can never get them back.
+    // Outside the isOwner gate: citationStyle is a rendering contract, and the retrieval keys only narrow.
+    citationStyle: session.citationStyle,
+    // temperature and maxToolCalls are plain numeric tuning knobs, safe for a share holder to inherit.
+    temperature: session.temperature,
+    maxToolCalls: session.maxToolCalls,
+    retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
+    retrievalVectorizedOnly: session.retrievalVectorizedOnly,
+    // Also outside the gate. disabledTools/disableUserIntegrations only restrict. enabledTools and
+    // systemPromptId grant nothing a share holder could not set on their own create call: tools are
+    // still filtered by availability per turn, and the prompt id resolves only through the
+    // session-activatable allowlist (sessionActivatablePrompts.ts).
+    enabledTools: session.enabledTools,
+    disabledTools: session.disabledTools,
+    disableUserIntegrations: session.disableUserIntegrations,
+    systemPromptId: session.systemPromptId,
     // Carried from the source, not re-derived: the owner's scope is already correct and explicit,
     // and re-deriving here would go through the OWNERSHIP arm alone (no resolveLakeAccess is threaded
     // to this path), which cannot see a teammate-authored organization-lake file. That derives an
@@ -99,7 +115,13 @@ export const cloneSession = async (
       ? {
           retrievalTags: session.retrievalTags,
           lakeScopeExplicit: session.lakeScopeExplicit,
+          includeLibraryFiles: session.includeLibraryFiles,
           forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
+          // Rides with the lake scope, which a non-owner does not inherit.
+          corpusGroundingMode: session.corpusGroundingMode,
+          // Injected verbatim with no allowlist, and write-only (stripped from responses), so a
+          // share holder could neither read nor vet it: owner only, like the lake scope.
+          systemPromptText: session.systemPromptText,
         }
       : {}),
   };

@@ -96,7 +96,7 @@ export interface HelpDatalakeIngestDeps {
   db: {
     fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'findAllInIds' | 'deleteManyInIds' | 'create'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'bulkInsert' | 'findFabFileIdsWithChunks'>;
-    dataLakes: Pick<IDataLakeRepository, 'findBySlug' | 'create' | 'update'>;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'create' | 'update'>;
   };
   /** Embeds one chunk with the deployment's `defaultEmbeddingModel`. */
   embed: (text: string) => Promise<number[]>;
@@ -153,7 +153,9 @@ function memberSlug(file: IFabFileDocument): string | null {
 
 /** Ensure the lake row exists and is active; returns its id. */
 async function ensureLake(deps: HelpDatalakeIngestDeps, opts: HelpDatalakeIngestOptions): Promise<string | null> {
-  const existing = await deps.db.dataLakes.findBySlug(HELP_DATALAKE_SLUG);
+  // By tag, not slug: findBySlug skips deleted/purging lakes, which would send a deleted help lake
+  // down the create path into the unique datalakeTag index instead of the reactivation below.
+  const existing = await deps.db.dataLakes.findByDatalakeTag(HELP_DATALAKE_TAG);
   if (!existing) {
     deps.logger.info(`Creating public data lake "${HELP_DATALAKE_SLUG}"`);
     if (opts.dryRun) return null;

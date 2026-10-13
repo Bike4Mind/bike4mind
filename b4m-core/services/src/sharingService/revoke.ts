@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { grantWrite } from './grantWrite';
 
 const revokeSharingSchema = z.object({
   id: z.string(),
@@ -90,11 +91,13 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
 
   document.users = document.users.filter(user => !isRevoked(user));
 
+  let write: Partial<typeof document> = grantWrite(document);
   if (type === 'projects') {
     const project = document as IProjectDocument;
     const pruned = await revokeFromProject({ project, userIdToRevoke }, adapters);
     project.fileIds = pruned.fileIds;
     project.sessionIds = pruned.sessionIds;
+    write = { ...write, fileIds: pruned.fileIds, sessionIds: pruned.sessionIds };
   } else if (!projectId && type === 'sessions') {
     // accept.ts's Session arm also pushes a plain (non-project) grant onto every file in
     // session.knowledgeIds; mirror that here so revoking the session doesn't leave those file
@@ -103,9 +106,9 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     await revokeSessionKnowledgeFileGrants({ session: document as ISessionDocument, userIdToRevoke }, adapters);
   }
 
-  // This filters `document.users` in memory and writes the whole doc back - a lost-update-sensitive
-  // grant path, so it opts in to the version guard (`updateGuarded`). Because the doc carries `__v`, a
-  // racing whole-doc write that ALSO goes through `updateGuarded` throws ConcurrencyConflictError (409,
+  // This filters `document.users` in memory and writes it back (see grantWrite) - a lost-update-sensitive
+  // grant path, so it opts in to the version guard (`updateGuarded`). Because the write carries `__v`, a
+  // racing write that ALSO goes through `updateGuarded` throws ConcurrencyConflictError (409,
   // surfaced by the shared errorHandler) instead of clobbering this revoke, and the route's
   // `withTransaction` rolls back the `revokeFromProject` side effects above on that conflict. Note the
   // guard only defends against other *guarded* writers: a plain `update` of the same doc (e.g. some
@@ -116,7 +119,7 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   // in-repo repo is a concrete BaseRepository that provides it.
   // Typed as one repository: a union of the three repos' overloaded `updateGuarded`s is not callable.
   const guarded: { updateGuarded?: RepositoryUpdate<typeof document> } = dbModel;
-  await guarded.updateGuarded!(document);
+  await guarded.updateGuarded!(write, { includeDeleted: true });
 
   return document;
 };
@@ -156,9 +159,9 @@ const revokeSessionKnowledgeFileGrants = async (
     );
     if (remaining.length === file.users.length) continue;
     file.users = remaining;
-    // Whole-doc grant write on the revocation path, same reason the main revoke below takes the
-    // guard: a racing guarded write must conflict rather than silently resurrect this grant.
-    await db.fabFiles.updateGuarded!(file);
+    // Grant write on the revocation path, same reason the main revoke above takes the guard: a
+    // racing guarded write must conflict rather than silently resurrect this grant.
+    await db.fabFiles.updateGuarded!(grantWrite(file), { includeDeleted: true });
   }
 };
 

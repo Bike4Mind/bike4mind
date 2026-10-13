@@ -19,11 +19,11 @@ import {
   ICompletionOptions,
   ICompletionOptionTools,
 } from './backend';
-import { Ollama, Message as OllamaMessage, ModelResponse, Options as OllamaOptions, Tool, ToolCall } from 'ollama';
+import { Ollama, Message as OllamaMessage, Options as OllamaOptions, Tool, ToolCall } from 'ollama';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -40,6 +40,24 @@ interface NormalizedToolCall {
   /** JSON-stringified arguments. */
   arguments: string;
   id: string;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  modified_at: Date;
+  model: string;
+  size: number;
+  digest: string;
+  details: {
+    parent_model: string;
+    format: string;
+    family: string;
+    families: string[];
+    parameter_size: string;
+    quantization_level: string;
+  };
+  expires_at: Date;
+  size_vram: number;
 }
 
 export class OllamaBackend implements ICompletionBackend {
@@ -448,6 +466,30 @@ export class OllamaBackend implements ICompletionBackend {
         return;
       }
 
+      // Content is only the answer when the calls were native; a parsed call IS the content (JSON).
+      // Tool rounds buffer content, so unlike streaming adapters it is delivered here.
+      if (
+        round.toolCalls.length > 0 &&
+        shouldEndTurnAfterTools(
+          toolCalls.map(tc => tc.name),
+          options.tools,
+          round.content
+        )
+      ) {
+        this._logger.info('[Tool Execution] Ending turn: answer already produced, only end-of-turn tools ran', {
+          model,
+          toolsExecuted: toolCalls.map(tc => tc.name),
+        });
+        await (artifactGuard?.callback ?? callback)([round.content], {
+          inputTokens,
+          outputTokens,
+          toolsUsed: executedToolsUsed,
+          stopReason: 'tool_use',
+        });
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+        return;
+      }
+
       // Recurse so the model turns the tool results into a final answer, carrying
       // the accumulated tool list and token totals forward.
       await this.complete(
@@ -851,12 +893,12 @@ export class OllamaBackend implements ICompletionBackend {
     });
   }
 
-  async listModels(): Promise<ModelResponse[]> {
+  async listModels(): Promise<OllamaModelInfo[]> {
     try {
       this._logger.debug('[OllamaBackend] Listing models from Ollama');
       const response = await this._api.list();
       this._logger.debug('[OllamaBackend] Models listed from Ollama:', response.models);
-      return response.models;
+      return response.models; // fails the build if an ollama upgrade stops fitting OllamaModelInfo
     } catch (error: any) {
       this._logger.error('[OllamaBackend] Error listing models from Ollama:', error);
       if (error.message?.includes('ECONNREFUSED') || error.message?.includes('Failed to fetch')) {

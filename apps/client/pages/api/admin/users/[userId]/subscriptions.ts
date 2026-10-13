@@ -4,7 +4,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { ApiKeyScope, IOrganizationDocument } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
-import { ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT } from '@client/lib/subscriptions/constants';
+import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -54,6 +54,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
       { field: 'name', direction: 'asc' }
     );
 
+    const { creditsPerSeat } = await getTeamPlanSettings();
     const teamSubscriptionsPromises = userOrganizations.map(async (org: IOrganizationDocument) => {
       // Find active subscription for this organization
       const subscriptions = await subscriptionRepository.findActiveSubscriptionsByOwner(
@@ -63,7 +64,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
 
       if (subscriptions.length > 0) {
         const sub = subscriptions[0]; // Take the first active subscription
-        const defaultCredits = sub.quantity * ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT;
+        const defaultCredits = sub.quantity * creditsPerSeat;
         const effectiveCredits = sub.customCreditsPerCycle ?? defaultCredits;
 
         // Repository returns plain objects via .lean({ virtuals: true })

@@ -5,7 +5,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { IAgent } from '@bike4mind/common';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import AgentQuickActions from './AgentQuickActions';
-import { LOW_CREDITS_THRESHOLD } from '@client/app/constants/agentForm';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { AgentAvatar } from '@client/app/components/Agent/AgentAvatar';
 
 interface AgentsGridProps {
@@ -16,12 +16,13 @@ interface AgentsGridProps {
 
 const AgentsGrid: FC<AgentsGridProps> = ({ agents, currentUserCredits, onAgentDelete }) => {
   const navigate = useNavigate();
+  const lowCreditsThreshold = useLowCreditsThreshold();
 
   return (
     <Grid container spacing={2} px={1}>
       {agents.map(agent => {
         const credits = agent.useOwnCredits ? agent.currentCredits || 0 : currentUserCredits || 0;
-        const isLowCredits = credits < LOW_CREDITS_THRESHOLD;
+        const isLowCredits = credits < lowCreditsThreshold;
 
         return (
           <Grid key={agent.id} xs={12} sm={6} md={4} xl={3}>

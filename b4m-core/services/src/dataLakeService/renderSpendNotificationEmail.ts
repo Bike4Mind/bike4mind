@@ -5,8 +5,8 @@ import type {
 } from '@bike4mind/common';
 
 /**
- * Minimal HTML escaper for values interpolated into a lake-related email body (a lake or member
- * name is user-supplied). Exported for reuse by other lake emails (notifyKeptPersonalLakeShares.ts).
+ * Minimal HTML escaper for values interpolated into notification email bodies (user-supplied
+ * strings such as lake or key names). Exported for reuse across service-layer notification emails.
  * Local rather than reusing the app-layer escaper (viewerSecurity.ts) - this module lives in
  * b4m-core/services, which cannot import apps/client code.
  */

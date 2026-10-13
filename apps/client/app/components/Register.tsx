@@ -1,6 +1,9 @@
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
+import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
+import OtcRateLimitNotice from './OtcRateLimitNotice';
 import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
+import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import MFAModal from './common/MFAModal';
 import { useTheme } from '@mui/joy/styles';
@@ -31,11 +34,13 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import React, { useEffect, useState, useRef } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
+import { dismissOtcCodeSentToast, toastOtcCodeSent } from './otcToast';
 import useGetLogo from '../hooks/useGetLogo';
 import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
+import { isSubmittableOtcCode, OTC_CODE_PLACEHOLDER, sanitizeOtcInput } from '@client/app/utils/otcCode';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
@@ -67,6 +72,7 @@ const Register: React.FC = () => {
   const { t } = useTranslation();
 
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
+  const rateLimit = useOtcRateLimit();
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
 
   const [createError, setCreateError] = React.useState<string | null>(null);
@@ -85,7 +91,9 @@ const Register: React.FC = () => {
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [mfaMode, setMfaMode] = useState<'verify' | 'setup'>('verify');
   const [mfaSetupData, setMfaSetupData] = useState<MFASetupResponse | null>(null);
+  const [mfaPasskeyAvailable, setMfaPasskeyAvailable] = useState(false);
   const verifyMFA = useVerifyMFA();
+  const verifyPasskeyMFA = useVerifyPasskeyMFA();
   const setupMFA = useSetupMFA();
   const verifyMFASetup = useVerifyMFASetup();
 
@@ -152,6 +160,8 @@ const Register: React.FC = () => {
     };
   }, []);
 
+  const resendBlockedSeconds = Math.max(resendCooldown, rateLimit.secondsLeft);
+
   const startResendCooldown = () => {
     // Match the server-side OTC_SEND_COOLDOWN_MS (30s) in /api/otc/send so the client
     // countdown doesn't block a resend the server would already allow.
@@ -190,6 +200,7 @@ const Register: React.FC = () => {
   useBrandingSettings();
 
   const onSubmit = async (data: RegisterFormData) => {
+    if (rateLimit.secondsLeft > 0) return;
     setCreateError(null);
     setServerUsernameError(null);
     setServerEmailError(null);
@@ -202,22 +213,23 @@ const Register: React.FC = () => {
       setPendingToken(result.pendingToken);
       setCurrentStep('otc');
       startResendCooldown();
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
     } catch (error: unknown) {
-      const serverMsg: string = (error as Record<string, string>)?.message || '';
-      setCreateError(serverMsg || t('auth.errors.registrationFailed'));
+      if (rateLimit.handleError(error)) return;
+      setCreateError(rateLimit.errorMessage(error, t('auth.errors.registrationFailed')));
     }
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0 || !submittedData) return;
+    if (resendCooldown > 0 || rateLimit.secondsLeft > 0 || !submittedData) return;
     try {
       const result = await sendOTC({ email: submittedData.email });
       setPendingToken(result.pendingToken);
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to resend code';
+      if (rateLimit.handleError(error)) return;
+      const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
     }
   };
@@ -239,6 +251,28 @@ const Register: React.FC = () => {
     }
   };
 
+  const finishMfaLogin = (result: { accessToken: string; user: Parameters<typeof setCurrentUser>[0] }) => {
+    resetRefreshCoordinator();
+    // Drop the cached cold-load result: this browser just acquired a session, so the next
+    // protected navigation must not reuse the "no session" answer from before login.
+    resetSessionBootstrap();
+    useAccessToken.getState().setVerifiedSession(result.accessToken);
+    setShowMFAModal(false);
+    setMfaPasskeyAvailable(false);
+    // Setting currentUser triggers the redirect effect above.
+    setCurrentUser(result.user);
+  };
+
+  const handlePasskeyVerification = async () => {
+    if (!mfaUserId) return;
+    setMfaError(null);
+    try {
+      finishMfaLogin(await verifyPasskeyMFA.mutateAsync({}));
+    } catch (error: unknown) {
+      setMfaError(describePasskeyMfaError(error));
+    }
+  };
+
   const handleMFAVerification = async (token: string) => {
     if (!mfaUserId) return;
     setMfaError(null);
@@ -249,14 +283,7 @@ const Register: React.FC = () => {
       } else {
         result = await verifyMFA.mutateAsync({ token });
       }
-      resetRefreshCoordinator();
-      // Drop the cached cold-load result: this browser just acquired a session, so the next
-      // protected navigation must not reuse the "no session" answer from before login.
-      resetSessionBootstrap();
-      useAccessToken.getState().setVerifiedSession(result.accessToken);
-      setShowMFAModal(false);
-      // Setting currentUser triggers the redirect effect above.
-      setCurrentUser(result.user);
+      finishMfaLogin(result);
     } catch (error: unknown) {
       const errorData = (error as Record<string, Record<string, Record<string, unknown>>>)?.response?.data;
       if (errorData?.forceLogout) {
@@ -278,6 +305,7 @@ const Register: React.FC = () => {
   const handleMFACancel = () => {
     useAccessToken.getState().resetTokens();
     setShowMFAModal(false);
+    setMfaPasskeyAvailable(false);
     setMfaUserId(null);
     setMfaError(null);
     setMfaMode('verify');
@@ -299,7 +327,7 @@ const Register: React.FC = () => {
 
   const handleOTCVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!submittedData || otcCode.length !== 6) return;
+    if (!submittedData || !isSubmittableOtcCode(otcCode)) return;
 
     try {
       const clientData = {
@@ -327,6 +355,7 @@ const Register: React.FC = () => {
         acceptedPolicyVersion: CURRENT_POLICY_VERSION,
         ageAttestation: submittedData.confirmAdult,
       });
+      dismissOtcCodeSentToast();
 
       // The email may already have an account - the server then answers with the LOGIN
       // shapes, including MFA challenges. Without these branches the code below would set
@@ -337,6 +366,7 @@ const Register: React.FC = () => {
         }
         setMfaUserId(response.userId);
         setMfaMode('verify');
+        setMfaPasskeyAvailable(!!response.passkeyAvailable);
         setShowMFAModal(true);
         return;
       }
@@ -447,9 +477,12 @@ const Register: React.FC = () => {
           sx={theme => ({
             maxWidth: '420px',
             width: '100%',
+            boxSizing: 'border-box',
             mx: 'auto',
             my: 'auto',
             py: '32px',
+            // disableGutters drops the side margins; a phone needs them back.
+            px: { xs: '16px', sm: 0 },
             backgroundColor: theme.palette.background.panel,
           })}
         >
@@ -562,13 +595,13 @@ const Register: React.FC = () => {
                 {/* eslint-disable-next-line react-hooks/refs -- react-hook-form's handleSubmit uses refs internally */}
                 <form className="register-form" data-testid="register-form" onSubmit={handleSubmit(onSubmit)}>
                   <Box sx={{ '& .MuiInput-root': { '--Input-minHeight': '40px' } }}>
-                    <Stack direction="row" spacing={2}>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                       <FormControl
                         className="register-username-control"
                         size="sm"
                         required
                         id="username"
-                        sx={{ width: '50%' }}
+                        sx={{ width: { xs: '100%', sm: '50%' } }}
                       >
                         <FormLabel
                           className="register-username-label"
@@ -598,16 +631,17 @@ const Register: React.FC = () => {
                           error={usernameShowError || !!serverUsernameError}
                           slotProps={{
                             input: {
-                              'aria-describedby':
-                                usernameShowError || serverUsernameError ? 'username-error' : undefined,
+                              'aria-invalid': usernameShowError || !!serverUsernameError,
+                              'aria-describedby': 'register-username-error',
                             },
                           }}
                           sx={inputStyles}
                         />
                         <Typography
-                          className="register-username-error"
-                          id="username-error"
+                          id="register-username-error"
                           role="alert"
+                          data-testid="register-username-error"
+                          className="register-username-error"
                           level="body-xs"
                           color="danger"
                           sx={{ minHeight: '18px', mt: '4px', fontSize: '12px' }}
@@ -615,7 +649,12 @@ const Register: React.FC = () => {
                           {serverUsernameError || (usernameShowError ? t('auth.fieldErrors.invalidUsername') : '')}
                         </Typography>
                       </FormControl>
-                      <FormControl className="register-email-control" size="sm" id="email" sx={{ width: '50%' }}>
+                      <FormControl
+                        className="register-email-control"
+                        size="sm"
+                        id="email"
+                        sx={{ width: { xs: '100%', sm: '50%' } }}
+                      >
                         <FormLabel className="register-email-label" id="email-label" sx={{ opacity: '0.5' }}>
                           {t('auth.email')}
                         </FormLabel>
@@ -640,15 +679,17 @@ const Register: React.FC = () => {
                           error={emailShowError || !!serverEmailError}
                           slotProps={{
                             input: {
-                              'aria-describedby': emailShowError || serverEmailError ? 'email-error' : undefined,
+                              'aria-invalid': emailShowError || !!serverEmailError,
+                              'aria-describedby': 'register-email-error',
                             },
                           }}
                           sx={inputStyles}
                         />
                         <Typography
-                          className="register-email-error"
-                          id="email-error"
+                          id="register-email-error"
                           role="alert"
+                          data-testid="register-email-error"
+                          className="register-email-error"
                           level="body-xs"
                           color="danger"
                           sx={{ minHeight: '18px', mt: '4px', fontSize: '12px' }}
@@ -743,7 +784,7 @@ const Register: React.FC = () => {
                         type="submit"
                         fullWidth
                         color="primary"
-                        disabled={!isValid || isSendingOTC}
+                        disabled={!isValid || isSendingOTC || rateLimit.secondsLeft > 0}
                         sx={[
                           { borderRadius: '8px', display: 'flex', gap: 1, alignItems: 'center' },
                           isDarkMode ? darkInactive : lightInactive,
@@ -757,9 +798,16 @@ const Register: React.FC = () => {
                             fontSize: '14px',
                           }}
                         >
-                          {t('auth.continue')}
+                          {rateLimit.secondsLeft > 0
+                            ? t('auth.retryIn', { time: formatCountdown(rateLimit.secondsLeft) })
+                            : t('auth.continue')}
                         </Typography>
                       </Button>
+                      <OtcRateLimitNotice
+                        initialSeconds={rateLimit.initialSeconds}
+                        capped={rateLimit.capped}
+                        testId="register-rate-limit-alert"
+                      />
                     </FormControl>
 
                     <Box
@@ -805,11 +853,13 @@ const Register: React.FC = () => {
                   variant="outlined"
                   name="otc-code"
                   type="text"
-                  inputMode="numeric"
-                  placeholder="000000"
+                  // Joy's Input forwards autoComplete to the <input> but not inputMode (that lands on the
+                  // root div), so the numeric keypad hint has to go through the input slot.
+                  slotProps={{ input: { inputMode: 'numeric', pattern: '[0-9]*' } }}
+                  placeholder={OTC_CODE_PLACEHOLDER}
                   value={otcCode}
                   onChange={e => {
-                    const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                    const val = sanitizeOtcInput(e.target.value);
                     setOtcCode(val);
                   }}
                   autoComplete="one-time-code"
@@ -833,7 +883,7 @@ const Register: React.FC = () => {
                 type="submit"
                 fullWidth
                 color="primary"
-                disabled={otcCode.length !== 6 || isVerifying}
+                disabled={!isSubmittableOtcCode(otcCode) || isVerifying}
                 sx={[
                   { borderRadius: '8px', display: 'flex', gap: 1, alignItems: 'center', minHeight: '40px' },
                   isDarkMode ? darkInactive : lightInactive,
@@ -859,15 +909,22 @@ const Register: React.FC = () => {
                   sx={{
                     fontWeight: 500,
                     fontSize: '14px',
-                    cursor: resendCooldown > 0 ? 'default' : 'pointer',
-                    opacity: resendCooldown > 0 ? 0.5 : 1,
+                    cursor: resendBlockedSeconds > 0 ? 'default' : 'pointer',
+                    opacity: resendBlockedSeconds > 0 ? 0.5 : 1,
                     transition: 'color 0.2s ease-in-out, opacity 0.2s ease-in-out',
-                    '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
+                    '&:hover': { textDecoration: resendBlockedSeconds > 0 ? 'none' : 'underline' },
                   }}
                 >
-                  {resendCooldown > 0 ? `${t('auth.resendCode')} (${resendCooldown}s)` : t('auth.resendCode')}
+                  {resendBlockedSeconds > 0
+                    ? `${t('auth.resendCode')} (${formatCountdown(resendBlockedSeconds)})`
+                    : t('auth.resendCode')}
                 </Link>
               </Box>
+              <OtcRateLimitNotice
+                initialSeconds={rateLimit.initialSeconds}
+                capped={rateLimit.capped}
+                testId="register-otc-rate-limit-alert"
+              />
 
               <Box sx={{ display: 'flex', justifyContent: 'center', mt: '12px' }}>
                 <Link
@@ -927,12 +984,16 @@ const Register: React.FC = () => {
         description={
           mfaMode === 'setup'
             ? 'Your administrator requires MFA. Scan the QR code with your authenticator app to set up MFA.'
-            : 'Enter your 6-digit code or backup code to continue.'
+            : mfaPasskeyAvailable && passkeysSupported()
+              ? 'Use your passkey, or enter your 6-digit code or backup code to continue.'
+              : 'Enter your 6-digit code or backup code to continue.'
         }
         qrCodeUrl={mfaSetupData?.qrCodeUrl}
         manualEntryKey={mfaSetupData?.manualEntryKey}
         backupCodes={mfaSetupData?.backupCodes}
         showVerify={true}
+        onPasskeyVerify={mfaPasskeyAvailable ? handlePasskeyVerification : undefined}
+        passkeyLoading={verifyPasskeyMFA.isPending}
       />
     </>
   );

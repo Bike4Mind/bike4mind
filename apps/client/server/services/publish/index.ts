@@ -89,3 +89,5 @@ export {
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
 export { renderArtifactIndexHtml } from './renderArtifactHtml';
+export { purgeUserPublishedArtifacts } from './purgeUserPublishedArtifacts';
+export { loadLiveOwner } from './loadLiveOwner';

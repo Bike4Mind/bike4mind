@@ -2,7 +2,7 @@ import { SQSService } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { SlackClient } from '../SlackClient';
 import { ChatModels, IChatHistoryItem, IUserDocument, stripSearchResultCardFences } from '@bike4mind/common';
-import { ChatCompletionInvoke } from '@bike4mind/services/llm';
+import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 import { resolveAccessibleNotebookId } from './notebook-manager';
 
@@ -272,6 +272,8 @@ export class WorkflowStepHandler {
           organizationId: user.organizationId,
         },
         userId: user.id,
+        // A Slack-linked user, not a B4M session or a b4m_live_ key (see ToolContext.authOrigin).
+        authOrigin: 'internal',
       });
     } catch (error) {
       // Don't fail the workflow if AI trigger fails - just log it

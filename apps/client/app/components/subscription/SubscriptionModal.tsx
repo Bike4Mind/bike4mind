@@ -2,16 +2,17 @@ import { useCreateTeamModal } from '@client/app/components/organizations/CreateT
 import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
 import {
   isCancellableSubscriptionStatus,
   isDelinquentSubscriptionStatus,
   pickSubscriptionByPrice,
+  resolveSubscriptionSource,
+  SubscriptionSource,
 } from '@client/lib/subscriptions/types';
-import {
-  SubscriptionPlanInterval,
-  UserSubscriptionTier,
-  SubscriptionPlanDetail,
-} from '@client/lib/userSubscriptions/types';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
 import {
   Box,
   Button,
@@ -19,17 +20,32 @@ import {
   Modal,
   ModalClose,
   ModalDialog,
+  Stack,
   Tab,
   tabClasses,
   TabList,
   Tabs,
+  Tooltip,
   Typography,
   useTheme,
 } from '@mui/joy';
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import SubscribeButton from '../Credits/SubscribeButton';
+import ManageSubscriptionButton from './ManageSubscriptionButton';
 import PlanCard from './PlanCard';
+import { isPopularPlan } from './isPopularPlan';
+import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
+import { useAnswerCostReference } from '@client/app/hooks/useAnswerCostReference';
+import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
+
+// Bullets, credits and copy come from the shared plan table so this modal and the server-side plan
+// map cannot drift; only the price id is re-picked by runtime stage below.
+const PROFESSIONAL_PLAN = SUBSCRIPTION_PLANS.find(plan => plan.name === 'Professional');
+if (!PROFESSIONAL_PLAN) {
+  throw new Error("SubscriptionModal: no 'Professional' entry in SUBSCRIPTION_PLANS (userSubscriptions/constants)");
+}
 
 function centsToDollars(cents: number | undefined) {
   if (cents === undefined) return 0;
@@ -67,8 +83,9 @@ const SubscriptionModal = ({ open, onClose }: SubscriptionModalProps) => {
 const SubscriptionModalContent = () => {
   const { t } = useTranslation();
   const theme = useTheme();
-  const [activeTab, setActiveTab] = useState<SubscriptionModalTabs>(SubscriptionModalTabs.Personal);
-  const enableTeamPlan = useGetSettingsValue('enableTeamPlan');
+  const [selectedTab, setSelectedTab] = useState<SubscriptionModalTabs>(SubscriptionModalTabs.Personal);
+  // The starter-credits line is only true while sign-ups are actually granted something.
+  const hasStarterCredits = Number(useGetSettingsValue('defaultFreeCredits')) > 0;
   const { data: config } = useConfig();
   const seedStageName = config?.seedStageName || process.env.NEXT_PUBLIC_SEED_STAGE_NAME || '';
   const isTestMode = seedStageName !== 'production';
@@ -83,6 +100,13 @@ const SubscriptionModalContent = () => {
     [subscriptions.data]
   );
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
+  const teamPlanAvailable = useTeamPlanAvailable();
+  const teamTabReasonId = useId();
+  // Drop a Business selection when the gate closes (render-phase adjust-on-change, per React's pattern):
+  // React re-runs this render, so no Team card commits and a later flip back on does not jump to Business.
+  if (!teamPlanAvailable && selectedTab === SubscriptionModalTabs.Business) {
+    setSelectedTab(SubscriptionModalTabs.Personal);
+  }
   const priceMap = useMemo(() => {
     return plans.data?.reduce(
       (acc, plan) => {
@@ -94,30 +118,26 @@ const SubscriptionModalContent = () => {
     );
   }, [plans.data]);
 
+  // The card quotes the cheapest Team checkout (minimum seats at the live Stripe per-seat price), the
+  // same figure CreateTeamModal opens on. Undefined hides the price rather than inventing one.
+  const { minSeats: teamMinSeats } = useTeamSeatLimits();
+  const teamCreditsPerSeat = useTeamCreditsPerSeat();
+  const teamSeatPrice = priceMap?.[ORGANIZATION_SUBSCRIPTION_PRICE_ID];
+  const teamPlanMinimumPrice = teamSeatPrice === undefined ? undefined : centsToDollars(teamSeatPrice) * teamMinSeats;
+  const teamPlanCredits = teamMinSeats * teamCreditsPerSeat;
+  const answerCostReference = useAnswerCostReference();
+
   // Build subscription plans based on runtime stage
   const subscriptionPlans: SubscriptionPlanDetail[] = useMemo(
     () => [
       {
+        ...PROFESSIONAL_PLAN,
         // Account-tied Stripe price from NEXT_PUBLIC_* env vars (no brand fallback). Same env
         // contract as PROFESSIONAL_PRICE_ID in userSubscriptions/constants; selected by runtime
         // stage here to match the rest of this modal.
         priceId: isTestMode
           ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
           : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? ''),
-        interval: SubscriptionPlanInterval.Monthly,
-        name: 'Professional',
-        credits: 50000,
-        tier: UserSubscriptionTier.Basic,
-        features: [
-          'Access to 25+ AI models including GPT-4, Claude 3, Gemini',
-          'Self-hosted Deepseek R1 & Phi-4 for private inference',
-          'Automatic model cost optimization',
-          'Credits roll over for 3 months',
-          'Advanced prompt engineering tools',
-          'Single API for all models',
-          'Priority support response',
-        ],
-        description: 'Access every major AI model through one unified interface, with smart cost optimization.',
       },
     ],
     [isTestMode]
@@ -125,10 +145,10 @@ const SubscriptionModalContent = () => {
 
   const availablePlans = useMemo(
     () =>
-      activeTab === SubscriptionModalTabs.Personal
+      selectedTab === SubscriptionModalTabs.Personal
         ? subscriptionPlans.filter(plan => activePlans.find(p => p.id === plan.priceId))
         : [],
-    [activePlans, activeTab, subscriptionPlans]
+    [activePlans, selectedTab, subscriptionPlans]
   );
 
   if (subscriptions.isPending || plans.isPending) {
@@ -154,23 +174,24 @@ const SubscriptionModalContent = () => {
       <Typography sx={{ mb: '36px', fontSize: '16px', color: 'neutral.500', textAlign: 'center' }}>
         {t('subscription_modal.description')}
         <br />
-        <Box
-          component="span"
-          sx={{
-            textDecoration: 'underline',
-            color: theme.palette.subscriptionModal.linkColor,
-            fontWeight: '500',
-          }}
-        >
-          {t('subscription_modal.no_free_tier')}
-        </Box>{' '}
+        {hasStarterCredits && (
+          <>
+            <Box
+              component="span"
+              data-testid="subscription-modal-starter-credits"
+              sx={{ color: theme.palette.subscriptionModal.linkColor, fontWeight: '500' }}
+            >
+              {t('subscription_modal.starter_credits')}
+            </Box>{' '}
+          </>
+        )}
         {t('subscription_modal.credits_rollover')}
       </Typography>
 
       <Box sx={{ mb: '24px', display: 'flex', justifyContent: 'center' }}>
         <Tabs
-          value={activeTab}
-          onChange={(_, value) => setActiveTab(value as SubscriptionModalTabs)}
+          value={selectedTab}
+          onChange={(_, value) => setSelectedTab(value as SubscriptionModalTabs)}
           sx={{
             bgcolor: 'transparent',
           }}
@@ -199,10 +220,31 @@ const SubscriptionModalContent = () => {
               {t('subscription_modal.personal')}
             </Tab>
 
-            <Tab disableIndicator value={SubscriptionModalTabs.Business} disabled={!enableTeamPlan}>
-              {t('subscription_modal.business')}
-            </Tab>
+            {/* Off, the tab stays visible but disabled. Joy keeps a disabled tab focusable, so the reason hangs
+                off the Tab via aria-describedby; the span only exists to receive hover (the disabled tab
+                has pointer-events: none) and is deliberately not focusable. The reason stays outside the Tab:
+                a descendant would join its accessible name. */}
+            <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
+              <span style={{ display: 'inline-flex' }} data-testid="subscription-modal-business-tab-wrapper">
+                <Tab
+                  disableIndicator
+                  value={SubscriptionModalTabs.Business}
+                  disabled={!teamPlanAvailable}
+                  aria-describedby={teamPlanAvailable ? undefined : teamTabReasonId}
+                  data-testid="subscription-modal-business-tab"
+                >
+                  {t('subscription_modal.business')}
+                </Tab>
+              </span>
+            </Tooltip>
           </TabList>
+          {/* aria-describedby resolves the id document-wide, so the reason stays a sibling of the tablist:
+              inside it, browse mode would read the text as stray content beside the tabs. */}
+          {!teamPlanAvailable && (
+            <Box component="span" id={teamTabReasonId} sx={visuallyHidden}>
+              {TEAM_PLAN_UNAVAILABLE_MESSAGE}
+            </Box>
+          )}
         </Tabs>
       </Box>
 
@@ -213,28 +255,40 @@ const SubscriptionModalContent = () => {
           gap: '32px',
         }}
       >
-        {activeTab === SubscriptionModalTabs.Personal && (
+        {selectedTab === SubscriptionModalTabs.Personal && (
           <>
             {availablePlans.map(plan => {
               // Active-first per price: a stale delinquent row at this price must not
               // mark the plan the user is actually paying for as payment-failed.
               const isCurrentPlan = pickSubscriptionByPrice(cancellableSubscriptions, plan.priceId);
+              const hasPaymentIssue = !!isCurrentPlan && isDelinquentSubscriptionStatus(isCurrentPlan.status);
+              // The portal route refuses admin-granted plans, so only Stripe-managed rows get Manage.
+              const isStripeManaged =
+                !!isCurrentPlan && resolveSubscriptionSource(isCurrentPlan) === SubscriptionSource.Stripe;
               return (
                 <PlanCard
                   key={plan.priceId}
                   name={plan.name}
                   credits={plan.credits}
+                  answersEstimate={formatAnswersEstimate(plan.credits, answerCostReference)}
                   description={plan.description}
                   price={centsToDollars(priceMap?.[plan.priceId])}
                   interval={plan.interval}
                   features={plan.features}
-                  isPopular={plan.name === 'Professional'}
+                  isPopular={isPopularPlan(plan.name, availablePlans.length)}
                   isCurrentPlan={!!isCurrentPlan}
-                  hasPaymentIssue={!!isCurrentPlan && isDelinquentSubscriptionStatus(isCurrentPlan.status)}
+                  hasPaymentIssue={hasPaymentIssue}
                   currentPlanDetails={isCurrentPlan}
                   priceId={plan.priceId}
                   actionButton={
-                    <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                    <Stack gap={1}>
+                      {isStripeManaged && <ManageSubscriptionButton isPrimaryAction={hasPaymentIssue} />}
+                      <SubscribeButton
+                        priceId={plan.priceId}
+                        planName={plan.name}
+                        cancellableSubscriptions={cancellableSubscriptions}
+                      />
+                    </Stack>
                   }
                 />
               );
@@ -242,15 +296,20 @@ const SubscriptionModalContent = () => {
           </>
         )}
 
-        {activeTab === SubscriptionModalTabs.Business && (
+        {selectedTab === SubscriptionModalTabs.Business && (
           <>
             <PlanCard
               name={t('subscription_modal.team')}
               description="Collaborative AI workspace with shared resources and advanced project management."
-              price={100}
+              price={teamPlanMinimumPrice}
+              credits={teamPlanCredits}
+              answersEstimate={formatAnswersEstimate(teamPlanCredits, answerCostReference)}
               interval="month"
               features={[
-                '4 team member accounts included',
+                teamSeatPrice === undefined
+                  ? `${teamMinSeats}-seat minimum`
+                  : `$${centsToDollars(teamSeatPrice).toFixed(2)} per seat per month, ${teamMinSeats}-seat minimum`,
+                `${teamMinSeats} team member accounts included`,
                 'Shared credit pool with 3-month rollover',
                 'Advanced Projects with RAG & Auto-Summary',
                 'Team workspace & knowledge management',
@@ -258,33 +317,34 @@ const SubscriptionModalContent = () => {
                 'Usage analytics across all models',
                 'Advanced security controls',
                 'Dedicated support channel',
+                'Priority support',
               ]}
               actionButton={
-                <Button variant="solid" color="primary" fullWidth onClick={openCreateTeamModal}>
-                  Create Team
-                </Button>
+                <Stack gap={1}>
+                  {/* Same checkout as Teams > Create Team: the modal picks the seats and opens Stripe. */}
+                  <Button
+                    variant="solid"
+                    color="primary"
+                    fullWidth
+                    disabled={teamSeatPrice === undefined}
+                    onClick={openCreateTeamModal}
+                    data-testid="subscription-modal-create-team-btn"
+                  >
+                    Create Team
+                  </Button>
+                  {teamSeatPrice === undefined && (
+                    <Typography
+                      level="body-sm"
+                      color="danger"
+                      textAlign="center"
+                      data-testid="subscription-modal-team-unavailable"
+                    >
+                      Team pricing is unavailable right now. Please try again later.
+                    </Typography>
+                  )}
+                </Stack>
               }
             />
-
-            {/* <PlanCard
-              name={t('subscription_modal.enterprise')}
-              description="Collaborative AI workspace with shared resources and advanced project management."
-              features={[
-                'Private Deepseek R1 & Phi-4 deployment',
-                'Custom AWS infrastructure setup',
-                'White-label deployment option',
-                'Full source code access',
-                'Custom model fine-tuning',
-                'Dedicated account manager',
-                'Custom SLA & support',
-                'Security audit & compliance support',
-              ]}
-              actionButton={
-                <Button variant="solid" color="primary" fullWidth disabled>
-                  Contact Sales
-                </Button>
-              }
-            /> */}
           </>
         )}
       </Box>

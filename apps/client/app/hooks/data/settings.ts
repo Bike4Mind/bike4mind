@@ -44,15 +44,21 @@ export function useUpdateSettings() {
 
       return data;
     },
+    // Returning the invalidations keeps `isPending` true until the refetched settings are cached,
+    // so callers never re-enable controls against stale values.
     onSuccess: (data, variables) => {
-      // Invalidate both admin settings caches (object format and array format)
-      queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_ARRAY_QUERY_KEY });
+      const invalidations = [
+        // Both admin settings caches (object format and array format)
+        queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_ARRAY_QUERY_KEY }),
+      ];
 
       // Also invalidate branding settings when updating logo settings
       if (variables.key === 'logoSettings') {
-        queryClient.invalidateQueries({ queryKey: BRANDING_SETTINGS_QUERY_KEY });
+        invalidations.push(queryClient.invalidateQueries({ queryKey: BRANDING_SETTINGS_QUERY_KEY }));
       }
+
+      return Promise.all(invalidations);
     },
   });
 }

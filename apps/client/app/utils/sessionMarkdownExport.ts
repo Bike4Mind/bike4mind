@@ -1,5 +1,5 @@
 import { stripSearchResultCardFences, type IChatHistoryItemDocument } from '@bike4mind/common';
-import { visibleReplyForExport } from '@client/app/utils/replyUtils';
+import { visibleReplyForExport } from '@client/shared/replyUtils';
 
 /**
  * Converts an array of chat history items (quests) into a markdown string.

@@ -1,8 +1,14 @@
 import { IOrganizationDocument } from '@bike4mind/common';
 import { useCreateTeamModal } from '@client/app/components/organizations/CreateTeamModal';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useGetUserOrganizations, useOrganizationSeats } from '@client/app/hooks/data/organizations';
+import {
+  useGetManagedOrganizations,
+  useGetUserOrganizations,
+  useOrganizationSeats,
+} from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
+import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
+import { TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
 import {
   SubscriptionOwnerType,
   isDelinquentSubscriptionStatus,
@@ -12,6 +18,7 @@ import { Add as AddIcon, Business as BusinessIcon, Search as SearchIcon } from '
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import {
   AspectRatio,
+  Alert,
   Box,
   Button,
   Card,
@@ -22,6 +29,7 @@ import {
   LinearProgress,
   Skeleton,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
@@ -44,6 +52,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
   const { currentSeats } = useOrganizationSeats(organization.id);
 
   const isOwner = organization.userId === currentUser?.id;
+  const isManager = !!currentUser && organization.managerId === currentUser.id && !isOwner;
 
   return (
     <Card variant="outlined" sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined }}>
@@ -64,9 +73,14 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
                   {t('organization.owner')}
                 </Chip>
               )}
+              {isManager && (
+                <Chip size="sm" variant="soft" color="primary">
+                  Manager
+                </Chip>
+              )}
             </Box>
             <Typography level="body-sm" color="neutral">
-              {organization.personal ? 'Personal Organization' : 'Team Organization'}
+              {organization.personal ? 'Personal team' : 'Shared team'}
             </Typography>
           </Box>
         </Box>
@@ -153,13 +167,33 @@ const OrganizationCardSkeleton: FC = () => (
 const OrganizationListPage: FC = () => {
   const { t } = useTranslation();
   const { currentUser } = useUser();
-  const { data: organizations, isLoading, isFetching } = useGetUserOrganizations(currentUser?.id);
+  const {
+    data: memberOrganizations,
+    isLoading: membersLoading,
+    isFetching: membersFetching,
+  } = useGetUserOrganizations(currentUser?.id);
+  const {
+    data: managedOrganizations,
+    isLoading: managedLoading,
+    isFetching: managedFetching,
+    isError: managedError,
+    refetch: refetchManaged,
+  } = useGetManagedOrganizations(currentUser?.id);
   const [searchQuery, setSearchQuery] = useState('');
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
+  const teamPlanAvailable = useTeamPlanAvailable();
 
-  useDocumentTitle('Organizations');
+  useDocumentTitle('Teams');
 
-  const filteredOrganizations = organizations?.filter(
+  const organizations = Array.from(
+    new Map([
+      ...(managedOrganizations ?? []).map(org => [org.id, org] as const),
+      ...(memberOrganizations ?? []).map(org => [org.id, org] as const),
+    ]).values()
+  ).sort((a, b) => a.name.localeCompare(b.name));
+  const isLoading = membersLoading || managedLoading;
+  const isFetching = membersFetching || managedFetching;
+  const filteredOrganizations = organizations.filter(
     org =>
       org.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       org.description?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -170,11 +204,22 @@ const OrganizationListPage: FC = () => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography level="h2">{t('organization.organizations')}</Typography>
-          <ContextHelpButton helpId="features/organizations-teams" tooltipText="Learn about Organizations" />
+          <ContextHelpButton helpId="features/organizations-teams" tooltipText="Learn about Teams" />
         </Box>
-        <Button startDecorator={<AddIcon />} color="primary" onClick={openCreateTeamModal}>
-          {t('organization.create')}
-        </Button>
+        <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
+          {/* Span so the tooltip still fires on hover/focus while the button is disabled. */}
+          <span tabIndex={teamPlanAvailable ? undefined : 0}>
+            <Button
+              startDecorator={<AddIcon />}
+              color="primary"
+              onClick={openCreateTeamModal}
+              disabled={!teamPlanAvailable}
+              data-testid="organizations-create-team-btn"
+            >
+              {t('organization.create')}
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
 
       <Box sx={{ position: 'relative', mb: 4 }}>
@@ -193,6 +238,12 @@ const OrganizationListPage: FC = () => {
         </Box>
       )}
 
+      {managedError && (
+        <Alert color="danger" endDecorator={<Button onClick={() => refetchManaged()}>Retry</Button>} sx={{ mb: 2 }}>
+          Managed teams could not be loaded.
+        </Alert>
+      )}
+
       <Grid container spacing={2}>
         {isLoading ? (
           <>
@@ -204,7 +255,7 @@ const OrganizationListPage: FC = () => {
           </>
         ) : (
           <>
-            {filteredOrganizations?.map(org => (
+            {filteredOrganizations.map(org => (
               <Grid key={org.id} xs={12} sm={6} md={4}>
                 <OrganizationCard organization={org} />
               </Grid>
@@ -213,7 +264,7 @@ const OrganizationListPage: FC = () => {
         )}
       </Grid>
 
-      {!isLoading && filteredOrganizations?.length === 0 && (
+      {!isLoading && !managedError && filteredOrganizations.length === 0 && (
         <Box sx={{ textAlign: 'center', py: 8 }}>
           <Typography level="body-lg" color="neutral">
             {t('organization.no_organizations')}

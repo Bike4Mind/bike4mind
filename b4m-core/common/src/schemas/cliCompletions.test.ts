@@ -374,3 +374,21 @@ describe('normalizeCompletionRequest', () => {
     expect(normalized.options?.maxTokens).toBe(0);
   });
 });
+
+describe('CompletionRequestSchema options.reasoningEffort', () => {
+  const base = { model: 'm', messages: [{ role: 'user', content: 'hi' }] };
+
+  it('keeps reasoningEffort on options', () => {
+    const parsed = CompletionRequestSchema.parse({ ...base, options: { reasoningEffort: 'low' } });
+    expect(parsed.options?.reasoningEffort).toBe('low');
+  });
+
+  it('leaves reasoningEffort absent when not sent', () => {
+    const parsed = CompletionRequestSchema.parse({ ...base, options: { temperature: 0.2 } });
+    expect(parsed.options).not.toHaveProperty('reasoningEffort');
+  });
+
+  it('rejects an unknown effort value', () => {
+    expect(() => CompletionRequestSchema.parse({ ...base, options: { reasoningEffort: 'turbo' } })).toThrow();
+  });
+});

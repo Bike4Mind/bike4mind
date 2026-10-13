@@ -32,5 +32,9 @@ export default defineConfig({
     // Shared with apps/client: the sst Resource mock and env seeds the moved suites relied on.
     setupFiles: [path.join(client, 'vitest.setup.ts')],
     testTimeout: 30000,
+    // Integration-lane only, mirroring apps/client/vitest.config.mts: real-Mongo concurrency
+    // suites lose the odd race to CI's oversubscribed CPU. Unset in the unit lane, where a retry
+    // would mask a real bug. Guarded by vitest.config.test.ts.
+    ...(INTEGRATION_LANE ? { retry: 2 } : {}),
   },
 });

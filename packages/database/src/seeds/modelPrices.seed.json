@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-01T06:01:25.900Z",
+  "generatedAt": "2026-10-12T04:20:46.790Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -82,6 +82,20 @@
       }
     },
     {
+      "modelId": "claude-haiku-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "100000": {
+          "input": 1.0000000000000001e-7,
+          "output": 5e-7
+        },
+        "1000000": {
+          "input": 5e-7,
+          "output": 0.0000025
+        }
+      }
+    },
+    {
       "modelId": "claude-opus-4-1-20250805",
       "unit": "per_token",
       "pricing": {
@@ -148,6 +162,17 @@
         "1000000": {
           "input": 0.000005,
           "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "claude-opus-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000004,
+          "output": 0.00002,
+          "cache_read": 2.0000000000000002e-7
         }
       }
     },
@@ -364,6 +389,40 @@
       }
     },
     {
+      "modelId": "global.anthropic.claude-fable-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.00001,
+          "output": 0.00005
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-fable-5-1",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.00001,
+          "output": 0.00005
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-haiku-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "100000": {
+          "input": 1.0000000000000001e-7,
+          "output": 5e-7
+        },
+        "1000000": {
+          "input": 5e-7,
+          "output": 0.0000025
+        }
+      }
+    },
+    {
       "modelId": "global.anthropic.claude-opus-4-5-20251101-v1:0",
       "unit": "per_token",
       "pricing": {
@@ -404,6 +463,27 @@
       }
     },
     {
+      "modelId": "global.anthropic.claude-opus-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000005,
+          "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000004,
+          "output": 0.00002,
+          "cache_read": 2.0000000000000002e-7
+        }
+      }
+    },
+    {
       "modelId": "global.anthropic.claude-sonnet-4-6",
       "unit": "per_token",
       "pricing": {
@@ -415,6 +495,16 @@
     },
     {
       "modelId": "global.anthropic.claude-sonnet-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-sonnet-5-5",
       "unit": "per_token",
       "pricing": {
         "1000000": {

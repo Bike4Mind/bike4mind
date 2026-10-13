@@ -7,6 +7,14 @@
  * forwards to POST /api/embed/chat, so the key itself never rides the per-turn
  * chat requests. The token is the rate-limited, revocable handle.
  *
+ * Identified mode: when the body carries `{ client_id, client_secret, id_token }`, the
+ * embedding site's backend is handing over its already-authenticated user. The token
+ * is then bound to that B4M user (`endUserId`), who pays from their own balance and
+ * whose conversation persists across visits. The key must list the client in
+ * `identifiedClientIds`. See server/embed/identifiedEmbedUser.ts.
+ * The client_secret makes this a server-to-server call only; a browser Origin on an
+ * identified mint is refused.
+ *
  * Unauthenticated at the baseApi layer (auth:false): the embed key is verified
  * in-handler via verifyEmbedApiKey, NOT the apiKeyAuth middleware (which would
  * populate the Express req.apiKeyInfo shape that does not carry agentId/
@@ -21,10 +29,15 @@ import { randomUUID } from 'crypto';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
 import { signEmbedSessionToken, EMBED_SESSION_TTL_SECONDS } from '@server/embed/embedSessionToken';
 import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
+import { IdentifiedEmbedMintSchema, resolveIdentifiedEmbedUser } from '@server/embed/identifiedEmbedUser';
+import { cacheRepository } from '@bike4mind/database';
+import { UserApiKeyAuditLog } from '@bike4mind/database/auth';
 
 /** Per-IP flood backstop on this unauth mint surface. */
 const MINT_RATE_LIMIT = 60;
 const RATE_WINDOW_MS = 60_000;
+/** Per-client identified-mint budget; same ceiling as the AI-token exchange. */
+const PER_CLIENT_IDENTIFIED_RATE_LIMIT = 300;
 
 const handler = baseApi({ auth: false })
   .use(embedCors())
@@ -52,12 +65,62 @@ const handler = baseApi({ auth: false })
       return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
     }
 
+    // Only the presence of id_token selects identified mode; a partial identified body
+    // is a client error, never a silent fallback to an anonymous (org-billed) session.
+    const body: unknown = req.body;
+    const wantsIdentified = !!body && typeof body === 'object' && 'id_token' in body;
+    let endUserId: string | undefined;
+    let oauthClientId: string | undefined;
+    if (wantsIdentified) {
+      if (headers.origin) {
+        return res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'Identified embed sessions must be minted server-to-server',
+        });
+      }
+      const parsed = IdentifiedEmbedMintSchema.safeParse(body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
+      }
+      const { client_id } = parsed.data;
+      const resolved = await resolveIdentifiedEmbedUser(parsed.data, info.identifiedClientIds, req.logger);
+      if ('rejection' in resolved) {
+        const { status, ...rejection } = resolved.rejection;
+        return res.status(status).json(rejection);
+      }
+      // After the client is authenticated, so failed-secret probes cannot burn a real
+      // client's budget (same ordering as pages/api/oauth/ai-token.ts).
+      const rl = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+        `rate-limit:embed-identified-mint:${client_id}`,
+        PER_CLIENT_IDENTIFIED_RATE_LIMIT,
+        RATE_WINDOW_MS
+      );
+      if (!rl.success) {
+        const retryAfter = Math.max(1, Math.ceil((rl.expiresAt.getTime() - Date.now()) / 1000));
+        res.setHeader('Retry-After', retryAfter);
+        return res.status(429).json({
+          error: 'rate_limited',
+          error_description: `Rate limit exceeded. Try again in ${retryAfter} seconds.`,
+        });
+      }
+      endUserId = resolved.userId;
+      oauthClientId = client_id;
+      await UserApiKeyAuditLog.create({
+        action: 'mint',
+        keyId: info.keyId,
+        actorUserId: endUserId,
+        actorUserAgent: headers['user-agent'],
+        details: { clientId: client_id, flow: 'embed-identified-session' },
+      });
+    }
+
     const token = signEmbedSessionToken(
       {
         keyId: info.keyId,
         agentId: info.agentId!,
         organizationId: info.organizationId!,
         sessionId: randomUUID(),
+        ...(endUserId && { endUserId, oauthClientId }),
       },
       EMBED_SESSION_TTL_SECONDS
     );
@@ -67,6 +130,7 @@ const handler = baseApi({ auth: false })
       token_type: 'Bearer',
       expires_in: EMBED_SESSION_TTL_SECONDS,
       agentId: info.agentId,
+      mode: endUserId ? 'identified' : 'anonymous',
     });
   });
 

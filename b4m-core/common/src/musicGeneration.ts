@@ -1,4 +1,5 @@
 import z from 'zod';
+import { generatedAudioRequestFields } from './generatedAudio';
 
 /**
  * Supported background-music generation vendors. Currently only ElevenLabs.
@@ -59,6 +60,7 @@ export const musicRequestSchema = z.object({
   forceInstrumental: z.boolean().optional(),
   modelId: supportedMusicModel.default(DEFAULT_MUSIC_MODEL_ID),
   format: z.string().optional(),
+  ...generatedAudioRequestFields,
 });
 
 export type MusicRequest = z.infer<typeof musicRequestSchema>;

@@ -1,6 +1,12 @@
 import { ChatModels } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { adapterModelIds, adapterPriceTiers, staticPriceBackends } from './adapterPriceLiterals';
+import {
+  adapterBuildPricedModelIds,
+  adapterModelIds,
+  adapterPriceLadders,
+  adapterPriceTiers,
+  staticPriceBackends,
+} from './adapterPriceLiterals';
 
 describe('adapterPriceTiers', () => {
   it('carries the cache rate a feed never publishes, which is the whole reason it exists', async () => {
@@ -83,5 +89,59 @@ describe('adapterModelIds', () => {
 
     expect(ids.has(ChatModels.GPT5_2)).toBe(true);
     expect(ids.size).toBe(new Set(tables.flat().map(model => String(model.id))).size);
+  });
+});
+
+describe('adapterPriceLadders', () => {
+  it('covers exactly the models adapterPriceTiers covers, and starts each ladder at that tier', async () => {
+    const tiers = await adapterPriceTiers();
+    const ladders = await adapterPriceLadders();
+
+    expect([...ladders.keys()].sort()).toEqual([...tiers.keys()].sort());
+    for (const [id, tier] of tiers) {
+      const lowest = Object.keys(ladders.get(id) ?? {})
+        .map(Number)
+        .sort((a, b) => a - b)[0];
+      expect(ladders.get(id)?.[String(lowest)], `${id} ladder does not start at its lowest tier`).toEqual(tier);
+    }
+  });
+
+  it('keys every tier by a numeric threshold, which getTextModelCost needs to select one', async () => {
+    for (const [id, ladder] of await adapterPriceLadders()) {
+      for (const threshold of Object.keys(ladder)) {
+        expect(Number.isFinite(Number(threshold)), `${id} has key ${threshold}`).toBe(true);
+      }
+    }
+  });
+
+  it("carries kimi-k3's literal, a provider that publishes no listing prices", async () => {
+    const [tier] = Object.values((await adapterPriceLadders()).get(ChatModels.KIMI_K3) ?? {});
+
+    expect(tier.input).toBeCloseTo(3 / 1_000_000, 12);
+    expect(tier.output).toBeCloseTo(15 / 1_000_000, 12);
+  });
+
+  it('keeps every threshold of a tiered literal, not just the base tier', async () => {
+    const tiered = (await adapterPriceLadders()).get(ChatModels.GROK_4_5);
+
+    expect(Object.keys(tiered ?? {}).length).toBeGreaterThan(1);
+  });
+
+  it('memoizes', async () => {
+    expect(await adapterPriceLadders()).toBe(await adapterPriceLadders());
+  });
+});
+
+describe('adapterBuildPricedModelIds', () => {
+  it('holds every per-token literal plus the per-image and per-minute ones the tiers leave out', async () => {
+    const priced = await adapterBuildPricedModelIds();
+
+    for (const id of (await adapterPriceTiers()).keys()) expect(priced.has(id), id).toBe(true);
+    expect(priced.has('gpt-image-1')).toBe(true);
+    expect(priced.has('whisper-1')).toBe(true);
+  });
+
+  it('leaves out a model the build ships no price for', async () => {
+    expect((await adapterBuildPricedModelIds()).has('no-such-model')).toBe(false);
   });
 });

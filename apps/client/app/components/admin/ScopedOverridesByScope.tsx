@@ -1,4 +1,4 @@
-import { settingsMap, SettingScopeLevel } from '@bike4mind/common';
+import { isBlankSettingValue, settingsMap, SettingScopeLevel } from '@bike4mind/common';
 import {
   useClearScopedSettingOverride,
   useScopedSettingOverrides,
@@ -24,12 +24,12 @@ function describeOverride(
   setting: AdminSetting,
   storedValue: string | undefined,
   isSettableHere: boolean,
-  platformValue: string
+  platformValue: string | undefined
 ): string {
   if (storedValue === undefined) {
-    return isSettableHere
-      ? `no override at this rung (platform: ${displayValue(setting, platformValue)})`
-      : 'not settable at this rung';
+    const unset = setting.unsetLabel ? `unset, ${setting.unsetLabel}` : 'unset';
+    const platform = platformValue === undefined ? unset : displayValue(setting, platformValue);
+    return isSettableHere ? `no override at this rung (platform: ${platform})` : 'not settable at this rung';
   }
   return isSettableHere
     ? `overridden here: ${displayValue(setting, storedValue)}`
@@ -124,9 +124,13 @@ export function ScopedOverridesByScope() {
               row => row.settingName === setting.key && row.scopeLevel === level && row.scopeId === address
             );
             const isSettableHere = setting.scope?.settableAt.includes(level) === true;
+            // A clearDeletesRow setting with no row - or a blank one, which the resolver also reads
+            // as unset - is unset, not its declared default (see AdminSettingsTab).
+            const storedPlatformValue = platformSettings?.find(row => row.settingName === setting.key)?.settingValue;
             const platformValue =
-              platformSettings?.find(stored => stored.settingName === setting.key)?.settingValue ??
-              setting.defaultValue;
+              setting.clearDeletesRow && isBlankSettingValue(storedPlatformValue)
+                ? undefined
+                : (storedPlatformValue ?? setting.defaultValue);
 
             return (
               <Box
@@ -137,7 +141,12 @@ export function ScopedOverridesByScope() {
                 <Typography level="body-sm" sx={{ flex: 1, minWidth: 0 }}>
                   <strong>{setting.name}</strong>
                   {' - '}
-                  {describeOverride(setting, override?.settingValue, isSettableHere, String(platformValue))}
+                  {describeOverride(
+                    setting,
+                    override?.settingValue,
+                    isSettableHere,
+                    platformValue === undefined ? undefined : String(platformValue)
+                  )}
                 </Typography>
                 {override && (
                   <Button

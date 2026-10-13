@@ -6,6 +6,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { userIsCustomer, userIsDeveloper } from '../utils/user';
 import { api, isPublicPath, getAxiosErrorStatus } from '@client/app/contexts/ApiContext';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
+import { setFunnelSyntheticUser } from '@client/app/utils/funnelEvents';
 import ExpiredSession from '../components/ExpiredSession';
 import { useSubscribeCollection } from '../utils/react-query';
 import { useGetIdentify } from '@client/app/hooks/data/user';
@@ -298,6 +299,9 @@ export const useUser = create<UserContextProps>()(
     }
   )
 );
+
+// Keeps synthetic test personas out of client funnel events (funnelEvents.ts).
+useUser.subscribe(state => setFunnelSyntheticUser(!!state.currentUser?.isSynthetic));
 
 /**
  * Decide whether a real-time `users` update should force a graceful sign-out

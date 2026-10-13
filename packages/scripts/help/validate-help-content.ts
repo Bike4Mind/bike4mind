@@ -24,7 +24,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { DOCS_ROOT, loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
-import { isDirectInvocation } from './isDirectInvocation.js';
+import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 import { resolveRelativePath, stripMarkdownFormatting, toAnchor, VIDEO_EXTENSIONS, isYouTubeUrl } from './utils.js';
 
 export type FindingType = 'frontmatter' | 'link' | 'anchor' | 'image' | 'media';

@@ -6,9 +6,13 @@ import { tokenEstimateMultiplier } from './tokenEstimateMultiplier';
 // new Claude id lands without a row here, so its bucket is a decision rather than whatever the regex says.
 const CLAUDE_CATALOGUE: Array<[ChatModels, number]> = [
   [ChatModels.CLAUDE_5_5_OPUS, 1.5],
+  [ChatModels.CLAUDE_5_5_OPUS_BEDROCK, 1.5],
   [ChatModels.CLAUDE_5_OPUS, 1.5],
+  [ChatModels.CLAUDE_5_OPUS_BEDROCK, 1.5],
+  [ChatModels.CLAUDE_FABLE_5_1_BEDROCK, 1],
   [ChatModels.CLAUDE_5_SONNET, 1.5],
   [ChatModels.CLAUDE_5_SONNET_BEDROCK, 1.5],
+  [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 1.5],
   [ChatModels.CLAUDE_4_8_OPUS, 1.5],
   [ChatModels.CLAUDE_4_8_OPUS_BEDROCK, 1.5],
   [ChatModels.CLAUDE_4_7_OPUS, 1.5],
@@ -21,6 +25,8 @@ const CLAUDE_CATALOGUE: Array<[ChatModels, number]> = [
   [ChatModels.CLAUDE_4_5_OPUS_BEDROCK, 1.09],
   [ChatModels.CLAUDE_4_5_SONNET, 1.09],
   [ChatModels.CLAUDE_4_5_SONNET_BEDROCK, 1.09],
+  [ChatModels.CLAUDE_5_5_HAIKU, 1.5],
+  [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 1.5],
   [ChatModels.CLAUDE_4_5_HAIKU, 1.09],
   [ChatModels.CLAUDE_4_5_HAIKU_BEDROCK, 1.09],
   [ChatModels.CLAUDE_4_1_OPUS, 1],
@@ -39,6 +45,7 @@ const CLAUDE_CATALOGUE: Array<[ChatModels, number]> = [
   [ChatModels.CLAUDE_3_OPUS, 1],
   [ChatModels.CLAUDE_3_HAIKU_BEDROCK, 1],
   [ChatModels.CLAUDE_FABLE_5, 1],
+  [ChatModels.CLAUDE_FABLE_5_BEDROCK, 1],
 ];
 
 describe('tokenEstimateMultiplier', () => {

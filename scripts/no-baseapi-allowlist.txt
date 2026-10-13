@@ -41,9 +41,11 @@ apps/client/pages/api/agent-quest/__tests__/manifest.test.ts # Test file for the
 # Slack — authenticated via HMAC-SHA256 signature (Slack signing secret)
 apps/client/pages/api/slack/commands.ts                 # verifySlackRequest() HMAC check
 apps/client/pages/api/slack/interactive.ts              # verifySlackRequest() HMAC check
+apps/client/pages/api/slack/__tests__/interactive.confirm.test.ts # Test file for the handler above (script greps by path, not export)
 
 # SRE workflow callback — authenticated via encrypted bearer token
 apps/client/pages/api/sre/workflow-callback.ts          # crypto.timingSafeEqual() bearer token
+apps/client/pages/api/sre/__tests__/workflow-callback.test.ts # Test file for the handler above (script greps by path, not export)
 
 # GitHub webhooks — authenticated via HMAC-SHA256 (GitHub webhook secret)
 apps/client/pages/api/webhooks/github.ts                # GitHub HMAC signature validation
@@ -58,3 +60,12 @@ apps/client/pages/api/webhooks/jira/[token].ts          # Jira HMAC + routing to
 # Qwork webhook — authenticated via HMAC-SHA256 (dual-secret rotation + 5-min replay prevention)
 apps/client/pages/api/webhooks/qwork/index.ts           # HMAC-SHA256 over raw body, dual-secret rotation, timestamp replay guard
 apps/client/pages/api/webhooks/qwork/__tests__/index.test.ts # Test file for the handler above (script greps by path, not export)
+
+# Removed Sora-era alias: a 410 tombstone, no auth or body to guard (not a contract route, outside the contract status set)
+apps/client/pages/api/ai/generate-video.ts               # 410 tombstone pointing at POST /api/v1/video-generations
+apps/client/pages/api/ai/__tests__/generate-video.integration.test.ts # Test file for the handler above (script greps by path, not export)
+
+# Unmatched /api/* catch-all: answers a JSON 404 for every method; serves no data, so no auth or DB
+apps/client/pages/api/[...unmatchedApiPath].ts           # JSON 404 in the shared error envelope instead of the SPA shell
+apps/client/pages/api/__tests__/unmatchedApiPath.test.ts # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/v1/[...unmatchedV1Path].ts        # Re-exports the catch-all above so /api/v1 misses outrank pages/api/[type]/[id]

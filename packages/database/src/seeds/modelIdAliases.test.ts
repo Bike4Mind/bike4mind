@@ -19,36 +19,34 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
 };
 
 /**
- * Measured against the checked-in seed on 2026-09-14: models.dev 75/122 (61.5%),
- * litellm 106/122 (86.9%). The thresholds sit under those, which tolerates an
- * aggregator retiring a handful of entries while still failing a normalizer
- * regression - dropping any single normalization step costs 10 points or more
- * (the region-prefix strip alone carries 17 Bedrock ids).
+ * Measured against the checked-in seed on 2026-10-07, with the fixture fully
+ * re-captured that day: models.dev 73/120 (60.8%), litellm 92/120 (76.7%). The
+ * thresholds sit about five points under those, which tolerates an aggregator
+ * retiring a handful of entries while still failing a normalizer regression -
+ * dropping any single normalization step costs 10 points or more (the
+ * region-prefix strip alone carries 17 Bedrock ids).
  *
- * models.dev is the lower of the two by nature, not by defect: roughly 40% of the
- * seed is retired or legacy (Gemini 1.5, Grok 2/3, Claude 3.x, whisper, sora,
- * transcribe, first-gen Bedrock) and models.dev drops what providers retire,
- * while litellm keeps historical entries.
+ * Both rates are below the seed's own coverage of live models, by nature and not
+ * by defect: roughly a fifth of the seed is retired or legacy (Gemini 1.5, Grok
+ * 2/3, Claude 3.x, o1-preview, first-gen Bedrock) and the aggregators drop what
+ * providers retire. litellm main dropped 116 such keys that the older v1.93.0
+ * capture still held, which is what moved its rate from 86.9% (87.7% after a
+ * three-key top-up from main) to 76.7%; that capture was keeping the rate up with
+ * keys the live source no longer serves. The grok-3-fast alias went the same way:
+ * main keeps only reseller keys for it, which the alias file forbids targeting.
  *
- * The litellm rate FELL from 89.4% when the SEVEN Moonshot ids landed (five direct
- * plus two Bedrock-served). All seven join models.dev; only four join litellm,
- * because its first-party moonshot list carries k2.5 and k2.6 but not k3 or either
- * k2.7-code. That is the expected shape for a provider newer than the aggregators
- * rather than a normalizer defect: those three are priced from the seed, and the
- * two-agreeing-aggregators rule can only flag them until litellm catches up.
- *
- * Adding the two direct DeepSeek ids moved litellm again, from 87.5% to 86.9%:
- * deepseek-v4-pro joins litellm's own bare entry, but deepseek-flash does not -
- * litellm still only carries the vendor's legacy deepseek-v4-flash alias name,
- * the same "aggregator has not caught up yet" shape as the Kimi ids above. Both
- * join models.dev, which already lists the current names.
+ * Of the Moonshot ids, kimi-k3 and kimi-k2.7-code now join litellm main, so only
+ * kimi-k2.7-code-highspeed is unjoined there (it joins models.dev). A model only
+ * one aggregator prices is flagged, not trusted, by the two-agreeing-aggregators
+ * rule, so a build that ships its price in code (the adapter literals) is what
+ * lets it promote.
  *
  * Raise these when the seed is next regenerated, never lower them without saying
  * why here.
  */
 const MIN_JOIN_RATE: Record<AggregatorName, number> = {
   modelsDev: 0.55,
-  litellm: 0.85,
+  litellm: 0.72,
 };
 
 describe('modelIdAliases seed', () => {

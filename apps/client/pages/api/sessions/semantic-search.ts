@@ -24,7 +24,8 @@ import { computeCosineSimilarity, getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
 import { isSupportedEmbeddingModel, SupportedEmbeddingModel } from '@bike4mind/common';
 import { apiKeyService } from '@bike4mind/services';
-import { ReRankService, SmallLLMService } from '@bike4mind/services/llm';
+import { ReRankService } from '@bike4mind/services/llm/reranker';
+import { SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
 interface SemanticSearchRequest {

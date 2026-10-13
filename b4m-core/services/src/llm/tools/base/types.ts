@@ -6,6 +6,8 @@ import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
 import {
   IChatHistoryItemDocument,
+  IChatHistoryItemRepository,
+  ISessionRepository,
   ILatticeModel,
   IUserDocument,
   IFabFileRepository,
@@ -25,6 +27,7 @@ import {
   ILakeConfigChangeEventRepository,
   ILakeMembershipChangeEventRepository,
   ModelInfo,
+  type AuthOrigin,
 } from '@bike4mind/common';
 
 /**
@@ -56,8 +59,8 @@ export interface KbScope {
  * than re-pricing the tokens at some other model's rate.
  *
  * The agent executor accumulates these into `ToolUsageTotals`
- * (apps/client agentExecutor.iterationBilling.ts) - same five fields, kept in sync by
- * hand. Keep both in step on a rename.
+ * (apps/client/server/queueHandlers/agentExecutor.billing.ts) - same five fields, kept in
+ * sync by hand. Keep both in step on a rename.
  */
 export type ToolLlmUsage = {
   model: string;
@@ -102,8 +105,16 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
-    /** The image tools bump the session's imageCount through this (see recordGeneratedImages). */
-    sessions?: GeneratedImageCounter;
+    /**
+     * The image tools bump the session's imageCount through this (see recordGeneratedImages).
+     * `findAllByIds` pairs with `quests` below for resolveOwnedGeneratedImageUrl.
+     */
+    sessions?: GeneratedImageCounter & Partial<Pick<ISessionRepository, 'findAllByIds'>>;
+    /**
+     * Owner lookup for generated-image keys (see resolveOwnedGeneratedImageUrl). Absent (or
+     * `sessions.findAllByIds` absent) means every generated key is refused - fail closed.
+     */
+    quests?: Pick<IChatHistoryItemRepository, 'findSessionIdsByImage'>;
     fabfilechunks?: Pick<
       IFabFileChunkRepository,
       | 'findByFabFileId'
@@ -220,10 +231,17 @@ export interface ToolContext {
    */
   organizationId?: string;
   /**
+   * How the turn was authenticated (see AuthOrigin). Required so that every door that runs tools
+   * has to decide it: a tool that must refuse non-session turns checks `authOrigin === 'session'`
+   * and fails closed, never reading a missing `apiKeyId` as a session. Agrees with `apiKeyId`
+   * (enforced where the context is built - see generateTools).
+   */
+  authOrigin: AuthOrigin;
+  /**
    * The `b4m_live_` key that authenticated the turn, when one did (`/api/chat`, `/api/ai/llm`).
    * Server-derived from `req.apiKeyInfo`, never from a request body. Attribution only: a lake
    * write the tool drives is audited under the key (see buildToolAccessContext), while
-   * authorization still runs as `userId`. Absent = a session turn.
+   * authorization still runs as `userId`. Present exactly when `authOrigin` is `apiKey`.
    */
   apiKeyId?: string;
   /**
@@ -294,6 +312,18 @@ export interface ToolContext {
    * a surface that forwards one and not the other re-creates exactly that ambiguity.
    */
   sessionLakeScopeExplicit?: boolean;
+  /**
+   * The "+ My files" chip resolved by libraryFlagForScope(session) (common), NOT the raw
+   * `session.includeLibraryFiles`: passing the raw field skips the Data-Lakes-off override. Read only
+   * through sessionExcludesLibrary (resolveSessionLakeAccess.ts), which defaults unset per session.
+   */
+  sessionIncludeLibraryFiles?: boolean;
+  /**
+   * Every file the user attached to this turn or session (session knowledge, session files,
+   * message files), inlined or not. With the library off it is the only way a non-lake file is
+   * still retrievable by id - see knowledgeBaseRetrieve.
+   */
+  attachedFileIds?: string[];
   /**
    * Lake ids this session was pre-authorized for at session-create time (a manager admitted to a
    * lake they can manage but are not a member of - see canManageLake, checked once at

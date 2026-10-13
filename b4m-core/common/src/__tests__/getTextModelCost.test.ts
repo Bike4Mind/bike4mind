@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getTextModelCost, ModelBackend, type ModelInfo } from '../models';
+import { getTextModelCost, pricingTierForTokens, ModelBackend, type ModelInfo } from '../models';
 
 const baseModel: ModelInfo = {
   id: 'test-model' as ModelInfo['id'],
@@ -69,5 +69,27 @@ describe('getTextModelCost unpriced-model alarm', () => {
     const unpriced: ModelInfo = { ...baseModel, pricing: {} };
     getTextModelCost(unpriced, 0, 0, 3000, 500);
     expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('pricingTierForTokens', () => {
+  const tier = (input: number) => ({ input, output: input });
+  const tiered = { ...baseModel, pricing: { 50_000: tier(1), 200_000: tier(2) } } as ModelInfo;
+
+  it('picks the smallest tier covering the tokens', () => {
+    expect(pricingTierForTokens(tiered, 10_000)).toBe(50_000);
+  });
+
+  it('keeps a token count equal to a threshold in that tier', () => {
+    expect(pricingTierForTokens(tiered, 50_000)).toBe(50_000);
+    expect(pricingTierForTokens(tiered, 50_001)).toBe(200_000);
+  });
+
+  it('falls back to the largest tier above every threshold', () => {
+    expect(pricingTierForTokens(tiered, 500_000)).toBe(200_000);
+  });
+
+  it('returns null for an empty pricing map', () => {
+    expect(pricingTierForTokens({ ...baseModel, pricing: {} } as ModelInfo, 100)).toBeNull();
   });
 });

@@ -149,6 +149,7 @@ jobs:
           role-session-name: GitHubActions-${{ github.run_id }}-prod-release
 
       - name: Create production release
+        id: create
         env:
           CI: 'true'
           SEED_APP_NAME: ${{ steps.config.outputs.app_name }}
@@ -166,6 +167,29 @@ jobs:
           SST_STAGE: ${{ steps.config.outputs.stage }}
         run: |
           pnpm sst shell --stage "$SST_STAGE" --print-logs -- pnpm --filter @bike4mind/scripts create-prod-release --target-sha "$DEPLOYED_SHA"
+
+      # Release notes are best-effort: a failure here must never fail the release itself.
+      # The role and queue URL are provisioned outside this repo; RELEASE_NOTES_ENABLED gates the steps until then.
+      - name: Configure AWS credentials for release notes
+        id: release-notes-creds
+        if: success() && vars.RELEASE_NOTES_ENABLED == 'true' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != ''
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_RELEASE_NOTES_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-${{ github.run_id }}-release-notes
+
+      - name: Enqueue release notes
+        if: success() && vars.RELEASE_NOTES_ENABLED == 'true' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != '' && steps.release-notes-creds.outcome == 'success'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_NOTES_QUEUE_URL: ${{ secrets.RELEASE_NOTES_QUEUE_URL }}
+          RELEASE_TAG: ${{ steps.create.outputs.release_tag }}
+        run: |
+          pnpm --filter @bike4mind/scripts release-notes:enqueue --tag "$RELEASE_TAG"
 
       - name: Summary
         if: success()

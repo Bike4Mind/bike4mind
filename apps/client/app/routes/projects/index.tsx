@@ -5,6 +5,7 @@ import { FC, useCallback, useState, useEffect } from 'react';
 import { useDetectScrollBottom } from '@client/app/hooks/useDetectScrollBottom';
 import ProjectCard from '@client/app/components/Project/Card';
 import ProjectCreateModal from '@client/app/components/Project/CreateModal';
+import PendingProjectInvites from '@client/app/components/Project/PendingInvites';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { ContextHelpButton } from '@client/app/components/help';
@@ -121,9 +122,14 @@ const ProjectsPage = () => {
       >
         <Box display="flex" alignItems="center" gap={1}>
           <Box
+            component="h1"
             fontSize="24px"
             lineHeight="24px"
-            sx={theme => ({ color: theme.palette.mode === 'dark' ? '#D1E4F4' : '#335F70' })}
+            sx={theme => ({
+              m: 0,
+              fontWeight: 'inherit',
+              color: theme.palette.mode === 'dark' ? '#D1E4F4' : '#335F70',
+            })}
           >
             Projects
           </Box>
@@ -163,6 +169,7 @@ const ProjectsPage = () => {
         pb={PAGE_PADDING}
         onScroll={debounceScroll}
       >
+        <PendingProjectInvites />
         <ProjectSection
           title=""
           projects={flattenProjects}

@@ -158,16 +158,6 @@ export interface ParentExecution {
   pendingTextByIteration?: Record<number, string>;
 }
 
-/** One outstanding `reconnect` request, waiting for the response that answers it. */
-export interface PendingReconnect {
-  /** Absent when the sweep asked about a run whose session the store never learned -
-   *  consuming such an entry returns undefined and hydrate falls back to the
-   *  execution's own stored sessionId. */
-  sessionId?: string;
-  /** Absent when the caller was asking "is anything running here?" and had no id yet. */
-  executionId?: string;
-}
-
 interface AgentExecutionState {
   executions: Record<string, ParentExecution>;
   /** Sessions awaiting their first `execution_started` event. Dispatch enqueues,
@@ -175,18 +165,6 @@ interface AgentExecutionState {
    * single tab; concurrent dispatches are bounded by the server's
    * `concurrent_limit` check. */
   pendingDispatches: string[];
-  /** Sessions awaiting their `reconnect_result` response. The server's payload
-   * doesn't echo sessionId back (the response shape is kept stable), so the
-   * sessionId has to be carried here to be stamped onto the hydrated execution.
-   *
-   * Correlation is by `executionId` whenever the caller knew one - a socket-open
-   * sweep asks about several runs at once, and independent handler invocations
-   * answer in whatever order their work finishes, so arrival order alone would
-   * pair a response with another run's session. Callers that cannot know the id
-   * yet (the mount-time "is anything running in this session?" probe) enqueue
-   * without one and are matched FIFO among themselves, which is safe because
-   * that probe is one-shot per session. */
-  pendingReconnects: PendingReconnect[];
 
   // Lifecycle
   startExecution: (executionId: string, sessionId?: string) => void;
@@ -301,10 +279,6 @@ interface AgentExecutionState {
   // Dispatch correlation
   registerPendingDispatch: (sessionId: string) => void;
   consumePendingDispatch: () => string | undefined;
-  /** `executionId` when the caller already knows which run it is asking about. */
-  registerPendingReconnect: (sessionId: string | undefined, executionId?: string) => void;
-  /** Pass the id the response carries; falls back to FIFO for un-keyed entries. */
-  consumePendingReconnect: (executionId?: string) => string | undefined;
 
   // Cleanup
   clear: (executionId: string) => void;
@@ -446,7 +420,6 @@ export function findChildAnyDepth(
 export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => ({
   executions: {},
   pendingDispatches: [],
-  pendingReconnects: [],
 
   registerPendingDispatch: sessionId => set(state => ({ pendingDispatches: [...state.pendingDispatches, sessionId] })),
 
@@ -454,23 +427,6 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
     const [head, ...rest] = get().pendingDispatches;
     set({ pendingDispatches: rest });
     return head;
-  },
-
-  registerPendingReconnect: (sessionId, executionId) =>
-    set(state => ({ pendingReconnects: [...state.pendingReconnects, { sessionId, executionId }] })),
-
-  consumePendingReconnect: executionId => {
-    const queue = get().pendingReconnects;
-    // A keyed entry answers only to its own run. Fall through to the oldest
-    // un-keyed entry otherwise, which is both the mount-time probe's own case
-    // and what a `found: false` response (no executionId on the wire) drains.
-    const at = executionId
-      ? queue.findIndex(e => e.executionId === executionId)
-      : queue.findIndex(e => e.executionId === undefined);
-    const index = at === -1 ? queue.findIndex(e => e.executionId === undefined) : at;
-    if (index === -1) return undefined;
-    set({ pendingReconnects: queue.filter((_, i) => i !== index) });
-    return queue[index].sessionId;
   },
 
   startExecution: (executionId, sessionId) =>
@@ -530,7 +486,8 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
   // has resolved or abandoned it. `PermissionCard` renders purely on
   // `pendingPermission` presence (not status), so a lingering value would leave a
   // dead permission prompt on a completed/failed/aborted run. Clear it on every
-  // terminal transition.
+  // terminal transition. `isAborting` is cleared too, so an abort racing a
+  // completed/failed event doesn't leave the flag set on a finished run.
   markCompleted: (executionId, answer, totalCreditsUsed) =>
     set(state => ({
       executions: withExecution(state, executionId, exec => ({
@@ -539,6 +496,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         answer,
         totalCreditsUsed,
         pendingPermission: undefined,
+        isAborting: false,
       })),
     })),
 
@@ -550,6 +508,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         failureReason: reason,
         errorMessage: message,
         pendingPermission: undefined,
+        isAborting: false,
       })),
     })),
 
@@ -595,6 +554,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         // permission card on an already-finished run - the reconnect arm of the
         // same bug the terminal transitions above guard against.
         pendingPermission: isActiveStatus(snapshot.status) ? snapshot.pendingPermission : undefined,
+        isAborting: isActiveStatus(snapshot.status) ? exec.isAborting : false,
         lastKnownIteration: Math.max(exec.lastKnownIteration, snapshot.iterationCount),
         // Step replay. Replace iterations only when the server actually
         // supplied them - `undefined` means "live-only reconnect" (legacy
@@ -755,10 +715,10 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
       return { executions: next, pendingDispatches };
     }),
 
-  // The pending queues are correlation state for requests already in flight, so a reset that
-  // dropped the executions but kept them would leave entries that can only ever mis-pair with
+  // The pending-dispatch queue is correlation state for requests already in flight, so a reset
+  // that dropped the executions but kept it would leave entries that can only ever mis-pair with
   // whatever comes next.
-  clearAll: () => set({ executions: {}, pendingDispatches: [], pendingReconnects: [] }),
+  clearAll: () => set({ executions: {}, pendingDispatches: [] }),
 }));
 
 // ---------------------------------------------------------------------------

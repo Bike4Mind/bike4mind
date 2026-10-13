@@ -36,6 +36,7 @@ import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAI
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { isToolDenied } from '@client/app/utils/toolMapping';
 import { useState, useRef, useEffect } from 'react';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
@@ -104,6 +105,16 @@ const AttachFileButton = ({
   const [currentView, setCurrentView] = useState<'main' | 'other-apps'>('main');
   const [isOpen, setIsOpen] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  // A file can land while the menu is open without going through one of its items (the native
+  // picker, drag and drop), so a new attachment closes the menu instead of leaving it over the composer.
+  const [seenFilesCount, setSeenFilesCount] = useState(totalFilesCount);
+  if (totalFilesCount !== seenFilesCount) {
+    setSeenFilesCount(totalFilesCount);
+    if ((totalFilesCount ?? 0) > (seenFilesCount ?? 0)) {
+      setIsOpen(false);
+      setCurrentView('main');
+    }
+  }
 
   const connectGoogleDrive = useConnectGoogleDrive();
   const isMobile = useIsMobile();
@@ -384,12 +395,15 @@ const AttachFileButton = ({
             >
               {ATTACH_SCOPE_MODES.map(mode => {
                 const selected = attachScopeMode === mode;
+                // 44px is the minimum touch target; coarse pointers only, so the desktop pill
+                // keeps its compact height (WCAG 2.5.5).
                 return (
                   <Chip
                     key={mode}
                     variant={selected ? 'solid' : 'outlined'}
                     color={selected ? 'primary' : 'neutral'}
                     size="sm"
+                    sx={{ '@media (pointer: coarse)': { minHeight: 44 } }}
                   >
                     {/* disableIcon drops the dot so the pill fill IS the selection cue; overlay
                         makes the focus ring follow the pill instead of boxing the whole row. It is
@@ -710,26 +724,29 @@ const AttachFileButton = ({
             ) : null}
 
             {/* Mobile only - roll dice */}
-            {isMobile && tools.includes('dice_roll') && currentView === 'main' && (
-              <ListItem sx={{ p: 0 }}>
-                <ListItemButton
-                  onClick={() => {
-                    setIsOpen(false);
-                    setCurrentView('main');
-                    rollRandomDice();
-                  }}
-                  sx={{
-                    color: 'text.primary',
-                    m: 0,
-                  }}
-                >
-                  <ListItemDecorator>
-                    <CasinoIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                  </ListItemDecorator>
-                  Roll Dice
-                </ListItemButton>
-              </ListItem>
-            )}
+            {isMobile &&
+              tools.includes('dice_roll') &&
+              !isToolDenied('dice_roll', currentSession?.disabledTools) &&
+              currentView === 'main' && (
+                <ListItem sx={{ p: 0 }}>
+                  <ListItemButton
+                    onClick={() => {
+                      setIsOpen(false);
+                      setCurrentView('main');
+                      rollRandomDice();
+                    }}
+                    sx={{
+                      color: 'text.primary',
+                      m: 0,
+                    }}
+                  >
+                    <ListItemDecorator>
+                      <CasinoIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                    </ListItemDecorator>
+                    Roll Dice
+                  </ListItemButton>
+                </ListItem>
+              )}
           </List>
         </Box>
       )}

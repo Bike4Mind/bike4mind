@@ -13,6 +13,8 @@ import {
   JIRA_DELETE_ISSUE,
   JIRA_UPLOAD_ATTACHMENT,
   JIRA_DELETE_ATTACHMENT,
+  JIRA_ADD_WATCHER,
+  JIRA_REMOVE_WATCHER,
   CONFLUENCE_CREATE_PAGE,
   CONFLUENCE_UPDATE_PAGE,
   CONFLUENCE_DELETE_PAGE,
@@ -320,10 +322,7 @@ export interface SlackBlockKitContext {
 }
 
 export type SlackBlockKitElement =
-  | SlackBlockKitActions
-  | SlackBlockKitDivider
-  | SlackBlockKitSection
-  | SlackBlockKitContext;
+  SlackBlockKitActions | SlackBlockKitDivider | SlackBlockKitSection | SlackBlockKitContext;
 
 /**
  * Format a preview message from pendingAction params, for consistent and complete
@@ -465,6 +464,20 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
         '> *Warning:* This action cannot be undone!',
         '',
         'Click ✅ Confirm to DELETE this issue, or ❌ Cancel to abort.',
+      ].join('\n');
+    }
+
+    case JIRA_ADD_WATCHER:
+    case JIRA_REMOVE_WATCHER: {
+      const adding = tool === JIRA_ADD_WATCHER;
+      const user = params.displayName ? `${params.displayName} (${params.userIdentifier})` : params.userIdentifier;
+      return [
+        `\u{1F441}\u{FE0F} *Preview: Jira ${adding ? 'Add' : 'Remove'} Watcher*`,
+        '',
+        `> *Issue:* ${params.issueKey}`,
+        `> *${adding ? 'Add' : 'Remove'} watcher:* ${user}`,
+        '',
+        `Click \u2705 Confirm to ${adding ? 'add' : 'remove'} this watcher, or \u274C Cancel to abort.`,
       ].join('\n');
     }
 
@@ -712,9 +725,12 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
 /**
  * Build Block Kit confirm/cancel buttons for a preview message.
  * @param questId - Quest ID containing the pendingAction to confirm
+ * @param pendingActionTs - `ts` of the previewed action, so a click acts on this action only and
+ *   never on a newer one that replaced it on the same quest
  * @returns divider + action buttons
  */
-export function buildConfirmationButtons(questId: string): SlackBlockKitElement[] {
+export function buildConfirmationButtons(questId: string, pendingActionTs: number): SlackBlockKitElement[] {
+  const value = `${questId}:${pendingActionTs}`;
   return [
     {
       type: 'divider',
@@ -731,7 +747,7 @@ export function buildConfirmationButtons(questId: string): SlackBlockKitElement[
           },
           style: 'primary',
           action_id: 'confirm_action',
-          value: questId,
+          value,
         },
         {
           type: 'button',
@@ -742,11 +758,27 @@ export function buildConfirmationButtons(questId: string): SlackBlockKitElement[
           },
           style: 'danger',
           action_id: 'cancel_action',
-          value: questId,
+          value,
         },
       ],
     },
   ];
+}
+
+/**
+ * Parse a confirm/cancel button value. A bare quest ID is a button rendered before the value
+ * carried the action's `ts`; it parses with `pendingActionTs` undefined.
+ */
+export function parseConfirmationButtonValue(value: string): { questId: string; pendingActionTs?: number } {
+  const separator = value.lastIndexOf(':');
+  if (separator === -1) {
+    return { questId: value };
+  }
+  const pendingActionTs = Number(value.slice(separator + 1));
+  if (!Number.isFinite(pendingActionTs)) {
+    return { questId: value };
+  }
+  return { questId: value.slice(0, separator), pendingActionTs };
 }
 
 // Attachment download buttons

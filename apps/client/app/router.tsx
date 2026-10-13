@@ -11,12 +11,14 @@ import {
   createBrowserHistory,
   Outlet,
   redirect,
+  useRouterState,
 } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
+import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -41,6 +43,7 @@ const ProfilePage = lazy(() => import('./routes/profile/index'));
 const GearsPage = lazy(() => import('./routes/gears/index'));
 const ProfileDetailPage = lazy(() => import('./routes/profile/$id'));
 const SubscriptionsCheckoutPage = lazy(() => import('./routes/subscriptions/checkout'));
+const BillingDeepLinkModals = lazy(() => import('./components/subscription/BillingDeepLinkModals'));
 const AgentsPage = lazy(() => import('./routes/agents'));
 const NewAgentPage = lazy(() => import('./routes/agents/new'));
 const AgentDetailPage = lazy(() => import('./routes/agents/$id'));
@@ -84,6 +87,7 @@ const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
+const VideoStudioPage = lazy(() => import('./routes/studio/video'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // Shared coercion for the optional string search params nearly every route declares.
@@ -196,9 +200,18 @@ const builtAppShellPremiumRoutes = premiumPartition.appShell.map(descriptor => {
 
 // Root route that wraps all other routes
 function RootComponent() {
+  // NotebookLayout draws its own main beside the sidebar nav, so only pages outside it get one here.
+  // display: contents keeps the page a direct child of the providers' grid.
+  const inNotebookLayout = useRouterState({ select: s => s.matches.some(m => m.routeId === layoutRoute.id) });
   return (
     <>
-      <Outlet />
+      {inNotebookLayout ? (
+        <Outlet />
+      ) : (
+        <Box component="main" sx={{ display: 'contents' }}>
+          <Outlet />
+        </Box>
+      )}
       {process.env.NEXT_PUBLIC_ENABLE_DEVTOOLS === 'true' && <TanStackRouterDevtools position="top-right" />}
     </>
   );
@@ -270,6 +283,9 @@ const layoutRoute = createRoute({
       <ProviderBundle>
         <NotebookLayout>
           <Outlet />
+          <Suspense fallback={null}>
+            <BillingDeepLinkModals />
+          </Suspense>
         </NotebookLayout>
       </ProviderBundle>
     </RestrictedPage>
@@ -436,6 +452,34 @@ const subscriptionsCheckoutRoute = createRoute({
   },
 });
 
+// Shareable billing entry points (/billing/credits, /billing/plans) for emails and marketing CTAs.
+// Under layoutRoute so a signed-out visitor goes through /login?redirectTo= and lands here after.
+export const billingRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/billing/$view',
+  beforeLoad: ({ params }) => {
+    throw redirect({ href: billingLandingHref(parseBillingView(params.view)), replace: true });
+  },
+});
+
+// Guessed URLs with no page of their own. Chats are listed in the sidenav, so /notebooks lands on
+// the app home; /subscriptions opens the plans modal the way /billing/plans does.
+export const notebooksIndexRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/notebooks',
+  beforeLoad: () => {
+    throw redirect({ to: '/', replace: true });
+  },
+});
+
+export const subscriptionsIndexRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/subscriptions',
+  beforeLoad: () => {
+    throw redirect({ href: billingLandingHref('plans'), replace: true });
+  },
+});
+
 const AGENT_FEATURE_GATE = {
   feature: 'enableAgents' as const,
   featureName: 'Agents',
@@ -464,6 +508,17 @@ const hearthRoute = createRoute({
         <HearthPage />
       </Suspense>
     </ExperimentalFeatureGate>
+  ),
+});
+
+// Video Studio: generate clips from text or a library image, and the gallery of the user's video jobs.
+const studioVideoRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/studio/video',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <VideoStudioPage />
+    </Suspense>
   ),
 });
 
@@ -612,10 +667,25 @@ const deepAgentsRoute = createRoute({
   ),
 });
 
+// Layout for the QA status pages: layoutRoute's providers and consent guard without the notebook
+// sidenav/header. A rootRoute child like adminRoute; the login redirect comes from RestrictedPage.
+const qaStatusLayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: 'qa-status-layout',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => (
+    <RestrictedPage requireAdmin={false}>
+      <ProviderBundle>
+        <Outlet />
+      </ProviderBundle>
+    </RestrictedPage>
+  ),
+});
+
 // QA status (admin only). Exported so pages read typed search/params via
 // `qaStatusRoute.useSearch()` etc.; filters live in the URL so links deep-link.
 export const qaStatusRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status',
   validateSearch: parseQaStatusSearch,
   component: () => (
@@ -628,7 +698,7 @@ export const qaStatusRoute = createRoute({
 });
 
 export const qaRunRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/runs/$id',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -642,7 +712,7 @@ export const qaRunRoute = createRoute({
 // The router encodes the key into one segment (it contains / > ? #); the page
 // re-sends it as ?testKey=.
 export const qaTestRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/tests/$testKey',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -1136,6 +1206,9 @@ const routeTree = rootRoute.addChildren([
     profileDetailRoute,
     feedbackRollupRoute,
     subscriptionsCheckoutRoute,
+    billingRoute,
+    notebooksIndexRoute,
+    subscriptionsIndexRoute,
     agentsRoute,
     newAgentRoute,
     agentDetailRoute,
@@ -1147,9 +1220,6 @@ const routeTree = rootRoute.addChildren([
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,
-    qaStatusRoute,
-    qaRunRoute,
-    qaTestRoute,
     shareRoute,
     reportPublicRoute,
     organizationsRoute,
@@ -1160,8 +1230,11 @@ const routeTree = rootRoute.addChildren([
     dataLakesRoute,
     hudRoute,
     hearthRoute,
+    studioVideoRoute,
     ...builtAppShellPremiumRoutes,
   ]),
+  // QA status pages (admin layout without the sidenav)
+  qaStatusLayoutRoute.addChildren([qaStatusRoute, qaRunRoute, qaTestRoute]),
   // Standalone auth routes (no layout)
   authCallbackRoute,
   authSuccessRoute,

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { adminUpdateUser } from './adminUpdate';
 
+vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
+
 const ADMIN_ID = 'admin-1';
 const TARGET_ID = 'user-1';
 
@@ -125,7 +127,7 @@ describe('adminUpdateUser — audited credit adjustments', () => {
         ADMIN_ID,
         // Bundle a non-credit edit with the credit change: it must not stick if
         // the credit audit throws.
-        { id: TARGET_ID, currentCredits: 150, tags: ['vip'] },
+        { id: TARGET_ID, currentCredits: 150, tags: ['vip'], moderationStatus: 'throttled' },
         adapters
       )
     ).rejects.toThrow('ledger unavailable');
@@ -137,25 +139,63 @@ describe('adminUpdateUser — audited credit adjustments', () => {
   it('does not mutate org membership when the ledger fails on a bundled org + credit change', async () => {
     const { adapters, createTransaction, target } = makeAdapters(100);
     target.organizationId = 'org-old';
+    adapters.db.organizations.findById.mockImplementation(async (id: string) => ({ id, users: [] }));
     createTransaction.mockRejectedValueOnce(new Error('ledger unavailable'));
 
     await expect(
       adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150, organizationId: 'org-new' }, adapters)
     ).rejects.toThrow('ledger unavailable');
 
-    // The ledger runs before the org-membership block, so a ledger failure must
-    // leave both org docs untouched (no half-applied membership move).
-    expect(adapters.db.organizations.findById).not.toHaveBeenCalled();
+    // Both orgs are validated before the ledger, but the membership writes run
+    // after it, so a ledger failure must leave both org docs untouched.
+    expect(adapters.db.organizations.findById).toHaveBeenCalledWith('org-old');
+    expect(adapters.db.organizations.findById).toHaveBeenCalledWith('org-new');
     expect(adapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown organizationId before the ledger commits any balance', async () => {
+    const { adapters, createTransaction, incrementCredits, update, target } = makeAdapters(100);
+    target.organizationId = 'org-old';
+    adapters.db.organizations.findById.mockImplementation(async (id: string) =>
+      id === 'org-old' ? { id, users: [] } : null
+    );
+
+    await expect(
+      adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150, organizationId: 'org-missing' }, adapters)
+    ).rejects.toThrow('Organization not found');
+
+    expect(createTransaction).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(target.currentCredits).toBe(100);
+  });
+
+  it('rejects an unknown current organization before the ledger commits any balance', async () => {
+    const { adapters, createTransaction, incrementCredits, update, target } = makeAdapters(100);
+    target.organizationId = 'org-gone';
+    adapters.db.organizations.findById.mockImplementation(async (id: string) =>
+      id === 'org-new' ? { id, users: [] } : null
+    );
+
+    await expect(
+      adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150, organizationId: 'org-new' }, adapters)
+    ).rejects.toThrow('Organization not found');
+
+    expect(createTransaction).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(target.currentCredits).toBe(100);
   });
 
   it('keeps the committed ledger change when the later doc write fails', async () => {
     const { adapters, incrementCredits, update } = makeAdapters(100);
     update.mockRejectedValueOnce(new Error('doc write failed'));
 
-    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150 }, adapters)).rejects.toThrow(
-      'doc write failed'
-    );
+    await expect(
+      adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150, moderationStatus: 'throttled' }, adapters)
+    ).rejects.toThrow('doc write failed');
 
     // Inverse trade-off: the balance change is already committed and auditable;
     // only the doc write and the moderation transition (which run after it) are
@@ -374,5 +414,69 @@ describe('adminUpdateUser - API key deactivation on entering a blocked state', (
       'write failed'
     );
     expect(deactivateAllByUserId).not.toHaveBeenCalled();
+  });
+});
+
+describe('adminUpdateUser - org move membership row', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('adds a read row for a target not yet in the new org', async () => {
+    const { adapters } = makeAdapters(100);
+    adapters.db.organizations.findById.mockResolvedValue({ id: 'org-new', userId: 'owner-1', users: [] });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, organizationId: 'org-new' }, adapters);
+
+    expect(adapters.db.organizations.update).toHaveBeenCalledWith({
+      id: 'org-new',
+      users: [{ userId: TARGET_ID, permissions: ['read'] }],
+    });
+  });
+
+  it('merges read into an existing row instead of adding a duplicate', async () => {
+    const { adapters } = makeAdapters(100);
+    adapters.db.organizations.findById.mockResolvedValue({
+      id: 'org-new',
+      userId: 'owner-1',
+      users: [{ userId: TARGET_ID, permissions: ['admin'] }],
+    });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, organizationId: 'org-new' }, adapters);
+
+    expect(adapters.db.organizations.update).toHaveBeenCalledWith({
+      id: 'org-new',
+      users: [{ userId: TARGET_ID, permissions: ['admin', 'read'] }],
+    });
+  });
+
+  it('keeps the other members when merging the target row', async () => {
+    const { adapters } = makeAdapters(100);
+    adapters.db.organizations.findById.mockResolvedValue({
+      id: 'org-new',
+      userId: 'owner-1',
+      users: [
+        { userId: 'other-1', permissions: ['read', 'write'] },
+        { userId: TARGET_ID, permissions: ['admin'] },
+      ],
+    });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, organizationId: 'org-new' }, adapters);
+
+    expect(adapters.db.organizations.update).toHaveBeenCalledWith({
+      id: 'org-new',
+      users: [
+        { userId: 'other-1', permissions: ['read', 'write'] },
+        { userId: TARGET_ID, permissions: ['admin', 'read'] },
+      ],
+    });
+  });
+
+  it('adds no row when the target owns the new org', async () => {
+    const { adapters, update } = makeAdapters(100);
+    adapters.db.organizations.findById.mockResolvedValue({ id: 'org-new', userId: TARGET_ID, users: [] });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, organizationId: 'org-new' }, adapters);
+
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalled();
   });
 });

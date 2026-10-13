@@ -1,3 +1,13 @@
-// Legacy alias: re-exports the nextRouteForContract handler published as POST /api/v1/video-generations.
-// Kept because live callers (and the SPA) use it - CONVENTIONS.md section 3: never remove a live URL.
-export { default } from '../v1/video-generations';
+import type { NextApiRequest, NextApiResponse } from 'next';
+
+/**
+ * Tombstone for the Sora-era alias. Sora shut down upstream, so this route answers 410 with the shared error
+ * envelope instead of disappearing (CONVENTIONS.md section 7: no silent removal). Not a contract route: 410 is
+ * outside the contract status set.
+ */
+export default function handler(_req: NextApiRequest, res: NextApiResponse) {
+  res.status(410).json({
+    error: 'This endpoint was removed. Use POST /api/v1/video-generations.',
+    replacement: 'POST /api/v1/video-generations',
+  });
+}

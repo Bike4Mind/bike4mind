@@ -61,15 +61,11 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
     credits: 50000,
     tier: UserSubscriptionTier.Basic,
     features: [
-      'Access to 25+ AI models including GPT-4, Claude 3, Gemini',
-      'Self-hosted Deepseek R1 & Phi-4 for private inference',
-      'Automatic model cost optimization',
+      'Models from OpenAI, Anthropic, Google, xAI, DeepSeek and Moonshot',
       'Credits roll over for 3 months',
-      'Advanced prompt engineering tools',
       'Single API for all models',
-      'Priority support response',
     ],
-    description: 'Access every major AI model through one unified interface, with smart cost optimization.',
+    description: 'Access every major AI model through one unified interface.',
   },
 ];
 

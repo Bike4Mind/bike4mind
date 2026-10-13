@@ -5,7 +5,10 @@ import {
   validateDefaultThoroughness,
   validateStringList,
   validateDefaultVariables,
+  validateAgentUpdate,
+  AgentValidationError,
 } from './agentValidation';
+import { IAgent } from '@bike4mind/common';
 
 describe('validateToolList', () => {
   it('returns undefined for an undefined input (field is optional)', () => {
@@ -162,5 +165,45 @@ describe('validateDefaultVariables', () => {
   it('caps key length at 64 and value length at 1024', () => {
     expect(() => validateDefaultVariables({ ['k'.repeat(65)]: 'v' })).toThrow(/64-character/);
     expect(() => validateDefaultVariables({ k: 'v'.repeat(1025) })).toThrow(/1024-character/);
+  });
+});
+
+describe('validateAgentUpdate', () => {
+  const tooMany = Array.from({ length: 101 }, (_, i) => `tool-${i}`);
+
+  it.each<[string, Record<string, unknown>]>([
+    ['preferredModel', { preferredModel: 'not-a-model' }],
+    ['preferredImageModel', { preferredImageModel: 'not-a-model' }],
+    ['temperature below 0', { temperature: -0.1 }],
+    ['temperature above 2', { temperature: 2.1 }],
+    ['maxTokens below 1', { maxTokens: 0 }],
+    ['maxTokens above 128000', { maxTokens: 128001 }],
+    ['triggerWords', { triggerWords: ['@-bad'] }],
+    ['allowedTools', { allowedTools: tooMany }],
+    ['deniedTools', { deniedTools: tooMany }],
+    ['maxIterations', { maxIterations: { quick: 0 } }],
+    ['defaultThoroughness', { defaultThoroughness: 'exhaustive' }],
+    ['defaultVariables', { defaultVariables: { k: 5 } }],
+    ['exclusiveMcpServers', { exclusiveMcpServers: 'not-an-array' }],
+    ['fallbackModels', { fallbackModels: tooMany }],
+  ])('rejects an invalid %s', (_, body) => {
+    expect(() => validateAgentUpdate(body as Partial<IAgent>)).toThrow(AgentValidationError);
+  });
+
+  it('normalizes fields in place to the validators output', () => {
+    const body: Partial<IAgent> = { triggerWords: ['@Helper', '@helper'] };
+    validateAgentUpdate(body);
+    expect(body).toStrictEqual({ triggerWords: ['@helper'] });
+  });
+
+  it('leaves absent fields absent', () => {
+    const body: Partial<IAgent> = {};
+    validateAgentUpdate(body);
+    expect(Object.keys(body)).toEqual([]);
+  });
+
+  it('names a tool-list field by its label', () => {
+    const label = (field: string) => (field === 'allowedTools' ? 'allowed_tools' : field);
+    expect(() => validateAgentUpdate({ allowedTools: tooMany }, label)).toThrow(/^allowed_tools may contain/);
   });
 });

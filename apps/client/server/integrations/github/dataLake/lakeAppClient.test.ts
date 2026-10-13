@@ -23,6 +23,7 @@ import {
   deleteInstallation,
   listInstallerVisibleRepositories,
   listUserInstallations,
+  getInstallation,
   getInstallationOctokit,
   getRepository,
   getBranchHeadSha,
@@ -209,6 +210,30 @@ describe('listUserInstallations', () => {
     await expect(listUserInstallations('user-token')).resolves.toEqual([
       expect.objectContaining({ id: 13, accountLogin: '', accountId: null }),
     ]);
+  });
+});
+
+describe('getInstallation', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const installationData = (account: unknown) => ({
+    data: { id: 42, account, repository_selection: 'selected', permissions: { contents: 'read' } },
+  });
+
+  it('maps the account id and login', async () => {
+    vi.mocked(createAppAuth).mockReturnValue(vi.fn() as never);
+    h.mockOctokit.request.mockResolvedValueOnce(installationData({ id: 9001, login: 'acme' }));
+    await expect(getInstallation(CONFIG, 42)).resolves.toEqual(
+      expect.objectContaining({ id: 42, accountLogin: 'acme', accountId: 9001 })
+    );
+  });
+
+  it('records a null accountId when the installation has no account', async () => {
+    vi.mocked(createAppAuth).mockReturnValue(vi.fn() as never);
+    h.mockOctokit.request.mockResolvedValueOnce(installationData(null));
+    await expect(getInstallation(CONFIG, 42)).resolves.toEqual(
+      expect.objectContaining({ accountLogin: '', accountId: null })
+    );
   });
 });
 

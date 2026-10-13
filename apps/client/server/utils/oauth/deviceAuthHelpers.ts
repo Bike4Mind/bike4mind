@@ -3,6 +3,9 @@ import crypto from 'crypto';
 // Shared by device/initiate (hard cap) and device/token (global poll ceiling = cap * 12, one poll per 5s each).
 export const MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS = 500;
 
+// Cache key for the atomic live-pending gauge used by device/initiate and device/verify.
+export const LIVE_PENDING_COUNTER_KEY = 'device-auth:live-pending-count';
+
 /**
  * Generate 8-character user code (base32, no confusing characters)
  * Format: XXXX-XXXX (e.g., "WXYZ-1234")

@@ -10,16 +10,16 @@ import {
   fabFileRepository,
   adminSettingsRepository,
   scopedSettingsRepository,
+  withTransaction,
 } from '@bike4mind/database';
-import { isSupportedEmbeddingModel } from '@bike4mind/common';
+import { CONVERGENCE_ORIGIN, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
-import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
 
 /**
  * GET  /api/data-lakes/:id/converge                     -> the plan (a preview; writes nothing)
@@ -134,7 +134,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query;
     const { limit, confirm } = ConvergeInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
+    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps, { idOnly: true });
 
     const { report, wave } = await dataLakeService.planLakeConvergenceRun(
       lake,
@@ -196,7 +196,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // itself remains the chunk worker's compare-and-set. Same shape as /rechunk on purpose - the
       // two doors must not drift on how a re-chunk is handed off.
       const userById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
-      const resetIds = await fabFileRepository.resetChunkStateByIds([...userById.keys()]);
+      // Gated a second time inside the transaction: the early gate keeps strangers from triggering
+      // detection, and this one is what serializes the reset against a concurrent grant revoke (see
+      // WRITE-TIME RESIDUAL on `canManageLake`). The sends below are external and run after commit.
+      const resetIds = await withTransaction(async () => {
+        await dataLakeService.assertLakeRebuildAccess(lake.id, ctx, gateDeps, { idOnly: true });
+        // Sequential: the ambient transaction session rejects concurrent operations.
+        const reset = await fabFileRepository.resetChunkStateByIds([...userById.keys()], { concurrency: 1 });
+        // A fallback lake has no Mongo doc and no grants to revoke, and its slug id is not a valid _id.
+        if (!dataLakeService.isFallbackLake(lake)) await dataLakeRepository.touchIfStable(lake.id);
+        return reset;
+      });
       const results = await Promise.allSettled(
         resetIds.map(fabFileId =>
           sendToQueue(queueUrl, {
