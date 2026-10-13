@@ -1,5 +1,7 @@
 import { getTextModelCreditsPer1M, ModelBackend, normalizeModelsDevKey, type ModelInfo } from '@bike4mind/common';
 
+const BEDROCK_REGION = /^(us|eu|apac|global)\./;
+
 const BEDROCK_VERSION_SUFFIX = /-v\d+(?::\d+)?$/;
 
 /**
@@ -20,9 +22,10 @@ const priceSignature = (model: ModelInfo): string | null => {
 
 /**
  * One row per pricingRowKey and price, in first-seen order. An unpriced twin gives way to a priced
- * one, but twins at different prices (an older snapshot billed at its own rate) both stay. Bedrock
- * region profiles of one model (`us.`, `eu.`, `global.`) are one row whatever their rates, and a
- * row that would read identically to a kept one (same backend, name and price) is dropped.
+ * one, but twins at different prices (an older snapshot billed at its own rate) both stay. That
+ * includes Bedrock region profiles: geographic ones (`us.`, `eu.`) bill a premium over `global.`,
+ * so they collapse only at equal rates. A row that would read identically to a kept one (same
+ * backend, name and price) is dropped.
  */
 export function dedupePricingRows(models: readonly ModelInfo[]): ModelInfo[] {
   const byKey = new Map<string, ModelInfo[]>();
@@ -35,7 +38,6 @@ export function dedupePricingRows(models: readonly ModelInfo[]): ModelInfo[] {
       if (kept.length === 0) byKey.set(key, [model]);
       continue;
     }
-    if (model.backend === ModelBackend.Bedrock && kept.some((_, i) => keptSignatures[i] !== null)) continue;
     if (keptSignatures.includes(signature)) continue;
     byKey.set(key, [...kept.filter((_, i) => keptSignatures[i] !== null), model]);
   }
@@ -47,6 +49,24 @@ export function dedupePricingRows(models: readonly ModelInfo[]): ModelInfo[] {
     seen.add(visible);
     return true;
   });
+}
+
+/**
+ * Backend chip text per Bedrock row id. Rows that share a name (region profiles kept apart because
+ * their rates differ) carry the region, so two prices never sit under one indistinguishable label.
+ */
+export function bedrockChipLabels(rows: readonly ModelInfo[]): Map<string, string> {
+  const bedrock = rows.filter(row => row.backend === ModelBackend.Bedrock);
+  const nameCount = new Map<string, number>();
+  for (const row of bedrock) nameCount.set(row.name, (nameCount.get(row.name) ?? 0) + 1);
+  return new Map(
+    bedrock.map(row => [
+      row.id,
+      (nameCount.get(row.name) ?? 0) > 1
+        ? `AWS Bedrock (${row.id.match(BEDROCK_REGION)?.[1] ?? 'in-region'})`
+        : 'AWS Bedrock',
+    ])
+  );
 }
 
 export const formatCreditsPer1M = (credits: number): string =>

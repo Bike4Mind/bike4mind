@@ -1,7 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { CREDITS_PER_USD_COST, ModelBackend, type ModelInfo } from '@bike4mind/common';
-import { dedupePricingRows, formatCreditsPer1M, pricingRowKey, textModelPriceCells } from './modelPricingRows';
+import {
+  bedrockChipLabels,
+  dedupePricingRows,
+  formatCreditsPer1M,
+  pricingRowKey,
+  textModelPriceCells,
+} from './modelPricingRows';
 
 const perM = (usd: number) => usd / 1_000_000;
 
@@ -73,16 +79,26 @@ describe('dedupePricingRows', () => {
     expect(rows.map(row => row.id)).toEqual(['gpt-4o', 'gpt-4o-2024-05-13']);
   });
 
-  it('collapses Bedrock region profiles of one model even when their rates differ', () => {
+  it('keeps Bedrock region profiles billed at different rates apart, so the premium is not hidden', () => {
     const rows = dedupePricingRows([
-      textModel('us.anthropic.claude-haiku-4-5-20251001-v1:0', ModelBackend.Bedrock, { name: 'Claude Haiku 4.5' }),
       textModel('global.anthropic.claude-haiku-4-5-20251001-v1:0', ModelBackend.Bedrock, {
+        name: 'Claude Haiku 4.5',
+        pricing: { 1_000_000: { input: perM(1), output: perM(5) } },
+      }),
+      textModel('us.anthropic.claude-haiku-4-5-20251001-v1:0', ModelBackend.Bedrock, {
+        name: 'Claude Haiku 4.5',
+        pricing: { 1_000_000: { input: perM(1.1), output: perM(5.5) } },
+      }),
+      textModel('eu.anthropic.claude-haiku-4-5-20251001-v1:0', ModelBackend.Bedrock, {
         name: 'Claude Haiku 4.5',
         pricing: { 1_000_000: { input: perM(1.1), output: perM(5.5) } },
       }),
     ]);
 
-    expect(rows.map(row => row.id)).toEqual(['us.anthropic.claude-haiku-4-5-20251001-v1:0']);
+    expect(rows.map(row => row.id)).toEqual([
+      'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+      'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+    ]);
   });
 
   it('drops a row that would read identically to a kept one', () => {
@@ -131,5 +147,22 @@ describe('formatCreditsPer1M', () => {
     expect(formatCreditsPer1M(75.5)).toBe((75.5).toLocaleString());
     expect(formatCreditsPer1M(1.23456)).toBe((1.23).toLocaleString());
     expect(formatCreditsPer1M(10_000)).toBe((10_000).toLocaleString());
+  });
+});
+
+describe('bedrockChipLabels', () => {
+  it('names the region only where two Bedrock rows share a name', () => {
+    const labels = bedrockChipLabels([
+      textModel('global.anthropic.claude-haiku-4-5', ModelBackend.Bedrock, { name: 'Claude Haiku 4.5' }),
+      textModel('us.anthropic.claude-haiku-4-5', ModelBackend.Bedrock, { name: 'Claude Haiku 4.5' }),
+      textModel('global.anthropic.claude-opus-5-5', ModelBackend.Bedrock, { name: 'Claude Opus 5.5' }),
+      textModel('claude-haiku-4-5', ModelBackend.Anthropic, { name: 'Claude Haiku 4.5' }),
+    ]);
+
+    expect(Object.fromEntries(labels)).toEqual({
+      'global.anthropic.claude-haiku-4-5': 'AWS Bedrock (global)',
+      'us.anthropic.claude-haiku-4-5': 'AWS Bedrock (us)',
+      'global.anthropic.claude-opus-5-5': 'AWS Bedrock',
+    });
   });
 });
