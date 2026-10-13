@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import bcrypt from 'bcryptjs';
 
 // Mock all external dependencies before importing the route handler.
 const mockFindByEmail = vi.fn();
 const mockUpdate = vi.fn();
 const mockValidateAndRotateNonce = vi.fn();
+const mockConsumeOtherCodes = vi.fn();
 const mockVerifyPendingOTC = vi.fn();
 const mockRegisterViaOTC = vi.fn();
 const mockUserHasMFA = vi.fn();
@@ -63,12 +65,17 @@ vi.mock('@bike4mind/common', async () => {
 });
 
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
+    tryAddWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 0, expiresAt: new Date() })),
+  },
   userRepository: {
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
     update: (...a: unknown[]) => mockUpdate(...a),
   },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: unknown[]) => mockValidateAndRotateNonce(...a),
+    consumeOtherCodes: (...a: unknown[]) => mockConsumeOtherCodes(...a),
   },
   adminSettingsRepository: {},
   registrationInviteRepository: {},
@@ -104,11 +111,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: () => () => {} }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { createAccessToken: () => ({ accessToken: 'access', refreshToken: 'refresh' }) },
 }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
@@ -181,6 +187,34 @@ describe('/api/otc/verify — enumeration resistance', () => {
     const body = mockRes.json.mock.calls[0][0];
     expect(body.error).toMatch(/Invalid code\. 4 attempts remaining\./);
     expect(body.pendingToken).toBe('reissued-token');
+  });
+
+  it('leaves the other live codes for the address alone on a wrong code', async () => {
+    mockJwtVerify.mockReturnValue(validToken());
+    mockVerifyPendingOTC.mockResolvedValue(false);
+
+    await handler(makeReq({ email: 'user@example.com', code: '000000', pendingToken: 'tok' }), mockRes);
+
+    expect(mockConsumeOtherCodes).not.toHaveBeenCalled();
+  });
+
+  it('retires every other live code for the address once a code is proven', async () => {
+    mockJwtVerify.mockReturnValue(validToken());
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue({
+      id: 'u1',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tokenVersion: 0,
+      toJSON: () => ({ id: 'u1', username: 'bob' }),
+    });
+
+    await handler(makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' }), mockRes);
+
+    const [, , rotatedNonce] = mockValidateAndRotateNonce.mock.calls[0];
+    expect(mockConsumeOtherCodes).toHaveBeenCalledWith('user@example.com', rotatedNonce);
+    expect(mockRes.status).toHaveBeenCalledWith(200);
   });
 
   it('throws a generic "Invalid code." (no existence read) for a missing token', async () => {
@@ -261,6 +295,51 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(sentCookies.join(';')).toContain('b4m_rt=refresh');
     // Serialized via toJSON - no raw Mongoose internals / select:false fields.
     expect(body.password).toBeUndefined();
+  });
+
+  // Rollout: a 6-digit code issued just before 8-digit codes shipped must still work while its token
+  // is live, and only by matching that token's hash.
+  describe('legacy 6-digit codes', () => {
+    beforeEach(() => {
+      // What verifyPendingOTC does (see verifyOTC.test.ts): a bcrypt compare with no length check.
+      mockVerifyPendingOTC.mockImplementation((code: string, hash: string) => bcrypt.compare(code, hash));
+      mockFindByEmail.mockResolvedValue({
+        id: 'u1',
+        isSystem: false,
+        isBanned: false,
+        emailVerified: true,
+        tokenVersion: 0,
+        toJSON: () => ({ id: 'u1', username: 'bob' }),
+      });
+    });
+
+    it('signs in with a 6-digit code that matches a live token', async () => {
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('012345', 4) }));
+
+      await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
+
+      expect(mockValidateAndRotateNonce).toHaveBeenCalled();
+      expect(mockRes.status).toHaveBeenCalledWith(200);
+    });
+
+    it('rejects a 6-digit code against an 8-digit token as a wrong guess', async () => {
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('01234567', 4) }));
+
+      await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
+
+      expect(mockRes.status).toHaveBeenCalledWith(422);
+      expect(mockFindByEmail).not.toHaveBeenCalled();
+    });
+
+    it('rejects a 6-digit code whose token nonce is no longer live', async () => {
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('012345', 4) }));
+      mockValidateAndRotateNonce.mockResolvedValue(false);
+
+      await expect(
+        handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes)
+      ).rejects.toThrow('Invalid code.');
+      expect(mockFindByEmail).not.toHaveBeenCalled();
+    });
   });
 
   it('registers a new user on a correct code with a username', async () => {

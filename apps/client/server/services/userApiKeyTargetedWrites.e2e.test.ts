@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { createHash } from 'crypto';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { ApiKeyScope, ApiKeyStatus, CreditHolderType, IUserApiKeyDocument } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
+import type { ApiKeyStoredSecret, IUserApiKeyDocument } from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { userApiKeyRepository, UserApiKey } from '@bike4mind/database';
@@ -83,8 +85,8 @@ describe('userApiKeyService writers vs concurrent writes (real repo + Mongo)', (
       if (doc) await race(minted.id, 7, true);
       return doc;
     };
-    repo.healKeyPrefix = (id: string, keyPrefix: string, expectedKeyHash: string) => {
-      const p = userApiKeyRepository.healKeyPrefix(id, keyPrefix, expectedKeyHash);
+    repo.healKeyPrefix = (id: string, keyPrefix: string, matchedSecret: ApiKeyStoredSecret) => {
+      const p = userApiKeyRepository.healKeyPrefix(id, keyPrefix, matchedSecret);
       healed = p;
       return p;
     };
@@ -99,6 +101,48 @@ describe('userApiKeyService writers vs concurrent writes (real repo + Mongo)', (
     expect(after!.revokedAt).toBeInstanceOf(Date);
     expect(after!.usage.totalSpendCredits).toBe(7);
     expect(after!.keyPrefix).toBe(currentPrefix);
+  });
+
+  it('validate self-heal of a digest-only key does not revive the key a rotation replaced mid-heal', async () => {
+    const minted = await mintEmbedKey();
+    const currentPrefix = minted.key.substring(0, minted.keyPrefix.length);
+    // Digest-only key under the legacy 12-char prefix: validation takes the self-heal path.
+    const legacyDoc = await UserApiKey.findByIdAndUpdate(
+      minted.id,
+      { $set: { keyPrefix: minted.key.substring(0, 12) } },
+      { new: true }
+    ).lean<IUserApiKeyDocument>();
+    expect(legacyDoc!.keyHash).toBeUndefined();
+
+    let healed: Promise<void> | undefined;
+    let rotatedKey = '';
+    const repo = Object.create(userApiKeyRepository) as typeof userApiKeyRepository;
+    // validate fires the heal without awaiting it, so record the promise synchronously for the test to await.
+    repo.healKeyPrefix = (id: string, keyPrefix: string, matchedSecret: ApiKeyStoredSecret) => {
+      healed = (async () => {
+        // The rotation commits after validation matched the old digest, before the heal lands.
+        const rotation = await userApiKeyService.rotateUserApiKey(
+          'owner-1',
+          { keyId: minted.id },
+          { db: { ...baseDb, userApiKeys: userApiKeyRepository } }
+        );
+        rotatedKey = rotation.key;
+        await userApiKeyRepository.healKeyPrefix(id, keyPrefix, matchedSecret);
+      })();
+      return healed as Promise<void>;
+    };
+
+    const result = await userApiKeyService.validateUserApiKey(minted.key, { db: { userApiKeys: repo } });
+    expect(result.isValid).toBe(true); // the old key was valid when the request read it
+    await healed;
+
+    const after = await reload(minted.id);
+    expect(after!.keyPrefix).toBe(rotatedKey.substring(0, minted.keyPrefix.length));
+    expect(after!.keyPrefix).not.toBe(currentPrefix);
+    expect(after!.keyDigest).toBe(createHash('sha256').update(rotatedKey).digest('hex'));
+    const db = { userApiKeys: userApiKeyRepository };
+    expect((await userApiKeyService.validateUserApiKey(minted.key, { db })).isValid).toBe(false);
+    expect((await userApiKeyService.validateUserApiKey(rotatedKey, { db })).isValid).toBe(true);
   });
 
   it('revoke keeps a spend increment that lands after its read', async () => {
@@ -147,7 +191,10 @@ describe('userApiKeyService writers vs concurrent writes (real repo + Mongo)', (
 
   it('rotate does not resurrect a key deactivated mid-flight or reset its spend', async () => {
     const minted = await mintEmbedKey();
+    // A legacy bcrypt hash, so the assertion below proves rotation removes it.
+    await userApiKeyRepository.update({ id: minted.id, keyHash: '$2b$12$legacylegacylegacylegac' });
     const before = await reload(minted.id);
+    expect(before!.keyHash).toBeDefined();
 
     await userApiKeyService.rotateUserApiKey(
       'owner-1',
@@ -158,7 +205,8 @@ describe('userApiKeyService writers vs concurrent writes (real repo + Mongo)', (
     const after = await reload(minted.id);
     expect(after!.status).toBe(ApiKeyStatus.DISABLED);
     expect(after!.usage.totalSpendCredits).toBe(9);
-    expect(after!.keyHash).not.toBe(before!.keyHash);
+    expect(after!.keyHash).toBeUndefined();
+    expect(after!.keyDigest).not.toBe(before!.keyDigest);
   });
 
   it('updateEmbedKey does not resurrect a key deactivated mid-flight or reset its spend', async () => {

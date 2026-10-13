@@ -162,7 +162,7 @@ describe('createUserApiKey - callback signing secret', () => {
 });
 
 describe('createUserApiKey - SHA-256 key digest', () => {
-  it('persists the hex SHA-256 of the raw key alongside the bcrypt hash, and never returns either', async () => {
+  it('persists the hex SHA-256 of the raw key with no bcrypt hash, and never returns either', async () => {
     const repo = makeRepo();
     const result = await createUserApiKey('sys-1', baseParams, {
       db: { userApiKeys: repo as any },
@@ -171,7 +171,7 @@ describe('createUserApiKey - SHA-256 key digest', () => {
 
     const [document] = repo.create.mock.calls[0];
     expect(document.keyDigest).toBe(createHash('sha256').update(result.key).digest('hex'));
-    expect(document.keyHash).toEqual(expect.any(String));
+    expect(document).not.toHaveProperty('keyHash');
     expect(result).not.toHaveProperty('keyDigest');
     expect(result).not.toHaveProperty('keyHash');
   });

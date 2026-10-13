@@ -77,7 +77,7 @@
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.11",
     "@vitest/ui": "^4.1.11",
-    "mongodb-memory-server": "^11.2.0",
+    "mongodb-memory-server": "^11.3.0",
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "vite-tsconfig-paths": "^6.1.1",

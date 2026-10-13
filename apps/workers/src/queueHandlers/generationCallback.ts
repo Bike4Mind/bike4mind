@@ -8,7 +8,7 @@ import {
   GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
   getDeliveryAttempt,
   isFinalDeliveryAttempt,
-} from '@server/queueHandlers/sqsDelivery';
+} from '@server/utils/sqsDelivery';
 import { GenerationCallbackMessageSchema } from '@server/generationCallback/messages';
 import { toQuestPollBody } from '@server/utils/questPollBody';
 import { assertUrlAllowed, SsrfError } from '@server/utils/ssrfProtection';

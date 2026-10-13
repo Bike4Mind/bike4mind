@@ -275,6 +275,8 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     },
     voiceReservedCredits: { type: Number, required: false, default: null },
     voiceSessionStartedAt: { type: Date, required: false, default: null },
+    // No default: $inc needs the field absent or numeric, never null.
+    voiceBilledCredits: { type: Number, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -647,11 +649,28 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     });
   }
 
-  async findStaleVoiceHolds(startedBefore: Date, limit: number) {
+  async addVoiceBilledCredits(sessionId: string, startedAt: Date, credits: number) {
+    // Only a realtime hold (opened with the marker) is billed per response; a response frame against
+    // any other hold gets null and is charged from the balance, so it can never re-price that hold.
+    const before = await this.sessionModel.findOneAndUpdate(
+      { _id: sessionId, voiceSessionStartedAt: startedAt, voiceBilledCredits: { $exists: true } },
+      { $inc: { voiceBilledCredits: credits } },
+      { new: false, projection: { voiceBilledCredits: 1 } }
+    );
+    return before ? (before.voiceBilledCredits ?? 0) : null;
+  }
+
+  async findStaleVoiceHolds(startedBefore: Date, realtimeStartedBefore: Date, limit: number) {
     const sessions = await this.sessionModel
       .find(
-        { voiceSessionStartedAt: { $lt: startedBefore }, voiceReservedCredits: { $gt: 0 } },
-        { userId: 1, voiceReservedCredits: 1, voiceSessionStartedAt: 1 }
+        {
+          voiceReservedCredits: { $gt: 0 },
+          $or: [
+            { voiceBilledCredits: { $exists: false }, voiceSessionStartedAt: { $lt: startedBefore } },
+            { voiceBilledCredits: { $exists: true }, voiceSessionStartedAt: { $lt: realtimeStartedBefore } },
+          ],
+        },
+        { userId: 1, voiceReservedCredits: 1, voiceSessionStartedAt: 1, voiceBilledCredits: 1 }
       )
       .sort({ voiceSessionStartedAt: 1 })
       .limit(limit)
@@ -661,25 +680,43 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       userId: s.userId,
       voiceReservedCredits: s.voiceReservedCredits as number,
       voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
+      realtime: s.voiceBilledCredits != null,
     }));
   }
 
-  async claimVoiceHold(sessionId: string, startedAt: Date) {
+  async claimVoiceHold(sessionId: string, startedAt: Date, options?: { realtimeOnly?: boolean }) {
     // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
-    // end, sweep or settlement frame wins, and a newer call's hold is never touched.
-    const claimed = await this.sessionModel.findOneAndUpdate(
-      { _id: sessionId, voiceSessionStartedAt: startedAt },
-      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null } },
-      { projection: { _id: 1 } }
+    // end, sweep or settlement frame wins, and a newer call's hold is never touched. The
+    // pre-update billed total includes every response frame that charged the hold before it.
+    // realtimeOnly matches only a hold carrying the realtime marker, as addVoiceBilledCredits does.
+    const before = await this.sessionModel.findOneAndUpdate(
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: startedAt,
+        ...(options?.realtimeOnly ? { voiceBilledCredits: { $exists: true } } : {}),
+      },
+      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null }, $unset: { voiceBilledCredits: '' } },
+      { new: false, projection: { voiceBilledCredits: 1 } }
     );
-    return claimed != null;
+    return before ? { billedCredits: before.voiceBilledCredits ?? null } : null;
   }
 
-  async restoreVoiceHold(sessionId: string, voiceReservedCredits: number, startedAt: Date) {
+  async restoreVoiceHold(
+    sessionId: string,
+    voiceReservedCredits: number,
+    startedAt: Date,
+    billedCredits: number | null
+  ) {
     // Only while no newer call has started a hold on the session.
     const { modifiedCount } = await this.sessionModel.updateOne(
       { _id: sessionId, voiceSessionStartedAt: null },
-      { $set: { voiceReservedCredits, voiceSessionStartedAt: startedAt } }
+      {
+        $set: {
+          voiceReservedCredits,
+          voiceSessionStartedAt: startedAt,
+          ...(billedCredits !== null ? { voiceBilledCredits: billedCredits } : {}),
+        },
+      }
     );
     return modifiedCount === 1;
   }

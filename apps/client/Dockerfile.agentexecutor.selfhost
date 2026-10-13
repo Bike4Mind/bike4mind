@@ -22,22 +22,27 @@ COPY apps/client/scripts ./apps/client/scripts
 #     present before it runs or the install ENOENTs.
 COPY patches ./patches
 
-# 2) Install the client workspace + all workspace deps INCLUDING devDeps (tsx). No --prod.
-RUN pnpm install --frozen-lockfile --filter @bike4mind/client...
+# 2) Install the client and workers workspaces + all workspace deps INCLUDING devDeps (tsx).
+#    No --prod. The service lives in apps/workers/src/agentExecutor; client stays because the
+#    agentExecutor queue handler it runs (reached through @server/*) still lives there.
+RUN pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...
 
 # 3) Source.
 COPY . .
 
 # 4) Build the client's upstream @bike4mind/* packages (incl. @bike4mind/resource, the shim
 #    the alias hook redirects to). `^...` builds the client's deps without the Next.js app.
+#    Workers' @bike4mind/* deps are a subset of the client's, so they need no filter of their own.
 RUN pnpm turbo build --filter=@bike4mind/client^...
 
 ENV NODE_ENV=production
 ENV B4M_SELF_HOST=true
 ENV PORT=8080
 EXPOSE 8080
-WORKDIR /app/apps/client
+WORKDIR /app/apps/workers
 
-# tsx resolves @server/* and @/* from apps/client/tsconfig.json (cwd here); the --import hook
-# aliases `sst` -> @bike4mind/resource so Resource.* resolves from env.
-CMD ["pnpm", "exec", "tsx", "--import", "./server/chatCompletion/selfhostSstAlias.mjs", "server/agentExecutor/main.ts"]
+# Same wiring as compose.selfhost.yaml's `worker` service: tsconfig.selfhost.json carries the
+# @workers/* paths plus the interim @server/* bridge into apps/client, with an include wide
+# enough that the bridged client files also transpile in strict mode. The --import hook (still
+# in apps/client) aliases `sst` -> @bike4mind/resource so Resource.* resolves from env.
+CMD ["pnpm", "exec", "tsx", "--tsconfig", "tsconfig.selfhost.json", "--import", "../client/server/chatCompletion/selfhostSstAlias.mjs", "src/agentExecutor/main.ts"]

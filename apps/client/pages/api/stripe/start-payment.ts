@@ -1,4 +1,5 @@
 import { userRepository } from '@bike4mind/database';
+import { CreditPurchaseEvents } from '@bike4mind/common';
 import { transactionSchema } from '@client/lib/credits/schemas';
 import { PaymentDetails, TransactionType } from '@client/lib/credits/types';
 import { handlePackageTransaction, handlePerCreditTransaction } from '@client/lib/credits/utils';
@@ -7,6 +8,8 @@ import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { Config } from '@server/utils/config';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { logEventSafe } from '@server/utils/analyticsLog';
+import type Stripe from 'stripe';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
@@ -26,17 +29,6 @@ const handler = baseApi()
       transactionType: parsedBody.transactionType,
     };
 
-    const stripeApi = stripe;
-    if (!req.user.stripeCustomerId) {
-      const customer = await createCustomer({
-        email: req.user.email!,
-        name: req.user.name!,
-        type: CustomerType.User,
-      });
-      req.user.stripeCustomerId = customer.id;
-      await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });
-    }
-
     let paymentDetails: PaymentDetails;
     switch (parsedBody.transactionType) {
       case TransactionType.PerCredit:
@@ -49,24 +41,84 @@ const handler = baseApi()
         throw new BadRequestError('Invalid transaction type');
     }
 
-    const paymentIntent = await stripeApi.paymentIntents.create({
-      amount: paymentDetails.amount,
-      currency: 'usd',
-      receipt_email: req.user.email ?? undefined,
-      customer: req.user.stripeCustomerId ?? undefined,
-      description: paymentDetails.description,
-      metadata: {
-        ...metadata,
-        ...paymentDetails.metadata,
-      },
-      automatic_payment_methods: {
-        enabled: true,
-      },
-    });
+    // The intent must carry a customer: the webhook resolves the purchaser by it, and the dispute
+    // fallback and billing portal depend on it too. A customer created here is only persisted once
+    // an intent references it, and is deleted if the intent cannot be created, so a failed start
+    // never leaves a customer behind.
+    let customerId = req.user.stripeCustomerId ?? undefined;
+    let createdCustomerId: string | undefined;
+    if (!customerId) {
+      const customer = await createCustomer({
+        email: req.user.email!,
+        name: req.user.name!,
+        type: CustomerType.User,
+      });
+      customerId = createdCustomerId = customer.id;
+    }
 
-    return res
-      .status(200)
-      .send({ clientSecret: paymentIntent.client_secret, publishableKey: Config.STRIPE_PUBLISHABLE_KEY });
+    let paymentIntent: Stripe.PaymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: paymentDetails.amount,
+        currency: 'usd',
+        receipt_email: req.user.email ?? undefined,
+        customer: customerId,
+        description: paymentDetails.description,
+        metadata: {
+          ...metadata,
+          ...paymentDetails.metadata,
+        },
+        automatic_payment_methods: {
+          enabled: true,
+        },
+      });
+    } catch (error) {
+      if (createdCustomerId) {
+        await stripe.customers.del(createdCustomerId).catch((delError: unknown) => {
+          req.logger.error('[CreditPurchase] Failed to delete customer after intent creation failed', {
+            userId: req.user.id,
+            error: delError instanceof Error ? delError.message : String(delError),
+          });
+        });
+      }
+      throw error;
+    }
+
+    if (createdCustomerId) {
+      req.user.stripeCustomerId = createdCustomerId;
+      await userRepository.update({ id: req.user.id, stripeCustomerId: createdCustomerId });
+    }
+
+    const credits = Number(paymentDetails.metadata.credits);
+    req.logger.info('[CreditPurchase] Payment intent created', {
+      step: 'intent_created',
+      userId: req.user.id,
+      paymentIntentId: paymentIntent.id,
+      transactionType: parsedBody.transactionType,
+      amount: paymentDetails.amount,
+      credits,
+    });
+    await logEventSafe(
+      {
+        type: CreditPurchaseEvents.CHECKOUT_STARTED,
+        userId: req.user.id,
+        metadata: {
+          paymentIntentId: paymentIntent.id,
+          transactionType: parsedBody.transactionType,
+          amount: paymentDetails.amount,
+          credits,
+          ...(paymentDetails.metadata.packageId && { packageId: String(paymentDetails.metadata.packageId) }),
+        },
+      },
+      undefined,
+      req.logger
+    );
+
+    return res.status(200).send({
+      clientSecret: paymentIntent.client_secret,
+      publishableKey: Config.STRIPE_PUBLISHABLE_KEY,
+      paymentIntentId: paymentIntent.id,
+    });
   });
 
 export const config = {

@@ -1,22 +1,18 @@
 /** POST /api/v1/video-generations/{id}/cancel - request cancellation and return the job. */
 import { cancelVideoGenerationContract, NotFoundError } from '@bike4mind/common';
-import { generationJobRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getGenerationJobEngine } from '@server/generationJobs/wiring';
-import { findOwnVideoJob } from '@server/videoGenerations/findOwnVideoJob';
+import { cancelOwnGenerationJob } from '@server/generations/cancelOwnGenerationJob';
+import { findOwnGenerationJob } from '@server/generations/findOwnGenerationJob';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { mapperDeps } from '@server/videoGenerations/routeDeps';
+import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const handler = nextRouteForContract(cancelVideoGenerationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/video-generations/[id]/cancel'),
 }).post(async (req, res) => {
-  const job = await findOwnVideoJob(req.validatedParams.id, req.user.id);
+  const job = await findOwnGenerationJob(req.validatedParams.id, req.user.id, 'video');
   if (!job) throw new NotFoundError('Video generation not found');
-  // null: already storing or terminal, so the provider has produced (and charged for) the video; report it as is.
-  const requested = await getGenerationJobEngine().requestCancel(job.id);
-  const current = requested ?? (await generationJobRepository.findById(job.id)) ?? job;
-  return res.json(await toPublicVideoGeneration(current, mapperDeps));
+  return res.json(await toPublicVideoGeneration(await cancelOwnGenerationJob(job), mapperDeps));
 });
 
 export const config = {
