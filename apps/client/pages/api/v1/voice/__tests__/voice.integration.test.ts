@@ -422,7 +422,8 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
     expect(mocks.incrementCredits).toHaveBeenLastCalledWith('user-1', -RESERVED_CREDITS);
     expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
+      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS }),
+      { unset: ['voiceBilledCredits'] }
     );
     const [claims] = mocks.signVoiceSessionToken.mock.calls[0] as [{ voiceHoldStartedAt?: string }];
     expect(claims.voiceHoldStartedAt).not.toBe(startedAt.toISOString());
@@ -433,7 +434,8 @@ describe('POST /api/v1/voice/sessions', () => {
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
+      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS }),
+      { unset: ['voiceBilledCredits'] }
     );
     expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1');
   });
@@ -482,6 +484,27 @@ describe('POST /api/v1/voice/sessions', () => {
     ]);
   });
 
+  it('drops the realtime marker of a prior realtime hold that had no reserve', async () => {
+    // enforceCredits off when the realtime call opened: no reserve, so the prior hold is never claimed.
+    settings({ enforceCredits: 'false' });
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      userId: 'user-1',
+      name: 'My notebook',
+      voiceReservedCredits: null,
+      voiceSessionStartedAt: new Date(Date.now() - 60_000),
+      voiceBilledCredits: 0,
+    });
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).not.toHaveBeenCalled();
+    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: null }),
+      { unset: ['voiceBilledCredits'] }
+    );
+  });
+
   it('creates a session when no sessionId is sent', async () => {
     const { res, run } = fireSessions({ body: { reasoningModelId: 'claude-sonnet-4-6' } });
     await run();
@@ -495,7 +518,8 @@ describe('POST /api/v1/voice/sessions', () => {
     );
     expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', -RESERVED_CREDITS);
     expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
+      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS }),
+      { unset: ['voiceBilledCredits'] }
     );
   });
 
@@ -505,7 +529,8 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', -RESERVED_CREDITS);
     expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ voiceReservedCredits: RESERVED_CREDITS })
+      expect.objectContaining({ voiceReservedCredits: RESERVED_CREDITS }),
+      { unset: ['voiceBilledCredits'] }
     );
   });
 

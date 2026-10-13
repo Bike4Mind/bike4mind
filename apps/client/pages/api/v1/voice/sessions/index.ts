@@ -225,14 +225,19 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
 
   // A reconnect leaves the original reservation record untouched so end-reconciliation
   // measures the full call duration, not just the post-reconnect segment.
+  // Drops any realtime marker explicitly: a prior realtime hold with no reserve is never claimed, so
+  // its marker would otherwise survive and this ElevenLabs hold would settle as realtime.
   if (!reuseHold) {
-    await sessionRepository.update({
-      id: session.id,
-      voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt: holdStartedAt,
-      voiceConnectedAt: null,
-      voiceLastActivityAt: null,
-    });
+    await sessionRepository.update(
+      {
+        id: session.id,
+        voiceReservedCredits: enforceCredits ? reservedCredits : null,
+        voiceSessionStartedAt: holdStartedAt,
+        voiceConnectedAt: null,
+        voiceLastActivityAt: null,
+      },
+      { unset: ['voiceBilledCredits'] }
+    );
   }
 
   return res.status(200).json({
