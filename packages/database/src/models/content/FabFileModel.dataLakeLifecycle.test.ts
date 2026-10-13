@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { KnowledgeType, type DataLakeMembershipScope } from '@bike4mind/common';
+import { KnowledgeType, STORAGE_CHARGE_STAMP_CUTOFF, type DataLakeMembershipScope } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
 import { FabFile, fabFileRepository } from './FabFileModel';
@@ -1179,6 +1179,25 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(swept.find(f => f.id === id)).toMatchObject({ fileSize: 0 });
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
       expect(restored.find(f => f.id === id)).toMatchObject({ fileSize: 0 });
+    });
+
+    it('carries full bytes for a legacy pre-cutoff complete row with no stamp, both ways', async () => {
+      const legacy = await makeFile({
+        fileName: 'legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        storageChargedAt: null,
+      });
+      await FabFile.collection.updateOne(
+        { _id: legacy._id },
+        { $set: { createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000) } }
+      );
+      const id = legacy._id.toString();
+
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope);
+      expect(swept.find(f => f.id === id)).toMatchObject({ fileSize: 100 });
+      const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
+      expect(restored.find(f => f.id === id)).toMatchObject({ fileSize: 100 });
     });
 
     it('honours excludeIds so a discarded duplicate stays deleted', async () => {

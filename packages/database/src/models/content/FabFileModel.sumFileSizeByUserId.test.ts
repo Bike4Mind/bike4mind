@@ -80,6 +80,8 @@ describe('FabFileRepository.sumFileSizeByUserId', () => {
       status: 'pending',
     });
     await FabFile.collection.updateOne({ _id: legacyPending._id }, { $set: { createdAt: before } });
+    const atCutoff = await makeFile(userId, 'at-cutoff.txt', 64, { storageChargedAt: null });
+    await FabFile.collection.updateOne({ _id: atCutoff._id }, { $set: { createdAt: STORAGE_CHARGE_STAMP_CUTOFF } });
 
     const total = await fabFileRepository.sumFileSizeByUserId(userId);
     expect(total).toBe(1 + 2 + 16);

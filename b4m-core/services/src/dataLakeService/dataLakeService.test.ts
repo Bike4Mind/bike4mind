@@ -3121,6 +3121,60 @@ describe('unarchiveDataLake - dedup pass (live re-upload wins)', () => {
     expect(incrementCurrentStorage).toHaveBeenCalledWith('contributor', -50);
   });
 
+  it('does not debit a discarded duplicate that was never charged', async () => {
+    const archived = [
+      {
+        id: 'a1',
+        contentHash: 'h1',
+        userId: 'creator',
+        fileSize: 100,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
+      {
+        id: 'a2',
+        contentHash: 'h2',
+        userId: 'contributor',
+        fileSize: 50,
+        status: 'pending',
+        storageChargedAt: null,
+        createdAt: new Date('2026-10-10T00:00:00Z'),
+      },
+    ];
+    const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue(archived),
+      // Both a1 and a2 have a live re-upload - both are discarded duplicates.
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([
+        { id: 'live1', contentHash: 'h1' },
+        { id: 'live2', contentHash: 'h2' },
+      ]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'unarchiving' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).toHaveBeenCalledTimes(1);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', -100);
+    expect(incrementCurrentStorage).not.toHaveBeenCalledWith('contributor', expect.anything());
+  });
+
   it("passes this lake's own filesArchivedAt stamp through to both the dedup read and the reversal", async () => {
     const STAMP = new Date('2026-05-01');
     const fabFiles = {
