@@ -54,9 +54,9 @@ mockRefs.facet.mockImplementation(() =>
   Promise.resolve([{ totalCount: [{ count: 1 }], paginatedResults: [makeRow()] }])
 );
 
-async function listAs(query: Record<string, unknown>, isAdmin: boolean) {
+async function listAs(query: Record<string, unknown>, isAdmin: boolean, viewerId = 'viewer1') {
   const { req, res } = createMocks({ method: 'GET', query });
-  (req as any).user = { id: 'viewer1', isAdmin };
+  (req as any).user = { id: viewerId, isAdmin };
   await mockRefs.getHandler!(req, res);
   return res._getJSONData();
 }
@@ -80,6 +80,15 @@ describe('GET /api/users - populated organization', () => {
 
     expect(org).toMatchObject({ id: 'o1', name: 'Org' });
     expect(org).not.toHaveProperty('billingContact');
+    expect(org).not.toHaveProperty('stripeCustomerId');
+  });
+
+  it('keeps billingContact for a non-admin viewer who owns the organization', async () => {
+    const body = await listAs({}, false, 'owner');
+    const org = body.users[0].organizationId;
+
+    expect(org).toMatchObject({ id: 'o1', name: 'Org' });
+    expect(org).toHaveProperty('billingContact');
     expect(org).not.toHaveProperty('stripeCustomerId');
   });
 
