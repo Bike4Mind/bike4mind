@@ -1,9 +1,9 @@
 // Linear-time stand-ins for four of convertToolOutputsToArtifacts' patterns (./artifactParser.ts).
 // Each returns what text.replace(pattern, replacer) returned, and passes the replacer the same
-// (match, captured) pair. The regex forms rescan to the end of the input from every prefix or
-// brace, which is quadratic on repeated unclosed ones.
+// (match, captured, offset) triple, offset indexing the input text. The regex forms rescan to the
+// end of the input from every prefix or brace, which is quadratic on repeated unclosed ones.
 
-export type ResultReplacer = (match: string, captured: string) => string;
+export type ResultReplacer = (match: string, captured: string, offset: number) => string;
 
 function nextIndexOf(text: string, needle: string, from: number): number {
   const at = text.indexOf(needle, from);
@@ -30,7 +30,7 @@ export function replaceLazyResultObjects(text: string, replacer: ResultReplacer)
     }
     if (closeAt < lineEndAt) {
       const end = closeAt + 2;
-      out += text.slice(copied, m.index) + replacer(text.slice(m.index, end), text.slice(brace, closeAt + 1));
+      out += text.slice(copied, m.index) + replacer(text.slice(m.index, end), text.slice(brace, closeAt + 1), m.index);
       copied = end;
       prefix.lastIndex = end;
     } else {
@@ -54,7 +54,7 @@ function replaceBraceTerminated(text: string, prefix: RegExp, keepBrace: boolean
     if (text[braceAt + 1] === '"') {
       const end = braceAt + 2;
       const captured = text.slice(prefixEnd - m[1].length, keepBrace ? braceAt + 1 : braceAt);
-      out += text.slice(copied, m.index) + replacer(text.slice(m.index, end), captured);
+      out += text.slice(copied, m.index) + replacer(text.slice(m.index, end), captured, m.index);
       copied = end;
       prefix.lastIndex = end;
     } else {
@@ -94,7 +94,7 @@ export function replaceDirectTypeObjects(text: string, replacer: ResultReplacer)
     if (!next) break;
     if (next[0] === '}' && DIRECT_TYPE.test(text.slice(open + 1, next.index))) {
       const match = text.slice(open, next.index + 1);
-      out += text.slice(copied, open) + replacer(match, match);
+      out += text.slice(copied, open) + replacer(match, match, open);
       copied = next.index + 1;
       open = text.indexOf('{', copied);
     } else {

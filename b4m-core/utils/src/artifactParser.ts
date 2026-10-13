@@ -646,6 +646,14 @@ function errorName(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 
+interface ToolOutputEchoes {
+  isToolEcho?: (body: string) => boolean;
+  /** Replacement for an echoed match; `offset` indexes `input`, the text the match was found in. */
+  mark: (match: string, offset: number, input: string) => string;
+  /** Mark echoes only: every other match stays as it is (markToolEchoes). */
+  only: boolean;
+}
+
 /**
  * Detects tool outputs (JSON responses from tools) and converts them to artifact syntax.
  * Ids are derived from the body (hashBody), not a clock: this now runs server-side too, and the
@@ -654,7 +662,7 @@ function errorName(error: unknown): string {
 function convertToolOutputsToArtifacts(
   content: string,
   holds: (value: string) => boolean,
-  isToolEcho?: (body: string) => boolean
+  echoes: ToolOutputEchoes
 ): string {
   // Look for any JSON-like structure that contains type field with our target types
   // This approach is more forgiving of escaping variations
@@ -685,8 +693,11 @@ function convertToolOutputsToArtifacts(
   let processedContent = content;
 
   for (const step of steps) {
-    processedContent = step(processedContent, (match, captured) => {
-      if (holds(match) || isToolEcho?.(captured || match)) return match;
+    const input = processedContent;
+    processedContent = step(input, (match, captured, offset) => {
+      if (holds(match)) return match;
+      if (echoes.isToolEcho?.(captured || match)) return echoes.mark(match, offset, input);
+      if (echoes.only) return match;
       try {
         let jsonString = captured || match;
 
@@ -841,17 +852,131 @@ function hasReactIndicators(code: string): boolean {
   return [hasReactHooks, hasJSXSyntax, hasReactImport, hasReactComponent, hasJSXReturn].filter(Boolean).length >= 2;
 }
 
-// A closed fence, or an inline code span.
-const CODE_SPAN = /(```[\s\S]*?```|`[^`\n]+`)/g;
-// A json fence holding nothing but a tool-output object is a shape models use, so it stays eligible.
-const JSON_FENCE_OPENER = /^```json\b/i;
+interface FenceOpener {
+  char: string;
+  run: number;
+  info: string;
+}
 
-/** Applies transform outside code spans (and inside json fences); other spans pass through untouched. */
-function outsideCodeSpans(content: string, transform: (text: string) => string): string {
-  return content
-    .split(CODE_SPAN)
-    .map((piece, index) => (index % 2 === 1 && !JSON_FENCE_OPENER.test(piece) ? piece : transform(piece)))
-    .join('');
+/** CommonMark fence opener: 0-3 spaces, then 3+ backticks or tildes; a backtick info string has no backtick. */
+function parseFenceOpener(line: string): FenceOpener | null {
+  let at = 0;
+  while (at < 3 && line[at] === ' ') at++;
+  const char = line[at];
+  if (char !== '`' && char !== '~') return null;
+  let end = at;
+  while (line[end] === char) end++;
+  const info = stripLineEnd(line.slice(end));
+  if (end - at < 3 || (char === '`' && info.includes('`'))) return null;
+  return { char, run: end - at, info: info.trim() };
+}
+
+/**
+ * End of the closer run that starts this line, or -1. Unlike CommonMark, text may follow the run:
+ * the lazy ``` regexes of the other detectors close there too, and agreeing with them keeps a
+ * second convert from re-pairing what the first one promoted (the parity harness's H3).
+ */
+function fenceCloserLength(line: string, opener: FenceOpener): number {
+  let at = 0;
+  while (at < 3 && line[at] === ' ') at++;
+  let end = at;
+  while (line[end] === opener.char) end++;
+  return end - at >= opener.run ? end : -1;
+}
+
+interface FencedBlock {
+  /** Start of the opener line. */
+  start: number;
+  /** End of the closer run; the end of the content when unclosed. */
+  end: number;
+  bodyStart: number;
+  bodyEnd: number;
+  info: string;
+}
+
+/**
+ * Every fenced code block, by CommonMark line rules except fenceCloserLength's, in one pass over
+ * the lines. An opener with no closer runs to the end of the content, as CommonMark (and so the
+ * rendered reply) treats it.
+ */
+function scanFencedBlocks(content: string): FencedBlock[] {
+  const blocks: FencedBlock[] = [];
+  for (let lineStart = 0; lineStart < content.length;) {
+    const newline = content.indexOf('\n', lineStart);
+    const lineEnd = newline === -1 ? content.length : newline;
+    const opener = parseFenceOpener(content.slice(lineStart, lineEnd));
+    if (!opener) {
+      lineStart = lineEnd + 1;
+      continue;
+    }
+    const bodyStart = Math.min(lineEnd + 1, content.length);
+    let block: FencedBlock = {
+      start: lineStart,
+      end: content.length,
+      bodyStart,
+      bodyEnd: content.length,
+      info: opener.info,
+    };
+    let at = bodyStart;
+    while (at < content.length) {
+      const next = content.indexOf('\n', at);
+      const end = next === -1 ? content.length : next;
+      const closer = fenceCloserLength(content.slice(at, end), opener);
+      if (closer >= 0) {
+        block = { ...block, end: at + closer, bodyEnd: at };
+        break;
+      }
+      at = end + 1;
+    }
+    blocks.push(block);
+    // Text after the closer run, on the same line, is prose.
+    const closerLineEnd = content.indexOf('\n', block.end);
+    lineStart = closerLineEnd === -1 ? content.length : closerLineEnd + 1;
+  }
+  return blocks;
+}
+
+// Fences a tool-output object can be pasted in; any other info string labels code, e.g. a
+// python dict literal, which stays code.
+const TOOL_OUTPUT_FENCE_INFO = new Set(['', 'json', 'json5', 'jsonc', 'text', 'txt', 'plaintext']);
+const isToolOutputFence = (block: FencedBlock): boolean =>
+  TOOL_OUTPUT_FENCE_INFO.has(block.info.split(/\s/, 1)[0].toLowerCase());
+
+const INLINE_CODE = /`[^`\n]+`/g;
+
+/**
+ * Rebuilds content with `prose` applied to text outside fences and inline code, and `fence`
+ * applied to each tool-output fence; other code passes through. Both get the real neighboring
+ * characters, from outside the piece when it starts or ends there.
+ */
+function mapOutsideCode(
+  content: string,
+  prose: (text: string, before: string, after: string) => string,
+  fence: (code: string, body: string, info: string, before: string, after: string) => string
+): string {
+  const before = (at: number) => content.slice(Math.max(0, at - 1), at);
+  const after = (at: number) => content.slice(at, at + 2);
+  const mapProse = (from: number, to: number): string => {
+    let out = '';
+    let copied = from;
+    for (const m of content.slice(from, to).matchAll(INLINE_CODE)) {
+      const at = from + m.index;
+      out += prose(content.slice(copied, at), before(copied), after(at)) + m[0];
+      copied = at + m[0].length;
+    }
+    return out + prose(content.slice(copied, to), before(copied), after(to));
+  };
+  let out = '';
+  let copied = 0;
+  for (const block of scanFencedBlocks(content)) {
+    const code = content.slice(block.start, block.end);
+    const body = content.slice(block.bodyStart, block.bodyEnd);
+    out +=
+      mapProse(copied, block.start) +
+      (isToolOutputFence(block) ? fence(code, body, block.info, before(block.start), after(block.end)) : code);
+    copied = block.end;
+  }
+  return out + mapProse(copied, content.length);
 }
 
 function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions, echoOnly: boolean): string {
@@ -978,11 +1103,32 @@ ${codeContent.trim()}
   // cannot wrap one in a second artifact when an unclosed fence spans it.
   content = protectArtifactSpans(content, mask).masked;
 
-  // Bare tool-output JSON a model pasted into the reply. Never under echoOnly: it promotes.
-  // Code spans are skipped, so a dict literal in a python fence stays code.
-  if (!echoOnly) {
-    content = outsideCodeSpans(content, text => convertToolOutputsToArtifacts(text, holds, isToolEcho));
-  }
+  // Bare tool-output JSON a model pasted into the reply, outside code or in a json/text fence.
+  // An echo becomes a protected marked fence so a later convert without isToolEcho skips it too;
+  // a "result": "..." chunk is fenced as matched, splitting the JSON string that quoted it.
+  const convertToolOutputs = (text: string, mark: ToolOutputEchoes['mark']) =>
+    convertToolOutputsToArtifacts(text, holds, { isToolEcho, mark, only: echoOnly });
+  content = mapOutsideCode(
+    content,
+    (text, before, after) =>
+      convertToolOutputs(text, (match, offset, input) => {
+        const end = offset + match.length;
+        const neighborBefore = offset > 0 ? input[offset - 1] : before;
+        const neighborAfter = (input.slice(end, end + 2) + after).slice(0, 2);
+        return mask.protect(toolOutputFence('json', match, neighborBefore, neighborAfter));
+      }),
+    (code, body, info, before, after) => {
+      // An echo anywhere in the fence marks the whole fence: it is one quote, so nothing in it promotes.
+      let echoed = false;
+      const converted = convertToolOutputs(code, match => {
+        echoed = true;
+        return match;
+      });
+      if (!echoed) return converted;
+      const lang = /^[\w-]*/.exec(info)?.[0] ?? '';
+      return mask.protect(toolOutputFence(lang, body, before, after));
+    }
+  );
 
   promoteReactFences((language, code) => language === 'tsx' || language === 'jsx' || hasReactIndicators(code));
 

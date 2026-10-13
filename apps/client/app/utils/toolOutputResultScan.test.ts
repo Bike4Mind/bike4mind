@@ -74,14 +74,17 @@ function randomText(rand: () => number): string {
   return s;
 }
 
-// Records every call and substitutes its ordinal, so equal outputs also mean equal offsets.
+// Records every call and substitutes its ordinal, so equal outputs also mean equal match
+// positions; `offsets` holds what each call was told, which the echo marking relies on.
 function run(scan: (replacer: ResultReplacer) => string) {
   const calls: Array<[string, string]> = [];
-  const output = scan((match, captured) => {
+  const offsets: number[] = [];
+  const output = scan((match, captured, offset) => {
     calls.push([match, captured]);
+    offsets.push(offset);
     return `<#${calls.length}>`;
   });
-  return { output, calls };
+  return { output, calls, offsets };
 }
 
 // Same best-of-3 and floored baseline as assertLinearGrowth in b4m-core/utils/src/artifactParser.test.ts,

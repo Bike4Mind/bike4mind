@@ -198,8 +198,8 @@ function collectMismatches(
 }
 
 /**
- * Malformed markup: a fence count that does not pair up, a fence closer glued to the text before it, an
- * unclosed `<artifact`, or an unclosed tool-output region. The old flow converted the text left
+ * Malformed markup: a fence count that does not pair up, a fence closer glued to the text before it
+ * (CommonMark does not close the fence there), an unclosed `<artifact`, or an unclosed tool-output region. The old flow converted the text left
  * after stripping artifact tags, so on these an unclosed fence could swallow a stripped tag and
  * yield a react/html artifact with a half-tag in its body; the merged pass protects artifact
  * spans and leaves them alone. Those deltas are accepted; mismatches on well-formed input are not.
@@ -209,7 +209,7 @@ function isMalformed(input: string): boolean {
   const bareTildeLines = input.match(/^~~~\s*$/gm)?.length ?? 0;
   return (
     (input.match(/```/g)?.length ?? 0) % 2 === 1 ||
-    /\S```[ \t]*$/m.test(input) ||
+    /\S```(?:[ \t]|$)/m.test(input) ||
     (input.match(/<artifact[\s>]/g)?.length ?? 0) !== (input.match(/<\/artifact>/g)?.length ?? 0) ||
     toolOutputOpeners > bareTildeLines
   );
@@ -217,7 +217,9 @@ function isMalformed(input: string): boolean {
 
 // Pinned, not capped: any new malformed-input delta (or a fixed one) changes the count and has to
 // be looked at. Every accepted delta is an old-flow bug or a half-tag the old flow leaked; see the PR.
-const ACCEPTED_MALFORMED_DELTAS = { H1: 15, H2: 11, H3: 0 };
+// 28 of H1's and H2's are tool-output JSON after an unclosed or glued fence, which the old flow
+// promoted out of what renders as code and the line-paired fence scan now leaves alone.
+const ACCEPTED_MALFORMED_DELTAS = { H1: 43, H2: 39, H3: 0 };
 
 function expectParity(label: keyof typeof ACCEPTED_MALFORMED_DELTAS, mismatches: Mismatch[]): void {
   const wellFormed = mismatches.filter(m => !isMalformed(m.input));

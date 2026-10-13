@@ -1906,7 +1906,15 @@ describe('convertCodeBlocksToArtifacts - detectors shared with the client render
       });
       const isToolEcho = createToolEchoMatcher([{ text: `Result: ${echoed}`, truncated: false }]);
       const input = `See ${echoed}`;
-      expect(convertCodeBlocksToArtifacts(input, { isToolEcho })).toBe(input);
+      const marked = `See \n~~~json ${TOOL_OUTPUT_MARKER}\n${echoed}\n~~~`;
+      const server = convertCodeBlocksToArtifacts(input, { isToolEcho });
+      expect(server).toBe(marked);
+      // The client render pass has no matcher; the mark alone must keep it from promoting.
+      expect(convertCodeBlocksToArtifacts(server)).toBe(marked);
+      expect(parseArtifacts(convertCodeBlocksToArtifacts(server)).artifacts).toEqual([]);
+
+      expect(markToolEchoes(input, isToolEcho)).toBe(marked);
+      expect(convertCodeBlocksToArtifacts(markToolEchoes(input, isToolEcho))).toBe(marked);
     });
 
     it('mints the same id for the same body on every call, and a different one for another body', () => {
@@ -1925,5 +1933,97 @@ describe('convertCodeBlocksToArtifacts - detectors shared with the client render
       `${F}ts\nexport default function App(){ return <div/> }\n${F}`,
     ].join('\n\n');
     expect(markToolEchoes(reply, () => false)).toBe(reply);
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - tool-output JSON and code fences', () => {
+  const F = '```';
+  const mermaid = JSON.stringify({ type: 'mermaid', content: 'graph TD; A-->B' });
+  const promoted = (converted: string) =>
+    parseArtifacts(converted).artifacts.map(a => ({ type: a.type, identifier: a.identifier, content: a.content }));
+  const mermaidArtifact = [
+    { type: 'mermaid', identifier: expect.stringMatching(/^mermaid-tool-[0-9a-z]+$/), content: 'graph TD; A-->B' },
+  ];
+
+  it.each(['', 'text', 'json'])('promotes a tool-output object in a %j fence', info => {
+    expect(promoted(convertCodeBlocksToArtifacts(`Here:\n${F}${info}\n${mermaid}\n${F}`))).toEqual(mermaidArtifact);
+  });
+
+  it('pairs fences by line, so a ``` mentioned in prose does not invert the pairing', () => {
+    const input = `Type ${F} to open a fence.\n\n${F}js\nconst a=1\n${F}\n\nResult: ${mermaid}\n\n${F}bash\nls\n${F}`;
+    expect(promoted(convertCodeBlocksToArtifacts(input))).toEqual(mermaidArtifact);
+  });
+
+  it('leaves a tool-output dict in a ~~~python fence as code', () => {
+    const input = `~~~python\nimport json\ndata = ${mermaid}\nprint(data)\n~~~`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  it('reads a 4-backtick fence with a ``` line inside as one block of code', () => {
+    const input = `${F}\`python\n${F}\ndata = ${mermaid}\n${F}\n${F}\``;
+    expect(convertCodeBlocksToArtifacts(input)).not.toContain('mermaid-tool-');
+  });
+
+  it('runs an unclosed labeled fence to the end of the reply, as the renderer does', () => {
+    const input = `${F}python\ndata = ${mermaid}`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  it('closes a fence at a ``` run with text after it, as the other detectors do, so a second convert agrees', () => {
+    const input = `${F}python\nimport os\n\ndef main():\n    print(os.getcwd())\n${F} Result: ${mermaid}`;
+    const once = convertCodeBlocksToArtifacts(input);
+    expect(promoted(once).map(a => a.type)).toEqual(['mermaid', 'python']);
+    expect(convertCodeBlocksToArtifacts(once)).toBe(once);
+  });
+
+  it('scans fences in linear time when no closer is long enough, or with many short fences', () => {
+    assertLinearGrowth(n => `mermaid\n~~~~~\n${'~~~ x\n`a `b\n'.repeat(n)}`, 20000);
+    assertLinearGrowth(n => `mermaid\n${'```\n`a`\n```\n`b\n'.repeat(n)}`, 20000);
+  });
+
+  describe('echoed tool output', () => {
+    const echoed = JSON.stringify({
+      type: 'mermaid',
+      content: 'graph TD; Fetch-->Parse; Parse-->Render; Render-->Done',
+    });
+    const isToolEcho = createToolEchoMatcher([{ text: `Result: ${echoed}`, truncated: false }]);
+    const open = `~~~json ${TOOL_OUTPUT_MARKER}`;
+
+    // Server convert (with the matcher), then the client render convert (without one).
+    const roundTrip = (input: string) =>
+      convertCodeBlocksToArtifacts(convertCodeBlocksToArtifacts(input, { isToolEcho }));
+
+    it('marks a whole json fence holding an echo, and the client leaves it alone', () => {
+      const input = `Got:\n${F}json\n${echoed}\n${F}\nDone.`;
+      const marked = `Got:\n${open}\n${echoed}\n~~~\nDone.`;
+      expect(convertCodeBlocksToArtifacts(input, { isToolEcho })).toBe(marked);
+      expect(roundTrip(input)).toBe(marked);
+      expect(markToolEchoes(input, isToolEcho)).toBe(marked);
+    });
+
+    it('puts the marked fence on its own line next to inline code, using the neighbors outside the piece', () => {
+      const input = `Use \`a\`${echoed}\`b\` next.`;
+      const marked = `Use \`a\`\n${open}\n${echoed}\n~~~\n\`b\` next.`;
+      expect(convertCodeBlocksToArtifacts(input, { isToolEcho })).toBe(marked);
+      expect(roundTrip(input)).toBe(marked);
+    });
+
+    it('fences an echoed "result" chunk as matched so the client cannot promote it', () => {
+      const input = `Log: ${JSON.stringify({ result: echoed })}`;
+      const server = convertCodeBlocksToArtifacts(input, { isToolEcho });
+      expect(server).toMatch(new RegExp(`^Log: \\{\\n${open}\\n"result":"\\{.*\\}"\\n~~~\\n\\}$`));
+      expect(parseArtifacts(convertCodeBlocksToArtifacts(server)).artifacts).toEqual([]);
+      expect(markToolEchoes(input, isToolEcho)).toBe(server);
+    });
+
+    it('markToolEchoes marks only the echo and leaves a non-echo tool object byte-identical', () => {
+      const input = `First ${mermaid}\n\nThen ${echoed}\n\n${F}\n${mermaid}\n${F}`;
+      expect(markToolEchoes(input, isToolEcho)).toBe(
+        `First ${mermaid}\n\nThen \n${open}\n${echoed}\n~~~\n\n${F}\n${mermaid}\n${F}`
+      );
+      expect(markToolEchoes(input.replace(`Then ${echoed}`, 'Then nothing'), isToolEcho)).toBe(
+        input.replace(`Then ${echoed}`, 'Then nothing')
+      );
+    });
   });
 });
