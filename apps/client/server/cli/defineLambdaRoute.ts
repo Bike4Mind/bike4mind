@@ -39,6 +39,14 @@ export type LambdaRateLimit = (ctx: {
 
 export type LambdaRouteOptions = { rateLimit?: LambdaRateLimit };
 
+export function internalErrorResult(requestId: string): APIGatewayProxyResultV2 {
+  return {
+    statusCode: 500,
+    headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
+    body: JSON.stringify({ error: 'Internal server error', request_id: requestId }),
+  };
+}
+
 /** A ForbiddenError (authenticated but forbidden, e.g. a suspended account) is a 403;
  * any other auth throw, plain Errors included, is a 401. */
 function authFailureStatus(error: unknown): 401 | 403 {
@@ -68,14 +76,14 @@ export function defineLambdaRoute<C extends EndpointContract>(
   contract: C,
   handle: (ctx: LambdaRouteContext<C>) => Promise<LambdaRouteResult>,
   options: LambdaRouteOptions = {}
-): (event: APIGatewayProxyEventV2, resolvedRequestId?: string) => Promise<APIGatewayProxyResultV2> {
+): (event: APIGatewayProxyEventV2, opts?: { requestId?: string }) => Promise<APIGatewayProxyResultV2> {
   const checkMethod = createMethodGuard([contract.method]);
 
-  return async (event: APIGatewayProxyEventV2, resolvedRequestId?: string): Promise<APIGatewayProxyResultV2> => {
-    // Reuse the wrapper's id when threaded (so both layers report the same value
-    // even when the caller sent no header), else resolve from headers / generate.
+  return async (event: APIGatewayProxyEventV2, opts?: { requestId?: string }): Promise<APIGatewayProxyResultV2> => {
+    // Reuse the wrapper's id so both layers agree. An options bag, not a positional id:
+    // Lambda passes its context as the 2nd arg, which has no requestId field.
     const requestId =
-      resolvedRequestId ??
+      opts?.requestId ??
       resolveRequestId(
         event.headers?.[REQUEST_ID_HEADER.toLowerCase()],
         event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
@@ -167,10 +175,7 @@ export function defineLambdaRoute<C extends EndpointContract>(
         return json(error.statusCode, { error: error.message, request_id: requestId });
       }
       log.error(`[${contract.operationId}] Unhandled handler error`, error);
-      return json(500, {
-        error: error instanceof Error ? error.message : 'Internal server error',
-        request_id: requestId,
-      });
+      return internalErrorResult(requestId);
     }
 
     // Non-prod safety net (see defineNextRoute): warn on a response body that does

@@ -102,6 +102,18 @@ describe('defineLambdaRoute + executeToolContract auth status', () => {
     expect(executeToolContract.responses[403]).toBeDefined();
     expect(JSON.parse(res.body as string)).toMatchObject({ error: 'Account suspended' });
   });
+
+  it('ignores a Lambda context passed as the second arg and uses the x-request-id header', async () => {
+    mockResolveAuth.mockRejectedValueOnce(new UnauthorizedError('nope'));
+    const lambdaContext = { awsRequestId: 'aws-req-1', functionName: 'tools-fn' } as unknown as { requestId?: string };
+    const event = {
+      headers: { authorization: 'Bearer x', 'x-request-id': 'req-from-header' },
+      body: JSON.stringify({ toolName: 'web_search', input: {} }),
+    } as unknown as APIGatewayProxyEventV2;
+    const res = asResult(await route(event, lambdaContext));
+    expect(res.headers?.['X-Request-ID']).toBe('req-from-header');
+    expect(JSON.parse(res.body as string)).toMatchObject({ request_id: 'req-from-header' });
+  });
 });
 
 /**
@@ -162,6 +174,7 @@ describe('defineLambdaRoute handler errors', () => {
     });
     const res = asResult(await route(makeEvent({ message: 'hi' })));
     expect(res.statusCode).toBe(500);
-    expect(JSON.parse(res.body as string)).toEqual({ error: 'boom', request_id: expect.any(String) });
+    expect(JSON.parse(res.body as string)).toEqual({ error: 'Internal server error', request_id: expect.any(String) });
+    expect(res.body).not.toContain('boom');
   });
 });
