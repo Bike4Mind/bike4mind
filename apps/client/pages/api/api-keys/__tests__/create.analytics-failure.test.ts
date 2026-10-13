@@ -54,7 +54,7 @@ describe('POST /api/api-keys/create - failed analytics write', () => {
     incrementUserCounter.mockRejectedValueOnce(new Error('counter write failed'));
     const { req, res } = post();
 
-    await expect(mockRefs.postHandler!(req, res)).resolves.not.toThrow();
+    await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual(expect.objectContaining({ id: 'k1' }));

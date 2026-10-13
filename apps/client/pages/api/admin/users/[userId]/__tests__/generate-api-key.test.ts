@@ -79,7 +79,10 @@ vi.mock('@bike4mind/services', () => ({
 const mockLogEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({
   logEvent: (...a: unknown[]) => mockLogEvent(...a),
-  logEventSafe: (event: unknown, options: unknown) => mockLogEvent(event, options),
+  // Matches logEventSafe's contract: a failed write is swallowed, never rethrown.
+  logEventSafe: async (event: unknown, options: unknown) => {
+    await Promise.resolve(mockLogEvent(event, options)).catch(() => undefined);
+  },
 }));
 
 import '../generate-api-key';

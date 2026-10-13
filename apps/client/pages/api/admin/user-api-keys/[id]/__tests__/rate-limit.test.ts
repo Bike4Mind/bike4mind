@@ -49,19 +49,10 @@ const updateApiKeyRateLimit = vi.hoisted(() =>
 );
 vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateApiKeyRateLimit } }));
 
-const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-// logEventSafe calls logEvent inside its own module, out of reach of this mock, so it is
-// re-modeled here on top of the mocked logEvent to keep both assertions meaningful.
-vi.mock('@server/utils/analyticsLog', () => ({
-  logEvent,
-  logEventSafe: async (event: unknown, options: unknown, logger?: { error: (...a: unknown[]) => void }) => {
-    try {
-      await logEvent(event, options);
-    } catch (error) {
-      logger?.error('Failed to log analytics event; continuing', error);
-    }
-  },
-}));
+// The real failure path (logEventSafe swallowing a thrown write) is covered by
+// analytics-failure.test.ts, which leaves analyticsLog unmocked.
+const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 import '@pages/api/admin/user-api-keys/[id]/rate-limit';
 
@@ -132,22 +123,15 @@ describe('PATCH /api/admin/user-api-keys/[id]/rate-limit', () => {
       { keyId: 'key-1', requestsPerMinute: 600, requestsPerDay: undefined },
       expect.anything()
     );
-    expect(logEvent).toHaveBeenCalledWith(
+    expect(logEventSafe).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'owner-1',
         metadata: expect.objectContaining({ updatedFields: ['rateLimit.requestsPerMinute'] }),
       }),
-      expect.anything()
+      expect.anything(),
+      (req as any).logger,
+      'API key key-1'
     );
-  });
-
-  it('still succeeds when the audit event write fails (orphaned-key owner)', async () => {
-    logEvent.mockRejectedValueOnce(new Error('User not found'));
-    const { req, res } = patch({ id: 'key-1' }, { requestsPerDay: 5000 }, admin);
-    await mockRefs.patchHandler!(req, res);
-
-    expect(res._getStatusCode()).toBe(200);
-    expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
   });
 
   it('registers PATCH only, so next-connect 405s every other verb', () => {

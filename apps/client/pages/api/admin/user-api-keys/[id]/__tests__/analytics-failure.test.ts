@@ -89,24 +89,30 @@ describe('admin user-api-keys/[id] levers - failed analytics write', () => {
     incrementUserCounter.mockRejectedValueOnce(new Error('User not found'));
     const { req, res } = request('PATCH');
 
-    await expect(mockRefs.patchHandler!(req, res)).resolves.not.toThrow();
+    await mockRefs.patchHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual(expect.objectContaining({ id: 'key-1' }));
     expect(updateApiKeyRateLimit).toHaveBeenCalledTimes(1);
-    expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/analytics event .* for API key key-1;/),
+      expect.any(Error)
+    );
   });
 
   it('POST reset-rate-limit still answers 200 when the counter write throws', async () => {
     incrementUserCounter.mockRejectedValueOnce(new Error('User not found'));
     const { req, res } = request('POST');
 
-    await expect(mockRefs.postHandler!(req, res)).resolves.not.toThrow();
+    await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual(expect.objectContaining({ success: true, id: 'key-1' }));
     expect(resetApiKeyRateLimit).toHaveBeenCalledTimes(1);
-    expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/analytics event .* for API key key-1;/),
+      expect.any(Error)
+    );
   });
 
   it('both answer 200 on the happy path without logging an error', async () => {

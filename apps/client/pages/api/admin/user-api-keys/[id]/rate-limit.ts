@@ -64,7 +64,8 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
           },
         },
         { ability: req.ability },
-        req.logger
+        req.logger,
+        `API key ${apiKey.id}`
       );
 
       req.logger.info(

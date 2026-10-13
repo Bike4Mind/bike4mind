@@ -68,11 +68,12 @@ describe('api-keys/[id] writes - failed analytics write', () => {
     incrementUserCounter.mockRejectedValueOnce(new Error('counter write failed'));
     const { req, res } = request('DELETE');
 
-    await expect(mockRefs.deleteHandler!(req, res)).resolves.not.toThrow();
+    await mockRefs.deleteHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ id: 'k1', type: 'openai', isActive: true });
     expect(deleteApiKey).toHaveBeenCalledTimes(1);
+    expect(incrementUserCounter).toHaveBeenCalledTimes(1);
     expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
   });
 
@@ -80,11 +81,12 @@ describe('api-keys/[id] writes - failed analytics write', () => {
     incrementUserCounter.mockRejectedValueOnce(new Error('counter write failed'));
     const { req, res } = request('POST');
 
-    await expect(mockRefs.postHandler!(req, res)).resolves.not.toThrow();
+    await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ id: 'k1', type: 'openai', isActive: true });
     expect(setApiKey).toHaveBeenCalledTimes(1);
+    expect(incrementUserCounter).toHaveBeenCalledTimes(1);
     expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
   });
 
