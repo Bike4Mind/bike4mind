@@ -25,6 +25,7 @@ const TRANSIENT_NETWORK_ERROR_PATTERNS = [
   'network error',
   'fetch failed',
   'und_err_socket',
+  'ended before [done]', // SDK completions(): stream closed without the [DONE] sentinel
   // A WebSocketLlmBackend only exists once the socket has connected (bootstrap
   // falls back to SSE otherwise), so a mid-session "not connected" is a transient
   // drop with auto-reconnect in flight. Classing it retryable lets a retry that
