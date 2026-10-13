@@ -16,6 +16,7 @@ import {
   organizationRepository,
   authSessionRepository,
   passkeyCredentialRepository,
+  oauthClientRepository,
 } from '@bike4mind/database';
 import { creditService, userService, organizationService, authSessionService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
@@ -56,6 +57,14 @@ interface PendingTokenPayload {
 }
 
 const MAX_PENDING_OTC_ATTEMPTS = 5;
+const MAX_SOURCE_CLIENT_ID_LENGTH = 128;
+
+// Attribution only: a malformed value is dropped rather than rejected so it can never fail a signup.
+function parseSourceClientId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_SOURCE_CLIENT_ID_LENGTH
+    ? value
+    : undefined;
+}
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -332,6 +341,7 @@ const handler = baseApi({ auth: false })
           // client collects both before submitting (register form, or the inline username step).
           acceptedPolicyVersion,
           ageAttestation,
+          sourceClientId: parseSourceClientId(req.body.sourceClientId),
           metadata: req.body.clientData
             ? {
                 loginTime: new Date(),
@@ -355,6 +365,7 @@ const handler = baseApi({ auth: false })
             registrationInvites: registrationInviteRepository,
             subscribers: subscriberRepository,
             creditTransactions: creditTransactionRepository,
+            oauthClients: oauthClientRepository,
           },
           logger: req.logger,
           skipInviteCheck: isBootstrapUser,
