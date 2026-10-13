@@ -414,11 +414,12 @@ export class ImageEditService {
    * Re-reads a still-scanning file (through the same access-scoped lookup as the initial load)
    * until it leaves 'pending'/'scanning' or the budget runs out. Returns the last row seen, so the
    * caller's fail-closed gate decides: a timeout hands back a still-in-flight row, not a 'clean' one.
+   * A mask that vanished or is no longer accessible returns null.
    */
   private async waitForModerationScan(
     file: IFabFileDocument,
     access: { userId: string; userGroups?: string[]; lakeAccess?: AttachmentLakeAccess }
-  ): Promise<IFabFileDocument> {
+  ): Promise<IFabFileDocument | null> {
     const deadline = Date.now() + MODERATION_WAIT_MS;
     let current = file;
     while (isModerationInFlight(current) && Date.now() < deadline) {
@@ -428,8 +429,8 @@ export class ImageEditService {
         { userId: access.userId, userGroups: access.userGroups },
         access.lakeAccess
       );
-      // A mask that vanished or is no longer accessible stops the wait; the last-seen row then fails the gate.
-      if (!refreshed) break;
+      // A mask that vanished or is no longer accessible is unavailable, not still being scanned.
+      if (!refreshed) return null;
       current = refreshed;
     }
     return current;
@@ -661,17 +662,21 @@ export class ImageEditService {
       // flight under that call ('pending') or the S3 event ('scanning'), so wait for the verdict
       // here. Still fail-closed: not 'clean' by the deadline is rejected.
       if (fileImage && isModerationInFlight(fileImage)) {
-        fileImage = await this.waitForModerationScan(fileImage, {
+        const waited = await this.waitForModerationScan(fileImage, {
           userId,
           userGroups: user.groups ?? undefined,
           lakeAccess,
         });
+        if (!waited) throw new BadRequestError('The uploaded image is not available');
+        fileImage = waited;
       }
       if (fileImage && !isImageServeable(fileImage)) {
         throw new BadRequestError(
           isModerationInFlight(fileImage)
             ? 'The uploaded image is still being scanned. Please try again in a few seconds.'
-            : 'The uploaded image is not available (blocked by moderation)'
+            : fileImage.moderationStatus === 'blocked'
+              ? 'The uploaded image is not available (blocked by moderation)'
+              : 'The uploaded image is not available'
         );
       }
 

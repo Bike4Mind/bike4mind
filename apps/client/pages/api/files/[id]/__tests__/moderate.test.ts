@@ -79,6 +79,15 @@ describe('POST /api/files/[id]/moderate', () => {
     h.sleep.mockResolvedValue(undefined);
   });
 
+  it('returns pending without claiming or scanning once the attempt cap is reached', async () => {
+    h.findById.mockResolvedValue(file({ moderationAttempts: 4 }));
+    const res = makeRes();
+    await handler(makeReq(), res);
+    expect(res.body).toEqual({ moderationStatus: 'pending' });
+    expect(h.claim).not.toHaveBeenCalled();
+    expect(h.scan).not.toHaveBeenCalled();
+  });
+
   it('requires a files write scope so unscoped API keys cannot drive scans', () => {
     expect(h.baseApiOptions).toMatchObject({ requiredScopes: expect.any(Array) });
   });

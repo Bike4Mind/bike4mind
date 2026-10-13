@@ -927,6 +927,8 @@ describe('ImageEditService.process mask access (#3069)', () => {
       expect(findAccessibleInIds).toHaveBeenCalledTimes(2);
       expect(editSpy).not.toHaveBeenCalled();
       expect(quest.type).toBe('error');
+      expect(quest.reply).toContain('not available');
+      expect(quest.reply).not.toContain('still being scanned');
     });
 
     it('reports blocked, not retry, when the scan resolves to blocked mid-wait', async () => {

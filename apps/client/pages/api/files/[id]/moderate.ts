@@ -17,6 +17,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 // Rekognition's own client loop has already retried without backoff by the time a scan throws.
 const SCAN_RETRY_DELAY_MS = 400;
 
+// Past this many failed attempts the route stops scanning and leaves the file to the rescue sweep.
+const ROUTE_MAX_MODERATION_ATTEMPTS = 4;
+
 // The S3 event normally owns a fresh upload's scan and lands its verdict within about a second, so a
 // caller that loses the claim waits this long for that verdict instead of answering 'pending'.
 const OWNER_VERDICT_WAIT_MS = 3000;
@@ -67,6 +70,10 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
 
     if (fabFile.moderationStatus === 'clean' || fabFile.moderationStatus === 'blocked') {
       return res.json({ moderationStatus: fabFile.moderationStatus });
+    }
+
+    if ((fabFile.moderationAttempts ?? 0) >= ROUTE_MAX_MODERATION_ATTEMPTS) {
+      return res.json({ moderationStatus: 'pending' });
     }
 
     let claimedAt = new Date();
