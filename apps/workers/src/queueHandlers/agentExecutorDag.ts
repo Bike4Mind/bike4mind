@@ -30,7 +30,7 @@ import type { AuthOrigin } from '@bike4mind/common';
 import type { DagDispatcher, DagNodeHandle } from '@bike4mind/services/llm';
 import { agentExecutionRepository, type AgentExecutionStatus, type IDagSpec } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { inheritedArtifactFields } from '../utils/artifactGate';
+import { inheritedArtifactFields } from '@server/utils/artifactGate';
 import { Resource } from 'sst';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 

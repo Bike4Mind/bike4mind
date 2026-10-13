@@ -23,8 +23,8 @@ COPY apps/client/scripts ./apps/client/scripts
 COPY patches ./patches
 
 # 2) Install the client and workers workspaces + all workspace deps INCLUDING devDeps (tsx).
-#    No --prod. The service lives in apps/workers/src/agentExecutor; client stays because the
-#    agentExecutor queue handler it runs (reached through @server/*) still lives there.
+#    No --prod. The service and the queue handler it runs live in apps/workers/src; client stays
+#    because that handler still reaches shared server code through @server/*.
 RUN pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...
 
 # 3) Source.

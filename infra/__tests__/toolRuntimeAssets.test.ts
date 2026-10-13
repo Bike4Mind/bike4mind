@@ -44,7 +44,7 @@ const OVERLAY_HANDLER_PREFIX = 'apps/client/server/premium-generated/';
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts'];
 
-/** tsconfig `paths` from apps/client, which is where every Lambda handler lives. */
+/** tsconfig `paths` into apps/client, which apps/workers handlers also reach through the @server/* bridge. */
 const CLIENT_ALIASES: ReadonlyArray<readonly [string, string]> = [
   ['@server/', path.join(CLIENT_DIR, 'server')],
   ['@pages/', path.join(CLIENT_DIR, 'pages')],
@@ -105,7 +105,7 @@ function reachesPremiumToolMap(entryFile: string): boolean {
 type HandlerDeclaration = {
   /** infra file the declaration lives in, e.g. "agentExecutor.ts". */
   infraFile: string;
-  /** SST handler string, e.g. "apps/client/server/queueHandlers/agentExecutor.handler". */
+  /** SST handler string, e.g. "apps/workers/src/queueHandlers/agentExecutor.handler". */
   handler: string;
   /** Source of the object literal declaring it, so `copyFiles` can be checked on it. */
   config: string;
@@ -373,33 +373,33 @@ describe('the infra handler scan', () => {
   it('does not lose declarations to a regex literal containing a quote', () => {
     const source = [
       "const sanitize = (value: string) => value.replace(/'/g, '');",
-      "const worker = { handler: 'apps/client/server/queueHandlers/agentExecutor.handler' };",
+      "const worker = { handler: 'apps/workers/src/queueHandlers/agentExecutor.handler' };",
     ].join('\n');
 
     expect(scanHandlerDeclarations(source, 'synthetic.ts').map(declaration => declaration.handler)).toEqual([
-      'apps/client/server/queueHandlers/agentExecutor.handler',
+      'apps/workers/src/queueHandlers/agentExecutor.handler',
     ]);
   });
 
   it('does not lose declarations to a regex literal containing braces', () => {
     const source = [
       'const isAccountId = (id: string) => /^\\d{12}$/.test(id);',
-      "const worker = { handler: 'apps/client/server/queueHandlers/agentExecutor.handler' };",
+      "const worker = { handler: 'apps/workers/src/queueHandlers/agentExecutor.handler' };",
     ].join('\n');
 
     expect(scanHandlerDeclarations(source, 'synthetic.ts').map(declaration => declaration.handler)).toEqual([
-      'apps/client/server/queueHandlers/agentExecutor.handler',
+      'apps/workers/src/queueHandlers/agentExecutor.handler',
     ]);
   });
 
   it('still reads a division expression as ordinary code', () => {
     const source = [
       'const share = total / count / 2;',
-      "const worker = { handler: 'apps/client/server/queueHandlers/agentExecutor.handler' };",
+      "const worker = { handler: 'apps/workers/src/queueHandlers/agentExecutor.handler' };",
     ].join('\n');
 
     expect(scanHandlerDeclarations(source, 'synthetic.ts').map(declaration => declaration.handler)).toEqual([
-      'apps/client/server/queueHandlers/agentExecutor.handler',
+      'apps/workers/src/queueHandlers/agentExecutor.handler',
     ]);
   });
 
@@ -459,7 +459,7 @@ describe('Lambdas that can execute the premium tool set', () => {
       })
       .map(declaration => declaration.handler);
 
-    expect(toolCapable).toContain('apps/client/server/queueHandlers/agentExecutor.handler');
+    expect(toolCapable).toContain('apps/workers/src/queueHandlers/agentExecutor.handler');
     expect(toolCapable).toContain('apps/client/server/queueHandlers/slackQuestProcessor.handler');
   });
 });
