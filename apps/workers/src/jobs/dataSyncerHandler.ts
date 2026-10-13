@@ -64,7 +64,11 @@ const SYNC_MARKER_KEY = 'staging-config-sync';
 
 // `skipped` names why nothing was copied, so the deploy log (which only sees the response) can tell
 // an already-synced preview from a misconfigured one.
-async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipped?: string }> {
+async function syncPreviewSettingsFromStaging(): Promise<{
+  synced: number;
+  skipped?: string;
+  emptyCollections?: string[];
+}> {
   console.log('=== Syncing Preview Settings from Staging ===');
 
   const stage = process.env.SEED_STAGE_NAME || 'unknown';
@@ -254,9 +258,11 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
       }
     }
 
-    // Only a complete copy is marked, so a partial one is retried on the next deploy
-    if (skippedCollections.length > 0) {
-      console.log(`  - Sync marker not set: skipped ${skippedCollections.join(', ')}`);
+    // An all-empty source points at a misconfigured staging, so leave the marker unset and retry.
+    // A single empty collection is a normal state and must not make later deploys re-copy.
+    if (totalSynced === 0) {
+      console.log(`  - Sync marker not set: source was empty for ${skippedCollections.join(', ')}`);
+      return { synced: 0, skipped: 'source empty for all collections; will retry next deploy' };
     } else {
       await targetDb
         .collection(SYNC_MARKER_COLLECTION)
@@ -275,7 +281,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
     console.log('✓ MongoDB connections closed');
   }
 
-  return { synced: totalSynced };
+  return { synced: totalSynced, emptyCollections: skippedCollections };
 }
 
 export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event => {
@@ -305,13 +311,14 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
     // Sync preview settings from staging (only on initial PR deploy when SYNC_PREVIEW_SETTINGS=true)
     if (shouldSyncPreviewSettings) {
       try {
-        const { synced, skipped } = await syncPreviewSettingsFromStaging();
+        const { synced, skipped, emptyCollections } = await syncPreviewSettingsFromStaging();
         previewSettingsSyncedCount = synced;
         const collectionsStr = COLLECTIONS_TO_SYNC.join(', ');
         messages.push(
           skipped
             ? `Skipped staging sync: ${skipped}`
-            : `Synced ${synced} documents from staging (collections: ${collectionsStr})`
+            : `Synced ${synced} documents from staging (collections: ${collectionsStr})` +
+                (emptyCollections?.length ? `; empty in source: ${emptyCollections.join(', ')}` : '')
         );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';

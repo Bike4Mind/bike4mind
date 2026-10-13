@@ -13,7 +13,7 @@ const state = vi.hoisted(() => ({
   emptyTarget: false,
   failFirstDeleteOn: undefined as string | undefined,
   ops: [] as string[],
-  emptySource: false,
+  emptySources: [] as string[],
   failRollbackBulkWrite: false,
   markerWrites: [] as unknown[][],
   findFilters: [] as { name: string; filter: unknown }[],
@@ -21,7 +21,10 @@ const state = vi.hoisted(() => ({
 
 vi.mock('mongodb', () => {
   const collection = (name: string, isTarget: boolean) => {
-    const docs = (isTarget && state.emptyTarget) || (!isTarget && state.emptySource) ? [] : [{ _id: `${name}-doc` }];
+    const docs =
+      (isTarget && state.emptyTarget) || (!isTarget && state.emptySources.includes(name))
+        ? []
+        : [{ _id: `${name}-doc` }];
     return {
       findOne: vi.fn(async () => state.marker),
       countDocuments: vi.fn(async () => docs.length),
@@ -55,6 +58,7 @@ vi.mock('mongodb', () => {
       drop: vi.fn(async () => true),
       updateOne: vi.fn(async (...args: unknown[]) => {
         state.markerWrites.push(args);
+        state.marker = { syncedAt: new Date() };
         return {};
       }),
     };
@@ -83,7 +87,7 @@ describe('dataSyncerHandler', () => {
     state.emptyTarget = false;
     state.failFirstDeleteOn = undefined;
     state.ops = [];
-    state.emptySource = false;
+    state.emptySources = [];
     state.failRollbackBulkWrite = false;
     state.markerWrites = [];
     state.findFilters = [];
@@ -188,13 +192,27 @@ describe('dataSyncerHandler', () => {
     expect(state.markerWrites[0][0]).toEqual({ key: 'staging-config-sync' });
   });
 
-  it('does not write the sync marker when a source collection was skipped', async () => {
+  it('writes the marker when only some source collections are empty and does not re-copy on the next deploy', async () => {
     process.env.SEED_STAGE_NAME = 'pr123';
-    state.emptySource = true;
+    state.emptySources = ['rapidreplymappings'];
 
-    await invoke();
+    const first = await invoke();
+    const second = await invoke();
+
+    expect(state.markerWrites).toHaveLength(1);
+    expect(first?.message).toContain('empty in source: rapidreplymappings');
+    expect(state.ops.filter(op => op === 'adminsettings.deleteMany')).toHaveLength(1);
+    expect(second?.message).toContain('already synced');
+  });
+
+  it('withholds the marker and reports a retry when every source collection is empty', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.emptySources = ['adminsettings', 'rapidreplymappings'];
+
+    const result = await invoke();
 
     expect(state.markerWrites).toHaveLength(0);
+    expect(result?.message).toBe('Skipped staging sync: source empty for all collections; will retry next deploy');
   });
 
   it('surfaces both the copy failure and the rollback failure', async () => {
@@ -209,7 +227,7 @@ describe('dataSyncerHandler', () => {
     expect(state.markerWrites).toHaveLength(0);
   });
 
-  it('passes the sensitive-setting $nin filter to the adminsettings source query', async () => {
+  it('excludes encrypted settings from the adminsettings source query', async () => {
     process.env.SEED_STAGE_NAME = 'pr123';
 
     await invoke();
@@ -221,7 +239,7 @@ describe('dataSyncerHandler', () => {
     expect(state.findFilters.find(f => f.name === 'rapidreplymappings')?.filter).toEqual({});
   });
 
-  it('treats only pr<number> stage names as previews in the sync gate and the environment check', async () => {
+  it('rejects stage names that are not pr<number>', async () => {
     process.env.SEED_STAGE_NAME = 'prod';
 
     const result = await invoke();
