@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Abonnement",
-    "description": "Toegang tot elk belangrijk AI-model via één uniforme interface. Voer geavanceerde modellen zoals Deepseek R1 privé uit.",
+    "description": "Toegang tot elk belangrijk AI-model via één uniforme interface.",
     "no_free_tier": "GEEN GRATIS NIVEAU - GERICHT OP PROFESSIONEELS.",
     "credits_rollover": "Ongedistribueerde credits rollen over voor 3 maanden.",
     "monthly_billing": "Maandelijkse Facturering",

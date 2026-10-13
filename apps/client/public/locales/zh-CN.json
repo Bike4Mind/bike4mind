@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "订阅",
-    "description": "通过一个统一的界面访问每个主要的 AI 模型。私密地运行像 Deepseek R1 这样的高级模型。",
+    "description": "通过一个统一的界面访问每个主要的 AI 模型。",
     "no_free_tier": "没有免费套餐 - 专注于专业人士。",
     "credits_rollover": "未使用的积分可累计 3 个月。",
     "monthly_billing": "按月计费",
