@@ -63,8 +63,6 @@ export const WORKSPACE_SURFACES: readonly WorkspaceSurface[] = [
     // `optihashi:pro`) and with the client predicate in apps/client/app/hooks/data/opti.ts.
     requiredEntitlement: 'optihashi:pro',
     movable: true,
-    // Mirror of LEGACY_SIDENAV_PATH in apps/client/scripts/generate-premium-glue.mjs: the legacy
-    // bare-specifier notebook-sidenav overlay renders on this prefix.
     routePrefix: '/opti',
     sessionHref: sessionId => `/opti?mode=canvas&session=${encodeURIComponent(sessionId)}`,
   },
