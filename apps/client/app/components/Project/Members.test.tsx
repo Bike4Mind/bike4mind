@@ -71,12 +71,10 @@ const usersInvalidations = () =>
 const fireProjectInvite = (type: string) =>
   mocks.inviteListener?.(type, { documentId: 'project-1', type: InviteType.Project });
 
-const fireBurst = () => {
+const fireInviteBurst = () =>
   act(() => {
     ['insert', 'update', 'delete', 'replace', 'insert', 'update', 'delete'].forEach(fireProjectInvite);
-    mocks.callbacks.projects('update', { id: 'project-1' });
   });
-};
 
 describe('ProjectMembersSection invite refetch', () => {
   beforeEach(() => {
@@ -91,12 +89,21 @@ describe('ProjectMembersSection invite refetch', () => {
     vi.useRealTimers();
   });
 
-  it('refetches project invites once for a burst of invite and project events', () => {
+  it('refetches project invites once for a burst of invite events', () => {
     renderMembers();
-    fireBurst();
+    fireInviteBurst();
     expect(projectInviteInvalidations()).toBe(0);
 
     act(() => {
+      vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS);
+    });
+    expect(projectInviteInvalidations()).toBe(1);
+  });
+
+  it('refetches project invites when the project itself updates', () => {
+    renderMembers();
+    act(() => {
+      mocks.callbacks.projects('update', { id: 'project-1' });
       vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS);
     });
     expect(projectInviteInvalidations()).toBe(1);
@@ -123,7 +130,7 @@ describe('ProjectMembersSection invite refetch', () => {
 
   it('invalidates the users key once, 500 ms after the last event, unchanged', () => {
     renderMembers();
-    fireBurst();
+    fireInviteBurst();
     act(() => {
       vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS);
     });
@@ -137,7 +144,7 @@ describe('ProjectMembersSection invite refetch', () => {
 
   it('drops a pending refetch when unmounted mid-burst', () => {
     const { unmount } = renderMembers();
-    fireBurst();
+    fireInviteBurst();
     unmount();
     act(() => {
       vi.runAllTimers();
