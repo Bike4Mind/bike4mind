@@ -109,7 +109,8 @@ describe('purgeDeletedUserData', () => {
 
       expect(revokeDriveMock).toHaveBeenCalledWith('enc-drive-refresh', 'deleted user u1');
       expect(flagConnectionsMock).toHaveBeenCalledWith('u1', 'plain-enc-drive-refresh');
-      expect(revokeAtlassianMock).toHaveBeenCalledWith('enc-atl-access', 'deleted user u1');
+      expect(revokeAtlassianMock).toHaveBeenNthCalledWith(1, 'enc-atl-refresh', 'deleted user u1');
+      expect(revokeAtlassianMock).toHaveBeenNthCalledWith(2, 'enc-atl-access', 'deleted user u1');
     });
 
     it('falls back to the Drive access token when no refresh token was stored', async () => {
@@ -147,7 +148,7 @@ describe('purgeDeletedUserData', () => {
         purge({ googleDrive: { accessToken: 'a', refreshToken: 'r', expiresAt }, atlassianConnect: null })
       ).resolves.toBeUndefined();
 
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Google Drive grant'));
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Drive connections stopped by the revoke'));
       expect(revokeAtlassianMock).toHaveBeenCalled();
     });
 

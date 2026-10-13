@@ -78,6 +78,13 @@ async function revokeIntegrationGrants(
 ): Promise<void> {
   const context = `deleted user ${userId}`;
 
+  try {
+    await revokeAtlassianGrant(atlassianConnect?.refreshToken, context);
+    await revokeAtlassianGrant(atlassianConnect?.accessToken, context);
+  } catch (err) {
+    logger.error(`Failed to revoke the Atlassian grant for deleted user ${userId}: ${String(err)}`);
+  }
+
   if (googleDrive) {
     try {
       // The refresh token when there is one: revoking it ends the whole grant, not just one access token.
@@ -87,13 +94,9 @@ async function revokeIntegrationGrants(
         `Flagged ${affected.affectedOrgConnections} org and ${affected.affectedPersonalConnections} personal Drive connection(s) for deleted user ${userId}`
       );
     } catch (err) {
-      logger.error(`Failed to revoke the Google Drive grant for deleted user ${userId}: ${String(err)}`);
+      logger.error(
+        `Failed to flag the Drive connections stopped by the revoke for deleted user ${userId}: ${String(err)}`
+      );
     }
-  }
-
-  try {
-    await revokeAtlassianGrant(atlassianConnect?.accessToken, context);
-  } catch (err) {
-    logger.error(`Failed to revoke the Atlassian grant for deleted user ${userId}: ${String(err)}`);
   }
 }

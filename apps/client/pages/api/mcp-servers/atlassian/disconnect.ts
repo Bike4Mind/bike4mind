@@ -10,6 +10,7 @@ const handler = baseApi().delete(async (req, res) => {
     const user = await userRepository.findById(req.user.id);
     const atlassianConnect = user?.atlassianConnect;
 
+    await revokeAtlassianGrant(atlassianConnect?.refreshToken, `user ${req.user.id}`);
     await revokeAtlassianGrant(atlassianConnect?.accessToken, `user ${req.user.id}`);
 
     // Clean up Jira webhook configs and subscriptions for all connected resources
