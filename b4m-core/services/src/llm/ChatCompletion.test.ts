@@ -8145,13 +8145,16 @@ describe('prompt moderation', () => {
   });
 
   const startParams = {
+    userId: 'user1',
     sessionId: 'sess1',
     questId: 'q1',
     message: 'Hello',
-    model: 'gpt-4',
-    tools: [],
-    projectId: undefined,
-    organizationId: undefined,
+    messageFileIds: [],
+    historyCount: 1,
+    fabFileIds: [],
+    params: { model: ChatModels.GPT4, temperature: 0.5, top_p: 1, max_tokens: 10 },
+    queryComplexity: 'simple',
+    promptMeta: {},
   };
 
   it('calls OpenaiModerationsService when an OpenAI key is available', async () => {
