@@ -244,8 +244,10 @@ export interface IUser extends ICreditHolder {
   /**
    * Invite-resolved credit amount awaiting proof of email ownership. Set at
    * registration alongside PENDING_FREE_CREDITS_TAG; released (and nulled) by
-   * registerViaOTC or the email-verify route. Null when nothing is pending - the
-   * open-registration path leaves it null and grants `defaultFreeCredits` instead.
+   * userService.releasePendingFreeCredits on OTC registration, email-link verify, first
+   * OTC login, OAuth signup/link, or the backfillPendingFreeCredits script. Null when
+   * nothing is pending - the open-registration path leaves it null and grants
+   * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
   level: UserLevelType;

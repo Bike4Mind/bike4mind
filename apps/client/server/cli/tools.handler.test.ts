@@ -19,7 +19,7 @@ function makeEvent(headers: Record<string, string> = {}): APIGatewayProxyEventV2
 
 /** The request ID threaded into handleToolRequest on its most recent call. */
 function threadedId(): string {
-  return vi.mocked(handleToolRequest).mock.calls.at(-1)?.[1] as string;
+  return vi.mocked(handleToolRequest).mock.calls.at(-1)?.[1]?.requestId as string;
 }
 
 describe('tools Lambda wrapper — request ID threading', () => {
@@ -64,5 +64,19 @@ describe('tools Lambda wrapper — request ID threading', () => {
     // header and body - the whole point of resolving once in the wrapper.
     expect(result.headers?.[REQUEST_ID_HEADER]).toBe(threadedId());
     expect(body.request_id).toBe(threadedId());
+  });
+
+  it('does not leak the thrown message and logs it with the request id', async () => {
+    vi.mocked(handleToolRequest).mockRejectedValue(new Error('inner blew up'));
+
+    const result = (await handler(makeEvent())) as APIGatewayProxyStructuredResultV2;
+
+    expect(JSON.parse(result.body as string)).toEqual({ error: 'Internal server error', request_id: threadedId() });
+    expect(result.body).not.toContain('inner blew up');
+    expect(console.error).toHaveBeenCalledWith(
+      '[CLI_TOOLS] Handler error:',
+      { requestId: threadedId() },
+      expect.any(Error)
+    );
   });
 });

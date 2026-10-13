@@ -38,6 +38,7 @@ import { refundLostVoiceHoldReserve, settlePriorVoiceHold } from '@server/voice/
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
+import { requestTurnAuth } from '@server/auth/turnAuth';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
 // The session token must stay valid for the whole call (ElevenLabs replays it on
@@ -174,7 +175,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       organizationId: req.user.organizationId ? String(req.user.organizationId) : '',
       sessionId: String(resolvedSessionId),
       reasoningModelId,
-      apiKeyId: req.apiKeyInfo?.keyId,
+      ...requestTurnAuth(req),
       voiceHoldStartedAt: holdStartedAt.toISOString(),
     },
     SESSION_TOKEN_TTL_SECONDS

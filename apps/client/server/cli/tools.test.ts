@@ -168,10 +168,9 @@ describe('tools Lambda handler — request ID correlation', () => {
     vi.mocked(executeToolWithLogging).mockResolvedValue({ success: true } as any);
 
     const { header, body } = parse(
-      (await handleToolRequest(
-        makeEvent({ body: VALID_BODY, headers: { 'x-request-id': 'from-header' } }),
-        'from-wrapper'
-      )) as any
+      (await handleToolRequest(makeEvent({ body: VALID_BODY, headers: { 'x-request-id': 'from-header' } }), {
+        requestId: 'from-wrapper',
+      })) as any
     );
 
     expect(header).toBe('from-wrapper');

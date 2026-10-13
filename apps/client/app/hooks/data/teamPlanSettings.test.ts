@@ -6,7 +6,12 @@ vi.mock('./settings', () => ({
   useGetSettingsValue: (key: string) => stored[key],
 }));
 
-import { useLowCreditsThreshold, useTeamCreditsPerSeat, useTeamSeatLimits } from './teamPlanSettings';
+import {
+  useLowCreditsThreshold,
+  useTeamPlanAvailable,
+  useTeamCreditsPerSeat,
+  useTeamSeatLimits,
+} from './teamPlanSettings';
 
 beforeEach(() => {
   stored = {};
@@ -34,5 +39,19 @@ describe('team plan setting hooks', () => {
   it('resolve a floor above the ceiling the same way the server does', () => {
     stored = { teamPlanMinSeats: 50, teamPlanMaxSeats: 10 };
     expect(renderHook(() => useTeamSeatLimits()).result.current).toEqual({ minSeats: 10, maxSeats: 10 });
+  });
+});
+
+describe('useTeamPlanAvailable', () => {
+  it.each([
+    [true, true],
+    ['true', true],
+    ['TRUE', true],
+    ['false', false],
+    [undefined, false],
+    [1, false],
+  ])('maps the raw setting %j to %s, as the setting schema does', (raw, expected) => {
+    stored = { enableTeamPlan: raw };
+    expect(renderHook(() => useTeamPlanAvailable()).result.current).toBe(expected);
   });
 });

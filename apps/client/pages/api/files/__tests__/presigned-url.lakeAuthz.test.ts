@@ -19,13 +19,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
-vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: class {},
-  GetObjectCommand: class {
-    constructor(public input: unknown) {}
-  },
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({ getSignedUrl: vi.fn(async () => 'https://s3.test/signed') }),
 }));
-vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () => 'https://s3.test/signed') }));
 
 const findOne = vi.fn();
 const findAccessibleById = vi.fn();
@@ -62,7 +58,11 @@ const LAKE_FILE = {
   tags: [{ name: 'datalake:lake-1' }],
 };
 
-describe('GET /api/files/presigned-url - data-lake read scope', () => {
+describe.each(['browser', 'server'])('GET /api/files/presigned-url - data-lake read scope: %s', audience => {
+  const request = (paths: string[], info?: { scopes: ApiKeyScope[] }) => ({
+    ...makeReq(paths, info),
+    query: { 'filePaths[]': paths, audience },
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     findOne.mockResolvedValue(LAKE_FILE);
@@ -73,7 +73,7 @@ describe('GET /api/files/presigned-url - data-lake read scope', () => {
 
   it('withholds the URL for a files:read-only key and never resolves its lakes', async () => {
     const { res, json } = makeRes();
-    await handler(makeReq(['lake-file.pdf'], { scopes: [ApiKeyScope.READ_FILES] }), res);
+    await handler(request(['lake-file.pdf'], { scopes: [ApiKeyScope.READ_FILES] }), res);
 
     expect(resolveAccessibleLakes).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ urls: [null] });
@@ -81,14 +81,14 @@ describe('GET /api/files/presigned-url - data-lake read scope', () => {
 
   it('signs the URL for a key holding datalake:read', async () => {
     const { res, json } = makeRes();
-    await handler(makeReq(['lake-file.pdf'], { scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] }), res);
+    await handler(request(['lake-file.pdf'], { scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] }), res);
 
     expect(json).toHaveBeenCalledWith({ urls: ['https://s3.test/signed'] });
   });
 
   it('signs the URL for a JWT/browser caller (no apiKeyInfo)', async () => {
     const { res, json } = makeRes();
-    await handler(makeReq(['lake-file.pdf']), res);
+    await handler(request(['lake-file.pdf']), res);
 
     expect(json).toHaveBeenCalledWith({ urls: ['https://s3.test/signed'] });
   });

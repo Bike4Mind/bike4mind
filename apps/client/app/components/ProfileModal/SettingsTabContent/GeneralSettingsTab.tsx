@@ -11,24 +11,7 @@ import { useDownload } from '@client/app/hooks/useDownload';
 import useToggle from '@client/app/hooks/useToggle';
 import { CloudUpload } from '@mui/icons-material';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
-import {
-  Button,
-  Grid,
-  Stack,
-  styled,
-  Box,
-  IconButton,
-  Dropdown,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Modal,
-  ModalDialog,
-  ModalClose,
-  Alert,
-  Switch,
-  Input,
-} from '@mui/joy';
+import { Button, Grid, Stack, styled, Box, Modal, ModalDialog, ModalClose, Alert, Switch, Input } from '@mui/joy';
 import axios from 'axios';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { toast } from 'sonner';
@@ -36,7 +19,6 @@ import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import HelpIcon from '@mui/icons-material/Help';
 import { Typography } from '@mui/joy';
-import { MoreVert as MoreVertIcon } from '@mui/icons-material';
 import SectionContainer from '@client/app/components/ProfileModal/SectionContainer';
 import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyles';
 import LanguageSelector from '@client/app/components/LanguageSelector';
@@ -351,44 +333,6 @@ const GeneralSettingsTab = () => {
                 >
                   Curate
                 </StyledButton>
-                <Dropdown>
-                  <MenuButton
-                    size={'md'}
-                    sx={{
-                      padding: '8px',
-                      border: '1px solid',
-                      borderColor: 'neutral.outlinedBorder',
-                      color: 'neutral.outlinedColor',
-                      width: '28px !important',
-                      height: '28px !important',
-                      minWidth: '28px !important',
-                      minHeight: '28px !important',
-                      '&:hover': {
-                        backgroundColor: 'neutral.outlinedHoverBg',
-                        borderColor: 'neutral.outlinedBorder',
-                      },
-                    }}
-                    slots={{ root: IconButton }}
-                    slotProps={{ root: { variant: 'outlined', color: 'neutral' } }}
-                  >
-                    <MoreVertIcon sx={{ fontSize: '18px' }} width={'16px'} height={'16px'} />
-                  </MenuButton>
-                  <Menu
-                    className="menuSurface"
-                    sx={{
-                      zIndex: 10001,
-                      borderRadius: '10px',
-                    }}
-                    variant={'outlined'}
-                    placement={'bottom'}
-                    direction="ltr"
-                  >
-                    <MenuItem onClick={() => toggleDeleteAllSessionsModal()} color="danger">
-                      <DeleteOutline sx={{ fontSize: '18px' }} width={'16px'} height={'16px'} />
-                      {t('deleteAllSomething', { name: t('llm.session_plural') })}
-                    </MenuItem>
-                  </Menu>
-                </Dropdown>
               </Box>
             </Box>
           </Grid>
@@ -435,44 +379,6 @@ const GeneralSettingsTab = () => {
                 >
                   Export All
                 </StyledButton>
-                <Dropdown>
-                  <MenuButton
-                    size={'md'}
-                    sx={{
-                      padding: '8px',
-                      border: '1px solid',
-                      borderColor: 'neutral.outlinedBorder',
-                      color: 'neutral.outlinedColor',
-                      width: '28px !important',
-                      height: '28px !important',
-                      minWidth: '28px !important',
-                      minHeight: '28px !important',
-                      '&:hover': {
-                        backgroundColor: 'neutral.outlinedHoverBg',
-                        borderColor: 'neutral.outlinedBorder',
-                      },
-                    }}
-                    slots={{ root: IconButton }}
-                    slotProps={{ root: { variant: 'outlined', color: 'neutral' } }}
-                  >
-                    <MoreVertIcon sx={{ fontSize: '18px' }} width={'16px'} height={'16px'} />
-                  </MenuButton>
-                  <Menu
-                    className="menuSurface"
-                    sx={{
-                      zIndex: 10001,
-                      borderRadius: '10px',
-                    }}
-                    variant={'outlined'}
-                    placement={'bottom'}
-                    direction="ltr"
-                  >
-                    <MenuItem onClick={() => toggleDeleteAllFilesModal()} color="danger">
-                      <DeleteOutline sx={{ fontSize: '18px' }} width={'16px'} height={'16px'} />
-                      {t('deleteAllSomething', { name: t('file') })}
-                    </MenuItem>
-                  </Menu>
-                </Dropdown>
               </Box>
             </Box>
           </Grid>
@@ -728,6 +634,43 @@ const GeneralSettingsTab = () => {
             </Box>
           </Grid>
         </Grid>
+      </SectionContainer>
+
+      <SectionContainer title="Danger zone">
+        <Box
+          data-testid="settings-danger-zone"
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1.5,
+            p: 2,
+            border: '1px solid',
+            borderColor: 'danger.outlinedBorder',
+            borderRadius: 'md',
+          }}
+        >
+          <Typography level="body-sm">These can&apos;t be undone. Export first if you want a copy.</Typography>
+          <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+            <Button
+              color="danger"
+              variant="outlined"
+              startDecorator={<DeleteOutline />}
+              onClick={() => toggleDeleteAllSessionsModal()}
+              data-testid="settings-delete-all-notebooks-btn"
+            >
+              Delete all notebooks
+            </Button>
+            <Button
+              color="danger"
+              variant="outlined"
+              startDecorator={<DeleteOutline />}
+              onClick={() => toggleDeleteAllFilesModal()}
+              data-testid="settings-delete-all-files-btn"
+            >
+              Delete all knowledge files
+            </Button>
+          </Box>
+        </Box>
       </SectionContainer>
 
       {openDeleteAllSessionsModal && (
