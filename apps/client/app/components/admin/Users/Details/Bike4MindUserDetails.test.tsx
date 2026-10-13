@@ -62,3 +62,20 @@ describe('Bike4MindUserDetails — credit reason input', () => {
     expect(onCreditReasonChange).toHaveBeenCalledWith('Manual top-up');
   });
 });
+
+describe('Bike4MindUserDetails - storage usage', () => {
+  // 920,000,000 of a 1000 MB limit is 92% to enforcement, which reads storageLimit as decimal MB.
+  const nearlyFullUser = { ...(user as object), storageLimit: 1000, currentStorageSize: 920_000_000 } as never;
+
+  it('labels the limit in decimal MB, as enforcement reads it', () => {
+    renderDetails({ user: nearlyFullUser });
+    expect(screen.getByTestId('admin-user-storage-label')).toHaveTextContent('920 MB / 1 GB');
+  });
+
+  it('shows the danger state at 92% of the limit', () => {
+    renderDetails({ user: nearlyFullUser });
+    const progress = screen.getByTestId('admin-user-storage-progress');
+    expect(progress).toHaveAttribute('aria-valuenow', '92');
+    expect(progress.className).toContain('MuiLinearProgress-colorDanger');
+  });
+});

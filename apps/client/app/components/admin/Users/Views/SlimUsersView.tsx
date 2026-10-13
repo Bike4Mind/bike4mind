@@ -1,3 +1,4 @@
+import { storageLimitToBytes } from '@bike4mind/common';
 import { useFullUserViewModal } from '@client/app/components/admin/Users/Views/FullUserViewModal';
 import { useGetRecentActivities } from '@client/app/hooks/data/user';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -41,7 +42,7 @@ const COLUMN_WIDTHS = {
 const ELLIPSIS_SX = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
 
 const StorageCell: React.FC<{ user: AdminUserListItem }> = ({ user }) => {
-  const storageLimitBytes = user.storageLimit * 1024 * 1024;
+  const storageLimitBytes = storageLimitToBytes(user.storageLimit);
   const storagePercent = computeStoragePercent(user.currentStorageSize, user.storageLimit);
   // Below 1% a percentage reads as "no data"; show the raw size so the cell stays meaningful.
   const label = storagePercent < 1 ? prettyBytes(user.currentStorageSize || 0) : `${Math.round(storagePercent)}%`;

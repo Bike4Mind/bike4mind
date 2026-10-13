@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import type { IUserDocument } from '@bike4mind/common';
+import { storageLimitToBytes } from '@bike4mind/common';
+import { checkStorageLimit } from '@bike4mind/utils';
+import { getStorageQuota } from '@client/app/utils/storageQuota';
 import { computeStoragePercent } from '../storageUtils';
 
 describe('computeStoragePercent', () => {
@@ -16,19 +20,41 @@ describe('computeStoragePercent', () => {
 
   it('returns 100 when usage equals the full limit', () => {
     const limitMb = 100;
-    const limitBytes = limitMb * 1024 * 1024;
-    expect(computeStoragePercent(limitBytes, limitMb)).toBe(100);
+    expect(computeStoragePercent(storageLimitToBytes(limitMb), limitMb)).toBe(100);
   });
 
   it('returns 50 when usage is half the limit', () => {
     const limitMb = 200;
-    const limitBytes = limitMb * 1024 * 1024;
-    expect(computeStoragePercent(limitBytes / 2, limitMb)).toBe(50);
+    expect(computeStoragePercent(storageLimitToBytes(limitMb) / 2, limitMb)).toBe(50);
   });
 
   it('can exceed 100 when usage is over the allocated limit', () => {
     const limitMb = 10;
-    const limitBytes = limitMb * 1024 * 1024;
-    expect(computeStoragePercent(limitBytes * 2, limitMb)).toBe(200);
+    expect(computeStoragePercent(storageLimitToBytes(limitMb) * 2, limitMb)).toBe(200);
+  });
+
+  // The limit is decimal MB, as enforcement reads it: 920,000,000 bytes of a 1000 MB limit is 92%.
+  it('reads the limit as decimal MB, matching enforcement', () => {
+    expect(computeStoragePercent(920_000_000, 1000)).toBe(92);
+  });
+
+  it.each([1, 1000, 5000])('reads a user at exactly a %i MB limit as full', limitMb => {
+    expect(computeStoragePercent(1_000_000 * limitMb, limitMb)).toBe(100);
+  });
+});
+
+describe('storage limit parity across admin, user UI and enforcement', () => {
+  const user = (fields: Partial<IUserDocument>) => fields as IUserDocument;
+
+  it.each([1, 1000, 5000])('agrees on the byte limit for %i MB', async limitMb => {
+    const limitBytes = getStorageQuota({ storageLimit: limitMb, currentStorageSize: 0 })!.limitBytes;
+
+    expect(computeStoragePercent(limitBytes, limitMb)).toBe(100);
+    await expect(checkStorageLimit(user({ storageLimit: limitMb, currentStorageSize: limitBytes }), 0)).resolves.toBe(
+      undefined
+    );
+    await expect(checkStorageLimit(user({ storageLimit: limitMb, currentStorageSize: limitBytes }), 1)).rejects.toThrow(
+      'File size exceeds storage limit'
+    );
   });
 });
