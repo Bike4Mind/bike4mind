@@ -122,5 +122,27 @@ describe('ImageModerationIncidentRepository', () => {
       const reloaded = await ImageModerationIncident.findById(inc._id);
       expect(reloaded?.ncmecReportId).toBe('rpt-1');
     });
+
+    it('returns null for false_positive when incident is in confirmed_csam (in-flight NCMEC guard)', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await imageModerationIncidentRepository.claimForNcmecSubmission(String(inc._id));
+      const fp = await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), 'false_positive');
+      expect(fp).toBeNull();
+      // The claim holds; incident stays confirmed_csam.
+      const reloaded = await ImageModerationIncident.findById(inc._id);
+      expect(reloaded?.reviewStatus).toBe('confirmed_csam');
+    });
+
+    it('allows reported to be set from confirmed_csam (normal NCMEC submission path)', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await imageModerationIncidentRepository.claimForNcmecSubmission(String(inc._id));
+      const updated = await imageModerationIncidentRepository.updateReviewStatus(
+        String(inc._id),
+        'reported',
+        'rpt-flow'
+      );
+      expect(updated?.reviewStatus).toBe('reported');
+      expect(updated?.ncmecReportId).toBe('rpt-flow');
+    });
   });
 });

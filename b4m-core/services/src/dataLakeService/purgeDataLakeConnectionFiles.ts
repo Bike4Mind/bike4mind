@@ -175,7 +175,19 @@ export const purgeDataLakeConnectionFiles = async (
               storageObjectsDeleted++;
             }
           }
-          const deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
+          // Legal-hold errors are permanent; catch them so the settled rejection does not
+          // surface as a thrown failure (line ~203). The file is on legal hold and must not
+          // be removed. deletedByThisCall stays false: no quota refund, no shred.
+          let deletedByThisCall = false;
+          try {
+            deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
+          } catch (err) {
+            if ((err as Error).message?.includes('legal hold')) {
+              logger?.warn('[dataLake] skipping blocked file in connection purge (legal hold)', { fabFileId: file.id });
+              return;
+            }
+            throw err;
+          }
           if (deletedByThisCall) {
             // Recorded (and shredded/unlinked) BEFORE the chunk delete: the row has no retry door
             // once hard-deleted, so a chunk-delete throw below must not cost this file its refund,

@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { submitNcmecReport } from './index';
 
+// Rekognition stores confidence in the 0-100 range (not 0-1).
 const BASE_INPUT = {
   incidentId: 'inc-123',
   userId: 'user-456',
   detectedAt: new Date('2026-01-15T10:00:00Z'),
-  labels: [{ name: 'Explicit Nudity', confidence: 0.98 }],
+  labels: [{ name: 'Explicit Nudity', confidence: 98.0 }],
 };
 
 describe('submitNcmecReport', () => {

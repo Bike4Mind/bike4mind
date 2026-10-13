@@ -111,7 +111,10 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
 
   /**
    * Transition an incident to a terminal reviewStatus. `ncmecReportId` is set when
-   * `status === 'reported'`. Returns null when already 'reported' (idempotency guard).
+   * `status === 'reported'`. Returns null if the transition is disallowed:
+   * - always blocked when already 'reported' (idempotency)
+   * - also blocked from 'confirmed_csam' when targeting 'false_positive', to prevent a
+   *   concurrent false_positive verdict from overriding an in-flight NCMEC submission.
    */
   async updateReviewStatus(
     id: string,
@@ -120,8 +123,9 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: status };
     if (ncmecReportId) update.ncmecReportId = ncmecReportId;
+    const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
     return this.model.findOneAndUpdate(
-      { _id: id, reviewStatus: { $ne: 'reported' } },
+      { _id: id, reviewStatus: { $nin: excluded } },
       { $set: update },
       { new: true }
     );

@@ -25,6 +25,9 @@
 const NCMEC_SANDBOX_URL = 'https://extapipre.cybertipline.org';
 const NCMEC_PRODUCTION_URL = 'https://extapi.cybertipline.org';
 
+// NCMEC incident type for child sexual abuse material (possession, manufacture, distribution).
+const NCMEC_CSAM_INCIDENT_TYPE = 74;
+
 export interface NcmecReportInput {
   /** Internal incident ID (imageModerationIncident._id) for audit correlation. */
   incidentId: string;
@@ -54,8 +57,9 @@ function xmlEscape(s: string): string {
 }
 
 function buildReportXml(espId: string, input: NcmecReportInput): string {
+  // Rekognition stores confidence in the 0-100 range (not 0-1); format directly.
   const labelsSummary = input.labels
-    .map(l => `${xmlEscape(l.name)} (${(l.confidence * 100).toFixed(1)}%)`)
+    .map(l => `${xmlEscape(l.name)} (${l.confidence.toFixed(1)}%)`)
     .join(', ');
 
   // XML per NCMEC CyberTipline ESP API v3 specification.
@@ -66,7 +70,7 @@ function buildReportXml(espId: string, input: NcmecReportInput): string {
     <espId>${xmlEscape(espId)}</espId>
   </reportingEsp>
   <incidentSummary>
-    <incidentType>74</incidentType>
+    <incidentType>${NCMEC_CSAM_INCIDENT_TYPE}</incidentType>
     <incidentDateTime>${input.detectedAt.toISOString()}</incidentDateTime>
   </incidentSummary>
   <reporter>

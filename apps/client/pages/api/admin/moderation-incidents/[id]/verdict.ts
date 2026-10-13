@@ -61,6 +61,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       ncmecReportId = result.reportId;
     } catch (err) {
       req.logger.error(`[NCMEC] submission failed for incident ${incidentId}: ${(err as Error).message}`);
+      // Roll back to pending_review so the incident re-enters the triage queue for retry.
+      // confirmed_csam is otherwise a terminal dead state if the NCMEC HTTP call fails.
+      await imageModerationIncidentRepository
+        .updateReviewStatus(incidentId, 'pending_review')
+        .catch(rollbackErr =>
+          req.logger.error(
+            `[NCMEC] rollback to pending_review also failed for incident ${incidentId}: ${(rollbackErr as Error).message}`
+          )
+        );
       return res.status(502).json({ error: `NCMEC submission failed: ${(err as Error).message}` });
     }
 
