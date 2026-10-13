@@ -7,6 +7,7 @@ import { getThemeConfig } from '../../utils/themes';
 const h = vi.hoisted(() => ({
   createFabFileOnServerWithUpload: vi.fn(),
   moderateFabFileNow: vi.fn(),
+  deleteFileUtility: vi.fn(),
   toastError: vi.fn(),
 }));
 
@@ -15,6 +16,7 @@ vi.mock('sonner', () => ({ toast: { error: h.toastError, success: vi.fn() } }));
 vi.mock('@client/app/utils/filesAPICalls', () => ({
   createFabFileOnServerWithUpload: h.createFabFileOnServerWithUpload,
   moderateFabFileNow: h.moderateFabFileNow,
+  deleteFileUtility: h.deleteFileUtility,
   copyGeneratedImageToFabFile: vi.fn(),
 }));
 vi.mock('./ImageMaskerFlux', () => ({
@@ -73,6 +75,7 @@ describe('ImageContainer edit flow', () => {
 
     await waitFor(() => expect(onSendMessage).toHaveBeenCalledTimes(1));
     expect(h.toastError).not.toHaveBeenCalled();
+    expect(h.deleteFileUtility).not.toHaveBeenCalled();
   });
 
   it('stops with an error toast, without dispatching, when the scan reports blocked', async () => {
@@ -82,5 +85,6 @@ describe('ImageContainer edit flow', () => {
 
     await waitFor(() => expect(h.toastError).toHaveBeenCalledWith(expect.stringContaining('blocked by moderation')));
     expect(onSendMessage).not.toHaveBeenCalled();
+    expect(h.deleteFileUtility).toHaveBeenCalledWith('mask1');
   });
 });
