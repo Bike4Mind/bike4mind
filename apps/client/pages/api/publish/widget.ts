@@ -67,6 +67,37 @@ const WIDGET_JS = String.raw`(function () {
     });
   })();
 
+  // ---- signed-in viewer: drop the sign-up CTAs ----
+  // The serve route cannot recognize a session on a plain navigation, so a signed-in viewer of
+  // an open-public artifact gets the anonymous render. Read the app's persisted session flag
+  // (not a credential, and no network call: an exchange on every public view would burn the
+  // per-IP refresh rate limit) and, when set, reveal the bar's "Try" link and ask the frame's
+  // gate bridge (server/services/publish/signupGateBridge.ts) to hide the gate. A stale flag
+  // only hides a marketing card; an evicted one (WebKit ITP) leaves the anonymous page as-is.
+  (function () {
+    var hasSession = false;
+    try {
+      // MUST STAY IN SYNC with ACCESS_TOKEN_STORAGE_KEY and partialize in app/hooks/useAccessToken.ts.
+      var saved = JSON.parse(window.localStorage.getItem('access-token-storage') || 'null');
+      hasSession = !!(saved && saved.state && saved.state.hasSession === true);
+    } catch (e) {}
+    if (!hasSession) return;
+    var ctas = document.querySelectorAll('.b4m-bar-cta[hidden]');
+    for (var i = 0; i < ctas.length; i++) ctas[i].hidden = false;
+    var frame = document.querySelector('iframe[data-b4m-gate]');
+    if (!frame) return;
+    var FO = (function () { try { return frame.src ? new URL(frame.src).origin : '*'; } catch (e) { return '*'; } })();
+    function tell() { try { frame.contentWindow.postMessage({ b4m: 'member' }, FO); } catch (e) {} }
+    // Either side may load first: tell now in case the bridge is already listening, and again
+    // when it announces itself in case this ran before it existed.
+    window.addEventListener('message', function (e) {
+      if (e.source !== frame.contentWindow) return;
+      if (FO !== '*' && e.origin !== FO) return;
+      if ((e.data || {}).b4m === 'gate-ready') tell();
+    });
+    tell();
+  })();
+
   var root = document.getElementById('b4m-annotate-root');
   if (!root) return;
   var publicId = root.getAttribute('data-public-id');

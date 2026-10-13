@@ -32,6 +32,7 @@ import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
 import { requestHasGateProof } from '@server/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
+import { injectSignupGateBridge } from '@server/services/publish/signupGateBridge';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
 import { displayReplyTitleFromLine, replyFirstLine } from '@server/services/publish/plainTitle';
 import {
@@ -52,7 +53,7 @@ import {
   hasSignupGateHtml,
   replaceSignupGateHtml,
   shouldShowSignupGate,
-  stripShareFooterCtaBeforeGate,
+  holdShareFooterCtaBeforeGate,
   stripSignupGateHtml,
 } from '@client/app/utils/shareFooter';
 import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
@@ -773,10 +774,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     });
   }
   // The gate is then the page's one sign-up CTA, so the brand cards that would compete with it
-  // (the footer card baked just above it, the wrapper bar's "Try" link) are dropped.
+  // (the footer card baked just above it, the wrapper bar's "Try" link) are hidden - not
+  // removed, so the gate bridge and widget can restore them for a signed-in viewer.
   const signupGateShown = showSignupGate && hasSignupGateHtml(indexHtml);
   indexHtml = signupGateShown
-    ? stripShareFooterCtaBeforeGate(
+    ? holdShareFooterCtaBeforeGate(
         replaceSignupGateHtml(indexHtml, {
           starterCredits: await getOpenSignupStarterCredits(),
           // A bundle can be served from the isolated usercontent origin, so /register is anchored to
@@ -886,7 +888,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // and renders existing pin markers inside the bundle doc (scroll-correct). It exchanges
   // only non-sensitive UI data with the parent; it cannot read the app token (opaque origin).
   const commentsEnabled = !!artifact.commentPolicy && artifact.commentPolicy !== 'none';
-  const srcdoc = commentsEnabled ? injectPinBridge(baseSrcdoc) : baseSrcdoc;
+  const pinnedSrcdoc = commentsEnabled ? injectPinBridge(baseSrcdoc) : baseSrcdoc;
+  // A signed-in viewer is served this same gated render (no Bearer on a navigation, and the
+  // page is shared-cached), so the wrapper widget asks the frame to drop the gate for them.
+  const srcdoc = signupGateShown ? injectSignupGateBridge(pinnedSrcdoc) : pinnedSrcdoc;
 
   if (droppedAssets.length) {
     // No silent truncation - surface skipped assets to operators and reviewers, both the
@@ -1022,7 +1027,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     exportHtmlHref,
     // For a sign-up prospect the bar's "Try" link would repeat a CTA the framed page already
     // carries: the gate, or the footer card baked into a gate-less page (full HTML documents).
-    !signupGateShown && !(showSignupGate && hasShareFooterCardHtml(indexHtml))
+    !signupGateShown && !(showSignupGate && hasShareFooterCardHtml(indexHtml)),
+    signupGateShown
   );
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1084,8 +1090,13 @@ function renderBundleWrapper(
   brandName = '',
   /** `?export=html` href for the "Save as HTML" affordance; '' hides it. */
   exportHtmlHref = '',
-  /** False when the framed page carries its own CTA (the sign-up gate or the footer card). */
-  barCta = true
+  /**
+   * False when the framed page carries its own CTA (the sign-up gate or the footer card). The
+   * bar's "Try" link then ships `hidden` and the widget reveals it for a signed-in viewer.
+   */
+  barCta = true,
+  /** The framed render carries the sign-up gate bridge (see signupGateBridge.ts). */
+  gateBridge = false
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
   // HTML attribute escape: inside a double-quoted attribute value only `&` and `"` are
@@ -1098,11 +1109,14 @@ function renderBundleWrapper(
   // lets the bundle load its own `<base>`-relative assets same-origin. Still NO allow-forms
   // (the isolated CSP sets `form-action 'none'`, so it'd be dead capability).
   // Fallback: opaque-origin srcdoc (no allow-same-origin - that would reclaim the app origin).
+  // `data-b4m-gate` tells the widget the frame has a gate to drop; without it the widget never
+  // sends the frame's untrusted author JS the viewer's signed-in state.
+  const gateAttr = gateBridge ? ' data-b4m-gate' : '';
   const iframeTag = isolatedSrc
-    ? `<iframe sandbox="${VIEWER_SANDBOX} allow-same-origin" title="${titleHtml}" src="${escapeHtml(
+    ? `<iframe sandbox="${VIEWER_SANDBOX} allow-same-origin" title="${titleHtml}"${gateAttr} src="${escapeHtml(
         isolatedSrc
       )}"></iframe>`
-    : `<iframe sandbox="${VIEWER_SANDBOX}" title="${titleHtml}" srcdoc="${srcdocAttr}"></iframe>`;
+    : `<iframe sandbox="${VIEWER_SANDBOX}" title="${titleHtml}"${gateAttr} srcdoc="${srcdocAttr}"></iframe>`;
   // Hash bridge (srcdoc mode only): forwards the page fragment into the sandboxed
   // bundle (initial deep link + hashchange) and mirrors in-bundle fragment jumps
   // back into the address bar. Approach B's wrapper CSP drops 'unsafe-inline', so
@@ -1157,14 +1171,10 @@ function renderBundleWrapper(
     ? `\n<div class="b4m-bar">
   <span class="b4m-bar-l">Built with ${liveryBarMark(brandName)}${LIVERY_REG}</span>
   <span class="b4m-bar-r">${barPrint}${barExport}
-    <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>${
-      barCta
-        ? `
-    <a class="b4m-bar-cta" href="${escapeHtml(
-      barHref
-    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)}${LIVERY_REG} &rarr;</a>`
-        : ''
-    }
+    <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>
+    <a class="b4m-bar-cta" href="${escapeHtml(barHref)}" target="_blank" rel="noopener noreferrer"${
+      barCta ? '' : ' hidden'
+    }>Try ${escapeHtml(brandName)}${LIVERY_REG} &rarr;</a>
   </span>
 </div>`
     : '';
@@ -1189,7 +1199,7 @@ function renderBundleWrapper(
   color:#cbd5e1;background:rgba(13,24,48,.78);padding:5px 9px;border-radius:8px;text-decoration:none;backdrop-filter:blur(4px)}
 .b4m-print{border:0;cursor:pointer}
 .b4m-report:hover,.b4m-export:hover,.b4m-print:hover{color:#fff;background:rgba(13,24,48,.95)}
-.b4m-bar-print[hidden],.b4m-print[hidden]{display:none}
+.b4m-bar-print[hidden],.b4m-print[hidden],.b4m-bar-cta[hidden]{display:none}
 .b4m-brand{position:fixed;bottom:10px;left:10px;z-index:2147483647;font:600 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:#fff;background:${LIVERY_ORANGE};padding:6px 11px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.28)}
 .b4m-brand:hover{filter:brightness(1.07)}
