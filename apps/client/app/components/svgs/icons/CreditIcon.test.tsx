@@ -4,17 +4,28 @@ import { render, screen } from '@testing-library/react';
 import { CreditIcon } from './CreditIcon';
 
 describe('CreditIcon', () => {
-  it('renders an svg with three paths and the default title', () => {
+  it('renders a decorative svg with three paths by default', () => {
     render(<CreditIcon />);
     const icon = screen.getByTestId('credit-icon');
     expect(icon.tagName.toLowerCase()).toBe('svg');
     expect(icon.querySelectorAll('path')).toHaveLength(3);
+    expect(icon.getAttribute('aria-hidden')).toBe('true');
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
+  it('exposes an accessible name when titleAccess is given', () => {
+    render(<CreditIcon titleAccess="Credits" />);
+    const icon = screen.getByRole('img', { name: 'Credits' });
     expect(icon.querySelector('title')?.textContent).toBe('Credits');
   });
 
-  it('allows the title to be overridden', () => {
-    render(<CreditIcon title="Credit cost" />);
-    expect(screen.getByTestId('credit-icon').querySelector('title')?.textContent).toBe('Credit cost');
+  it('inherits the surrounding text color unless a color is passed', () => {
+    render(
+      <div style={{ color: 'rgb(12, 34, 56)' }}>
+        <CreditIcon />
+      </div>
+    );
+    expect(getComputedStyle(screen.getByTestId('credit-icon')).color).toBe('rgb(12, 34, 56)');
   });
 
   it('forwards MUI icon props', () => {

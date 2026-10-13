@@ -8,14 +8,12 @@ const CHAINRING_SPIDER_PATH =
 
 const CHAINRING_HUB_PATH = 'M14.80 12.00A2.8 2.8 0 1 0 9.20 12.00A2.8 2.8 0 1 0 14.80 12.00Z';
 
-export interface CreditIconProps extends SvgIconProps {
-  /** Accessible title; defaults to "Credits". */
-  title?: string;
-}
-
-/** Spider chainring glyph that stands for credits (a unit, not money). */
-export const CreditIcon = ({ title = 'Credits', ...props }: CreditIconProps) => (
-  <SvgIcon viewBox="0 0 24 24" titleAccess={title} data-testid="credit-icon" {...props}>
+/**
+ * Spider chainring glyph that stands for credits (a unit, not money). Decorative by default, since
+ * it usually sits beside a "Credits" label; pass titleAccess when it stands alone.
+ */
+export const CreditIcon = (props: SvgIconProps) => (
+  <SvgIcon viewBox="0 0 24 24" color="inherit" data-testid="credit-icon" {...props}>
     <path fillRule="evenodd" d={CHAINRING_TEETH_PATH} />
     <path fillRule="evenodd" d={CHAINRING_SPIDER_PATH} />
     <path fillRule="evenodd" d={CHAINRING_HUB_PATH} />
