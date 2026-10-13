@@ -5,6 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { RouterProvider } from '@tanstack/react-router';
 import { publishScrollGutterWidth } from './chat/layout';
 import { router } from './router';
+import { desktopTheme } from './theme';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('renderer root element is missing from index.html');
@@ -14,7 +15,7 @@ publishScrollGutterWidth();
 
 createRoot(container).render(
   <StrictMode>
-    <CssVarsProvider defaultMode="system">
+    <CssVarsProvider theme={desktopTheme} defaultMode="system">
       <CssBaseline />
       <RouterProvider router={router} />
     </CssVarsProvider>

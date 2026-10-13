@@ -27,6 +27,7 @@ function buildAppInfo(): AppInfo {
     electronVersion: process.versions.electron,
     nodeVersion: process.versions.node,
     chromeVersion: process.versions.chrome,
+    homeDirectory: app.getPath('home'),
   };
 }
 

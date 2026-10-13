@@ -15,7 +15,8 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { SxProps } from '@mui/joy/styles/types';
 import { branchHolder, type BranchCheckout, type BranchElsewhere, type ChatProject } from '@shared/chat';
-import { describeChipRow, type ChipRowState } from './chipState';
+import { describeChipRow, displayPath, type ChipRowState } from './chipState';
+import { useHomeDirectory } from './homeDirectory';
 import { BranchIcon, CloseIcon, FolderIcon, FolderPlusIcon } from './icons';
 import { contentColumnSx } from './layout';
 import type { ProjectBindingController } from './useChat';
@@ -107,6 +108,9 @@ const pillButtonSx: SxProps = {
   borderRadius: '999px',
 };
 
+/** Chip tooltips put a path on a line of its own; the width cap is in theme.ts. */
+const chipTooltipSx: SxProps = { whiteSpace: 'pre-line' };
+
 function lastSegments(path: string, count = 2): string {
   const parts = path.split('/').filter(Boolean);
   return parts.length <= count ? path : `.../${parts.slice(-count).join('/')}`;
@@ -135,7 +139,7 @@ const BRANCH_MENU_WIDTH = 380;
 function ProjectChip({ binding }: { binding: ChipBinding }) {
   const { folder, unset } = binding.chips;
   return (
-    <Tooltip title={folder.tooltip} size="sm" variant="soft" placement="top-start">
+    <Tooltip title={folder.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
       {/* Wrapped for the same reason as the worktree toggle below: a disabled Chip takes no
           pointer events, so the reason it is locked would be unreadable on the chip it is about. */}
       <Box sx={{ display: 'flex' }}>
@@ -172,11 +176,13 @@ function BranchChip({
   binding,
   branches,
   elsewhere,
+  home,
 }: {
   project: ChatProject | null;
   binding: ChipBinding;
   branches: readonly string[];
   elsewhere: Readonly<Record<string, BranchCheckout>>;
+  home: string;
 }) {
   const [filter, setFilter] = useState('');
   const { branch: branchChip, worktree, branchNotice, unset, locked } = binding.chips;
@@ -196,7 +202,7 @@ function BranchChip({
   return (
     <Box sx={pillSx} data-testid="session-chip-branch">
       <Dropdown onOpenChange={(_event, open) => open && setFilter('')}>
-        <Tooltip title={branchChip.tooltip} size="sm" variant="soft" placement="top-start">
+        <Tooltip title={branchChip.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
           {/* Wrapped for the same reason as the worktree toggle: once locked the button is
               disabled, and the tooltip is then the only place its branch and reason are read. */}
           <Box sx={{ display: 'flex' }}>
@@ -267,10 +273,11 @@ function BranchChip({
                 </Typography>
                 {held && (
                   <Tooltip
-                    title={heldTooltip(held, project?.workspace ?? false)}
+                    title={heldTooltip(held, project?.workspace ?? false, home)}
                     size="sm"
                     variant="soft"
                     placement="right"
+                    sx={chipTooltipSx}
                   >
                     {/* The outsized shrink factor makes the mark give up its width before the
                         branch name does, down to a floor that keeps the icon and a few letters;
@@ -317,7 +324,7 @@ function BranchChip({
 
       <Box sx={{ width: '1px', alignSelf: 'stretch', my: 0.5, bgcolor: 'neutral.outlinedBorder' }} />
 
-      <Tooltip title={worktree.tooltip} size="sm" variant="soft" placement="top-start">
+      <Tooltip title={worktree.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
         {/* The Box, not the Checkbox, carries the tooltip: a disabled input takes no pointer
             events, so the reason it is disabled would be unreadable on the one it applies to. */}
         <Box sx={{ px: 1, display: 'flex', alignItems: 'center' }}>
@@ -343,13 +350,13 @@ function BranchChip({
  * The full path behind a menu mark. With the toggle on the pick is only a base, so the mark is
  * information there rather than a warning, and the tooltip says as much.
  */
-function heldTooltip(held: BranchCheckout, workspace: boolean): string {
-  const where = held.prunable
-    ? `Held by a worktree at ${held.path}, whose folder is gone.`
-    : `Checked out in ${held.path}.`;
-  return workspace
-    ? `${where} With worktree on this is only the base a new branch is cut from, so that is fine.`
-    : `${where} Picking it offers to work in that folder, or to cut a worktree from it.`;
+function heldTooltip(held: BranchCheckout, workspace: boolean, home: string): string {
+  const where = held.prunable ? 'Held by a worktree whose folder is gone.' : 'Checked out in another folder.';
+  const then = workspace
+    ? 'With worktree on it is only the base, so that is fine.'
+    : 'Picking it offers to work there or cut a worktree from it.';
+  // Whole, unlike the chips' own paths: the menu mark is cut short, so this is where it is read.
+  return `${where} ${then}\n${displayPath(held.path, home, Number.POSITIVE_INFINITY)}`;
 }
 
 /**
@@ -438,7 +445,7 @@ function ContextChips({
 
   return (
     <>
-      <Tooltip title={addContext.tooltip} size="sm" variant="soft" placement="top-start">
+      <Tooltip title={addContext.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
         {/* Wrapped for the same reason as the worktree toggle: a disabled button shows no tooltip. */}
         <Box sx={{ display: 'flex' }}>
           <IconButton
@@ -467,8 +474,16 @@ function ContextChips({
 
 /** One granted folder; clicking it takes the grant back. */
 function DirectoryChip({ directory, onRemove }: { directory: string; onRemove: (directory: string) => Promise<void> }) {
+  const home = useHomeDirectory();
   return (
-    <Tooltip title={directory} size="sm" variant="soft" placement="top-start">
+    // Not cut in the middle: this is a grant, and the whole of what was granted is the point.
+    <Tooltip
+      title={displayPath(directory, home, Number.POSITIVE_INFINITY)}
+      size="sm"
+      variant="soft"
+      placement="top-start"
+      sx={chipTooltipSx}
+    >
       <Chip
         size="sm"
         variant="soft"
@@ -643,14 +658,16 @@ export function SessionChips({
   // Unknown until git answers: the list is empty meanwhile, which is not evidence of a new name.
   const pickedExists = checkedOut === undefined ? undefined : !picked || branches.includes(picked);
   const elsewhereCount = Object.keys(elsewhere).length;
+  const home = useHomeDirectory();
   const chips = useMemo(
     () =>
       describeChipRow(
         project,
         { isRepository, count: branches.length, checkedOut, pickedExists, elsewhereCount },
-        inUse
+        inUse,
+        home
       ),
-    [project, isRepository, branches.length, checkedOut, pickedExists, elsewhereCount, inUse]
+    [project, isRepository, branches.length, checkedOut, pickedExists, elsewhereCount, inUse, home]
   );
   // A toggle-off pick switches HEAD without changing either folder useBranches is keyed on, so
   // nothing else would re-read it before the next focus; a created branch also joins the list.
@@ -690,7 +707,7 @@ export function SessionChips({
 
       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
         <ProjectChip binding={bound} />
-        <BranchChip project={project} binding={bound} branches={branches} elsewhere={elsewhere} />
+        <BranchChip project={project} binding={bound} branches={branches} elsewhere={elsewhere} home={home} />
         <ContextChips project={project} granted={grantedDirectories} binding={bound} />
       </Stack>
     </Box>

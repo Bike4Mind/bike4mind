@@ -36,20 +36,48 @@ export interface ChipRowState {
   branchNotice: string | null;
 }
 
-const CHOOSE_FOLDER_FIRST = 'Choose a project folder first - branches belong to a repository.';
+const CHOOSE_FOLDER_FIRST = 'Choose a folder first. Branches come from its repository.';
 
 /**
- * Why a bound chip is locked. One sentence, repeated on every control it applies to, because
- * each one is read on its own hover.
+ * The tail of every locked chip's tooltip, repeated on each because each is read on its own hover.
  *
  * The lock is a different refusal from `busy` and has to read as one. Busy is timing - the same
  * change works once the reply ends - while this one never clears: the transcript above already
  * describes commands that ran somewhere, and repointing the session would leave it claiming a
- * folder that work never happened in.
+ * folder that work never happened in. Hence "fixed", never "wait".
  */
-const IN_USE =
-  'This conversation has already run here. Start a new session to work somewhere else - ' +
-  'moving this one would leave its transcript describing work done in a folder it no longer names.';
+const FIXED = 'is fixed once the session starts.';
+
+/** Past this a path line would wrap inside the tooltip's max width; see theme.ts. */
+const PATH_MAX_LENGTH = 52;
+
+/**
+ * A path as a tooltip shows it: on its own line, home as `~`, and a long one cut in the middle so
+ * the folder name at the end - the part that tells folders apart - survives.
+ */
+export function displayPath(path: string, home = '', max = PATH_MAX_LENGTH): string {
+  const root = home.length > 1 ? home.replace(/\/+$/, '') : home;
+  const short = root && (path === root || path.startsWith(`${root}/`)) ? `~${path.slice(root.length)}` : path;
+  if (short.length <= max) return short;
+
+  const parts = short.split('/');
+  const headCount = parts[0] === '' ? 2 : 1;
+  const head = parts.slice(0, headCount).join('/');
+  let tail = parts[parts.length - 1];
+  for (let index = parts.length - 2; index >= headCount; index--) {
+    const longer = `${parts[index]}/${tail}`;
+    if (head.length + '/.../'.length + longer.length > max) break;
+    tail = longer;
+  }
+  const cut = `${head}/.../${tail}`;
+  if (cut.length <= max) return cut;
+  const keep = max - '...'.length;
+  return `${short.slice(0, Math.ceil(keep / 3))}...${short.slice(-Math.floor((keep * 2) / 3))}`;
+}
+
+function withPath(sentence: string, path: string, home: string): string {
+  return `${sentence}\n${displayPath(path, home)}`;
+}
 
 /** What the branch list turned out to be for the chosen folder; see useBranches. */
 export interface BranchLookup {
@@ -98,7 +126,9 @@ export function describeChipRow(
    * start lying about where work happened once work has happened. Before that the chips are how
    * a session gets bound at all.
    */
-  inUse = false
+  inUse = false,
+  /** The user's home folder, for `~` in path lines; empty until it has been read. */
+  home = ''
 ): ChipRowState {
   if (!project) {
     return {
@@ -106,7 +136,7 @@ export function describeChipRow(
       locked: false,
       folder: {
         label: 'Choose a folder',
-        tooltip: 'Pick the folder this conversation works in. Nothing can run until you do.',
+        tooltip: 'Choose the folder this session works in. Nothing runs until you do.',
         enabled: true,
       },
       // Still clickable: its menu is where the explanation lives, and a chip that can say why
@@ -115,7 +145,7 @@ export function describeChipRow(
       worktree: { label: 'worktree', tooltip: CHOOSE_FOLDER_FIRST, enabled: false },
       addContext: {
         label: 'Add a context folder',
-        tooltip: 'Choose a project folder first - context folders are extra reading beside it.',
+        tooltip: 'Choose a folder first. Context folders are extra reading beside it.',
         enabled: false,
       },
       branchNotice: CHOOSE_FOLDER_FIRST,
@@ -129,7 +159,11 @@ export function describeChipRow(
     locked: inUse,
     folder: {
       label: project.name,
-      tooltip: inUse ? `${project.directory}\n\n${IN_USE}` : project.directory,
+      tooltip: withPath(
+        inUse ? `Folder ${FIXED} Start a new session to switch.` : 'Folder this session works in. Click to change.',
+        project.directory,
+        home
+      ),
       enabled: !inUse,
     },
     branch: {
@@ -141,15 +175,15 @@ export function describeChipRow(
     },
     worktree: {
       label: 'worktree',
-      tooltip: inUse ? `${worktreeTooltip(project, relocated)}\n\n${IN_USE}` : worktreeTooltip(project, relocated),
+      tooltip: worktreeTooltip(project, branches, relocated, inUse, home),
       enabled: branches.isRepository && !inUse,
     },
     addContext: {
       label: 'Add a context folder',
-      tooltip: inUse ? IN_USE : 'Add a folder this session may read',
+      tooltip: inUse ? 'Context folders are fixed once the session starts.' : 'Add a folder this session may read.',
       enabled: !inUse,
     },
-    branchNotice: inUse ? IN_USE : branchNotice(project, branches),
+    branchNotice: inUse ? `Branch ${FIXED}` : branchNotice(project, branches),
   };
 }
 
@@ -160,15 +194,22 @@ export function describeChipRow(
  * ticked and nothing exists yet. Saying "runs in" there would name a folder that is not on
  * disk, and saying nothing would read as the toggle having failed.
  */
-function worktreeTooltip(project: ChatProject, relocated: boolean): string {
+function worktreeTooltip(
+  project: ChatProject,
+  { isRepository }: BranchLookup,
+  relocated: boolean,
+  inUse: boolean,
+  home: string
+): string {
   if (relocated) {
     const on = project.workspaceBranch ? ` on ${project.workspaceBranch}` : '';
-    return `Runs in the worktree at ${project.workingDirectory}${on}`;
+    const lock = inUse ? ` Worktree ${FIXED}` : '';
+    return withPath(`Runs in its own worktree${on}.${lock}`, project.workingDirectory, home);
   }
-  if (project.workspace) {
-    return 'A branch and a worktree are cut from the branch you picked when you send your first message';
-  }
-  return 'Run this session on its own branch, cut from the one picked, in its own git worktree';
+  if (inUse) return `Worktree setting ${FIXED}`;
+  if (!isRepository) return 'Worktrees need a git repository, and this folder is not one.';
+  if (project.workspace) return 'A branch and worktree are cut from your pick on your first message.';
+  return 'Run this session on its own branch, in its own git worktree.';
 }
 
 /** The branch the session is on, or will be cut from, or an admission that there is neither. */
@@ -189,26 +230,29 @@ function branchLabel(project: ChatProject, { checkedOut }: BranchLookup): string
 function branchTooltip(project: ChatProject, { checkedOut, isRepository, pickedExists }: BranchLookup): string {
   if (awaitsWorktree(project) && project.branch) {
     return pickedExists === false
-      ? `A new branch, ${project.branch}, and its worktree will be created when you send your first message.`
-      : `A new branch and worktree will be cut from ${project.branch} when you send your first message.`;
+      ? `Branch ${project.branch} and its worktree are created on your first message.`
+      : `A new branch and worktree are cut from ${project.branch} on your first message.`;
   }
-  if (checkedOut === undefined) return `Reading the branch in ${project.workingDirectory}...`;
+  if (checkedOut === undefined) return 'Reading the branch...';
   if (checkedOut === null) {
-    if (!isRepository) return `${project.directory} is not a git repository, so it has no branch.`;
-    return `${project.workingDirectory} is not on any branch - a detached HEAD, or git could not be read.`;
+    return isRepository
+      ? 'No branch: a detached HEAD, or git could not be read.'
+      : 'Not a git repository, so there is no branch.';
   }
-  if (checkedOut === project.branch) return project.directory;
-  if (!project.branch) return `${project.workingDirectory} is on ${checkedOut}. This session has not picked a branch.`;
-  return `${project.workingDirectory} is on ${checkedOut}; this session recorded ${project.branch}.`;
+  if (checkedOut === project.branch) return `On ${checkedOut}. Click to switch branches.`;
+  if (!project.branch) return `On ${checkedOut}. This session has not picked a branch.`;
+  return `On ${checkedOut}, but this session recorded ${project.branch}.`;
 }
 
 /** The locked pill's one place to read from, so it has to name the branch itself. */
 function lockedBranchTooltip(project: ChatProject, branches: BranchLookup): string {
-  const label = branchLabel(project, branches);
-  const detail = branchTooltip(project, branches);
-  const on = branches.checkedOut ? `On ${label} in ${project.workingDirectory}.` : detail;
-  const extra = branches.checkedOut && detail !== project.directory ? `\n\n${detail}` : '';
-  return `${on}${extra}\n\n${IN_USE}`;
+  const { checkedOut } = branches;
+  const mismatch =
+    checkedOut && project.branch && project.branch !== checkedOut && !awaitsWorktree(project)
+      ? ` This session recorded ${project.branch}.`
+      : '';
+  const lead = checkedOut ? `On ${branchLabel(project, branches)}.${mismatch}` : branchTooltip(project, branches);
+  return `${lead} Branch ${FIXED}`;
 }
 
 /**
@@ -223,13 +267,13 @@ function branchNotice(project: ChatProject, { isRepository, count, elsewhereCoun
     // And that nothing has happened yet, so changing the pick now is free.
     const pending = project.workspaceBranch
       ? ''
-      : ' Nothing is cut until you send your first message, so you can still change this.';
+      : ' Nothing is cut until your first message, so you can still change this.';
     // A base is never checked out, so another worktree holding it is no obstacle - and the
     // marks in the list must not read as one.
     const held = elsewhereCount > 0 ? ' A branch checked out in another folder is a fine base too.' : '';
     return (
-      'With worktree on, the branch you pick is the BASE: this session gets a new branch cut ' +
-      `from it, in a worktree of its own. The branch you pick is never checked out here.${held}${pending}`
+      'With worktree on, your pick is the BASE: this session gets a new branch cut from it, in ' +
+      `its own worktree. Your pick is never checked out here.${held}${pending}`
     );
   }
   const held =
@@ -239,7 +283,7 @@ function branchNotice(project: ChatProject, { isRepository, count, elsewhereCoun
       : '';
   // Said up front because the folder may be shared - with another session, or a terminal.
   return (
-    `Picking a branch checks it out in ${project.workingDirectory}. Uncommitted changes there, or ` +
-    `another session running there, stop the switch. Turn on worktree to leave this folder as it is.${held}`
+    'Picking a branch checks it out in the folder this session runs in. Uncommitted changes there, ' +
+    `or another session running there, stop the switch. Turn on worktree to leave it as it is.${held}`
   );
 }

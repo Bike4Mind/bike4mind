@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatProject } from '@shared/chat';
-import { describeChipRow } from './chipState';
+import { describeChipRow, displayPath, type BranchLookup, type ChipRowState } from './chipState';
 
 const project: ChatProject = {
   directory: '/Users/someone/code/thing',
@@ -27,19 +27,19 @@ describe('describeChipRow with no project chosen', () => {
   it('turns the folder chip into the picker rather than a readout', () => {
     expect(row.folder.enabled).toBe(true);
     expect(row.folder.label).toBe('Choose a folder');
-    expect(row.folder.tooltip).toMatch(/pick the folder/i);
+    expect(row.folder.tooltip).toMatch(/choose the folder/i);
   });
 
   it('leaves the branch chip clickable so its menu can say why it is empty', () => {
     expect(row.branch.enabled).toBe(true);
-    expect(row.branchNotice).toMatch(/choose a project folder first/i);
+    expect(row.branchNotice).toMatch(/choose a folder first/i);
   });
 
   it('disables the controls that cannot mean anything yet, each with a reason', () => {
     expect(row.worktree.enabled).toBe(false);
-    expect(row.worktree.tooltip).toMatch(/choose a project folder first/i);
+    expect(row.worktree.tooltip).toMatch(/choose a folder first/i);
     expect(row.addContext.enabled).toBe(false);
-    expect(row.addContext.tooltip).toMatch(/choose a project folder first/i);
+    expect(row.addContext.tooltip).toMatch(/choose a folder first/i);
   });
 
   it('never leaves a disabled chip without an explanation', () => {
@@ -54,7 +54,7 @@ describe('describeChipRow with a project', () => {
     const row = describeChipRow(project, { isRepository: true, count: 3, checkedOut: 'main' });
     expect(row.unset).toBe(false);
     expect(row.folder.label).toBe('thing');
-    expect(row.folder.tooltip).toBe(project.directory);
+    expect(row.folder.tooltip.split('\n')).toEqual([expect.stringMatching(/folder/i), project.directory]);
     expect(row.branch.label).toBe('main');
     expect(row.worktree.enabled).toBe(true);
     expect(row.addContext.enabled).toBe(true);
@@ -64,6 +64,7 @@ describe('describeChipRow with a project', () => {
     const row = describeChipRow({ ...project, branch: '' }, { isRepository: false, count: 0, checkedOut: null });
     expect(row.branch.label).toBe('no branch');
     expect(row.worktree.enabled).toBe(false);
+    expect(row.worktree.tooltip).toMatch(/need a git repository/i);
     expect(row.branchNotice).toBe('Not a git repository.');
   });
 
@@ -105,7 +106,8 @@ describe('describeChipRow when the worktree has moved off its branch', () => {
   it('leaves the tooltip alone when the two agree', () => {
     const row = describeChipRow(relocated, { isRepository: true, count: 2, checkedOut: 'agent/x' });
     expect(row.branch.label).toBe('agent/x');
-    expect(row.branch.tooltip).toBe(relocated.directory);
+    expect(row.branch.tooltip).toContain('agent/x');
+    expect(row.branch.tooltip).not.toMatch(/recorded/i);
   });
 });
 
@@ -125,13 +127,14 @@ describe('describeChipRow when the live branch is not known', () => {
   it('says nothing yet rather than naming the recorded branch, before git has answered', () => {
     const row = describeChipRow(relocated, { isRepository: true, count: 2 });
     expect(row.branch.label).not.toBe('agent/x');
-    expect(row.branch.tooltip).toContain(relocated.workingDirectory);
+    expect(row.branch.tooltip).toMatch(/reading/i);
+    expect(row.branch.tooltip).not.toContain('agent/x');
   });
 
   it('admits a detached HEAD rather than naming the recorded branch', () => {
     const row = describeChipRow(relocated, { isRepository: true, count: 2, checkedOut: null });
     expect(row.branch.label).toBe('no branch');
-    expect(row.branch.tooltip).toMatch(/not on any branch/i);
+    expect(row.branch.tooltip).toMatch(/detached HEAD/i);
   });
 
   it('names no branch for a folder that is not a repository', () => {
@@ -148,8 +151,7 @@ describe('describeChipRow when the live branch is not known', () => {
 describe('describeChipRow on what picking a branch will do', () => {
   it('says a pick checks the branch out in the folder while the toggle is off', () => {
     const row = describeChipRow(project, { isRepository: true, count: 3, checkedOut: 'main' });
-    expect(row.branchNotice).toMatch(/checks it out in/i);
-    expect(row.branchNotice).toContain(project.workingDirectory);
+    expect(row.branchNotice).toMatch(/checks it out in the folder this session runs in/i);
     expect(row.branchNotice).toMatch(/uncommitted changes/i);
     expect(row.branchNotice).not.toMatch(/nothing is checked out/i);
   });
@@ -208,7 +210,7 @@ describe('describeChipRow once the session has run here', () => {
     expect(row.locked).toBe(true);
     for (const chip of [row.folder, row.branch, row.worktree, row.addContext]) {
       expect(chip.enabled).toBe(false);
-      expect(chip.tooltip).toMatch(/already run here/i);
+      expect(chip.tooltip).toMatch(/fixed once the session starts/i);
     }
   });
 
@@ -234,8 +236,7 @@ describe('describeChipRow once the session has run here', () => {
 
     expect(row.branch.enabled).toBe(false);
     expect(row.branch.tooltip).toContain('On main');
-    expect(row.branch.tooltip).toContain(project.workingDirectory);
-    expect(row.branch.tooltip).toMatch(/already run here/i);
+    expect(row.branch.tooltip).toMatch(/fixed once the session starts/i);
   });
 
   it('keeps a mismatch between the folder and the recorded branch in the locked tooltip', () => {
@@ -316,7 +317,7 @@ describe('the branch chip with the worktree toggle on, before and after the cut'
 
   it('says a new branch and worktree will be cut from the pick on the first message', () => {
     const row = describeChipRow(pending, { isRepository: true, count: 3, checkedOut: 'main' });
-    expect(row.branch.tooltip).toMatch(/new branch and worktree will be cut from develop/i);
+    expect(row.branch.tooltip).toMatch(/new branch and worktree are cut from develop/i);
     expect(row.branch.tooltip).toMatch(/first message/i);
   });
 
@@ -326,7 +327,7 @@ describe('the branch chip with the worktree toggle on, before and after the cut'
       { isRepository: true, count: 3, checkedOut: 'main', pickedExists: false }
     );
     expect(row.branch.label).toBe('feat/new-thing');
-    expect(row.branch.tooltip).toMatch(/new branch, feat\/new-thing, and its worktree will be created/i);
+    expect(row.branch.tooltip).toMatch(/feat\/new-thing and its worktree are created/i);
   });
 
   it('reads the worktree checkout once the cut has happened', () => {
@@ -387,5 +388,112 @@ describe('the branch menu notice when another worktree holds some of the branche
     const notice = describeChipRow(project, { ...lookup, elsewhereCount: 0 }).branchNotice ?? '';
 
     expect(notice).not.toMatch(/another folder/i);
+  });
+});
+
+describe('chip tooltip copy', () => {
+  const HOME = '/Users/someone';
+  const relocated: ChatProject = {
+    ...project,
+    branch: 'agent/x',
+    workspace: true,
+    workspaceBranch: 'b4m/thing-a1b2c3',
+    workingDirectory: `${HOME}/code/thing/.claude/worktrees/b4m+thing-a1b2c3`,
+  };
+  const states: [string, ChatProject | null, BranchLookup, boolean][] = [
+    ['unset', null, { isRepository: false, count: 0 }, false],
+    ['reading', project, { isRepository: true, count: 3 }, false],
+    ['on its branch', project, { isRepository: true, count: 3, checkedOut: 'main' }, false],
+    ['no branch picked', { ...project, branch: '' }, { isRepository: true, count: 3, checkedOut: 'main' }, false],
+    ['moved off its branch', relocated, { isRepository: true, count: 3, checkedOut: 'fix/x' }, false],
+    ['detached', project, { isRepository: true, count: 3, checkedOut: null }, false],
+    ['not a repository', project, { isRepository: false, count: 0, checkedOut: null }, false],
+    ['worktree pending', { ...project, workspace: true }, { isRepository: true, count: 3, checkedOut: 'main' }, false],
+    [
+      'new branch pending',
+      { ...project, branch: 'feat/new', workspace: true },
+      { isRepository: true, count: 3, checkedOut: 'main', pickedExists: false },
+      false,
+    ],
+    ['locked', project, { isRepository: true, count: 3, checkedOut: 'main' }, true],
+    [
+      'locked, mismatched',
+      { ...project, branch: 'develop' },
+      { isRepository: true, count: 3, checkedOut: 'main' },
+      true,
+    ],
+    ['locked in a worktree', relocated, { isRepository: true, count: 3, checkedOut: 'b4m/thing-a1b2c3' }, true],
+    ['locked, detached', project, { isRepository: true, count: 3, checkedOut: null }, true],
+  ];
+  const tooltips = (row: ChipRowState): string[] =>
+    [row.folder, row.branch, row.worktree, row.addContext].map(chip => chip.tooltip);
+
+  it.each(states)('keeps every sentence short when %s', (_name, bound, lookup, inUse) => {
+    for (const tooltip of tooltips(describeChipRow(bound, lookup, inUse, HOME))) {
+      const [sentence] = tooltip.split('\n');
+      expect(sentence.length).toBeGreaterThan(0);
+      expect(sentence.length).toBeLessThanOrEqual(120);
+      expect(tooltip.split('\n').length).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it.each(states)('never runs a path into the sentence when %s', (_name, bound, lookup, inUse) => {
+    for (const tooltip of tooltips(describeChipRow(bound, lookup, inUse, HOME))) {
+      expect(tooltip.split('\n')[0]).not.toMatch(/[~/][\w.+-]*\//);
+    }
+  });
+
+  it('puts the folder on its own line with home shortened to ~', () => {
+    const row = describeChipRow(project, { isRepository: true, count: 3, checkedOut: 'main' }, true, HOME);
+    const [sentence, path] = row.folder.tooltip.split('\n');
+
+    expect(sentence).toMatch(/new session/i);
+    expect(path).toBe('~/code/thing');
+  });
+
+  it('puts the worktree on its own line once the session runs in one', () => {
+    const row = describeChipRow(
+      relocated,
+      { isRepository: true, count: 3, checkedOut: 'b4m/thing-a1b2c3' },
+      false,
+      HOME
+    );
+    const [sentence, path] = row.worktree.tooltip.split('\n');
+
+    expect(sentence).toContain('b4m/thing-a1b2c3');
+    expect(path.startsWith('~/')).toBe(true);
+    expect(path.endsWith('b4m+thing-a1b2c3')).toBe(true);
+  });
+});
+
+describe('displayPath', () => {
+  it('shortens the home folder to ~', () => {
+    expect(displayPath('/Users/someone/code', '/Users/someone')).toBe('~/code');
+    expect(displayPath('/Users/someone', '/Users/someone/')).toBe('~');
+  });
+
+  it('leaves a folder that only shares a prefix with home alone', () => {
+    expect(displayPath('/Users/someone2/code', '/Users/someone')).toBe('/Users/someone2/code');
+  });
+
+  it('cuts a long path in the middle, keeping the folder name', () => {
+    const long = `/Users/someone/${'nested/'.repeat(12)}the-folder`;
+    const shown = displayPath(long, '/Users/someone');
+
+    expect(shown.length).toBeLessThanOrEqual(52);
+    expect(shown.startsWith('~/...')).toBe(true);
+    expect(shown.endsWith('/the-folder')).toBe(true);
+  });
+
+  it('cuts by characters when even the last folder will not fit', () => {
+    const shown = displayPath(`/srv/${'x'.repeat(80)}`, '', 40);
+
+    expect(shown.length).toBe(40);
+    expect(shown).toContain('...');
+  });
+
+  it('keeps the whole path when told to', () => {
+    const long = `/srv/${'nested/'.repeat(20)}end`;
+    expect(displayPath(long, '', Number.POSITIVE_INFINITY)).toBe(long);
   });
 });

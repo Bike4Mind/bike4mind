@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatProject, ProjectInspection } from '@shared/chat';
+import type { AppInfo } from '@shared/ipc';
 import { SessionChips } from './SessionChips';
 import type { ProjectBindingController } from './useChat';
 
@@ -35,6 +36,8 @@ function inspection(over: Partial<ProjectInspection> = {}): ProjectInspection {
   };
 }
 
+const getAppInfo = async (): Promise<Partial<AppInfo>> => ({ homeDirectory: '' });
+
 const binding: ProjectBindingController = {
   busy: false,
   error: null,
@@ -63,7 +66,7 @@ describe('the branch chip against what git answers', () => {
 
   beforeEach(() => {
     inspectProject.mockReset();
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject } };
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject }, getAppInfo };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -177,7 +180,7 @@ describe('the branch chip against what git answers', () => {
     });
     const tooltip = document.body.querySelector('[role="tooltip"]')?.textContent ?? '';
     expect(tooltip).toMatch(/cut from feat\/chips/i);
-    expect(tooltip).not.toMatch(/will be created/i);
+    expect(tooltip).not.toMatch(/are created/i);
   });
 
   it('shows the picked base before the first message when the worktree toggle is on', async () => {
@@ -301,7 +304,7 @@ describe('the chip row once the session has run here', () => {
   beforeEach(() => {
     inspectProject.mockReset();
     inspectProject.mockResolvedValue(inspection());
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject } };
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject }, getAppInfo };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -345,6 +348,22 @@ describe('the chip row once the session has run here', () => {
     await act(async () => button.click());
     expect(document.body.querySelector('[data-testid="session-chip-branch-option"]')).toBeNull();
     expect(document.body.querySelector('[data-testid="session-chip-branch-notice"]')).toBeNull();
+  });
+
+  /** The report this guards: the path and the reason ran together as one line off the window. */
+  it('shows the locked folder reason with the path on a line of its own', async () => {
+    await show(true);
+
+    const chip = host.querySelector('[data-testid="session-chip-project"]') as HTMLElement;
+    await act(async () => {
+      chip.parentElement?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      // Joy's Tooltip opens after its enter delay (100ms).
+      await new Promise(resolve => setTimeout(resolve, 150));
+    });
+    const tooltip = document.body.querySelector('[role="tooltip"]') as HTMLElement;
+
+    expect(tooltip.textContent?.split('\n')).toEqual([expect.stringMatching(/new session/i), CHECKOUT]);
+    expect(getComputedStyle(tooltip).whiteSpace).toBe('pre-line');
   });
 });
 
@@ -392,7 +411,7 @@ describe('a branch another worktree has checked out', () => {
         checkedOutElsewhere: { 'feat/held': { path: HELD } },
       })
     );
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject } };
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject }, getAppInfo };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);

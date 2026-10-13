@@ -243,6 +243,8 @@ export interface AppInfo {
   electronVersion: string;
   nodeVersion: string;
   chromeVersion: string;
+  /** Lets the renderer, which has no `os`, print paths under it as `~`. */
+  homeDirectory: string;
 }
 
 /**
