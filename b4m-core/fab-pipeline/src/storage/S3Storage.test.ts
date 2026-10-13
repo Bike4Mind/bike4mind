@@ -46,7 +46,7 @@ describe('S3Storage upload input handling', () => {
     return { storage, send };
   };
 
-  it('upload stores a string as literal content even when it matches an existing file path', async () => {
+  it('upload stores string input verbatim', async () => {
     const { storage, send } = setup();
     const dir = mkdtempSync(join(tmpdir(), 's3storage-'));
     const existing = join(dir, 'note.txt');

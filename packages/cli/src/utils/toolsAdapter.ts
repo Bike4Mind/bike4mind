@@ -76,7 +76,7 @@ class NoOpStorage extends BaseStorage {
     return `/tmp/${destination}`;
   }
 
-  async uploadFile(localPath: string, destination: string, options?: any): Promise<string> {
+  async uploadFile(localPath: string, destination: string, options?: Record<string, unknown>): Promise<string> {
     return `/tmp/${destination}`;
   }
 

@@ -62,7 +62,7 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
    * and historyUploadComplete runs unchanged.
    *
    * Spooled to disk rather than buffered: a history export is large enough that holding it in
-   * the app pod would be a real memory problem, and S3Storage.upload takes a path.
+   * the app pod would be a real memory problem, and S3Storage.uploadFile streams it from disk.
    *
    * Self-host only (404 otherwise).
    */
