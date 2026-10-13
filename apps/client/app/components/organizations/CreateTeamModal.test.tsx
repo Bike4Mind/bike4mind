@@ -217,7 +217,7 @@ describe('CreateTeamModal', () => {
       expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
       const user = userEvent.setup({ delay: null });
       await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
-      const seats = Number(screen.getByTestId('create-team-size-value').textContent);
+      const seats = Number(sizeValue());
       await user.click(screen.getByTestId('create-team-submit-btn'));
 
       await waitFor(() => expect(devCreate).toHaveBeenCalledTimes(1));
