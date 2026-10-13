@@ -17,12 +17,33 @@ const PLATFORM_EMAIL_SUFFIX = PLATFORM_EMAIL_DOMAIN
     : `@${PLATFORM_EMAIL_DOMAIN}`
   : '';
 
-const EmailSettingsSchema = z.object({
+export const RESERVED_EMAIL_LOCAL_PARTS: ReadonlySet<string> = new Set([
+  'admin',
+  'administrator',
+  'postmaster',
+  'abuse',
+  'support',
+  'noreply',
+  'no-reply',
+  'security',
+  'billing',
+  'hostmaster',
+  'webmaster',
+  'root',
+  'info',
+  'help',
+  'mailer-daemon',
+]);
+
+export const EmailSettingsSchema = z.object({
   platformEmailAddress: z
     .email()
     .toLowerCase()
     .refine(email => !PLATFORM_EMAIL_SUFFIX || email.endsWith(PLATFORM_EMAIL_SUFFIX), {
       error: `Platform email must end with ${PLATFORM_EMAIL_SUFFIX}`,
+    })
+    .refine(email => !RESERVED_EMAIL_LOCAL_PARTS.has(email.split('@')[0]), {
+      error: 'Platform email local part is reserved',
     })
     .optional(),
   authorizedEmailAddresses: z.array(z.email().toLowerCase()).optional(),

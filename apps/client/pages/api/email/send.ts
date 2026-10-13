@@ -5,6 +5,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { notebookCurationService } from '@bike4mind/services';
 import { Permission, isImageServeable } from '@bike4mind/common';
 import { z } from 'zod';
+import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { sendEmailWithAttachments } from '@server/utils/mailer/emailAttachments';
 
 const handler = baseApi().post(async (req, res) => {
@@ -235,14 +236,14 @@ async function handleFileEmail(
         <div class="content">
           <p>Hello!</p>
 
-          <p>${userName} has shared ${fileNames.length === 1 ? 'a file' : `${fileNames.length} files`} with you${brand ? ` from ${brand}` : ''}.</p>
+          <p>${escapeHtml(userName)} has shared ${fileNames.length === 1 ? 'a file' : `${fileNames.length} files`} with you${brand ? ` from ${brand}` : ''}.</p>
 
           ${
             customMessage
               ? `
           <div class="custom-message">
             <strong>Personal message:</strong><br/>
-            ${customMessage.replace(/\n/g, '<br/>')}
+            ${escapeHtml(customMessage).replace(/\n/g, '<br/>')}
           </div>
           `
               : ''
@@ -262,7 +263,7 @@ async function handleFileEmail(
 
         <div class="footer">
           <p>This email was sent${brand ? ` from ${brand}, an AI collaboration platform` : ''}.</p>
-          <p>If you have questions about these files, please contact ${userName}.</p>
+          <p>If you have questions about these files, please contact ${escapeHtml(userName)}.</p>
         </div>
       </body>
     </html>
@@ -512,14 +513,14 @@ async function handleNotebookEmail(
         <div class="content">
           <p>Hello!</p>
 
-          <p>${userName} has shared ${sessionNames.length === 1 ? 'a curated notebook' : `${sessionNames.length} curated notebooks`} with you${brand ? ` from ${brand}` : ''}.</p>
+          <p>${escapeHtml(userName)} has shared ${sessionNames.length === 1 ? 'a curated notebook' : `${sessionNames.length} curated notebooks`} with you${brand ? ` from ${brand}` : ''}.</p>
 
           ${
             customMessage
               ? `
           <div class="custom-message">
             <strong>Personal message:</strong><br/>
-            ${customMessage.replace(/\n/g, '<br/>')}
+            ${escapeHtml(customMessage).replace(/\n/g, '<br/>')}
           </div>
           `
               : ''
@@ -541,7 +542,7 @@ async function handleNotebookEmail(
 
         <div class="footer">
           <p>This email was sent${brand ? ` from ${brand}, an AI collaboration platform` : ''}.</p>
-          <p>If you have questions about these notebooks, please contact ${userName}.</p>
+          <p>If you have questions about these notebooks, please contact ${escapeHtml(userName)}.</p>
         </div>
       </body>
     </html>

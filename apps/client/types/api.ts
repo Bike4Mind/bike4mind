@@ -180,8 +180,13 @@ export const NotebookDownloadRequestSchema = z.object({
   downloadAsZip: z.boolean().prefault(false), // If true, zip all files together
 });
 
+export const MAX_EMAIL_RECIPIENTS = 20;
+
 const BaseEmailRequestSchema = z.object({
-  recipients: z.array(z.email()).min(1, 'At least one recipient email is required'),
+  recipients: z
+    .array(z.email())
+    .min(1, 'At least one recipient email is required')
+    .max(MAX_EMAIL_RECIPIENTS, `Maximum ${MAX_EMAIL_RECIPIENTS} recipients per email`),
   message: z.string().optional(),
 });
 
