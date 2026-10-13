@@ -62,6 +62,9 @@ export const ImageModerationIncident =
   (mongoose.models.ImageModerationIncident as mongoose.Model<IImageModerationIncidentDocument>) ||
   model<IImageModerationIncidentDocument>('ImageModerationIncident', ImageModerationIncidentSchema);
 
+// A confirmed_csam claim older than this is treated as a stuck submission, not a live one.
+export const STALE_CONFIRMED_CSAM_MS = 10 * 60 * 1000;
+
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
     super(model);
@@ -104,7 +107,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    */
   async findStaleConfirmedCsam(
     limit: number,
-    staleAfterMs = 10 * 60 * 1000
+    staleAfterMs = STALE_CONFIRMED_CSAM_MS
   ): Promise<IImageModerationIncidentDocument[]> {
     const cutoff = new Date(Date.now() - staleAfterMs);
     return this.model
@@ -142,32 +145,35 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     const update: Record<string, unknown> = { reviewStatus: status };
     if (ncmecReportId) update.ncmecReportId = ncmecReportId;
     const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
-    return this.model.findOneAndUpdate(
-      { _id: id, reviewStatus: { $nin: excluded } },
-      { $set: update },
-      { new: true }
-    );
+    return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });
   }
 
   /**
    * Admin recovery action for incidents stuck in 'confirmed_csam' after an unknown NCMEC
-   * outcome. Transitions only from 'confirmed_csam'. Returns null if the incident is not
-   * in that state (wrong state, not found, or concurrent resolution).
+   * outcome. Transitions only from a stale 'confirmed_csam' (same threshold as
+   * findStaleConfirmedCsam), so a live in-flight submission cannot be resolved under it.
+   * Returns null if the incident is not in that state (wrong state, not found, still fresh,
+   * or concurrent resolution).
    *
    *   { status: 'reported', ncmecReportId }  -- operator confirmed the tip was received
-   *   { status: 'pending_review' }           -- operator confirmed nothing was filed; requeue
+   *   { status: 'pending_review' }           -- operator confirmed nothing was filed; requeue.
+   *                                             Refused when an ncmecReportId is stored: that
+   *                                             report must be finalized, not filed again.
    */
   async resolveConfirmedCsam(
     id: string,
-    target: { status: 'reported'; ncmecReportId: string } | { status: 'pending_review' }
+    target: { status: 'reported'; ncmecReportId: string } | { status: 'pending_review' },
+    staleAfterMs = STALE_CONFIRMED_CSAM_MS
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: target.status };
     if (target.status === 'reported') update.ncmecReportId = target.ncmecReportId;
-    return this.model.findOneAndUpdate(
-      { _id: id, reviewStatus: 'confirmed_csam' },
-      { $set: update },
-      { new: true }
-    );
+    const filter: Record<string, unknown> = {
+      _id: id,
+      reviewStatus: 'confirmed_csam',
+      updatedAt: { $lt: new Date(Date.now() - staleAfterMs) },
+    };
+    if (target.status === 'pending_review') filter.ncmecReportId = null;
+    return this.model.findOneAndUpdate(filter, { $set: update }, { new: true });
   }
 
   /**
@@ -176,10 +182,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    * be stored so an admin can use 'mark_reported' to finalize within NCMEC's 24-hour window.
    */
   async setNcmecReportId(id: string, ncmecReportId: string): Promise<void> {
-    await this.model.updateOne(
-      { _id: id, reviewStatus: 'confirmed_csam' },
-      { $set: { ncmecReportId } }
-    );
+    await this.model.updateOne({ _id: id, reviewStatus: 'confirmed_csam' }, { $set: { ncmecReportId } });
   }
 }
 

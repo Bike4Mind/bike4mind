@@ -23,9 +23,12 @@ function resolveNcmecCredentials() {
 
 function isNcmecConfigured(creds: ReturnType<typeof resolveNcmecCredentials>): boolean {
   return (
-    Boolean(creds.espId) && creds.espId !== 'not-configured' &&
-    Boolean(creds.apiKey) && creds.apiKey !== 'not-configured' &&
-    Boolean(creds.espEmail) && creds.espEmail !== 'not-configured'
+    Boolean(creds.espId) &&
+    creds.espId !== 'not-configured' &&
+    Boolean(creds.apiKey) &&
+    creds.apiKey !== 'not-configured' &&
+    Boolean(creds.espEmail) &&
+    creds.espEmail !== 'not-configured'
   );
 }
 
@@ -36,10 +39,11 @@ function isNcmecConfigured(creds: ReturnType<typeof resolveNcmecCredentials>): b
  *   confirmed_csam  -> submit an NCMEC CyberTip and mark the incident 'reported'.
  *   false_positive  -> mark the incident 'false_positive' (no NCMEC submission).
  *
- * Recovery verdicts (incident stuck in confirmed_csam after unknown NCMEC outcome):
+ * Recovery verdicts (incident stuck in confirmed_csam after unknown NCMEC outcome; only
+ * claims older than STALE_CONFIRMED_CSAM_MS are resolvable, so a live submission is safe):
  *   mark_reported   -> move to 'reported' with an operator-supplied ncmecReportId.
  *   requeue         -> move back to 'pending_review' after confirming with NCMEC that
- *                      no tip was filed.
+ *                      no tip was filed. Refused when an ncmecReportId is stored.
  *
  * Concurrency safety: `confirmed_csam` first atomically claims the incident by
  * transitioning it to 'confirmed_csam' (the intermediate state). Only one concurrent
@@ -76,8 +80,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       status: 'reported',
       ncmecReportId: body.ncmecReportId,
     });
-    if (!updated) return res.status(409).json({ error: 'Incident is not in confirmed_csam state' });
-    req.logger.info(`[NCMEC] incident ${incidentId} manually marked reported, reportId=${body.ncmecReportId}, by admin=${req.user.id}`);
+    if (!updated) {
+      return res
+        .status(409)
+        .json({ error: 'Incident is not a stale confirmed_csam claim (wrong state, or submission still in flight)' });
+    }
+    req.logger.info(
+      `[NCMEC] incident ${incidentId} manually marked reported, reportId=${body.ncmecReportId}, by admin=${req.user.id}`
+    );
     return res.status(200).json({ ok: true, ncmecReportId: body.ncmecReportId });
   }
 
@@ -85,7 +95,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     const updated = await imageModerationIncidentRepository.resolveConfirmedCsam(incidentId, {
       status: 'pending_review',
     });
-    if (!updated) return res.status(409).json({ error: 'Incident is not in confirmed_csam state' });
+    if (!updated) {
+      return res.status(409).json({
+        error:
+          'Incident is not a stale confirmed_csam claim without an ncmecReportId (wrong state, submission still in flight, or an unfinished report exists -- use mark_reported once it is finalized)',
+      });
+    }
     req.logger.info(`[Moderation] incident ${incidentId} requeued from confirmed_csam by admin=${req.user.id}`);
     return res.status(200).json({ ok: true });
   }
@@ -97,7 +112,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     // never moved out of pending_review in the first place.
     const credentials = resolveNcmecCredentials();
     if (!isNcmecConfigured(credentials)) {
-      return res.status(503).json({ error: 'NCMEC credentials not configured -- set NCMEC_ESP_ID, NCMEC_API_KEY and NCMEC_ESP_EMAIL via sst secret set' });
+      return res.status(503).json({
+        error:
+          'NCMEC credentials not configured -- set NCMEC_ESP_ID, NCMEC_API_KEY and NCMEC_ESP_EMAIL via sst secret set',
+      });
     }
     if (process.env.B4M_SELF_HOST === 'true') {
       return res.status(503).json({ error: 'NCMEC reporting is not available on self-host installs' });
@@ -109,7 +127,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     if (!claimed) {
       const incident = await imageModerationIncidentRepository.findById(incidentId);
       if (!incident) return res.status(404).json({ error: 'Incident not found' });
-      if (incident.reviewStatus === 'reported') return res.status(409).json({ error: 'Incident already reported to NCMEC' });
+      if (incident.reviewStatus === 'reported')
+        return res.status(409).json({ error: 'Incident already reported to NCMEC' });
       return res.status(409).json({ error: 'Incident is already being processed or has been reviewed' });
     }
 
@@ -146,7 +165,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         // reportId so an admin can manually finalize within NCMEC's 24-hour window using
         // the 'mark_reported' verdict. Do NOT roll back.
         const finishErr = err as ncmecService.NcmecFinishFailedError;
-        req.logger.info(`[NCMEC] /finish failed for incident ${incidentId}; persisting reportId=${finishErr.reportId} for manual recovery`);
+        req.logger.info(
+          `[NCMEC] /finish failed for incident ${incidentId}; persisting reportId=${finishErr.reportId} for manual recovery`
+        );
         await imageModerationIncidentRepository
           .setNcmecReportId(incidentId, finishErr.reportId)
           .catch(persistErr =>
@@ -165,15 +186,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
 
     // Log before the DB write: if the write fails, the reportId is still recoverable from logs.
-    req.logger.info(`[NCMEC] submission accepted for incident ${incidentId}, reportId=${ncmecReportId}; persisting to DB`);
+    req.logger.info(
+      `[NCMEC] submission accepted for incident ${incidentId}, reportId=${ncmecReportId}; persisting to DB`
+    );
 
     const updated = await imageModerationIncidentRepository.updateReviewStatus(incidentId, 'reported', ncmecReportId);
     if (!updated) {
-      req.logger.warn(`[NCMEC] DB update skipped for incident ${incidentId} (already reported); NCMEC reportId=${ncmecReportId}`);
+      req.logger.warn(
+        `[NCMEC] DB update skipped for incident ${incidentId} (already reported); NCMEC reportId=${ncmecReportId}`
+      );
       return res.status(409).json({ error: 'Incident already reported to NCMEC (concurrent request)' });
     }
 
-    req.logger.info(`[NCMEC] incident ${incidentId} marked reported, reportId=${ncmecReportId}, by admin=${req.user.id}`);
+    req.logger.info(
+      `[NCMEC] incident ${incidentId} marked reported, reportId=${ncmecReportId}, by admin=${req.user.id}`
+    );
     return res.status(200).json({ ok: true, ncmecReportId });
   }
 
