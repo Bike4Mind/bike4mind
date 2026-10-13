@@ -21,7 +21,7 @@ import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { sendToQueue } from '@server/utils/sqs';
-import type { DataLakeCleanupMessage } from '@server/queueHandlers/dataLakeCleanup';
+import type { DataLakeCleanupMessage } from '@server/dataLakes/dataLakeCleanupPayload';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { disableDriveConnectionForLake, enableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import {

@@ -37,7 +37,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   S3Storage: class {
-    upload = uploadMock;
+    uploadFile = uploadMock;
     getSignedUrl = getSignedUrlMock;
   },
 }));

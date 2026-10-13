@@ -75,7 +75,7 @@ vi.mock('@server/utils/storage', () => ({
   }),
 }));
 
-vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: mockCreateLakeAccess,
 }));
 

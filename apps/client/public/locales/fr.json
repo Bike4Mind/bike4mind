@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Abonnement",
-    "description": "Accédez à tous les principaux modèles d'IA via une interface unifiée. Exécutez des modèles avancés comme Deepseek R1 en toute confidentialité.",
+    "description": "Accédez à tous les principaux modèles d'IA via une interface unifiée.",
     "no_free_tier": "PAS DE NIVEAU GRATUIT - AXÉ SUR LES PROFESSIONNELS.",
     "credits_rollover": "Les crédits non utilisés se reportent pendant 3 mois.",
     "monthly_billing": "Facturation Mensuelle",

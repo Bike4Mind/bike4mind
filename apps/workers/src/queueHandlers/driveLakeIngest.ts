@@ -56,7 +56,7 @@ import {
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
 } from '@server/integrations/google/drive/driveContent';
-import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import mime from 'mime-types';

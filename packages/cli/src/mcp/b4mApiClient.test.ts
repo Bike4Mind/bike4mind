@@ -185,6 +185,16 @@ describe('B4mApiClient', () => {
     });
   });
 
+  it('stops one turn via POST .../chat/stop-reply with its quest id and a short timeout', async () => {
+    mockPost.mockResolvedValue({ status: 'cancelled' });
+    await client.stopReply(NB_ID, 'q1');
+    expect(mockPost).toHaveBeenCalledWith(
+      `/api/sessions/${NB_ID}/chat/stop-reply`,
+      { questId: 'q1' },
+      { timeout: 10_000 }
+    );
+  });
+
   it('deletes a notebook via DELETE without following redirects', async () => {
     mockFetch.mockResolvedValue(jsonResponse({ newLastNotebookId: null }));
     await expect(client.deleteNotebook(NB_ID)).resolves.toEqual({ newLastNotebookId: null });

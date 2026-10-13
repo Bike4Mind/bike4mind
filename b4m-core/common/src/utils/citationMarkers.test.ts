@@ -29,4 +29,9 @@ describe('findCitationMarkers', () => {
   it('reads adjacent markers separately', () => {
     expect(valuesOf('[1][2]')).toEqual([[1], [2]]);
   });
+
+  it('reads a comma list on one line but not one that spans a line break', () => {
+    expect(valuesOf('[1, 2]')).toEqual([[1, 2]]);
+    expect(valuesOf('[1,\n2]')).toEqual([]);
+  });
 });
