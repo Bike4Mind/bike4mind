@@ -391,6 +391,19 @@ describe('the attach shortcut', () => {
     expect(pick).not.toHaveBeenCalled();
   });
 
+  it('still fires from a focused switch or checkbox, which are inputs but not text fields', () => {
+    const { pick, attachments } = withPick();
+    mount({ attachments });
+
+    const toggle = document.createElement('input');
+    toggle.type = 'checkbox';
+    document.body.appendChild(toggle);
+    chord(toggle);
+    toggle.remove();
+
+    expect(pick).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores the auto-repeat of a held chord', () => {
     const { pick, attachments } = withPick();
     mount({ attachments });

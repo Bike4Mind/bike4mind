@@ -42,9 +42,16 @@ import type { SkillsController } from './useSkills';
 
 const ATTACH_SHORTCUT = attachShortcut(isMac);
 
+// Joy's Switch, Checkbox, Radio and Slider are all inputs, and focus stays on one after a click.
+const TEXT_FIELD = [
+  'textarea',
+  'select',
+  'input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="file"]):not([type="color"])',
+].join(', ');
+
 function isTextField(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || target.matches('input, textarea, select');
+  return target.isContentEditable || target.matches(TEXT_FIELD);
 }
 
 export function Composer({
