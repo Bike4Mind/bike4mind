@@ -84,13 +84,23 @@ function clearReconnectTimer(): void {
 // Best-effort: a failure just leaves the upfront hold in place - it must never
 // block teardown or surface an error to the user. Safe to call more than once
 // (the endpoint is idempotent), so both end() and a natural onDisconnect use it.
+//
+// The in-flight POST is tracked so start() can wait it out. /end settles the hold
+// it read when it began, so a retry that reserved a new hold mid-settle could have
+// that new hold settled at ~0 elapsed (a free call) or cleared without a refund.
+let pendingReconcile: Promise<void> | null = null;
 async function reconcileVoiceSession(sessionId: string | null): Promise<void> {
   if (!sessionId) return;
-  try {
-    await api.post(`/api/voice/v2/sessions/${sessionId}/end`, {});
-  } catch {
-    // ignore - reservation reconciliation is not user-blocking
-  }
+  const run = (async () => {
+    try {
+      await api.post(`/api/voice/v2/sessions/${sessionId}/end`, {});
+    } catch {
+      // ignore - reservation reconciliation is not user-blocking
+    }
+  })();
+  pendingReconcile = run;
+  await run;
+  if (pendingReconcile === run) pendingReconcile = null;
 }
 
 function formatSessionsError(err: unknown): string {
@@ -329,6 +339,10 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
       set({ phase: 'error', errorMessage: micError });
       return;
     }
+    // A prior attempt's refund must land before we reserve again, or its settle
+    // can act on the hold we are about to create (see reconcileVoiceSession).
+    if (pendingReconcile) await pendingReconcile;
+    if (myGen !== startGen) return; // superseded while waiting on the refund
     await establishConnection(set, myGen, { sessionId, reasoningModelId, onSessionResolved }, false);
   },
 

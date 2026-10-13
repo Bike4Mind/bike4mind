@@ -136,6 +136,9 @@ describe('useConversationalVoice — auto-reconnect', () => {
   });
 
   const sessionPosts = () => apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions');
+  // Let queued microtasks (and any 0ms timers) drain so a start() can progress
+  // to the point the test is inspecting without resolving a deferred it holds.
+  const flush = () => vi.advanceTimersByTimeAsync(0);
 
   it('releases the mic probe and proceeds on the happy path', async () => {
     await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
@@ -178,6 +181,39 @@ describe('useConversationalVoice — auto-reconnect', () => {
     await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
     expect(useConversationalVoiceStore.getState().phase).toBe('error');
     expect(endCalls()).toEqual([['/api/voice/v2/sessions/s1/end', {}]]);
+  });
+
+  it('waits for an in-flight refund before reserving a new hold', async () => {
+    let resolveEnd!: () => void;
+    const endPending = new Promise<void>(resolve => (resolveEnd = resolve));
+    const order: string[] = [];
+    startSessionMock.mockRejectedValueOnce(new Error('boom'));
+    apiPost.mockImplementation((url: string) => {
+      order.push(url);
+      if (url === '/api/voice/v2/sessions') return Promise.resolve({ data: BOOTSTRAP });
+      return endPending.then(() => {
+        order.push('end-settled');
+        return { data: {} };
+      });
+    });
+
+    const failed = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await flush();
+    expect(endCalls()).toHaveLength(1);
+
+    // Retry while the refund is still in flight: it must not reserve a new hold
+    // until /end has settled the old one.
+    const retry = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await flush();
+    resolveEnd();
+    await Promise.all([failed, retry]);
+
+    expect(order).toEqual([
+      '/api/voice/v2/sessions',
+      '/api/voice/v2/sessions/s1/end',
+      'end-settled',
+      '/api/voice/v2/sessions',
+    ]);
   });
 
   it('still surfaces the start error when the refund call itself fails', async () => {
