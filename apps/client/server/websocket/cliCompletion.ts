@@ -123,6 +123,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       // Org-billed API keys settle to the org's shared pool.
       billingOrganizationId: apiKeyInfo?.organizationId,
       requestId,
+      // Defaults to 'api' otherwise; this handler only serves the CLI.
+      source: 'cli',
       logger: logger as unknown as Logger,
       onChunk: async (text, info) => {
         // Track token counts and tool usage
