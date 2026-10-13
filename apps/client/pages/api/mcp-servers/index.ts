@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { BadRequestError } from '@server/utils/errors';
+import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { encryptEnvVariables, decryptEnvVariables } from '@server/security/tokenEncryption';
@@ -67,6 +68,7 @@ const handler = baseApi()
     res.json(servers);
   })
   .post(async (req, res) => {
+    await assertMcpServerEnabled();
     // Guarded before the findOne below, not just before the write: `name` is part of that
     // filter, and a filter casts too -- an object or array there throws a `CastError` on the
     // route's very first statement.
