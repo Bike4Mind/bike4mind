@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import type { Logger } from '@bike4mind/observability';
+import { describe, expect, it, vi } from 'vitest';
 import { buildDecisionProviders, selectDecisionProviderKey } from './providers';
 
 type Keys = Parameters<typeof selectDecisionProviderKey>[1];
@@ -12,8 +13,11 @@ describe('buildDecisionProviders', () => {
     expect(() => buildDecisionProviders({ SYSTEMONE_BASE_URL: 'https://laya.example.com/' })).not.toThrow();
   });
 
-  it('fails at build time when SYSTEMONE_BASE_URL is set but not a URL', () => {
-    expect(() => buildDecisionProviders({ SYSTEMONE_BASE_URL: 'laya.example.com' })).toThrow(/SYSTEMONE_BASE_URL/);
+  it('drops only the systemOne adapter, with an error log, when SYSTEMONE_BASE_URL is set but not a URL', () => {
+    const logger = { error: vi.fn() } as unknown as Logger;
+    const providers = buildDecisionProviders({ SYSTEMONE_BASE_URL: 'laya.example.com' }, logger);
+    expect(providers.map(provider => provider.id)).toEqual(['openaiDecisions']);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('SYSTEMONE_BASE_URL'));
   });
 });
 

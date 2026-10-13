@@ -62,7 +62,7 @@ GEMINI_API_KEY=         # Google Gemini
 XAI_API_KEY=            # Grok
 DEEPSEEK_API_KEY=       # DeepSeek
 TYPESAFE_API_KEY=       # TypeSafe Jev (Decisions API models)
-SYSTEMONE_BASE_URL=     # optional: Jev-compatible server such as self-hosted Laya (default https://api.typesafe.ai)
+SYSTEMONE_BASE_URL=     # optional: Jev-compatible server such as self-hosted Laya (default https://api.typesafe.ai); a malformed value logs an error and disables only the Jev models
 MOONSHOT_API_KEY=       # Kimi
 BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
