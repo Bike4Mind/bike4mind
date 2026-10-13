@@ -230,17 +230,54 @@ export function shouldShowSignupGate(
   return effectiveVisibility === 'public' && !viewer?.id;
 }
 
+// The panel opening tag in every gate version published (the pre-#3283 gate had a
+// `<div id="b4m-gate-ol">` overlay between the checkbox and the panel; it is tolerated below).
+const SIGNUP_GATE_PANEL_OPEN = '<div id="b4m-gate-panel"';
+const SIGNUP_GATE_PREAMBLE =
+  /^<input type="checkbox" id="b4m-gate-dismiss"[^>]*>\s*(?:<div id="b4m-gate-ol"[^>]*><\/div>\s*)?$/;
+
+// Index just past the `</div>` that closes the div opening at `openAt`, or -1 if unbalanced.
+function matchingDivCloseEnd(html: string, openAt: number): number {
+  const tags = /<div\b|<\/div>/gi;
+  tags.lastIndex = openAt;
+  let depth = 0;
+  for (let m = tags.exec(html); m; m = tags.exec(html)) {
+    depth += m[0][1] === '/' ? -1 : 1;
+    if (depth === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
 /**
- * Remove a sign-up gate baked into stored artifact bytes (renderArtifactIndexHtml emits it
- * as the last element before `</body>`). The gate's CSS is left in place: every rule keys
- * off the removed elements, so it goes inert.
+ * Locate a sign-up gate baked into stored artifact bytes, as [start, end) where `end` is the
+ * page's closing `</body>`. Only the position renderArtifactIndexHtml writes it counts: the
+ * checkbox and one balanced panel div, followed by nothing but the document's final
+ * `</body></html>`. Matching the marker anywhere would let an artifact whose own content
+ * contains the gate markup lose everything after it on serve.
+ *
+ * Known limit: a full-HTML artifact that ends its body with an exact copy of the gate is only
+ * rejected because renderArtifactIndexHtml injects the share footer after it; with no marketing
+ * URL configured nothing follows it and it is treated as baked.
+ */
+function findBakedSignupGate(html: string): { start: number; end: number } | null {
+  const end = html.lastIndexOf('</body>');
+  if (end === -1 || !/^\s*<\/html>\s*$/i.test(html.slice(end + '</body>'.length))) return null;
+  const start = html.lastIndexOf(SIGNUP_GATE_MARKER, end);
+  if (start === -1) return null;
+  const panelAt = html.indexOf(SIGNUP_GATE_PANEL_OPEN, start);
+  if (panelAt === -1 || panelAt > end || !SIGNUP_GATE_PREAMBLE.test(html.slice(start, panelAt))) return null;
+  const panelEnd = matchingDivCloseEnd(html, panelAt);
+  if (panelEnd === -1 || panelEnd > end || html.slice(panelEnd, end).trim() !== '') return null;
+  return { start, end };
+}
+
+/**
+ * Remove a sign-up gate baked into stored artifact bytes (see findBakedSignupGate). The gate's
+ * CSS is left in place: every rule keys off the removed elements, so it goes inert.
  */
 export function stripSignupGateHtml(html: string): string {
-  const start = html.lastIndexOf(SIGNUP_GATE_MARKER);
-  if (start === -1) return html;
-  const end = html.indexOf('</body>', start);
-  if (end === -1) return html;
-  return html.slice(0, start) + html.slice(end);
+  const gate = findBakedSignupGate(html);
+  return gate ? html.slice(0, gate.start) + html.slice(gate.end) : html;
 }
 
 /**
@@ -249,11 +286,8 @@ export function stripSignupGateHtml(html: string): string {
  * is reused as-is (it does not depend on the number). No-op on a page without a gate.
  */
 export function replaceSignupGateHtml(html: string, opts: SignupGateOptions = {}): string {
-  const start = html.lastIndexOf(SIGNUP_GATE_MARKER);
-  if (start === -1) return html;
-  const end = html.indexOf('</body>', start);
-  if (end === -1) return html;
-  return html.slice(0, start) + buildSignupGateHtml(opts).html + html.slice(end);
+  const gate = findBakedSignupGate(html);
+  return gate ? html.slice(0, gate.start) + buildSignupGateHtml(opts).html + html.slice(gate.end) : html;
 }
 
 // Exact opening tag of the brand card buildShareFooterHtml emits. Already-published pages carry
@@ -270,7 +304,7 @@ function endsWithCardClose(card: string): boolean {
 
 /** Whether the page carries a baked sign-up gate (see renderArtifactIndexHtml). */
 export function hasSignupGateHtml(html: string): boolean {
-  return html.includes(SIGNUP_GATE_MARKER);
+  return findBakedSignupGate(html) !== null;
 }
 
 /**
@@ -296,7 +330,7 @@ export function hasShareFooterCardHtml(html: string): boolean {
  * touches the artifact's own content. No-op on a page without that pairing.
  */
 export function stripShareFooterCtaBeforeGate(html: string): string {
-  const gateStart = html.lastIndexOf(SIGNUP_GATE_MARKER);
+  const gateStart = findBakedSignupGate(html)?.start ?? -1;
   if (gateStart === -1) return html;
   const cardStart = html.lastIndexOf(SHARE_FOOTER_CARD_OPEN, gateStart);
   if (cardStart === -1) return html;

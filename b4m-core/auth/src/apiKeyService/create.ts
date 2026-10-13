@@ -4,8 +4,8 @@ import { z } from 'zod';
 
 export const createApiKeySchema = z.object({
   apiKey: z.string().min(6),
-  description: z.string().optional().prefault(''),
-  isActive: z.boolean().optional().prefault(true),
+  description: z.string().prefault(''),
+  isActive: z.boolean().prefault(true),
   type: z.enum(ApiKeyType),
   expireDays: z.number().min(1).max(365).prefault(90), // Default 90-day expiration
 });

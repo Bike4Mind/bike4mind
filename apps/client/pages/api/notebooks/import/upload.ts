@@ -56,7 +56,7 @@ const handler = baseApi({ maxBodySize: MAX_NOTEBOOK_IMPORT_UPLOAD_BYTES })
 
       try {
         const { dataKey } = buildNotebookImportKeys(String(req.user.id), importId);
-        await new S3Storage(Resource.historyImportBucket.name).upload(spooled.path, dataKey);
+        await new S3Storage(Resource.historyImportBucket.name).uploadFile(spooled.path, dataKey);
         req.logger?.info(
           `[notebooks/import] proxied upload user=${req.user.id} importId=${importId} bytes=${spooled.bytes}`
         );

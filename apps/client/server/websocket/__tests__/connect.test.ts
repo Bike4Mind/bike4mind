@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   isTokenVersionCurrent: vi.fn(),
   verifyToken: vi.fn(),
   verifyApiKey: vi.fn(),
+  assertAccountStateUsable: vi.fn(),
 }));
 
 vi.mock('@server/websocket/utils', () => ({
@@ -40,6 +41,9 @@ vi.mock('@bike4mind/common', () => ({
 }));
 vi.mock('@server/auth/tokenGenerator', () => ({ authTokenGenerator: { verifyToken: h.verifyToken } }));
 vi.mock('@server/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
+vi.mock('@server/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: h.assertAccountStateUsable,
+}));
 vi.mock('@server/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));

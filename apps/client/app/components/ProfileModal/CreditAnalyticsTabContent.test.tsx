@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -31,14 +31,19 @@ const accessibleTextModels = [
   textModel('claude-opus-5-5', 'Claude Opus 5.5', ModelBackend.Anthropic, 5, 25),
 ];
 
+const hoisted = vi.hoisted(() => ({
+  currentUser: { id: 'user_1', currentCredits: 1000 } as Record<string, unknown>,
+  transactions: [] as Array<Record<string, unknown>>,
+}));
+
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@nivo/line', () => ({ ResponsiveLine: () => null }));
 vi.mock('@nivo/pie', () => ({ ResponsivePie: () => null }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'user_1', currentCredits: 1000 } }),
+  useUser: () => ({ currentUser: hoisted.currentUser }),
 }));
 vi.mock('@client/app/hooks/data/credits', () => ({
-  useGetCreditTransactions: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
+  useGetCreditTransactions: () => ({ data: hoisted.transactions, isLoading: false, isError: false, refetch: vi.fn() }),
 }));
 vi.mock('@client/app/hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({
@@ -75,5 +80,23 @@ describe('CreditAnalyticsTabContent model pricing', () => {
     expect(within(nano).getByText(formatCreditsPer1M(0.1 * CREDITS_PER_USD_COST))).toBeTruthy();
     expect(within(nano).getByText(formatCreditsPer1M(0.4 * CREDITS_PER_USD_COST))).toBeTruthy();
     expect(screen.getByText('credits.pricing_per_1m_tokens')).toBeTruthy();
+  });
+});
+
+describe('CreditAnalyticsTabContent days remaining', () => {
+  afterEach(() => {
+    hoisted.currentUser = { id: 'user_1', currentCredits: 1000 };
+    hoisted.transactions = [];
+  });
+
+  it('says it is too early instead of projecting from a day-old account', () => {
+    const now = Date.now();
+    hoisted.currentUser = { id: 'user_1', currentCredits: 9237, createdAt: new Date(now - 6 * 60 * 60 * 1000) };
+    hoisted.transactions = [
+      { type: 'text_generation_usage', credits: -760, createdAt: new Date(now - 60 * 60 * 1000), model: 'm' },
+    ];
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('credit-analytics-days-remaining')).toHaveTextContent('Too early');
   });
 });

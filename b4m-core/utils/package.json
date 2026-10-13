@@ -150,6 +150,26 @@
         "default": "./dist/registrableDomain.cjs"
       }
     },
+    "./decisionProviders": {
+      "import": {
+        "types": "./dist/decisionProviders/index.d.mts",
+        "default": "./dist/decisionProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/decisionProviders/index.d.cts",
+        "default": "./dist/decisionProviders/index.cjs"
+      }
+    },
+    "./generationProviders": {
+      "import": {
+        "types": "./dist/generationProviders/index.d.mts",
+        "default": "./dist/generationProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/generationProviders/index.d.cts",
+        "default": "./dist/generationProviders/index.cjs"
+      }
+    },
     "./videoProviders": {
       "import": {
         "types": "./dist/videoProviders/index.d.mts",
@@ -158,6 +178,16 @@
       "require": {
         "types": "./dist/videoProviders/index.d.cts",
         "default": "./dist/videoProviders/index.cjs"
+      }
+    },
+    "./musicProviders": {
+      "import": {
+        "types": "./dist/musicProviders/index.d.mts",
+        "default": "./dist/musicProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/musicProviders/index.d.cts",
+        "default": "./dist/musicProviders/index.cjs"
       }
     },
     "./security": {
@@ -216,7 +246,7 @@
     "unpdf": "^1.6.2",
     "uuid": "^14.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/lodash": "^4.17.24",

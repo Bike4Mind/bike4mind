@@ -84,11 +84,10 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
     .number()
     .min(BFL_SAFETY_TOLERANCE.MIN)
     .max(BFL_SAFETY_TOLERANCE.MAX)
-    .optional()
     .prefault(BFL_SAFETY_TOLERANCE.DEFAULT),
-  prompt_upsampling: z.boolean().optional().prefault(false),
+  prompt_upsampling: z.boolean().prefault(false),
   seed: z.number().nullable().optional(),
-  output_format: ImageOutputFormatSchema.nullable().optional().prefault('png'),
+  output_format: ImageOutputFormatSchema.nullable().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),

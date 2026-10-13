@@ -123,16 +123,22 @@ These endpoints are defined by a contract, and their full request/response refer
 the [generated API docs](/api/v1/docs) (raw spec: \`/api/v1/openapi.json\`, which a generator can
 use to build a typed client). They are deliberately not repeated here, so the two cannot disagree.
 
-- Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/agent-executions[/{id}]\`
-- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`
+- Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
+  \`/api/v1/agent-executions[/{id}]\`
+- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`
+- Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
+  \`/api/v1/artifacts/{id}/versions[/{version}]\`
 - Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
 - Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
   delete), \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
+- Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
 - Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
+- Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
+- Release notes: \`/api/v1/whats-new\` (public, no key needed)
 
 Image, video and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.
@@ -143,16 +149,6 @@ Image, video and chat work is asynchronous; the Async jobs section of the
 
 The sections below are still hand-written. Each row was checked against its route file, but
 treat the handler as authoritative.
-
-### Quest files
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/quests/[id]/files | Files generated or referenced during quest processing |
-
-**Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access).
-
----
 
 ### Files (FabFiles)
 
@@ -174,23 +170,16 @@ between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, in
 
 ### Sessions (Notebooks)
 
-Session create, list, get, update and delete are covered by the generated docs (see above). The routes below are
-still hand-written.
+Session create, list, get, update, delete and clone are covered by the generated docs (see above). The routes
+below are still hand-written.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | /api/sessions/[id]/clone | Clone a session |
 | GET | /api/sessions/[id]/files | List session files |
 | POST | /api/sessions/semantic-search | Semantic search across sessions |
 | GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
 | PUT | /api/sessions/[id]/chat/[messageId] | Update a message |
 | DELETE | /api/sessions/[id]/chat/[messageId] | Delete a message |
-
-#### Release Notes
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/whats-new | Published release notes, newest first (public, cursor-paginated, cached) |
 
 ---
 
@@ -265,9 +254,10 @@ DELETE /api/v1/agents/[id]
 
 ### AI Services
 
+Transcription is covered by the generated docs (see above).
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | /api/ai/transcribe | Audio/video to text (Whisper) |
 | POST | /api/ai/refineText | Refine and improve text |
 
 **Required API-key scope for \`refineText\`:** \`ai:generate\`.
@@ -276,18 +266,12 @@ DELETE /api/v1/agents/[id]
 
 ### Artifacts
 
-Versioned content artifacts generated during conversations (code, documents, diagrams).
+Artifact list, create, get, update, delete and version reads are covered by the generated docs (see above).
+The routes below are still hand-written.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | /api/artifacts | List artifacts |
-| POST | /api/artifacts | Create artifact |
-| GET | /api/artifacts/[id] | Get artifact |
-| PUT | /api/artifacts/[id] | Update artifact |
-| DELETE | /api/artifacts/[id] | Delete artifact |
-| GET | /api/artifacts/[id]/versions | List artifact versions |
 | POST | /api/artifacts/[id]/versions | Add an artifact version |
-| GET | /api/artifacts/[id]/versions/[version] | Get specific version |
 | GET | /api/artifacts/search | Search artifacts |
 | GET | /api/artifacts/types | List artifact types |
 

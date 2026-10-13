@@ -141,6 +141,7 @@ import EnsureDataLakeResearchScheduleIndex from './20260921125000_ensure-data-la
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod's for the same reason as
 // EnsureDataLakeInconsistencyScanIndex above - see that migration's docstring.
 import BackfillShareTokens from './20260921130000_backfill-share-tokens';
+import DropShareTokenScalar from './20260921140000_drop-share-token-scalar';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod's, as EnsureDataLakeInconsistencyScanIndex.
 import EnsureQuestCallbackPendingIndex from './20260921235900_ensure-quest-callback-pending-index';
 import EnsureFabFileGitHubConnectionIndex from './20260921235958_ensure-fabfile-github-connection-index';
@@ -174,6 +175,8 @@ import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note
 import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureArtifactOwnedKeysetIndex from './20260921235993_ensure-artifact-owned-keyset-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -295,6 +298,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureDataLakeInconsistencyScanIndex,
   EnsureDataLakeResearchScheduleIndex,
   BackfillShareTokens,
+  DropShareTokenScalar,
   EnsureQuestCallbackPendingIndex,
   EnsureFabFileGitHubConnectionIndex,
   EnsureOrgGitHubLakeConnectionIndexes,
@@ -311,6 +315,7 @@ const coreMigrations: MigrationFile[] = [
   ReplaceReleaseNoteStatusIndex,
   EnsureFabFileOwnedKeysetIndex,
   UnsetStoredDefaultForcedRetrievalFloor,
+  EnsureArtifactOwnedKeysetIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

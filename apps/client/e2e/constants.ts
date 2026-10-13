@@ -7,7 +7,7 @@ export const MODEL_SEARCH_DEBOUNCE_MS = 600;
  * Single source of truth - keep both consumers in sync by importing from here. Names must
  * match the model selector exactly.
  */
-export const MONITORED_MODELS = ['Claude 4.7 Opus', 'GPT-5.5'] as const;
+export const MONITORED_MODELS = ['Claude Opus 4.7', 'GPT-5.5'] as const;
 
 /**
  * Spec-user key for the second account the notebook-export-bytes suite imports as. The round trip

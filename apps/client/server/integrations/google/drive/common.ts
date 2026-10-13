@@ -282,7 +282,11 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
   }
   if (!refreshToken) throw new BadRequestError('Google Drive refresh token unreadable - reconnect required');
 
-  const credentials = await refreshAccessToken(refreshToken);
+  const credentials = await refreshAccessToken(refreshToken).catch((e: unknown) => {
+    // A revoked/expired grant is a reconnect (400), not a server fault: left raw, drive-sync 500s on it.
+    if (isInvalidGrantError(e)) throw new BadRequestError('Google Drive access was revoked - reconnect required');
+    throw e;
+  });
   if (!credentials.access_token) throw new BadRequestError('Google Drive token refresh returned no access token');
 
   await User.updateOne(
@@ -307,8 +311,12 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
  * `credential_error`: nothing but a manual reconnect clears that state, and the poll skips it.
  */
 function isTerminalDriveGrantError(e: unknown): boolean {
-  // getValidUserDriveAccessToken's expected states (unlinked, unreadable, empty refresh) are all reconnects.
-  if (e instanceof BadRequestError) return true;
+  // getValidUserDriveAccessToken's expected states (unlinked, unreadable, revoked) are all reconnects.
+  return e instanceof BadRequestError || isInvalidGrantError(e);
+}
+
+/** A revoked/expired Google grant: only a fresh consent fixes it. */
+export function isInvalidGrantError(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
   // google-auth-library surfaces a revoked/expired grant as a GaxiosError whose body is the OAuth error.
   const response: unknown = 'response' in e ? e.response : undefined;

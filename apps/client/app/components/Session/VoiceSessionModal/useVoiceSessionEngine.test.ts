@@ -100,6 +100,7 @@ vi.mock('./useVoiceKeepAlive', () => ({
 }));
 
 import { useVoiceSessionEngine } from './useVoiceSessionEngine';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useVoiceSessionStore } from './voiceSessionStore';
 import { toast } from 'sonner';
 
@@ -358,30 +359,62 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
   });
 
-  it('does not send a zero settlement once a response has settled the hold', async () => {
+  const responseDone = (id: string, audioOutputTokens: number) => ({
+    type: 'response.done',
+    response: {
+      id,
+      usage: {
+        input_token_details: {
+          audio_tokens: 1,
+          text_tokens: 0,
+          cached_tokens_details: { audio_tokens: 0, text_tokens: 0 },
+        },
+        output_token_details: { audio_tokens: audioOutputTokens, text_tokens: 0 },
+      },
+    },
+  });
+
+  it('bills each response by its id and closes the hold once when the call ends', async () => {
     const view = await connectAndConnected();
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-1', 10));
+      latestDc().__emitMessage(responseDone('resp-2', 20));
+    });
     act(() => {
       view.result.current.endSession();
     });
     act(() => {
-      latestDc().__emitMessage({
-        type: 'response.done',
-        response: {
-          usage: {
-            input_token_details: {
-              audio_tokens: 5,
-              text_tokens: 1,
-              cached_tokens_details: { audio_tokens: 0, text_tokens: 0 },
-            },
-            output_token_details: { audio_tokens: 7, text_tokens: 2 },
-          },
-        },
-      });
+      latestDc().__emitMessage(responseDone('resp-3', 5));
     });
 
     const frames = settlementFrames();
-    expect(frames).toHaveLength(1);
-    expect(frames[0].usage).toMatchObject({ audioInputTokens: 5, audioOutputTokens: 7 });
+    expect(frames.map(f => f.responseId)).toEqual(['resp-1', 'resp-2', 'resp-3', undefined]);
+    expect(frames[1].usage).toMatchObject({ audioOutputTokens: 20 });
+    // The closing frame carries no usage of its own; every response was billed by id.
+    expect(frames[3]).toMatchObject({ sessionId: 's1', usage: { audioOutputTokens: 0, audioInputTokens: 0 } });
+  });
+
+  it('keeps the hold open across a reconnect and closes it only when the call ends', async () => {
+    const view = await connectAndConnected();
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-1', 10));
+      latestPc().__emit('connectionstatechange', 'failed');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    act(() => {
+      latestDc().__emitMessage({ type: 'session.created' });
+    });
+    expect(settlementFrames().filter(f => !f.responseId)).toHaveLength(0);
+
+    act(() => {
+      view.result.current.endSession();
+    });
+    act(() => {
+      latestDc().__emitMessage(responseDone('resp-2', 5));
+    });
+    expect(settlementFrames().filter(f => !f.responseId)).toHaveLength(1);
   });
 
   it('stops every track of the microphone probe so the mic indicator goes off', async () => {
@@ -391,6 +424,54 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     await connectAndConnected();
 
     stops.forEach(stop => expect(stop).toHaveBeenCalledTimes(1));
+  });
+
+  it('settles the hold when the tab is closed mid-call, which runs no React teardown', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    useAccessToken.setState({ accessToken: 'tok' });
+    try {
+      await connectAndConnected();
+
+      act(() => {
+        window.dispatchEvent(new Event('pagehide'));
+      });
+
+      expect(settlementFrames()).toEqual([ZERO_SETTLEMENT]);
+      // The frame can be dropped as the page unloads; a keepalive end request is the backstop.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/voice/v2/sessions/s1/end',
+        expect.objectContaining({
+          method: 'POST',
+          keepalive: true,
+          headers: expect.objectContaining({ Authorization: 'Bearer tok' }),
+        })
+      );
+
+      // A second pagehide (e.g. after a bfcache restore) has no hold left to end.
+      act(() => {
+        window.dispatchEvent(new Event('pagehide'));
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      useAccessToken.setState({ accessToken: null });
+    }
+  });
+
+  it('sends no end request on pagehide when no hold is open', () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+      act(() => {
+        window.dispatchEvent(new Event('pagehide'));
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('settles an unsettled hold on unmount, and a failing socket does not break teardown', async () => {
