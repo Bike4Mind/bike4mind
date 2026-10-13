@@ -302,7 +302,7 @@ export class B4mApiClient {
   async stopReply(notebookId: string, questId: string): Promise<unknown> {
     // Sent while the MCP client's cancel is in flight, so it gets a short bound, not the 10-minute default.
     return this.client.post(
-      `${notebookPath(notebookId)}/chat/stop-reply`,
+      `/api/sessions/${writableNotebookId(notebookId)}/chat/stop-reply`,
       { questId },
       { timeout: STOP_REPLY_TIMEOUT_MS }
     );
