@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Subskrypcja",
-    "description": "Uzyskaj dostęp do każdego głównego modelu AI za pośrednictwem jednego zintegrowanego interfejsu. Uruchom zaawansowane modele, takie jak Deepseek R1, prywatnie.",
+    "description": "Uzyskaj dostęp do każdego głównego modelu AI za pośrednictwem jednego zintegrowanego interfejsu.",
     "no_free_tier": "BRAK BEZPŁATNEGO POZIOMU - SKONCENTROWANE NA PROFESJONALISTACH.",
     "credits_rollover": "Niewykorzystane kredyty przechodzą na 3 miesiące.",
     "monthly_billing": "Fakturowanie miesięczne",

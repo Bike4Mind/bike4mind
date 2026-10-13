@@ -1,76 +1,85 @@
-import { questRepository, sessionRepository, userRepository } from '@bike4mind/database';
+import { sessionRepository, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import {
-  creditsForElapsed,
-  MAX_SESSION_SECONDS,
-  REALTIME_VOICE_HOLD_SECONDS,
-  realtimeCreditsFloor,
-} from './voiceSessionLimits';
+import { creditsForElapsed, realtimeCreditsFloor } from './voiceSessionLimits';
 
-const logger = new Logger({ metadata: { service: 'settleVoiceHold' } });
+const logger = new Logger({ metadata: { service: 'voiceHoldSettlement' } });
+
+/** Message of the one log line every settlement writes; aggregate on it. */
+export const VOICE_HOLD_SETTLED_LOG = 'voice_hold_settled';
 
 export type VoiceHold = {
   id: string;
   userId: string;
   voiceReservedCredits: number;
   voiceSessionStartedAt: Date;
+  voiceConnectedAt?: Date | null;
+  voiceLastActivityAt?: Date | null;
 };
 
-export type VoiceHoldSettlement = { settled: false } | { settled: true; owed: number; refund: number };
+export type VoiceHoldSettlementSource = 'end' | 'sweep' | 'bootstrap';
+
+export type VoiceHoldSettlement =
+  { settled: false } | { settled: true; connected: boolean; chargedCredits: number; refundedCredits: number };
+
+const secondsBetween = (from: Date, to: Date) => Math.max(0, Math.floor((to.getTime() - from.getTime()) / 1000));
 
 /**
- * Call time a hold nobody closed can be shown to have used: from its start to the session's last
- * turn within the longest call's window, so a call that never produced a turn costs nothing. Turns
- * past the window are never call time: the user kept using the session after the call died.
- */
-export async function evidencedVoiceCallSeconds(hold: VoiceHold, realtime: boolean): Promise<number> {
-  const turns = await questRepository.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(
-    hold.id,
-    hold.voiceSessionStartedAt
-  );
-  const startedAtMs = hold.voiceSessionStartedAt.getTime();
-  const windowEndMs = startedAtMs + (realtime ? REALTIME_VOICE_HOLD_SECONDS : MAX_SESSION_SECONDS) * 1000;
-  const lastTurnAtMs = turns.reduce((latest, turn) => {
-    const turnAtMs = new Date(turn.timestamp).getTime();
-    return turnAtMs <= windowEndMs && turnAtMs > latest ? turnAtMs : latest;
-  }, 0);
-  if (!lastTurnAtMs) return 0;
-  return Math.floor((lastTurnAtMs - startedAtMs) / 1000);
-}
-
-/**
- * Settle a voice credit hold: keep `elapsedSeconds` of call time (capped at the hold) and refund
- * the rest. The one settlement rule shared by POST /api/v1/voice/sessions/{id}/end and the stale
- * hold sweep (apps/workers/src/cron/voiceHoldSweep.ts). The hold is claimed atomically before any
- * credit moves, so of concurrent settlers exactly one refunds; the others get `settled: false`.
- * The caller supplies `elapsedSeconds`: the end endpoint measures wall clock, the sweep measures
- * the last turn the session evidences. A realtime hold (billed per response by
- * server/websocket/voiceSessionEnded.ts) keeps at least what its responses drew from it, and
- * prices call time at the realtime hold's own rate, the same floor its closing frame settles at.
+ * Settle a voice credit hold for a call that ended at `endedAt`. The one settlement rule shared by
+ * POST /api/v1/voice/sessions/{id}/end, the stale hold sweep (apps/workers/src/cron/voiceHoldSweep.ts)
+ * and a fresh bootstrap over an open hold; the realtime closing frame
+ * (server/websocket/voiceSessionEnded.ts) applies the same realtime rule inline.
  *
- * If crediting back throws, the hold is restored and the error rethrown, so the sweep retries it
- * rather than leaving the user charged the full reservation with no record left to reconcile.
+ * An ElevenLabs hold is billed connected time, from voiceConnectedAt to `endedAt`, capped at the
+ * hold; a call that never connected costs nothing. A realtime hold (billed per response) keeps at
+ * least what its responses drew from it and never less than the hold's own rate over the time it
+ * was open by the server's clock. The hold is claimed atomically before any credit moves, so of
+ * concurrent settlers exactly one settles and the others get `settled: false`.
+ *
+ * If crediting back throws, the hold is restored (with its per-call markers) and the error
+ * rethrown, so the sweep retries it rather than leaving it with no record left to reconcile.
  */
-export async function settleVoiceHold(hold: VoiceHold, elapsedSeconds: number): Promise<VoiceHoldSettlement> {
+export async function settleVoiceHold(
+  hold: VoiceHold,
+  endedAt: Date,
+  source: VoiceHoldSettlementSource
+): Promise<VoiceHoldSettlement> {
   const claimed = await sessionRepository.claimVoiceHold(hold.id, hold.voiceSessionStartedAt);
   if (!claimed) return { settled: false };
 
+  const reserved = hold.voiceReservedCredits;
   const { billedCredits } = claimed;
-  const owed =
-    billedCredits === null
-      ? creditsForElapsed(hold.voiceReservedCredits, elapsedSeconds)
-      : Math.max(
-          Math.min(billedCredits, hold.voiceReservedCredits),
-          realtimeCreditsFloor(hold.voiceReservedCredits, elapsedSeconds)
-        );
-  const refund = Math.max(0, hold.voiceReservedCredits - owed);
-  // Claimed before crediting back so a concurrent settler can't double-refund.
-  if (refund > 0) {
+  let chargedCredits: number;
+  let connected: boolean;
+  if (billedCredits !== null) {
+    chargedCredits = Math.max(
+      Math.min(billedCredits, reserved),
+      realtimeCreditsFloor(reserved, secondsBetween(hold.voiceSessionStartedAt, endedAt))
+    );
+    connected = chargedCredits > 0;
+  } else {
+    connected = hold.voiceConnectedAt != null;
+    chargedCredits = hold.voiceConnectedAt
+      ? creditsForElapsed(reserved, secondsBetween(new Date(hold.voiceConnectedAt), endedAt))
+      : 0;
+  }
+
+  // Responses billed past the hold already left the balance, so a settlement only ever refunds.
+  const refundedCredits = Math.max(0, reserved - chargedCredits);
+  if (refundedCredits > 0) {
     try {
-      await userRepository.incrementCredits(hold.userId, refund);
+      await userRepository.incrementCredits(hold.userId, refundedCredits);
     } catch (creditError) {
+      // An explicit end is the call's last activity, so the sweep's retry must bill up to it, not
+      // stop at the last beat or turn seen before it.
+      const lastActivity = hold.voiceLastActivityAt ? new Date(hold.voiceLastActivityAt) : null;
+      const restoredLastActivity =
+        source === 'end' && (!lastActivity || lastActivity < endedAt) ? endedAt : lastActivity;
       const restored = await sessionRepository
-        .restoreVoiceHold(hold.id, hold.voiceReservedCredits, hold.voiceSessionStartedAt, billedCredits)
+        .restoreVoiceHold(hold.id, reserved, hold.voiceSessionStartedAt, {
+          voiceConnectedAt: hold.voiceConnectedAt ?? null,
+          voiceLastActivityAt: restoredLastActivity,
+          voiceBilledCredits: billedCredits,
+        })
         .catch(restoreError => {
           throw new AggregateError(
             [creditError, restoreError],
@@ -84,18 +93,57 @@ export async function settleVoiceHold(hold: VoiceHold, elapsedSeconds: number): 
           sessionId: hold.id,
           userId: hold.userId,
           startedAt: hold.voiceSessionStartedAt.toISOString(),
-          refund,
+          refund: refundedCredits,
         });
       }
       throw creditError;
     }
   }
-  return { settled: true, owed, refund };
+
+  logger.info(VOICE_HOLD_SETTLED_LOG, {
+    source,
+    userId: hold.userId,
+    sessionId: hold.id,
+    holdCredits: reserved,
+    chargedCredits,
+    refundedCredits,
+    connected,
+  });
+  return { settled: true, connected, chargedCredits, refundedCredits };
+}
+
+/** Message of the log line a bootstrap writes when it lost the hold race and its refund failed. */
+export const VOICE_HOLD_LOSER_REFUND_FAILED_LOG = 'voice_hold_loser_refund_failed';
+
+/**
+ * Credit back the reserve of a bootstrap that lost the race to open the session's hold. A failed
+ * refund is logged for reconciliation by hand, not thrown: no hold records this reserve, and the
+ * caller must still answer 409.
+ */
+export async function refundLostVoiceHoldReserve(
+  log: Pick<Logger, 'error'>,
+  hold: { userId: string; sessionId: string; refund: number }
+): Promise<void> {
+  try {
+    await userRepository.incrementCredits(hold.userId, hold.refund);
+  } catch (error) {
+    log.error(VOICE_HOLD_LOSER_REFUND_FAILED_LOG, {
+      userId: hold.userId,
+      sessionId: hold.sessionId,
+      refund: hold.refund,
+      err: error instanceof Error ? { message: error.message, name: error.name } : { message: String(error) },
+    });
+  }
+}
+
+/** When a call nobody closed was last seen alive: its last activity, else its connect, else its start. */
+export function lastSeenAt(hold: VoiceHold): Date {
+  return hold.voiceLastActivityAt ?? hold.voiceConnectedAt ?? hold.voiceSessionStartedAt;
 }
 
 /**
- * Settle a session's open hold, if any, by the stale-hold sweep's rule. A fresh call writes its
- * new hold over the session's, so an earlier call that never closed (a closed tab sends no end
+ * Settle a session's open hold, if any, up to when the call was last seen alive. A fresh call writes
+ * its new hold over the session's, so an earlier call that never closed (a closed tab sends no end
  * request or closing frame) must be settled first or its reservation is lost.
  */
 export async function settlePriorVoiceHold(session: {
@@ -103,14 +151,17 @@ export async function settlePriorVoiceHold(session: {
   userId: string;
   voiceReservedCredits?: number | null;
   voiceSessionStartedAt?: Date | null;
-  voiceBilledCredits?: number | null;
+  voiceConnectedAt?: Date | null;
+  voiceLastActivityAt?: Date | null;
 }): Promise<VoiceHoldSettlement> {
   if (session.voiceReservedCredits == null || session.voiceSessionStartedAt == null) return { settled: false };
   const hold: VoiceHold = {
     id: session.id,
     userId: session.userId,
     voiceReservedCredits: session.voiceReservedCredits,
-    voiceSessionStartedAt: session.voiceSessionStartedAt,
+    voiceSessionStartedAt: new Date(session.voiceSessionStartedAt),
+    voiceConnectedAt: session.voiceConnectedAt ?? null,
+    voiceLastActivityAt: session.voiceLastActivityAt ?? null,
   };
-  return settleVoiceHold(hold, await evidencedVoiceCallSeconds(hold, session.voiceBilledCredits != null));
+  return settleVoiceHold(hold, lastSeenAt(hold), 'bootstrap');
 }
