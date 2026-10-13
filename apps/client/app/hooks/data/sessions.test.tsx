@@ -583,8 +583,12 @@ describe('copy-path cache writes', () => {
     expect(toast.error).toHaveBeenCalledWith('Failed to snip session');
     expect(toast.success).not.toHaveBeenCalled();
     expect(invalidate).not.toHaveBeenCalled();
-    expect(dataOf(queryClient, unfilteredKey)).toHaveLength(0);
-    expect(dataOf(queryClient, hideApiKey)).toHaveLength(0);
+    for (const key of [unfilteredKey, hideApiKey]) {
+      expect(queryClient.getQueryData(key)).toEqual({
+        pages: [{ data: [], hasMore: false }],
+        pageParams: [{ page: 1 }],
+      });
+    }
   });
 
   // Clone, fork and snip share the gate, so one hook covers the surface guard for all three.
