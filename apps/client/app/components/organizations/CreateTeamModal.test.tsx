@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 import CreateTeamModal, { useCreateTeamModal } from './CreateTeamModal';
 
 const mutateAsync = vi.fn();
@@ -167,6 +168,16 @@ describe('CreateTeamModal', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     process.off('unhandledRejection', unhandled);
     expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('links custom billing to the sales contact in a new tab', () => {
+    renderModal();
+    const link = screen.getByTestId('create-team-contact-sales-link') as HTMLAnchorElement;
+
+    expect(link.textContent).toBe('Contact sales');
+    expect(link.getAttribute('href')).toBe(ExternalLinks.support);
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
   describe('typing the seat count', () => {

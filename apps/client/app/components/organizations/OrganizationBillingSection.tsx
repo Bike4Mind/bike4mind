@@ -14,7 +14,6 @@ import {
   pickDisplayedSubscription,
 } from '@client/lib/subscriptions/types';
 import AddIcon from '@mui/icons-material/Add';
-import RemoveIcon from '@mui/icons-material/Remove';
 import GroupIcon from '@mui/icons-material/Group';
 import PaymentIcon from '@mui/icons-material/Payment';
 import EventIcon from '@mui/icons-material/Event';
@@ -27,7 +26,7 @@ import {
   CircularProgress,
   FormControl,
   FormLabel,
-  IconButton,
+  Link,
   Modal,
   ModalClose,
   ModalDialog,
@@ -39,6 +38,8 @@ import {
   LinearProgress,
 } from '@mui/joy';
 import dayjs from 'dayjs';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
+import SeatCountInput from './SeatCountInput';
 import { useState, useEffect, useMemo } from 'react';
 
 type OrganizationBillingSectionProps = {
@@ -71,6 +72,7 @@ const SubscriptionModal = ({
   // Clamped on read: the initial pick can predate the seat settings loading, or sit outside a range an
   // admin has since changed, and update-seats/subscribe reject anything outside it.
   const seats = Math.min(Math.max(requestedSeats, minimumSeats), planMaxSeats);
+  const [isSeatsInvalid, setIsSeatsInvalid] = useState(false);
   const updateSeats = useUpdateSubscriptionSeats();
 
   // Update seats when organization.seats changes
@@ -101,14 +103,6 @@ const SubscriptionModal = ({
     } catch (error) {
       // Error will be handled by the mutation
     }
-  };
-
-  const handleIncreaseSeats = () => {
-    setSeats(Math.min(seats + 1, planMaxSeats));
-  };
-
-  const handleDecreaseSeats = () => {
-    setSeats(Math.max(seats - 1, minimumSeats));
   };
 
   // Calculate if we're decreasing seats from current allocation
@@ -152,33 +146,18 @@ const SubscriptionModal = ({
               }}
               className="organization-billing-seats-container"
             >
-              <IconButton
-                variant="soft"
-                color="neutral"
-                disabled={seats <= minimumSeats}
-                onClick={handleDecreaseSeats}
+              <SeatCountInput
+                value={seats}
+                min={minimumSeats}
+                max={planMaxSeats}
+                onChange={setSeats}
+                onInvalidChange={setIsSeatsInvalid}
                 size="lg"
-                className="organization-billing-seats-decrease"
-              >
-                <RemoveIcon />
-              </IconButton>
-              <Typography
-                level="h4"
-                sx={{ minWidth: '60px', textAlign: 'center' }}
-                className="organization-billing-seats-value"
-              >
-                {seats}
-              </Typography>
-              <IconButton
-                variant="soft"
-                color="neutral"
-                onClick={handleIncreaseSeats}
-                size="lg"
-                disabled={isAtMaxSeats}
-                className="organization-billing-seats-increase"
-              >
-                <AddIcon />
-              </IconButton>
+                buttonVariant="soft"
+                ariaLabel="Number of seats"
+                testId="organization-billing-seats-input"
+                classNamePrefix="organization-billing-seats"
+              />
             </Box>
           </FormControl>
 
@@ -271,6 +250,19 @@ const SubscriptionModal = ({
             )}
           </Typography>
 
+          <Typography level="body-xs" mt={2} data-testid="organization-billing-contact-sales">
+            Need a PO, invoice, or other custom billing?{' '}
+            <Link
+              href={ExternalLinks.support}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="organization-billing-contact-sales-link"
+            >
+              Contact sales
+            </Link>
+            .
+          </Typography>
+
           {updateSeats.error && (
             <Typography level="body-sm" color="danger" mt={2}>
               {updateSeats.error.message}
@@ -294,6 +286,7 @@ const SubscriptionModal = ({
           <Button
             onClick={handleSubmit}
             loading={loading || updateSeats.isPending}
+            disabled={isSeatsInvalid}
             size="lg"
             className="organization-billing-submit-button"
           >

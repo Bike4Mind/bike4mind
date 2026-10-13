@@ -2,11 +2,13 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument } from '@bike4mind/common';
 import { isDelinquentSubscriptionStatus, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 import OrganizationBillingSection from './OrganizationBillingSection';
 
 /**
@@ -17,11 +19,12 @@ import OrganizationBillingSection from './OrganizationBillingSection';
  */
 
 const subscriptionsData = vi.hoisted(() => ({ current: [] as unknown[] }));
+const updateSeatsMutate = vi.hoisted(() => vi.fn());
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptionsByOwner: () => ({ data: subscriptionsData.current, isPending: false }),
   useSubscribeTeamPlan: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdateSubscriptionSeats: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
+  useUpdateSubscriptionSeats: () => ({ mutateAsync: updateSeatsMutate, isPending: false, error: null }),
 }));
 
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
@@ -116,5 +119,65 @@ describe('OrganizationBillingSection - delinquent organization', () => {
 
     expect(screen.getByRole('button', { name: /subscribe now/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /billing portal/i })).toBeNull();
+  });
+});
+
+describe('OrganizationBillingSection - seat editor', () => {
+  // Seat limits are 4..100 and the org has one member besides the owner, so the floor is 4.
+  const openSeatEditor = async () => {
+    subscriptionsData.current = [row('active')];
+    updateSeatsMutate.mockReset();
+    updateSeatsMutate.mockResolvedValue(undefined);
+    renderSection();
+    const user = userEvent.setup({ delay: null });
+    await user.click(screen.getByRole('button', { name: /manage seats/i }));
+    const input = screen.getByTestId('organization-billing-seats-input') as HTMLInputElement;
+    return { user, input };
+  };
+
+  it('accepts a typed seat count and prices it', async () => {
+    const { user, input } = await openSeatEditor();
+    await user.clear(input);
+    await user.type(input, '12');
+
+    expect(input.value).toBe('12');
+    expect(screen.getByText('$120/month')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Update Seats' }));
+    expect(updateSeatsMutate).toHaveBeenCalledWith({ organizationId: 'org1', seats: 12 });
+  });
+
+  it('clamps a value above the maximum and below the minimum on blur', async () => {
+    const { user, input } = await openSeatEditor();
+    await user.clear(input);
+    await user.type(input, '500');
+    await user.tab();
+    expect(input.value).toBe('100');
+
+    await user.clear(input);
+    await user.type(input, '1');
+    await user.tab();
+    expect(input.value).toBe('4');
+  });
+
+  it('disables the submit button while the field is empty', async () => {
+    const { user, input } = await openSeatEditor();
+    const submit = screen.getByRole('button', { name: 'Update Seats' });
+    expect(submit.hasAttribute('disabled')).toBe(false);
+
+    await user.clear(input);
+    expect(submit.hasAttribute('disabled')).toBe(true);
+
+    await user.tab();
+    expect(submit.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('links custom billing to the sales contact in a new tab', async () => {
+    await openSeatEditor();
+    const link = screen.getByTestId('organization-billing-contact-sales-link') as HTMLAnchorElement;
+
+    expect(link.getAttribute('href')).toBe(ExternalLinks.support);
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
 });
