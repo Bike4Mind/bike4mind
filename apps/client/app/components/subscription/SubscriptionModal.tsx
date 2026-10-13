@@ -102,7 +102,12 @@ const SubscriptionModalContent = () => {
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
   const teamPlanAvailable = useTeamPlanAvailable();
   const teamTabReasonId = useId();
-  // The flag can flip off while the Business tab is open; fall back rather than keep a purchasable Team card.
+  // The flag can flip off while the Business tab is open: fall back for this render so a Team card is never
+  // purchasable, and drop the stored selection (render-phase, per React's adjust-on-prop-change pattern) so
+  // a later flip back on does not jump the view to Business.
+  if (!teamPlanAvailable && selectedTab === SubscriptionModalTabs.Business) {
+    setSelectedTab(SubscriptionModalTabs.Personal);
+  }
   const activeTab =
     selectedTab === SubscriptionModalTabs.Business && !teamPlanAvailable ? SubscriptionModalTabs.Personal : selectedTab;
   const priceMap = useMemo(() => {
@@ -220,7 +225,8 @@ const SubscriptionModalContent = () => {
 
             {/* Off, the tab stays visible but disabled. Joy keeps a disabled tab focusable, so the reason hangs
                 off the Tab via aria-describedby; the span only exists to receive hover (the disabled tab
-                has pointer-events: none) and is deliberately not focusable. */}
+                has pointer-events: none) and is deliberately not focusable. The reason stays outside the Tab:
+                a descendant would join its accessible name. */}
             <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
               <span style={{ display: 'inline-flex' }} data-testid="subscription-modal-business-tab-wrapper">
                 <Tab
@@ -231,12 +237,12 @@ const SubscriptionModalContent = () => {
                   data-testid="subscription-modal-business-tab"
                 >
                   {t('subscription_modal.business')}
-                  {!teamPlanAvailable && (
-                    <Box component="span" id={teamTabReasonId} sx={visuallyHidden}>
-                      {TEAM_PLAN_UNAVAILABLE_MESSAGE}
-                    </Box>
-                  )}
                 </Tab>
+                {!teamPlanAvailable && (
+                  <Box component="span" id={teamTabReasonId} sx={visuallyHidden}>
+                    {TEAM_PLAN_UNAVAILABLE_MESSAGE}
+                  </Box>
+                )}
               </span>
             </Tooltip>
           </TabList>

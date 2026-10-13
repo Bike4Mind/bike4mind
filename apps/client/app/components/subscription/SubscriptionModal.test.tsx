@@ -122,7 +122,8 @@ describe('SubscriptionModal - Team tab', () => {
     settingValues = { enableTeamPlan: false };
     renderModal();
 
-    const tab = screen.getByTestId('subscription-modal-business-tab');
+    // The reason is described by, not part of, the tab, so the name stays 'Business'.
+    const tab = screen.getByRole('tab', { name: 'subscription_modal.business' });
     expect(tab).toHaveAttribute('aria-disabled', 'true');
 
     // The tab itself carries the reason; there is no extra tab stop around it.
@@ -139,7 +140,7 @@ describe('SubscriptionModal - Team tab', () => {
     expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
   });
 
-  it('drops the Team card when the flag flips off while the Business tab is open', async () => {
+  it('drops the Team card when the flag flips off while the Business tab is open, and stays on Personal when it returns', async () => {
     const view = renderModal();
     await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
@@ -152,6 +153,18 @@ describe('SubscriptionModal - Team tab', () => {
     );
 
     expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+
+    // The stored selection fell back with the gate; turning the flag back on must not pull the view to
+    // Business without a click.
+    settingValues = { enableTeamPlan: true };
+    view.rerender(
+      <TestWrapper>
+        <SubscriptionModal open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeInTheDocument();
   });
 
   it('leaves the Business tab enabled and unexplained when enableTeamPlan is on', () => {
