@@ -74,8 +74,10 @@ const JiraNotificationsForm: FC = () => {
 
   // Derived state (404 returns null from queryFn, so isError is only for real failures)
   const hasConfig = !!config;
+  // Keep in sync with canManageConfig in server/integrations/jira/webhookUtils.ts
   const canManageConfig = !!config && (config.createdBy === currentUser?.id || !!currentUser?.isAdmin);
   const isEnabled = hasConfig && config.enabled;
+  const isLocked = !isEnabled && !canManageConfig;
   const existingSub = subscriptions?.[0]; // First subscription (simplified single-sub model)
   const isLoading = configLoading || subsLoading;
 
@@ -364,7 +366,7 @@ const JiraNotificationsForm: FC = () => {
                 isDirty.current = true;
                 setSlackChannelId(e.target.value);
               }}
-              disabled={isLoading}
+              disabled={isLoading || isLocked}
               data-testid="jira-slack-channel-id"
               sx={{
                 backgroundColor: theme => theme.palette.loginRegister.inputFieldBg,
@@ -399,7 +401,7 @@ const JiraNotificationsForm: FC = () => {
                       isDirty.current = true;
                       setProjectFilter(e.target.value);
                     }}
-                    disabled={isLoading}
+                    disabled={isLoading || isLocked}
                     data-testid="jira-project-filter"
                     sx={{
                       backgroundColor: theme => theme.palette.loginRegister.inputFieldBg,
@@ -426,6 +428,7 @@ const JiraNotificationsForm: FC = () => {
                         variant={priorityPrefs[p.key] ? 'solid' : 'outlined'}
                         color={priorityPrefs[p.key] ? 'primary' : 'neutral'}
                         size="sm"
+                        disabled={isLocked}
                         onClick={() => {
                           isDirty.current = true;
                           setPriorityPrefs(prev => ({ ...prev, [p.key]: !prev[p.key] }));
