@@ -80,10 +80,11 @@ function clearReconnectTimer(): void {
   }
 }
 
-// Reconcile the up-front credit reservation down to the actual call duration.
-// Best-effort: a failure just leaves the upfront hold in place - it must never
-// block teardown or surface an error to the user. Safe to call more than once
-// (the endpoint is idempotent), so both end() and a natural onDisconnect use it.
+// Reconcile the up-front credit reservation down to the call's connected time (a call that never
+// connected costs nothing). Called on every end after a successful bootstrap: hang-up, natural
+// disconnect, and each terminal failure. Best-effort: a failure leaves the hold to the server's
+// voiceHoldSweep (apps/workers/src/cron/voiceHoldSweep.ts), and it must never block teardown or
+// surface an error to the user. Safe to call more than once (the endpoint is idempotent).
 async function reconcileVoiceSession(sessionId: string | null): Promise<void> {
   if (!sessionId) return;
   try {
@@ -118,6 +119,19 @@ function stopHeartbeat(): void {
   }
 }
 
+// Probe the microphone BEFORE bootstrapping: the bootstrap reserves credits, and a browser with no
+// (or a denied) mic would otherwise reserve them for a call that can never connect. The tracks are
+// released at once; the SDK reopens the mic itself.
+async function ensureMicrophone(): Promise<void> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw Object.assign(new Error('Microphone access is unavailable in this browser context.'), {
+      name: window.isSecureContext ? 'NotSupportedError' : 'SecurityError',
+    });
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach(track => track.stop());
+}
+
 function formatSessionsError(err: unknown): string {
   if (axios.isAxiosError(err)) {
     const status = err.response?.status;
@@ -145,6 +159,12 @@ function formatConnectError(err: unknown): string {
   }
   if (name === 'NotReadableError') {
     return 'Microphone is busy (in use by another app). Close other audio apps and retry.';
+  }
+  if (name === 'SecurityError') {
+    return 'Microphone access needs a secure (https) connection. Open the site over https and retry.';
+  }
+  if (name === 'NotSupportedError') {
+    return 'This browser does not support microphone access. Try a current Chrome, Edge, Firefox or Safari.';
   }
   return `Failed to open voice connection: ${err instanceof Error ? err.message : String(err)}`;
 }
@@ -213,16 +233,28 @@ async function establishConnection(
       scheduleReconnect(set, myGen, ctx);
       return;
     }
+    // Reconnects exhausted: the original connect's hold is still open, so settle it. A failed first
+    // bootstrap reserved nothing, and activeSessionId is still null then.
+    const sid = activeSessionId;
     activeSessionId = null;
     set({
       phase: 'error',
       errorMessage: `Failed to ${isReconnect ? 'reconnect' : 'create'} voice session: ${formatSessionsError(err)}`,
     });
+    void reconcileVoiceSession(sid);
     return;
   }
 
-  // Superseded during the /sessions request - don't open a connection we'd orphan.
-  if (isStale()) return;
+  // Superseded during the /sessions request - don't open a connection we'd orphan. A first
+  // bootstrap already reserved credits, and end() ran before the id was known, so settle it here.
+  // Skipped when a newer start() is under way: /end is keyed by notebook, so it could settle that
+  // call's hold, and a new bootstrap on the same notebook settles the old hold itself.
+  if (isStale()) {
+    if (!isReconnect && useConversationalVoiceStore.getState().phase === 'ended') {
+      void reconcileVoiceSession(bootstrap.session?.id ?? null);
+    }
+    return;
+  }
 
   activeSessionId = bootstrap.session?.id ?? null;
   // Only the first connect drives the requesting->connecting->navigate flow; a
@@ -310,8 +342,12 @@ async function establishConnection(
       scheduleReconnect(set, myGen, ctx);
       return;
     }
+    // The bootstrap above reserved credits (or kept the original hold on a reconnect); settle it
+    // now rather than leave the whole reservation to the sweep.
+    const sid = activeSessionId;
     activeSessionId = null;
     set({ phase: 'error', errorMessage: formatConnectError(err) });
+    void reconcileVoiceSession(sid);
   }
 }
 
@@ -328,6 +364,15 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     reconnectAttempts = 0;
     const myGen = ++startGen;
     set({ phase: 'requesting-session', errorMessage: null, mode: null, lastUserMessage: null });
+    try {
+      await ensureMicrophone();
+    } catch (err) {
+      if (myGen !== startGen) return;
+      set({ phase: 'error', errorMessage: formatConnectError(err) });
+      return;
+    }
+    // Ended during the permission prompt: nothing was reserved, and nothing should be.
+    if (myGen !== startGen) return;
     await establishConnection(set, myGen, { sessionId, reasoningModelId, onSessionResolved }, false);
   },
 

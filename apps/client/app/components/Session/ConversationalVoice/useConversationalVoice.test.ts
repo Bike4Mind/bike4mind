@@ -30,6 +30,11 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 
 import { useConversationalVoiceStore } from './useConversationalVoice';
 
+const stopTrack = vi.fn();
+const getUserMedia = vi.fn();
+const micStream = () => ({ getTracks: () => [{ stop: stopTrack }] });
+Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia }, configurable: true });
+
 const BOOTSTRAP = {
   session: { id: 's1', name: 'Voice' },
   reasoningModelId: 'model-x',
@@ -52,6 +57,9 @@ describe('useConversationalVoice — auto-reconnect', () => {
     capturedOptions = null;
     startSessionMock.mockClear();
     endSessionMock.mockClear();
+    stopTrack.mockClear();
+    getUserMedia.mockReset();
+    getUserMedia.mockResolvedValue(micStream());
     apiPost.mockReset();
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/voice/v2/sessions') return Promise.resolve({ data: BOOTSTRAP });
@@ -123,7 +131,42 @@ describe('useConversationalVoice — auto-reconnect', () => {
     // Budget exhausted - the next drop ends the call and reconciles credits.
     drop();
     expect(useConversationalVoiceStore.getState().phase).toBe('ended');
-    expect(endCalls().length).toBeGreaterThanOrEqual(1);
+    expect(endCalls()).toHaveLength(1);
+  });
+
+  it('settles the hold when every reconnect bootstrap fails', async () => {
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    onConnect();
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions' ? Promise.reject(new Error('offline')) : Promise.resolve({ data: {} })
+    );
+
+    onDisconnect({ reason: 'error', message: 'drop', context: new Event('close') });
+    await vi.advanceTimersByTimeAsync(1000 + 2000 + 4000);
+
+    expect(useConversationalVoiceStore.getState().phase).toBe('error');
+    expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+  });
+
+  it('settles the hold when every reconnect transport fails to open', async () => {
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    onConnect();
+    startSessionMock.mockRejectedValue(new Error('websocket refused'));
+
+    try {
+      onDisconnect({ reason: 'error', message: 'drop', context: new Event('close') });
+      await vi.advanceTimersByTimeAsync(1000 + 2000 + 4000);
+
+      expect(useConversationalVoiceStore.getState().phase).toBe('error');
+      expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+    } finally {
+      startSessionMock.mockImplementation(async (options: StartSessionOptions) => {
+        capturedOptions = options;
+        return { endSession: endSessionMock } as unknown as Awaited<
+          ReturnType<typeof import('@elevenlabs/client').Conversation.startSession>
+        >;
+      });
+    }
   });
 
   const activityCalls = () => apiPost.mock.calls.filter(([url]) => String(url).endsWith('/activity'));
@@ -151,5 +194,157 @@ describe('useConversationalVoice — auto-reconnect', () => {
     // The reconnect re-establishes but never comes back up.
     await vi.advanceTimersByTimeAsync(60_000);
     expect(activityCalls()).toHaveLength(1);
+  });
+});
+
+describe('useConversationalVoice - credit hold on a failed start', () => {
+  beforeEach(() => {
+    startSessionMock.mockClear();
+    stopTrack.mockClear();
+    getUserMedia.mockReset();
+    getUserMedia.mockResolvedValue(micStream());
+    apiPost.mockReset();
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/voice/v2/sessions') return Promise.resolve({ data: BOOTSTRAP });
+      return Promise.resolve({ data: {} });
+    });
+  });
+
+  afterEach(async () => {
+    await useConversationalVoiceStore.getState().end();
+    Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia }, configurable: true });
+  });
+
+  const sessionCalls = () => apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions');
+  const endCalls = () => apiPost.mock.calls.filter(([url]) => String(url).endsWith('/end'));
+
+  it('never bootstraps (so never reserves credits) when no microphone is available', async () => {
+    getUserMedia.mockRejectedValue(Object.assign(new Error('Requested device not found'), { name: 'NotFoundError' }));
+
+    await useConversationalVoiceStore.getState().start({});
+
+    expect(sessionCalls()).toHaveLength(0);
+    expect(startSessionMock).not.toHaveBeenCalled();
+    const state = useConversationalVoiceStore.getState();
+    expect(state.phase).toBe('error');
+    expect(state.errorMessage).toMatch(/No microphone detected/);
+  });
+
+  it('never bootstraps when microphone permission is denied', async () => {
+    getUserMedia.mockRejectedValue(Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' }));
+
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+
+    expect(sessionCalls()).toHaveLength(0);
+    expect(useConversationalVoiceStore.getState().errorMessage).toMatch(/Microphone access denied/);
+  });
+
+  it('never bootstraps when the browser exposes no microphone API', async () => {
+    Object.defineProperty(navigator, 'mediaDevices', { value: undefined, configurable: true });
+
+    await useConversationalVoiceStore.getState().start({});
+
+    expect(sessionCalls()).toHaveLength(0);
+    expect(useConversationalVoiceStore.getState().phase).toBe('error');
+    expect(useConversationalVoiceStore.getState().errorMessage).toMatch(/https|does not support/);
+  });
+
+  it('releases the mic probe before bootstrapping', async () => {
+    await useConversationalVoiceStore.getState().start({});
+
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(stopTrack.mock.invocationCallOrder[0]).toBeLessThan(apiPost.mock.invocationCallOrder[0]);
+    expect(sessionCalls()).toHaveLength(1);
+  });
+
+  it('does not reserve credits when ended during the microphone probe', async () => {
+    let resolveMicrophone: (stream: ReturnType<typeof micStream>) => void = () => {
+      throw new Error('Microphone probe was not started');
+    };
+    getUserMedia.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveMicrophone = resolve;
+        })
+    );
+
+    const starting = useConversationalVoiceStore.getState().start({});
+    await useConversationalVoiceStore.getState().end();
+    resolveMicrophone(micStream());
+    await starting;
+
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(sessionCalls()).toHaveLength(0);
+    expect(useConversationalVoiceStore.getState().phase).toBe('ended');
+  });
+
+  it('settles the hold when the transport fails to open on the first connect', async () => {
+    startSessionMock.mockRejectedValueOnce(new Error('websocket refused'));
+
+    await useConversationalVoiceStore.getState().start({});
+
+    expect(useConversationalVoiceStore.getState().phase).toBe('error');
+    expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+  });
+
+  it('settles nothing when the first bootstrap itself fails', async () => {
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions' ? Promise.reject(new Error('503')) : Promise.resolve({ data: {} })
+    );
+
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+
+    expect(useConversationalVoiceStore.getState().phase).toBe('error');
+    expect(endCalls()).toHaveLength(0);
+  });
+
+  it('settles the bootstrapped session when the call is ended while /sessions is in flight', async () => {
+    let resolveBootstrap: (value: { data: typeof BOOTSTRAP }) => void = () => {
+      throw new Error('Bootstrap was not requested');
+    };
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions'
+        ? new Promise(resolve => {
+            resolveBootstrap = resolve;
+          })
+        : Promise.resolve({ data: {} })
+    );
+
+    const starting = useConversationalVoiceStore.getState().start({});
+    await vi.waitFor(() => expect(sessionCalls()).toHaveLength(1));
+    await useConversationalVoiceStore.getState().end();
+    expect(endCalls()).toHaveLength(0);
+
+    resolveBootstrap({ data: BOOTSTRAP });
+    await starting;
+
+    expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+    expect(startSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves a superseded bootstrap to the server when a newer call has already started', async () => {
+    const resolvers: ((value: { data: typeof BOOTSTRAP }) => void)[] = [];
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions'
+        ? new Promise(resolve => {
+            resolvers.push(resolve);
+          })
+        : Promise.resolve({ data: {} })
+    );
+
+    const first = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await vi.waitFor(() => expect(sessionCalls()).toHaveLength(1));
+    await useConversationalVoiceStore.getState().end();
+    const second = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await vi.waitFor(() => expect(sessionCalls()).toHaveLength(2));
+
+    resolvers[0]({ data: BOOTSTRAP });
+    await first;
+    // /end is keyed by notebook, so settling here could hit the newer call's hold.
+    expect(endCalls()).toHaveLength(0);
+
+    resolvers[1]({ data: BOOTSTRAP });
+    await second;
+    expect(startSessionMock).toHaveBeenCalledOnce();
   });
 });
