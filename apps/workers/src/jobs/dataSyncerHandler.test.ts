@@ -13,20 +13,35 @@ const state = vi.hoisted(() => ({
   emptyTarget: false,
   failFirstDeleteOn: undefined as string | undefined,
   ops: [] as string[],
+  emptySources: [] as string[],
+  cursorEmptySources: [] as string[],
+  failRollbackBulkWrite: false,
+  markerWrites: [] as unknown[][],
+  findFilters: [] as { name: string; filter: unknown }[],
 }));
 
 vi.mock('mongodb', () => {
   const collection = (name: string, isTarget: boolean) => {
-    const docs = isTarget && state.emptyTarget ? [] : [{ _id: `${name}-doc` }];
+    const docs =
+      (isTarget && state.emptyTarget) || (!isTarget && state.emptySources.includes(name))
+        ? []
+        : [{ _id: `${name}-doc` }];
+    // countDocuments and the copy cursor are separate reads: a source can report rows and then
+    // yield none (rows deleted in between).
+    const cursorEmpty = !isTarget && state.cursorEmptySources.includes(name);
     return {
       findOne: vi.fn(async () => state.marker),
-      countDocuments: vi.fn(async () => docs.length),
-      find: vi.fn(() => ({
-        async *[Symbol.asyncIterator]() {
-          yield* docs;
-        },
-        toArray: async () => docs,
-      })),
+      countDocuments: vi.fn(async () => (cursorEmpty ? 1 : docs.length)),
+      find: vi.fn((filter?: unknown) => {
+        if (!isTarget) state.findFilters.push({ name, filter });
+        const yielded = cursorEmpty ? [] : docs;
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield* yielded;
+          },
+          toArray: async () => yielded,
+        };
+      }),
       insertMany: vi.fn(async (docs: unknown[]) => {
         if (name === state.failInsertInto) throw new Error(`insert into ${name} failed`);
         inserted.set(name, (inserted.get(name) ?? 0) + docs.length);
@@ -42,10 +57,15 @@ vi.mock('mongodb', () => {
       }),
       bulkWrite: vi.fn(async () => {
         state.ops.push(`${name}.bulkWrite`);
+        if (state.failRollbackBulkWrite) throw new Error(`rollback of ${name} failed`);
         return {};
       }),
       drop: vi.fn(async () => true),
-      updateOne: vi.fn(async () => ({})),
+      updateOne: vi.fn(async (...args: unknown[]) => {
+        state.markerWrites.push(args);
+        state.marker = { syncedAt: new Date() };
+        return {};
+      }),
     };
   };
   class MongoClient {
@@ -72,6 +92,11 @@ describe('dataSyncerHandler', () => {
     state.emptyTarget = false;
     state.failFirstDeleteOn = undefined;
     state.ops = [];
+    state.emptySources = [];
+    state.cursorEmptySources = [];
+    state.failRollbackBulkWrite = false;
+    state.markerWrites = [];
+    state.findFilters = [];
     fetchSpy.mockReset();
     vi.stubGlobal('fetch', fetchSpy);
     process.env.STAGING_MONGODB_URI = 'mongodb://staging/db';
@@ -162,5 +187,93 @@ describe('dataSyncerHandler', () => {
       'rapidreplymappings.deleteMany',
       'rapidreplymappings.bulkWrite',
     ]);
+  });
+
+  it('writes the sync marker after a full copy', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    const result = await invoke();
+
+    expect(state.markerWrites).toHaveLength(1);
+    expect(state.markerWrites[0][0]).toEqual({ key: 'staging-config-sync' });
+    expect(result?.message).not.toContain('empty in source');
+  });
+
+  it('writes the marker when only some source collections are empty and does not re-copy on the next deploy', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.emptySources = ['rapidreplymappings'];
+
+    const first = await invoke();
+    const second = await invoke();
+
+    expect(state.markerWrites).toHaveLength(1);
+    expect(first?.message).toContain('empty in source: rapidreplymappings');
+    expect(state.ops.filter(op => op === 'adminsettings.deleteMany')).toHaveLength(1);
+    expect(second?.message).toContain('already synced');
+  });
+
+  it('withholds the marker and reports a retry when every source collection is empty', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.emptySources = ['adminsettings', 'rapidreplymappings'];
+
+    const result = await invoke();
+
+    expect(state.markerWrites).toHaveLength(0);
+    expect(result?.message).toBe('Skipped staging sync: source empty for all collections; will retry next deploy');
+  });
+
+  it('withholds the marker when the sources report rows but copy none', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.cursorEmptySources = ['adminsettings', 'rapidreplymappings'];
+
+    const result = await invoke();
+
+    expect(state.markerWrites).toHaveLength(0);
+    expect(result?.message).toContain('no documents copied; will retry next deploy');
+  });
+
+  it('surfaces both the copy failure and the rollback failure', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.failInsertInto = 'rapidreplymappings';
+    state.failRollbackBulkWrite = true;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await invoke();
+
+      expect(result?.message).toContain('insert into rapidreplymappings failed');
+      expect(result?.message).toContain('rollback of rapidreplymappings failed');
+      expect(state.markerWrites).toHaveLength(0);
+      // The combined error keeps the original failure as its cause, so the log shows both.
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Error syncing preview settings from staging:',
+        expect.objectContaining({
+          cause: expect.objectContaining({ message: 'insert into rapidreplymappings failed' }),
+        })
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('excludes encrypted settings from the adminsettings source query', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
+      settingName: { $nin: string[] };
+    };
+    expect(adminFilter.settingName.$nin.length).toBeGreaterThan(0);
+    expect(state.findFilters.find(f => f.name === 'rapidreplymappings')?.filter).toEqual({});
+  });
+
+  it('rejects stage names that are not pr<number>', async () => {
+    process.env.SEED_STAGE_NAME = 'prod';
+
+    const result = await invoke();
+
+    expect(inserted.size).toBe(0);
+    expect(result?.message).toContain('is not a preview');
   });
 });
