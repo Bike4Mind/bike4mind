@@ -30,8 +30,9 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
-import { ModelBackend, ModelInfo, resolveModelName, usdToCredits } from '@bike4mind/common';
+import { ModelBackend, ModelInfo, usdToCredits } from '@bike4mind/common';
 import { dedupePricingRows, textModelPriceCells } from './modelPricingRows';
+import { aggregateUsageByModel } from './usageByModel';
 import SectionContainer from './SectionContainer';
 import { TYPE } from './settingsStyles';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
@@ -133,16 +134,10 @@ const CreditAnalyticsTabContent: React.FC = () => {
       balance: currentUser?.currentCredits,
     });
 
-    const modelUsageMap: Record<string, number> = {};
-
-    allDeductTransactions.forEach(transaction => {
-      const modelName = resolveModelName(transaction);
-
-      if (!modelUsageMap[modelName]) {
-        modelUsageMap[modelName] = 0;
-      }
-      modelUsageMap[modelName] += Math.abs(transaction.credits);
-    });
+    const modelUsageMap = aggregateUsageByModel(allDeductTransactions, [
+      ...accessibleTextModels,
+      ...accessibleImageModels,
+    ]);
 
     // Aggregate transactions by day for each type
     const purchaseDailyData = new Map<string, { x: string; y: number }>();
@@ -441,7 +436,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       daysRemaining,
       observedDays,
     };
-  }, [transactions, timePeriod, viewMode, theme.palette, currentUser]);
+  }, [transactions, timePeriod, viewMode, theme.palette, currentUser, accessibleTextModels, accessibleImageModels]);
 
   // Tooltip text for days remaining, adjusted based on selected time period
   // Only when a projection would otherwise exist: no burn or no balance is N/A, not "too early".

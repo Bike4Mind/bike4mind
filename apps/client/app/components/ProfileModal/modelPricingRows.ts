@@ -1,4 +1,4 @@
-import { getTextModelCreditsPer1M, normalizeModelsDevKey, type ModelInfo } from '@bike4mind/common';
+import { getTextModelCreditsPer1M, ModelBackend, normalizeModelsDevKey, type ModelInfo } from '@bike4mind/common';
 
 const BEDROCK_VERSION_SUFFIX = /-v\d+(?::\d+)?$/;
 
@@ -20,7 +20,9 @@ const priceSignature = (model: ModelInfo): string | null => {
 
 /**
  * One row per pricingRowKey and price, in first-seen order. An unpriced twin gives way to a priced
- * one, but twins at different prices (an older snapshot billed at its own rate) both stay.
+ * one, but twins at different prices (an older snapshot billed at its own rate) both stay. Bedrock
+ * region profiles of one model (`us.`, `eu.`, `global.`) are one row whatever their rates, and a
+ * row that would read identically to a kept one (same backend, name and price) is dropped.
  */
 export function dedupePricingRows(models: readonly ModelInfo[]): ModelInfo[] {
   const byKey = new Map<string, ModelInfo[]>();
@@ -33,10 +35,18 @@ export function dedupePricingRows(models: readonly ModelInfo[]): ModelInfo[] {
       if (kept.length === 0) byKey.set(key, [model]);
       continue;
     }
+    if (model.backend === ModelBackend.Bedrock && kept.some((_, i) => keptSignatures[i] !== null)) continue;
     if (keptSignatures.includes(signature)) continue;
     byKey.set(key, [...kept.filter((_, i) => keptSignatures[i] !== null), model]);
   }
-  return [...byKey.values()].flat();
+
+  const seen = new Set<string>();
+  return [...byKey.values()].flat().filter(model => {
+    const visible = `${model.backend}|${model.name}|${priceSignature(model)}`;
+    if (seen.has(visible)) return false;
+    seen.add(visible);
+    return true;
+  });
 }
 
 export const formatCreditsPer1M = (credits: number): string =>

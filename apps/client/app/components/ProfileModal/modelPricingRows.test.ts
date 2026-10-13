@@ -73,6 +73,27 @@ describe('dedupePricingRows', () => {
     expect(rows.map(row => row.id)).toEqual(['gpt-4o', 'gpt-4o-2024-05-13']);
   });
 
+  it('collapses Bedrock region profiles of one model even when their rates differ', () => {
+    const rows = dedupePricingRows([
+      textModel('us.anthropic.claude-haiku-4-5-20251001-v1:0', ModelBackend.Bedrock, { name: 'Claude Haiku 4.5' }),
+      textModel('global.anthropic.claude-haiku-4-5-20251001-v1:0', ModelBackend.Bedrock, {
+        name: 'Claude Haiku 4.5',
+        pricing: { 1_000_000: { input: perM(1.1), output: perM(5.5) } },
+      }),
+    ]);
+
+    expect(rows.map(row => row.id)).toEqual(['us.anthropic.claude-haiku-4-5-20251001-v1:0']);
+  });
+
+  it('drops a row that would read identically to a kept one', () => {
+    const rows = dedupePricingRows([
+      textModel('claude-fable-5-1', ModelBackend.Anthropic, { name: 'Claude Fable 5.1' }),
+      textModel('claude-fable-5-1-preview', ModelBackend.Anthropic, { name: 'Claude Fable 5.1' }),
+    ]);
+
+    expect(rows.map(row => row.id)).toEqual(['claude-fable-5-1']);
+  });
+
   it('keeps the first of two equally priced twins', () => {
     const rows = dedupePricingRows([
       textModel('gpt-4.1-2025-04-14', ModelBackend.OpenAI),
