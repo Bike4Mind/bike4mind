@@ -61,8 +61,6 @@ export interface UserSettings {
   /** Layer-2 Agent-mode preference. Default `'off'` per `IUserPreferences`. */
   agentModeDefault: 'off' | 'auto' | 'on';
   showFunTools: boolean;
-  /** Whether generated audio (TTS, sound-effect, music) is saved as a browsable FabFile. Default: true. */
-  saveGeneratedAudio: boolean;
   showSplashCards: boolean;
 }
 
@@ -114,7 +112,6 @@ const defaultSettings: UserSettings = {
   toolsCatalogCollapsed: false,
   agentModeDefault: 'off',
   showFunTools: false,
-  saveGeneratedAudio: true,
   showSplashCards: false,
 };
 
@@ -207,7 +204,6 @@ const SCALAR_PREF_KEYS = [
   'toolsCatalogCollapsed',
   'agentModeDefault',
   'showFunTools',
-  'saveGeneratedAudio',
   'showSplashCards',
 ] as const;
 

@@ -13,6 +13,7 @@ export * as apiKeyService from './apiKeyService';
 export * as promptService from './promptService';
 export * as voiceService from './voiceService';
 export * as fabFilesService from './fabFileService';
+export * from './generatedAssets';
 export * as sharingService from './sharingService';
 export * as projectService from './projectService';
 export * as friendshipService from './friendshipService';

@@ -32,7 +32,8 @@ export type DecisionConformanceErrorCase = Omit<DecisionConformanceCase, 'vendor
 export type DecisionConformanceSetup = {
   provider: () => DecisionProvider;
   answers: readonly DecisionConformanceCase[];
-  refusal: DecisionConformanceCase;
+  /** Omit for a vendor with no refusal concept; the refusal check is then skipped. */
+  refusal?: DecisionConformanceCase;
   errors: readonly DecisionConformanceErrorCase[];
   beforeEach?: () => Promise<void> | void;
   afterEach?: () => Promise<void> | void;
@@ -85,13 +86,13 @@ export function describeDecisionProviderConformance(name: string, setup: Decisio
       }
     );
 
-    it('maps a refusal to a refusal answer that keeps the question name', async () => {
-      const decision = await decide(setup, setup.refusal);
-      const answers = normalizeDecisionAnswers(setup.refusal.request.questions, decision.answers);
+    const { refusal } = setup;
+    it.skipIf(!refusal)('maps a refusal to a refusal answer that keeps the question name', async () => {
+      if (!refusal) return;
+      const decision = await decide(setup, refusal);
+      const answers = normalizeDecisionAnswers(refusal.request.questions, decision.answers);
       expect(answers.some(answer => answer.type === 'refusal')).toBe(true);
-      expect(answers.map(answer => answer.name)).toEqual(
-        setup.refusal.request.questions.map(question => question.name)
-      );
+      expect(answers.map(answer => answer.name)).toEqual(refusal.request.questions.map(question => question.name));
     });
 
     it.each(setup.errors.map(testCase => [testCase.label, testCase] as const))('maps %s', async (_label, testCase) => {

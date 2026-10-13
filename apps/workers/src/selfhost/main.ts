@@ -16,7 +16,7 @@ import { dispatch as githubLakeRevokeDispatch } from '@workers/queueHandlers/git
 import { dispatch as imageGenerationDispatch } from '@workers/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@workers/queueHandlers/imageEdit';
 import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
-import { dispatch as generationJobDispatch } from '@server/queueHandlers/generationJob';
+import { dispatch as generationJobDispatch } from '@workers/queueHandlers/generationJob';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';

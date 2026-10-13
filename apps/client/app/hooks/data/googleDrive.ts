@@ -129,6 +129,10 @@ function useLakeDriveConnectionOptions(dataLakeId: string | undefined, enabled: 
       if (dataLakeId && previous?.disconnecting && (!next || next.fileCount !== previous.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
       }
+      // A finished sync is when the not-ingested list changes (skips recorded, ingests cleared).
+      if (dataLakeId && previous?.status === 'syncing' && next?.status !== 'syncing') {
+        void queryClient.invalidateQueries({ queryKey: dataLakeKeys.skippedFilesOf(dataLakeId) });
+      }
       return response.data;
     },
     refetchInterval: (query: { state: { data?: LakeDriveConnectionResponse } }) =>

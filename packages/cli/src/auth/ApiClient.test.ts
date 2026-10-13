@@ -467,3 +467,37 @@ describe('ApiClient.fetch (the transport handed to @bike4mind/sdk)', () => {
     await expect(client.fetch('http://localhost:3000/api/v1/me')).rejects.toMatchObject({ code: 'ECONNABORTED' });
   });
 });
+
+describe('ApiClient 401 on a streaming completions request', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAuthTokens.mockResolvedValue({
+      accessToken: 'stale',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      userId: 'user-1',
+    });
+    mockRefreshToken.mockResolvedValue({ access_token: 'fresh', refresh_token: 'refresh2', expires_in: 3600 });
+  });
+
+  it('refreshes once and retries once, then gives up', async () => {
+    const client = new ApiClient('http://localhost:3000');
+    let calls = 0;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      calls += 1;
+      return Promise.reject(make401(config));
+    }) as AxiosAdapter;
+
+    const error = await rejection(
+      client.fetch('http://localhost:3000/api/ai/v1/completions', {
+        method: 'POST',
+        headers: { accept: 'text/event-stream' },
+        body: '{}',
+      })
+    );
+
+    expect(error).toBeInstanceOf(SessionRevokedError);
+    expect(mockRefreshToken).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(2);
+  });
+});

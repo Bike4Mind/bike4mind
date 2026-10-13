@@ -144,7 +144,6 @@ const UserPreferencesSchema = new Schema(
     // ExperimentalFeatureToggle silently reverts to 'off' on reload.
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
     showFunTools: { type: Boolean },
-    saveGeneratedAudio: { type: Boolean },
     showSplashCards: { type: Boolean },
   },
   { _id: false }

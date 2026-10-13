@@ -4,6 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { parseOverrides } from '../lib-pnpm-workspace.mjs';
 import { computeOverrideFixes, lockfileVersions, patchedFloor, renderSkippedLines } from '../audit-autofix.mjs';
 
 const ALLOWLIST = new Set(['GHSA-known-1111-1111']);
@@ -245,6 +246,10 @@ describe('main (CLI)', () => {
     fs.mkdirSync(path.join(dir, 'scripts'));
     fs.copyFileSync(scriptPath, path.join(dir, 'scripts', 'audit-autofix.mjs'));
     fs.copyFileSync(new URL('../audit-gate.mjs', import.meta.url), path.join(dir, 'scripts', 'audit-gate.mjs'));
+    fs.copyFileSync(
+      new URL('../lib-pnpm-workspace.mjs', import.meta.url),
+      path.join(dir, 'scripts', 'lib-pnpm-workspace.mjs')
+    );
     fs.writeFileSync(path.join(dir, 'scripts', 'audit-allowlist.json'), '[]');
     fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\npackages:\n  some-pkg@1.10.0:\n");
   });
@@ -274,23 +279,23 @@ describe('main (CLI)', () => {
     };
   };
 
-  it('(6) leaves package.json byte-identical when nothing fails', () => {
-    const original = '{\n  "name": "x",\n  "pnpm": {\n    "overrides": {\n      "a@<1.0.0": "^1.0.0"\n    }\n  }\n}\n';
-    fs.writeFileSync(path.join(dir, 'package.json'), original);
+  it('(6) leaves pnpm-workspace.yaml byte-identical when nothing fails', () => {
+    const original = 'packages:\n  - apps/*\n\noverrides:\n  "a@<1.0.0": "^1.0.0"\n';
+    fs.writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), original);
     const res = run(report());
     expect(res.status).toBe(0);
     expect(res.output).toBe('changed=false\n');
     // Written even when empty: an empty file means "nothing skipped", a missing one "unknown".
     expect(res.skipped).toBe('');
-    expect(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).toBe(original);
+    expect(fs.readFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'utf8')).toBe(original);
   });
 
   it('writes the override, the summary and changed=true', () => {
-    fs.writeFileSync(path.join(dir, 'package.json'), '{\n  "name": "x"\n}\n');
+    fs.writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
     const res = run(report(advisory()));
     expect(res.status).toBe(0);
     expect(res.output).toBe('changed=true\n');
-    expect(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).pnpm.overrides).toEqual({
+    expect(parseOverrides(fs.readFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'utf8'))).toEqual({
       'some-pkg@<1.11.0': '^1.11.0',
     });
     expect(res.summary).toMatch(/GHSA-new-aaaa-aaaa/);
@@ -302,7 +307,7 @@ describe('main (CLI)', () => {
       path.join(dir, 'pnpm-lock.yaml'),
       "lockfileVersion: '9.0'\npackages:\n  some-pkg@0.9.0:\n  some-pkg@1.10.0:\n"
     );
-    fs.writeFileSync(path.join(dir, 'package.json'), '{\n  "name": "x"\n}\n');
+    fs.writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
     const res = run(report(advisory()));
     expect(res.status).toBe(0);
     expect(res.output).toBe('changed=false\n');
@@ -310,7 +315,7 @@ describe('main (CLI)', () => {
   });
 
   it('writes the skipped advisories file', () => {
-    fs.writeFileSync(path.join(dir, 'package.json'), '{\n  "name": "x"\n}\n');
+    fs.writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
     const res = run(report(advisory({ patched_versions: '<0.0.0' })));
     expect(res.status).toBe(0);
     expect(res.skipped).toMatch(/^GHSA-new-aaaa-aaaa \| some-pkg \| high \| no usable patched version/);

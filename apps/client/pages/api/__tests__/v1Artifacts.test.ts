@@ -284,12 +284,23 @@ describe('POST /api/v1/artifacts', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it('answers 404 for a session the caller cannot edit', async () => {
+  it('answers 404 for a session the caller cannot edit, through the guard handed to the service', async () => {
     mockCanUpdateSession.mockResolvedValue(null);
+    // The real service calls the adapter before any write; the mock does the same.
+    mockCreate.mockImplementation(
+      async (
+        userId: string,
+        params: { sessionId?: string },
+        adapters: { assertSourceRefsAccessible: (u: string, r: object) => Promise<void> }
+      ) => {
+        await adapters.assertSourceRefsAccessible(userId, { sessionId: params.sessionId });
+        return { artifact: artifactDoc() };
+      }
+    );
     const { req, res } = fire('POST', { body: { ...BODY, session_id: 'someone-elses' } });
 
     expect(await statusOf(call(listOrCreate, req, res))).toBe(404);
-    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockCanUpdateSession).toHaveBeenCalledWith(expect.anything(), 'someone-elses', { includeGlobalWrite: true });
   });
 
   it('files the artifact under a project the caller can read', async () => {

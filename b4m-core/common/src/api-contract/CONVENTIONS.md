@@ -146,7 +146,8 @@ re-deciding per endpoint:
 | Method the contract does not declare | `405` | - (`Allow` header; answered before auth, auto-documented on every operation) |
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
-| No provider key configured for this deployment | `503` | `provider_not_configured` |
+| Model id unknown or not available to the caller | `400` | `unknown_model` |
+| The model's provider is not configured on this deployment | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
@@ -232,8 +233,8 @@ of credits" across the whole surface.
 Where an error carries a machine-readable classifier it is the field `errorCode`, and its
 value comes from **one** enumerated union: `API_ERROR_CODES` (`src/apiErrorCodes.ts`).
 
-Per-surface tuples may *narrow* it - `QUEST_ERROR_CODES` for the SSE frame,
-`TTS_ERROR_CODES` for the audio routes - but each declares
+Per-surface tuples may *narrow* it - `QUEST_ERROR_CODES` for quest errors,
+`COMPLETION_SSE_ERROR_CODES` for the completions SSE frame, `TTS_ERROR_CODES` for the audio routes - but each declares
 `satisfies readonly ApiErrorCode[]`, so a code that is not in the shared union fails the
 build. A narrowing is fine; a second union that merely shares the field name is what this
 rule forbids, and is what the TTS provider codes were before they were folded in.
@@ -242,10 +243,13 @@ Adding a classifier means adding it to `API_ERROR_CODES`, not inventing a local 
 
 ### Streaming surfaces classify in-band
 
-A streaming endpoint flushes its headers before it authenticates or prices anything, so
-once the stream is open the status is pinned at `200` and every failure past that point
-is reported as an in-band `error` event. That event is the endpoint's whole error
-surface: the status table and the envelope gate above never see it.
+A streaming endpoint validates, authenticates, rate-limits and prices a request before it
+commits its `200`, so every failure it can detect up front is an ordinary JSON error with a
+real status, declared like any other (`registerContract` injects the `401`, the scope `403`
+and the validation status for streaming operations too). Only a failure after the stream has
+opened - the provider failing, or credits running out mid-generation - is reported as an
+in-band `error` event, and that event is the part of the error surface the status table and
+the envelope gate above never see.
 
 **[gated]** A contract with `streaming: true` must publish, in its `200` event schema, a
 `type: "error"` variant carrying a required `message` string and an **optional**
@@ -259,10 +263,14 @@ regex-matching the prose `message` to detect mid-generation credit exhaustion.
 The field is `code` rather than `errorCode` on the SSE frames: they shipped that way and
 are published wire shapes, so what had to be shared was the vocabulary, not the key.
 
-The pairing a caller needs is worth stating in the contract `description`, because it
-differs per surface: `/api/chat` and `/api/embed/chat` can still refuse pre-stream with a
-classified `422`, whereas `/api/ai/v1/completions` cannot and reports even a pre-token
-refusal in-band.
+`/api/ai/v1/completions` classifies its frame with `COMPLETION_SSE_ERROR_CODES`: the billing
+codes plus `provider_rejected` (the provider refused our credentials), `content_blocked` (the
+model's safety classifier declined the request) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
+reaches the client.
+
+The pairing a caller needs is worth stating in the contract `description`: `/api/chat`,
+`/api/embed/chat` and `/api/ai/v1/completions` all refuse pre-stream with a classified
+`422`, and report only a mid-generation exhaustion in-band.
 
 ### Why RFC 9457 is not the answer here
 

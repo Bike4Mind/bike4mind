@@ -25,7 +25,8 @@ export const listModelsContract = defineEndpoint({
     'meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured. To pick the ' +
     'cheapest text model, compare `credits_per_1m_tokens` - the rate a call is billed at. The list ' +
     'is cached for up to a minute per caller. Cursor-paginated (see the pagination convention): pass ' +
-    '`next_cursor` back as `cursor` until it is `null`. Authenticate with an API key (`b4m_live_`) ' +
+    '`next_cursor` back as `cursor` until it is `null`. Sorted by `id` ascending. ' +
+    'Authenticate with an API key (`b4m_live_`) ' +
     'carrying `ai:chat` or `ai:generate`, or a JWT.',
   tags: ['Models'],
   auth: 'apiKeyOrJwt',

@@ -5,6 +5,7 @@ import { ServerLlmBackend } from './ServerLlmBackend';
 import type { ApiClient } from '../auth/ApiClient';
 import type { CompletionRequest } from './streamTransport';
 import type { StreamEvent } from './streamEvents';
+import { isLlmUnavailableError } from '../utils/handoff';
 
 const sseResponse = (stream: PassThrough) =>
   new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
@@ -147,5 +148,57 @@ describe('ServerLlmBackend completions endpoint resolution', () => {
 
   it('defaults to the same-origin path without either', async () => {
     expect(await endpointUsed(undefined)).toBe('http://localhost:3000/api/ai/v1/completions');
+  });
+});
+
+describe('ServerLlmBackend pre-stream HTTP errors', () => {
+  const messageOf = async (status: number, body: string): Promise<string> => {
+    const backend = new ServerLlmBackend({
+      apiClient: apiClientFor(() => new Response(body, { status })),
+      model: 'test-model',
+    });
+    const events = backend.open({ model: 'test-model', messages: [], options: {} });
+    const error = await events[Symbol.asyncIterator]()
+      .next()
+      .catch((e: unknown) => e);
+    return (error as Error).message;
+  };
+
+  it('surfaces the JSON error and errorCode of a 422', async () => {
+    const body = JSON.stringify({
+      error: 'Insufficient credits.',
+      errorCode: 'insufficient_credits',
+      request_id: 'r1',
+    });
+    expect(await messageOf(422, body)).toBe('Insufficient credits. (insufficient_credits)');
+  });
+
+  it('keeps the "Rate limit exceeded" prefix callers match on for a 429', async () => {
+    const message = 'Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.';
+    const got = await messageOf(429, JSON.stringify({ error: message, request_id: 'r2' }));
+    expect(got).toBe(message);
+    expect(isLlmUnavailableError(new Error(got))).toBe(true);
+  });
+
+  it('surfaces provider_not_configured on a 503 and still triggers handoff fallback', async () => {
+    const body = JSON.stringify({
+      error: 'Failed to create LLM backend for model: x',
+      errorCode: 'provider_not_configured',
+    });
+    const got = await messageOf(503, body);
+    expect(got).toBe(
+      'Request failed with status 503: Failed to create LLM backend for model: x (provider_not_configured)'
+    );
+    expect(isLlmUnavailableError(new Error(got))).toBe(true);
+  });
+
+  it('falls back to the status line for a non-JSON body', async () => {
+    expect(await messageOf(502, 'Bad Gateway')).toBe('Request failed with status 502: HTTP 502');
+  });
+
+  it('falls back to the status line when the JSON has no string error field', async () => {
+    expect(await messageOf(400, JSON.stringify({ error: { nested: true } }))).toBe(
+      'Request failed with status 400: HTTP 400'
+    );
   });
 });

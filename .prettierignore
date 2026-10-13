@@ -17,5 +17,9 @@ packages/database/src/seeds/modelCatalog.seed.json
 packages/database/src/seeds/modelPrices.seed.json
 packages/database/src/seeds/__fixtures__/aggregatorKeys.json
 
+# scripts/lib-pnpm-workspace.mjs reads and writes the overrides block line by line and
+# expects double-quoted entries; prettier's singleQuote would rewrite them.
+pnpm-workspace.yaml
+
 # Helm parses these Go templates before validating the resulting YAML.
 selfhost/kubernetes/templates/**

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Raises root package.json pnpm.overrides past the high/critical advisories that
+// Raises the root pnpm-workspace.yaml overrides past the high/critical advisories that
 // scripts/audit-gate.mjs would fail on, in the same `name@<X: ^X` style as the
 // hand-written fixes. Used by the scheduled audit job in
 // .github/workflows/audit-gate.yml to open an auto-fix PR; a human reviews and
@@ -15,6 +15,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { extractNewAdvisories } from './audit-gate.mjs';
+import { readOverrides, writeOverrides } from './lib-pnpm-workspace.mjs';
 
 const VERSION = /^(\d+)\.(\d+)\.(\d+)$/;
 
@@ -207,7 +208,7 @@ export function renderSkippedLines(skipped) {
 
 function renderSummary({ fixes, skipped }, shapeNote) {
   const lines = [
-    'Raises `pnpm.overrides` past high/critical advisories found by the scheduled dependency audit of `main`.',
+    'Raises the `overrides` in `pnpm-workspace.yaml` past high/critical advisories found by the scheduled dependency audit of `main`.',
     '',
   ];
   if (shapeNote) lines.push(shapeNote, '');
@@ -230,22 +231,20 @@ async function main() {
   const summaryPath = process.env.AUTOFIX_SUMMARY_PATH || 'autofix-summary.md';
   const skippedPath = process.env.AUTOFIX_SKIPPED_PATH;
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-  const pkgPath = path.join(scriptDir, '..', 'package.json');
+  const workspacePath = path.join(scriptDir, '..', 'pnpm-workspace.yaml');
 
   const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
   const allowlist = new Set(JSON.parse(await fs.readFile(path.join(scriptDir, 'audit-allowlist.json'), 'utf8')));
-  const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
   const installed = lockfileVersions(await fs.readFile(path.join(scriptDir, '..', 'pnpm-lock.yaml'), 'utf8'));
 
-  const result = computeOverrideFixes(report, allowlist, pkg.pnpm?.overrides, installed);
+  const result = computeOverrideFixes(report, allowlist, readOverrides(workspacePath), installed);
   const shapeNote =
     !report.advisories && report.vulnerabilities
       ? 'The report only has the `vulnerabilities` shape, which carries no patched versions; nothing was fixed automatically.'
       : '';
 
   if (result.changed) {
-    pkg.pnpm = { ...pkg.pnpm, overrides: result.overrides };
-    await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+    writeOverrides(workspacePath, result.overrides);
   }
   if (skippedPath) {
     const lines = renderSkippedLines(result.skipped);
