@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   createInboxMessage: vi.fn(),
   postSreFixSuccessMessage: vi.fn(),
+  loggerError: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -32,7 +33,7 @@ vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
     warn = vi.fn();
-    error = vi.fn();
+    error = mocks.loggerError;
   },
 }));
 
@@ -94,5 +95,8 @@ describe('POST /api/sre/workflow-callback', () => {
     expect(mocks.atomicTransition).toHaveBeenCalledWith('track-1', REPO, 'fixing', 'fixed', expect.any(Object));
     expect(mocks.postSreFixSuccessMessage).toHaveBeenCalledTimes(1);
     expect(mocks.createInboxMessage).not.toHaveBeenCalled();
+    // An inbox write through an inboxRepository method the mock does not stub would throw, and the
+    // success path swallows its non-fatal errors with logger.error; a clean log pins that too.
+    expect(mocks.loggerError).not.toHaveBeenCalled();
   });
 });
