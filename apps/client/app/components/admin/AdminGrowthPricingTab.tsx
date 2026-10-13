@@ -32,7 +32,7 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     id: 'team',
     title: 'Team plan',
     description: 'Seat limits and the credits each paid seat adds to a team pool.',
-    keys: ['enableTeamPlan', 'teamPlanMinSeats', 'teamPlanMaxSeats', 'teamPlanCreditsPerSeat'],
+    keys: ['teamPlanMinSeats', 'teamPlanMaxSeats', 'teamPlanCreditsPerSeat'],
   },
 ];
 

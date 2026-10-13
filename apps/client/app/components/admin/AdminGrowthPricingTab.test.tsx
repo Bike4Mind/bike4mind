@@ -44,7 +44,6 @@ describe('AdminGrowthPricingTab', () => {
         'defaultFreeCredits',
         'allowOpenRegistration',
         'ReferralCreditsAmount',
-        'enableTeamPlan',
         'enforceCredits',
         'pricePerCredit',
         'teamPlanMinSeats',

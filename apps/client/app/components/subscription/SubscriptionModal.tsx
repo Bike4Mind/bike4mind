@@ -109,11 +109,12 @@ const SubscriptionModalContent = () => {
   }, [plans.data]);
 
   // The card quotes the cheapest Team checkout (minimum seats at the live Stripe per-seat price), the
-  // same figure CreateTeamModal opens on. Undefined hides the price rather than inventing one.
+  // same figure CreateTeamModal opens on. A deployment with no Team price does not sell Team, so the
+  // tab is not offered at all.
   const { minSeats: teamMinSeats } = useTeamSeatLimits();
   const teamCreditsPerSeat = useTeamCreditsPerSeat();
   const teamSeatPrice = priceMap?.[ORGANIZATION_SUBSCRIPTION_PRICE_ID];
-  const teamPlanMinimumPrice = teamSeatPrice === undefined ? undefined : centsToDollars(teamSeatPrice) * teamMinSeats;
+  const visibleTab = teamSeatPrice === undefined ? SubscriptionModalTabs.Personal : activeTab;
   const teamPlanCredits = teamMinSeats * teamCreditsPerSeat;
   const answerCostReference = useAnswerCostReference();
 
@@ -135,10 +136,10 @@ const SubscriptionModalContent = () => {
 
   const availablePlans = useMemo(
     () =>
-      activeTab === SubscriptionModalTabs.Personal
+      visibleTab === SubscriptionModalTabs.Personal
         ? subscriptionPlans.filter(plan => activePlans.find(p => p.id === plan.priceId))
         : [],
-    [activePlans, activeTab, subscriptionPlans]
+    [activePlans, visibleTab, subscriptionPlans]
   );
 
   if (subscriptions.isPending || plans.isPending) {
@@ -158,7 +159,10 @@ const SubscriptionModalContent = () => {
 
   return (
     <>
-      <Typography sx={{ mb: '8px', fontSize: '24px', lineHeight: '24px', textAlign: 'center' }}>
+      <Typography
+        data-testid="subscription-modal-title"
+        sx={{ mb: '8px', fontSize: '24px', lineHeight: '24px', textAlign: 'center' }}
+      >
         {t('subscription_modal.title')}
       </Typography>
       <Typography sx={{ mb: '36px', fontSize: '16px', color: 'neutral.500', textAlign: 'center' }}>
@@ -178,47 +182,50 @@ const SubscriptionModalContent = () => {
         {t('subscription_modal.credits_rollover')}
       </Typography>
 
-      <Box sx={{ mb: '24px', display: 'flex', justifyContent: 'center' }}>
-        <Tabs
-          value={activeTab}
-          onChange={(_, value) => setActiveTab(value as SubscriptionModalTabs)}
-          sx={{
-            bgcolor: 'transparent',
-          }}
-          aria-label="tabs"
-        >
-          <TabList
-            disableUnderline
+      {teamSeatPrice !== undefined && (
+        <Box sx={{ mb: '24px', display: 'flex', justifyContent: 'center' }}>
+          <Tabs
+            value={visibleTab}
+            onChange={(_, value) => setActiveTab(value as SubscriptionModalTabs)}
             sx={{
-              p: 0.5,
-              gap: 0.5,
-              borderRadius: '10px',
-              border: '1px solid',
-              borderColor: theme.palette.subscriptionModal.tabsBorderColor,
-              bgcolor: theme.palette.subscriptionModal.tabsBackgroundColor,
-              [`& .${tabClasses.root}[aria-selected="true"]`]: {
-                boxShadow: 'sm',
-                bgcolor: 'primary.500',
-                color: 'white',
-              },
-              [`& .${tabClasses.root}`]: {
-                borderRadius: '6px',
-              },
+              bgcolor: 'transparent',
             }}
+            aria-label="tabs"
           >
-            <Tab disableIndicator value={SubscriptionModalTabs.Personal}>
-              {t('subscription_modal.personal')}
-            </Tab>
+            <TabList
+              disableUnderline
+              sx={{
+                p: 0.5,
+                gap: 0.5,
+                borderRadius: '10px',
+                border: '1px solid',
+                borderColor: theme.palette.subscriptionModal.tabsBorderColor,
+                bgcolor: theme.palette.subscriptionModal.tabsBackgroundColor,
+                [`& .${tabClasses.root}[aria-selected="true"]`]: {
+                  boxShadow: 'sm',
+                  bgcolor: 'primary.500',
+                  color: 'white',
+                },
+                [`& .${tabClasses.root}`]: {
+                  borderRadius: '6px',
+                },
+              }}
+            >
+              <Tab disableIndicator value={SubscriptionModalTabs.Personal}>
+                {t('subscription_modal.personal')}
+              </Tab>
 
-            {/* Always selectable: Team is sold from Teams > Create Team whenever its Stripe price is
-                live, so this tab tells the same story (price, or why it is unavailable) instead of
-                hiding the offer behind a separate switch. */}
-            <Tab disableIndicator value={SubscriptionModalTabs.Business} data-testid="subscription-modal-business-tab">
-              {t('subscription_modal.business')}
-            </Tab>
-          </TabList>
-        </Tabs>
-      </Box>
+              <Tab
+                disableIndicator
+                value={SubscriptionModalTabs.Business}
+                data-testid="subscription-modal-business-tab"
+              >
+                {t('subscription_modal.business')}
+              </Tab>
+            </TabList>
+          </Tabs>
+        </Box>
+      )}
 
       <Box
         sx={{
@@ -227,7 +234,7 @@ const SubscriptionModalContent = () => {
           gap: '32px',
         }}
       >
-        {activeTab === SubscriptionModalTabs.Personal && (
+        {visibleTab === SubscriptionModalTabs.Personal && (
           <>
             {availablePlans.map(plan => {
               // Active-first per price: a stale delinquent row at this price must not
@@ -268,19 +275,17 @@ const SubscriptionModalContent = () => {
           </>
         )}
 
-        {activeTab === SubscriptionModalTabs.Business && (
+        {visibleTab === SubscriptionModalTabs.Business && teamSeatPrice !== undefined && (
           <>
             <PlanCard
               name={t('subscription_modal.team')}
               description="Collaborative AI workspace with shared resources and advanced project management."
-              price={teamPlanMinimumPrice}
+              price={centsToDollars(teamSeatPrice) * teamMinSeats}
               credits={teamPlanCredits}
               answersEstimate={formatAnswersEstimate(teamPlanCredits, answerCostReference)}
               interval="month"
               features={[
-                teamSeatPrice === undefined
-                  ? `${teamMinSeats}-seat minimum`
-                  : `$${centsToDollars(teamSeatPrice).toFixed(2)} per seat per month, ${teamMinSeats}-seat minimum`,
+                `$${centsToDollars(teamSeatPrice).toFixed(2)} per seat per month, ${teamMinSeats}-seat minimum`,
                 `${teamMinSeats} team member accounts included`,
                 'Shared credit pool with 3-month rollover',
                 'Advanced Projects with RAG & Auto-Summary',
@@ -291,29 +296,16 @@ const SubscriptionModalContent = () => {
                 'Dedicated support channel',
               ]}
               actionButton={
-                <Stack gap={1}>
-                  {/* Same checkout as Teams > Create Team: the modal picks the seats and opens Stripe. */}
-                  <Button
-                    variant="solid"
-                    color="primary"
-                    fullWidth
-                    disabled={teamSeatPrice === undefined}
-                    onClick={openCreateTeamModal}
-                    data-testid="subscription-modal-create-team-btn"
-                  >
-                    Create Team
-                  </Button>
-                  {teamSeatPrice === undefined && (
-                    <Typography
-                      level="body-sm"
-                      color="danger"
-                      textAlign="center"
-                      data-testid="subscription-modal-team-unavailable"
-                    >
-                      Team pricing is unavailable right now. Please try again later.
-                    </Typography>
-                  )}
-                </Stack>
+                // Same checkout as Teams > Create Team: the modal picks the seats and opens Stripe.
+                <Button
+                  variant="solid"
+                  color="primary"
+                  fullWidth
+                  onClick={openCreateTeamModal}
+                  data-testid="subscription-modal-create-team-btn"
+                >
+                  Create Team
+                </Button>
               }
             />
           </>

@@ -115,18 +115,15 @@ describe('SubscriptionModal - Team tab', () => {
     expect(screen.getByText(/\$120\.00/)).toBeInTheDocument();
     expect(screen.getByText('$30.00 per seat per month, 4-seat minimum')).toBeInTheDocument();
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
-    expect(screen.queryByTestId('subscription-modal-team-unavailable')).not.toBeInTheDocument();
   });
 
-  it('says why Team cannot be bought when its Stripe price is not live, instead of hiding the tab', async () => {
+  it('does not offer Team at all when the deployment has no Team Stripe price', () => {
     teamPriceActive = false;
     renderModal();
 
-    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
-
-    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeDisabled();
-    expect(screen.getByTestId('subscription-modal-team-unavailable')).toBeInTheDocument();
-    expect(screen.getByText('4-seat minimum')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'subscription_modal.business' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeEnabled();
   });
 
   it('quotes seats, price and pool size from the admin team plan settings', async () => {

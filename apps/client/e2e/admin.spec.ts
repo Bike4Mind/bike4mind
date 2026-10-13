@@ -79,6 +79,22 @@ test.describe('Admin - User Search & Sort', () => {
 });
 
 // Dependent tests - must run in order (create -> edit -> delete)
+test.describe('Admin - Growth & Pricing', () => {
+  test('should list the Team plan settings without the retired Enable Team Plan toggle', async ({
+    page,
+    adminPage,
+  }) => {
+    await adminPage.gotoAdmin();
+    await page.getByTestId('admin-growth-pricing-btn').first().click();
+
+    const teamSection = page.getByTestId('admin-growth-pricing-section-team');
+    await expect(teamSection).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(page.getByTestId('admin-growth-pricing-current-teamPlanMinSeats')).toBeVisible();
+    await expect(page.getByTestId('admin-growth-pricing-current-enableTeamPlan')).toHaveCount(0);
+    await expect(teamSection.getByText('Enable Team Plan')).toHaveCount(0);
+  });
+});
+
 test.describe('Admin - User CRUD', () => {
   test('should create, edit, and delete a user', async ({ adminPage }) => {
     test.slow();

@@ -119,6 +119,39 @@ test.describe.serial('Profile - Settings', () => {
   });
 });
 
+test.describe('Billing - Plans modal', () => {
+  // page.route cannot see a request the service worker answers; see the same opt-out in notebook.spec.ts.
+  test.use({ serviceWorkers: 'block' });
+
+  test('does not offer the Team plan when the deployment has no Team Stripe price', async ({ page, basePage }) => {
+    // An empty plan list stands in for a deployment that never configured a Team price, whatever
+    // prices the environment under test actually has.
+    await page.route('**/api/stripe/subscription-plans', route => route.fulfill({ json: [] }));
+    // The plans modal only opens with credit metering on, which self-host defaults off.
+    await page.route('**/api/settings/fetch', async route => {
+      const response = await route.fetch();
+      const settings = (await response.json()) as Array<{ settingName: string }>;
+      await route.fulfill({
+        response,
+        json: [
+          ...settings.filter(s => s.settingName !== 'enforceCredits'),
+          { settingName: 'enforceCredits', settingValue: true },
+        ],
+      });
+    });
+
+    await page.goto('/');
+    await page.waitForLoadState('domcontentloaded');
+    await basePage.dismissModals();
+    await page.goto('/new?billing=plans');
+
+    await expect(page.getByTestId('subscription-modal-title')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    await expect(page.getByTestId('subscription-modal-business-tab')).toHaveCount(0);
+    await expect(page.getByTestId('subscription-modal-create-team-btn')).toHaveCount(0);
+    await expect(page.getByText('Team pricing is unavailable')).toHaveCount(0);
+  });
+});
+
 test.describe('Profile - Agent connect', () => {
   test('should copy a key-free agent prompt and MCP snippets from the API Keys tab', async ({
     profilePage,
