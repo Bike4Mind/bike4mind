@@ -125,7 +125,7 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
 
   return (
     <Stack gap="20px" sx={{ height: '100%' }} className="project-members-container">
-      <Stack gap="12px" className="project-members-header">
+      <Stack gap="12px" mx="20px" className="project-members-header">
         <Box
           sx={{
             flexDirection: {
@@ -134,7 +134,6 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
             },
             display: 'flex',
             gap: '12px',
-            mx: '20px',
           }}
           className="project-members-controls"
         >
@@ -214,7 +213,7 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
           <Typography
             data-testid="project-members-billing-note"
             level="body-xs"
-            sx={{ color: 'text.tertiary', mx: '20px' }}
+            sx={{ color: 'text.tertiary' }}
           >
             {PROJECT_MEMBERS_BILLING_NOTE}
           </Typography>
