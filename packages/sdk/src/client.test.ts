@@ -47,12 +47,14 @@ describe('auth', () => {
 
   it('prefers getAuthToken, asked per request, and falls back to apiKey when it returns nothing', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => json({}));
-    const tokens = ['jwt-1', undefined];
+    const tokens = ['jwt-1', undefined, ''];
     const client = createClient({ baseUrl: BASE, apiKey: 'k', fetch, getAuthToken: async () => tokens.shift() });
+    await client.call('getMe');
     await client.call('getMe');
     await client.call('getMe');
     expect(new Headers(fetch.mock.calls[0][1]?.headers).get('authorization')).toBe('Bearer jwt-1');
     expect(new Headers(fetch.mock.calls[1][1]?.headers).get('authorization')).toBe('Bearer k');
+    expect(new Headers(fetch.mock.calls[2][1]?.headers).get('authorization')).toBe('Bearer k');
   });
 
   it('keeps a caller Authorization header when no token is configured', async () => {
@@ -64,6 +66,16 @@ describe('auth', () => {
 
   it('requires a baseUrl', () => {
     expect(() => createClient({ baseUrl: '' })).toThrow(/baseUrl/);
+  });
+
+  it.each([
+    'b4m.example.com',
+    '/api',
+    'ftp://b4m.example.com',
+    'https://b4m.example.com?x=1',
+    'https://b4m.example.com/#a',
+  ])('refuses a baseUrl that is not a bare absolute http(s) URL: %s', baseUrl => {
+    expect(() => createClient({ baseUrl })).toThrow(/baseUrl must be/);
   });
 });
 
@@ -93,6 +105,7 @@ describe('call', () => {
   it('refuses an empty or dot-segment path param before sending', async () => {
     const { client, fetch } = setup();
     await expect(client.call('deleteSession', { params: { id: '' } })).rejects.toThrow(/Invalid path parameter id/);
+    await expect(client.call('deleteSession', { params: { id: '.' } })).rejects.toThrow(/Invalid path parameter/);
     await expect(client.call('deleteSession', { params: { id: '..' } })).rejects.toThrow(/Invalid path parameter/);
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -106,7 +119,7 @@ describe('call', () => {
   it('throws on a non-JSON 2xx body', async () => {
     const { client } = setup(new Response('ID3', { headers: { 'content-type': 'audio/mpeg' } }));
     await expect(client.call('synthesizeSpeech', { body: {} as never })).rejects.toThrow(
-      'synthesizeSpeech returned audio/mpeg; use raw() or the tts/music/soundEffects helpers'
+      'synthesizeSpeech returned audio/mpeg; use raw(), completions() or the tts/music/soundEffects helpers'
     );
   });
 
@@ -186,6 +199,18 @@ describe('completions', () => {
     const { client, request } = setup(new Response('data: [DONE]\n\n'));
     for await (const event of client.completions({} as never, { url: 'https://stream.example.com/sse' })) void event;
     expect(request().url).toBe('https://stream.example.com/sse');
+  });
+
+  it('joins a relative url override under a path-prefixed baseUrl, with or without a leading slash', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response('data: [DONE]\n\n'));
+    const client = createClient({ baseUrl: 'https://b4m.example.com/prefix/', fetch });
+    for (const url of ['api/sse', '/api/sse']) {
+      for await (const event of client.completions({} as never, { url })) void event;
+    }
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+      'https://b4m.example.com/prefix/api/sse',
+      'https://b4m.example.com/prefix/api/sse',
+    ]);
   });
 
   it('throws after yielding when the stream ends without [DONE]', async () => {

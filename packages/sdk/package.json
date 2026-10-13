@@ -48,6 +48,7 @@
     "build": "tsdown",
     "generate": "node scripts/generate.mjs",
     "typecheck": "tsc --noEmit",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {

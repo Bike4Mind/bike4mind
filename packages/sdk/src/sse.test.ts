@@ -63,4 +63,37 @@ describe('parseSse', () => {
     expect(seen).toEqual(['first']);
     expect(cancelled).toBe(true);
   });
+
+  it('cancels a read that is still pending when the signal aborts', async () => {
+    let cancelled = false;
+    // Never enqueues: without the abort listener the read would hang until the next server byte.
+    const stream = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const controller = new AbortController();
+    const run = collect(parseSse(stream, controller.signal));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    controller.abort(new Error('stop'));
+    await expect(run).rejects.toThrow('stop');
+    expect(cancelled).toBe(true);
+  });
+
+  it('cancels the body when the caller breaks out early', async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: first\n\ndata: second\n\n'));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    for await (const data of parseSse(stream)) {
+      expect(data).toBe('first');
+      break;
+    }
+    expect(cancelled).toBe(true);
+  });
 });

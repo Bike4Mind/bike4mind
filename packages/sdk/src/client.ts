@@ -129,18 +129,36 @@ function buildUrl(baseUrl: string, path: string, params?: object, query?: object
     }
   }
   const qs = search.toString();
-  const url = ABSOLUTE_URL.test(resolved) ? resolved : `${baseUrl.replace(/\/+$/, '')}${resolved}`;
+  // Joined, not `new URL(path, base)`, so a base path prefix (`https://host/b4m`) is kept.
+  const relative = resolved.startsWith('/') ? resolved : `/${resolved}`;
+  const url = ABSOLUTE_URL.test(resolved) ? resolved : `${baseUrl.replace(/\/+$/, '')}${relative}`;
   return qs ? `${url}${url.includes('?') ? '&' : '?'}${qs}` : url;
+}
+
+function assertBaseUrl(baseUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error(`createClient: baseUrl must be an absolute http(s) URL, got ${JSON.stringify(baseUrl)}`);
+  }
+  if (!/^https?:$/.test(parsed.protocol) || parsed.search || parsed.hash) {
+    throw new Error(
+      `createClient: baseUrl must be an http(s) URL with no query or fragment, got ${JSON.stringify(baseUrl)}`
+    );
+  }
 }
 
 export function createClient(options: ClientOptions) {
   if (!options.baseUrl) throw new Error('createClient: baseUrl is required');
+  assertBaseUrl(options.baseUrl);
   const fetchImpl = options.fetch ?? globalThis.fetch;
 
   async function send(method: string, path: string, args: RequestArgs = {}): Promise<Response> {
     const headers = new Headers(options.headers);
     for (const [name, value] of Object.entries(args.headers ?? {})) headers.set(name, value);
-    const token = (await options.getAuthToken?.()) ?? options.apiKey;
+    // `||`, not `??`: an empty token from getAuthToken falls back to apiKey rather than sending no auth.
+    const token = (await options.getAuthToken?.()) || options.apiKey;
     if (token) headers.set('authorization', `Bearer ${token}`);
     let body: string | undefined;
     if (args.body !== undefined) {
@@ -171,7 +189,7 @@ export function createClient(options: ClientOptions) {
     const contentType = response.headers.get('content-type') ?? '';
     if (text && !/json/i.test(contentType)) {
       throw new Error(
-        `${operationId} returned ${contentType || 'a non-JSON body'}; use raw() or the tts/music/soundEffects helpers`
+        `${operationId} returned ${contentType || 'a non-JSON body'}; use raw(), completions() or the tts/music/soundEffects helpers`
       );
     }
     return (text ? JSON.parse(text) : undefined) as JsonResponse<K>;
@@ -233,8 +251,8 @@ export function createClient(options: ClientOptions) {
     /**
      * Stream `POST /api/ai/v1/completions` as parsed events. A non-2xx before the stream throws `B4mApiError`; a
      * server `{ type: 'error' }` event is yielded, not thrown. A stream that ends without `[DONE]` and without an
-     * error event throws. `url` overrides the path (absolute URLs as-is) and receives the same `Authorization`
-     * header, so pass only an origin you trust.
+     * error event throws. `url` overrides the path: an absolute http(s) URL is used as-is, anything else is joined
+     * under `baseUrl`. An absolute `url` receives the same `Authorization` header, so pass only an origin you trust.
      */
     async *completions(
       body: JsonBody<'createCompletion'>,
