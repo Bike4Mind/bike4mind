@@ -442,8 +442,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          272_000: { input: 5.0 / 1_000_000, output: 30.0 / 1_000_000 }, // <=272k: $5.00 / 1M in, $30.00 / 1M out
-          1_050_000: { input: 10.0 / 1_000_000, output: 45.0 / 1_000_000 }, // >272k: $10.00 / 1M in, $45.00 / 1M out
+          272_000: { input: 4.0 / 1_000_000, output: 20.0 / 1_000_000 }, // <=272k: $4.00 / 1M in, $20.00 / 1M out
+          1_050_000: { input: 8.0 / 1_000_000, output: 30.0 / 1_000_000 }, // >272k: $8.00 / 1M in, $30.00 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -465,8 +465,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          272_000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 }, // <=272k: $2.50 / 1M in, $15.00 / 1M out
-          1_050_000: { input: 5.0 / 1_000_000, output: 22.5 / 1_000_000 }, // >272k: $5.00 / 1M in, $22.50 / 1M out
+          272_000: { input: 2.0 / 1_000_000, output: 12.0 / 1_000_000 }, // <=272k: $2.00 / 1M in, $12.00 / 1M out
+          1_050_000: { input: 4.0 / 1_000_000, output: 18.0 / 1_000_000 }, // >272k: $4.00 / 1M in, $18.00 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -488,8 +488,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          272_000: { input: 1.0 / 1_000_000, output: 6.0 / 1_000_000 }, // <=272k: $1.00 / 1M in, $6.00 / 1M out
-          1_050_000: { input: 2.0 / 1_000_000, output: 9.0 / 1_000_000 }, // >272k: $2.00 / 1M in, $9.00 / 1M out
+          272_000: { input: 0.2 / 1_000_000, output: 1.2 / 1_000_000 }, // <=272k: $0.20 / 1M in, $1.20 / 1M out
+          1_050_000: { input: 0.4 / 1_000_000, output: 1.8 / 1_000_000 }, // >272k: $0.40 / 1M in, $1.80 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
