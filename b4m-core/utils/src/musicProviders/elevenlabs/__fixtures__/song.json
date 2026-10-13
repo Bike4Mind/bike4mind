@@ -1,0 +1,87 @@
+{
+  "scenario": "song",
+  "recordedAt": "2026-10-13T12:25:24.016Z",
+  "renderSeconds": 3,
+  "requestedSeconds": 20,
+  "exchanges": [
+    {
+      "name": "generate",
+      "request": {
+        "method": "POST",
+        "path": "/v1/music/detailed?output_format=mp3_44100_128",
+        "body": {
+          "model_id": "music_v2_5",
+          "composition_plan": {
+            "chunks": [
+              {
+                "text": "[Verse]\nMorning light on the kitchen floor\nKettle singing by the open door",
+                "duration_ms": 10000,
+                "positive_styles": ["Warm acoustic folk song, male vocal"],
+                "negative_styles": []
+              },
+              {
+                "text": "[Chorus]\nStay a while, stay a while\nThe day can wait for one more smile",
+                "duration_ms": 10000,
+                "positive_styles": ["Warm acoustic folk song, male vocal"],
+                "negative_styles": []
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "multipart/mixed; boundary=----boundary32cdfe2670834c78b24af69ed08d5dba",
+          "song-id": "<redacted>"
+        },
+        "parts": [
+          {
+            "contentType": "application/json",
+            "body": {
+              "composition_plan": {
+                "chunks": [
+                  {
+                    "text": "[Verse]\nMorning light on the kitchen floor\nKettle singing by the open door",
+                    "duration_ms": 10000,
+                    "positive_styles": ["Warm acoustic folk song, male vocal"],
+                    "negative_styles": [],
+                    "context_adherence": "high",
+                    "conditioning_ref": null,
+                    "condition_strength": null
+                  },
+                  {
+                    "text": "[Chorus]\nStay a while, stay a while\nThe day can wait for one more smile",
+                    "duration_ms": 10000,
+                    "positive_styles": ["Warm acoustic folk song, male vocal"],
+                    "negative_styles": [],
+                    "context_adherence": "high",
+                    "conditioning_ref": null,
+                    "condition_strength": null
+                  }
+                ]
+              },
+              "song_metadata": {
+                "title": null,
+                "description": null,
+                "genres": [],
+                "languages": [],
+                "is_explicit": null
+              },
+              "words_timestamps": null,
+              "waveform_visual": null
+            }
+          },
+          {
+            "contentType": "audio/mpeg",
+            "audio": {
+              "mimeType": "audio/mpeg",
+              "bytes": 320619,
+              "durationSeconds": 20.035875
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
