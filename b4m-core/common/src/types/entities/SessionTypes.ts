@@ -1204,9 +1204,14 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   /**
    * Atomically clear the voice hold that started at `startedAt`. Resolves, for the single caller
    * that cleared it, what realtime responses had billed against it (null for a hold never billed per
-   * response); null when it was already settled or replaced by a newer call.
+   * response); null when it was already settled or replaced by a newer call. With `realtimeOnly`,
+   * a hold without the realtime marker (an ElevenLabs call) is left untouched and resolves null.
    */
-  claimVoiceHold: (sessionId: string, startedAt: Date) => Promise<{ billedCredits: number | null } | null>;
+  claimVoiceHold: (
+    sessionId: string,
+    startedAt: Date,
+    options?: { realtimeOnly?: boolean }
+  ) => Promise<{ billedCredits: number | null } | null>;
 
   /**
    * Put back a hold claimed by `claimVoiceHold` whose refund then failed, with its per-call

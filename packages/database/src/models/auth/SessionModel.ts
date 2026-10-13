@@ -723,12 +723,17 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return matchedCount === 1;
   }
 
-  async claimVoiceHold(sessionId: string, startedAt: Date) {
+  async claimVoiceHold(sessionId: string, startedAt: Date, options?: { realtimeOnly?: boolean }) {
     // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
     // end, sweep or settlement frame wins, and a newer call's hold is never touched. The
     // pre-update billed total includes every response frame that charged the hold before it.
+    // realtimeOnly matches only a hold carrying the realtime marker, as addVoiceBilledCredits does.
     const before = await this.sessionModel.findOneAndUpdate(
-      { _id: sessionId, voiceSessionStartedAt: startedAt },
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: startedAt,
+        ...(options?.realtimeOnly ? { voiceBilledCredits: { $exists: true } } : {}),
+      },
       {
         $set: {
           voiceReservedCredits: null,

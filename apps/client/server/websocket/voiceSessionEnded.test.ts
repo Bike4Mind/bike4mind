@@ -88,9 +88,10 @@ vi.mock('@bike4mind/database', () => ({
         state.session.voiceLastActivityAt = at;
       }
     },
-    claimVoiceHold: async (_id: string, startedAt: Date) => {
+    claimVoiceHold: async (_id: string, startedAt: Date, options?: { realtimeOnly?: boolean }) => {
       state.beforeClaim?.();
       if (state.session.voiceSessionStartedAt?.getTime() !== startedAt.getTime()) return null;
+      if (options?.realtimeOnly && state.session.voiceBilledCredits === undefined) return null;
       const billedCredits = state.session.voiceBilledCredits ?? null;
       state.session = {
         id: state.session.id,
@@ -398,6 +399,29 @@ describe('voiceSessionEnded realtime billing', () => {
     expect(state.session.voiceBilledCredits).toBeUndefined();
     expect(state.session.voiceSessionStartedAt).not.toBeNull();
     expect(charged()).toBe(HOLD + 30);
+  });
+
+  it('leaves an ElevenLabs hold (no realtime marker) untouched by a zero-usage close frame', async () => {
+    const startedAt = new Date(Date.now() - (4 * 60 + 50) * 1000);
+    state.session.voiceSessionStartedAt = startedAt;
+    delete state.session.voiceBilledCredits;
+
+    await send(0);
+
+    expect(state.session.voiceSessionStartedAt).toEqual(startedAt);
+    expect(state.session.voiceReservedCredits).toBe(HOLD);
+    expect(state.balance).toBe(STARTING_BALANCE - HOLD);
+    expect(state.transactions).toHaveLength(0);
+  });
+
+  it('still settles a realtime hold from a zero-usage close frame at its floor', async () => {
+    const openFor = 10 * 60;
+    state.session.voiceSessionStartedAt = new Date(Date.now() - openFor * 1000);
+
+    await send(0);
+
+    expect(state.session.voiceSessionStartedAt).toBeNull();
+    expect(charged()).toBe(realtimeCreditsFloor(HOLD, openFor));
   });
 
   it('settles a close only once when the frame is replayed', async () => {

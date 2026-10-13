@@ -167,9 +167,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     const startedAt = new Date(session.voiceSessionStartedAt);
     // Claim the hold before any credit moves: of this frame, a replay, the end endpoint and the
     // stale hold sweep (apps/workers/src/cron/voiceHoldSweep.ts), exactly one settles it.
-    const claimed = await sessionRepository.claimVoiceHold(session.id, startedAt);
+    // Only a realtime hold: an ElevenLabs hold must not settle at the realtime floor from this frame.
+    const claimed = await sessionRepository.claimVoiceHold(session.id, startedAt, { realtimeOnly: true });
     if (!claimed) {
-      logger.warn(`voiceSessionEnded: session ${sessionId} hold already settled - ignoring`);
+      logger.warn(`voiceSessionEnded: session ${sessionId} has no open realtime hold - ignoring`);
       return { statusCode: 200 };
     }
     const billed = claimed.billedCredits ?? 0;
