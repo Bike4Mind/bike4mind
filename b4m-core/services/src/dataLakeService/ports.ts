@@ -149,9 +149,10 @@ export async function strictIndexRemove(
 /**
  * Sums `swept[].fileSize` (charged bytes - callers map rows through `chargedBytes`) per `userId`
  * and signs the total by `sign` (-1 on soft delete, since those files leave the owner's counted
- * set; +1 on restore, since they re-enter it). Grouped by owner, never collapsed to one id, because lake membership carries no ownership conjunct on the
- * meta-tag arm - a contributor's own file is a full member of someone else's lake and is billed to
- * its own uploader (see `DataLakeSweptFile`). Zero-size files are dropped rather than emitting a
+ * set; +1 on restore, since they re-enter it). Grouped by owner, never collapsed to one id,
+ * because lake membership carries no ownership conjunct on the meta-tag arm - a contributor's
+ * own file is a full member of someone else's lake and is billed to its own uploader (see
+ * `DataLakeSweptFile`). Zero-size files are dropped rather than emitting a
  * no-op delta.
  */
 export function groupStorageDeltaByOwner(swept: DataLakeSweptFile[], sign: 1 | -1): Map<string, number> {
