@@ -434,6 +434,39 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
       await second;
       expect(endCalls()).toHaveLength(1);
     });
+
+    it('leaves the notebook to the newer call when its bootstrap succeeds after the superseded one resolves', async () => {
+      const { first, second } = await endThenRestart();
+
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      pending[1].resolve({ data: BOOTSTRAP });
+      await second;
+      expect(endCalls()).toHaveLength(0);
+    });
+
+    it('settles the deferred hold when the newer start fails its microphone check', async () => {
+      let rejectMic: (err: unknown) => void = () => {};
+      const first = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+      await vi.waitFor(() => expect(sessionCalls()).toHaveLength(1));
+      await useConversationalVoiceStore.getState().end();
+      getUserMedia.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectMic = reject;
+          })
+      );
+      const second = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      expect(endCalls()).toHaveLength(0);
+
+      rejectMic(Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' }));
+      await second;
+      expect(sessionCalls()).toHaveLength(1);
+      expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+    });
   });
 
   it('settles a superseded fresh-notebook bootstrap even when a newer call has started', async () => {
