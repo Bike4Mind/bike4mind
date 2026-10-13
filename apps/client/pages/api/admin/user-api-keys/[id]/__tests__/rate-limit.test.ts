@@ -49,8 +49,10 @@ const updateApiKeyRateLimit = vi.hoisted(() =>
 );
 vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateApiKeyRateLimit } }));
 
-const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
+// The real failure path (logEventSafe swallowing a thrown write) is covered by
+// analytics-failure.test.ts, which leaves analyticsLog unmocked.
+const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 import '@pages/api/admin/user-api-keys/[id]/rate-limit';
 
@@ -61,7 +63,7 @@ function patch(query: Record<string, unknown>, body: unknown, user?: Record<stri
   const { req, res } = createMocks({ method: 'PATCH', query, body });
   if (user) (req as any).user = user;
   (req as any).ability = {};
-  (req as any).logger = { info: vi.fn(), warn: vi.fn() };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
@@ -121,22 +123,15 @@ describe('PATCH /api/admin/user-api-keys/[id]/rate-limit', () => {
       { keyId: 'key-1', requestsPerMinute: 600, requestsPerDay: undefined },
       expect.anything()
     );
-    expect(logEvent).toHaveBeenCalledWith(
+    expect(logEventSafe).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'owner-1',
         metadata: expect.objectContaining({ updatedFields: ['rateLimit.requestsPerMinute'] }),
       }),
-      expect.anything()
+      expect.anything(),
+      (req as any).logger,
+      'API key key-1'
     );
-  });
-
-  it('still succeeds when the audit event write fails (orphaned-key owner)', async () => {
-    logEvent.mockRejectedValueOnce(new Error('User not found'));
-    const { req, res } = patch({ id: 'key-1' }, { requestsPerDay: 5000 }, admin);
-    await mockRefs.patchHandler!(req, res);
-
-    expect(res._getStatusCode()).toBe(200);
-    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('key-1'));
   });
 
   it('registers PATCH only, so next-connect 405s every other verb', () => {

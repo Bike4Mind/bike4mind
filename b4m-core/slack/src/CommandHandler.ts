@@ -423,6 +423,8 @@ export class CommandHandler {
             : undefined,
         },
         userId: this.user.id,
+        // A Slack-linked user, not a B4M session or a b4m_live_ key (see ToolContext.authOrigin).
+        authOrigin: 'internal',
       });
 
       if (!quest) return null;

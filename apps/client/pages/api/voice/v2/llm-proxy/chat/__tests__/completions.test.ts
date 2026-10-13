@@ -135,6 +135,7 @@ function primeSuccessfulTurn() {
     sessionId: 'session-1',
     organizationId: undefined,
     reasoningModelId: 'test-model',
+    authOrigin: 'session',
   });
   mockFindDuplicateQuests.mockResolvedValue([]);
   mockRecordVoiceActivity.mockResolvedValue(true);
@@ -171,33 +172,40 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
   });
 });
 
-describe('POST /api/voice/v2/llm-proxy/chat/completions - apiKeyId', () => {
+describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
   beforeEach(primeSuccessfulTurn);
 
-  type InvokeArg = { apiKeyId?: string };
-  type ProcessArg = { body: { apiKeyId?: string } };
+  type InvokeArg = { authOrigin?: string; apiKeyId?: string };
+  type ProcessArg = { body: { authOrigin?: string; apiKeyId?: string } };
 
-  // A scope-gated tool tells a key turn from a session turn only by ToolContext.apiKeyId, which
-  // process() reads from its body; invoke() carries it for the quest record.
+  // A session-only tool reads ToolContext.authOrigin, which process() takes from its body; invoke()
+  // carries it (and the key id) for the quest record.
   it('forwards the key that minted the token to invoke() and the process() body', async () => {
     mockVerifyVoiceSessionToken.mockReturnValue({
       userId: 'user-1',
       sessionId: 'session-1',
       organizationId: '',
       reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
       apiKeyId: 'key-1',
     });
 
     await handler(makeReq() as never, makeRes() as never);
 
-    expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBe('key-1');
-    expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBe('key-1');
+    expect(mockInvoke.mock.calls[0][0] as InvokeArg).toEqual(
+      expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key-1' })
+    );
+    expect((mockProcess.mock.calls[0][0] as ProcessArg).body).toEqual(
+      expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key-1' })
+    );
   });
 
-  it('forwards no key id for a token minted by a signed-in session', async () => {
+  it('forwards a session origin and no key id for a token minted by a signed-in session', async () => {
     await handler(makeReq() as never, makeRes() as never);
 
+    expect((mockInvoke.mock.calls[0][0] as InvokeArg).authOrigin).toBe('session');
     expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBeUndefined();
+    expect((mockProcess.mock.calls[0][0] as ProcessArg).body.authOrigin).toBe('session');
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBeUndefined();
   });
 });

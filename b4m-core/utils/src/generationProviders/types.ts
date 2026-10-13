@@ -6,7 +6,13 @@ export type { GenerationProviderJobHandle, ProviderOutput };
 
 /** A finished provider call. Expected provider outcomes are values, never exceptions. */
 export type ProviderTerminalResult =
-  | { status: 'succeeded'; output: ProviderOutput; reportedDurationSeconds?: number }
+  | {
+      status: 'succeeded';
+      output: ProviderOutput;
+      reportedDurationSeconds?: number;
+      /** Lyrics the provider sang (its own or the user's), as plain lines; absent for instrumental output. */
+      lyrics?: string;
+    }
   /**
    * `billed`: set only when the provider is known to have charged for the blocked generation (it generated the
    * output, then withheld it). The job then settles the user's hold instead of releasing it; leave it unset when unsure.
