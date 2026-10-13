@@ -3248,8 +3248,7 @@ export const settingsMap = {
     userReadable: true,
     name: 'Default Free Credits',
     defaultValue: 0,
-    description:
-      'Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup — an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this — their hard ceiling of real model cost is roughly credits ÷ 1500 USD.',
+    description: `Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup - an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this - their hard ceiling of real model cost is roughly credits / ${CREDITS_PER_USD_COST} USD.`,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
