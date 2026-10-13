@@ -65,14 +65,20 @@ describe('persistGeneratedFileAsFabFile', () => {
     expect(context.storage.upload).toHaveBeenCalledWith(content, 'generated/a.mp3', { ContentType: 'audio/mpeg' });
   });
 
-  it('skips and warns instead of persisting when the harness supplies no file adapters', async () => {
-    const context = makeContext({ db: {} as ToolContext['db'] });
+  // One key at a time (not an all-empty db), so dropping any single clause of the four-way guard fails here.
+  it.each(['fabfiles', 'users', 'adminSettings', 'dataLakes'] as const)(
+    'skips and warns when the harness supplies no %s adapter',
+    async missing => {
+      const db: Record<string, unknown> = { fabfiles: {}, users: {}, adminSettings: {}, dataLakes: {} };
+      delete db[missing];
+      const context = makeContext({ db: db as unknown as ToolContext['db'] });
 
-    await persistGeneratedFileAsFabFile(context, audio);
+      await persistGeneratedFileAsFabFile(context, audio);
 
-    expect(mockCreateFabFile).not.toHaveBeenCalled();
-    expect(context.logger.warn).toHaveBeenCalled();
-  });
+      expect(mockCreateFabFile).not.toHaveBeenCalled();
+      expect(context.logger.warn).toHaveBeenCalled();
+    }
+  );
 
   it('swallows a create failure so the tool itself still succeeds', async () => {
     mockCreateFabFile.mockRejectedValueOnce(new Error('quota'));
@@ -121,6 +127,9 @@ describe('saveGeneratedAssetFromTool', () => {
     });
     await storage.generateSignedUrl('generated-audio/a.mp3', 60);
     expect(context.storage.getSignedUrl).toHaveBeenCalledWith('generated-audio/a.mp3', 'get', { expiresIn: 60 });
+    // createFabFile mints a 'put' URL for the upload leg, so the verb must survive the remap, not default to 'get'.
+    await storage.generateSignedUrl('generated-audio/a.mp3', 60, 'put');
+    expect(context.storage.getSignedUrl).toHaveBeenCalledWith('generated-audio/a.mp3', 'put', { expiresIn: 60 });
   });
 
   it('skips the save when the harness supplies no file adapters', async () => {
