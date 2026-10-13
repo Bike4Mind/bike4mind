@@ -30,6 +30,7 @@ const file = (over: Partial<LakeSkippedFileView> = {}): LakeSkippedFileView => (
 });
 
 const state = (over: Record<string, unknown> = {}) => ({
+  data: { pages: [], pageParams: [] },
   files: [file()],
   total: 1,
   hasMore: false,
@@ -37,6 +38,7 @@ const state = (over: Record<string, unknown> = {}) => ({
   isLoadingMore: false,
   isLoading: false,
   isError: false,
+  isFetchNextPageError: false,
   ...over,
 });
 
@@ -60,6 +62,35 @@ describe('LakeSkippedFilesChip', () => {
     renderChip(false);
     expect(screen.queryByTestId('datalake-skipped-files-chip-lake-1')).toBeNull();
     expect(h.skipped).toHaveBeenCalledWith('lake-1', false);
+  });
+
+  it('renders nothing until the first page has loaded, or when that load failed', () => {
+    h.skipped.mockReturnValue(state({ data: undefined, files: [], total: 0, isLoading: true }));
+    const { unmount } = renderChip();
+    expect(screen.queryByTestId('datalake-skipped-files-chip-lake-1')).toBeNull();
+    unmount();
+    h.skipped.mockReturnValue(state({ data: undefined, files: [], total: 0, isError: true }));
+    renderChip();
+    expect(screen.queryByTestId('datalake-skipped-files-chip-lake-1')).toBeNull();
+  });
+
+  it('keeps the open dialog and its rows when a load-more fails', () => {
+    const loaded = state({ hasMore: true, total: 60 });
+    h.skipped.mockReturnValue(loaded);
+    const { rerender } = renderChip();
+    openDialog();
+
+    h.skipped.mockReturnValue({ ...loaded, isError: true, isFetchNextPageError: true });
+    rerender(
+      <TestWrapper>
+        <LakeSkippedFilesChip lakeId="lake-1" lakeName="Docs" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('lake-skipped-files-dialog')).toBeTruthy();
+    expect(screen.getByTestId('lake-skipped-files-row-skip-1')).toBeTruthy();
+    expect(screen.getByTestId('lake-skipped-files-load-more-error')).toBeTruthy();
+    expect(screen.queryByTestId('lake-skipped-files-error')).toBeNull();
   });
 
   it('renders nothing when no file was skipped', () => {
@@ -86,13 +117,11 @@ describe('LakeSkippedFilesChip', () => {
     expect(row.textContent).toContain(SKIPPED_FILE_REASON_LABELS.oversized);
   });
 
-  it('tells the owner a storage_limit skip will be retried', () => {
+  it('tells the manager a storage_limit skip will be retried', () => {
     h.skipped.mockReturnValue(state({ files: [file({ reason: 'storage_limit' })] }));
     renderChip();
     openDialog();
-    expect(screen.getByTestId('lake-skipped-files-row-skip-1').textContent).toContain(
-      'retried after you free up space'
-    );
+    expect(screen.getByTestId('lake-skipped-files-row-skip-1').textContent).toContain('retried once space is freed');
   });
 
   it('loads the next page on demand', () => {

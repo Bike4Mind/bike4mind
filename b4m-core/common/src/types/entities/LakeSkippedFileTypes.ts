@@ -8,7 +8,8 @@ import { IMongoDocument } from './common';
 // with the reason. Keyed per lake rather than per batch: every sync mints a new batch and finished
 // batches drop out of every read, so a batch-scoped list would vanish on the next sync. The row is
 // upserted on each skip and deleted when the file later ingests or leaves the source, so the
-// collection always reads as "what is missing right now".
+// collection always reads as "what is missing right now". An edited file that fails a gate gets a
+// row too, even though its previous version stays a lake member: the current version is missing.
 
 /** Every reason a lake sync can refuse a file. Producers and the UI copy map share this one list. */
 export const LAKE_SKIPPED_FILE_REASONS = [
@@ -66,6 +67,8 @@ export interface ILakeSkippedFileRepository extends IBaseRepository<ILakeSkipped
    * `firstSeenAt` is kept, everything else takes the latest skip's values.
    */
   recordSkip(input: LakeSkippedFileInput): Promise<void>;
+  /** `recordSkip` for many files in one round trip; same per-row semantics. */
+  recordSkips(inputs: readonly LakeSkippedFileInput[]): Promise<void>;
   /** Drop the rows for these source ids, e.g. once they ingest or the source reports them removed. */
   clearSources(
     dataLakeId: string,
@@ -82,7 +85,10 @@ export interface ILakeSkippedFileRepository extends IBaseRepository<ILakeSkipped
     sourceKind: LakeSkippedFileSourceKind,
     presentSourceIds: ReadonlySet<string>
   ): Promise<number>;
-  /** Newest-skipped first. */
+  /**
+   * Most recently first-skipped first. Keyed on `firstSeenAt`, which a re-skip never moves, so a
+   * full walk refreshing every row between two page loads does not reshuffle offset paging.
+   */
   listByLake(dataLakeId: string, options: { limit: number; offset: number }): Promise<ILakeSkippedFileDocument[]>;
   countByLake(dataLakeId: string): Promise<number>;
   /** Connector disconnect: the source's files are no longer the lake's concern. */

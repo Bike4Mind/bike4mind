@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   setTotalFilesIfActive: vi.fn(),
   recordSkippedDriveFile: vi.fn(),
   recordSkip: vi.fn(),
+  recordSkips: vi.fn(),
   clearSkipSources: vi.fn(),
   pruneMissingSkips: vi.fn(),
   retire: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findByGitHubConnectionIdInDataLake: h.findByGitHubConnectionIdInDataLake },
   lakeSkippedFileRepository: {
     recordSkip: h.recordSkip,
+    recordSkips: h.recordSkips,
     clearSources: h.clearSkipSources,
     pruneMissing: h.pruneMissingSkips,
   },
@@ -120,6 +122,7 @@ beforeEach(() => {
   h.batchFindById.mockResolvedValue(null);
   h.recordSkippedDriveFile.mockResolvedValue(true);
   h.recordSkip.mockResolvedValue(undefined);
+  h.recordSkips.mockResolvedValue(undefined);
   h.clearSkipSources.mockResolvedValue(0);
   h.pruneMissingSkips.mockResolvedValue(0);
   h.retire.mockImplementation(async (copy: { id: string }, replacement: string | null) => {
@@ -343,7 +346,7 @@ describe('runGitHubLakeSlice', () => {
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
     expect(h.getBlobBytes).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
-      '[githubLakeIngest] oversized files with no other sync work this run; not recorded',
+      '[githubLakeIngest] oversized files with no other sync work this run; not batch-recorded',
       expect.objectContaining({ count: 2 })
     );
   });
@@ -424,9 +427,20 @@ describe('runGitHubLakeSlice', () => {
       await runGitHubLakeSlice(input());
 
       expect(h.batchCreate).not.toHaveBeenCalled();
-      expect(h.recordSkip).toHaveBeenCalledWith(
-        expect.objectContaining({ sourceId: 'big.md', reason: 'oversized', size: 2 * 1024 * 1024 })
-      );
+      expect(h.recordSkips).toHaveBeenCalledWith([
+        expect.objectContaining({ sourceId: 'big.md', reason: 'oversized', size: 2 * 1024 * 1024 }),
+      ]);
+    });
+
+    it('names the admin MaxFileSize as the reason when it is the cap that bound', async () => {
+      h.getSettingsValue.mockReturnValueOnce(0.5);
+      tree(blob('big.md', 's1', 600_000));
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.recordSkips).toHaveBeenCalledWith([
+        expect.objectContaining({ sourceId: 'big.md', reason: 'exceeds_max_file_size' }),
+      ]);
     });
 
     it('lists a storage-limit file as retryable while keeping it out of the chain skips', async () => {

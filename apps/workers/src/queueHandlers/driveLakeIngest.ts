@@ -917,7 +917,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           existing: existingDocs.length,
         });
         removed = [];
-      } else {
+      }
+      // Stricter than the guard above: an empty walk never prunes the not-ingested list, even with
+      // no ingested files to protect - a folder whose every file was skipped would otherwise lose
+      // its whole list on one blip and only regain it on the next full walk.
+      if (walked.length > 0) {
         await lakeSkippedFileRepository.pruneMissing(lake.id, 'google_drive', seenIds);
       }
     }
@@ -1174,7 +1178,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           dataLakeId: lake.id,
           sourceKind: 'google_drive',
           sourceId: file.id,
-          name: file.name,
+          // Drive allows an empty name; the id still identifies the file.
+          name: file.name || file.id,
           relativePath: file.relativePath,
           mimeType: file.mimeType,
           size,
@@ -1311,8 +1316,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         });
         uploaded++;
         acceptedBytes += bytes.length;
-        await lakeSkippedFileRepository.clearSources(lake.id, 'google_drive', [file.id]);
-
         // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy
         // (see retireSupersededCopy in lakeIngestShared.ts, and the header for the invariants it keeps). Done PER-FILE right
         // after the upload, not batched at the end: a later file throwing then leaves every
@@ -1324,6 +1327,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           await retireSupersededCopy(staleCopy, fabFile.id);
           retired++;
         }
+        // After the retire, so a throw here cannot strand an edit half-reconciled (see above).
+        await lakeSkippedFileRepository.clearSources(lake.id, 'google_drive', [file.id]);
       }
 
       logger.info('[driveLakeIngest] uploaded; pipeline will chunk+vectorize', {

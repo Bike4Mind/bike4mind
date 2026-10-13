@@ -8,7 +8,7 @@ export const SKIPPED_FILE_REASON_LABELS: Record<LakeSkippedFileReason, string> =
   unsupported: 'This file type cannot be imported',
   export_too_large: 'Too large for Google Drive to export',
   error: 'Could not be downloaded; it will be retried on a later sync',
-  storage_limit: 'Your storage is full; it will be retried after you free up space',
+  storage_limit: "The lake owner's storage is full; it will be retried once space is freed",
   binary: 'Not a text file',
   invalid_utf8: 'Not valid UTF-8 text',
 };

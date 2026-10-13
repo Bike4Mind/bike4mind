@@ -31,7 +31,7 @@ const toView = (row: ILakeSkippedFileDocument): LakeSkippedFileView => ({
 
 /**
  * GET /api/data-lakes/:id/skipped-files - the files a connected source (Drive folder, GitHub repo)
- * holds that the lake sync refused to ingest, newest-skipped first, with the reason. See
+ * holds that the lake sync refused to ingest, most recently first-skipped first, with the reason. See
  * ILakeSkippedFile for the record's lifecycle.
  *
  * MANAGE-gated: the rows name files and paths in the connector owner's source that never became

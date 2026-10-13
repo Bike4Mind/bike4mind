@@ -39,6 +39,15 @@ describe('LakeSkippedFileRepository', () => {
     expect(all[0].lastSeenAt.getTime()).toBeGreaterThanOrEqual(first.lastSeenAt.getTime());
   });
 
+  it('recordSkips upserts a whole set in one call, idempotently', async () => {
+    const set = [skip({ sourceId: 'a' }), skip({ sourceId: 'b', reason: 'storage_limit' })];
+    await repo.recordSkips(set);
+    await repo.recordSkips(set);
+
+    expect((await rows()).map(row => row.sourceId).sort()).toEqual(['a', 'b']);
+    await expect(repo.recordSkips([])).resolves.toBeUndefined();
+  });
+
   it('enforces one row per (lake, source, id) via the unique index', async () => {
     await repo.recordSkip(skip());
     const now = new Date();
@@ -83,7 +92,7 @@ describe('LakeSkippedFileRepository', () => {
     expect(left).toEqual(['github:gone', 'google_drive:kept']);
   });
 
-  it('pages newest-skipped first while the count covers every row', async () => {
+  it('pages most-recently-first-skipped first while the count covers every row', async () => {
     for (const sourceId of ['a', 'b', 'c']) {
       await repo.recordSkip(skip({ sourceId }));
     }
@@ -93,6 +102,18 @@ describe('LakeSkippedFileRepository', () => {
     expect(page.map(row => row.sourceId)).toEqual(['c', 'b']);
     expect(rest.map(row => row.sourceId)).toEqual(['a']);
     expect(await repo.countByLake('lake-1')).toBe(3);
+  });
+
+  it('keeps page order stable when a re-skip refreshes a row between page loads', async () => {
+    for (const sourceId of ['a', 'b', 'c']) {
+      await repo.recordSkip(skip({ sourceId }));
+    }
+    const page = await repo.listByLake('lake-1', { limit: 2, offset: 0 });
+    // A full walk re-skips the oldest row, refreshing its lastSeenAt.
+    await repo.recordSkip(skip({ sourceId: 'a' }));
+    const rest = await repo.listByLake('lake-1', { limit: 2, offset: 2 });
+
+    expect([...page, ...rest].map(row => row.sourceId)).toEqual(['c', 'b', 'a']);
   });
 
   it('deleteForSource and deleteForLake scope their sweep', async () => {

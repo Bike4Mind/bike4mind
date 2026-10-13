@@ -2511,7 +2511,7 @@ const SKIPPED_FILES_PAGE_SIZE = 25;
 /** One lake's files the connected source holds but the sync did not ingest. Manage-gated server-side. */
 export function useDataLakeSkippedFiles(dataLakeId: string | undefined, enabled: boolean) {
   const query = useInfiniteQuery({
-    queryKey: dataLakeKeys.skippedFiles(dataLakeId),
+    queryKey: dataLakeKeys.skippedFiles(dataLakeId ?? null),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
       const { data } = await api.get<LakeSkippedFilesResponse>(`/api/data-lakes/${dataLakeId}/skipped-files`, {

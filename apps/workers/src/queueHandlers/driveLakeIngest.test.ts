@@ -1188,6 +1188,26 @@ describe('driveLakeIngest consumer', () => {
       expect(h.clearSkipSources).toHaveBeenCalledWith('lake1', 'google_drive', ['file-1']);
     });
 
+    it('never prunes on an empty walk, even with no ingested files to protect', async () => {
+      // Every file in the folder was skipped, so the lake holds none of this connection's files.
+      h.walkFolder.mockResolvedValue([]);
+      setExisting([]);
+
+      await run();
+
+      expect(h.pruneMissingSkips).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the Drive id for a file with an empty name', async () => {
+      h.walkFolder.mockResolvedValue([
+        { id: 'big', name: '', mimeType: 'application/pdf', relativePath: '', size: 200 * 1024 * 1024 },
+      ]);
+
+      await run();
+
+      expect(h.recordSkip).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'big', name: 'big' }));
+    });
+
     it('prunes rows for files a full walk no longer sees', async () => {
       h.walkFolder.mockResolvedValue([
         { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
@@ -3062,6 +3082,31 @@ describe('classifyDriveChanges', () => {
     );
     expect(result.adds).toEqual([]);
     expect(result.untrackedGoneIds).toEqual(['d1']);
+  });
+
+  it('reports an untracked file Drive confirms trashed as gone, for the not-ingested list', async () => {
+    const result = await classifyDriveChanges(
+      drive,
+      [{ fileId: 'd1', removed: false, file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', trashed: true } }],
+      'ROOT',
+      () => undefined,
+      logger
+    );
+    expect(result.untrackedGoneIds).toEqual(['d1']);
+    expect(result.removedFileIds).toEqual([]);
+  });
+
+  it('leaves an untracked file out of untrackedGoneIds when its ancestry check fails', async () => {
+    h.isUnderRoot.mockRejectedValue(new Error('drive blip'));
+    const result = await classifyDriveChanges(
+      drive,
+      [{ fileId: 'd1', removed: false, file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', parents: ['X'] } }],
+      'ROOT',
+      () => undefined,
+      logger
+    );
+    expect(result.untrackedGoneIds).toEqual([]);
+    expect(result.ambiguous).toBe(1);
   });
 
   it('ignores a new (never-tracked) file that Drive reports removed - nothing to add or prune', async () => {

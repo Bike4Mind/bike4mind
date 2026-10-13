@@ -15,7 +15,11 @@ export function LakeSkippedFilesDialog({
   lakeId: string;
   lakeName: string;
 }) {
-  const { files, total, hasMore, loadMore, isLoadingMore, isLoading, isError } = useDataLakeSkippedFiles(lakeId, open);
+  const { data, files, total, hasMore, loadMore, isLoadingMore, isLoading, isFetchNextPageError } =
+    useDataLakeSkippedFiles(lakeId, open);
+  // A failed load-more or background refetch keeps the rows already fetched; only a first load with
+  // nothing to show reads as an error.
+  const hasRows = data !== undefined;
 
   return (
     <Modal open={open} onClose={onClose}>
@@ -26,7 +30,7 @@ export function LakeSkippedFilesDialog({
           <Typography level="body-sm" sx={{ mb: 0.5 }}>
             These files are in the connected source but were not added to the lake.
           </Typography>
-          {!isLoading && !isError && (
+          {hasRows && (
             <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 1 }}>
               {total === 1 ? '1 file' : `${total} files`}
             </Typography>
@@ -36,12 +40,12 @@ export function LakeSkippedFilesDialog({
               Loading...
             </Typography>
           )}
-          {isError && (
+          {!isLoading && !hasRows && (
             <Typography level="body-sm" color="danger" data-testid="lake-skipped-files-error">
               Could not load the skipped files. Try again shortly.
             </Typography>
           )}
-          {!isLoading && !isError && (
+          {hasRows && (
             <Box
               component="ul"
               data-testid="lake-skipped-files-list"
@@ -78,6 +82,11 @@ export function LakeSkippedFilesDialog({
               ))}
             </Box>
           )}
+          {isFetchNextPageError && (
+            <Typography level="body-xs" color="danger" sx={{ mt: 1 }} data-testid="lake-skipped-files-load-more-error">
+              Could not load more files. Try again.
+            </Typography>
+          )}
           {hasMore && (
             <Button
               size="sm"
@@ -106,9 +115,11 @@ export default function LakeSkippedFilesChip({
   canManage: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const { total, isLoading, isError } = useDataLakeSkippedFiles(lakeId, canManage);
+  const { data, total } = useDataLakeSkippedFiles(lakeId, canManage);
 
-  if (!canManage || isLoading || isError || total === 0) return null;
+  // Keyed on data, not isError: a failed load-more or refetch keeps the data and must not unmount
+  // the open dialog with it.
+  if (!canManage || data === undefined || total === 0) return null;
 
   return (
     <>

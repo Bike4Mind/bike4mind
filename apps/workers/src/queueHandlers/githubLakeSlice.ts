@@ -121,27 +121,30 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
 
   // The lake's skip list (see ILakeSkippedFile) is keyed by repo path and kept independent of the
   // batch. A non-truncated tree is the whole repo, so it is safe to prune against.
+  const lakeSkip = (githubPath: string, reason: LakeSkippedFileReason, size?: number) => ({
+    dataLakeId: lake.id,
+    sourceKind: 'github' as const,
+    sourceId: githubPath,
+    name: path.posix.basename(githubPath),
+    relativePath: githubPath,
+    mimeType: lakeFileMimeType(githubPath),
+    size,
+    reason,
+  });
   const recordLakeSkip = (githubPath: string, reason: LakeSkippedFileReason, size?: number) =>
-    lakeSkippedFileRepository.recordSkip({
-      dataLakeId: lake.id,
-      sourceKind: 'github',
-      sourceId: githubPath,
-      name: path.posix.basename(githubPath),
-      relativePath: githubPath,
-      mimeType: lakeFileMimeType(githubPath),
-      size,
-      reason,
-    });
+    lakeSkippedFileRepository.recordSkip(lakeSkip(githubPath, reason, size));
   await lakeSkippedFileRepository.pruneMissing(
     lake.id,
     'github',
     new Set([...candidates.map(candidate => candidate.path), ...oversized.map(entry => entry.path)])
   );
   // Written every sync rather than only into a batch: a no-op sync creates no batch (see below),
-  // and the upsert is idempotent.
-  for (const { path: oversizedPath, size } of oversized) {
-    await recordLakeSkip(oversizedPath, 'oversized', size);
-  }
+  // and the upsert is idempotent. Named for whichever cap bound, matching Drive's two reasons.
+  const oversizedReason: LakeSkippedFileReason =
+    maxFileBytes < GITHUB_LAKE_FILE_RULES.maxFileBytes ? 'exceeds_max_file_size' : 'oversized';
+  await lakeSkippedFileRepository.recordSkips(
+    oversized.map(entry => lakeSkip(entry.path, oversizedReason, entry.size))
+  );
   if (candidates.length > GITHUB_LAKE_FILE_RULES.maxCandidates) {
     return {
       kind: 'refused',
@@ -215,7 +218,7 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       // No batch this run to record them into (one isn't created for skips alone - see the loop
       // below), so a persistent oversized file doesn't churn a fresh batch on every no-op sync.
       if (newOversized.length > 0) {
-        logger.info('[githubLakeIngest] oversized files with no other sync work this run; not recorded', {
+        logger.info('[githubLakeIngest] oversized files with no other sync work this run; not batch-recorded', {
           count: newOversized.length,
           examples: newOversized.slice(0, 5),
         });
@@ -347,11 +350,12 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
         logger,
       });
       acceptedBytes += bytes.length;
-      await lakeSkippedFileRepository.clearSources(lake.id, 'github', [candidate.path]);
       if (prior) {
         await retirer.retireSupersededCopy(prior, fabFile.id);
         membershipChanged = true;
       }
+      // After the retire, so a throw here cannot strand an edit as two live copies.
+      await lakeSkippedFileRepository.clearSources(lake.id, 'github', [candidate.path]);
     }
     return { kind: 'done', batchId: batch.id, transientSkips };
   } finally {

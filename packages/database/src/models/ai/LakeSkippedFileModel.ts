@@ -6,7 +6,12 @@ import type {
   LakeSkippedFileInput,
   LakeSkippedFileSourceKind,
 } from '@bike4mind/common';
-import { LAKE_SKIPPED_FILE_REASONS, LAKE_SKIPPED_FILE_SOURCE_KINDS } from '@bike4mind/common';
+import {
+  LAKE_SKIPPED_FILE_REASONS,
+  LAKE_SKIPPED_FILE_SOURCE_KINDS,
+  LakeSkippedFileReasonSchema,
+  LakeSkippedFileSourceKindSchema,
+} from '@bike4mind/common';
 
 // See ILakeSkippedFile (in @bike4mind/common) for the record's contract. Its own collection rather
 // than a field on the batch: the list must outlive the batch, and the batch document already
@@ -32,7 +37,7 @@ const LakeSkippedFileSchema = new mongoose.Schema(
 // (or by two overlapping slices) stays exactly one row. Its leading fields also serve the
 // per-source prune and clear.
 LakeSkippedFileSchema.index({ dataLakeId: 1, sourceKind: 1, sourceId: 1 }, { unique: true });
-LakeSkippedFileSchema.index({ dataLakeId: 1, lastSeenAt: -1 });
+LakeSkippedFileSchema.index({ dataLakeId: 1, firstSeenAt: -1 });
 
 export const LakeSkippedFileModel =
   (mongoose.models['LakeSkippedFile'] as unknown as mongoose.Model<ILakeSkippedFileDocument>) ||
@@ -44,26 +49,41 @@ class LakeSkippedFileRepository extends BaseRepository<ILakeSkippedFileDocument>
   }
 
   async recordSkip(input: LakeSkippedFileInput): Promise<void> {
-    const { dataLakeId, sourceKind, sourceId, name, relativePath, mimeType, size, reason } = input;
+    await this.recordSkips([input]);
+  }
+
+  async recordSkips(inputs: readonly LakeSkippedFileInput[]): Promise<void> {
+    if (inputs.length === 0) return;
     const now = new Date();
-    // Optional fields are $set or $unset explicitly, so a refreshed row never keeps a stale size or
-    // mime type from an earlier skip of the same file.
-    const optional = { relativePath, mimeType, size };
-    const set = Object.fromEntries(Object.entries(optional).filter(([, value]) => value !== undefined));
-    const unset = Object.fromEntries(
-      Object.entries(optional)
-        .filter(([, value]) => value === undefined)
-        .map(([key]) => [key, ''])
-    );
-    await this.skippedFileModel.updateOne(
-      { dataLakeId, sourceKind, sourceId },
-      {
-        $set: { name, reason, lastSeenAt: now, ...set },
-        ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
-        $setOnInsert: { firstSeenAt: now },
-      },
-      { upsert: true, runValidators: true }
-    );
+    // One round trip for the whole set: a GitHub repo can hold thousands of oversized files, each
+    // re-recorded on every slice. bulkWrite skips mongoose update validators, so the enums are
+    // checked here instead.
+    const operations = inputs.map(input => {
+      const { dataLakeId, sourceKind, sourceId, name, relativePath, mimeType, size, reason } = input;
+      LakeSkippedFileSourceKindSchema.parse(sourceKind);
+      LakeSkippedFileReasonSchema.parse(reason);
+      // Optional fields are $set or $unset explicitly, so a refreshed row never keeps a stale size
+      // or mime type from an earlier skip of the same file.
+      const optional = { relativePath, mimeType, size };
+      const set = Object.fromEntries(Object.entries(optional).filter(([, value]) => value !== undefined));
+      const unset: Record<string, ''> = Object.fromEntries(
+        Object.entries(optional)
+          .filter(([, value]) => value === undefined)
+          .map(([key]) => [key, '' as const])
+      );
+      return {
+        updateOne: {
+          filter: { dataLakeId, sourceKind, sourceId },
+          update: {
+            $set: { name, reason, lastSeenAt: now, ...set },
+            ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
+            $setOnInsert: { firstSeenAt: now },
+          },
+          upsert: true,
+        },
+      };
+    });
+    await this.skippedFileModel.bulkWrite(operations, { ordered: false });
   }
 
   async clearSources(
@@ -98,7 +118,7 @@ class LakeSkippedFileRepository extends BaseRepository<ILakeSkippedFileDocument>
   ): Promise<ILakeSkippedFileDocument[]> {
     const docs = await this.skippedFileModel
       .find({ dataLakeId })
-      .sort({ lastSeenAt: -1, _id: -1 })
+      .sort({ firstSeenAt: -1, _id: -1 })
       .skip(options.offset)
       .limit(options.limit);
     return docs.map(doc => doc.toJSON() as ILakeSkippedFileDocument);
