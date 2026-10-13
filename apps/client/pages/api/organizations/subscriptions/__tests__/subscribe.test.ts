@@ -133,7 +133,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
   });
 
   describe('enableTeamPlan gate', () => {
-    it.each([false, undefined, 'true'])('refuses a new Team checkout when the flag is %s', async flag => {
+    it.each([false, undefined, null, 1])('refuses a new Team checkout when the flag is %s', async flag => {
       mockGetSettingsValue.mockResolvedValue(flag);
       const { req, res } = makeReq();
 
@@ -343,6 +343,7 @@ describe('POST /api/organizations/subscriptions/subscribe - duplicate subscripti
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true); // enableTeamPlan on
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
     mockVerifyOrgOwner.mockResolvedValue({
@@ -399,6 +400,7 @@ describe('POST /api/organizations/subscriptions/subscribe - duplicate subscripti
       await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
         constructor: BadRequestError,
         statusCode: HttpStatus.BadRequest,
+        message: 'An active subscription already exists for this organization',
       });
 
       expect(mockSessionsCreate).not.toHaveBeenCalled();
@@ -433,6 +435,7 @@ describe('POST /api/organizations/subscriptions/subscribe - organization owner g
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true); // enableTeamPlan on
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
     mockVerifyOrgOwner.mockResolvedValue({
@@ -542,6 +545,7 @@ describe('POST /api/organizations/subscriptions/subscribe - request-shape and id
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true); // enableTeamPlan on
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
     mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
@@ -643,6 +647,7 @@ describe('POST /api/organizations/subscriptions/subscribe - acquisition attribut
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true); // enableTeamPlan on
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
     mockVerifyOrgOwner.mockResolvedValue({ id: 'org_1', name: 'Org One', users: [{ userId: 'user_1' }] });

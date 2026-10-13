@@ -36,6 +36,7 @@ import ManageSubscriptionButton from './ManageSubscriptionButton';
 import PlanCard from './PlanCard';
 import { isPopularPlan } from './isPopularPlan';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { useAnswerCostReference } from '@client/app/hooks/useAnswerCostReference';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
 
@@ -82,7 +83,7 @@ const SubscriptionModal = ({ open, onClose }: SubscriptionModalProps) => {
 const SubscriptionModalContent = () => {
   const { t } = useTranslation();
   const theme = useTheme();
-  const [activeTab, setActiveTab] = useState<SubscriptionModalTabs>(SubscriptionModalTabs.Personal);
+  const [selectedTab, setSelectedTab] = useState<SubscriptionModalTabs>(SubscriptionModalTabs.Personal);
   // The starter-credits line is only true while sign-ups are actually granted something.
   const hasStarterCredits = Number(useGetSettingsValue('defaultFreeCredits')) > 0;
   const { data: config } = useConfig();
@@ -101,6 +102,9 @@ const SubscriptionModalContent = () => {
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
   const teamPlanAvailable = useTeamPlanAvailable();
   const teamTabReasonId = useId();
+  // The flag can flip off while the Business tab is open; fall back rather than keep a purchasable Team card.
+  const activeTab =
+    selectedTab === SubscriptionModalTabs.Business && !teamPlanAvailable ? SubscriptionModalTabs.Personal : selectedTab;
   const priceMap = useMemo(() => {
     return plans.data?.reduce(
       (acc, plan) => {
@@ -185,7 +189,7 @@ const SubscriptionModalContent = () => {
       <Box sx={{ mb: '24px', display: 'flex', justifyContent: 'center' }}>
         <Tabs
           value={activeTab}
-          onChange={(_, value) => setActiveTab(value as SubscriptionModalTabs)}
+          onChange={(_, value) => setSelectedTab(value as SubscriptionModalTabs)}
           sx={{
             bgcolor: 'transparent',
           }}
@@ -214,40 +218,25 @@ const SubscriptionModalContent = () => {
               {t('subscription_modal.personal')}
             </Tab>
 
-            {/* Selectable whenever enableTeamPlan is on, and then tells the story of the Stripe price (or why
-                it is unavailable). Off, the tab stays visible but disabled with a stated reason; the span
-                keeps hover and keyboard focus working, which a disabled tab does not receive. */}
+            {/* Off, the tab stays visible but disabled. Joy keeps a disabled tab focusable, so the reason hangs
+                off the Tab via aria-describedby; the span only exists to receive hover (the disabled tab
+                has pointer-events: none) and is deliberately not focusable. */}
             <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
-              <span
-                tabIndex={teamPlanAvailable ? undefined : 0}
-                style={{ display: 'inline-flex' }}
-                aria-describedby={teamPlanAvailable ? undefined : teamTabReasonId}
-                data-testid="subscription-modal-business-tab-wrapper"
-              >
+              <span style={{ display: 'inline-flex' }} data-testid="subscription-modal-business-tab-wrapper">
                 <Tab
                   disableIndicator
                   value={SubscriptionModalTabs.Business}
                   disabled={!teamPlanAvailable}
+                  aria-describedby={teamPlanAvailable ? undefined : teamTabReasonId}
                   data-testid="subscription-modal-business-tab"
                 >
                   {t('subscription_modal.business')}
+                  {!teamPlanAvailable && (
+                    <Box component="span" id={teamTabReasonId} sx={visuallyHidden}>
+                      {TEAM_PLAN_UNAVAILABLE_MESSAGE}
+                    </Box>
+                  )}
                 </Tab>
-                {!teamPlanAvailable && (
-                  <Box
-                    component="span"
-                    id={teamTabReasonId}
-                    sx={{
-                      position: 'absolute',
-                      width: 1,
-                      height: 1,
-                      overflow: 'hidden',
-                      clip: 'rect(0 0 0 0)',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {TEAM_PLAN_UNAVAILABLE_MESSAGE}
-                  </Box>
-                )}
               </span>
             </Tooltip>
           </TabList>

@@ -122,20 +122,35 @@ describe('SubscriptionModal - Team tab', () => {
     settingValues = { enableTeamPlan: false };
     renderModal();
 
-    const tab = screen.getByRole('tab', { name: 'subscription_modal.business' });
+    const tab = screen.getByTestId('subscription-modal-business-tab');
     expect(tab).toHaveAttribute('aria-disabled', 'true');
 
-    // The wrapper takes focus (a disabled tab cannot) and describes itself with the reason.
-    const wrapper = screen.getByTestId('subscription-modal-business-tab-wrapper');
-    expect(wrapper).toHaveAttribute('tabindex', '0');
-    const reasonId = wrapper.getAttribute('aria-describedby');
+    // The tab itself carries the reason; there is no extra tab stop around it.
+    const reasonId = tab.getAttribute('aria-describedby');
     expect(reasonId).toBeTruthy();
     expect(document.getElementById(reasonId as string)).toHaveTextContent('Team plans are coming back soon');
 
+    const wrapper = screen.getByTestId('subscription-modal-business-tab-wrapper');
+    expect(wrapper).not.toHaveAttribute('tabindex');
     await userEvent.setup({ delay: null }).hover(wrapper);
     expect(await screen.findByRole('tooltip')).toHaveTextContent('Team plans are coming back soon');
 
     // The Team card is not reachable.
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+  });
+
+  it('drops the Team card when the flag flips off while the Business tab is open', async () => {
+    const view = renderModal();
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+
+    settingValues = { enableTeamPlan: false };
+    view.rerender(
+      <TestWrapper>
+        <SubscriptionModal open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
     expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
   });
 
@@ -146,7 +161,7 @@ describe('SubscriptionModal - Team tab', () => {
       'aria-disabled',
       'true'
     );
-    expect(screen.getByTestId('subscription-modal-business-tab-wrapper')).not.toHaveAttribute('aria-describedby');
+    expect(screen.getByTestId('subscription-modal-business-tab')).not.toHaveAttribute('aria-describedby');
     expect(screen.queryByText('Team plans are coming back soon')).not.toBeInTheDocument();
   });
 
