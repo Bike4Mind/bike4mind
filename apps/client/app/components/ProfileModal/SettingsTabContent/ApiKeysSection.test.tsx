@@ -53,6 +53,7 @@ const BYOK_TYPES = [
   ApiKeyType.deepseek,
   ApiKeyType.bfl,
   ApiKeyType.voyageai,
+  ApiKeyType.typesafe,
   ApiKeyType.elevenlabs,
 ];
 
