@@ -172,8 +172,9 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
       return { moderationStatus: 'blocked', correctedMimeType, blockReason: 'unsupported_format' };
     }
     // Not a confirmed block or unsupported format (e.g. detector unavailable, throttling,
-    // download failure) - rethrow so the S3 event retries instead of permanently
-    // false-blocking a benign image.
+    // download failure) - rethrow so the caller can retry instead of permanently false-blocking a
+    // benign image: objectCreated lets it propagate so S3 retries; the on-demand route releases its
+    // claim and reports 'pending'.
     logger.warn(`[Q2b] uploaded image ${fabFileId} scan failed transiently, will retry: ${(err as Error).message}`);
     throw err;
   }
