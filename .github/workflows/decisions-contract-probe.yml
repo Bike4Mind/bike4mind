@@ -1,0 +1,59 @@
+name: Decisions Contract Probe
+
+# Nightly live probe of the TypeSafe (systemOne) wire contract. It replays every recorder scenario against the real
+# API and fails when a response status, envelope or shape drifts from what the adapter and its fixtures assume.
+# Recorder: b4m-core/utils/src/decisionProviders/systemOne/__fixtures__/record.ts
+
+on:
+  schedule:
+    - cron: '17 6 * * *' # 06:17 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Require the TypeSafe key
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          if [ -z "$TYPESAFE_API_KEY" ]; then
+            echo "::error::TYPESAFE_API_KEY secret is empty or missing; the contract probe cannot run"
+            exit 1
+          fi
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Authenticate with private NPM package
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
+
+      - name: Install Dependencies
+        run: pnpm i --frozen-lockfile
+
+      # The recorder imports @bike4mind/observability, which resolves to its built output.
+      - name: Build core packages
+        run: pnpm turbo:core:build
+
+      - name: Probe the live contract
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          pnpm --filter @bike4mind/scripts exec tsx \
+            "$GITHUB_WORKSPACE/b4m-core/utils/src/decisionProviders/systemOne/__fixtures__/record.ts" --check

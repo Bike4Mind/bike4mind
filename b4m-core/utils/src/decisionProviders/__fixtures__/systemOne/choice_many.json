@@ -1,0 +1,23 @@
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "language": {
+      "type": "choice",
+      "choice": "de",
+      "probabilities": {
+        "ja": 0.01,
+        "fr": 0.03,
+        "es": 0.02,
+        "en": 0.05,
+        "it": 0.01,
+        "de": 0.86,
+        "pt": 0.02
+      },
+      "confidence": 0.84
+    }
+  },
+  "usage": {
+    "input_tokens": 88,
+    "output_tokens": 44
+  }
+}

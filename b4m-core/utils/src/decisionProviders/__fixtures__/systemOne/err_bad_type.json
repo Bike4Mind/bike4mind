@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "error_type": "invalid_request",
+    "message": "questions.q.type: Input should be 'noul', 'choice' or 'score'"
+  }
+}

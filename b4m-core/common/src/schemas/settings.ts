@@ -266,6 +266,7 @@ export const SettingKeySchema = z.enum([
   'moonshotApiKey',
   'deepseekApiKey',
   'voyageApiKey',
+  'typesafeApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
   'PerplexityApiKey',
@@ -1753,6 +1754,13 @@ export const API_SERVICE_GROUPS = {
     icon: 'AutoAwesome',
     settings: [{ key: 'voyageApiKey', order: 1 }],
   },
+  TYPESAFE: {
+    id: 'typesafeAPIService',
+    name: 'TypeSafe Service',
+    description: 'TypeSafe API integration settings',
+    icon: 'AutoAwesome',
+    settings: [{ key: 'typesafeApiKey', order: 1 }],
+  },
   WEATHER: {
     id: 'weatherAPIService',
     name: 'Weather Service',
@@ -2158,6 +2166,16 @@ export const settingsMap = {
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.VOYAGE.id,
+    order: 1,
+  }),
+  typesafeApiKey: makeStringSetting({
+    key: 'typesafeApiKey',
+    name: 'TypeSafe API Key',
+    defaultValue: '',
+    description: 'TypeSafe API key used by the Decisions API for Jev models.',
+    isSensitive: true,
+    category: 'AI',
+    group: API_SERVICE_GROUPS.TYPESAFE.id,
     order: 1,
   }),
   anthropicDemoKey: makeStringSetting({

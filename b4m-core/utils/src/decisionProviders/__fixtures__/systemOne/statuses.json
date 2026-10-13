@@ -1,0 +1,18 @@
+{
+  "_provisional": true,
+  "noul": 200,
+  "noul_criteria": 200,
+  "choice": 200,
+  "choice_many": 200,
+  "score": 200,
+  "score_ambiguous": 200,
+  "multi": 200,
+  "state_json": 200,
+  "state_array": 200,
+  "err_bad_type": 400,
+  "err_bad_criteria": 400,
+  "err_one_level": 200,
+  "err_too_many_choices": 400,
+  "err_bad_key": 401,
+  "err_unknown_model": 400
+}
