@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ findOneAndUpdate: vi.fn(), updateOne: vi.fn() }));
+const h = vi.hoisted(() => ({
+  findOneAndUpdate: vi.fn(),
+  updateOne: vi.fn(),
+  download: vi.fn(),
+  downloadRange: vi.fn(),
+  moderateUploadedFile: vi.fn(),
+  getSettingsValue: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   FabFile: { findOneAndUpdate: h.findOneAndUpdate, updateOne: h.updateOne },
@@ -8,19 +15,33 @@ vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {},
 }));
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(async () => ({})), getSettingsValue: () => true }));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: h.getSettingsValue,
+}));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }) }));
-vi.mock('@server/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({ download: h.download, downloadRange: h.downloadRange }),
+}));
+vi.mock('@server/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
 
-import { claimModerationScan, releaseModerationClaim, toVerdictPatch, writeModerationVerdict } from './moderationScan';
+import {
+  claimModerationScan,
+  releaseModerationClaim,
+  scanUploadedObject,
+  toVerdictPatch,
+  writeModerationVerdict,
+} from './moderationScan';
 
 const claimedAt = new Date('2026-10-13T00:00:00Z');
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
 describe('moderationScan', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.updateOne.mockResolvedValue({ matchedCount: 1 });
+    h.getSettingsValue.mockReturnValue(undefined);
+    h.moderateUploadedFile.mockResolvedValue({ moderationStatus: 'clean' });
   });
 
   it('claims only a pending or unset file, stamping the claim identity', async () => {
@@ -62,6 +83,47 @@ describe('moderationScan', () => {
     expect(toVerdictPatch({ moderationStatus: 'blocked', blockReason: 'unsupported_format' })).toEqual({
       moderationStatus: 'blocked',
       blockReason: 'unsupported_format',
+    });
+  });
+
+  describe('scanUploadedObject', () => {
+    const fabFile = { id: 'ff1', userId: 'u1', mimeType: null };
+
+    it('reads the scanned bytes from the object key it was given', async () => {
+      await scanUploadedObject({ fabFile, objectKey: 'masks/m.png', logger });
+
+      const args = h.moderateUploadedFile.mock.calls[0][0];
+      await args.downloadBytes();
+      await args.downloadPartialBytes(512);
+
+      expect(h.download).toHaveBeenCalledWith('masks/m.png');
+      expect(h.downloadRange).toHaveBeenCalledWith('masks/m.png', 512);
+    });
+
+    it('passes the file identity through and turns a null mime type into undefined', async () => {
+      await scanUploadedObject({ fabFile, objectKey: 'masks/m.png', logger });
+
+      expect(h.moderateUploadedFile).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'u1', fabFileId: 'ff1', mimeType: undefined })
+      );
+    });
+
+    it('defaults moderation to enabled when the setting is unset, and honors an explicit off', async () => {
+      await scanUploadedObject({ fabFile, objectKey: 'masks/m.png', logger });
+      expect(h.moderateUploadedFile.mock.calls[0][0].enabled).toBe(true);
+
+      h.getSettingsValue.mockReturnValue(false);
+      await scanUploadedObject({ fabFile, objectKey: 'masks/m.png', logger });
+      expect(h.moderateUploadedFile.mock.calls[1][0].enabled).toBe(false);
+    });
+
+    it('returns the scan result unchanged', async () => {
+      h.moderateUploadedFile.mockResolvedValue({ moderationStatus: 'blocked', blockReason: 'explicit' });
+
+      await expect(scanUploadedObject({ fabFile, objectKey: 'masks/m.png', logger })).resolves.toEqual({
+        moderationStatus: 'blocked',
+        blockReason: 'explicit',
+      });
     });
   });
 });
