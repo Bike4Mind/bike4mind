@@ -143,13 +143,13 @@ describe('per-email budgets', () => {
     );
   });
 
-  it('keys the verify budget on the exact address, not the folded inbox', async () => {
+  it('keys the verify budget on the exact address and the verifying source, not the folded inbox', async () => {
     await chargeOtcEmailBudget('victim+x@gmail.com', '203.0.113.7', OTC_VERIFY_EMAIL_BUDGETS);
 
     expect(mocks.tryIncrement).toHaveBeenCalledWith(
-      `otc-limit:verify-email:${otcEmailKey('victim+x@gmail.com')}`,
-      OTC_LIMITS.verify.perEmail.limit,
-      OTC_LIMITS.verify.perEmail.windowMs
+      `otc-limit:verify-email-ip:${otcEmailKey('victim+x@gmail.com|203.0.113.7')}`,
+      OTC_LIMITS.verify.perEmailPerIp.limit,
+      OTC_LIMITS.verify.perEmailPerIp.windowMs
     );
   });
 

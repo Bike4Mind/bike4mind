@@ -102,9 +102,9 @@ const handler = baseApi({ auth: false })
       throw new UnprocessableEntityError('Too many failed attempts. Please request a new code.');
     }
 
-    // Brute-force bound per address across every token; the per-token attempt cap alone resets with
-    // each new code. Only a wrong guess against a live token spends it (see OTC_VERIFY_EMAIL_BUDGETS);
-    // tokenless junk is bounded by the per-IP cap.
+    // Brute-force bound per (address, source) across every token; the per-token attempt cap alone
+    // resets with each new code. Only a wrong guess against a live token spends it, and another
+    // source's guesses never do (see OTC_VERIFY_EMAIL_BUDGETS); tokenless junk is bounded per IP.
     const ipBucket = ipSubject(req);
     const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, ipBucket, OTC_VERIFY_EMAIL_BUDGETS);
     if (budgetRetryAfter !== undefined) {

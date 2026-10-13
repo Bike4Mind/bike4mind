@@ -17,6 +17,13 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
  * a many-source bomb but has only a short window, so a lockout bought with it lasts at most one
  * window after the attacker stops paying. There is deliberately no inbox-wide daily refusal.
  *
+ * The wrong-guess budget is keyed per (address, source) for the same reason: no other source's
+ * guesses can refuse the owner's verify. Guessing stays bounded across sources because every guess
+ * needs a live token, the inbox-wide send ceiling issues at most 15 per 15-minute window (1,440 a
+ * day), and each token takes 5 guesses: at most 7,200 guesses a day (~2.6% a year) against the 10^8
+ * 8-digit codes, and only for an attacker who also mails the owner 1,440 codes a day. One source
+ * alone gets 10 guesses per 15 minutes (960 a day).
+ *
  * The per-IP caps only bound a single source, so they are sized for a shared office or campus NAT
  * where many distinct people sign in from one address: the short window counts distinct emails per
  * IP and the blunt total plus daily caps keep one IP bounded no matter what.
@@ -32,7 +39,7 @@ export const OTC_LIMITS = {
     perIpDaily: { limit: 200, windowMs: DAY_MS },
   },
   verify: {
-    perEmail: { limit: 10, windowMs: 15 * MINUTE_MS },
+    perEmailPerIp: { limit: 10, windowMs: 15 * MINUTE_MS },
     perIp: { limit: 60, windowMs: 15 * MINUTE_MS },
   },
 } as const;
@@ -149,14 +156,14 @@ export const OTC_SEND_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
   { bucket: 'send-email-ip-daily', ...OTC_LIMITS.send.perEmailPerIpDaily, subject: inboxFromSource },
   { bucket: 'send-email', ...OTC_LIMITS.send.perEmail, subject: inbox },
 ];
-// Keyed on the exact token address, not the folded inbox: each alias has its own nonce and account,
-// so folding adds no brute-force protection and would let wrong guesses on alias tokens an attacker
-// requested lock the owner out of verifying a correct code.
+// Keyed on the exact token address plus the verifying source, not the folded inbox: each alias has
+// its own nonce and account, so folding adds no brute-force protection, and a guess from one source
+// must never spend the owner's budget (see OTC_LIMITS).
 // Safe only because sendOTC's ASCII-only email validation issues no token for an address that
 // userRepository.findByEmail's strength-2 collation would match to another account (zero-width or
 // fullwidth variants); a looser validator would give each such variant its own verify budget.
 export const OTC_VERIFY_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
-  { bucket: 'verify-email', ...OTC_LIMITS.verify.perEmail, subject: email => email },
+  { bucket: 'verify-email-ip', ...OTC_LIMITS.verify.perEmailPerIp, subject: (email, ip) => `${email}|${ip}` },
 ];
 
 const budgetKey = ({ bucket, subject }: OtcEmailBudget, email: string, ip: string) =>

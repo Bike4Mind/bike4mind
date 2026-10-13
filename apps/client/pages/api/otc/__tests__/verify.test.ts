@@ -165,7 +165,10 @@ describe('/api/otc/verify limiter wiring', () => {
 });
 
 describe('/api/otc/verify per-email budget', () => {
-  const budgetKey = `otc-limit:verify-email:${otcEmailKey(NON_DOMAIN_EMAIL)}`;
+  // makeReqRes requests come from the socket address 127.0.0.1.
+  const budgetKeyFor = (email: string, ip = '127.0.0.1') =>
+    `otc-limit:verify-email-ip:${otcEmailKey(`${email}|${ip}`)}`;
+  const budgetKey = budgetKeyFor(NON_DOMAIN_EMAIL);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -204,8 +207,8 @@ describe('/api/otc/verify per-email budget', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(422);
-    const { perEmail } = OTC_LIMITS.verify;
-    expect(mockTryIncrement).toHaveBeenCalledWith(budgetKey, perEmail.limit, perEmail.windowMs);
+    const { perEmailPerIp } = OTC_LIMITS.verify;
+    expect(mockTryIncrement).toHaveBeenCalledWith(budgetKey, perEmailPerIp.limit, perEmailPerIp.windowMs);
   });
 
   it('charges the exact token address, so alias tokens cannot drain the owner', async () => {
@@ -214,13 +217,64 @@ describe('/api/otc/verify per-email budget', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(422);
-    const { perEmail } = OTC_LIMITS.verify;
-    expect(mockTryIncrement).toHaveBeenCalledWith(
-      `otc-limit:verify-email:${otcEmailKey(alias)}`,
-      perEmail.limit,
-      perEmail.windowMs
-    );
+    const { perEmailPerIp } = OTC_LIMITS.verify;
+    expect(mockTryIncrement).toHaveBeenCalledWith(budgetKeyFor(alias), perEmailPerIp.limit, perEmailPerIp.windowMs);
     expect(mockTryIncrement).not.toHaveBeenCalledWith(budgetKey, expect.anything(), expect.anything());
+  });
+
+  describe('across sources', () => {
+    const ATTACKER_IP = '81.2.69.166';
+    const OWNER_IP = '81.2.69.110';
+    const counts = new Map<string, number>();
+    const window = () => new Date(Date.now() + 60_000);
+
+    beforeEach(() => {
+      counts.clear();
+      mockTryIncrement.mockImplementation(async (key: string, limit: number) => {
+        const count = counts.get(key) ?? 0;
+        if (count + 1 > limit) return { success: false, count, expiresAt: window() };
+        counts.set(key, count + 1);
+        return { success: true, count: count + 1, expiresAt: window() };
+      });
+      mockTryAdd.mockImplementation(async (key: string) => ({
+        success: true,
+        count: counts.get(key) ?? 0,
+        expiresAt: window(),
+      }));
+    });
+
+    const verifyFrom = async (ip: string) => {
+      const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+      (req as any).headers['x-real-ip'] = ip;
+      req.body.username = undefined;
+      await handler(req, res);
+      return res;
+    };
+
+    it('lets the owner verify from another source after an attacker spends its own budget', async () => {
+      const { limit } = OTC_LIMITS.verify.perEmailPerIp;
+      for (let i = 0; i < limit; i++) expect((await verifyFrom(ATTACKER_IP))._getStatusCode()).toBe(422);
+      expect(counts.get(budgetKeyFor(NON_DOMAIN_EMAIL, ATTACKER_IP))).toBe(limit);
+
+      const refused = await verifyFrom(ATTACKER_IP);
+      expect(refused._getStatusCode()).toBe(429);
+      expect(refused.getHeader('Retry-After')).toBeDefined();
+
+      mockVerifyPendingOTC.mockResolvedValue(true);
+      mockFindByEmail.mockResolvedValue(null);
+      const owner = await verifyFrom(OWNER_IP);
+      expect(owner._getStatusCode()).toBe(200);
+    });
+
+    it('still caps each source on its own', async () => {
+      const { limit } = OTC_LIMITS.verify.perEmailPerIp;
+      for (let i = 0; i < limit; i++) await verifyFrom(OWNER_IP);
+
+      const refused = await verifyFrom(OWNER_IP);
+      expect(refused._getStatusCode()).toBe(429);
+      expect(refused.getHeader('Retry-After')).toBeDefined();
+      expect(mockVerifyPendingOTC).toHaveBeenCalledTimes(limit);
+    });
   });
 
   it('does not spend the budget on a correct code', async () => {
@@ -245,7 +299,7 @@ describe('/api/otc/verify per-email budget', () => {
 
     expect(res._getStatusCode()).toBe(429);
     expect(res.getHeader('Retry-After')).toBeDefined();
-    expect(mockTryAdd).toHaveBeenCalledWith(budgetKey, 0, OTC_LIMITS.verify.perEmail.limit, expect.anything());
+    expect(mockTryAdd).toHaveBeenCalledWith(budgetKey, 0, OTC_LIMITS.verify.perEmailPerIp.limit, expect.anything());
     expect(mockValidateNonce).not.toHaveBeenCalled();
     expect(mockVerifyPendingOTC).not.toHaveBeenCalled();
     expect(mockTryIncrement).not.toHaveBeenCalled();
