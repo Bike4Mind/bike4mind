@@ -20,7 +20,7 @@ const SWEEP_INDEX_KEY = { voiceSessionStartedAt: 1 };
  * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), which must stay last.
  */
 const migration: MigrationFile = {
-  id: 20260921235989,
+  id: 20260921235986,
   name: 'ensure stale voice hold index',
 
   up: async () => {

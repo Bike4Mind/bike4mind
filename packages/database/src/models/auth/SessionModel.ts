@@ -975,7 +975,7 @@ SessionSchema.index({ userId: 1, voiceSessionStartedAt: 1 }, { sparse: true });
 // `voiceReservedCredits: { $gt: 0 }`, so only open paid holds are indexed and the planner can prove
 // the query is covered by the filter. A `{ voiceSessionStartedAt: { $type: 'date' } }` filter is not
 // implied by the sweep's `$lt` ranges, so that index was never chosen. Named so it can coexist with
-// that index until migration 20260921235989_ensure-stale-voice-hold-index drops it.
+// that index until migration 20260921235986_ensure-stale-voice-hold-index drops it.
 SessionSchema.index(
   { voiceSessionStartedAt: 1 },
   { name: 'voiceSessionStartedAt_1_openVoiceHold', partialFilterExpression: { voiceReservedCredits: { $gt: 0 } } }

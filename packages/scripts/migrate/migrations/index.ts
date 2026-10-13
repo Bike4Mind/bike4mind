@@ -153,7 +153,7 @@ import EnsureGitHubLakeAuthGrantIndexes from './20260921235962_ensure-github-lak
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureSessionOriginChannelIndex from './20260921235980_ensure-session-origin-channel-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
-import EnsureStaleVoiceHoldIndex from './20260921235989_ensure-stale-voice-hold-index';
+import EnsureStaleVoiceHoldIndex from './20260921235986_ensure-stale-voice-hold-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureQuestCallbackDispatchedIndex from './20260921235990_ensure-quest-callback-dispatched-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
