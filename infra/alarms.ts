@@ -105,8 +105,9 @@ if (isMonitoredStage) {
    * Alarm: Ungranted Credit Purchases
    *
    * Fires when the daily reconciliation finds a succeeded Stripe credit purchase with no
-   * purchase transaction. The Slack post from the cron is best-effort; this alarm is the
-   * signal that cannot fail quietly. The metric is emitted once a day (0 when clean), so
+   * purchase transaction, a transaction whose balance increment never applied, or a
+   * transaction whose owner no longer exists (see UngrantedReason in the cron). The Slack
+   * post from the cron is best-effort; this alarm is the signal that cannot fail quietly. The metric is emitted once a day (0 when clean), so
    * the period is one day.
    *
    * Metric emitted by: apps/workers/src/cron/creditPurchaseReconciliation.ts
