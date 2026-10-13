@@ -899,6 +899,36 @@ describe('ImageEditService.process mask access (#3069)', () => {
       expect(quest.reply).toContain('blocked by moderation');
     });
 
+    it("waits through 'scanning', the state a mask is in when the S3 event owns the claim", async () => {
+      const { getSignedUrl, findAccessibleInIds } = await runWithTimers({
+        reachable: sequence(['scanning', 'scanning', 'clean']),
+      });
+
+      expect(findAccessibleInIds).toHaveBeenCalledTimes(3);
+      expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+      expect(editSpy).toHaveBeenCalled();
+    });
+
+    it("fails closed with the retry message when a 'scanning' mask outlasts the wait", async () => {
+      const { quest, findAccessibleInIds } = await runWithTimers({ reachable: sequence(['scanning']) });
+
+      expect(findAccessibleInIds.mock.calls.length).toBeGreaterThanOrEqual(16);
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(quest.type).toBe('error');
+      expect(quest.reply).toContain('still being scanned');
+    });
+
+    it('stops polling and fails closed when the mask disappears mid-wait', async () => {
+      let call = 0;
+      const { quest, findAccessibleInIds } = await runWithTimers({
+        reachable: () => (call++ === 0 ? [withStatus('pending')] : []),
+      });
+
+      expect(findAccessibleInIds).toHaveBeenCalledTimes(2);
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(quest.type).toBe('error');
+    });
+
     it('reports blocked, not retry, when the scan resolves to blocked mid-wait', async () => {
       const { quest } = await runWithTimers({ reachable: sequence(['pending', 'blocked']) });
 
