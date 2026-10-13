@@ -1,8 +1,4 @@
-import { isOAuthClientIdShape, oauthClientSourceSlug } from '@bike4mind/common';
-
-// Attribution only, and self-assertable: any new account can name any active client at signup.
-// Never key access (entitlements, requiredUserTag, model or tool gates) on a source: tag.
-export const OAUTH_SOURCE_TAG_PREFIX = 'source:';
+import { OAUTH_SOURCE_TAG_PREFIX, isOAuthClientIdShape, oauthClientSourceSlug } from '@bike4mind/common';
 
 /** Narrow client lookup, so this package stays free of @bike4mind/database. */
 export interface OAuthSourceClientLookup {

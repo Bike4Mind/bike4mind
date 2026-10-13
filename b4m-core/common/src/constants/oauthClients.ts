@@ -45,6 +45,16 @@ export function isOAuthClientIdShape(value: unknown): value is string {
   return typeof value === 'string' && OAUTH_CLIENT_ID_SHAPE.test(value);
 }
 
+// Attribution only, and self-assertable: any new account can name any active client at signup.
+// So the namespace never grants access: isOAuthSourceTag is refused in admin-configured gates
+// (lake requiredUserTag/requiredEntitlement, model allowedUserTags/allowedEntitlements) and
+// dropped before user tags pass through as entitlement keys (entitlementsForTags, briefcase).
+export const OAUTH_SOURCE_TAG_PREFIX = 'source:';
+
+export function isOAuthSourceTag(tag: string): boolean {
+  return tag.trim().toLowerCase().startsWith(OAUTH_SOURCE_TAG_PREFIX);
+}
+
 /**
  * The attribution slug for a registered OAuth client, used as the `source:<slug>` user tag.
  * Recovered from the id minted by generateOAuthClientId

@@ -4,6 +4,7 @@ import {
   OAUTH_DEVICE_CLIENT_IDS,
   clientIdFromAuthorizeRedirect,
   isOAuthClientIdShape,
+  isOAuthSourceTag,
   oauthClientDisplayName,
   oauthClientSourceSlug,
 } from './oauthClients';
@@ -89,5 +90,15 @@ describe('isOAuthClientIdShape', () => {
 
   it.each(['', 'a'.repeat(129), 'b4m_x\r\nforged', 'a b', 'a/b', null, 42])('rejects %p', value => {
     expect(isOAuthClientIdShape(value)).toBe(false);
+  });
+});
+
+describe('isOAuthSourceTag', () => {
+  it.each(['source:acme', 'SOURCE:acme', '  source:x'])('matches %p', tag => {
+    expect(isOAuthSourceTag(tag)).toBe(true);
+  });
+
+  it.each(['acme:pro', 'opensource:x', 'source', 'vip'])('ignores %p', tag => {
+    expect(isOAuthSourceTag(tag)).toBe(false);
   });
 });
