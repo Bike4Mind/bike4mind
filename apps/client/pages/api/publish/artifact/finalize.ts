@@ -265,6 +265,10 @@ const handler = baseApi().post(async (req, res) => {
       accessGate?: unknown;
     } | null>();
 
+  if (previous && previous.ownerId !== String(req.user.id) && !req.user.isAdmin) {
+    return res.status(403).json({ error: 'Only the owner can republish this slug' });
+  }
+
   // Validate the embed allowlist against the artifact's FINAL open-public state. A
   // re-publish PRESERVES the previous access gate (it is not in the $set below), so
   // open-public means visibility public AND no preserved gate - matching the PATCH
