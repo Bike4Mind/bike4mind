@@ -35,6 +35,7 @@ vi.mock('@server/services/publish', () => ({
   checkScopePermission: () => ({ ok: true }),
   checkPublishQuota: () => ({ ok: true }),
   invalidatePublishCdn: mocks.invalidatePublishCdn,
+  restrictDuplicatePublications: vi.fn(),
   toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
 }));
 vi.mock('@server/utils/storage', () => ({

@@ -401,7 +401,7 @@ const handler = baseApi().post(async (req, res) => {
   // (gated pages are no-store), so skip the invalidation otherwise - unless the page WAS public:
   // an update that downgrades it must purge the cached public copy too. Best-effort.
   if (saved.visibility === 'public' || previous?.visibility === 'public') {
-    void invalidatePublishCdn(toCacheTarget(saved), req.logger);
+    await invalidatePublishCdn(toCacheTarget(saved), req.logger);
   }
 
   // 8. Best-effort draft cleanup

@@ -43,6 +43,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish', () => ({
   resolveVisibility: vi.fn(() => ({ ok: true })),
   invalidatePublishCdn: vi.fn(),
+  restrictDuplicatePublications: vi.fn(),
   toCacheTarget: vi.fn(() => ({})),
   validateEmbedOrigins: vi.fn(() => ({ ok: true, value: [] })),
 }));
@@ -358,6 +359,16 @@ describe('PATCH /api/publish/artifacts/[id] - discoverable de-arms on leaving op
     vi.mocked(invalidatePublishCdn).mockClear();
     await patchBody({ visibility: 'private' }, listedArtifact());
     expect(invalidatePublishCdn).toHaveBeenCalled();
+  });
+
+  it('carries a visibility change over to older duplicates of the same source, and only then', async () => {
+    const { restrictDuplicatePublications } = await import('@server/services/publish');
+    vi.mocked(restrictDuplicatePublications).mockClear();
+    const { artifact } = await patchBody({ visibility: 'private' }, listedArtifact());
+    expect(restrictDuplicatePublications).toHaveBeenCalledWith(artifact, expect.anything());
+    vi.mocked(restrictDuplicatePublications).mockClear();
+    await patchBody({ title: 'Renamed' }, listedArtifact());
+    expect(restrictDuplicatePublications).not.toHaveBeenCalled();
   });
 
   it('does not re-list an artifact when a gate is later cleared', async () => {
