@@ -308,10 +308,14 @@ describe('isOriginalQuest', () => {
     expect(isOriginalQuest(createdAt(-5_000), timestamp)).toBe(true);
   });
 
-  it('keeps the boundary at exactly one hour and drops anything wider in either direction', () => {
+  it('keeps the boundary at exactly one hour for an _id newer than its timestamp', () => {
     expect(isOriginalQuest(createdAt(QUEST_COPY_SKEW_MS), timestamp)).toBe(true);
     expect(isOriginalQuest(createdAt(QUEST_COPY_SKEW_MS + 1_000), timestamp)).toBe(false);
-    expect(isOriginalQuest(createdAt(-QUEST_COPY_SKEW_MS - 1_000), timestamp)).toBe(false);
+  });
+
+  it('counts a retry whose timestamp moved hours past its _id', () => {
+    expect(isOriginalQuest(createdAt(-QUEST_COPY_SKEW_MS - 1_000), timestamp)).toBe(true);
+    expect(isOriginalQuest(createdAt(-5 * QUEST_COPY_SKEW_MS), timestamp)).toBe(true);
   });
 
   it('drops a copy made 30 days after the source timestamp', () => {

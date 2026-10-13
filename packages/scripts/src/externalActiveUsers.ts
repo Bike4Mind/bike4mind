@@ -132,12 +132,13 @@ export function recordUsageSource(counts: UserSourceCounts, userId: string, sour
 
 /**
  * Session clone, fork and snip copy quests with the source `timestamp` but a fresh _id, and rebind
- * the session to the copier. An original's _id and timestamp are created together, so a wide gap
- * marks a copy that must not credit the copier on a past day. `createdAt` is not used: the copy
- * may spread it from the source.
+ * the session to the copier, so a copy's _id is newer than its timestamp and must not credit the
+ * copier on a past day. One-sided: a retry keeps its _id and moves timestamp forward
+ * (ChatCompletionInvoke in b4m-core/services), which is real activity. `createdAt` is not used: the
+ * copy may spread it from the source.
  */
 export function isOriginalQuest(id: { getTimestamp(): Date }, timestamp: Date): boolean {
-  return Math.abs(id.getTimestamp().getTime() - timestamp.getTime()) <= QUEST_COPY_SKEW_MS;
+  return id.getTimestamp().getTime() - timestamp.getTime() <= QUEST_COPY_SKEW_MS;
 }
 
 // --- Exclusions ---
