@@ -33,3 +33,44 @@ const DISPLAY_NAMES: Record<OAuthDeviceClientId, string> = {
 export function oauthClientDisplayName(clientId: string): string {
   return DISPLAY_NAMES[clientId as OAuthDeviceClientId] ?? clientId;
 }
+
+const MAX_SOURCE_SLUG_LENGTH = 64;
+const MAX_AUTHORIZE_CLIENT_ID_LENGTH = 128;
+
+/**
+ * The attribution slug for a registered OAuth client, used as the `source:<slug>` user tag.
+ * Recovered from the id minted by generateOAuthClientId
+ * (packages/database/src/models/auth/oauthClientAdmin.ts), whose b4m_<slug>_<8 hex> shape
+ * must stay in sync with the pattern here. Two clients registered under the same name share a slug.
+ */
+export function oauthClientSourceSlug(clientId: string): string {
+  const minted = /^b4m_(.+)_[0-9a-f]{8}$/.exec(clientId);
+  if (minted) return minted[1];
+  return clientId
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '_')
+    .slice(0, MAX_SOURCE_SLUG_LENGTH);
+}
+
+/**
+ * The client_id of an in-app /oauth/authorize return path, or undefined for anything else.
+ * Only a same-origin relative path is accepted, so an absolute or protocol-relative
+ * redirectTo never yields an id.
+ */
+export function clientIdFromAuthorizeRedirect(redirectTo: unknown): string | undefined {
+  if (typeof redirectTo !== 'string' || !redirectTo.startsWith('/') || redirectTo.startsWith('//')) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(redirectTo, 'http://local');
+  } catch {
+    return undefined;
+  }
+  if (url.origin !== 'http://local' || url.pathname !== '/oauth/authorize') return undefined;
+  const ids = url.searchParams.getAll('client_id');
+  if (ids.length !== 1) return undefined;
+  const [id] = ids;
+  if (!id || id.length > MAX_AUTHORIZE_CLIENT_ID_LENGTH) return undefined;
+  return id;
+}

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { LEGACY_DEVICE_CLIENT_ID, OAUTH_DEVICE_CLIENT_IDS, oauthClientDisplayName } from './oauthClients';
+import {
+  LEGACY_DEVICE_CLIENT_ID,
+  OAUTH_DEVICE_CLIENT_IDS,
+  clientIdFromAuthorizeRedirect,
+  oauthClientDisplayName,
+  oauthClientSourceSlug,
+} from './oauthClients';
 
 describe('oauthClientDisplayName', () => {
   it('names every allowlisted client', () => {
@@ -22,5 +28,53 @@ describe('oauthClientDisplayName', () => {
 
   it('treats the pre-clientId row default as an allowlisted client', () => {
     expect(OAUTH_DEVICE_CLIENT_IDS).toContain(LEGACY_DEVICE_CLIENT_ID);
+  });
+});
+
+describe('oauthClientSourceSlug', () => {
+  it.each([
+    ['b4m_acme_app_0a1b2c3d', 'acme_app'],
+    ['b4m_client_deadbeef', 'client'],
+    ['b4m_x_12345678', 'x'],
+  ])('recovers the slug from a minted id %s', (id, slug) => {
+    expect(oauthClientSourceSlug(id)).toBe(slug);
+  });
+
+  it.each([
+    ['b4m-cli', 'b4m-cli'],
+    ['B4M_Acme_ZZZZZZZZ', 'b4m_acme_zzzzzzzz'],
+    ['weird id/with:chars', 'weird_id_with_chars'],
+  ])('normalizes a non-minted id %s', (id, slug) => {
+    expect(oauthClientSourceSlug(id)).toBe(slug);
+  });
+
+  it('caps a non-minted slug at 64 chars', () => {
+    expect(oauthClientSourceSlug('a'.repeat(200))).toHaveLength(64);
+  });
+});
+
+describe('clientIdFromAuthorizeRedirect', () => {
+  it('returns the client_id of an authorize return path', () => {
+    expect(clientIdFromAuthorizeRedirect('/oauth/authorize?client_id=b4m_acme_0a1b2c3d&response_type=code')).toBe(
+      'b4m_acme_0a1b2c3d'
+    );
+  });
+
+  it.each([
+    ['protocol-relative', '//evil.example.com/oauth/authorize?client_id=x'],
+    ['absolute URL', 'https://evil.example.com/oauth/authorize?client_id=x'],
+    ['backslash host', '/\\evil.example.com/oauth/authorize?client_id=x'],
+    ['other path', '/settings?client_id=x'],
+    ['two client_ids', '/oauth/authorize?client_id=a&client_id=b'],
+    ['empty client_id', '/oauth/authorize?client_id='],
+    ['no client_id', '/oauth/authorize?response_type=code'],
+    ['overlong client_id', `/oauth/authorize?client_id=${'a'.repeat(129)}`],
+    ['empty string', ''],
+  ])('rejects %s', (_label, value) => {
+    expect(clientIdFromAuthorizeRedirect(value)).toBeUndefined();
+  });
+
+  it.each([null, undefined, 42, {}, ['/oauth/authorize?client_id=x']])('rejects non-string %p', value => {
+    expect(clientIdFromAuthorizeRedirect(value)).toBeUndefined();
   });
 });

@@ -14,6 +14,7 @@ import bcrypt from 'bcryptjs';
 import { CURRENT_POLICY_VERSION, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
 import { addCredits } from '../creditService';
 import { isDisposableEmail } from './disposableEmail';
+import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
 
 // NOT parsed at runtime - derives the param type via z.infer only. The policy/age fields are
 // enforced by the manual `!== true` / version checks in registerUser below, not by this schema.
@@ -24,6 +25,9 @@ const registerUserSchema = z.object({
   email: z.string(),
   name: z.string(),
   inviteCode: z.string().optional(),
+  // client_id of the OAuth client the signup came through; resolved to a source:<slug> tag only
+  // when it names an active registered client.
+  sourceClientId: z.string().optional(),
   password: z.string().optional().default(''),
   // P0-B abuse gate: a new account cannot be created without a versioned AUP/ToS
   // acceptance and an 18+ age attestation. Enforced HERE in the service (not just the UI form) so
@@ -68,6 +72,7 @@ interface RegisterUserAdapters {
      * to the user
      */
     creditTransactions?: ICreditTransactionRepository;
+    oauthClients?: OAuthSourceClientLookup;
   };
   logger: Logger;
   /**
@@ -81,7 +86,17 @@ export const registerUser = async (
   params: RegisterUserParameters,
   { db, logger, skipInviteCheck }: RegisterUserAdapters
 ) => {
-  const { username, email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation } = params;
+  const {
+    username,
+    email,
+    name,
+    inviteCode,
+    password,
+    metadata,
+    acceptedPolicyVersion,
+    ageAttestation,
+    sourceClientId,
+  } = params;
 
   // P0-B abuse gate: reject creation unless a current, versioned AUP/ToS acceptance
   // and an 18+ attestation are present. This is the server-side enforcement - the UI checkboxes
@@ -241,6 +256,16 @@ export const registerUser = async (
   // open-registration grant; the amount travels on the user doc.
   if (freeCredits > 0) {
     tags = [...new Set([...tags, PENDING_FREE_CREDITS_TAG])];
+  }
+
+  // Attribution must never block a signup, so a failed lookup only drops the tag.
+  if (sourceClientId && db.oauthClients) {
+    try {
+      const sourceTag = await resolveOAuthSourceTag(sourceClientId, db.oauthClients);
+      if (sourceTag) tags = [...new Set([...tags, sourceTag])];
+    } catch (error) {
+      logger.warn(`Could not resolve OAuth source tag for client ${sourceClientId}: ${error}`);
+    }
   }
 
   const buildUser: Omit<IUserDocument, 'id'> = {
