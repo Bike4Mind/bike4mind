@@ -82,7 +82,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
 
       await withTransaction(async session => {
         try {
-          const files = await FabFile.find(ownedFilter).select('filePath').session(session);
+          const files = await FabFile.find(ownedFilter).select('filePath versions').session(session);
           const user = await User.findById(userId).session(session);
 
           if (!user) {
@@ -90,6 +90,11 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
           }
 
           const filePaths = files.map(file => file.filePath).filter((filePath): filePath is string => !!filePath);
+          // An AI-edited file also keeps its retained revisions under their own keys (see
+          // appendEditedVersion); deleteFabFile removes them too, so this bulk path must as well.
+          const storageKeys = Array.from(
+            new Set([...files.flatMap(file => (file.versions ?? []).map(version => version?.filePath)), ...filePaths])
+          ).filter((key): key is string => !!key);
 
           // Every owned file is going, and storage only ever counted the caller's own files.
           user.currentStorageSize = 0;
@@ -105,7 +110,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
           ]);
 
           await Promise.all(
-            filePaths.map(async filePath => {
+            storageKeys.map(async filePath => {
               try {
                 await getFilesStorage().delete(filePath);
               } catch (error) {

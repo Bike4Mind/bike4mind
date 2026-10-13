@@ -36,7 +36,15 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
-const fabFileDocs = vi.hoisted(() => [{ filePath: 'a/one.png' }, { filePath: 'b/two.png' }]);
+const fabFileDocs = vi.hoisted(() => [
+  { filePath: 'a/one.png' },
+  // An AI-edited file: v1 and a retained edit under their own keys, the latest repeating filePath.
+  {
+    filePath: 'b/v3.docx',
+    versions: [{ filePath: 'b/v1.docx' }, { filePath: 'b/v2.docx' }, { filePath: 'b/v3.docx' }],
+  },
+]);
+const storageDelete = vi.hoisted(() => vi.fn());
 
 vi.mock('@bike4mind/database', () => {
   class FabFile {
@@ -96,7 +104,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn(), delete: vi.fn() }) }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn(), delete: storageDelete }) }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...args: unknown[]) => {
@@ -249,6 +257,17 @@ describe('DELETE /api/files', () => {
     expect(update).toEqual({ $pull: { users: { userId: 'user-1' } } });
     // A soft-deleted share must lose the grant too, or restoring it hands the access back.
     expect(mockRefs.updateManyOptions).toEqual({ includeDeleted: true });
+  });
+
+  it('deletes every retained version object of an owned file, each key once', async () => {
+    storageDelete.mockClear();
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    const deleted = storageDelete.mock.calls.map(([key]) => key);
+    expect(deleted).toHaveLength(4);
+    expect(new Set(deleted)).toEqual(new Set(['a/one.png', 'b/v1.docx', 'b/v2.docx', 'b/v3.docx']));
   });
 
   it('completes the request without throwing', async () => {
