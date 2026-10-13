@@ -235,14 +235,16 @@ const SubscriptionModalContent = () => {
                 >
                   {t('subscription_modal.business')}
                 </Tab>
-                {!teamPlanAvailable && (
-                  <Box component="span" id={teamTabReasonId} sx={visuallyHidden}>
-                    {TEAM_PLAN_UNAVAILABLE_MESSAGE}
-                  </Box>
-                )}
               </span>
             </Tooltip>
           </TabList>
+          {/* aria-describedby resolves the id document-wide, so the reason stays a sibling of the tablist:
+              inside it, browse mode would read the text as stray content beside the tabs. */}
+          {!teamPlanAvailable && (
+            <Box component="span" id={teamTabReasonId} sx={visuallyHidden}>
+              {TEAM_PLAN_UNAVAILABLE_MESSAGE}
+            </Box>
+          )}
         </Tabs>
       </Box>
 
