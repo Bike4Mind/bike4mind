@@ -608,6 +608,46 @@ describe('ModelSelection duplicate and unavailable rows', () => {
   });
 });
 
+describe('ModelSelection direct and Bedrock routes', () => {
+  afterEach(() => {
+    extraTextModels.length = 0;
+  });
+
+  const directHaiku = {
+    ...textModel,
+    id: 'claude-haiku-5-5',
+    name: 'Claude Haiku 5.5',
+    backend: ModelBackend.Anthropic,
+  } as ModelInfo;
+  const bedrockHaiku = {
+    ...textModel,
+    id: 'global.anthropic.claude-haiku-5-5',
+    name: 'Claude Haiku 5.5',
+    backend: ModelBackend.Bedrock,
+  } as ModelInfo;
+
+  it('lists the Bedrock route under its own labelled heading, after the direct row', () => {
+    extraTextModels.push(bedrockHaiku, directHaiku);
+    renderSelection({});
+
+    const bedrockSection = screen.getByTestId('bedrock-route-section-Anthropic-text');
+    expect(within(bedrockSection).getByText('Via AWS Bedrock')).toBeInTheDocument();
+    expect(within(bedrockSection).getByTestId(`model-card-${bedrockHaiku.id}`)).toBeInTheDocument();
+    expect(within(bedrockSection).queryByTestId(`model-card-${directHaiku.id}`)).not.toBeInTheDocument();
+
+    const directCard = screen.getByTestId(`model-card-${directHaiku.id}`);
+    expect(directCard.compareDocumentPosition(bedrockSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('adds no route heading when a maker is served by one route only', () => {
+    extraTextModels.push(bedrockHaiku);
+    renderSelection({});
+
+    expect(screen.getByTestId(`model-card-${bedrockHaiku.id}`)).toBeInTheDocument();
+    expect(screen.queryByText('Via AWS Bedrock')).not.toBeInTheDocument();
+  });
+});
+
 describe('ModelSelection keyboard access', () => {
   afterEach(() => {
     extraTextModels.length = 0;

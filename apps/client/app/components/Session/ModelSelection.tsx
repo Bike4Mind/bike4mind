@@ -32,7 +32,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { resolveRecommendedModelIds } from '@client/app/utils/recommendedModels';
-import { dedupeModelsForPicker } from '@client/app/utils/pickerModelDedupe';
+import { dedupeModelsForPicker, splitModelsByRoute } from '@client/app/utils/pickerModelDedupe';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -990,6 +990,34 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     );
   if (error) return <div>Error loading models: {error.message}</div>;
 
+  const renderModelCards = (cards: ModelInfo[]) => (
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
+        gap: 2,
+      }}
+    >
+      {cards.map(modelInfo => (
+        <ModelOption
+          key={modelInfo.id}
+          model={modelInfo}
+          isSelected={modelInfo.id === model}
+          maxContextWindow={maxContextWindow}
+          maxTokens={maxTokens}
+          onSelect={handleModelSelect}
+          onSettingsClick={onSettingsClick}
+          isFavorite={isFavorite(modelInfo.id)}
+          onToggleFavorite={toggleFavorite}
+          avgResponseTimeByModel={avgResponseTimeByModel}
+          statsLoading={statsLoading}
+          mode={mode}
+          viewMode={effectiveViewMode}
+        />
+      ))}
+    </Box>
+  );
+
   // Pinned sections (Recommended, Favorites) sit above the provider accordions and share one
   // layout; only the key, label, icon and model list differ.
   const renderPinnedSection = ({
@@ -1083,37 +1111,35 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           }}
         />
       </AccordionSummary>
-      <AccordionDetails>
-        {expandedBackends.has(sectionKey) && (
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-              gap: 2,
-            }}
-          >
-            {sectionModels.map(modelInfo => (
-              <ModelOption
-                key={modelInfo.id}
-                model={modelInfo}
-                isSelected={modelInfo.id === model}
-                maxContextWindow={maxContextWindow}
-                maxTokens={maxTokens}
-                onSelect={handleModelSelect}
-                onSettingsClick={onSettingsClick}
-                isFavorite={isFavorite(modelInfo.id)}
-                onToggleFavorite={toggleFavorite}
-                avgResponseTimeByModel={avgResponseTimeByModel}
-                statsLoading={statsLoading}
-                mode={mode}
-                viewMode={effectiveViewMode}
-              />
-            ))}
-          </Box>
-        )}
-      </AccordionDetails>
+      <AccordionDetails>{expandedBackends.has(sectionKey) && renderModelCards(sectionModels)}</AccordionDetails>
     </Accordion>
   );
+
+  // Direct-API rows first, then the maker's Bedrock routes under their own heading, so two cards
+  // with the same name are never neighbours told apart only by a corner badge.
+  const renderProviderModels = (backend: string, cards: ModelInfo[], section: string) => {
+    const { direct, bedrock } = splitModelsByRoute(cards);
+    if (direct.length === 0 || bedrock.length === 0) return renderModelCards(cards);
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {renderModelCards(direct)}
+        <Box
+          data-testid={`bedrock-route-section-${backend}-${section}`}
+          sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+        >
+          <Box sx={{ ml: '8px' }}>
+            <Typography level="title-sm" sx={{ color: 'text.primary' }}>
+              Via AWS Bedrock
+            </Typography>
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              The same models, served through AWS Bedrock instead of {backend}&apos;s own API.
+            </Typography>
+          </Box>
+          {renderModelCards(bedrock)}
+        </Box>
+      </Box>
+    );
+  };
 
   return (
     <Box
@@ -1554,32 +1580,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                             <ChatIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
                             Text Models
                           </Typography>
-                          <Box
-                            sx={{
-                              display: 'grid',
-                              gridTemplateColumns:
-                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-                              gap: 2,
-                            }}
-                          >
-                            {modelsByBackendAndType[backend].text.map(modelInfo => (
-                              <ModelOption
-                                key={modelInfo.id}
-                                model={modelInfo}
-                                isSelected={modelInfo.id === model}
-                                maxContextWindow={maxContextWindow}
-                                maxTokens={maxTokens}
-                                onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
-                                isFavorite={isFavorite(modelInfo.id)}
-                                onToggleFavorite={toggleFavorite}
-                                avgResponseTimeByModel={avgResponseTimeByModel}
-                                statsLoading={statsLoading}
-                                mode={mode}
-                                viewMode={effectiveViewMode}
-                              />
-                            ))}
-                          </Box>
+                          {renderProviderModels(backend, modelsByBackendAndType[backend].text, 'text')}
                         </Box>
                       )}
 
@@ -1603,32 +1604,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                             <ImageIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
                             Image Generation Models
                           </Typography>
-                          <Box
-                            sx={{
-                              display: 'grid',
-                              gridTemplateColumns:
-                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-                              gap: 2,
-                            }}
-                          >
-                            {modelsByBackendAndType[backend].image.map(modelInfo => (
-                              <ModelOption
-                                key={modelInfo.id}
-                                model={modelInfo}
-                                isSelected={modelInfo.id === model}
-                                maxContextWindow={maxContextWindow}
-                                maxTokens={maxTokens}
-                                onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
-                                isFavorite={isFavorite(modelInfo.id)}
-                                onToggleFavorite={toggleFavorite}
-                                avgResponseTimeByModel={avgResponseTimeByModel}
-                                statsLoading={statsLoading}
-                                mode={mode}
-                                viewMode={effectiveViewMode}
-                              />
-                            ))}
-                          </Box>
+                          {renderProviderModels(backend, modelsByBackendAndType[backend].image, 'image')}
                         </Box>
                       )}
 
@@ -1652,62 +1628,13 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                             <VideoIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
                             Video Generation Models
                           </Typography>
-                          <Box
-                            sx={{
-                              display: 'grid',
-                              gridTemplateColumns:
-                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-                              gap: 2,
-                            }}
-                          >
-                            {modelsByBackendAndType[backend].video.map(modelInfo => (
-                              <ModelOption
-                                key={modelInfo.id}
-                                model={modelInfo}
-                                isSelected={modelInfo.id === model}
-                                maxContextWindow={maxContextWindow}
-                                maxTokens={maxTokens}
-                                onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
-                                isFavorite={isFavorite(modelInfo.id)}
-                                onToggleFavorite={toggleFavorite}
-                                avgResponseTimeByModel={avgResponseTimeByModel}
-                                statsLoading={statsLoading}
-                                mode={mode}
-                                viewMode={effectiveViewMode}
-                              />
-                            ))}
-                          </Box>
+                          {renderProviderModels(backend, modelsByBackendAndType[backend].video, 'video')}
                         </Box>
                       )}
                     </Box>
                   ) : (
                     // Fallback to normal single-type view if grouping data is not available
-                    <Box
-                      sx={{
-                        display: 'grid',
-                        gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-                        gap: 2,
-                      }}
-                    >
-                      {modelsByBackend[backend].map(modelInfo => (
-                        <ModelOption
-                          key={modelInfo.id}
-                          model={modelInfo}
-                          isSelected={modelInfo.id === model}
-                          maxContextWindow={maxContextWindow}
-                          maxTokens={maxTokens}
-                          onSelect={handleModelSelect}
-                          onSettingsClick={onSettingsClick}
-                          isFavorite={isFavorite(modelInfo.id)}
-                          onToggleFavorite={toggleFavorite}
-                          avgResponseTimeByModel={avgResponseTimeByModel}
-                          statsLoading={statsLoading}
-                          mode={mode}
-                          viewMode={effectiveViewMode}
-                        />
-                      ))}
-                    </Box>
+                    renderProviderModels(backend, modelsByBackend[backend], 'all')
                   ))}
               </AccordionDetails>
             </Accordion>
