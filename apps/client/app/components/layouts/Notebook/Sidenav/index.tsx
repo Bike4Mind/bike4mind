@@ -45,9 +45,8 @@ const CombinedNotebooks = dynamic(() => import('./CombinedNotebooks'), {
 // projects, and agents with that surface's own list.
 //
 // The route is matched against `path` from the manifest, not a pathname this file names: which
-// route a premium nav owns is the overlay's knowledge. That is what lets a SECOND overlay have one
-// at all - the slot used to be a single component core matched against a hardcoded pathname, so
-// any other overlay's nav was dropped with a codegen warning.
+// route a premium nav owns is the overlay's knowledge, and that is what lets more than one overlay
+// have one.
 import { premiumNotebookSidenavs } from '@client/app/premium-generated/premiumNotebookSidenavs.generated';
 
 const NotebookSideNav = () => {
@@ -59,14 +58,15 @@ const NotebookSideNav = () => {
   // A route an overlay claims owns its dedicated, surface-scoped nav; every other route uses the
   // shared one. A claim is the route itself, or - for a workspace core registers - any app-shell
   // route declaring it hosts that workspace (see hostedWorkspaceAt), so the overlay's own nav
-  // follows its workspace wherever it is hosted. First match wins (codegen warns on a duplicate
-  // path).
+  // follows its workspace wherever it is hosted. The exact route is preferred, so a route that is
+  // both claimed outright and hosts a workspace draws its own nav; codegen warns on a duplicate
+  // path.
   const pathname = useLocation({ select: l => l.pathname });
   const hostedWorkspace = hostedWorkspaceAt(pathname, premiumRoutes);
   const hostedPrefix = hostedWorkspace ? getWorkspaceSurface(hostedWorkspace)?.routePrefix : undefined;
-  const PremiumSidenav = premiumNotebookSidenavs.find(
-    nav => nav.path === pathname || nav.path === hostedPrefix
-  )?.component;
+  const PremiumSidenav =
+    premiumNotebookSidenavs.find(nav => nav.path === pathname)?.component ??
+    premiumNotebookSidenavs.find(nav => nav.path === hostedPrefix)?.component;
 
   return (
     <Stack

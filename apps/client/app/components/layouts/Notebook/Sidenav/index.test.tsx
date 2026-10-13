@@ -7,12 +7,11 @@ import { getThemeConfig } from '@client/app/utils/themes';
 /**
  * WHICH sidenav the notebook shell shows.
  *
- * The slot used to be a single premium component matched against a hardcoded pathname. It is now
- * a per-route list the overlays declare, and the selection - the entry whose `path` is the current
- * route, or the route prefix of the workspace hosted there, falling back to the shared notebook
- * list - is the whole of what this file decides. The codegen test covers the generated TEXT; this
- * covers the RUNTIME, because a wrong field, a flipped condition or the wrong fallback would pass
- * every assertion over that text.
+ * The slot took a single premium component; it is now a per-route list the overlays declare, and
+ * the selection - the entry whose `path` is the current route, or the route prefix of the workspace
+ * hosted there, falling back to the shared notebook list - is the whole of what this file decides.
+ * The codegen test covers the generated TEXT; this covers the RUNTIME, because a wrong field, a
+ * flipped condition or the wrong fallback would pass every assertion over that text.
  */
 
 const { pathname } = vi.hoisted(() => ({ pathname: { current: '/' } }));
@@ -126,7 +125,7 @@ describe('which sidenav body the notebook shell renders', () => {
 
   it('matches the route exactly, so an overlay cannot claim a path that merely starts with its own', () => {
     // `/alphabet` is not `/alpha`. This also pins today's behaviour on an overlay's SUB-routes:
-    // they get the shared list, exactly as they did when the match was a hardcoded equality.
+    // they get the shared list - the deliberate exact-match hold.
     renderAt('/alphabet', TWO);
     expect(defaultBody()).toBeTruthy();
     expect(screen.queryByTestId('overlay-alpha')).toBeNull();
@@ -161,6 +160,15 @@ describe('a hosted workspace keeps its own list', () => {
   it('draws the default list on a hosting route when the build carries no workspace list', () => {
     renderAt('/desk', [], HOSTING);
     expect(defaultBody()).toBeTruthy();
+  });
+
+  it('prefers the exact route over the hosted-workspace prefix', () => {
+    // `/desk` is both claimed outright and a route hosting the workspace. The workspace entry is
+    // declared FIRST, so a single `find` over both conditions would pick it and the nav would
+    // depend on declaration order; the exact claim wins.
+    renderAt('/desk', [...WORKSPACE, { path: '/desk', component: overlay('desk') }], HOSTING);
+    expect(screen.queryByTestId('overlay-desk')).toBeTruthy();
+    expect(workspaceList()).toBeNull();
   });
 
   it('leaves an unregistered overlay matched on its own path alone', () => {
