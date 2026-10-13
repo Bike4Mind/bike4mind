@@ -614,7 +614,7 @@ export interface paths {
     put?: never;
     /**
      * Start a video generation
-     * @description Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. On success, `output.availability` says whether the clip can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the requested duration are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`.
+     * @description Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. On success, `output.availability` says whether the clip can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the requested duration are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job.
      */
     post: operations['createVideoGeneration'];
     delete?: never;
@@ -3500,6 +3500,8 @@ export interface components {
       /** @description An image file you own, for image_to_video. */
       input_image_file_id?: string;
       audio?: boolean;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. */
+      organization_id?: string | null;
     };
     /**
      * @example {
@@ -10231,7 +10233,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope. */
+      /** @description The API key lacks the `ai:generate` scope, or `organization_id` names an organization you do not belong to (or is not a valid id). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -10254,7 +10256,7 @@ export interface operations {
           'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
-      /** @description `input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). */
+      /** @description `input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
