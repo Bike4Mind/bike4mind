@@ -513,6 +513,14 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
     expect(toggle.checked).toBe(false);
   });
 
+  it('keeps the switch from shrinking beside the long helper text on a narrow viewport', () => {
+    renderModal();
+    const toggle = screen.getByTestId('publish-share-discoverable-toggle');
+    expect(getComputedStyle(toggle.closest('.MuiSwitch-root') as HTMLElement).flexShrink).toBe('0');
+    const textColumn = (toggle.closest('.MuiFormControl-root') as HTMLElement).firstElementChild as HTMLElement;
+    expect(getComputedStyle(textColumn).minWidth).toBe('0px');
+  });
+
   it('tells the user a public link stays out of search engines by default', () => {
     renderModal();
     // The public warning must say what "public" does NOT mean - this is the exact
