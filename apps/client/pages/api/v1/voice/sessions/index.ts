@@ -25,7 +25,14 @@ import { sessionService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createElevenLabsConversationalTransport, type ElevenLabsClientBootstrap } from '@bike4mind/voice';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { BadGatewayError, BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@server/utils/errors';
+import {
+  BadGatewayError,
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  HTTPError,
+  NotFoundError,
+} from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
 import { settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
@@ -181,6 +188,8 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   const estimate = transport.estimateCost(MAX_SESSION_SECONDS);
   const reservedCredits = estimate.creditsToReserve;
 
+  // The hold read before any credit moves; the new hold is written only over it (or over none).
+  const priorHoldStartedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
   // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
   if (!reuseHold) {
     await settlePriorVoiceHold(session);
@@ -225,14 +234,21 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
 
   // A reconnect leaves the original reservation record untouched so end-reconciliation
   // measures the full call duration, not just the post-reconnect segment.
+  // Drops any realtime marker explicitly: a prior realtime hold with no reserve is never claimed, so
+  // its marker would otherwise survive and this ElevenLabs hold would settle as realtime.
   if (!reuseHold) {
-    await sessionRepository.update({
-      id: session.id,
+    const opened = await sessionRepository.openVoiceHold(session.id, priorHoldStartedAt, {
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
       voiceSessionStartedAt: holdStartedAt,
-      voiceConnectedAt: null,
-      voiceLastActivityAt: null,
+      realtime: false,
     });
+    if (!opened) {
+      // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
+      if (enforceCredits) {
+        await userRepository.incrementCredits(req.user.id, reservedCredits);
+      }
+      throw new ConflictError('Another voice call on this session started at the same time; retry');
+    }
   }
 
   return res.status(200).json({

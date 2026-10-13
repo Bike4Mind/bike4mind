@@ -59,6 +59,12 @@ describe('pickAnswerCostReference', () => {
     expect(pickAnswerCostReference([OPUS, native])?.modelName).toBe('Claude 5 Sonnet (native)');
   });
 
+  it('skips a disabled mid-tier model, so the estimate never names one the user cannot pick', () => {
+    const disabled = { ...SONNET_55, disabled: true } as ModelInfo;
+
+    expect(pickAnswerCostReference([OPUS, disabled, SONNET_5])?.modelName).toBe('Claude 5 Sonnet');
+  });
+
   it('gives no reference when no mid-tier model is priced', () => {
     expect(pickAnswerCostReference([OPUS])).toBeNull();
   });

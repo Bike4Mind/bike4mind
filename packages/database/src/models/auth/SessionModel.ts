@@ -725,12 +725,17 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return matchedCount === 1;
   }
 
-  async claimVoiceHold(sessionId: string, startedAt: Date) {
+  async claimVoiceHold(sessionId: string, startedAt: Date, options?: { realtimeOnly?: boolean }) {
     // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
     // end, sweep or settlement frame wins, and a newer call's hold is never touched. The
     // pre-update billed total includes every response frame that charged the hold before it.
+    // realtimeOnly matches only a hold carrying the realtime marker, as addVoiceBilledCredits does.
     const before = await this.sessionModel.findOneAndUpdate(
-      { _id: sessionId, voiceSessionStartedAt: startedAt },
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: startedAt,
+        ...(options?.realtimeOnly ? { voiceBilledCredits: { $exists: true } } : {}),
+      },
       {
         $set: {
           voiceReservedCredits: null,
@@ -743,6 +748,34 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       { new: false, projection: { voiceBilledCredits: 1 } }
     );
     return before ? { billedCredits: before.voiceBilledCredits ?? null } : null;
+  }
+
+  async openVoiceHold(
+    sessionId: string,
+    priorStartedAt: Date | null,
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
+  ) {
+    // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
+    // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
+    // hold makes this match nothing, so only one of them keeps a reserve.
+    const { matchedCount } = await this.sessionModel.updateOne(
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: priorStartedAt ? { $in: [null, priorStartedAt] } : null,
+      },
+      {
+        $set: {
+          voiceReservedCredits: hold.voiceReservedCredits,
+          voiceSessionStartedAt: hold.voiceSessionStartedAt,
+          voiceConnectedAt: null,
+          voiceLastActivityAt: null,
+          // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
+          ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
+        },
+        ...(hold.realtime ? {} : { $unset: { voiceBilledCredits: '' } }),
+      }
+    );
+    return matchedCount === 1;
   }
 
   async restoreVoiceHold(

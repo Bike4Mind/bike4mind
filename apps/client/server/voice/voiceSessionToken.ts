@@ -24,6 +24,7 @@ export const VoiceSessionContextSchema = z.object({
   apiKeyId: z.string().min(1).optional(),
   // ISO start of the credit hold this call bills against, so its activity marks only that hold.
   // Optional: tokens minted before the claim existed still verify until they expire.
+  // Follow-up: make it required once one token TTL has passed after deploy, deleting the proxy's claimless branch.
   voiceHoldStartedAt: z.string().datetime().optional(),
 });
 
