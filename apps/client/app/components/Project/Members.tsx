@@ -105,7 +105,7 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
     useMemo(() => (project?.id ? { id: project.id } : null), [project.id]),
     useCallback<SubscriptionCallbackFunction<IProjectDocument>>(
       (type, data) => {
-        // Only invalidate if it's a new document that's not already in our cache
+        // Every update: write it through to the cached projects, then refresh the dependent members and invites.
         if (type === 'update') {
           updateAllQueryData(queryClient, 'projects', 'write', data);
           debouncedInvalidateUsers();

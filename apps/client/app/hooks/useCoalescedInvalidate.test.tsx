@@ -62,6 +62,27 @@ describe('useCoalescedInvalidate', () => {
     expect(mocks.invalidateQueries).toHaveBeenCalledTimes(1);
   });
 
+  it('invalidates the caller key as given, not a JSON round-trip of it', () => {
+    const { result } = renderHook(() => useCoalescedInvalidate(['invites', undefined]));
+    act(() => {
+      result.current();
+      vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS);
+    });
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['invites', undefined] });
+  });
+
+  it('drops a pending invalidate when the key changes', () => {
+    const { result, rerender } = renderHook(({ id }) => useCoalescedInvalidate(['invites', 'projects', id]), {
+      initialProps: { id: 'p1' },
+    });
+    act(() => result.current());
+    rerender({ id: 'p2' });
+    act(() => {
+      vi.runAllTimers();
+    });
+    expect(mocks.invalidateQueries).not.toHaveBeenCalled();
+  });
+
   it('drops a pending invalidate on unmount', () => {
     const { result, unmount } = renderHook(() => useCoalescedInvalidate(['invites', 'inbox']));
     act(() => result.current());
