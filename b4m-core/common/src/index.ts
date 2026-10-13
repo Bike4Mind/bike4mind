@@ -15,6 +15,7 @@ export * from './successorCostDelta';
 export * from './pricing';
 export * from './realtimeVoicePricing';
 export * from './imageGeneration';
+export * from './generatedAsset';
 export * from './generatedAudio';
 export * from './voiceGeneration';
 export * from './voicePricing';
