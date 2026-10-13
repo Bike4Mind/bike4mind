@@ -323,12 +323,12 @@ describe('POST /api/v1/voice/sessions', () => {
   });
 
   // The proxy forwards this claim to the turn's tools; without it a key-minted call reads as a session.
-  it('binds the minting key id into the session token', async () => {
+  it('binds an apiKey origin and the minting key id into the session token', async () => {
     const { res, run } = fireSessions();
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.signVoiceSessionToken).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKeyId: 'k1' }),
+      expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }),
       expect.any(Number)
     );
   });
@@ -341,7 +341,9 @@ describe('POST /api/v1/voice/sessions', () => {
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.validate).not.toHaveBeenCalled();
-    expect((mocks.signVoiceSessionToken.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBeUndefined();
+    const claims = mocks.signVoiceSessionToken.mock.calls[0][0] as { authOrigin?: string; apiKeyId?: string };
+    expect(claims.authOrigin).toBe('session');
+    expect(claims.apiKeyId).toBeUndefined();
   });
 
   it('rejects a body that fails the contract schema (422)', async () => {

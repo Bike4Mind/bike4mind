@@ -266,10 +266,16 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
 
       const files = await deps.saveToFiles({
         userId: job.requestedBy,
-        jobId: job.id,
         bytes,
         contentType,
-        prompt: payload.request.prompt,
+        generation: {
+          generator: 'video',
+          provider: payload.providerId,
+          modelId: payload.request.model,
+          jobId: job.id,
+          prompt: payload.request.prompt,
+          durationSeconds: common.durationSeconds,
+        },
         signal: context.signal,
       });
       let output: VideoJobOutput;

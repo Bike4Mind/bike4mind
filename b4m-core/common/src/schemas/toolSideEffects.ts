@@ -2,7 +2,7 @@ import type { B4MLLMTools } from './llm';
 
 /**
  * How much of the world a tool disturbs when it runs. This is the input the agent-mode
- * permission gate classifies on (see apps/client/server/queueHandlers/agentExecutorUtils/
+ * permission gate classifies on (see apps/workers/src/queueHandlers/agentExecutorUtils/
  * toolPermissions.ts); it is deliberately about blast radius, not about usefulness.
  *
  * - `none`     Reads only. Returns a computation or a public/read-only lookup. Nothing the

@@ -280,7 +280,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
 
     // Get presigned URL and fetch the body
     const urlR = await fetch(
-      `${baseUrl}/api/files/presigned-url?filePaths%5B%5D=${encodeURIComponent(article.filePath)}`,
+      `${baseUrl}/api/files/presigned-url?filePaths%5B%5D=${encodeURIComponent(article.filePath)}&audience=server`,
       { signal, headers: { ...deps.authHeaders } }
     );
     if (!urlR.ok) throw new Error(`getArticle presigned ${urlR.status}`);

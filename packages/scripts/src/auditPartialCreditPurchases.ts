@@ -34,6 +34,8 @@ export type PurchaseEvidence = {
   stampSince: Date | null;
 };
 
+// Mirrors the cron's findUngrantedReason (apps/workers/src/cron/creditPurchaseReconciliation.ts);
+// the balanceBackfilledAt and purchase-stamp witnesses must stay in sync with it.
 export function classifyPurchase(evidence: PurchaseEvidence): { verdict: PurchaseVerdict; reason: string } {
   if (evidence.backfilledAt) return { verdict: 'backfilled', reason: 'repaired by an earlier run' };
   if (evidence.hasLot) return { verdict: 'granted', reason: 'pack lot exists' };

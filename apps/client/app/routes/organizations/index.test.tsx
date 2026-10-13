@@ -8,6 +8,12 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   memberOrganizations: [] as Array<Record<string, unknown>>,
   managedOrganizations: [] as Array<Record<string, unknown>>,
+  teamPlanAvailable: true,
+  openCreateTeamModal: vi.fn(),
+}));
+
+vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
+  useTeamPlanAvailable: () => mocks.teamPlanAvailable,
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -26,7 +32,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({ useGetSubscriptionsByOwner: () => ({ data: [] }) }));
 vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
-  useCreateTeamModal: () => vi.fn(),
+  useCreateTeamModal: () => mocks.openCreateTeamModal,
 }));
 vi.mock('@client/app/components/help', () => ({ ContextHelpButton: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
@@ -39,6 +45,8 @@ const theme = extendTheme({ ...getThemeConfig() });
 describe('Teams list for an appointed manager', () => {
   beforeEach(() => {
     mocks.navigate.mockReset();
+    mocks.openCreateTeamModal.mockReset();
+    mocks.teamPlanAvailable = true;
     mocks.memberOrganizations = [];
     mocks.managedOrganizations = [
       {
@@ -51,6 +59,33 @@ describe('Teams list for an appointed manager', () => {
         currentCredits: 100,
       },
     ];
+  });
+
+  it('opens the Create Team modal when enableTeamPlan is on', () => {
+    render(
+      <CssVarsProvider theme={theme}>
+        <OrganizationListPage />
+      </CssVarsProvider>
+    );
+
+    const button = screen.getByTestId('organizations-create-team-btn');
+    expect(button.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(button);
+    expect(mocks.openCreateTeamModal).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Create Team visible but disabled when enableTeamPlan is off', () => {
+    mocks.teamPlanAvailable = false;
+    render(
+      <CssVarsProvider theme={theme}>
+        <OrganizationListPage />
+      </CssVarsProvider>
+    );
+
+    const button = screen.getByTestId('organizations-create-team-btn');
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(button);
+    expect(mocks.openCreateTeamModal).not.toHaveBeenCalled();
   });
 
   it('offers a manager-only team as a navigable Team card', () => {

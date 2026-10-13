@@ -22,7 +22,6 @@ import {
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
 import { Subscription } from '@server/models/Subscription';
-import { UnauthorizedError } from '@server/utils/errors';
 import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
@@ -104,12 +103,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   } = parsedRequest;
 
   const user = await verifyWsAccessToken(accessToken);
-  // A ban does not bump tokenVersion, so refuse it here (not in verifyWsAccessToken, which unsubscribe
-  // shares). Dispute and suspension stay subscribable, matching the web session: the quest error that
-  // explains a refused turn reaches the browser over this subscription. This tightens only the socket:
-  // REST's verifyJwtPayload does not re-check isBanned, so a banned user's live JWT still works until
-  // it expires. "Banned" is accountBlockReasons in b4m-core/services/src/userService/accountState.ts.
-  if (user.isBanned) throw new UnauthorizedError('User not found or banned');
   const userAbility = ability(user);
 
   // 'scope' limits the scope of the query, to only things you're allowed to see.

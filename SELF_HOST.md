@@ -238,11 +238,11 @@ Authenticate with any one of: `x-api-key: b4m_...`, `Authorization: ApiKey b4m_.
 
 **Response** - a **custom SSE contract, not OpenAI's**: there is no `choices[].delta`. Each frame is either an SSE comment (a line starting with `:`) or a `data:` line carrying one JSON object, and every frame ends with a blank line (`\n\n`). The stream opens and closes in the order below, but the middle is a stream: `content` and `tool_use` frames interleave one per chunk (a tool-calling turn emits `tool_use` frames among the `content` ones), and keep-alive comments keep recurring (about every 10s) throughout:
 
-1. `: keep-alive` - an SSE comment sent immediately and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
+1. `: keep-alive` - an SSE comment sent once the provider call begins and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
 2. `data: {"type":"meta","requestId":"..."}` - always the first JSON event; use `requestId` to correlate with server logs.
 3. `data: {"type":"content","text":"...","usage":{...}}` - zero or more content chunks. `text` is the incremental output; `usage`, when present, carries `inputTokens`/`outputTokens` (and Anthropic cache-token deltas).
 4. `data: {"type":"tool_use","text":"...","tools":[...]}` - sent instead of `content` for a chunk in which the model invoked a tool.
-5. `data: {"type":"error","message":"...","requestId":"..."}` - on failure (invalid body, auth failure, or a mid-stream error); the stream then ends.
+5. `data: {"type":"error","message":"...","requestId":"..."}` - on a failure after the stream has started; the stream then ends. A failure before the stream starts (invalid body, auth, rate limit, billing) is a JSON error response with a real HTTP status instead, so check the status before reading the stream.
 6. `data: [DONE]` - terminal sentinel on success.
 
 **Example** - a local Ollama model (`-N` disables curl buffering so the stream prints live):
@@ -837,7 +837,7 @@ Notebook exports are written under `exports/` in the FabFile bucket and download
 
 ### Browser downloads from a private object store
 
-QuestMaster ZIP exports opt into `S3Storage.getSignedUrl` with `audience: 'browser'`. With the default container endpoint, the returned URL contains the internal MinIO hostname, which a browser cannot resolve. Set the optional `S3_PRESIGN_ENDPOINT` in the environment of both the app and workers to the S3 API origin the browser can reach. `AWS_ENDPOINT_URL_S3` stays on the private backend endpoint for uploads, metadata reads, downloads and default server-side signed URLs. `S3_PRESIGN_ENDPOINT` must be an absolute HTTP or HTTPS URL. If the signing override is unset, the existing signing behavior is unchanged.
+QuestMaster ZIP exports, generic file presign responses and accessible-file download responses opt into `S3Storage.getSignedUrl` with `audience: 'browser'`. Accessible-file responses include both the SPA file route and the public file API; external API clients need the same reachable download origin. With the default container endpoint, the returned URL contains the internal MinIO hostname, which a browser cannot resolve. Set the optional `S3_PRESIGN_ENDPOINT` in the environment of both the app and workers to the S3 API origin the browser can reach. `AWS_ENDPOINT_URL_S3` stays on the private backend endpoint for uploads, metadata reads, downloads and default server-side signed URLs. `S3_PRESIGN_ENDPOINT` must be an absolute HTTP or HTTPS URL. If the signing override is unset, the existing signing behavior is unchanged.
 
 The app adds the configured HTTP or HTTPS origin to its browser connection, image and media policy. Paths and query parameters are normalized to the origin; invalid values are omitted with a diagnostic naming `S3_PRESIGN_ENDPOINT`. Other policy directives and the default policy when unset remain unchanged. The object store must still provide appropriate CORS headers for cross-origin browser requests.
 
@@ -854,7 +854,7 @@ For the Kubernetes evaluation chart, follow the [chart installation guide](selfh
 
 For a remote browser, use a trusted HTTPS S3 API origin that routes to the same backend and bucket namespace. A reverse proxy must preserve the signed host, path and query. Sign that origin directly; changing the hostname of an already signed URL invalidates its signature. Keep the backing service private, and configure the object store's CORS policy for the browser origin if using cross-origin fetches or PUT uploads.
 
-This override covers only explicit browser-audience calls to `S3Storage.getSignedUrl`, currently the two QuestMaster ZIP completion paths. Default callers, including server-side file and image fetchers, retain the private endpoint. Routes that construct their own S3 client and call the SDK presigner directly do not use this override; it does not establish parity for every file upload or download path.
+This override covers only explicit browser-audience calls to `S3Storage.getSignedUrl`: the two QuestMaster ZIP completion paths, `GET /api/files/presigned-url`, and the accessible-file responses of `GET /api/files/{id}` and `GET /api/v1/files/{id}`. Other default callers, including server-side image fetchers, retain the private endpoint. `GET /api/files/presigned-url` defaults to the browser audience; a caller may pass `audience=server` to receive a private-endpoint URL (the internal data-lake `getArticle` tool does this, since the app container may not reach the browser origin). Other file readers, such as the batch file and session file listings, still return private-origin URLs (tracked in issue 4272); the override does not establish parity for every file upload or download path.
 
 ## Share your instance with friends (secure internet exposure)
 

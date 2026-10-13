@@ -166,8 +166,6 @@ export interface IUserPreferences {
   agentModeDefault?: 'off' | 'auto' | 'on';
   /** Whether to show fun/novelty tools (chess, dice, ISS tracker, etc.) in the tools catalog. Default: false. */
   showFunTools?: boolean;
-  /** Whether generated audio (TTS, sound-effect, music) is saved to storage as a browsable FabFile. Default: true. */
-  saveGeneratedAudio?: boolean;
   /** Whether to show the prompt suggestion cards on the splash screen. Default: false. */
   showSplashCards?: boolean;
 }
@@ -244,8 +242,10 @@ export interface IUser extends ICreditHolder {
   /**
    * Invite-resolved credit amount awaiting proof of email ownership. Set at
    * registration alongside PENDING_FREE_CREDITS_TAG; released (and nulled) by
-   * registerViaOTC or the email-verify route. Null when nothing is pending - the
-   * open-registration path leaves it null and grants `defaultFreeCredits` instead.
+   * userService.releasePendingFreeCredits on OTC registration, email-link verify, first
+   * OTC login, OAuth signup/link, or the backfillPendingFreeCredits script. Null when
+   * nothing is pending - the open-registration path leaves it null and grants
+   * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
   level: UserLevelType;

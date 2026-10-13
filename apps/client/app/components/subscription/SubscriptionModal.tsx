@@ -2,6 +2,7 @@ import { useCreateTeamModal } from '@client/app/components/organizations/CreateT
 import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
 import {
   isCancellableSubscriptionStatus,
   isDelinquentSubscriptionStatus,
@@ -9,7 +10,7 @@ import {
   resolveSubscriptionSource,
   SubscriptionSource,
 } from '@client/lib/subscriptions/types';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
 import {
@@ -24,16 +25,18 @@ import {
   tabClasses,
   TabList,
   Tabs,
+  Tooltip,
   Typography,
   useTheme,
 } from '@mui/joy';
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import SubscribeButton from '../Credits/SubscribeButton';
 import ManageSubscriptionButton from './ManageSubscriptionButton';
 import PlanCard from './PlanCard';
 import { isPopularPlan } from './isPopularPlan';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { useAnswerCostReference } from '@client/app/hooks/useAnswerCostReference';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
 
@@ -80,7 +83,7 @@ const SubscriptionModal = ({ open, onClose }: SubscriptionModalProps) => {
 const SubscriptionModalContent = () => {
   const { t } = useTranslation();
   const theme = useTheme();
-  const [activeTab, setActiveTab] = useState<SubscriptionModalTabs>(SubscriptionModalTabs.Personal);
+  const [selectedTab, setSelectedTab] = useState<SubscriptionModalTabs>(SubscriptionModalTabs.Personal);
   // The starter-credits line is only true while sign-ups are actually granted something.
   const hasStarterCredits = Number(useGetSettingsValue('defaultFreeCredits')) > 0;
   const { data: config } = useConfig();
@@ -97,6 +100,13 @@ const SubscriptionModalContent = () => {
     [subscriptions.data]
   );
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
+  const teamPlanAvailable = useTeamPlanAvailable();
+  const teamTabReasonId = useId();
+  // Drop a Business selection when the gate closes (render-phase adjust-on-change, per React's pattern):
+  // React re-runs this render, so no Team card commits and a later flip back on does not jump to Business.
+  if (!teamPlanAvailable && selectedTab === SubscriptionModalTabs.Business) {
+    setSelectedTab(SubscriptionModalTabs.Personal);
+  }
   const priceMap = useMemo(() => {
     return plans.data?.reduce(
       (acc, plan) => {
@@ -135,10 +145,10 @@ const SubscriptionModalContent = () => {
 
   const availablePlans = useMemo(
     () =>
-      activeTab === SubscriptionModalTabs.Personal
+      selectedTab === SubscriptionModalTabs.Personal
         ? subscriptionPlans.filter(plan => activePlans.find(p => p.id === plan.priceId))
         : [],
-    [activePlans, activeTab, subscriptionPlans]
+    [activePlans, selectedTab, subscriptionPlans]
   );
 
   if (subscriptions.isPending || plans.isPending) {
@@ -180,8 +190,8 @@ const SubscriptionModalContent = () => {
 
       <Box sx={{ mb: '24px', display: 'flex', justifyContent: 'center' }}>
         <Tabs
-          value={activeTab}
-          onChange={(_, value) => setActiveTab(value as SubscriptionModalTabs)}
+          value={selectedTab}
+          onChange={(_, value) => setSelectedTab(value as SubscriptionModalTabs)}
           sx={{
             bgcolor: 'transparent',
           }}
@@ -210,13 +220,31 @@ const SubscriptionModalContent = () => {
               {t('subscription_modal.personal')}
             </Tab>
 
-            {/* Always selectable: Team is sold from Teams > Create Team whenever its Stripe price is
-                live, so this tab tells the same story (price, or why it is unavailable) instead of
-                hiding the offer behind a separate switch. */}
-            <Tab disableIndicator value={SubscriptionModalTabs.Business} data-testid="subscription-modal-business-tab">
-              {t('subscription_modal.business')}
-            </Tab>
+            {/* Off, the tab stays visible but disabled. Joy keeps a disabled tab focusable, so the reason hangs
+                off the Tab via aria-describedby; the span only exists to receive hover (the disabled tab
+                has pointer-events: none) and is deliberately not focusable. The reason stays outside the Tab:
+                a descendant would join its accessible name. */}
+            <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
+              <span style={{ display: 'inline-flex' }} data-testid="subscription-modal-business-tab-wrapper">
+                <Tab
+                  disableIndicator
+                  value={SubscriptionModalTabs.Business}
+                  disabled={!teamPlanAvailable}
+                  aria-describedby={teamPlanAvailable ? undefined : teamTabReasonId}
+                  data-testid="subscription-modal-business-tab"
+                >
+                  {t('subscription_modal.business')}
+                </Tab>
+              </span>
+            </Tooltip>
           </TabList>
+          {/* aria-describedby resolves the id document-wide, so the reason stays a sibling of the tablist:
+              inside it, browse mode would read the text as stray content beside the tabs. */}
+          {!teamPlanAvailable && (
+            <Box component="span" id={teamTabReasonId} sx={visuallyHidden}>
+              {TEAM_PLAN_UNAVAILABLE_MESSAGE}
+            </Box>
+          )}
         </Tabs>
       </Box>
 
@@ -227,7 +255,7 @@ const SubscriptionModalContent = () => {
           gap: '32px',
         }}
       >
-        {activeTab === SubscriptionModalTabs.Personal && (
+        {selectedTab === SubscriptionModalTabs.Personal && (
           <>
             {availablePlans.map(plan => {
               // Active-first per price: a stale delinquent row at this price must not
@@ -268,7 +296,7 @@ const SubscriptionModalContent = () => {
           </>
         )}
 
-        {activeTab === SubscriptionModalTabs.Business && (
+        {selectedTab === SubscriptionModalTabs.Business && (
           <>
             <PlanCard
               name={t('subscription_modal.team')}

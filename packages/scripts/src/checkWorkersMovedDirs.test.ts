@@ -18,19 +18,32 @@ const MOVED = [
   { from: 'apps/client/server/jobs', to: 'apps/workers/src/jobs' },
   { from: 'apps/client/server/emailIngestion', to: 'apps/workers/src/emailIngestion' },
   { from: 'apps/client/server/agentExecutor', to: 'apps/workers/src/agentExecutor' },
+  {
+    from: 'apps/client/server/security/attackSimulation/probes',
+    to: 'apps/workers/src/security/attackSimulation/probes',
+  },
+  // A subdirectory of queueHandlers, which the per-stem check below cannot see.
+  {
+    from: 'apps/client/server/queueHandlers/agentExecutorUtils',
+    to: 'apps/workers/src/queueHandlers/agentExecutorUtils',
+  },
 ] as const;
 
 /**
- * Modules moved out of a directory that can't be guarded whole: apps/client/server/queueHandlers
- * keeps questProcessor (the in-process chat-completion path imports it), so it never empties.
- * Guarded per module instead, by file stem. Shared helpers that apps/client itself imports moved to
- * client-side homes rather than to apps/workers, because apps/client must never import apps/workers.
+ * Modules moved out of directories that can't be guarded whole, so they are guarded per module by
+ * file stem: apps/client/server/queueHandlers keeps questProcessor (the in-process chat-completion
+ * path imports it), and apps/client/server/security keeps the library the admin dashboard routes
+ * call, including attackSimulation/types (the ingest route's payload contract). Shared helpers that
+ * apps/client itself imports moved to client-side homes rather than to apps/workers, because
+ * apps/client must never import apps/workers.
  */
 const MOVED_MODULES = [
   {
     from: 'apps/client/server/queueHandlers',
     to: 'apps/workers/src/queueHandlers',
     stems: [
+      'agentExecutor',
+      'agentExecutorDag',
       'agentProactiveMessage',
       'createZipBuffer',
       'dataLakeBatchRetryGating',
@@ -67,6 +80,7 @@ const MOVED_MODULES = [
       'sreFix',
       'sreJob',
       'sreRevision',
+      'toolBuilderDeps',
       'vectorizeStrandRecovery',
       'webhookDelivery',
       'whatsNewGeneration',
@@ -81,6 +95,16 @@ const MOVED_MODULES = [
   // A deleted re-export shim, not a move: its vocabulary lives in common.
   { from: 'apps/client/server/queueHandlers', to: '@bike4mind/common', stems: ['convergenceProvenance'] },
   { from: 'apps/client/server/queueHandlers', to: 'apps/client/server/utils', stems: ['sqsDelivery'] },
+  {
+    from: 'apps/client/server/security',
+    to: 'apps/workers/src/security',
+    stems: ['alertProcessor'],
+  },
+  {
+    from: 'apps/client/server/security/attackSimulation',
+    to: 'apps/workers/src/security/attackSimulation',
+    stems: ['fingerprint', 'runner'],
+  },
 ] as const;
 
 const MOVED_MODULE_CASES = MOVED_MODULES.flatMap(({ from, to, stems }) => stems.map(stem => ({ from, to, stem })));
@@ -144,6 +168,12 @@ describe('directories and modules moved out of apps/client/server stay moved', (
         'apps/workers/src/queueHandlers/emailBatch.dispatch',
         'apps/workers/src/queueHandlers/dataLakeCleanup.dispatch',
         'apps/workers/src/queueHandlers/driveDisconnectPurge.dispatch',
+        // infra/securityAlerts.ts, which no other moved handler lives in.
+        'apps/workers/src/security/alertProcessor.handler',
+        // infra/cron.ts
+        'apps/workers/src/security/attackSimulation/runner.handler',
+        // infra/agentExecutor.ts; the Lambda and the continuation subscriber share this export.
+        'apps/workers/src/queueHandlers/agentExecutor.handler',
       ])
     );
     const stale = handlers

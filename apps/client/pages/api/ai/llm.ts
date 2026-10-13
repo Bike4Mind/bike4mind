@@ -19,6 +19,7 @@ import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/uti
 import { sessionWillInjectAuthoredPrompt } from '@server/utils/sessionSystemPromptResolver';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@server/utils/systemPrompts/loader';
+import { requestTurnAuth } from '@server/auth/turnAuth';
 import { Request } from 'express';
 
 // Gate API-key callers on `ai:chat`: this route commissions a billed chat completion
@@ -136,8 +137,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
         ...(deniedTools.length > 0 ? { deniedTools } : {}),
       },
       userId: req.user.id,
-      // Attributes a lake write a tool drives this turn to the key rather than its owner.
-      apiKeyId: req.apiKeyInfo?.keyId,
+      // The key (when one authenticated the turn) also attributes a lake write a tool drives.
+      ...requestTurnAuth(req),
     });
 
     // Handle case where quest creation failed (session or quest not found during invoke)

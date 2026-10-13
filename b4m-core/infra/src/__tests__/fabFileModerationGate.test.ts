@@ -144,8 +144,8 @@ const ALLOWLIST: Record<string, string> = {
 
   // --- DI passthroughs: the file only wires a storage closure; the actual gate lives
   // in the shared service function the closure is handed to. ---
-  'apps/client/pages/api/quests/[id]/files.ts':
-    'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFilesByQuest -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts',
+  'apps/client/server/files/listQuestFiles.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.listFabFilesByQuest -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/quests/[id]/files and GET /api/v1/quests/[id]/files, the latter also gating download_url on isImageServeable in toPublicFile',
   'apps/client/pages/api/sessions/[id]/files.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFilesBySession -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/search.ts':
@@ -190,11 +190,11 @@ const ALLOWLIST: Record<string, string> = {
   'apps/client/server/slack/dataLakeIngestDeps.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
-  // --- Audio-only generation, never an image. ---
+  // --- Generated output: delivery and the saveGeneratedAsset passthrough. ---
   'apps/client/server/utils/generatedAudioDelivery.ts':
     'audio-only - signs a GET for oversized generated audio it just uploaded under generated-audio-offload/ (no FabFile row, audio/* only); a saved copy is served by the fileUrl the already-gated createFabFile minted, so isImageServeable is inapplicable',
-  'apps/client/server/utils/persistGeneratedAudio.ts':
-    'audio-only (type AUDIO, audio/* mime from TTS/sound-effects) — DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; audio is never image content, so isImageServeable is inapplicable',
+  'apps/client/server/utils/saveGeneratedAssetToFiles.ts':
+    'DI passthrough to saveGeneratedAsset -> the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
   // --- Synchronous pre-persist moderation, not the stored-moderationStatus gate. ---
   'apps/client/pages/api/agents/[id]/generate-avatar.ts':

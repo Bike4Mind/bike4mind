@@ -149,6 +149,18 @@ describe('slackQuestProcessor failure notice', () => {
     expect(mockFindByIdAndUpdate).not.toHaveBeenCalledWith(QUEST_ID, { $unset: { slackNotification: 1 } });
   });
 
+  it('forwards the queued authOrigin to process() unchanged', async () => {
+    mockProcess.mockResolvedValueOnce(undefined);
+    const event = makeEvent() as unknown as { detail: Record<string, unknown> };
+    event.detail.authOrigin = 'internal';
+
+    await handler(event as never);
+
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'internal' }) })
+    );
+  });
+
   it('replaces the failure notice with the answer when a retry succeeds', async () => {
     await expect(handler(makeEvent())).rejects.toThrow(processError.message);
 

@@ -1,5 +1,6 @@
 import { getFilesStorage } from '@server/utils/storage';
 import { v4 as uuid } from 'uuid';
+import { escapeHtml } from '@client/app/utils/htmlEscape';
 
 // EventBridge has a 256 KB limit per event
 // Leave some margin for JSON overhead and other fields
@@ -100,7 +101,7 @@ function generateDownloadLinksEmail(originalBody: string, sharedFiles: SharedFil
     <li style="margin: 10px 0;">
       <a href="${file.downloadUrl}"
          style="color: #1976d2; text-decoration: none; font-weight: 500;">
-        📎 ${file.filename}
+        📎 ${escapeHtml(file.filename)}
       </a>
       <span style="color: #666; font-size: 12px; margin-left: 8px;">
         (${(file.size / 1024).toFixed(1)} KB)
@@ -183,7 +184,7 @@ function generateDownloadLinksEmail(originalBody: string, sharedFiles: SharedFil
 
         <div class="footer">
           ${sentFromLine}
-          <p>If you have questions about these files, please contact ${userName}.</p>
+          <p>If you have questions about these files, please contact ${escapeHtml(userName)}.</p>
         </div>
       </body>
     </html>

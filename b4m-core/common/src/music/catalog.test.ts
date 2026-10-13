@@ -44,6 +44,10 @@ describe('published prices', () => {
     expect(estimateMusicCostUsd(MUSIC_MODEL_CATALOG[id], { durationSeconds: 60 })).toBeCloseTo(0.15, 10);
   });
 
+  it.each(['music_v2_5', 'music_v2', 'music_v1'] as const)('caps a %s lyric line at 200 characters', id => {
+    expect(MUSIC_MODEL_CATALOG[id].lyrics?.maxLineChars).toBe(200);
+  });
+
   it('enables the current ElevenLabs models by default and leaves v1 to an admin', () => {
     expect(MUSIC_MODEL_CATALOG.music_v2_5.defaultEnabled).toBe(true);
     expect(MUSIC_MODEL_CATALOG.music_v2.defaultEnabled).toBe(true);
