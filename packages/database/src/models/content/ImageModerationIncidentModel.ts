@@ -1,5 +1,6 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
-import type { ImageModerationIncident as ImageModerationIncidentData } from '@bike4mind/common';
+import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
+import { INCIDENT_REVIEW_STATUSES } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
@@ -38,6 +39,10 @@ const ImageModerationIncidentSchema = new Schema(
         confidence: { type: Number, required: true },
       },
     ],
+    // Absent on pre-Q3 incidents; treated as 'pending_review' by all queries.
+    reviewStatus: { type: String, enum: INCIDENT_REVIEW_STATUSES, required: false },
+    // Populated when reviewStatus === 'reported'. The CyberTipline report ID returned by NCMEC.
+    ncmecReportId: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -50,6 +55,8 @@ const ImageModerationIncidentSchema = new Schema(
 // Indexes (per MongoDB Index Guidelines)
 ImageModerationIncidentSchema.index({ userId: 1, createdAt: -1 }); // per-user history
 ImageModerationIncidentSchema.index({ createdAt: -1 }); // moderation queue
+// Admin triage queue: absent reviewStatus (pre-Q3) sorts alongside 'pending_review' via $in query.
+ImageModerationIncidentSchema.index({ reviewStatus: 1, createdAt: 1 });
 
 export const ImageModerationIncident =
   (mongoose.models.ImageModerationIncident as mongoose.Model<IImageModerationIncidentDocument>) ||
@@ -78,6 +85,35 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    */
   async record(input: ImageModerationIncidentData): Promise<IImageModerationIncidentDocument> {
     return this.model.create(input);
+  }
+
+  /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */
+  async findPendingReview(limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({ reviewStatus: { $in: ['pending_review', null] } })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
+   * Atomically transition an incident to a new reviewStatus. `ncmecReportId` is required
+   * when `status === 'reported'`. Throws if the incident is already 'reported' (idempotency
+   * guard: the NCMEC submission may not be re-sent once completed).
+   */
+  async updateReviewStatus(
+    id: string,
+    status: IncidentReviewStatus,
+    ncmecReportId?: string
+  ): Promise<IImageModerationIncidentDocument | null> {
+    const update: Record<string, unknown> = { reviewStatus: status };
+    if (ncmecReportId) update.ncmecReportId = ncmecReportId;
+    // $ne guard prevents a duplicate NCMEC submission if the route is called twice.
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: { $ne: 'reported' } },
+      { $set: update },
+      { new: true }
+    );
   }
 }
 

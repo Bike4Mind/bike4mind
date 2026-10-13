@@ -2,9 +2,13 @@ import { z } from 'zod';
 
 /**
  * ImageModerationIncident - audit record for a generated image blocked by
- * auto-moderation. Metadata-only (no image bytes); byte preservation for
- * Section 2258A retention is a later quest.
+ * auto-moderation. Metadata-only (no image bytes). S3 objects are preserved
+ * by convention for 18 U.S.C. §2258A; confirmed incidents must be reported
+ * to NCMEC via the admin triage flow.
  */
+
+export const INCIDENT_REVIEW_STATUSES = ['pending_review', 'confirmed_csam', 'false_positive', 'reported'] as const;
+export type IncidentReviewStatus = (typeof INCIDENT_REVIEW_STATUSES)[number];
 
 export const ModerationLabelHitSchema = z.object({
   name: z.string(),
@@ -27,6 +31,12 @@ export const ImageModerationIncidentSchema = z.object({
   provider: z.string(),
   model: z.string(),
   labels: z.array(ModerationLabelHitSchema),
+  // Triage state for the admin review queue. Absent on incidents created before Q3; treated
+  // as 'pending_review' by all queries. Set to 'reported' once an NCMEC report is submitted.
+  reviewStatus: z.enum(INCIDENT_REVIEW_STATUSES).optional(),
+  // Populated when reviewStatus transitions to 'reported'. The CyberTipline report identifier
+  // returned by NCMEC; retained as the audit trail that reporting occurred.
+  ncmecReportId: z.string().optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

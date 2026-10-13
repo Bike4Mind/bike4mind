@@ -3243,6 +3243,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
     if (fabFileIds.length === 0) return [];
+    // Blocked files are legal-hold evidence under 18 U.S.C. §2258A. Throw rather than
+    // silently skip: a partial purge would delete the DB row while the S3 object stays,
+    // orphaning the evidence and making it untrackable.
+    const blocked = await this.fabFileModel
+      .find({ _id: { $in: fabFileIds }, moderationStatus: 'blocked' }, { _id: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    if (blocked.length > 0) {
+      const ids = blocked.map(d => String(d._id)).join(', ');
+      throw new Error(`Cannot hard-delete FabFiles with moderationStatus 'blocked' (legal hold): ${ids}`);
+    }
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
     await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
     return fabFileIds;
@@ -3278,6 +3289,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async hardDeleteOneById(fabFileId: string): Promise<boolean> {
+    // Blocked files are legal-hold evidence under 18 U.S.C. §2258A. Check before the atomic
+    // delete so the guard fires even when called from within a transaction (hardDeleteWithChunks).
+    const existing = await this.fabFileModel
+      .findOne({ _id: fabFileId }, { moderationStatus: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    if (existing?.moderationStatus === 'blocked') {
+      throw new Error(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold under 18 U.S.C. §2258A)`);
+    }
     // findOneAndDelete, not deleteMany: it is the delete and the claim in one round trip, so of two
     // concurrent purges of the same document exactly one is told it did the deleting.
     const doc = await this.fabFileModel

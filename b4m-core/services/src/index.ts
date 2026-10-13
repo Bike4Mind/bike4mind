@@ -93,3 +93,4 @@ export * from './audienceVariants';
 // namespace the server-side adapters in context.ts/send.ts/generate.ts consume.
 export * from './prReportService';
 export * as prReportService from './prReportService';
+export * as ncmecService from './ncmecService';
