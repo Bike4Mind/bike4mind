@@ -231,7 +231,10 @@ describe('POST /api/ai/music', () => {
   it('forwards caller-supplied forceInstrumental and format to the provider and the saved copy metadata', async () => {
     getSettingsValue.mockReturnValue(false);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 30 });
-    generate.mockResolvedValue({ audio: Buffer.from('mp3'), contentType: 'audio/mpeg' });
+    // A saveable non-mpeg type, so the provider's content type can only reach the
+    // save and the response by pass-through - a route that hardcoded audio/mpeg
+    // anywhere on this path would fail here.
+    generate.mockResolvedValue({ audio: Buffer.from('wav'), contentType: 'audio/wav' });
     saveGeneratedAssetToFiles.mockResolvedValue({
       saved: true,
       fileId: 'fab1',
@@ -260,12 +263,12 @@ describe('POST /api/ai/music', () => {
     });
     expect(saveGeneratedAssetToFiles).toHaveBeenCalledWith(
       expect.objectContaining({
-        contentType: 'audio/mpeg',
+        contentType: 'audio/wav',
         generation: expect.objectContaining({ generator: 'music' }),
       }),
       expect.anything()
     );
-    expect(res.getHeader('Content-Type')).toBe('audio/mpeg');
+    expect(res.getHeader('Content-Type')).toBe('audio/wav');
     expect(res.getHeader('Content-Length')).toBe(3);
   });
 
