@@ -17,7 +17,7 @@ Open the account menu in the sidebar and choose **Teams**. The page lists every 
 
 1. On the Teams page, click **Create Team**.
 2. In the **Create New Team** dialog, type a **Team Name**.
-3. Under **Team Size**, type the number of seats or use the minus and plus buttons to step it up or down. A note under the field states the allowed range, for example "Team size must be between 4 and 100 members". If you type a number outside the range, the field shows an error and **Create Team** stays disabled until you fix it. The range is set by Bike4Mind and can change, so go by the note in the dialog. If you need a PO, invoice or other custom billing, use the **Contact us** link under the field.
+3. Under **Team Size**, type the number of seats or use the minus and plus buttons to step it up or down. A note under the field states the allowed range, for example "Team size must be between 4 and 100 members". If you type a number outside the range, the field shows an error and **Create Team** stays disabled until you fix it. The range is set by Bike4Mind and can change, so go by the note in the dialog. If you need a PO, invoice or other custom billing, use the **Contact us** link in the dialog.
 4. Read the **Total Price** line, which shows the monthly total for the seats you picked.
 5. Click **Create Team**. You are sent to a secure checkout to pay for the subscription.
 
