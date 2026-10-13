@@ -37,9 +37,9 @@ describe('API reference scopes table', () => {
     );
 
     // Pin both label forms (plain and "scope for X"); the tokens alone would not catch a dropped line.
-    expect(requiredLines).toHaveLength(4);
+    expect(requiredLines).toHaveLength(3);
     expect(requiredLines.some(line => line.includes('for `refineText`'))).toBe(true);
-    expect(required).toContain('notebooks:read');
+    expect(required).toContain('ai:generate');
     expect(required).toContain('projects:read');
     expect(required).toContain('projects:write');
     expect(required).toContain('agents:read');
@@ -127,6 +127,12 @@ describe('API reference facts shared with the generated docs', () => {
     const rates = section('### Rate Limits');
     expect(rates).not.toMatch(/every response/i);
     expect(rates).toContain('Retry-After');
+  });
+
+  it('says the streaming completions endpoint answers an exceeded ceiling with a 429, not an in-stream event', () => {
+    const rates = section('### Rate Limits');
+    expect(rates).not.toMatch(/in-stream/);
+    expect(rates).toContain('rate-limits before it opens its event');
   });
 
   it('quotes the real request-id length cap', () => {

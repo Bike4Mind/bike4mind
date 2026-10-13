@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "訂閱",
-    "description": "通過一個統一的介面訪問每個主要的 AI 模型。私下運行類似 Deepseek R1 的高級模型。",
+    "description": "通過一個統一的介面訪問每個主要的 AI 模型。",
     "no_free_tier": "沒有免費層 - 專注於專業人士。",
     "credits_rollover": "未使用的點數會延續 3 個月。",
     "monthly_billing": "每月計費",

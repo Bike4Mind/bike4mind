@@ -1,6 +1,5 @@
 import {
   AuthEvents,
-  CreditHolderType,
   HTTPError,
   InternalServerError,
   UnprocessableEntityError,
@@ -12,18 +11,13 @@ import {
   userRepository,
   subscriberRepository,
   creditTransactionRepository,
+  creditLotRepository,
   pendingOtcTokenRepository,
-  organizationRepository,
   authSessionRepository,
   passkeyCredentialRepository,
 } from '@bike4mind/database';
-import { creditService, userService, organizationService, authSessionService } from '@bike4mind/services';
-import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
-import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
-import {
-  notifySeatCeilingRaised,
-  notifyPartnerSignupBlockedAtCapacity,
-} from '@server/organizations/notifySeatCeilingRaised';
+import { userService, authSessionService } from '@bike4mind/services';
+import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
@@ -50,7 +44,6 @@ import { randomUUID } from 'crypto';
 
 interface PendingTokenPayload {
   email: string;
-  otcHash: string;
   attempts: number;
   exp: number;
   jti: string;
@@ -71,9 +64,9 @@ const handler = baseApi({ auth: false })
     const normalizedEmail = (email as string).toLowerCase().trim();
 
     // --- UNIFORM CODE VERIFICATION (enumeration-resistant by construction) ---
-    // Both login and registration verify the emailed code against the signed
-    // pending token issued by /api/otc/send (which returns an identical token for
-    // every address). NOTHING in this block reads account state, so the response
+    // Both login and registration verify the emailed code against the server-side
+    // record for the signed pending token issued by /api/otc/send (which returns an
+    // identical token and writes an identical record for every address). NOTHING in this block reads account state, so the response
     // never reveals whether an account exists. Account existence only affects what
     // happens AFTER a correct code proves ownership (see "CODE PROVEN" below).
     //
@@ -115,26 +108,23 @@ const handler = baseApi({ auth: false })
 
     // Server-side nonce: single-use + JWT-replay protection. Rotating to a fresh
     // nonce invalidates the presented token (the client must use the re-issued token
-    // below to retry). A stale/replayed token fails this check -> generic invalid.
+    // below to retry). A stale/replayed token, or one whose record holds no code hash,
+    // fails this check -> generic invalid. The code hash is only ever read from here.
     const newNonce = randomUUID();
-    const nonceValid = await pendingOtcTokenRepository.validateAndRotateNonce(
-      normalizedEmail,
-      tokenPayload.jti,
-      newNonce
-    );
-    if (!nonceValid) {
+    const otcHash = await pendingOtcTokenRepository.validateAndRotateNonce(normalizedEmail, tokenPayload.jti, newNonce);
+    if (!otcHash) {
       await budget.refund();
       throw new UnprocessableEntityError('Invalid code.');
     }
 
-    const isValid = await userService.verifyPendingOTC(code, tokenPayload.otcHash);
+    const isValid = await userService.verifyPendingOTC(code, otcHash);
     if (!isValid) {
       // Re-issue the token with an incremented attempt count + the rotated nonce so
       // the user can retry. Identical response for existing and non-existent accounts
       // (no existence lookup has happened yet).
       const nextAttempts = attempts + 1;
       const updatedToken = jwt.sign(
-        { email: tokenPayload.email, otcHash: tokenPayload.otcHash, attempts: nextAttempts, jti: newNonce },
+        { email: tokenPayload.email, attempts: nextAttempts, jti: newNonce },
         Config.JWT_SECRET,
         { algorithm: 'HS256', expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)) }
       );
@@ -177,13 +167,34 @@ const handler = baseApi({ auth: false })
         existingUser.emailVerified = true;
         existingUser.emailVerifiedAt = new Date();
         try {
+          // A tagged account was registered with credits deferred until email ownership is
+          // proven; the code just proved it. Never throws. A failed grant keeps the tag, but
+          // emailVerified is persisted in this same write, so later logins skip this branch:
+          // the only retry is the backfillPendingFreeCredits script.
+          const release = await userService.releasePendingFreeCredits(existingUser, {
+            db: {
+              adminSettings: adminSettingsRepository,
+              creditTransactions: creditTransactionRepository,
+              creditLots: creditLotRepository,
+              users: userRepository,
+            },
+            reason: 'OTC login (email verified)',
+            logger: req.logger,
+          });
           // Write only the fields set here: a later loginRecords update below writes the same doc,
-          // and a whole-doc write on either would clobber the other's change.
+          // and a whole-doc write on either would clobber the other's change. The release patch
+          // rides this same write so there is no extra round trip.
           await userRepository.update({
             id: existingUser.id,
             emailVerified: existingUser.emailVerified,
             emailVerifiedAt: existingUser.emailVerifiedAt,
+            ...release.patch,
           });
+          if (release.released) {
+            existingUser.tags = release.patch.tags ?? existingUser.tags;
+            existingUser.pendingCreditGrant = null;
+            if (release.currentCredits !== null) existingUser.currentCredits = release.currentCredits;
+          }
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);
         }
@@ -301,15 +312,14 @@ const handler = baseApi({ auth: false })
     // If no username was supplied, this is a login attempt for an email with no account:
     // signal the client to collect a username and finish registration inline. The code is
     // single-use (the nonce was already rotated above), so hand back a re-issued token
-    // carrying the rotated nonce + same code hash - this lets the client complete
+    // carrying the rotated nonce (whose record keeps the same code hash) - this lets the client complete
     // registration in one continuous flow with NO second OTC email (same pattern as the
     // wrong-code re-issue above). Only reachable post-verification, so it leaks nothing.
     if (!username || typeof username !== 'string') {
-      const registrationToken = jwt.sign(
-        { email: tokenPayload.email, otcHash: tokenPayload.otcHash, attempts, jti: newNonce },
-        Config.JWT_SECRET,
-        { algorithm: 'HS256', expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)) }
-      );
+      const registrationToken = jwt.sign({ email: tokenPayload.email, attempts, jti: newNonce }, Config.JWT_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)),
+      });
       return res.status(200).json({
         registrationRequired: true,
         email: normalizedEmail,
@@ -360,6 +370,7 @@ const handler = baseApi({ auth: false })
             registrationInvites: registrationInviteRepository,
             subscribers: subscriberRepository,
             creditTransactions: creditTransactionRepository,
+            creditLots: creditLotRepository,
           },
           logger: req.logger,
           skipInviteCheck: isBootstrapUser,
@@ -375,7 +386,7 @@ const handler = baseApi({ auth: false })
       // Post-code-proven, so the specific error message leaks nothing about email existence.
       const nextAttempts = attempts + 1;
       const reissuedToken = jwt.sign(
-        { email: tokenPayload.email, otcHash: tokenPayload.otcHash, attempts: nextAttempts, jti: newNonce },
+        { email: tokenPayload.email, attempts: nextAttempts, jti: newNonce },
         Config.JWT_SECRET,
         { algorithm: 'HS256', expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)) }
       );
@@ -397,115 +408,18 @@ const handler = baseApi({ auth: false })
       req.logger.info('Self-host bootstrap: first registered user promoted to admin', { userId: newUser.id });
     }
 
-    // Domain-grant signup credits (mirrors /api/email/verify Phase 2b). OTC proved email
-    // ownership and registerViaOTC set emailVerified=true, so the now-verified domain may
-    // confer a one-time signup grant - ADDITIVE on top of the flat defaultFreeCredits
-    // registerViaOTC already granted (distinct transactionId). Idempotent via the stable
-    // `domain-grant-credits:${userId}` id - the SAME id email/verify uses, so a user who
-    // somehow hits both paths is never double-granted.
-    //
-    // Source precedence (issue #293): a DB-backed PartnerSignupRule wins; the env registry
-    // (`entitlementsForEmail` / `signupCreditsForKeys`) is the migration fallback for a domain
-    // not yet in the collection. `matched` lets a DB rule grant access with 0 bonus credits
-    // without falling through to the env amount.
-    //
-    // Wrapped whole (resolve + grant) so a failure can't 500 a completed registration: the
-    // account exists and the client already holds a token, the same post-rotation invariant as
-    // the analytics call below. The stable transactionId makes an admin/maintenance retry safe.
-    let partnerOrganizationId: string | null = null;
-    try {
-      const partnerGrant = await partnerSignupGrantForEmail(normalizedEmail, true);
-      partnerOrganizationId = partnerGrant.matched ? partnerGrant.organizationId : null;
-      const signupCredits = partnerGrant.matched
-        ? partnerGrant.signupCredits
-        : signupCreditsForKeys(entitlementsForEmail(normalizedEmail, true));
-      if (signupCredits > 0) {
-        const updatedHolder = await creditService.addCredits(
-          {
-            ownerId: newUser.id,
-            ownerType: CreditHolderType.User,
-            credits: signupCredits,
-            type: 'generic_add',
-            transactionId: `domain-grant-credits:${newUser.id}`,
-            reason: 'domain-grant signup credits',
-          },
-          { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
-        );
-        // Reflect the grant in the returned user so the client shows the full balance immediately.
-        newUser.currentCredits = updatedHolder.currentCredits;
-        req.logger.info(
-          `Granted ${signupCredits} one-time domain-grant signup credits to OTC-registered user ${newUser.id}`
-        );
-      }
-    } catch (grantError) {
-      req.logger.error(
-        `OTC registration succeeded for user ${newUser.id} but domain-grant signup-credit grant failed; ` +
-          `idempotent transactionId domain-grant-credits:${newUser.id} makes a retry safe`,
-        grantError
-      );
-    }
-
-    // Partner-rule org auto-add (mirrors /api/email/verify Phase 2c). registerViaOTC set
-    // emailVerified=true, so a DB rule may place this signup into an org. Idempotent, additive,
-    // and never removes anyone. Wrapped so a failure can't 500 a completed registration; the
-    // membership write is safe to retry. Reflect the join on the returned user so the client
-    // sees the org immediately.
-    if (partnerOrganizationId) {
-      try {
-        const result = await organizationService.applyPartnerRuleMembership(
-          { userId: newUser.id, organizationId: partnerOrganizationId },
-          {
-            db: {
-              users: userRepository,
-              organizations: organizationRepository,
-              adminSettings: adminSettingsRepository,
-            },
-            logger: req.logger,
-          }
-        );
-        if (result.added) {
-          newUser.organizationId = partnerOrganizationId;
-          req.logger.info(`Partner-rule org membership: added OTC user ${newUser.id} to org ${partnerOrganizationId}`);
-          if (result.reason === 'added-seat-raised') {
-            // Never awaited-into-failure: the join already committed; the alert/audit is best-effort.
-            await notifySeatCeilingRaised(
-              {
-                organizationId: partnerOrganizationId,
-                userId: newUser.id,
-                previousSeats: result.previousSeats,
-                newSeats: result.newSeats,
-                trigger: 'otc-signup',
-              },
-              req.logger
-            );
-          }
-        } else if (result.reason === 'at-capacity') {
-          // Org at capacity with no auto-raise: a Stripe-billed org (ceiling not raised out of band)
-          // or a non-Stripe org already at MAX_SEATS (the raise is clamped there, #1424). Alert an
-          // admin to add seats so this stranded partner user can be admitted. Best-effort, never throws.
-          await notifyPartnerSignupBlockedAtCapacity(
-            {
-              organizationId: partnerOrganizationId,
-              userId: newUser.id,
-              seats: result.seats,
-              trigger: 'otc-signup',
-            },
-            req.logger
-          );
-        } else if (result.reason === 'org-missing') {
-          req.logger.warn(
-            `Partner-rule org membership not applied for OTC user ${newUser.id} ` +
-              `(org ${partnerOrganizationId}): ${result.reason}`
-          );
-        }
-      } catch (membershipError) {
-        req.logger.error(
-          `OTC registration succeeded for user ${newUser.id} but partner-rule org auto-add failed ` +
-            `(org ${partnerOrganizationId}); membership is idempotent so a retry is safe`,
-          membershipError
-        );
-      }
-    }
+    // registerViaOTC set emailVerified=true, so the now-verified domain may confer its signup
+    // grant (one-time domain credits on top of the flat grant, partner-rule org membership).
+    // Never throws, so it cannot 500 a completed registration. Reflect the grant and any join on
+    // the returned user so the client sees the full balance and the org immediately.
+    const domainGrant = await applySignupDomainGrant({
+      userId: newUser.id,
+      email: normalizedEmail,
+      trigger: 'otc-signup',
+      logger: req.logger,
+    });
+    if (domainGrant.currentCredits !== null) newUser.currentCredits = domainGrant.currentCredits;
+    if (domainGrant.joinedOrganizationId) newUser.organizationId = domainGrant.joinedOrganizationId;
 
     // Analytics only - the account already exists, so a counter-write failure must not 500 a
     // completed registration (post-rotation, that would strand the client on a success).

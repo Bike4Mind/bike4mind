@@ -44,7 +44,11 @@ test.describe('Skills - list, create, detail, edit, share', () => {
   test('nav entry, empty state, then search filter', async ({ page, skillsPage, request }) => {
     await test.step('reach /skills from the profile menu', async () => {
       await skillsPage.openViaNav();
-      await expect(page.getByRole('heading', { name: 'Skills' })).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+      await expect(
+        page.getByTestId('skills-list-page').getByRole('heading', { name: 'Skills', level: 2 })
+      ).toBeVisible({
+        timeout: TIMEOUTS.VISIBLE,
+      });
     });
 
     await test.step('empty state for a user with no skills', async () => {

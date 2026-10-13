@@ -25,6 +25,7 @@ describe('JiraApi Issue Link Operations', () => {
       expect(isValidIssueKey('ABC-1')).toBe(true);
       expect(isValidIssueKey('A1-999')).toBe(true);
       expect(isValidIssueKey('MYPROJECT-12345')).toBe(true);
+      expect(isValidIssueKey('MY_PROJ-7')).toBe(true);
     });
 
     it('should return false for invalid issue keys', () => {

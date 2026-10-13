@@ -24,21 +24,25 @@ const { DATED_GPT_4_1 } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
-  getAvailableModels: vi.fn().mockResolvedValue([DATED_GPT_4_1]),
-  getLlmByModel: vi.fn((_apiKeyTable: unknown, options: { modelInfo?: { id: string } }) => {
-    capturedModelInfoId = options.modelInfo?.id;
-    if (!options.modelInfo) return null;
-    return {
-      currentModel: '',
-      complete: vi.fn(async (model: unknown, _messages: unknown, _options: unknown, onChunk: any) => {
-        capturedCompleteModel = model;
-        await onChunk([''], { inputTokens: 1, outputTokens: 1 });
-      }),
-    };
-  }),
-}));
+vi.mock('@bike4mind/llm-adapters', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
+  return {
+    ...actual,
+    isModelProviderConfigured: vi.fn(actual.isModelProviderConfigured),
+    getAvailableModels: vi.fn().mockResolvedValue([DATED_GPT_4_1]),
+    getLlmByModel: vi.fn((_apiKeyTable: unknown, options: { modelInfo?: { id: string } }) => {
+      capturedModelInfoId = options.modelInfo?.id;
+      if (!options.modelInfo) return null;
+      return {
+        currentModel: '',
+        complete: vi.fn(async (model: unknown, _messages: unknown, _options: unknown, onChunk: any) => {
+          capturedCompleteModel = model;
+          await onChunk([''], { inputTokens: 1, outputTokens: 1 });
+        }),
+      };
+    }),
+  };
+});
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   usdToCredits: vi.fn(() => 10),
@@ -54,6 +58,8 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 
 import { BadRequestError, ChatModels } from '@bike4mind/common';
 import { executeCompletion } from './cliCompletions';
+import { getEffectiveLLMApiKeys } from './apiKeyService';
+import { isModelProviderConfigured } from '@bike4mind/llm-adapters';
 
 function buildDb() {
   const users = {
@@ -83,6 +89,10 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     vi.clearAllMocks();
     capturedModelInfoId = undefined;
     capturedCompleteModel = undefined;
+    vi.unstubAllEnvs();
+    vi.stubEnv('B4M_SELF_HOST', '');
+    vi.stubEnv('BEDROCK_AWS_ACCESS_KEY_ID', '');
+    vi.stubEnv('BEDROCK_AWS_SECRET_ACCESS_KEY', '');
   });
 
   it('resolves the bare "gpt-4.1" alias to the catalog\'s dated snapshot id', async () => {
@@ -108,16 +118,81 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     const rejection = executeCompletion({ ...baseParams, model: 'not-a-real-model', db });
     await expect(rejection).rejects.toThrow('Failed to create LLM backend for model: not-a-real-model');
     await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
+    expect(isModelProviderConfigured).not.toHaveBeenCalled();
   });
 
-  it('raises a plain Error, not caller input, for a catalogued model whose backend is unavailable', async () => {
+  it("raises a retryable 503 provider_not_configured when the catalogued model's provider has no key", async () => {
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: ChatModels.GEMINI_2_5_FLASH, db });
+    await expect(rejection).rejects.toThrow(`Failed to create LLM backend for model: ${ChatModels.GEMINI_2_5_FLASH}`);
+    await expect(rejection).rejects.not.toBeInstanceOf(BadRequestError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 503,
+      additionalInfo: { errorCode: 'provider_not_configured' },
+    });
+  });
+
+  it('raises a plain 400 when the provider key is present but the model is not available to the caller', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ gemini: 'gemini-key' } as never);
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: ChatModels.GEMINI_2_5_FLASH, db });
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
+    await expect(rejection).rejects.toThrow(`Failed to create LLM backend for model: ${ChatModels.GEMINI_2_5_FLASH}`);
+    await expect(rejection).rejects.not.toHaveProperty('additionalInfo.errorCode');
+  });
+
+  it('raises a retryable 503 for a Bedrock model on self-host without BEDROCK_AWS_* credentials', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     const { db } = buildDb();
 
     const rejection = executeCompletion({ ...baseParams, model: ChatModels.CLAUDE_4_SONNET_BEDROCK, db });
-    await expect(rejection).rejects.toThrow(
-      `Failed to create LLM backend for model: ${ChatModels.CLAUDE_4_SONNET_BEDROCK}`
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 503,
+      additionalInfo: { errorCode: 'provider_not_configured' },
+    });
+  });
+
+  it('raises a plain 400 for an unlisted Bedrock model on hosted, where Bedrock is always reachable', async () => {
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: ChatModels.CLAUDE_4_SONNET_BEDROCK, db });
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  // Ollama is the one listing that does network I/O and can time out; its ids are in no static table.
+  it('raises a retryable 503 for a catalogued Ollama model even with Ollama configured', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ ollama: 'http://ollama.local:11434' } as never);
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: ChatModels.DEEPSEEK_R1, db });
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 503,
+      additionalInfo: { errorCode: 'provider_not_configured' },
+    });
+  });
+
+  it('falls back to a retryable 503 and logs when the provider check throws', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ gemini: 'gemini-key' } as never);
+    vi.mocked(isModelProviderConfigured).mockRejectedValueOnce(new Error('boom'));
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({
+      ...baseParams,
+      model: ChatModels.GEMINI_2_5_FLASH,
+      db,
+      logger: logger as never,
+    });
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 503,
+      additionalInfo: { errorCode: 'provider_not_configured' },
+    });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('provider check failed'),
+      expect.objectContaining({ model: ChatModels.GEMINI_2_5_FLASH })
     );
-    await expect(rejection).rejects.not.toBeInstanceOf(BadRequestError);
   });
 
   // A plain-object alias map would return Object.prototype members (the Object

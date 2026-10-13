@@ -250,7 +250,7 @@
     "showPassword": "Show password",
     "enterEmailOrUsername": "Enter email or username",
     "enterPassword": "Enter password",
-    "signInOrCreate": "Sign in or create an account to continue",
+    "signInOrCreate": "Enter your email and we'll send a one-time code to sign in or create an account.",
     "justAMoment": "Just a moment...",
     "fieldErrors": {
       "invalidUsername": "Invalid username",
@@ -617,7 +617,7 @@
   },
   "subscription_modal": {
     "title": "Subscription",
-    "description": "Access every major AI model through one unified interface. Run advanced models like Deepseek R1 privately.",
+    "description": "Access every major AI model through one unified interface.",
     "starter_credits": "Every account starts with free credits; subscribe for a monthly allowance.",
     "credits_rollover": "Unused credits roll over for 3 months.",
     "monthly_billing": "Monthly Billing",

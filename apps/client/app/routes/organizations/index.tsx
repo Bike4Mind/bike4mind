@@ -7,6 +7,8 @@ import {
   useOrganizationSeats,
 } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
+import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
+import { TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
 import {
   SubscriptionOwnerType,
   isDelinquentSubscriptionStatus,
@@ -27,6 +29,7 @@ import {
   LinearProgress,
   Skeleton,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
@@ -178,6 +181,7 @@ const OrganizationListPage: FC = () => {
   } = useGetManagedOrganizations(currentUser?.id);
   const [searchQuery, setSearchQuery] = useState('');
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
+  const teamPlanAvailable = useTeamPlanAvailable();
 
   useDocumentTitle('Teams');
 
@@ -202,9 +206,20 @@ const OrganizationListPage: FC = () => {
           <Typography level="h2">{t('organization.organizations')}</Typography>
           <ContextHelpButton helpId="features/organizations-teams" tooltipText="Learn about Teams" />
         </Box>
-        <Button startDecorator={<AddIcon />} color="primary" onClick={openCreateTeamModal}>
-          {t('organization.create')}
-        </Button>
+        <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
+          {/* Span so the tooltip still fires on hover/focus while the button is disabled. */}
+          <span tabIndex={teamPlanAvailable ? undefined : 0}>
+            <Button
+              startDecorator={<AddIcon />}
+              color="primary"
+              onClick={openCreateTeamModal}
+              disabled={!teamPlanAvailable}
+              data-testid="organizations-create-team-btn"
+            >
+              {t('organization.create')}
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
 
       <Box sx={{ position: 'relative', mb: 4 }}>

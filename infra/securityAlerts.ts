@@ -17,7 +17,7 @@ export const SecurityAlertsSchedule = new sst.aws.Cron('SecurityAlertsSchedule',
   schedule: 'rate(5 minutes)', // Check every 5 minutes
   job: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/security/alertProcessor.handler',
+    handler: 'apps/workers/src/security/alertProcessor.handler',
     runtime: 'nodejs24.x',
     link: [eventBus, ...allSecrets],
     permissions: [

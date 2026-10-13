@@ -133,7 +133,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    '00d4555f6a208289054c958832d6ba88f17730777584e46aebae9a13911d8b81',
+    'dd357e4dcc8e4f94cbf3f2d23be2db8a3fb1bca1723b01a2d2bfc52b0e132939',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   gap('function:infra/database.ts:DatabaseCleaner', 'ab828f690cdda6172736a412bcd33e138f35f0525c8306dc0c6a1c31e12b07b2'),
@@ -223,7 +223,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    'e60c086717cd00367a15603b1e40320dec23c60b6a2313c66b942118be76466b',
+    'eac469edc46eeafcbcaee5bf5c2e8391e138d3020999fb33729dd2fb4b764432',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   broker(
@@ -619,7 +619,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'schedule:infra/cron.ts:attackSimulationCron',
-    '86ba6e388c31d7bf2618976c62d6688a83cbd25407ecc913253d6b6cba56b43e'
+    'ca1059603efb233b53b1392b15d08d992c160fbeaa5b320b40e66b1816006ab5'
   ),
   gap('schedule:infra/cron.ts:CloudSecurityScan', '59885b8bae50fcf16de5d40ddfbdccd02759cc654e66eb4fb835ab9da98994ce'),
   wired('schedule:infra/cron.ts:creditLotSweep', 'edefcd966023f5e25978ccd7cebbf356bdcfc670a9731184d50a4411cbee7f15', {
@@ -785,7 +785,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ]),
   gap(
     'schedule:infra/securityAlerts.ts:SecurityAlertsSchedule',
-    'ba1da4d07cacea76f0543639e4a89aa2b76a78664ff0592e61a77acafd919c8a',
+    'efd2f6c3a776b574e28c9472db6e42678865e8adb14506bff608a6fbc8ce0ca6',
     ['events:PutEvents']
   ),
   gap(

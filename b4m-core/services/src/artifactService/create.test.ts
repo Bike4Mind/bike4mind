@@ -23,6 +23,7 @@ describe('artifactService - create', () => {
     };
 
     adapters = {
+      assertSourceRefsAccessible: vi.fn().mockResolvedValue(undefined),
       db: {
         artifacts: mockArtifactRepo,
         artifactContents: mockContentRepo,
@@ -157,5 +158,62 @@ describe('artifactService - create', () => {
         }),
       })
     );
+  });
+
+  it('rejects a source quest the actor cannot access before writing anything', async () => {
+    adapters.assertSourceRefsAccessible.mockRejectedValueOnce(new Error('no access to quest'));
+
+    await expect(
+      create(userId, { type: 'react', title: 'T', content: 'x', sourceQuestId: 'foreign-quest' } as any, adapters)
+    ).rejects.toThrow('no access to quest');
+
+    expect(adapters.assertSourceRefsAccessible).toHaveBeenCalledWith(userId, {
+      sessionId: undefined,
+      sourceQuestId: 'foreign-quest',
+      parentArtifactId: undefined,
+    });
+    expect(mockContentRepo.create).not.toHaveBeenCalled();
+    expect(mockVersionRepo.create).not.toHaveBeenCalled();
+    expect(mockArtifactRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('hands the adapter each reference under its own key', async () => {
+    vi.mocked(mockContentRepo.create!).mockResolvedValueOnce({ _id: 'c1' } as never);
+    vi.mocked(mockVersionRepo.create!).mockResolvedValueOnce({ _id: 'v1' } as never);
+    vi.mocked(mockArtifactRepo.create!).mockResolvedValueOnce({ id: 'a1' } as never);
+
+    await create(
+      userId,
+      {
+        type: 'react',
+        title: 'T',
+        content: 'x',
+        sessionId: 's-1',
+        sourceQuestId: 'q-1',
+        parentArtifactId: 'p-1',
+      } as never,
+      adapters
+    );
+
+    expect(adapters.assertSourceRefsAccessible).toHaveBeenCalledWith(userId, {
+      sessionId: 's-1',
+      sourceQuestId: 'q-1',
+      parentArtifactId: 'p-1',
+    });
+  });
+
+  it('invokes the reference adapter even when the create carries no references', async () => {
+    vi.mocked(mockContentRepo.create!).mockResolvedValueOnce({ _id: 'c1' } as never);
+    vi.mocked(mockVersionRepo.create!).mockResolvedValueOnce({ _id: 'v1' } as never);
+    vi.mocked(mockArtifactRepo.create!).mockResolvedValueOnce({ id: 'a1' } as never);
+
+    await create(userId, { type: 'react', title: 'T', content: 'x' } as never, adapters);
+
+    expect(adapters.assertSourceRefsAccessible).toHaveBeenCalledTimes(1);
+    expect(adapters.assertSourceRefsAccessible).toHaveBeenCalledWith(userId, {
+      sessionId: undefined,
+      sourceQuestId: undefined,
+      parentArtifactId: undefined,
+    });
   });
 });

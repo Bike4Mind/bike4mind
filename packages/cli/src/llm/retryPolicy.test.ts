@@ -31,6 +31,7 @@ describe('isTransientNetworkError', () => {
       // A retry that races auto-reconnect hits this at open(); it must be retryable
       // so the core waits out another backoff window instead of short-circuiting.
       'WebSocket is not connected',
+      'completion stream ended before [DONE]',
     ];
     for (const message of transient) {
       expect(isTransientNetworkError(new Error(message)), message).toBe(true);

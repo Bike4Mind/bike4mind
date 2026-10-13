@@ -320,16 +320,17 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toBeUndefined();
   });
 
-  it('hands invoke() the authenticating key id, so a tool-driven lake write is audited as the key', async () => {
+  it('hands invoke() an apiKey origin and the key id, so a tool-driven lake write is audited as the key', async () => {
     validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
     const { req, res } = fire();
     await handler(req, res);
-    expect((mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBe('k1');
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }));
   });
 
-  it('hands invoke() no key id for a JWT/browser caller', async () => {
+  it('hands invoke() a session origin and no key id for a JWT/browser caller', async () => {
     const { req, res } = fire({ apiKey: null });
     await handler(req, res);
+    expect((mockInvoke.mock.calls[0][0] as { authOrigin?: string }).authOrigin).toBe('session');
     expect((mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBeUndefined();
   });
 
@@ -1071,18 +1072,20 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     );
   });
 
-  it('hands process() the authenticating key id, matching what the async path stores', async () => {
+  it('hands process() an apiKey origin and the key id, matching what the async path stores', async () => {
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
     await handler(req, res);
     expect(mockProcess).toHaveBeenCalledWith(
-      expect.objectContaining({ body: expect.objectContaining({ apiKeyId: 'k1' }) })
+      expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }) })
     );
   });
 
-  it('hands process() no key id for a JWT/browser caller', async () => {
+  it('hands process() a session origin and no key id for a JWT/browser caller', async () => {
     const { req, res } = fire({ apiKey: null, body: { message: 'hello', sessionId: 'sess-1', wait: true } });
     await handler(req, res);
-    expect((mockProcess.mock.calls[0][0] as { body: { apiKeyId?: string } }).body.apiKeyId).toBeUndefined();
+    const { body } = mockProcess.mock.calls[0][0] as { body: { authOrigin?: string; apiKeyId?: string } };
+    expect(body.authOrigin).toBe('session');
+    expect(body.apiKeyId).toBeUndefined();
   });
 
   describe('toolPayloads (structured tool output for programmatic callers)', () => {

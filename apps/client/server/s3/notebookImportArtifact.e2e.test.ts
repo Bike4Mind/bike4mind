@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { randomUUID } from 'crypto';
 import mongoose from 'mongoose';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
-// createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { Artifact, ArtifactContent, ArtifactVersion, Session } from '@bike4mind/database';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
+// createMongoReplSet is not exported from the package barrel / dist; deep-import the source.
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
+} from '../../../../packages/database/src/__test__/createMongoServer';
+import { Artifact, ArtifactContent, ArtifactVersion, Session, withTransaction } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
 import { createArtifactWrites, createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
 
@@ -20,18 +24,21 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * Run `pnpm --filter @bike4mind/services build` first: the service comes from the built dist, so a
  * stale build reports green against whatever was last compiled.
  *
- * No transaction here - createMongoServer is a standalone mongod, and transactions need a replica
- * set. What breaks in this layer is the payload against the schema, which a standalone reproduces.
+ * Runs on a replica set (createMongoReplSet) because the last describe drives the ref guard inside
+ * a real transaction, which a standalone mongod rejects.
  */
 
 const { NotebookImportService } = notebookImportService;
 
-let mongoServer: MongoMemoryServer;
+let mongoServer: MongoMemoryReplSet;
 const USER = 'artifact-import-owner';
 
 beforeAll(async () => {
-  mongoServer = await createMongoServer();
-  await mongoose.connect(mongoServer.getUri());
+  mongoServer = await createMongoReplSet();
+  // No assertion depends on a schema index, so skip the builds and settle collection creates before
+  // the first transaction (see settleAutoIndexBuilds for the pool deadlock this avoids).
+  await mongoose.connect(mongoServer.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -224,5 +231,53 @@ describe('notebook import: artifacts against real models', () => {
     expect(await Artifact.countDocuments({})).toBe(0);
     expect(await ArtifactContent.countDocuments({})).toBe(0);
     expect(await ArtifactVersion.countDocuments({})).toBe(0);
+  });
+});
+
+describe('notebook import: source-ref guard inside the import transaction', () => {
+  const sessionData = (userId: string, name: string) => ({
+    userId,
+    name,
+    firstCreated: new Date(),
+    lastUpdated: new Date(),
+  });
+
+  const newArtifact = (sessionId: string) => ({
+    userId: USER,
+    sessionId,
+    type: 'svg' as const,
+    title: 'Guarded Diagram',
+    content: BODY,
+  });
+
+  it('accepts the session the same transaction just created, though it is not committed', async () => {
+    const { sessionId, artifactCount, contentCount } = await withTransaction(async session => {
+      const created = await createSessionWrites().create(sessionData(USER, 'In-flight notebook'));
+      const sessionId = String(created.id);
+      await createArtifactWrites(session).createArtifact(newArtifact(sessionId));
+
+      // Session-bound reads: the rows exist for this transaction and nobody else yet.
+      return {
+        sessionId,
+        artifactCount: await Artifact.countDocuments({ sessionId }).session(session),
+        contentCount: await ArtifactContent.countDocuments({}).session(session),
+      };
+    });
+
+    expect(artifactCount).toBe(1);
+    expect(contentCount).toBe(1);
+    expect(await Artifact.countDocuments({ sessionId })).toBe(1);
+  });
+
+  it('rejects a session owned by someone else with a 403 and writes nothing', async () => {
+    await expect(
+      withTransaction(async session => {
+        const created = await createSessionWrites().create(sessionData('someone-else', 'Foreign notebook'));
+        await createArtifactWrites(session).createArtifact(newArtifact(String(created.id)));
+      })
+    ).rejects.toMatchObject({ statusCode: 403 });
+
+    expect(await Artifact.countDocuments({})).toBe(0);
+    expect(await ArtifactContent.countDocuments({})).toBe(0);
   });
 });

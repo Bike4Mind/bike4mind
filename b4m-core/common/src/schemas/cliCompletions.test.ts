@@ -5,11 +5,14 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  COMPLETION_SSE_ERROR_CODES,
   CompletionRequestSchema,
+  CompletionSseErrorEventSchema,
   CompletionToolSchema,
   ResponseFormatSchema,
   normalizeCompletionRequest,
 } from './cliCompletions';
+import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
 describe('ResponseFormatSchema', () => {
   it('accepts text mode', () => {
@@ -390,5 +393,35 @@ describe('CompletionRequestSchema options.reasoningEffort', () => {
 
   it('rejects an unknown effort value', () => {
     expect(() => CompletionRequestSchema.parse({ ...base, options: { reasoningEffort: 'turbo' } })).toThrow();
+  });
+});
+
+describe('CompletionSseErrorEventSchema', () => {
+  it('accepts the provider classifiers alongside the billing ones', () => {
+    for (const code of [
+      'insufficient_credits',
+      'spend_cap_exceeded',
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]) {
+      expect(CompletionSseErrorEventSchema.safeParse({ type: 'error', message: 'm', code }).success).toBe(true);
+    }
+  });
+
+  it('rejects a code outside the frame vocabulary', () => {
+    const frame = { type: 'error', message: 'm', code: 'provider_not_configured' };
+    expect(CompletionSseErrorEventSchema.safeParse(frame).success).toBe(false);
+  });
+
+  // QUEST_ERROR_CODES is persisted on quests; the frame widens its own copy instead.
+  it('leaves the persisted quest vocabulary unwidened', () => {
+    expect([...QUEST_ERROR_CODES]).toEqual(['insufficient_credits', 'spend_cap_exceeded']);
+    expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
+      ...QUEST_ERROR_CODES,
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]);
   });
 });

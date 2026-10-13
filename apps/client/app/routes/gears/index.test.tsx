@@ -92,7 +92,7 @@ describe('GearsPage reward markers', () => {
     // Pending: the yellow chip and the note saying what it waits for.
     expect(screen.getByTestId('gear-pending-published')).toBeInTheDocument();
     expect(screen.getByTestId('gear-pending-note-published')).toHaveTextContent(
-      'Once someone else opens your artifact link, you can claim 5,000 credits.'
+      'Once someone else opens your artifact link while signed in, you can claim 5,000 credits.'
     );
   });
 

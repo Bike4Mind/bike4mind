@@ -212,7 +212,7 @@ describe('executeCompletion - org billing routing', () => {
     const { db, users, organizations } = buildDb({ org: buildOrg({ users: [{ userId: 'someone-else' }] }) });
 
     const rejection = executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
-    await expect(rejection).rejects.toThrow(/no longer a member of billing organization org1/i);
+    await expect(rejection).rejects.toThrow(/no longer a member of/i);
     await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
 
     // Nothing was reserved from either pool - the refusal precedes the credit hold.

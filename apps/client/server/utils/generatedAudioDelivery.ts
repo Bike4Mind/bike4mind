@@ -3,7 +3,7 @@ import type { Response } from 'express';
 import type { Logger } from '@bike4mind/observability';
 import { extensionFromMimeType, type GeneratedAudioEncoding } from '@bike4mind/common';
 import { getFilesStorage } from '@server/utils/storage';
-import type { PersistGeneratedAudioResult } from '@server/utils/persistGeneratedAudio';
+import type { SaveGeneratedAssetResult } from '@bike4mind/services';
 import { GENERATED_AUDIO_OFFLOAD_PREFIX } from '@server/utils/generatedAudioOffloadPrefix';
 
 /**
@@ -46,19 +46,19 @@ export async function offloadGeneratedAudio(audio: Buffer, contentType: string):
 }
 
 /** The save outcome as JSON body fields (common generatedAudio.ts `generatedAudioSaveFields`). */
-function saveFields(save: PersistGeneratedAudioResult | undefined) {
+function saveFields(save: SaveGeneratedAssetResult | undefined) {
   if (!save) return {};
   return save.saved
-    ? { saved: true, fabFileId: save.fabFileId, fileName: save.fileName, fileUrl: save.fileUrl }
+    ? { saved: true, fabFileId: save.fileId, fileName: save.fileName, fileUrl: save.fileUrl }
     : { saved: false, saveSkippedReason: save.reason };
 }
 
 /** The save outcome as headers (contract GENERATED_AUDIO_SAVE_HEADERS), the binary encoding's only channel for it. */
-function setSaveHeaders(res: Response, save: PersistGeneratedAudioResult | undefined): void {
+function setSaveHeaders(res: Response, save: SaveGeneratedAssetResult | undefined): void {
   if (!save) return;
   res.setHeader('X-B4M-Audio-Saved', String(save.saved));
   if (!save.saved) return;
-  res.setHeader('X-B4M-Audio-Fab-File-Id', save.fabFileId);
+  res.setHeader('X-B4M-Audio-Fab-File-Id', save.fileId);
   res.setHeader('X-B4M-Audio-File-Name', save.fileName);
   if (save.fileUrl) res.setHeader('X-B4M-Audio-File-Url', save.fileUrl);
 }
@@ -71,7 +71,7 @@ function setSaveHeaders(res: Response, save: PersistGeneratedAudioResult | undef
 async function oversizedAudioUrl(
   audio: Buffer,
   contentType: string,
-  save: PersistGeneratedAudioResult | undefined,
+  save: SaveGeneratedAssetResult | undefined,
   logger: Logger
 ): Promise<string | undefined> {
   if (save?.saved && save.fileUrl) return save.fileUrl;
@@ -97,7 +97,7 @@ export async function deliverGeneratedAudio(
     audio: Buffer;
     contentType: string;
     encoding: GeneratedAudioEncoding;
-    save: PersistGeneratedAudioResult | undefined;
+    save: SaveGeneratedAssetResult | undefined;
     fields?: Record<string, unknown>;
     tooLargeFields?: Record<string, unknown>;
     logger: Logger;

@@ -330,6 +330,8 @@ export const SettingKeySchema = z.enum([
   'EnableInertArtifactRender',
   'pricePerCredit',
   'ModerationEnabled',
+  'BedrockGuardrailId',
+  'BedrockGuardrailVersion',
   'ImageModerationEnabled',
   'tagLineMain',
   'tagLineSub',
@@ -2685,6 +2687,21 @@ export const settingsMap = {
     description: 'Whether to enable moderation for LLM prompts.',
     category: 'AI Moderation',
   }),
+  BedrockGuardrailId: makeStringSetting({
+    key: 'BedrockGuardrailId',
+    name: 'Bedrock Guardrail ID',
+    defaultValue: '',
+    description:
+      'Bedrock Guardrail identifier used for prompt moderation when no OpenAI key is available. Leave empty to skip Bedrock moderation.',
+    category: 'AI Moderation',
+  }),
+  BedrockGuardrailVersion: makeStringSetting({
+    key: 'BedrockGuardrailVersion',
+    name: 'Bedrock Guardrail Version',
+    defaultValue: 'DRAFT',
+    description: 'Version of the Bedrock Guardrail to apply. Defaults to DRAFT.',
+    category: 'AI Moderation',
+  }),
   ImageModerationEnabled: makeBooleanSetting({
     key: 'ImageModerationEnabled',
     name: 'Image Moderation Enabled',
@@ -4980,7 +4997,7 @@ export const settingsMap = {
       'Most video_generation clips one agent-mode run may start, counted across the run and all of its subagents. 0 removes the tool from agent mode. Each clip still holds and settles its own credits.',
     category: 'AI',
     order: 146,
-    // Consumed by apps/client/server/queueHandlers/agentExecutor.videoToolConfig.ts.
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.videoToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   musicGeneration: makeObjectSetting({
