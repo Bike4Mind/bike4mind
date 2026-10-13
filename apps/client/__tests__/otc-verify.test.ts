@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import bcrypt from 'bcryptjs';
 
 // Mock all external dependencies before importing the route handler.
 const mockFindByEmail = vi.fn();
@@ -294,6 +295,51 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(sentCookies.join(';')).toContain('b4m_rt=refresh');
     // Serialized via toJSON - no raw Mongoose internals / select:false fields.
     expect(body.password).toBeUndefined();
+  });
+
+  // Rollout: a 6-digit code issued just before 8-digit codes shipped must still work while its token
+  // is live, and only by matching that token's hash.
+  describe('legacy 6-digit codes', () => {
+    beforeEach(() => {
+      // What verifyPendingOTC does (see verifyOTC.test.ts): a bcrypt compare with no length check.
+      mockVerifyPendingOTC.mockImplementation((code: string, hash: string) => bcrypt.compare(code, hash));
+      mockFindByEmail.mockResolvedValue({
+        id: 'u1',
+        isSystem: false,
+        isBanned: false,
+        emailVerified: true,
+        tokenVersion: 0,
+        toJSON: () => ({ id: 'u1', username: 'bob' }),
+      });
+    });
+
+    it('signs in with a 6-digit code that matches a live token', async () => {
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('012345', 4) }));
+
+      await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
+
+      expect(mockValidateAndRotateNonce).toHaveBeenCalled();
+      expect(mockRes.status).toHaveBeenCalledWith(200);
+    });
+
+    it('rejects a 6-digit code against an 8-digit token as a wrong guess', async () => {
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('01234567', 4) }));
+
+      await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
+
+      expect(mockRes.status).toHaveBeenCalledWith(422);
+      expect(mockFindByEmail).not.toHaveBeenCalled();
+    });
+
+    it('rejects a 6-digit code whose token nonce is no longer live', async () => {
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('012345', 4) }));
+      mockValidateAndRotateNonce.mockResolvedValue(false);
+
+      await expect(
+        handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes)
+      ).rejects.toThrow('Invalid code.');
+      expect(mockFindByEmail).not.toHaveBeenCalled();
+    });
   });
 
   it('registers a new user on a correct code with a username', async () => {

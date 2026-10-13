@@ -43,7 +43,7 @@ Steps:
    ```bash
    curl -s -H "x-e2e-cleanup-secret: $E2E_CLEANUP_SECRET" \
      "https://app.pr<N>.preview.bike4mind.com/api/test/otc-code?email=qa-admin-e2e@test.com"
-   # → {"code":"123456"}
+   # -> {"code":"12345678"}
    ```
 3. Type the 6-digit code → **Verify Code** → you're in.
 

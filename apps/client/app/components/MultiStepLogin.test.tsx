@@ -108,7 +108,7 @@ const advanceToUsernameStep = async (user: ReturnType<typeof userEvent.setup>) =
   await user.type(textboxIn('login-email-input'), 'new@test.com');
   await user.click(screen.getByTestId('login-continue-btn'));
   const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
-  await user.type(otcInput, '123456');
+  await user.type(otcInput, '12345678');
   await user.click(screen.getByTestId('login-verify-btn'));
   await screen.findByTestId('login-register-username-input');
 };
@@ -300,6 +300,38 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     expect(otcInput).toHaveAttribute('autocomplete', 'one-time-code');
   });
 
+  it('takes an 8-digit code, and a legacy 6-digit one, but not a partial code', async () => {
+    const user = userEvent.setup();
+    mocks.verifyOTC.mockResolvedValueOnce({
+      registrationRequired: true,
+      email: 'new@test.com',
+      pendingToken: 'ptok-2',
+    });
+    renderLogin();
+
+    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+
+    const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
+    expect(otcInput).toHaveAttribute('placeholder', '00000000');
+    const verifyBtn = screen.getByTestId('login-verify-btn');
+
+    await user.click(otcInput);
+    await user.paste('1234-5678 9');
+    expect(otcInput).toHaveValue('12345678');
+    expect(verifyBtn).not.toBeDisabled();
+
+    await user.type(otcInput, '{backspace}');
+    expect(verifyBtn).toBeDisabled();
+
+    await user.type(otcInput, '{backspace}');
+    expect(otcInput).toHaveValue('123456');
+    expect(verifyBtn).not.toBeDisabled();
+    await user.click(verifyBtn);
+
+    await waitFor(() => expect(mocks.verifyOTC).toHaveBeenCalledWith(expect.objectContaining({ code: '123456' })));
+  });
+
   it('does not advance to the username step when open registration is disabled', async () => {
     const user = userEvent.setup();
     mocks.verifyOTC.mockResolvedValueOnce({
@@ -314,7 +346,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     await user.click(screen.getByTestId('login-continue-btn'));
 
     const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
-    await user.type(otcInput, '123456');
+    await user.type(otcInput, '12345678');
     await user.click(screen.getByTestId('login-verify-btn'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
