@@ -235,11 +235,21 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
   // ElevenLabs calling the proxy with a valid token is server-to-server proof the call is live
   // (it also calls on user silence), so it marks the hold connected without trusting the browser.
-  // Fire-and-forget: it must not delay the turn's first token.
+  // The same write gates the turn: a token naming a hold that is no longer open (ended, swept, or
+  // settled by a newer call) gets a 402 so ElevenLabs ends the call instead of talking for free
+  // until the token expires. Legacy tokens without the claim cannot name a hold and are served as
+  // before; they age out with the token TTL. A failed write fails open (logged), not the turn.
   const holdStartedAt = sessionCtx.voiceHoldStartedAt ? new Date(sessionCtx.voiceHoldStartedAt) : null;
-  sessionRepository.recordVoiceActivity(sessionCtx.sessionId, new Date(), holdStartedAt).catch(err => {
-    req.logger.warn({ err }, '[voice-v2/llm-proxy] failed to record voice activity');
-  });
+  const holdOpen = await sessionRepository
+    .recordVoiceActivity(sessionCtx.sessionId, new Date(), holdStartedAt)
+    .catch((err: unknown) => {
+      req.logger.warn({ err }, '[voice-v2/llm-proxy] failed to record voice activity');
+      return true;
+    });
+  if (holdStartedAt && !holdOpen) {
+    req.logger.info({ sessionId: sessionCtx.sessionId }, '[voice-v2/llm-proxy] voice hold is no longer open');
+    return res.status(402).json({ error: 'Voice session has ended', request_id: req.requestId });
+  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
