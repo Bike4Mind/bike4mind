@@ -33,6 +33,8 @@ export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
 export const MAX_ACTIVE_KEYS_PER_USER = 10;
 /** Live federated-exchange keys per user, i.e. distinct relying-party apps in use at once. */
 export const MAX_ACTIVE_EXCHANGE_KEYS_PER_USER = 25;
+/** Longest lifetime of a federated-exchange key, measured from mint time. */
+export const MAX_EXCHANGE_KEY_TTL_MS = 15 * 60 * 1000;
 
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
@@ -79,7 +81,20 @@ const createUserApiKeySchema = z.object({
   preauthorizedLakeIds: z.array(z.string().min(1)).max(25).optional(),
 });
 
-export type CreateUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
+type MintUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
+
+/** Parameters for the shared mint path; 'oauth-exchange' keys only come from createExchangeUserApiKey. */
+export type CreateUserApiKeyParameters = Omit<MintUserApiKeyParameters, 'metadata'> & {
+  metadata: Omit<MintUserApiKeyParameters['metadata'], 'createdFrom'> & {
+    createdFrom: Exclude<MintUserApiKeyParameters['metadata']['createdFrom'], 'oauth-exchange'>;
+  };
+};
+
+/** Parameters for the federated AI-token exchange mint; createdFrom is fixed by the entry point. */
+export type CreateExchangeUserApiKeyParameters = Omit<MintUserApiKeyParameters, 'metadata' | 'expiresAt'> & {
+  expiresAt: Date;
+  metadata: { clientIP?: string; userAgent?: string; oauthClientId: string };
+};
 
 interface CreateUserApiKeyAdapters {
   db: {
@@ -149,9 +164,33 @@ function generateApiKey(): { key: string; keyPrefix: string; keyDigest: string }
   return { key, keyPrefix, keyDigest };
 }
 
+/** Mints a key through the shared path (dashboard, API, CLI, bridge, admin); never the exchange pool. */
 export const createUserApiKey = async (
   userId: string,
   parameters: CreateUserApiKeyParameters,
+  adapters: CreateUserApiKeyAdapters
+): Promise<CreateUserApiKeyResult> => {
+  if ((parameters.metadata?.createdFrom as string) === 'oauth-exchange') {
+    throw new BadRequestError('oauth-exchange keys are minted only by the AI-token exchange');
+  }
+  return mintUserApiKey(userId, parameters, adapters);
+};
+
+/** Mints a short-lived key into the federated-exchange pool, tagged to one relying party. */
+export const createExchangeUserApiKey = async (
+  userId: string,
+  parameters: CreateExchangeUserApiKeyParameters,
+  adapters: CreateUserApiKeyAdapters
+): Promise<CreateUserApiKeyResult> =>
+  mintUserApiKey(
+    userId,
+    { ...parameters, metadata: { ...parameters.metadata, createdFrom: 'oauth-exchange' } },
+    adapters
+  );
+
+const mintUserApiKey = async (
+  userId: string,
+  parameters: MintUserApiKeyParameters,
   adapters: CreateUserApiKeyAdapters
 ): Promise<CreateUserApiKeyResult> => {
   const { db, systemUserId } = adapters;
@@ -256,6 +295,11 @@ export const createUserApiKey = async (
   const isExchangeKey = params.metadata.createdFrom === 'oauth-exchange';
   if (isExchangeKey && (!params.expiresAt || !params.metadata.oauthClientId)) {
     throw new BadRequestError('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
+  }
+  if (isExchangeKey && params.expiresAt && params.expiresAt.getTime() - Date.now() > MAX_EXCHANGE_KEY_TTL_MS) {
+    throw new BadRequestError(
+      `An oauth-exchange key may not expire more than ${MAX_EXCHANGE_KEY_TTL_MS / 60_000} minutes from now`
+    );
   }
 
   // Per-user caps, one per ApiKeyCapPool: 10 standard keys, and a separate ceiling on

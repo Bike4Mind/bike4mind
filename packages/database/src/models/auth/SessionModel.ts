@@ -18,6 +18,7 @@ import {
   SessionListFilters,
   SessionOriginChannel,
   tagAttemptDueFilter,
+  VoiceHoldMarkers,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
@@ -275,6 +276,8 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     },
     voiceReservedCredits: { type: Number, required: false, default: null },
     voiceSessionStartedAt: { type: Date, required: false, default: null },
+    voiceConnectedAt: { type: Date, required: false, default: null },
+    voiceLastActivityAt: { type: Date, required: false, default: null },
     // No default: $inc needs the field absent or numeric, never null.
     voiceBilledCredits: { type: Number, required: false },
     ...ShareableDocumentSchema,
@@ -670,7 +673,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
             { voiceBilledCredits: { $exists: true }, voiceSessionStartedAt: { $lt: realtimeStartedBefore } },
           ],
         },
-        { userId: 1, voiceReservedCredits: 1, voiceSessionStartedAt: 1, voiceBilledCredits: 1 }
+        {
+          userId: 1,
+          voiceReservedCredits: 1,
+          voiceSessionStartedAt: 1,
+          voiceConnectedAt: 1,
+          voiceLastActivityAt: 1,
+          voiceBilledCredits: 1,
+        }
       )
       .sort({ voiceSessionStartedAt: 1 })
       .limit(limit)
@@ -680,8 +690,37 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       userId: s.userId,
       voiceReservedCredits: s.voiceReservedCredits as number,
       voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
+      voiceConnectedAt: s.voiceConnectedAt ?? null,
+      voiceLastActivityAt: s.voiceLastActivityAt ?? null,
       realtime: s.voiceBilledCredits != null,
     }));
+  }
+
+  async recordVoiceActivity(
+    sessionId: string,
+    at: Date,
+    holdStartedAt?: Date | null,
+    options: { realtimeOnly?: boolean } = {}
+  ) {
+    // Keyed on the hold's start when the signal names it, so a call still running elsewhere can
+    // never mark a newer hold on the same session connected.
+    // One pipeline update: the first signal sets voiceConnectedAt, and $max never moves activity back.
+    const { matchedCount } = await this.sessionModel.updateOne(
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: holdStartedAt ?? { $ne: null },
+        ...(options.realtimeOnly ? { voiceBilledCredits: { $exists: true } } : {}),
+      },
+      [
+        {
+          $set: {
+            voiceConnectedAt: { $ifNull: ['$voiceConnectedAt', at] },
+            voiceLastActivityAt: { $max: ['$voiceLastActivityAt', at] },
+          },
+        },
+      ]
+    );
+    return matchedCount === 1;
   }
 
   async claimVoiceHold(sessionId: string, startedAt: Date, options?: { realtimeOnly?: boolean }) {
@@ -695,17 +734,58 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
         voiceSessionStartedAt: startedAt,
         ...(options?.realtimeOnly ? { voiceBilledCredits: { $exists: true } } : {}),
       },
-      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null }, $unset: { voiceBilledCredits: '' } },
+      {
+        $set: {
+          voiceReservedCredits: null,
+          voiceSessionStartedAt: null,
+          voiceConnectedAt: null,
+          voiceLastActivityAt: null,
+        },
+        $unset: { voiceBilledCredits: '' },
+      },
       { new: false, projection: { voiceBilledCredits: 1 } }
     );
     return before ? { billedCredits: before.voiceBilledCredits ?? null } : null;
+  }
+
+  async openVoiceHold(
+    sessionId: string,
+    priorStartedAt: Date | null,
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
+  ) {
+    // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
+    // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
+    // hold makes this match nothing, so only one of them keeps a reserve. The prior start matches
+    // only without a reserve: a reserved hold a settler restored after its refund failed still owes
+    // that refund (settleVoiceHold), so it must not be overwritten.
+    const { matchedCount } = await this.sessionModel.updateOne(
+      {
+        _id: sessionId,
+        $or: [
+          { voiceSessionStartedAt: null },
+          ...(priorStartedAt ? [{ voiceSessionStartedAt: priorStartedAt, voiceReservedCredits: null }] : []),
+        ],
+      },
+      {
+        $set: {
+          voiceReservedCredits: hold.voiceReservedCredits,
+          voiceSessionStartedAt: hold.voiceSessionStartedAt,
+          voiceConnectedAt: null,
+          voiceLastActivityAt: null,
+          // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
+          ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
+        },
+        ...(hold.realtime ? {} : { $unset: { voiceBilledCredits: '' } }),
+      }
+    );
+    return matchedCount === 1;
   }
 
   async restoreVoiceHold(
     sessionId: string,
     voiceReservedCredits: number,
     startedAt: Date,
-    billedCredits: number | null
+    markers: VoiceHoldMarkers = {}
   ) {
     // Only while no newer call has started a hold on the session.
     const { modifiedCount } = await this.sessionModel.updateOne(
@@ -714,7 +794,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
         $set: {
           voiceReservedCredits,
           voiceSessionStartedAt: startedAt,
-          ...(billedCredits !== null ? { voiceBilledCredits: billedCredits } : {}),
+          voiceConnectedAt: markers.voiceConnectedAt ?? null,
+          voiceLastActivityAt: markers.voiceLastActivityAt ?? null,
+          ...(markers.voiceBilledCredits != null ? { voiceBilledCredits: markers.voiceBilledCredits } : {}),
         },
       }
     );

@@ -64,7 +64,6 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
       'Models from OpenAI, Anthropic, Google, xAI, DeepSeek and Moonshot',
       'Credits roll over for 3 months',
       'Single API for all models',
-      'Priority support response',
     ],
     description: 'Access every major AI model through one unified interface.',
   },

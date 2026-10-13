@@ -9,7 +9,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
  * Contract-driven (executeToolContract): nextRouteForContract owns auth + request
  * validation (`req.validated`; a bad body is a 422, uniform with the API - it used
  * to be a 400). Business logic stays in toolsHandler.shared.ts. Production/preview
- * use the Lambda handler instead (@see apps/client/server/cli/tools.ts).
+ * use the Lambda handler instead (@see apps/client/server/cli/tools.handler.ts).
  *
  * WHY dual implementation? SST dev + Lambda Function URLs + CloudFront router =
  * socket hang ups; Next.js API works reliably in local dev.

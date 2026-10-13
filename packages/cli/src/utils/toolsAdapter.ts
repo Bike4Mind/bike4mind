@@ -76,6 +76,10 @@ class NoOpStorage extends BaseStorage {
     return `/tmp/${destination}`;
   }
 
+  async uploadFile(localPath: string, destination: string, options?: Record<string, unknown>): Promise<string> {
+    return `/tmp/${destination}`;
+  }
+
   async download(path: string): Promise<Buffer> {
     throw new Error('Download not supported in CLI');
   }
@@ -1122,6 +1126,9 @@ export async function generateCliTools(
       apiKeys: null,
       adminSettings: mockAdminSettings,
     },
+    // The signed-in user, running tools on their own machine. Spelled out because this object is
+    // `any`, so typecheck cannot require it (see ToolContext.authOrigin).
+    authOrigin: 'session',
   };
 
   // B4M tools enabled for CLI (subset of shared tools)

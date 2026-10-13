@@ -840,4 +840,90 @@ describe('CookieConsentBanner', () => {
       expect(pageViews()).toHaveLength(0);
     });
   });
+
+  describe('tracking cookies and MailerLite', () => {
+    const mailerLiteScript = () => document.querySelector('script[src="/scripts/ml.js"]');
+    const ALL_NAMES = ['_fbp', '_fbc', '_rdt_uuid', '_rdt_em', '_rdt_cid', '_ga', '_gcl_au', '_ga_ABC123'];
+    const trackingCookies = () =>
+      document.cookie
+        .split('; ')
+        .map(c => c.split('=')[0])
+        .filter(n => ALL_NAMES.includes(n));
+    const seedTrackingCookies = () => {
+      for (const name of ALL_NAMES) document.cookie = `${name}=x; path=/`;
+    };
+    const renderBanner = () =>
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+    beforeEach(() => {
+      document.getElementById('mailerlite')?.remove();
+    });
+
+    it('expires the ad and analytics cookies on decline', () => {
+      seedTrackingCookies();
+      expect(trackingCookies()).toHaveLength(8);
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(trackingCookies()).toEqual([]);
+    });
+
+    it('expires the cookies on load for a visitor who declined earlier', () => {
+      seedTrackingCookies();
+      localStorageMock.setItem('cookie_consent', 'denied');
+      renderBanner();
+      expect(trackingCookies()).toEqual([]);
+    });
+
+    it('expires the cookies on load for a visitor who declined on the marketing site', () => {
+      seedTrackingCookies();
+      setSharedDecision('denied');
+      renderBanner();
+      expect(trackingCookies()).toEqual([]);
+    });
+
+    it('loads the MailerLite script only after consent is granted', () => {
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      expect(mailerLiteScript()).toBeNull();
+
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(mailerLiteScript()).not.toBeNull();
+    });
+
+    it('loads the MailerLite script in the auto-granted region with no stored decision', () => {
+      setRegion('row');
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(mailerLiteScript()).not.toBeNull();
+    });
+
+    it('does not load the MailerLite script when consent is denied', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(mailerLiteScript()).toBeNull();
+    });
+  });
 });

@@ -17,6 +17,10 @@ describe('generateAndSendProactiveMessage tool deps', () => {
     expect(source).toMatch(/sessions: \{ findAllByIds: db\.sessions\.findAllByIds\.bind\(db\.sessions\) \},/);
   });
 
+  it('marks the turn as internal-origin', () => {
+    expect(source).toMatch(/authOrigin: 'internal',/);
+  });
+
   it('does not hand the tools the whole session repository', () => {
     // The whole repo would enable incrementImageCount for images no quest of this run holds.
     expect(source).not.toMatch(/sessions: db\.sessions,/);

@@ -156,6 +156,7 @@ re-deciding per endpoint:
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
+| Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,

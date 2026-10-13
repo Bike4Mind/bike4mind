@@ -8,6 +8,7 @@ interface FakeSession {
   voiceReservedCredits: number | null;
   voiceSessionStartedAt: Date | null;
   voiceBilledCredits?: number;
+  voiceLastActivityAt?: Date | null;
 }
 const state = vi.hoisted(() => ({
   session: null as unknown as FakeSession,
@@ -17,6 +18,7 @@ const state = vi.hoisted(() => ({
   beforeClaim: null as null | (() => void),
   failIncrement: false,
   failTransaction: false,
+  failActivity: false,
   // A newer call's hold that takes the session the moment a settlement's refund fails.
   newerHoldOnFailure: null as null | Date,
 }));
@@ -79,6 +81,13 @@ vi.mock('@bike4mind/database', () => ({
       state.session.voiceBilledCredits = before + credits;
       return before;
     },
+    recordVoiceActivity: async (_id: string, at: Date, holdStartedAt?: Date | null) => {
+      if (state.failActivity) throw new Error('mongo blip');
+      const open = state.session.voiceSessionStartedAt;
+      if (open && (!holdStartedAt || holdStartedAt.getTime() === open.getTime())) {
+        state.session.voiceLastActivityAt = at;
+      }
+    },
     claimVoiceHold: async (_id: string, startedAt: Date, options?: { realtimeOnly?: boolean }) => {
       state.beforeClaim?.();
       if (state.session.voiceSessionStartedAt?.getTime() !== startedAt.getTime()) return null;
@@ -92,13 +101,19 @@ vi.mock('@bike4mind/database', () => ({
       };
       return { billedCredits };
     },
-    restoreVoiceHold: async (_id: string, reserved: number, startedAt: Date, billedCredits: number | null) => {
+    restoreVoiceHold: async (
+      _id: string,
+      reserved: number,
+      startedAt: Date,
+      markers: { voiceLastActivityAt?: Date | null; voiceBilledCredits?: number | null } = {}
+    ) => {
       if (state.session.voiceSessionStartedAt !== null) return false;
       state.session = {
         ...state.session,
         voiceReservedCredits: reserved,
         voiceSessionStartedAt: startedAt,
-        ...(billedCredits !== null ? { voiceBilledCredits: billedCredits } : {}),
+        voiceLastActivityAt: markers.voiceLastActivityAt ?? null,
+        ...(markers.voiceBilledCredits != null ? { voiceBilledCredits: markers.voiceBilledCredits } : {}),
       };
       return true;
     },
@@ -148,6 +163,7 @@ describe('voiceSessionEnded realtime billing', () => {
     state.beforeClaim = null;
     state.failIncrement = false;
     state.failTransaction = false;
+    state.failActivity = false;
     state.newerHoldOnFailure = null;
     sendToClient.mockClear();
     logger.error.mockClear();
@@ -166,6 +182,22 @@ describe('voiceSessionEnded realtime billing', () => {
     expect(state.session.voiceSessionStartedAt).toBeNull();
   });
 
+  it('records each response as the call being alive, so the sweep can settle an abandoned call', async () => {
+    await send(30, 'resp-1');
+
+    expect(state.session.voiceLastActivityAt).toBeInstanceOf(Date);
+  });
+
+  it('still bills a response whose activity marker cannot be written', async () => {
+    state.failActivity = true;
+
+    await send(30, 'resp-1');
+
+    expect(state.session.voiceBilledCredits).toBe(30);
+    expect(state.transactions.map(t => t.credits)).toEqual([-30]);
+    expect(logger.warn).toHaveBeenCalledWith('voiceSessionEnded: failed to record voice activity', expect.anything());
+  });
+
   it('does not bill a replayed response twice', async () => {
     await send(30, 'resp-1');
     await send(30, 'resp-1');
@@ -178,7 +210,7 @@ describe('voiceSessionEnded realtime billing', () => {
   it('keeps the hold open across responses, so a reconnect reuses it instead of taking a second one', async () => {
     await send(30, 'resp-1');
 
-    expect(shouldReuseVoiceHold(true, state.session)).toBe(true);
+    expect(shouldReuseVoiceHold(true, state.session, true)).toBe(true);
     expect(state.balance).toBe(STARTING_BALANCE - HOLD);
   });
 
@@ -240,7 +272,7 @@ describe('voiceSessionEnded realtime billing', () => {
     const atClose = charged();
 
     // A reconnect must reserve afresh, and further responses are charged from the balance.
-    expect(shouldReuseVoiceHold(true, state.session)).toBe(false);
+    expect(shouldReuseVoiceHold(true, state.session, true)).toBe(false);
     await send(25, 'resp-after-close');
     expect(charged()).toBe(atClose + 25);
   });
@@ -278,6 +310,7 @@ describe('voiceSessionEnded realtime billing', () => {
     expect(state.session.voiceSessionStartedAt).toEqual(startedAt);
     expect(state.session.voiceReservedCredits).toBe(HOLD);
     expect(state.session.voiceBilledCredits).toBe(30);
+    expect(state.session.voiceLastActivityAt).toBeInstanceOf(Date);
     expect(state.balance).toBe(STARTING_BALANCE - HOLD);
     expect(state.transactions.map(t => t.credits)).toEqual([-30]);
 
