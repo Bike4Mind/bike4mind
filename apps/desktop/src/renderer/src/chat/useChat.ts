@@ -689,7 +689,7 @@ export function useConversation(
       const summary = await window.b4m.chat.getSession(sessionId);
       if (summary) {
         setSession(summary);
-        const { messages: _messages, ...rest } = summary;
+        const { messages: _messages, spawnSuggestions: _suggestions, ...rest } = summary;
         onSummaryChanged({ ...rest, messageCount: summary.messages.length });
       }
     },

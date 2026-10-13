@@ -20,6 +20,7 @@ import type {
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
+  ChatSpawnSuggestion,
   ChatStreamEvent,
   ChatRoundTiming,
   BranchCheckout,
@@ -32,6 +33,8 @@ import type {
   ContextBoundaryResult,
   ReasoningEffortSetting,
   SendMessageResult,
+  SpawnSuggestionResult,
+  StartSpawnSuggestionRequest,
   UpdateProjectRequest,
   UpdateProjectResult,
 } from '@shared/chat';
@@ -52,7 +55,7 @@ import { autoFixToolRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
-import { isValidBranchName } from './project/branchName';
+import { isValidBranchName, suggestBranchName } from './project/branchName';
 import {
   branchCheckouts,
   branchExists,
@@ -107,7 +110,7 @@ import {
   suggestionRequestMessages,
 } from './nextPrompt';
 import type { SessionActivity } from './SessionActivity';
-import { isValidSessionId, type SessionStore } from './SessionStore';
+import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
 import { SkillsPromptCache } from './skills/prompt';
 import type { SkillCatalog } from './skills/SkillCatalog';
@@ -140,6 +143,8 @@ import {
   type SpawnOutcome,
   type SpawnPlacement,
   type SpawnRejected,
+  type SpawnSuggestionHost,
+  type SuggestionOutcome,
   type SkillContext,
   type ToolContext,
   type ToolDefinition,
@@ -469,6 +474,9 @@ export class ChatService {
    */
   private spawnReservations = 0;
 
+  /** `sessionId:suggestionId` of starts in flight, so a double click cannot start two children. */
+  private readonly startingSuggestions = new Set<string>();
+
   /** Finished children waiting for their parent to be idle, so a report never splits a turn. */
   private readonly childReports = new Map<string, ChildReport[]>();
 
@@ -614,9 +622,11 @@ export class ChatService {
     return { ok: false, busy: false, error: result.error };
   }
 
-  setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
+  async setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
     if (archived) this.archiveCleanup(sessionId);
-    return this.deps.store.setArchived(sessionId, archived);
+    const updated = await this.deps.store.setArchived(sessionId, archived);
+    if (updated && archived) await this.announceSuggestions(sessionId);
+    return updated;
   }
 
   private archiveCleanup(sessionId: string): void {
@@ -1851,6 +1861,7 @@ export class ChatService {
       // them rather than adding a hop of their own; every later turn takes it from the cache.
       const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
       const skillsBlock = this.skillsPrompt?.get(session.id, skillRoot) ?? Promise.resolve('');
+      if (!resume) await this.reportSuggestionOutcomes(session);
       const wire = await toCompletionMessages(
         session,
         (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
@@ -2644,8 +2655,7 @@ export class ChatService {
 
       setArchived: async (sessionId, archived) => {
         if (!(await addressable(sessionId))) return null;
-        if (archived) this.archiveCleanup(sessionId);
-        const updated = await this.deps.store.setArchived(sessionId, archived);
+        const updated = await this.setSessionArchived(sessionId, archived);
         return updated ? this.toHostView(updated) : null;
       },
 
@@ -2658,7 +2668,189 @@ export class ChatService {
       describeSession: async sessionId => (await addressable(sessionId))?.title ?? null,
 
       sendTo: async (targetId, message) => this.relayMessage(session, await addressable(targetId), targetId, message),
+
+      // A spawned session has nobody to click a card, so it keeps the approval-gated start.
+      ...(session.origin ? {} : { suggestions: this.suggestionHost(session.id, project) }),
     };
+  }
+
+  /**
+   * session_spawn's side of a suggestion: record it and return, so the turn is never held on
+   * the user's answer. The start itself is `startSpawnSuggestion`, reached only from the card.
+   */
+  private suggestionHost(sessionId: string, project: ChatProject): SpawnSuggestionHost {
+    const revise = async (
+      id: string,
+      apply: (target: ChatSpawnSuggestion) => ChatSpawnSuggestion
+    ): Promise<SuggestionOutcome> => {
+      let outcome: SuggestionOutcome = { ok: false, message: `No suggestion with id ${id} in this conversation.` };
+      const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current => {
+        const target = current.find(entry => entry.id === id);
+        if (!target) return null;
+        if (target.status !== 'pending') {
+          outcome = {
+            ok: false,
+            message:
+              target.status === 'started'
+                ? `The user already started suggestion ${id} as session ${target.started?.sessionId ?? ''}, so it ` +
+                  'can no longer change. Use session_send to tell that session instead.'
+                : `Suggestion ${id} was dismissed. Suggest it again only if the user still wants it.`,
+          };
+          return null;
+        }
+        const next = apply(target);
+        outcome = { ok: true, suggestion: next };
+        return current.map(entry => (entry.id === id ? next : entry));
+      });
+      if (stored) this.emitSuggestions(sessionId, stored);
+      return outcome;
+    };
+
+    return {
+      suggest: async task => {
+        const suggestion: ChatSpawnSuggestion = {
+          // Short because the model has to type it back to revise the card.
+          id: randomUUID().slice(0, 8),
+          title: task.title ?? deriveTitle(task.prompt),
+          prompt: task.prompt,
+          ...(task.summary ? { summary: task.summary } : {}),
+          base: await spawnBaseFor(project),
+          branch: suggestBranchName(task.title, task.prompt),
+          status: 'pending',
+          revision: 0,
+          createdAt: new Date().toISOString(),
+        };
+        const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current => [...current, suggestion]);
+        if (!stored) throw new Error('This conversation no longer exists.');
+        this.emitSuggestions(sessionId, stored);
+        return suggestion;
+      },
+
+      update: (id, changes) =>
+        revise(id, target => {
+          const title = changes.title ?? target.title;
+          const prompt = changes.prompt ?? target.prompt;
+          return {
+            ...target,
+            title,
+            prompt,
+            ...(changes.summary ? { summary: changes.summary } : {}),
+            branch: changes.title ? suggestBranchName(title, prompt) : target.branch,
+            revision: target.revision + 1,
+          };
+        }),
+
+      dismiss: id => revise(id, target => ({ ...target, status: 'dismissed', dismissedBy: 'assistant' })),
+    };
+  }
+
+  /**
+   * Start a pending suggestion the way the user edited it on the card.
+   *
+   * Allowed while this conversation is replying: the child is its own conversation, and holding
+   * the start for the reply would make the card the blocking thing it replaced. The model hears
+   * what happened through the note `reportSuggestionOutcomes` puts on the next turn.
+   */
+  async startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult> {
+    const { sessionId, suggestionId } = request;
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    const key = `${sessionId}:${suggestionId}`;
+    if (this.startingSuggestions.has(key)) return { ok: false, error: 'It is already starting.' };
+    this.startingSuggestions.add(key);
+    try {
+      const parent = await this.deps.store.get(sessionId);
+      if (!parent) return { ok: false, error: 'That conversation no longer exists.' };
+      const suggestion = parent.spawnSuggestions?.find(entry => entry.id === suggestionId);
+      if (suggestion?.status !== 'pending')
+        return { ok: false, error: 'That suggestion is no longer waiting to start.' };
+
+      const prompt = typeof request.prompt === 'string' ? request.prompt.trim() : '';
+      if (!prompt) return { ok: false, error: 'The task needs a prompt.' };
+      const title = (typeof request.title === 'string' ? request.title.trim() : '') || suggestion.title;
+      const branch = typeof request.branch === 'string' ? request.branch.trim() : '';
+      if (request.placement === 'worktree' && !branch) return { ok: false, error: 'Name a branch for the worktree.' };
+      const placement: SpawnPlacement =
+        request.placement === 'worktree' ? { kind: 'worktree', branch, base: suggestion.base } : { kind: 'local' };
+
+      const outcome = await this.spawnSession(parent, prompt, title, placement);
+      if (!outcome.ok) return { ok: false, error: outcome.message };
+
+      let started: ChatSpawnSuggestion | null = null;
+      const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
+        current.map(entry => {
+          if (entry.id !== suggestionId) return entry;
+          started = {
+            ...entry,
+            title,
+            prompt,
+            status: 'started',
+            unreported: true,
+            started: {
+              sessionId: outcome.session.id,
+              title: outcome.session.title,
+              placement: placement.kind,
+              ...(placement.kind === 'worktree' ? { branch: placement.branch } : {}),
+              edited: prompt !== suggestion.prompt || title !== suggestion.title,
+            },
+          };
+          return started;
+        })
+      );
+      if (stored) this.emitSuggestions(sessionId, stored);
+      // The child runs either way; only the card is gone with a parent deleted mid-start.
+      return started ? { ok: true, suggestion: started } : { ok: false, error: 'That conversation no longer exists.' };
+    } finally {
+      this.startingSuggestions.delete(key);
+    }
+  }
+
+  async dismissSpawnSuggestion(sessionId: string, suggestionId: string): Promise<SpawnSuggestionResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    if (this.startingSuggestions.has(`${sessionId}:${suggestionId}`)) return { ok: false, error: 'It is starting.' };
+    let dismissed: ChatSpawnSuggestion | null = null;
+    const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current => {
+      const target = current.find(entry => entry.id === suggestionId);
+      if (target?.status !== 'pending') return null;
+      dismissed = { ...target, status: 'dismissed', dismissedBy: 'user', unreported: true };
+      return current.map(entry => (entry.id === suggestionId && dismissed ? dismissed : entry));
+    });
+    if (!stored || !dismissed) return { ok: false, error: 'That suggestion is no longer waiting to start.' };
+    this.emitSuggestions(sessionId, stored);
+    return { ok: true, suggestion: dismissed };
+  }
+
+  async clearSpawnSuggestion(sessionId: string, suggestionId: string): Promise<void> {
+    if (!isValidSessionId(sessionId)) return;
+    const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
+      current.some(entry => entry.id === suggestionId && entry.status === 'started')
+        ? current.map(entry => (entry.id === suggestionId ? { ...entry, cleared: true } : entry))
+        : null
+    );
+    if (stored) this.emitSuggestions(sessionId, stored);
+  }
+
+  private emitSuggestions(sessionId: string, suggestions: ChatSpawnSuggestion[]): void {
+    this.emit({ type: 'spawn-suggestions', sessionId, suggestions });
+  }
+
+  private async announceSuggestions(sessionId: string): Promise<void> {
+    this.emitSuggestions(sessionId, await this.deps.store.spawnSuggestions(sessionId));
+  }
+
+  /**
+   * Put what the user did with this conversation's suggestions since the last turn onto the
+   * prompt this turn answers, once. Stored on the message rather than added to this request
+   * alone, so every later turn replays the same bytes and still knows the child's id.
+   */
+  private async reportSuggestionOutcomes(session: ChatSession): Promise<void> {
+    if (!session.spawnSuggestions?.some(entry => entry.unreported)) return;
+    const last = session.messages[session.messages.length - 1];
+    if (last?.role !== 'user' || last.boundary) return;
+    const reported = await this.deps.store.reportSpawnSuggestions(session.id, last.id, describeSuggestionOutcome);
+    if (!reported) return;
+    last.notes = [...(last.notes ?? []), ...reported.notes];
+    session.spawnSuggestions = reported.suggestions;
+    this.emitSuggestions(session.id, reported.suggestions);
   }
 
   /**
@@ -4094,11 +4286,17 @@ const MEMORY_GUIDANCE: readonly string[] = [
  */
 const HOST_GUIDANCE: readonly string[] = [
   'You can also work with the conversations in this project: session_list and session_read see',
-  'them, session_spawn starts one, session_send speaks to one that already exists,',
+  'them, session_spawn hands work to a new one, session_send speaks to one that already exists,',
   'session_archive tidies one away and session_delete removes one permanently. They reach this',
   'project only, and a spawned session can read and change exactly the folders you can - it',
   'cannot be given others.',
-  'A session you spawn runs on its own and does NOT report back into this turn. Finish your',
+  'With the user present, session_spawn only SUGGESTS the session: a card appears beside their',
+  'composer and the call returns at once. Nothing has started, so say you suggested it, never',
+  'that it is running, and do not wait for them. If they ask in chat to change the task, revise',
+  'it with session_suggestion_update; if they decline it or say to do it here, withdraw it with',
+  'session_suggestion_dismiss and do the work yourself. Never suggest the same work twice. A',
+  'system reminder on a later turn tells you when they start or dismiss one.',
+  'A session that has started runs on its own and does NOT report back into this turn. Finish your',
   'answer without it. Later, this conversation is told THAT it finished - never what it said,',
   'so use session_read on its id when you need that. Never start a second session because the',
   'first has not answered yet, and never start several to try',
@@ -4452,7 +4650,7 @@ async function toCompletionMessages(
     const calls = message.toolCalls ?? [];
     // Artifact markup is stripped out of the stored text, so it has to go back in here: a model
     // that cannot see the artifact it just wrote cannot revise it.
-    const text = frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message)));
+    const text = withNotes(message, frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message))));
 
     if (calls.length === 0) {
       const attachments = message.attachments ?? [];
@@ -4485,6 +4683,39 @@ async function toCompletionMessages(
   }
 
   return wire;
+}
+
+/** App-written notes ride after the turn's own words, so what the user said stays first. */
+function withNotes(message: ChatMessage, text: string): string {
+  if (!message.notes?.length) return text;
+  const block = ['<system-reminder>', ...message.notes, '</system-reminder>'].join('\n');
+  return text ? `${text}\n\n${block}` : block;
+}
+
+/** Longest edited prompt quoted back to the model; the child has the whole of it. */
+const EDITED_PROMPT_QUOTE_CHARS = 4000;
+
+/** The note the model gets about one suggestion the user acted on. See reportSuggestionOutcomes. */
+export function describeSuggestionOutcome(suggestion: ChatSpawnSuggestion): string {
+  const name = `suggestion ${suggestion.id} ("${suggestion.title}")`;
+  const started = suggestion.started;
+  if (suggestion.status !== 'started' || !started) {
+    return `The user dismissed ${name}. Nothing was started; do not suggest it again unless they ask.`;
+  }
+  const where =
+    started.placement === 'worktree'
+      ? `in a worktree of its own on branch ${started.branch ?? ''}, cut from ${suggestion.base}`
+      : 'locally, sharing this working directory';
+  const lines = [`The user started ${name} as session ${started.sessionId}, ${where}.`];
+  if (started.edited) {
+    const quoted =
+      suggestion.prompt.length > EDITED_PROMPT_QUOTE_CHARS
+        ? `${suggestion.prompt.slice(0, EDITED_PROMPT_QUOTE_CHARS)}\n[...]`
+        : suggestion.prompt;
+    lines.push(`They edited it before starting. It was started with this prompt:\n${quoted}`);
+  }
+  lines.push('This conversation is told when it finishes; use session_read on its id for what it said.');
+  return lines.join('\n');
 }
 
 /**

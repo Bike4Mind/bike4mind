@@ -13,6 +13,7 @@ import type {
   CreateCodeSessionRequest,
   ReasoningEffortSetting,
   SendMessageRequest,
+  StartSpawnSuggestionRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
@@ -108,6 +109,12 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
     sendQueuedMessageNow: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSendQueuedNow, sessionId, queuedId),
+    startSpawnSuggestion: (request: StartSpawnSuggestionRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatStartSpawnSuggestion, request),
+    dismissSpawnSuggestion: (sessionId: string, suggestionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatDismissSpawnSuggestion, sessionId, suggestionId),
+    clearSpawnSuggestion: (sessionId: string, suggestionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatClearSpawnSuggestion, sessionId, suggestionId),
     onQueueChanged: listener => {
       const handler = (_event: unknown, queueEvent: ChatQueueEvent) => listener(queueEvent);
       ipcRenderer.on(IPC_CHANNELS.chatQueueChanged, handler);

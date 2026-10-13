@@ -7,6 +7,7 @@ import type {
   ChatToolDetail,
   ChatMedia,
   ChatSessionSummary,
+  ChatSpawnSuggestion,
   ChatToolNotice,
   ChatUsage,
   RelayRefusal,
@@ -390,6 +391,29 @@ export interface HostContext {
    * ChatRelayOrigin. A refusal here is the bound working, not a transient failure.
    */
   sendTo(sessionId: string, message: string): Promise<RelayOutcome>;
+  /**
+   * Present only when a user is in this conversation to act on a suggestion. session_spawn then
+   * proposes rather than starts, and the turn is never held on the answer. Absent in a spawned
+   * session, which keeps the approval-gated start.
+   */
+  suggestions?: SpawnSuggestionHost;
+}
+
+export interface SpawnSuggestionTask {
+  prompt: string;
+  title?: string;
+  summary?: string;
+}
+
+/** A suggestion the model addressed that cannot take the change, and why. */
+export type SuggestionOutcome = { ok: true; suggestion: ChatSpawnSuggestion } | { ok: false; message: string };
+
+/** The spawn suggestions of the calling conversation, and only that conversation. */
+export interface SpawnSuggestionHost {
+  suggest(task: SpawnSuggestionTask): Promise<ChatSpawnSuggestion>;
+  /** Only a pending suggestion can change. */
+  update(id: string, changes: Partial<SpawnSuggestionTask>): Promise<SuggestionOutcome>;
+  dismiss(id: string): Promise<SuggestionOutcome>;
 }
 
 /** What the user is asked to allow before a tool runs, for tools that declare `approval`. */

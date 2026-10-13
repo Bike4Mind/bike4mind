@@ -647,6 +647,12 @@ export interface ChatMessage {
    * see which skill ran instead of a screen of prose they never wrote.
    */
   skill?: ChatMessageSkill;
+  /**
+   * App-written context the model reads with this user turn, never drawn in the thread: today
+   * only what the user did with a spawn suggestion since the last turn. Stored rather than added
+   * per request so the replayed history stays byte-identical and the prompt cache holds.
+   */
+  notes?: string[];
 }
 
 /**
@@ -1001,6 +1007,11 @@ export interface ChatSession extends ChatSessionMeta {
    */
   remoteSessionId?: string;
   /**
+   * Tasks the model suggested handing to a new session; see ChatSpawnSuggestion. Kept off
+   * ChatSessionSummary so the sidebar listing never carries them.
+   */
+  spawnSuggestions?: ChatSpawnSuggestion[];
+  /**
    * The reply streaming into this conversation right now, and when its turn started. Never
    * stored: ChatService.getSession adds it, so a window joining mid-turn can show the turn's
    * status line with a true elapsed time rather than none at all.
@@ -1096,7 +1107,9 @@ export type ChatStreamEvent =
    * ends it whether or not the worktree was made - a failure reaches the sender as the turn's
    * refusal.
    */
-  | { type: 'workspace'; sessionId: string; running: boolean; base: string; branch?: string };
+  | { type: 'workspace'; sessionId: string; running: boolean; base: string; branch?: string }
+  /** The conversation's spawn suggestions changed; carries the whole list. No reply in flight. */
+  | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] };
 
 /**
  * What a session is doing, as the sidebar draws it.
@@ -1387,6 +1400,55 @@ export function branchHolder(
  * than retrying, since nothing it can do changes the answer.
  */
 export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt' | 'branch';
+
+/**
+ * A task the model proposed handing to a new session, waiting on the user.
+ *
+ * session_spawn in a conversation with a user present records one of these and returns at once,
+ * so the turn is never held behind it: the user starts it (with whatever edits they made),
+ * dismisses it, or asks the model in chat to revise it. `revision` counts the model's edits, so
+ * the card can tell an update from the text it was showing.
+ */
+export interface ChatSpawnSuggestion {
+  id: string;
+  title: string;
+  prompt: string;
+  summary?: string;
+  /** What a worktree child is cut from, resolved when the suggestion was made. */
+  base: string;
+  /** The prefilled branch name for a worktree start. */
+  branch: string;
+  status: 'pending' | 'started' | 'dismissed';
+  revision: number;
+  createdAt: string;
+  started?: ChatSpawnSuggestionStart;
+  dismissedBy?: 'user' | 'assistant';
+  /** A user outcome the model has not been told yet; cleared when the next turn carries it. */
+  unreported?: boolean;
+  /** The user closed the "Started" row, so the tray no longer draws it. */
+  cleared?: boolean;
+}
+
+export interface ChatSpawnSuggestionStart {
+  sessionId: string;
+  title: string;
+  placement: 'worktree' | 'local';
+  branch?: string;
+  /** The user changed the prompt or title before starting. */
+  edited: boolean;
+}
+
+export interface StartSpawnSuggestionRequest {
+  sessionId: string;
+  suggestionId: string;
+  placement: 'worktree' | 'local';
+  prompt: string;
+  title: string;
+  /** Required for a worktree start. */
+  branch?: string;
+}
+
+export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion } | { ok: false; error: string };
 
 /**
  * A session_send that did not happen, and which bound or precondition stopped it.

@@ -33,6 +33,7 @@ describe('ChatService approval modes', () => {
   let approvals: ApprovalGate;
   let events: ChatStreamEvent[];
   let streams: PassThrough[];
+  let post: ReturnType<typeof vi.fn>;
   let root: string;
 
   const calls = (status: ChatToolCall['status']): ChatToolCall[] =>
@@ -50,13 +51,25 @@ describe('ChatService approval modes', () => {
    * These tests are about which MODE a child inherits and run in a plain temp directory with no
    * repository in it; where a child lands is ChatService.spawnPlacement.test.ts's subject.
    */
-  async function answer(decision: 'once' | 'deny'): Promise<void> {
-    const asked = await awaitStatus('awaiting-approval');
-    if (!asked.approvalId) throw new Error('no approval announced');
-    approvals.resolve(asked.approvalId, {
-      decision,
-      ...(asked.approvalChoice ? { optionId: 'local' } : {}),
+  /** Start the session's one pending spawn suggestion from its card, in this working directory. */
+  async function startSuggested(sessionId: string): Promise<void> {
+    const suggestion = await vi.waitUntil(
+      () => {
+        const latest = events.findLast(event => event.type === 'spawn-suggestions' && event.sessionId === sessionId);
+        return latest?.type === 'spawn-suggestions'
+          ? latest.suggestions.find(entry => entry.status === 'pending')
+          : undefined;
+      },
+      { timeout: 5000, interval: 10 }
+    );
+    const result = await service.startSpawnSuggestion({
+      sessionId,
+      suggestionId: suggestion.id,
+      placement: 'local',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
     });
+    if (!result.ok) throw new Error(result.error);
   }
 
   beforeEach(async () => {
@@ -75,6 +88,7 @@ describe('ChatService approval modes', () => {
     });
     events = testEvents;
     streams = testStreams;
+    post = testPost;
 
     service = new ChatService({
       store,
@@ -233,15 +247,18 @@ describe('ChatService approval modes', () => {
       expect(calls('done')).toHaveLength(0);
     });
 
-    it('still asks before starting a session in auto', async () => {
+    it('starts no session on its own in auto: the model can only suggest one', async () => {
       const created = await service.createCodeSession({ directory: root, branch: '', workspace: false });
       if (!created.ok) throw new Error(created.error);
+      await service.setApprovalMode(created.session.id, 'auto');
       await service.send(created.session.id, 'go');
       await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
       streams[0].write(toolTurn('s1', 'session_spawn', { prompt: 'do the thing' }));
       streams[0].write(frame('[DONE]'));
 
-      expect((await awaitStatus('awaiting-approval')).name).toBe('session_spawn');
+      expect((await awaitStatus('done')).name).toBe('session_spawn');
+      expect(calls('awaiting-approval')).toHaveLength(0);
+      expect((await service.listSessions()).some(entry => entry.origin)).toBe(false);
     });
   });
 
@@ -281,7 +298,7 @@ describe('ChatService approval modes', () => {
      * Cost is a separate axis from filesystem risk, and the modes govern only the second.
      * Deciding the agent may run the shell unwatched says nothing about paying for a spawn.
      */
-    it('still asks before starting a session, which spends credits', async () => {
+    it('starts no session, which spends credits, until the user starts the suggestion', async () => {
       const created = await service.createCodeSession({ directory: root, branch: '', workspace: false });
       if (!created.ok) throw new Error(created.error);
       await service.setApprovalMode(created.session.id, 'full');
@@ -291,8 +308,8 @@ describe('ChatService approval modes', () => {
       streams[0].write(toolTurn('s1', 'session_spawn', { prompt: 'do the thing' }));
       streams[0].write(frame('[DONE]'));
 
-      const asked = await awaitStatus('awaiting-approval');
-      expect(asked.name).toBe('session_spawn');
+      expect((await awaitStatus('done')).name).toBe('session_spawn');
+      expect((await service.listSessions()).some(entry => entry.origin)).toBe(false);
     });
   });
 
@@ -368,13 +385,9 @@ describe('ChatService approval modes', () => {
       streams[0].write(toolTurn('s1', 'session_spawn', { prompt: 'do the thing', title: 'child' }));
       streams[0].write(frame('[DONE]'));
 
-      // Spawning spends credits, so it asks in every mode; the user says yes.
-      await answer('once');
-
-      // The tool ends only once the child's own turn is accepted, so the child is in the
-      // store and its turn is one dispose() can abort.
-      const spawned = await awaitStatus('done');
-      expect(spawned.name).toBe('session_spawn');
+      // The child's turn is accepted before the start resolves, so it is in the store and its
+      // turn is one dispose() can abort.
+      await startSuggested(created.session.id);
 
       const child = (await service.listSessions()).find(entry => entry.origin?.parentSessionId === created.session.id);
       if (!child) throw new Error('spawned session not stored');
@@ -391,6 +404,27 @@ describe('ChatService approval modes', () => {
 
     it('is clamped below a parent on full access rather than inheriting it', async () => {
       expect((await spawnFrom('full')).approvalMode).toBe('auto');
+    });
+
+    // Nobody watches a card in a spawned session, so its own spawns keep the approval gate,
+    // which asks in every mode because it spends credits.
+    it('still asks before a spawned session starts another, in auto', async () => {
+      const child = await spawnFrom('auto');
+      const childStream = await vi.waitUntil(
+        () => {
+          const index = post.mock.calls.findIndex(([, body]) =>
+            body.messages.some((message: { content: unknown }) => message.content === 'do the thing')
+          );
+          return index >= 0 ? streams[index] : undefined;
+        },
+        { timeout: 5000, interval: 5 }
+      );
+      childStream.write(toolTurn('g1', 'session_spawn', { prompt: 'and another' }));
+      childStream.write(frame('[DONE]'));
+
+      const asked = await awaitStatus('awaiting-approval');
+      expect(asked.name).toBe('session_spawn');
+      expect(child.approvalMode).toBe('auto');
     });
   });
 });

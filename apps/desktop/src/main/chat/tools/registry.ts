@@ -4,7 +4,16 @@ import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTool
 import { BROWSER_TOOLS } from './browserTools';
 import { exploreTool } from './exploreTool';
 import { fileRead, globFiles, grepSearch } from './fileTools';
-import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, sessionSpawn } from './hostTools';
+import {
+  sessionArchive,
+  sessionDelete,
+  sessionList,
+  sessionRead,
+  sessionSend,
+  sessionSpawn,
+  sessionSuggestionDismiss,
+  sessionSuggestionUpdate,
+} from './hostTools';
 import type { VideoModel } from '@bike4mind/common';
 import {
   generateImageTool,
@@ -93,6 +102,9 @@ const HOST_TOOLS: readonly ToolDefinition[] = [
   sessionDelete,
 ];
 
+/** Revising a spawn suggestion, which only exists where a user is present to see its card. */
+const SUGGESTION_TOOLS: readonly ToolDefinition[] = [sessionSuggestionUpdate, sessionSuggestionDismiss];
+
 /**
  * The project's long-term memory: recall what was recorded before, and record something new.
  *
@@ -127,6 +139,7 @@ const BY_NAME = new Map(
     ...MEDIA_TOOLS,
     generateVideoTool,
     ...HOST_TOOLS,
+    ...SUGGESTION_TOOLS,
     ...BROWSER_TOOLS,
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
@@ -207,6 +220,7 @@ export function toolsForRequest(options: {
     ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
     ...(options.host ? HOST_TOOLS : []),
+    ...(options.host && options.ask ? SUGGESTION_TOOLS : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),

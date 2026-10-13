@@ -9,6 +9,7 @@ import type {
   ChatSessionMode,
   ChatSessionOrigin,
   ChatSessionSummary,
+  ChatSpawnSuggestion,
   ReasoningEffortSetting,
 } from '@shared/chat';
 import { storedReasoningEffortSetting } from './reasoningEffort';
@@ -87,8 +88,36 @@ export interface CreateOptions {
 }
 
 function summarize(session: ChatSession): ChatSessionSummary {
-  const { messages, ...summary } = session;
+  const { messages, spawnSuggestions: _suggestions, ...summary } = session;
   return { ...summary, messageCount: messages.length };
+}
+
+/** Settled suggestions kept for their "Started" rows; older ones are dropped on the next write. */
+const MAX_SETTLED_SUGGESTIONS = 20;
+
+function normalizeSuggestions(value: unknown): ChatSpawnSuggestion[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is ChatSpawnSuggestion =>
+      !!entry &&
+      typeof entry === 'object' &&
+      typeof entry.id === 'string' &&
+      typeof entry.prompt === 'string' &&
+      typeof entry.title === 'string' &&
+      (entry.status === 'pending' || entry.status === 'started' || entry.status === 'dismissed')
+  );
+}
+
+/** What a suggestion list still needs to hold once its outcomes are reported. */
+function pruneSuggestions(suggestions: readonly ChatSpawnSuggestion[]): ChatSpawnSuggestion[] {
+  const kept = suggestions.filter(
+    entry => entry.status === 'pending' || entry.unreported || (entry.status === 'started' && !entry.cleared)
+  );
+  const settled = kept.filter(entry => entry.status !== 'pending');
+  const excess = settled.length - MAX_SETTLED_SUGGESTIONS;
+  if (excess <= 0) return kept;
+  const dropped = new Set(settled.filter(entry => !entry.unreported).slice(0, excess));
+  return kept.filter(entry => !dropped.has(entry));
 }
 
 /**
@@ -168,6 +197,13 @@ export class SessionStore {
 
   /** The scope directory last resolved, for id-addressed operations only. See `directoryFor`. */
   private lastDirectory: string | null = null;
+
+  /**
+   * The tail of each session's read-change-write chain. Every write is a whole-file rewrite, so
+   * two overlapping ones lose whichever finished first - and a user starting a suggestion while
+   * the reply is still appending is exactly that overlap.
+   */
+  private readonly writes = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly baseDirectory: string,
@@ -470,10 +506,76 @@ export class SessionStore {
    */
   async setArchived(id: string, archived: boolean): Promise<ChatSessionSummary | null> {
     return this.mutate(id, session => {
-      if (archived) session.archived = true;
-      else delete session.archived;
+      if (archived) {
+        session.archived = true;
+        // Nobody is looking at an archived conversation to start one.
+        const kept = (session.spawnSuggestions ?? []).filter(entry => entry.status !== 'pending');
+        if (kept.length > 0) session.spawnSuggestions = kept;
+        else delete session.spawnSuggestions;
+      } else delete session.archived;
       return true;
     });
+  }
+
+  async spawnSuggestions(id: string): Promise<ChatSpawnSuggestion[]> {
+    return (await this.get(id))?.spawnSuggestions ?? [];
+  }
+
+  /**
+   * Replace a session's suggestions with what `change` returns, or leave them when it returns
+   * null. Resolves to the stored list, or null when nothing was written.
+   *
+   * Leaves `updatedAt` alone: a card changing says nothing about when the conversation was last
+   * talked to.
+   */
+  async changeSpawnSuggestions(
+    id: string,
+    change: (current: readonly ChatSpawnSuggestion[]) => ChatSpawnSuggestion[] | null
+  ): Promise<ChatSpawnSuggestion[] | null> {
+    let stored: ChatSpawnSuggestion[] | null = null;
+    await this.mutate(id, session => {
+      const next = change(session.spawnSuggestions ?? []);
+      if (!next) return null;
+      stored = pruneSuggestions(next);
+      if (stored.length > 0) session.spawnSuggestions = stored;
+      else delete session.spawnSuggestions;
+      return true;
+    });
+    return stored;
+  }
+
+  /**
+   * Hand every unreported suggestion outcome to the model, once: each is rendered by `describe`
+   * onto `messageId`'s `notes`, and marked reported in the same write.
+   *
+   * Null when there was nothing to report or no such message, and then nothing is written.
+   */
+  async reportSpawnSuggestions(
+    id: string,
+    messageId: string,
+    describe: (suggestion: ChatSpawnSuggestion) => string
+  ): Promise<{ notes: string[]; suggestions: ChatSpawnSuggestion[] } | null> {
+    let reported: { notes: string[]; suggestions: ChatSpawnSuggestion[] } | null = null;
+    await this.mutate(id, session => {
+      const current = session.spawnSuggestions ?? [];
+      const unreported = current.filter(entry => entry.unreported);
+      const target = session.messages.find(message => message.id === messageId);
+      if (unreported.length === 0 || !target) return null;
+      const notes = unreported.map(describe);
+      target.notes = [...(target.notes ?? []), ...notes];
+      const suggestions = pruneSuggestions(
+        current.map(entry => {
+          if (!entry.unreported) return entry;
+          const { unreported: _reported, ...rest } = entry;
+          return rest;
+        })
+      );
+      if (suggestions.length > 0) session.spawnSuggestions = suggestions;
+      else delete session.spawnSuggestions;
+      reported = { notes, suggestions };
+      return true;
+    });
+    return reported;
   }
 
   /**
@@ -541,9 +643,11 @@ export class SessionStore {
    * Removing one stays a git operation the user performs themselves (`rmworktree <branch>`).
    */
   async delete(id: string): Promise<void> {
-    const directory = await this.directoryFor(false);
-    if (!directory) return;
-    await rm(this.filePath(directory, id), { force: true });
+    await this.serialize(id, async () => {
+      const directory = await this.directoryFor(false);
+      if (!directory) return;
+      await rm(this.filePath(directory, id), { force: true });
+    });
   }
 
   /**
@@ -551,6 +655,10 @@ export class SessionStore {
    * saying "New chat" as soon as there is something to call it.
    */
   async appendMessage(id: string, message: ChatMessage): Promise<ChatSession | null> {
+    return this.serialize(id, () => this.appendNow(id, message));
+  }
+
+  private async appendNow(id: string, message: ChatMessage): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     if (!directory) return null;
     const session = await this.read(directory, id);
@@ -579,6 +687,10 @@ export class SessionStore {
 
   /** Replace an already-appended message, for settling a streamed reply into its final text. */
   async updateMessage(id: string, messageId: string, changes: Partial<ChatMessage>): Promise<ChatSession | null> {
+    return this.serialize(id, () => this.updateNow(id, messageId, changes));
+  }
+
+  private async updateNow(id: string, messageId: string, changes: Partial<ChatMessage>): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     if (!directory) return null;
     const session = await this.read(directory, id);
@@ -606,15 +718,27 @@ export class SessionStore {
     id: string,
     change: (session: ChatSession) => boolean | null
   ): Promise<ChatSessionSummary | null> {
-    const directory = await this.directoryFor(false);
-    if (!directory) return null;
-    const session = await this.read(directory, id);
-    if (!session) return null;
+    return this.serialize(id, async () => {
+      const directory = await this.directoryFor(false);
+      if (!directory) return null;
+      const session = await this.read(directory, id);
+      if (!session) return null;
 
-    const outcome = change(session);
-    if (outcome === null) return null;
-    if (outcome) await this.write(directory, session);
-    return summarize(session);
+      const outcome = change(session);
+      if (outcome === null) return null;
+      if (outcome) await this.write(directory, session);
+      return summarize(session);
+    });
+  }
+
+  private serialize<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const result = (this.writes.get(id) ?? Promise.resolve()).then(work);
+    const tail = result.catch(() => undefined);
+    this.writes.set(id, tail);
+    void tail.then(() => {
+      if (this.writes.get(id) === tail) this.writes.delete(id);
+    });
+    return result;
   }
 
   private async read(directory: string, id: string): Promise<ChatSession | null> {
@@ -635,6 +759,7 @@ export class SessionStore {
     // in a later version must not make an existing conversation unreadable.
     const project = normalizeProject(parsed.project);
     const origin = normalizeOrigin(parsed.origin);
+    const suggestions = normalizeSuggestions(parsed.spawnSuggestions);
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
       ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))
@@ -667,6 +792,7 @@ export class SessionStore {
       ...(origin ? { origin } : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
+      ...(suggestions.length > 0 ? { spawnSuggestions: suggestions } : {}),
     };
   }
 

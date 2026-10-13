@@ -59,6 +59,16 @@ describe('toolsForRequest', () => {
     expect(names({ roots: ['/tmp'], media: true, host: true })).not.toContain('mcp__notion_search');
   });
 
+  it('declares the suggestion tools only to a project session with a user present', () => {
+    const revising = ['session_suggestion_update', 'session_suggestion_dismiss'];
+    expect(names({ roots: [], media: false, host: true, ask: true })).toEqual(expect.arrayContaining(revising));
+    // A spawned session keeps the gated start, so it has no card for these to revise.
+    expect(names({ roots: [], media: false, host: true, ask: false })).not.toContain(revising[0]);
+    expect(names({ roots: [], media: false, host: false, ask: true })).not.toContain(revising[0]);
+    expect(findTool('session_suggestion_update')).toBeDefined();
+    expect(findTool('session_suggestion_dismiss')).toBeDefined();
+  });
+
   it('offers the browser without a folder, a project or anything else', () => {
     // The browser rides on nothing: a Chat session with no grant at all still gets it.
     expect(names({ roots: [], media: false, host: false, browser: true })).toEqual(

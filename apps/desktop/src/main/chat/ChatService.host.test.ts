@@ -89,6 +89,27 @@ describe('ChatService app-control tools', () => {
     stream.write(frame('[DONE]'));
   }
 
+  /** Start the session's one pending suggestion from its card, in this working directory. */
+  async function startSuggested(sessionId: string): Promise<void> {
+    const suggestion = await vi.waitUntil(
+      () => {
+        const latest = events.findLast(event => event.type === 'spawn-suggestions' && event.sessionId === sessionId);
+        return latest?.type === 'spawn-suggestions'
+          ? latest.suggestions.find(entry => entry.status === 'pending')
+          : undefined;
+      },
+      { timeout: 5000, interval: 5 }
+    );
+    const result = await service.startSpawnSuggestion({
+      sessionId,
+      suggestionId: suggestion.id,
+      placement: 'local',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    if (!result.ok) throw new Error(result.error);
+  }
+
   function settled(name: string) {
     return events
       .filter(event => event.type === 'tool-end')
@@ -139,6 +160,8 @@ describe('ChatService app-control tools', () => {
       'session_send',
       'session_archive',
       'session_delete',
+      'session_suggestion_update',
+      'session_suggestion_dismiss',
     ]);
   });
 
@@ -199,6 +222,7 @@ describe('ChatService app-control tools', () => {
     await service.send(parent.id, 'delegate it');
     callTool(await awaitStreamOf('delegate it'), 'c1', 'session_spawn', { prompt: 'go and do it' });
     await vi.waitUntil(() => settled('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+    await startSuggested(parent.id);
 
     // The parent finishes first, so the report has an idle conversation to land in.
     const parentFollowUp = await awaitStreamOf('delegate it');
@@ -244,6 +268,7 @@ describe('ChatService app-control tools', () => {
     await service.send(parent.id, 'delegate it');
     callTool(await awaitStreamOf('delegate it'), 'c1', 'session_spawn', { prompt: 'go and do it' });
     await vi.waitUntil(() => settled('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+    await startSuggested(parent.id);
 
     const childId = (await store.list()).find(session => session.origin)?.id;
     expect(childId).toBeDefined();

@@ -48,6 +48,27 @@ describe('ChatService ask_user', () => {
   const awaitStatus = (status: ChatToolCall['status']) =>
     vi.waitUntil(() => calls(status)[0], { timeout: 5000, interval: 10 });
 
+  /** Start the session's one pending spawn suggestion from its card, in this working directory. */
+  async function startSuggested(sessionId: string): Promise<void> {
+    const suggestion = await vi.waitUntil(
+      () => {
+        const latest = events.findLast(event => event.type === 'spawn-suggestions' && event.sessionId === sessionId);
+        return latest?.type === 'spawn-suggestions'
+          ? latest.suggestions.find(entry => entry.status === 'pending')
+          : undefined;
+      },
+      { timeout: 5000, interval: 10 }
+    );
+    const result = await service.startSpawnSuggestion({
+      sessionId,
+      suggestionId: suggestion.id,
+      placement: 'local',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    if (!result.ok) throw new Error(result.error);
+  }
+
   const toolNames = (callIndex: number): string[] =>
     (post.mock.calls[callIndex][1].options.tools as { toolSchema: { name: string } }[]).map(
       tool => tool.toolSchema.name
@@ -234,8 +255,7 @@ describe('ChatService ask_user', () => {
       streams[0].write(toolTurn('s1', 'session_spawn', { prompt: 'do the thing', title: 'child' }));
       streams[0].write(frame('[DONE]'));
 
-      const gate = await awaitStatus('awaiting-approval');
-      approvals.resolve(gate.approvalId as string, { decision: 'once', optionId: 'local' });
+      await startSuggested(created.session.id);
       const childCall = () =>
         post.mock.calls.findIndex(([, body]) => {
           const last = body.messages[body.messages.length - 1];

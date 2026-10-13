@@ -4,6 +4,7 @@ import {
   type HostContext,
   type HostSessionView,
   type SpawnPlacement,
+  type SpawnSuggestionHost,
   type ToolContext,
   type ToolDefinition,
 } from './types';
@@ -19,6 +20,10 @@ import {
  * cost and autonomy together, asked in every mode including 'full' - starting a conversation
  * that calls models and tools with nobody typing is its own decision - and `session_delete` is
  * gated as irreversible, which additionally means no "always" answer can ever cover it.
+ *
+ * With a user present, `session_spawn` does not start anything and so is not gated at all: it
+ * leaves a suggestion card the user starts, edits or dismisses whenever they like, and the turn
+ * carries on. The gate is for the spawned sessions, where nobody is watching a card.
  * `session_send` rides the mode like an ordinary tool: its runaway case is bounded structurally
  * by the relay hop and fan-out budgets, so 'ask' asks and the other modes do not.
  */
@@ -29,6 +34,17 @@ function requireHost(context: ToolContext): HostContext {
     throw new Error('Session tools are only available in a Code session, which is grounded in a project.');
   }
   return context.host;
+}
+
+function requireSuggestions(context: ToolContext): SpawnSuggestionHost {
+  const suggestions = requireHost(context).suggestions;
+  if (!suggestions) throw new Error('This conversation has no user present to show a suggestion to.');
+  return suggestions;
+}
+
+function optionalText(input: Record<string, unknown>, key: string): string | undefined {
+  const value = input[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 /** One row of the listing, as the model reads it. */
@@ -92,25 +108,6 @@ export const sessionRead: ToolDefinition = {
   },
 };
 
-/**
- * What the model is told when the user answers "Do it here".
- *
- * Emphatically not a refusal, and worded against one: a declined call trains the model to stop
- * and ask what to do instead (see HOST_GUIDANCE), which is the exact opposite of what this
- * answer means. The user has said they want the work done - just in this conversation.
- */
-const DO_IT_HERE = [
-  'No session was started, and none should be. The user chose to have this done in THIS',
-  'conversation instead, by you, now.',
-  '',
-  'This is not a refusal and there is nothing to ask about: they have already told you what they',
-  'want. Get on with the task you were about to hand over, in this turn, using your own tools. Do',
-  'not call session_spawn for it again, and do not ask them what they would like instead.',
-  '',
-  'When you report back, report the WORK. Their choice is not news to them, so do not open by',
-  'explaining that a session was not started, and do not close by offering to start one after all.',
-].join('\n');
-
 function worktreeNote(base: string): string {
   return (
     `The new session gets its own git worktree on the branch below, cut from ${base} and beside ` +
@@ -127,18 +124,22 @@ export const sessionSpawn: ToolDefinition = {
   schema: {
     name: 'session_spawn',
     description:
-      'Start a NEW conversation in this project and set it working on `prompt` straight away. ' +
-      'It runs on its own: it does not wait for you, and it reports back into this conversation ' +
-      'when it finishes. Use it for a self-contained piece of work that can proceed without this ' +
-      'conversation, and give it everything it needs in the prompt - it cannot see what has been ' +
-      'said here. It costs credits and the user approves each one, so do not start one ' +
-      'speculatively, and never start several to try variations of the same task. ' +
-      'When they approve it, the USER chooses where it runs: in this working directory, or in a ' +
-      'git worktree of its own on a new branch, cut from the branch this conversation is on. You ' +
-      'cannot choose and must not assume - so write the prompt so it stands on its own in ' +
-      'either, naming files by their path within the repository rather than telling it to carry ' +
-      'on with something uncommitted here. They may also answer that they want the work done in ' +
-      'this conversation, in which case nothing is started and you do it yourself.',
+      'Hand a self-contained piece of work to a NEW conversation in this project. With the user ' +
+      'present this only SUGGESTS it: a card appears beside their composer where they can edit ' +
+      'the prompt, title and branch, then start it or dismiss it. Nothing has started when this ' +
+      'returns and the call does not wait for them - carry on or end your turn, and say you ' +
+      'suggested the task, not that it is running. You are told on a later turn if they start or ' +
+      'dismiss it. If they ask in chat to change the task, use session_suggestion_update on the ' +
+      'same id instead of suggesting it again; if they decline it or say to do it here, use ' +
+      'session_suggestion_dismiss and do the work yourself. In a session that was itself started ' +
+      'by another one, the user is asked to approve the start instead, and the call waits. ' +
+      'A started session runs on its own, does not report into your turn, and tells this ' +
+      'conversation when it finishes. It cannot see anything said here, so the prompt has to ' +
+      'carry the whole task. The USER chooses where it runs: in this working directory, or in a ' +
+      'git worktree of its own on a new branch cut from the branch this conversation is on - so ' +
+      'name files by their path within the repository rather than telling it to carry on with ' +
+      'something uncommitted here. Each one costs credits: never suggest several variations of ' +
+      'one task.',
     parameters: {
       type: 'object',
       properties: {
@@ -147,11 +148,17 @@ export const sessionSpawn: ToolDefinition = {
           description: 'The complete, self-contained task for the new conversation to start on.',
         },
         title: { type: 'string', description: 'Optional short name for its sidebar row.' },
+        summary: {
+          type: 'string',
+          description: 'Optional one line telling the user what the task is for, shown on the card.',
+        },
       },
       required: ['prompt'],
       additionalProperties: false,
     },
   },
+  // A suggestion starts nothing, so there is nothing to approve; the gate is for the start itself.
+  needsApproval: (_input, context) => !context.host?.suggestions,
   async approval(input, context) {
     // Resolved here, once, and carried to `run` in the option's input: the base the card names
     // is then the base the child is cut from, with no second resolution to disagree with it.
@@ -188,13 +195,6 @@ export const sessionSpawn: ToolDefinition = {
             description: LOCAL_NOTE,
             input: { placement: 'local' },
           },
-          {
-            id: 'here',
-            label: 'Do it here',
-            description: 'No new session. This conversation does the work itself.',
-            redirect: true,
-            note: DO_IT_HERE,
-          },
         ],
       },
     };
@@ -202,7 +202,26 @@ export const sessionSpawn: ToolDefinition = {
   async run(input, context) {
     const host = requireHost(context);
     const prompt = requireString(input, 'prompt');
-    const title = typeof input.title === 'string' && input.title.trim() ? input.title.trim() : undefined;
+    const title = optionalText(input, 'title');
+
+    if (host.suggestions) {
+      const summary = optionalText(input, 'summary');
+      const suggestion = await host.suggestions.suggest({
+        prompt,
+        ...(title ? { title } : {}),
+        ...(summary ? { summary } : {}),
+      });
+      context.report?.label(`Suggested a task: ${suggestion.title}`);
+      return [
+        `Suggested task ${suggestion.id} ("${suggestion.title}"). Nothing has started.`,
+        'It is on a card beside the user composer. They can edit it, start it - in a worktree on',
+        `${suggestion.branch} cut from ${suggestion.base}, or in this working directory - or dismiss it.`,
+        'Do not wait for them: carry on or end your turn, and tell them you suggested it, not that it',
+        `is running. If they ask for changes, call session_suggestion_update with id ${suggestion.id};`,
+        'if they decline it or want it done here, call session_suggestion_dismiss and do it yourself.',
+        'You will be told on a later turn if they start or dismiss it.',
+      ].join('\n');
+    }
 
     // Set by the approval card and by nothing else - none of these properties is in the schema
     // above, so a model cannot send one. Absent means no gate was configured at all, and the
@@ -219,6 +238,7 @@ export const sessionSpawn: ToolDefinition = {
     if (placement.kind === 'worktree') context.report?.progress(`Creating branch ${placement.branch} and worktree...`);
     const outcome = await host.spawn(prompt, title, placement);
     if (!outcome.ok) throw new Error(outcome.message);
+    context.report?.label(`Started a session: ${outcome.session.title}`);
     return [
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
       placement.kind === 'worktree'
@@ -228,6 +248,72 @@ export const sessionSpawn: ToolDefinition = {
       'it said - read it with session_read then if you need that. Do not wait for it in this',
       'turn, and do not start another one for the same work.',
     ].join('\n');
+  },
+};
+
+export const sessionSuggestionUpdate: ToolDefinition = {
+  schema: {
+    name: 'session_suggestion_update',
+    description:
+      'Revise a task you suggested with session_spawn that the user has not started yet, when ' +
+      'they ask in chat to add to it, narrow it or rename it. Pass only what changes; `prompt` ' +
+      'replaces the whole prompt, so send the complete revised task. Their card updates in place. ' +
+      'Use this instead of calling session_spawn again for the same work.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The suggestion id session_spawn returned.' },
+        prompt: { type: 'string', description: 'The complete revised task.' },
+        title: { type: 'string', description: 'A new short name.' },
+        summary: { type: 'string', description: 'A new one-line summary for the card.' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  async run(input, context) {
+    const suggestions = requireSuggestions(context);
+    const id = requireString(input, 'id');
+    const prompt = optionalText(input, 'prompt');
+    const title = optionalText(input, 'title');
+    const summary = optionalText(input, 'summary');
+    if (!prompt && !title && !summary) throw new Error('Pass at least one of prompt, title or summary to change.');
+
+    const outcome = await suggestions.update(id, {
+      ...(prompt ? { prompt } : {}),
+      ...(title ? { title } : {}),
+      ...(summary ? { summary } : {}),
+    });
+    if (!outcome.ok) throw new Error(outcome.message);
+    context.report?.label(`Updated the suggested task: ${outcome.suggestion.title}`);
+    return `Updated suggestion ${id} ("${outcome.suggestion.title}"). The user sees the new version on its card; it has still not started.`;
+  },
+};
+
+export const sessionSuggestionDismiss: ToolDefinition = {
+  schema: {
+    name: 'session_suggestion_dismiss',
+    description:
+      'Withdraw a task you suggested with session_spawn that the user has not started, when they ' +
+      'decline it, say to do it here instead, or it no longer applies. Its card disappears.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The suggestion id session_spawn returned.' },
+        reason: { type: 'string', description: 'Optional short reason, shown on the call row.' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  async run(input, context) {
+    const suggestions = requireSuggestions(context);
+    const id = requireString(input, 'id');
+    const outcome = await suggestions.dismiss(id);
+    if (!outcome.ok) throw new Error(outcome.message);
+    const reason = optionalText(input, 'reason');
+    context.report?.label(`Withdrew the suggested task: ${outcome.suggestion.title}${reason ? ` (${reason})` : ''}`);
+    return `Dismissed suggestion ${id} ("${outcome.suggestion.title}"). Nothing was started.`;
   },
 };
 

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatApprovalAnswer, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import type { ChatSessionSummary, ChatSpawnSuggestion, ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -17,21 +17,20 @@ function frame(payload: unknown): string {
 }
 
 /**
- * Where a spawned session's tools run, which the USER picks on the approval card.
+ * Where a spawned session's tools run, which the USER picks on the suggestion card.
  *
  * A real repository in the user's container layout underneath, because what is being tested is
  * whether a checkout is actually made and where - stubbing resolveWorkspace would assert only
  * that this code calls the code it calls.
  *
  * Its own file rather than ChatService.spawn.test.ts because that one states, and depends on,
- * having no approval gate: its subject is the caps holding against a model that ignores them, and
- * a gate would stop the loop before the caps did. The choice only exists AT the gate, so there is
- * nothing here to test without one.
+ * the caps holding against a model that ignores them. Here the model only suggests; the choice is
+ * made when the test starts the suggestion, as the card does, so what is under test is the
+ * placement that start produces.
  */
 describe('ChatService spawn placement', () => {
   let store: SessionStore;
   let service: ChatService;
-  let approvals: ApprovalGate;
   let events: ChatStreamEvent[];
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
@@ -61,7 +60,6 @@ describe('ChatService spawn placement', () => {
   beforeEach(async () => {
     await repository();
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-place-sessions-')), 'test-model');
-    approvals = new ApprovalGate();
     events = [];
     streams = [];
     post = vi.fn().mockImplementation(() => {
@@ -72,7 +70,7 @@ describe('ChatService spawn placement', () => {
 
     service = new ChatService({
       store,
-      approvals,
+      approvals: new ApprovalGate(),
       access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
@@ -108,14 +106,17 @@ describe('ChatService spawn placement', () => {
     stream.write(frame('[DONE]'));
   }
 
-  /** The call now parked at the gate, once its card has been announced. */
-  function awaitCard() {
+  /** The newest pending suggestion the card would show, once the model's request has recorded it. */
+  function awaitSuggestion(): Promise<ChatSpawnSuggestion> {
     return vi.waitUntil(
-      () =>
-        events
-          .filter(event => event.type === 'tool-start')
-          .map(event => (event.type === 'tool-start' ? event.call : null))
-          .find(call => call?.status === 'awaiting-approval' && call.name === 'session_spawn'),
+      () => {
+        for (let index = events.length - 1; index >= 0; index--) {
+          const event = events[index];
+          if (event.type !== 'spawn-suggestions') continue;
+          return event.suggestions.find(entry => entry.status === 'pending');
+        }
+        return undefined;
+      },
       { timeout: 5000, interval: 5 }
     );
   }
@@ -131,42 +132,46 @@ describe('ChatService spawn placement', () => {
     return vi.waitUntil(() => settled().length >= count, { timeout: 5000, interval: 5 });
   }
 
-  /** The newest open stream whose first user message is `prompt`; index 0 is the access preamble. */
-  function awaitStreamOfPrompt(prompt: string): Promise<PassThrough> {
-    return vi.waitUntil(
-      () => {
-        for (let index = streams.length - 1; index >= 0; index--) {
-          const messages = post.mock.calls[index]?.[1]?.messages as { role: string; content: unknown }[] | undefined;
-          if (messages?.[1]?.content === prompt) return streams[index];
-        }
-        return undefined;
-      },
-      { timeout: 5000, interval: 5 }
-    );
+  type Choice = { placement: 'worktree'; branch: string } | { placement: 'local' };
+
+  /** The model's request through to the suggestion it leaves on the card; nothing has started. */
+  async function suggest(
+    task: { prompt: string; title: string } = { prompt: 'do the thing', title: 'The thing' }
+  ): Promise<ChatSpawnSuggestion> {
+    requestSpawn(streams[0], 'call-1', task.prompt, task.title);
+    const suggestion = await awaitSuggestion();
+    await awaitSettled(1);
+    return suggestion;
   }
 
-  /** Drive one spawn from the model's request through to the user's answer on the card. */
+  /** Start a suggestion the way the card does, with the text the model gave unless edited. */
+  function start(parent: ChatSessionSummary, suggestion: ChatSpawnSuggestion, choice: Choice) {
+    return service.startSpawnSuggestion({
+      sessionId: parent.id,
+      suggestionId: suggestion.id,
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+      ...choice,
+    });
+  }
+
+  /** A parent with a turn open, the model's request for one task, and the user's start of it. */
   async function spawnWith(
-    answer: ChatApprovalAnswer,
+    choice: Choice,
     task: { prompt: string; title: string } = { prompt: 'do the thing', title: 'The thing' }
-  ): Promise<ChatSessionSummary> {
+  ) {
     const parent = await parentSession();
     await service.send(parent.id, 'go');
     await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
-    await answerSpawn(answer, task);
-    return parent;
+    const suggestion = await suggest(task);
+    const result = await start(parent, suggestion, choice);
+    return { parent, suggestion, result };
   }
 
   /** The rest of spawnWith, for a parent a test has already set up and started a turn on. */
-  async function answerSpawn(
-    answer: ChatApprovalAnswer,
-    task: { prompt: string; title: string } = { prompt: 'do the thing', title: 'The thing' }
-  ) {
-    requestSpawn(streams[0], 'call-1', task.prompt, task.title);
-    const card = await awaitCard();
-    approvals.resolve(card.approvalId as string, answer);
-    await awaitSettled(1);
-    return card;
+  async function startOn(parent: ChatSessionSummary, choice: Choice) {
+    const suggestion = await suggest();
+    return { suggestion, result: await start(parent, suggestion, choice) };
   }
 
   async function commit(directory: string, file: string): Promise<string> {
@@ -186,9 +191,10 @@ describe('ChatService spawn placement', () => {
     return (await store.list()).find(session => session.origin);
   }
 
-  it('gives the child a worktree of its own on the default choice', async () => {
-    const parent = await spawnWith({ decision: 'once', optionId: 'worktree', value: 'agent/the-thing' });
+  it('gives the child a worktree of its own when the user starts it in one', async () => {
+    const { parent, result } = await spawnWith({ placement: 'worktree', branch: 'agent/the-thing' });
 
+    expect(result.ok).toBe(true);
     expect((await child())?.project).toMatchObject({
       branch: 'agent/the-thing',
       workspace: true,
@@ -199,27 +205,47 @@ describe('ChatService spawn placement', () => {
     // its own, and the parent's are still where they were.
     expect((await stat(join(appWorktreeRoot(container), 'agent+the-thing', 'README.md'))).isFile()).toBe(true);
     expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
+  });
+
+  it('starts nothing when the model only suggests, and leaves the tool call done', async () => {
+    const parent = await parentSession();
+    await service.send(parent.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+
+    await suggest();
+
+    expect(await child()).toBeUndefined();
+    expect(await listWorktrees(main)).toHaveLength(1);
     expect(settled()[0]?.status).toBe('done');
+    expect(settled()[0]?.preview).toMatch(/Nothing has started/);
   });
 
-  it("reports the worktree step on the parent's turn while the child's checkout is cut", async () => {
-    await spawnWith({ decision: 'once', optionId: 'worktree', value: 'agent/the-thing' });
+  it('starts while the parent is still mid-reply, and the child gets its worktree', async () => {
+    const parent = await parentSession();
+    await service.send(parent.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+    const suggestion = await suggest();
+    // The tool result goes back to the model, whose next round is a second open stream: the
+    // parent's turn has not ended.
+    await vi.waitUntil(() => streams.length > 1, { timeout: 5000, interval: 5 });
+    expect(events.some(event => event.type === 'done')).toBe(false);
 
-    const progress = events.flatMap(event => (event.type === 'tool-progress' ? [event.text] : []));
-    expect(progress).toContain('Creating branch agent/the-thing and worktree...');
-  });
+    const result = await start(parent, suggestion, { placement: 'worktree', branch: 'agent/while-busy' });
 
-  it('reports no worktree step for a child started locally', async () => {
-    await spawnWith({ decision: 'once', optionId: 'local' });
-
-    expect(events.some(event => event.type === 'tool-progress' && /worktree/.test(event.text))).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(events.some(event => event.type === 'done')).toBe(false);
+    expect((await child())?.project).toMatchObject({
+      branch: 'agent/while-busy',
+      workingDirectory: join(appWorktreeRoot(container), 'agent+while-busy'),
+    });
+    expect((await stat(join(appWorktreeRoot(container), 'agent+while-busy', 'README.md'))).isFile()).toBe(true);
   });
 
   it('tells a child in a worktree where it is, since its task was written before anyone knew', async () => {
     // The live failure this exists for: the parent names files by ITS absolute path - the user
     // picks the placement only afterwards - so the child's file tools refuse those paths and its
     // shell works in the wrong checkout. Observed, not hypothetical.
-    await spawnWith({ decision: 'once', optionId: 'worktree', value: 'agent/told-where' });
+    await spawnWith({ placement: 'worktree', branch: 'agent/told-where' });
 
     const worktree = join(appWorktreeRoot(container), 'agent+told-where');
     const body = await vi.waitUntil(
@@ -236,7 +262,7 @@ describe('ChatService spawn placement', () => {
   });
 
   it("leaves a local child's seed exactly as the parent wrote it", async () => {
-    await spawnWith({ decision: 'once', optionId: 'local' });
+    await spawnWith({ placement: 'local' });
 
     const body = await vi.waitUntil(
       () => post.mock.calls.map(call => call[1]?.messages?.[1]?.content).find(text => text === 'do the thing'),
@@ -248,83 +274,40 @@ describe('ChatService spawn placement', () => {
   it('puts the child in the parent working directory on "Start locally", exactly as before', async () => {
     const before = (await listWorktrees(main)).length;
 
-    const parent = await spawnWith({ decision: 'once', optionId: 'local' });
+    const { parent } = await spawnWith({ placement: 'local' });
 
     expect((await child())?.project).toEqual((await store.get(parent.id))?.project);
     // Nothing was checked out, which is the other half of "exactly as before".
     expect(await listWorktrees(main)).toHaveLength(before);
   });
 
-  it('starts no session at all on "Do it here", and tells the model to get on with it', async () => {
-    await spawnWith({ decision: 'redirect', optionId: 'here' });
-
-    expect(await child()).toBeUndefined();
-
-    // Not an error, because an error is what teaches a model to stop and apologise. The text has
-    // to read as an instruction to carry on, in this conversation.
-    const call = settled()[0];
-    expect(call?.status).toBe('done');
-    expect(call?.error).toBeUndefined();
-    expect(call?.preview).toMatch(/No session was started/);
-    expect(call?.preview).toMatch(/not a refusal/);
-    expect(call?.preview).toMatch(/do not ask them what they would like instead/);
-  });
-
-  it('records no standing approval for "Do it here", so it can never become a policy', async () => {
-    // Answering 'always' on a redirect is the malformed case the card cannot produce - it offers
-    // no "always" for that option - and the gate has to refuse to record one anyway.
-    const parent = await spawnWith({ decision: 'always', optionId: 'here' });
-
-    const key = 'session_spawn:The thing:do the thing';
-    expect(approvals.isStanding(parent.id, key, ['here'])).toBeNull();
-    expect(approvals.isStanding(parent.id, key)).toBeNull();
-    expect(await child()).toBeUndefined();
-  });
-
-  it('files a standing approval under the option it was given, and replays that option', async () => {
-    const parent = await spawnWith({ decision: 'always', optionId: 'local' }, { prompt: 'same task', title: 'Same' });
-
-    const key = 'session_spawn:Same:same task';
-    expect(approvals.isStanding(parent.id, key, ['local'])).toMatchObject({ optionId: 'local' });
-    // The same call looked up under the OTHER option finds nothing: a standing "locally" must
-    // never be spent on a worktree, which is why the option is part of what it is filed under.
-    expect(approvals.isStanding(parent.id, key, ['worktree'])).toBeNull();
-
-    // And an identical repeat replays as local rather than being asked again or upgraded.
-    const before = events.length;
-    requestSpawn(await awaitStreamOfPrompt('go'), 'call-2', 'same task', 'Same');
-    await awaitSettled(2);
-    expect(events.slice(before).some(event => event.type === 'tool-start' && event.call.approvalId)).toBe(false);
-
-    const children = (await store.list()).filter(session => session.origin);
-    expect(children).toHaveLength(2);
-    expect(children.every(entry => entry.project?.workingDirectory === main)).toBe(true);
-  });
-
   it('refuses the parent own branch rather than handing back the parent worktree', async () => {
     // The trap this exists for: resolveWorkspace is keyed on branch, so 'main' would resolve to
     // the checkout the parent is already in, while the row and the chip claimed isolation.
-    await spawnWith({ decision: 'once', optionId: 'worktree', value: 'main' });
+    const { parent, suggestion, result } = await spawnWith({ placement: 'worktree', branch: 'main' });
 
     expect(await child()).toBeUndefined();
-    expect(settled()[0]?.status).toBe('error');
-    expect(settled()[0]?.error).toMatch(/this conversation's own branch/);
+    expect(result).toMatchObject({ ok: false });
+    expect(!result.ok && result.error).toMatch(/this conversation's own branch/);
+    expect((await store.get(parent.id))?.spawnSuggestions?.find(entry => entry.id === suggestion.id)?.status).toBe(
+      'pending'
+    );
   });
 
   it('refuses a branch that already exists rather than adopting its worktree', async () => {
     await git(main, ['branch', 'agent/taken']);
 
-    await spawnWith({ decision: 'once', optionId: 'worktree', value: 'agent/taken' });
+    const { result } = await spawnWith({ placement: 'worktree', branch: 'agent/taken' });
 
     expect(await child()).toBeUndefined();
-    expect(settled()[0]?.error).toMatch(/already exists/);
+    expect(!result.ok && result.error).toMatch(/already exists/);
   });
 
   it('refuses a branch name git would not take', async () => {
-    await spawnWith({ decision: 'once', optionId: 'worktree', value: 'not a branch' });
+    const { result } = await spawnWith({ placement: 'worktree', branch: 'not a branch' });
 
     expect(await child()).toBeUndefined();
-    expect(settled()[0]?.error).toMatch(/not a usable branch name/);
+    expect(!result.ok && result.error).toMatch(/not a usable branch name/);
   });
 
   it('leaves no half-made session when the worktree cannot be created', async () => {
@@ -333,10 +316,10 @@ describe('ChatService spawn placement', () => {
     await mkdir(join(appWorktreeRoot(container), 'agent+blocked'), { recursive: true });
     await writeFile(join(appWorktreeRoot(container), 'agent+blocked', 'stray.txt'), 'not mine\n', 'utf8');
 
-    await spawnWith({ decision: 'once', optionId: 'worktree', value: 'agent/blocked' });
+    const { result } = await spawnWith({ placement: 'worktree', branch: 'agent/blocked' });
 
     expect(await child()).toBeUndefined();
-    expect(settled()[0]?.error).toMatch(/could not be created/);
+    expect(!result.ok && result.error).toMatch(/could not be created/);
     // Untouched, which is the other half of refusing rather than adopting.
     expect(await readFile(join(appWorktreeRoot(container), 'agent+blocked', 'stray.txt'), 'utf8')).toBe('not mine\n');
   });
@@ -346,14 +329,10 @@ describe('ChatService spawn placement', () => {
     await store.setApprovalMode(parent.id, 'full');
     await service.send(parent.id, 'go');
     await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
-    requestSpawn(streams[0], 'call-1', 'isolated work', 'Isolated');
 
-    // Still asked despite 'full', because session_spawn spends credits - and that is what makes
-    // the choice reachable in every mode.
-    const card = await awaitCard();
-    approvals.resolve(card.approvalId as string, { decision: 'once', optionId: 'worktree', value: 'agent/isolated' });
-    await awaitSettled(1);
+    const { result } = await startOn(parent, { placement: 'worktree', branch: 'agent/isolated' });
 
+    expect(result.ok).toBe(true);
     const spawned = await child();
     expect(spawned?.approvalMode).toBe('auto');
     expect(spawned?.origin).toMatchObject({ parentSessionId: parent.id, depth: 1 });
@@ -367,13 +346,11 @@ describe('ChatService spawn placement', () => {
     await service.send(parent.id, 'go');
     await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
 
-    const card = await answerSpawn({ decision: 'once', optionId: 'worktree', value: 'agent/from-parent' });
+    const { suggestion } = await startOn(parent, { placement: 'worktree', branch: 'agent/from-parent' });
 
-    expect(card.approvalChoice?.options[0].field?.hint).toBe('Based on feat/parent');
-    expect(card.approvalChoice?.options[0].description).toMatch(/cut from feat\/parent/);
+    expect(suggestion.base).toBe('feat/parent');
     const worktree = join(appWorktreeRoot(container), 'agent+from-parent');
     expect(await head(worktree)).toBe(tip);
-    expect(settled()[0]?.preview).toMatch(/on agent\/from-parent, cut from feat\/parent/);
   });
 
   it("cuts the child from a worktree parent's own branch, with the commits it has not pushed", async () => {
@@ -386,14 +363,14 @@ describe('ChatService spawn placement', () => {
     expect(parentBranch).toMatch(/^b4m\//);
     const tip = await commit(project?.workingDirectory as string, 'unpushed.txt');
 
-    const card = await answerSpawn({ decision: 'once', optionId: 'worktree', value: 'agent/from-worktree' });
+    const { suggestion } = await startOn(created.session, { placement: 'worktree', branch: 'agent/from-worktree' });
 
-    expect(card.approvalChoice?.options[0].field?.hint).toBe(`Based on ${parentBranch}`);
+    expect(suggestion.base).toBe(parentBranch);
     expect(await head(join(appWorktreeRoot(container), 'agent+from-worktree'))).toBe(tip);
     expect(await head(main)).not.toBe(tip);
   });
 
-  it('falls back to origin/main for a parent on a detached HEAD, and the card names it', async () => {
+  it('falls back to origin/main for a parent on a detached HEAD, and the suggestion names it', async () => {
     const bare = join(container, '.bare');
     // A real remote-tracking ref, which `clone --bare` does not write, ahead of the checkout.
     await git(bare, ['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*']);
@@ -407,26 +384,26 @@ describe('ChatService spawn placement', () => {
     await service.send(created.session.id, 'go');
     await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
 
-    const card = await answerSpawn({ decision: 'once', optionId: 'worktree', value: 'agent/detached' });
+    const { suggestion } = await startOn(created.session, { placement: 'worktree', branch: 'agent/detached' });
 
-    expect(card.approvalChoice?.options[0].field?.hint).toBe('Based on origin/main');
+    expect(suggestion.base).toBe('origin/main');
     expect(await head(join(appWorktreeRoot(container), 'agent+detached'))).toBe(remoteTip);
   });
 
-  it('offers the three options, worktree first, with only that one carrying a branch', async () => {
+  it('records the prefilled branch and the base, and a dismissal starts nothing', async () => {
     const parent = await parentSession();
     await service.send(parent.id, 'go');
     await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
     requestSpawn(streams[0], 'call-1', 'tidy the imports', 'Tidy imports');
 
-    const card = await awaitCard();
-    const options = card.approvalChoice?.options ?? [];
-    expect(options.map(option => option.id)).toEqual(['worktree', 'local', 'here']);
-    expect(options[0].field).toMatchObject({ name: 'branch', value: 'agent/tidy-imports' });
-    expect(options[1].field).toBeUndefined();
-    expect(options[2].redirect).toBe(true);
+    const suggestion = await awaitSuggestion();
+    expect(suggestion).toMatchObject({ branch: 'agent/tidy-imports', base: 'main', status: 'pending' });
 
-    approvals.resolve(card.approvalId as string, { decision: 'deny' });
-    await awaitSettled(1);
+    const dismissed = await service.dismissSpawnSuggestion(parent.id, suggestion.id);
+
+    expect(dismissed).toMatchObject({ ok: true, suggestion: { status: 'dismissed' } });
+    expect((await store.get(parent.id))?.spawnSuggestions?.[0]?.status).toBe('dismissed');
+    expect(await child()).toBeUndefined();
+    expect(await listWorktrees(main)).toHaveLength(1);
   });
 });

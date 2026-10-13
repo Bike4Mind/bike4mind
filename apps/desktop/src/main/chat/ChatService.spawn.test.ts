@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import type { ChatSessionSummary, ChatSpawnSuggestion, ChatStreamEvent, SpawnSuggestionResult } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import type { ModelMemory } from './ModelPreference';
@@ -26,7 +26,9 @@ function frame(payload: unknown): string {
  * four at once is where a check made before an await would let all four through.
  *
  * No approval gate is wired in deliberately. The gate would stop the loop by itself, and a test
- * that passes because the user was asked proves nothing about the caps underneath it.
+ * that passes because the user was asked proves nothing about the caps underneath it. A session
+ * the user is in only suggests, so its children are started the way the card starts them, through
+ * the same caps; every session below that spawns ungated.
  */
 describe('ChatService spawn caps', () => {
   let store: SessionStore;
@@ -126,6 +128,33 @@ describe('ChatService spawn caps', () => {
     );
   }
 
+  function pendingSuggestions(sessionId: string): ChatSpawnSuggestion[] {
+    const latest = events.findLast(event => event.type === 'spawn-suggestions' && event.sessionId === sessionId);
+    return latest?.type === 'spawn-suggestions' ? latest.suggestions.filter(entry => entry.status === 'pending') : [];
+  }
+
+  /** Start the named suggestions all at once, as several clicks on their cards would. */
+  async function startSuggested(sessionId: string, titles: readonly string[]): Promise<SpawnSuggestionResult[]> {
+    const wanted = await vi.waitUntil(
+      () => {
+        const found = pendingSuggestions(sessionId).filter(entry => titles.includes(entry.title));
+        return found.length === titles.length ? found : undefined;
+      },
+      { timeout: 5000, interval: 5 }
+    );
+    return Promise.all(
+      wanted.map(entry =>
+        service.startSpawnSuggestion({
+          sessionId,
+          suggestionId: entry.id,
+          placement: 'local',
+          prompt: entry.prompt,
+          title: entry.title,
+        })
+      )
+    );
+  }
+
   /** Every settled call of a given tool, in the order they finished. */
   function settledCalls(name: string) {
     return events
@@ -139,19 +168,16 @@ describe('ChatService spawn caps', () => {
     await service.send(parent.id, 'do four things at once');
     await awaitStream(0);
 
-    // Four at once, so the cap is tested against the parallel path: runTools runs a turn's
-    // calls with Promise.all, and a check that read the count before awaiting the create would
-    // let every one of them through.
     requestSpawns(streams[0], 4, 'fan');
-
     await vi.waitUntil(() => settledCalls('session_spawn').length === 4, { timeout: 5000, interval: 5 });
-    const calls = settledCalls('session_spawn');
 
-    const started = calls.filter(call => call?.status === 'done');
-    const refused = calls.filter(call => call?.status === 'error');
-    expect(started).toHaveLength(3);
+    // Four starts at once, so the cap is tested against the parallel path: a check that read
+    // the count before awaiting the create would let every one of them through.
+    const results = await startSuggested(parent.id, ['fan-0', 'fan-1', 'fan-2', 'fan-3']);
+    const refused = results.filter(result => !result.ok);
+    expect(results.filter(result => result.ok)).toHaveLength(3);
     expect(refused).toHaveLength(1);
-    expect(refused[0]?.error).toMatch(/already running, which is the limit/);
+    expect(refused[0]).toMatchObject({ error: expect.stringMatching(/already running, which is the limit/) });
 
     const sessions = await store.list();
     expect(sessions.filter(session => session.origin)).toHaveLength(3);
@@ -162,14 +188,12 @@ describe('ChatService spawn caps', () => {
     await service.send(parent.id, 'fill the slots');
     await awaitStream(0);
     requestSpawns(streams[0], 3, 'fill');
-
-    await vi.waitUntil(() => settledCalls('session_spawn').length === 3, { timeout: 5000, interval: 5 });
-    expect(settledCalls('session_spawn').every(call => call?.status === 'done')).toBe(true);
+    const filled = await startSuggested(parent.id, ['fill-0', 'fill-1', 'fill-2']);
+    expect(filled.every(result => result.ok)).toBe(true);
 
     // A fourth while all three are still replying is refused: the cap counts runs in flight.
     requestSpawns(await awaitStreamOf('fill the slots'), 1, 'over');
-    await vi.waitUntil(() => settledCalls('session_spawn').length === 4, { timeout: 5000, interval: 5 });
-    expect(settledCalls('session_spawn')[3]?.status).toBe('error');
+    expect((await startSuggested(parent.id, ['over-0']))[0]?.ok).toBe(false);
 
     // Let one child finish and the slot comes back, so the cap is a live count rather than a
     // lifetime quota that a long-running session could exhaust permanently.
@@ -182,8 +206,7 @@ describe('ChatService spawn caps', () => {
     });
 
     requestSpawns(await awaitStreamOf('fill the slots'), 1, 'again');
-    await vi.waitUntil(() => settledCalls('session_spawn').length === 5, { timeout: 5000, interval: 5 });
-    expect(settledCalls('session_spawn')[4]?.status).toBe('done');
+    expect((await startSuggested(parent.id, ['again-0']))[0]?.ok).toBe(true);
   });
 
   it('refuses to nest deeper than the depth cap, so a chain of spawns terminates', async () => {
@@ -191,6 +214,7 @@ describe('ChatService spawn caps', () => {
     await service.send(parent.id, 'start a chain');
     await awaitStream(0);
     requestSpawns(streams[0], 1, 'chain');
+    await startSuggested(parent.id, ['chain-0']);
 
     requestSpawns(await awaitStreamOf('task chain-0'), 1, 'chain-2');
 
@@ -218,8 +242,7 @@ describe('ChatService spawn caps', () => {
     await service.send(parent.id, 'go');
     await awaitStream(0);
     requestSpawns(streams[0], 1, 'model');
-
-    await vi.waitUntil(() => settledCalls('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+    await startSuggested(parent.id, ['model-0']);
 
     const child = (await store.list()).find(session => session.origin);
     expect(child?.model).toBe('parent-model');
@@ -231,8 +254,7 @@ describe('ChatService spawn caps', () => {
     await service.send(parent.id, 'go');
     await awaitStream(0);
     requestSpawns(streams[0], 1, 'grants');
-
-    await vi.waitUntil(() => settledCalls('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+    await startSuggested(parent.id, ['grants-0']);
 
     const parentSession = await store.get(parent.id);
     const child = (await store.list()).find(session => session.origin);
@@ -246,6 +268,7 @@ describe('ChatService spawn caps', () => {
     expect(Object.keys((spawnSchema?.toolSchema.parameters as { properties: object }).properties)).toEqual([
       'prompt',
       'title',
+      'summary',
     ]);
   });
 });

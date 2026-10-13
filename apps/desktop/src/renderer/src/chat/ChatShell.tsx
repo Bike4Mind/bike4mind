@@ -31,6 +31,8 @@ import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { SettingsScreen } from './SettingsPanel';
 import { TodoPanel } from './TodoPanel';
+import { SpawnSuggestionTray } from './SpawnSuggestionTray';
+import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
 import { workspacePhrase } from './workspaceProgress';
@@ -165,6 +167,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // thread's "send a message" line for a frame - or, on a switch, the PREVIOUS conversation's
   // transcript under this one's id until the read lands.
   const opening = settling || (!!activeId && conversation.session?.id !== activeId);
+  const spawnSuggestions = useSpawnSuggestions(conversation.session);
   const background = useBackgroundProcesses(activeId);
   const videoJobs = useVideoJobs(activeId);
   const skills = useSkills(activeId);
@@ -672,6 +675,17 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                 : Promise.resolve({ ok: false as const, error: 'No conversation is open.' })
             }
             onOpenLink={openInBrowserPane}
+          />
+
+          <SpawnSuggestionTray
+            suggestions={spawnSuggestions.visible}
+            onStart={spawnSuggestions.start}
+            onDismiss={spawnSuggestions.dismiss}
+            onClear={spawnSuggestions.clear}
+            onOpenSession={sessionId => {
+              setScreen('conversation');
+              setActiveId(sessionId);
+            }}
           />
 
           {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
