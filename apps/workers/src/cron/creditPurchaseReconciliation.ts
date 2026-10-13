@@ -128,8 +128,9 @@ function formatAlert(stage: string, result: CreditPurchaseReconciliationResult):
     ...(result.ungranted.some(p => p.reason === 'balance_not_applied')
       ? [
           'Balance never credited: check the user balance and credit ledger first, then add the credits with an ' +
-            'admin credit adjustment, which clears this alert on the next run. Do not re-grant the purchase (the ' +
-            'row exists, so a redelivery will not grant).',
+            'admin credit adjustment, which clears this alert on the next run. Any positive adjustment clears it ' +
+            'for every line listed for that user, so credit the full amount for each. Do not re-grant the purchase ' +
+            '(the row exists, so a redelivery will not grant).',
         ]
       : []),
     ...(result.ungranted.some(p => p.reason === 'owner_missing')
