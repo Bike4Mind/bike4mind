@@ -63,10 +63,21 @@ let activeSessionId: string | null = null;
 // credit-burning WebSocket the UI can no longer reach.
 let startGen = 0;
 
-// Notebook the newest live start() targets (undefined sessionId = a fresh notebook). Cleared by
-// end() and a failed mic check. A superseded bootstrap skips its own /end only when the newer call
-// is on the same notebook, since /end is keyed by notebook.
-let liveStart: { sessionId?: string } | null = null;
+// Notebook the newest live start() targets (undefined sessionId = a fresh notebook), and whether its
+// first bootstrap has succeeded. Cleared by end(), a failed mic check and a failed first bootstrap.
+// A superseded bootstrap skips its own /end only when the newer call is on the same notebook, since
+// /end is keyed by notebook.
+let liveStart: { sessionId?: string; bootstrapped: boolean } | null = null;
+
+// Notebooks whose superseded bootstrap left its hold for a newer same-notebook bootstrap still in
+// flight: the server settles the prior hold only when that bootstrap succeeds. A success drops its
+// entry; a failed first start or end() sends /end for every entry, since nothing else will.
+const deferredSettles = new Set<string>();
+
+function settleDeferredHolds(): void {
+  for (const id of deferredSettles) void reconcileVoiceSession(id);
+  deferredSettles.clear();
+}
 
 // Bounded auto-reconnect after an abnormal disconnect (network drop - common on
 // mobile when Wi-Fi<->cellular handoff or a signal dip kills the WebSocket). We
@@ -251,9 +262,14 @@ async function establishConnection(
       return;
     }
     // Reconnects exhausted: the original connect's hold is still open, so settle it. A failed first
-    // bootstrap reserved nothing, and activeSessionId is still null then.
+    // bootstrap reserved nothing, and activeSessionId is still null then, but it also settled no
+    // prior hold, so a superseded same-notebook bootstrap must now settle its own.
     const sid = activeSessionId;
     activeSessionId = null;
+    if (!isReconnect) {
+      liveStart = null;
+      settleDeferredHolds();
+    }
     set({
       phase: 'error',
       errorMessage: `Failed to ${isReconnect ? 'reconnect' : 'create'} voice session: ${formatSessionsError(err)}`,
@@ -262,21 +278,32 @@ async function establishConnection(
     return;
   }
 
+  // Any successful bootstrap settled the notebook's prior hold server-side.
+  const resolvedId = bootstrap.session?.id ?? null;
+  if (resolvedId) deferredSettles.delete(resolvedId);
+
   // Superseded during the /sessions request - don't open a connection we'd orphan. A first
   // bootstrap already reserved credits, and end() ran before the id was known, so settle it here.
   // A bootstrap that created its own notebook is always settled: no other call can know that id.
-  // Otherwise skipped only when a newer start() targets the same notebook, because /end is keyed by
-  // notebook (it could settle that call's hold) and that bootstrap settles the old hold itself.
+  // When a newer start() targets the same notebook, /end could settle that call's hold instead:
+  // skip once its bootstrap has succeeded (that settled the prior hold, and the live call's own /end
+  // covers the notebook), otherwise defer to the outcome of that bootstrap.
   if (isStale()) {
-    const id = bootstrap.session?.id ?? null;
-    const newerSameNotebook = liveStart !== null && id !== null && liveStart.sessionId === id;
-    if (!isReconnect && (isNewSession || !newerSameNotebook)) {
-      void reconcileVoiceSession(id);
+    const newerSameNotebook = liveStart !== null && resolvedId !== null && liveStart.sessionId === resolvedId;
+    if (isReconnect || !resolvedId) return;
+    if (isNewSession || !newerSameNotebook) {
+      void reconcileVoiceSession(resolvedId);
+    } else if (!liveStart?.bootstrapped) {
+      deferredSettles.add(resolvedId);
     }
     return;
   }
 
-  activeSessionId = bootstrap.session?.id ?? null;
+  activeSessionId = resolvedId;
+  if (!isReconnect) {
+    if (liveStart) liveStart.bootstrapped = true;
+    settleDeferredHolds();
+  }
   // Only the first connect drives the requesting->connecting->navigate flow; a
   // reconnect stays in the 'reconnecting' phase until onConnect flips it.
   if (!isReconnect) {
@@ -384,13 +411,14 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     clearReconnectTimer();
     reconnectAttempts = 0;
     const myGen = ++startGen;
-    liveStart = { sessionId };
+    liveStart = { sessionId, bootstrapped: false };
     set({ phase: 'requesting-session', errorMessage: null, mode: null, lastUserMessage: null });
     try {
       await ensureMicrophone();
     } catch (err) {
       if (myGen !== startGen) return;
       liveStart = null;
+      settleDeferredHolds();
       set({ phase: 'error', errorMessage: formatConnectError(err) });
       return;
     }
@@ -406,6 +434,7 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     // exactly once - here.
     startGen++;
     liveStart = null;
+    settleDeferredHolds();
     clearReconnectTimer();
     stopHeartbeat();
     reconnectAttempts = 0;

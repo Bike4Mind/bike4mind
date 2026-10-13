@@ -369,6 +369,73 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
     expect(startSessionMock).toHaveBeenCalledOnce();
   });
 
+  describe('when the newer same-notebook bootstrap loses the conditional write (409)', () => {
+    const conflict = () =>
+      Object.assign(new Error('Request failed with status code 409'), {
+        isAxiosError: true,
+        response: { status: 409, data: { error: 'Another voice call on this session started at the same time' } },
+      });
+    let pending: { resolve: (value: { data: typeof BOOTSTRAP }) => void; reject: (err: unknown) => void }[];
+
+    beforeEach(() => {
+      pending = [];
+      apiPost.mockImplementation((url: string) =>
+        url === '/api/voice/v2/sessions'
+          ? new Promise((resolve, reject) => {
+              pending.push({ resolve, reject });
+            })
+          : Promise.resolve({ data: {} })
+      );
+    });
+
+    const endThenRestart = async () => {
+      const first = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+      await vi.waitFor(() => expect(sessionCalls()).toHaveLength(1));
+      await useConversationalVoiceStore.getState().end();
+      const second = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+      await vi.waitFor(() => expect(sessionCalls()).toHaveLength(2));
+      return { first, second };
+    };
+
+    it('settles the superseded hold when the newer bootstrap fails after it resolves', async () => {
+      const { first, second } = await endThenRestart();
+
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      expect(endCalls()).toHaveLength(0);
+
+      pending[1].reject(conflict());
+      await second;
+      expect(useConversationalVoiceStore.getState().phase).toBe('error');
+      expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+    });
+
+    it('settles the superseded hold when the newer bootstrap fails before it resolves', async () => {
+      const { first, second } = await endThenRestart();
+
+      pending[1].reject(conflict());
+      await second;
+      expect(endCalls()).toHaveLength(0);
+
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+    });
+
+    it('settles the deferred hold when the newer call is ended before its bootstrap returns', async () => {
+      const { first, second } = await endThenRestart();
+
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      await useConversationalVoiceStore.getState().end();
+      expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+
+      pending[1].reject(conflict());
+      await second;
+      expect(endCalls()).toHaveLength(1);
+    });
+  });
+
   it('settles a superseded fresh-notebook bootstrap even when a newer call has started', async () => {
     const resolvers: ((value: { data: typeof BOOTSTRAP }) => void)[] = [];
     apiPost.mockImplementation((url: string) =>
