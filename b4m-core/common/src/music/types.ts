@@ -5,6 +5,9 @@ export type MusicProviderId = (typeof MUSIC_PROVIDER_IDS)[number];
 // Upper bound for any model, so an oversized body fails schema validation before capability checks run.
 export const MAX_MUSIC_LYRICS_CHARS = 10_000;
 
+// A 5-minute 320 kbps MP3 is about 12 MB; the cap only stops a runaway download.
+export const MAX_MUSIC_OUTPUT_BYTES = 32 * 1024 * 1024;
+
 export const MUSIC_OUTPUT_FORMATS = ['mp3'] as const;
 export type MusicOutputFormat = (typeof MUSIC_OUTPUT_FORMATS)[number];
 
