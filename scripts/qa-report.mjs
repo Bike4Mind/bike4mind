@@ -589,13 +589,14 @@ export async function main(argv, env, deps = {}) {
     }
     // No results file means the job died before Playwright reported: still post it (infra-error).
     const parsed = parts.length > 0 ? mergeParsed(parts) : parseResults({});
-    if (args.countsOut) await fs.writeFile(args.countsOut, JSON.stringify(parsed.counts));
 
     // QA_LATENCY_BREACH is the Aggregate step's skip-aware verdict; unset means not a latency run.
     if (env.QA_LATENCY_BREACH === 'true' || env.QA_LATENCY_BREACH === 'false') {
       const gateTests = await loadLatencyGateTests(args.latencyDir, log);
       applyLatencyGate(parsed, gateTests, env.QA_LATENCY_BREACH === 'true');
     }
+    // After the gate, so the counts match the ingested payload when both are requested.
+    if (args.countsOut) await fs.writeFile(args.countsOut, JSON.stringify(parsed.counts));
 
     const metrics = await loadMetrics(args, log);
     let reportPrefix;
