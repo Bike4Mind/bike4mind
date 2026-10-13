@@ -1,7 +1,7 @@
 import ProfileDetailSection from '@client/app/components/profile/ProfileDetailSection';
 import ChangeEmailCard from '@client/app/components/profile/ChangeEmailCard';
 import SectionContainer from '@client/app/components/ProfileModal/SectionContainer';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import SubscriptionModal from '@client/app/components/subscription/SubscriptionModal';
 import CreditsModal from '@client/app/components/subscription/CreditsModal';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -73,7 +73,7 @@ const AboutTabContent = () => {
             }}
           >
             <Box className="profile-detail-tab-icon-container" sx={{ flexShrink: 1 }}>
-              <Bike4MindIcon size="38" fill={theme.palette.fileBrowser.fileSizeColor} />
+              <CreditIcon sx={{ fontSize: 38, color: theme.palette.fileBrowser.fileSizeColor }} />
             </Box>
 
             <Box
