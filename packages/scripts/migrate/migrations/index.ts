@@ -163,6 +163,8 @@ import EnsureApiKeyUsageLogSourceOwnerIndex from './20260921235995_ensure-apikey
 import DetachForeignQuestNodeArtifacts from './20260921235996_detach-foreign-quest-node-artifacts';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureSessionUserIdIdIndex from './20260921235997_ensure-session-userid-id-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureLakeSkippedFileIndexes from './20260921235989_ensure-lake-skipped-file-indexes';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note-status-index';
@@ -311,6 +313,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureApiKeyUsageLogSourceOwnerIndex,
   DetachForeignQuestNodeArtifacts,
   EnsureSessionUserIdIdIndex,
+  EnsureLakeSkippedFileIndexes,
   EnsureOAuthGrantClientUserIndex,
   ReplaceReleaseNoteStatusIndex,
   EnsureFabFileOwnedKeysetIndex,
