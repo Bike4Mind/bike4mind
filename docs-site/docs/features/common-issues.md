@@ -70,7 +70,7 @@ If the issue persists, contact your organization admin to confirm your account e
 
 Credits are the currency used to run AI operations on Bike4Mind. Each message, image generation, Smart Tool use, or Subagent run consumes credits based on the cost of the underlying AI model.
 
-- **More powerful models cost more** — GPT-4o, Claude Opus, and Gemini Ultra use significantly more credits per message than smaller models like GPT-4o Mini or Claude Haiku.
+- **More powerful models cost more** — flagship models such as Claude Opus and GPT-6.1 Sol use significantly more credits per message than smaller models like Claude Haiku or Gemini Flash or Claude Haiku.
 - **Longer conversations cost more** — The full conversation history is sent to the model on every turn, so credit cost grows as a conversation gets longer.
 - **Tools and subagents each consume credits** — Web search, image generation, and Subagents each bill independently.
 
@@ -155,7 +155,7 @@ Responses can be truncated when:
 
 Speed depends on the model and current provider load:
 
-- **Switch to a faster model** — GPT-4o Mini and Claude Haiku are significantly faster than their flagship counterparts.
+- **Switch to a faster model** — Claude Haiku and Gemini Flash models are significantly faster than their flagship counterparts.
 - **Shorten the conversation** — Less history means fewer tokens per request and faster streaming.
 - **Check provider status** — Slowdowns during peak usage are common across all providers.
 - **Check your connection** — VPNs and proxies can add latency to streaming responses.

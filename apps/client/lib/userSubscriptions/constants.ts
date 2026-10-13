@@ -12,7 +12,7 @@ export const PROFESSIONAL_PRICE_ID = isTestMode
   : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? '');
 
 export const PROFESSIONAL_PLAN_FEATURES: string[] = [
-  'Access to 25+ AI models including GPT-4, Claude 3, Gemini',
+  'Access to 60+ AI models from OpenAI, Anthropic, Google, xAI and more',
   'Automatic model cost optimization',
   'Credits roll over for 3 months',
   'Advanced prompt engineering tools',

@@ -13,177 +13,73 @@ Bike4Mind supports a wide range of state-of-the-art AI models for text generatio
 
 ## Supported Text Models
 
+Bike4Mind offers 60+ AI models. The lists below name the current lineup; your model picker shows exactly what is enabled for your organization.
+
 ### OpenAI Models
-
-#### GPT-5 Family
-- **GPT-5.5** — Latest and most capable flagship, ~1M context window (1.05M tokens)
-- **GPT-5.4** — Highly capable previous flagship, 1M+ context window
-- **GPT-5.4 Mini** — Compact GPT-5.4 variant, 400K context window
-- **GPT-5.4 Nano** — Ultra-lightweight GPT-5.4, 400K context window
-- **GPT-5.2** — Previous-generation flagship, 400K context window
-- **GPT-5.2 Chat Latest** — Always points to the latest GPT-5.2 version
-- **GPT-5.1** — Early GPT-5 series, 400K context window
-- **GPT-5.1 Chat Latest** — Always points to the latest GPT-5.1 version
-- **GPT-5** — Original GPT-5 release, 400K context window
-- **GPT-5 Mini** — Compact version with excellent performance at lower cost
-- **GPT-5 Nano** — Ultra-efficient variant for lightweight tasks
-- **GPT-5 Chat Latest** — Always points to the latest GPT-5 version
-
-#### GPT-4 Family
-- **GPT-4.1** — Enhanced GPT-4 with 1M+ token context window
-- **GPT-4.1 Mini** — Cost-effective variant with the same 1M+ context window
-- **GPT-4.1 Nano** — Ultra-efficient variant with the same 1M+ context window
-- **GPT-4.5 Preview** — Preview model bridging GPT-4 and GPT-5
-- **GPT-4o** — Multimodal model with 128K context
-- **GPT-4o Mini** — Cost-effective multimodal model
-- **GPT-4 Turbo** — High-performance model with 128K context
-- **GPT-4** — Original GPT-4 model
-
-#### O-Series (Reasoning Models)
-- **O4 Mini** — Latest compact reasoning model with agentic capabilities
-- **O3** — Advanced reasoning with structured thinking
-- **O3 Mini** — Smaller, faster reasoning model
-- **O1** — Original reasoning model with 200K context
-- **O1 Preview** — Early reasoning model preview
-- **O1 Mini** — Compact reasoning model
+- **GPT-6.1 Sol** and the **GPT-6** family (**Astra**, **Luna**, **Sol**)
+- **GPT-5.6** and **GPT-5.5**
+- **o3** — Advanced reasoning with structured thinking
 
 ### Anthropic Models (Claude)
 
 Anthropic models are available via both the Anthropic API and AWS Bedrock. Your administrator determines which backend is active for your organization.
 
-#### Claude Fable Series
-- **Claude Fable 5** — Anthropic's most capable model, built for complex long-running agentic tasks, with 1M context and adaptive reasoning. Generally available and selectable in the model picker. Its safety classifiers may decline some requests (targeting cybersecurity and research-biology content); when that happens the request transparently continues on Claude 4.8 Opus rather than failing.
-
-#### Claude 4.8 Series
-- **Claude 4.8 Opus** — Latest generally available Claude flagship, 1M context window with adaptive reasoning
-
-#### Claude 4.7 Series
-- **Claude 4.7 Opus** — High-capability reasoning and analysis, 1M context window with adaptive reasoning
-
-#### Claude 4.6 Series
-- **Claude 4.6 Opus** — Powerful reasoning and analysis, 1M context window
-- **Claude 4.6 Sonnet** — Enhanced coding, analysis, and complex reasoning with improved speed and efficiency
-
-#### Claude 4.5 Series
-- **Claude 4.5 Opus** — Top-tier reasoning and analysis
-- **Claude 4.5 Sonnet** — Balanced performance and cost
-- **Claude 4.5 Haiku** — Fast and lightweight with large output capacity
-
-#### Claude 4 Series
-- **Claude 4.1 Opus** — Enhanced Claude 4 with improved performance
-- **Claude 4 Opus** — Powerful reasoning and analysis
-- **Claude 4 Sonnet** — Balanced model with competitive pricing
-
-#### Claude 3 Series
-- **Claude 3.7 Sonnet** — Most advanced Claude 3.x model with thinking support
-- **Claude 3.5 Sonnet** / **Claude 3.5 Sonnet V2** — Balanced performance and cost
-- **Claude 3.5 Haiku** — Fast and lightweight
-- **Claude 3 Opus** — Original top-tier Claude model
-
-Claude 3.x through 4.5 models (and Claude 4.6 Sonnet) support a 200K token context window. Claude 4.6 Opus and the newer Opus models (4.7, 4.8) and Claude Fable 5 support a 1M token context window.
+- **Claude Fable 5.1** — Anthropic's most capable model, built for complex long-running agentic tasks. Its safety classifiers may decline some requests (targeting cybersecurity and research-biology content); when that happens the request transparently continues on another Claude model rather than failing.
+- **Claude Opus 5.5** and **Claude Opus 5** — Top-tier reasoning and analysis
+- **Claude Sonnet 5.5** and **Claude Sonnet 5** — Balanced performance and cost, strong for coding
+- **Claude Haiku 5.5** — Fast and lightweight
+- **Claude Opus 4.8** — Previous-generation Opus, still available
 
 ### Google Gemini Models
-
-#### Gemini 3.5
-- **Gemini 3.5 Flash** — Latest generation, fast and efficient with 1M context window and thinking support
-
-#### Gemini 3.1 (Preview)
-- **Gemini 3.1 Pro Preview** — Advanced reasoning with 1M context window and thinking support
-- **Gemini 3.1 Flash Lite** — Ultra-lightweight latest-gen variant with 1M context window and thinking support
-
-#### Gemini 3 (Preview)
-- **Gemini 3 Pro Preview** — Earlier Gemini 3 generation, 1M context window
-- **Gemini 3 Flash Preview** — Speed-optimized Gemini 3 generation
-
-#### Gemini 2.5
-- **Gemini 2.5 Pro** — Flagship model with 2M context window and thinking support
-- **Gemini 2.5 Flash** — Fast and efficient with 1M context window and thinking support
-- **Gemini 2.5 Flash Lite** — Ultra-lightweight variant
-
-#### Gemini Legacy
-- **Gemini 2.0 Flash Experimental** — Experimental next-gen model
-- **Gemini 1.5 Pro** — 2M context window for massive documents
-- **Gemini 1.5 Flash** — Speed-optimized with 1M context
-- **Gemini 1.5 Flash 8B** — Compact variant
+- **Gemini 3.1 Pro** — Advanced reasoning with thinking support
+- **Gemini 3.8 Flash** — Fast and efficient
+- **Gemini 3.5 Flash Lite** — Ultra-lightweight variant
 
 ### xAI Models (Grok)
+- **Grok 4.7**
+- **Grok 4.20**
 
-- **Grok 4** — Latest generation with 256K context window
-- **Grok 3** — Powerful reasoning model with 131K context
-- **Grok 3 Fast** — Speed-optimized Grok 3
-- **Grok 3 Mini** — Compact Grok 3
-- **Grok 3 Mini Fast** — Fastest Grok variant
-- **Grok 2** — Previous generation
-- **Grok 2 Vision** — Multimodal with image understanding
-
-### DeepSeek Models (Direct API)
-
-- **DeepSeek Flash** - DeepSeek-V4.1-Flash, 1M context window with vision, tool use, and reasoning support
-- **DeepSeek V4 Pro** - DeepSeek-V4-Pro, 1M context window with reasoning support
+### DeepSeek Models
+- **DeepSeek V4 Pro** — Reasoning-focused flagship
+- **DeepSeek Flash** — Fast general-purpose model
+- **DeepSeek R1** and **DeepSeek V3.2** — Available via AWS Bedrock
 
 ### Moonshot Models (Kimi)
-
-- **Kimi K3** - Moonshot's flagship model, 1M context window with vision, tool use, and reasoning support
-- **Kimi K2.7 Code** - Coding-focused variant
-- **Kimi K2.7 Code Highspeed** - Faster coding-focused variant
-- **Kimi K2.6** - Previous-generation general-purpose model
+- **Kimi K3** — Moonshot's flagship model with vision, tool use, and reasoning support
+- **Kimi K2.7 Code** — Coding-focused variant
 
 ### Meta Llama Models (AWS Bedrock)
-
-- **Llama 4 Maverick 17B Instruct** — Optimized for fast, efficient inference
-- **Llama 4 Scout 17B Instruct** — Specialized for exploration and reasoning
-- **Llama 3 Instruct 70B** — Powerful open-source model
-- **Llama 3 Instruct 8B** — Compact model for high-volume tasks
-
-### DeepSeek Models (AWS Bedrock)
-
-- **DeepSeek R1** — Advanced reasoning model with 128K context
-- **DeepSeek v3.1** — General-purpose model with 128K context
-
-### Moonshot Models (AWS Bedrock)
-
-- **Kimi K2.5** - General-purpose model
-- **Kimi K2 Thinking** - Reasoning-focused variant
-
-### Amazon Titan Models (AWS Bedrock)
-
-- **Titan Text Express** — General-purpose text generation
-- **Titan Text Lite** — Lightweight variant
-
-### AI21 Labs Models (AWS Bedrock)
-
-- **Jurassic-2 Ultra** — High-capability text generation
-- **Jurassic-2 Mid** — Balanced performance
+- **Llama 4 Maverick**
+- **Llama 4 Scout**
 
 ### Local Models (Ollama)
 
-If your organization has Ollama configured, you can access locally-hosted models including:
-- **LLaMA 3.3** — Meta's latest local model
-- **DeepSeek R1** — Local reasoning model
-- **TinyLlama** — Ultra-lightweight local model
-- Any other models installed on your organization's Ollama instance
+If your organization has Ollama configured, you can access any locally-hosted models installed on your organization's Ollama instance. Nothing leaves your machine.
 
-## Supported Image Models
+### Retiring Soon
 
-### FLUX Models (Black Forest Labs)
-- **FLUX Pro Ultra** — Highest quality, photorealistic output
-- **FLUX Pro 1.1** — Professional quality generation
-- **FLUX Pro (Legacy)** — Previous generation
-- **FLUX Pro Fill** — Inpainting and fill operations
-- **FLUX Kontext Pro** — Image-to-image transformations
-- **FLUX Kontext Max** — Maximum quality transformations
+These models are being retired by their providers. Move saved notebooks, agents, and API calls to a current model before the date shown.
 
-### OpenAI Image Models
-- **GPT-Image-1.5** — Latest generation image model
-- **GPT-Image-1** — Previous generation
-- **GPT-Image-1 Mini** — Cost-effective variant
+| Model | Retirement date |
+|-------|-----------------|
+| Claude Sonnet 4 | 2026-10-14 |
+| Claude Haiku 4.5 (direct Anthropic API) | 2026-10-15 |
+| Gemini 2.5 models | 2026-10-20 |
+| GPT-4, GPT-4 Turbo, GPT-4.1 Nano, o4-mini | 2026-10-23 |
+| Claude Opus 4.5 | 2026-11-24 |
+| Claude Sonnet 4.5 | 2026-11-30 |
 
-### Google Gemini Image Models
-- **Gemini 3 Pro Image Preview** — Google's latest image generation
-- **Gemini 2.5 Flash Image** — Fast image generation
+## Supported Image and Video Models
 
-### xAI Image Models
-- **Grok 2 Image** — Image generation via xAI
+### Image
+- **GPT-Image-2** (OpenAI)
+- **Nano Banana Pro** and **Nano Banana 2** (Google)
+- **FLUX 1.1 Pro Ultra** — Highest quality, photorealistic output (Black Forest Labs)
+- **FLUX Kontext** — Image-to-image transformations and editing (Black Forest Labs)
+
+### Video
+- **Veo 3.1 Fast** (Google)
+- **Grok Imagine Video 1.5** (xAI)
 
 ## Speech-to-Text Models
 
@@ -220,66 +116,46 @@ Controls response length:
 #### Thinking Models
 - Explicit reasoning steps before responding
 - Configurable token budget
-- Available for models flagged with thinking support — including O4 Mini, the GPT-5.4 family, Claude 3.7 Sonnet and all Claude 4.x models (Sonnet, Haiku, Opus, Fable), and Gemini 2.5 Pro/Flash plus all Gemini 3.x text models
+- Available for models flagged with thinking support, including o3, recent GPT models, the Claude Opus, Sonnet, Haiku, and Fable families, and the Gemini 3.x models
 
 ## Model Selection Best Practices
 
 ### For General Use
-- **GPT-4o Mini** or **Claude 4.5 Haiku**: Best balance of cost and performance
-- **Gemini 2.5 Flash**: Fast responses for simple queries
+- **Claude Haiku 5.5** or **Gemini 3.8 Flash**: Best balance of cost and speed
+- **Gemini 3.5 Flash Lite**: Very fast responses for simple queries
 
 ### For Complex Tasks
-- **Claude 4.8 Opus** or **GPT-5.5**: Deep analysis and reasoning
-- **O3** or **O4 Mini**: Mathematical and logical problems
-- **Gemini 2.5 Pro**: Massive document analysis (2M context)
+- **Claude Opus 5.5**, **GPT-6.1 Sol**, or **Claude Fable 5.1**: Deep analysis and reasoning
+- **o3**: Mathematical and logical problems
 
 ### For Creative Writing
-- **Claude 4.5 Sonnet**: Nuanced creative output
-- **GPT-5**: Large context for long-form content
+- **Claude Sonnet 5.5**: Nuanced creative output
+- **GPT-5.6**: Long-form content
 - Temperature: 0.8-1.2
 
 ### For Code Generation
-- **Claude 4.5 Sonnet** or **GPT-4.1**: Excellent code comprehension
-- **DeepSeek R1**: Strong reasoning for complex code tasks
+- **Claude Sonnet 5.5**, **Kimi K2.7 Code**, or **GPT-5.6**: Strong code comprehension
+- **DeepSeek V4 Pro**: Strong reasoning for complex code tasks
 - Temperature: 0.3-0.5
 
 ### For Image Generation
-- **FLUX Pro Ultra**: Photorealistic images
-- **GPT-Image-1.5**: Creative and artistic
-- **FLUX Kontext Pro/Max**: Image transformations and editing
-
-## Context Windows
-
-Different models support different context lengths:
-
-| Model | Context Window | Best For |
-|-------|---------------|----------|
-| GPT-4.1 / 4.1 Mini / 4.1 Nano | 1M+ tokens | Massive codebases |
-| GPT-5.5 | ~1M tokens | Long documents, latest flagship |
-| GPT-5.4 | ~1M tokens | Long documents, deep analysis |
-| GPT-5 / 5.1 / 5.2 (incl. GPT-5 Mini/Nano), GPT-5.4 Mini/Nano | 400K tokens | Long documents |
-| Claude 4.6 Opus / Claude 4.7 Opus / Claude 4.8 Opus / Claude Fable 5 | 1M tokens | Largest Claude context |
-| Claude (3.x–4.5, 4.6 Sonnet) | 200K tokens | Extensive analysis |
-| Gemini 2.5 Pro | 2M tokens | Largest documents |
-| Gemini 3.x / 2.5 Flash | 1M tokens | Large documents, fast |
-| Grok 4 | 256K tokens | Long conversations |
-| DeepSeek Flash / V4 Pro | 1M tokens | Massive codebases, long documents |
-| Kimi K3 | 1M tokens | Large documents, agentic tool use |
-| DeepSeek R1 / v3.1 | 128K tokens | Code repositories |
+- **FLUX 1.1 Pro Ultra**: Photorealistic images
+- **GPT-Image-2** or **Nano Banana Pro**: Creative and artistic
+- **FLUX Kontext**: Image transformations and editing
 
 ## Cost Optimization
 
 ### Tips for Managing Credits
-1. **Start with smaller models** for initial drafts (Haiku, Mini, Flash variants)
+1. **Start with smaller models** for initial drafts (Haiku, Flash, and Flash Lite variants)
 2. **Use streaming** to stop generation early if needed
 3. **Set appropriate max tokens** to avoid waste
 4. **Choose the right model tier** for the task complexity
 
 ### Model Cost Tiers
-- **Economy**: GPT-4o Mini, Claude 4.5 Haiku, Gemini Flash, Grok 3 Mini Fast
-- **Standard**: GPT-4.1, Claude 4.5 Sonnet, Gemini 2.5 Flash, Grok 3
-- **Premium**: GPT-5, Claude 4.5 Opus, Gemini 2.5 Pro, Grok 4
-- **Ultra**: O3, Claude 4.6 Opus / Claude 4.7 Opus / Claude 4.8 Opus, GPT-5.5
+- **Economy**: Claude Haiku 5.5, Gemini 3.5 Flash Lite, DeepSeek Flash
+- **Standard**: Claude Sonnet 5.5, Gemini 3.8 Flash, GPT-5.5
+- **Premium**: Claude Opus 5.5, GPT-6.1 Sol, Gemini 3.1 Pro, Grok 4.7
+- **Ultra**: Claude Fable 5.1, o3
 
 ## API Keys & Custom Models
 
