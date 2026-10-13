@@ -133,6 +133,7 @@ export const secrets = {
   NCMEC_ESP_ID: new sst.Secret('NCMEC_ESP_ID', 'not-configured'),
   NCMEC_API_KEY: new sst.Secret('NCMEC_API_KEY', 'not-configured'),
   NCMEC_USE_SANDBOX: new sst.Secret('NCMEC_USE_SANDBOX', 'true'),
+  NCMEC_ESP_EMAIL: new sst.Secret('NCMEC_ESP_EMAIL', 'not-configured'),
   // RSA private key for signing OIDC ID tokens (RS256). Base64-encoded PEM.
   // Generate with: openssl genrsa 2048 | base64 | tr -d '\n'
   // If not set, an ephemeral key is generated at runtime (dev only — NOT safe for production).

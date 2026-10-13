@@ -38,6 +38,8 @@ export interface NcmecCredentials {
    * the test host, so misconfigured deployments cannot post to production.
    */
   useSandbox: boolean;
+  /** Contact email for the reporting ESP. Required under <reporter>/<reportingPerson>/<email>. */
+  espEmail: string;
 }
 
 export interface NcmecReportInput {
@@ -68,15 +70,15 @@ function xmlEscape(s: string): string {
     .replace(/'/g, '&apos;');
 }
 
-function buildSubmitXml(espId: string, input: NcmecReportInput): string {
+function buildSubmitXml(credentials: NcmecCredentials, input: NcmecReportInput): string {
   // Rekognition stores confidence in the 0-100 range (not 0-1); format directly.
   const labelsSummary = input.labels
     .map(l => `${xmlEscape(l.name)} (${l.confidence.toFixed(1)}%)`)
     .join(', ');
 
   // XML per NCMEC CyberTipline ESP API (report.cybertip.org/ispws/documentation/).
-  // <reporter> identifies the reporting ESP; <personOrUserReported> is the suspect.
-  // Verify this schema with your NCMEC ESP representative before production use.
+  // <reporter> is the reporting ESP (reportingPerson required with email).
+  // <personOrUserReported> is the suspect; <espIdentifier> is the platform user ID.
   return `<?xml version="1.0" encoding="UTF-8"?>
 <report>
   <incidentSummary>
@@ -84,24 +86,17 @@ function buildSubmitXml(espId: string, input: NcmecReportInput): string {
     <incidentDateTime>${input.detectedAt.toISOString()}</incidentDateTime>
   </incidentSummary>
   <reporter>
-    <reportingEsp>
-      <espId>${xmlEscape(espId)}</espId>
-    </reportingEsp>
+    <reportingPerson>
+      <email>${xmlEscape(credentials.espEmail)}</email>
+    </reportingPerson>
   </reporter>
   <personOrUserReported>
-    <espUserId>${xmlEscape(input.userId)}</espUserId>
+    <espIdentifier>${xmlEscape(input.userId)}</espIdentifier>
   </personOrUserReported>
   <additionalInfo>
     <text>Internal incident ID: ${xmlEscape(input.incidentId)}. Detected labels: ${labelsSummary}.${input.fabFileId ? ` File ID: ${xmlEscape(input.fabFileId)}.` : ''}</text>
   </additionalInfo>
 </report>`;
-}
-
-function buildFinishXml(reportId: string): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<finishReport>
-  <reportId>${xmlEscape(reportId)}</reportId>
-</finishReport>`;
 }
 
 /**
@@ -117,6 +112,21 @@ export class NcmecRejectedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'NcmecRejectedError';
+  }
+}
+
+/**
+ * /submit succeeded and returned a reportId, but /finish failed.
+ * NCMEC already holds the report; it will be deleted after 24 hours unless finalized.
+ * The caller must NOT roll back. The reportId is carried on this error so it can be
+ * persisted for manual recovery within NCMEC's 24-hour window.
+ */
+export class NcmecFinishFailedError extends Error {
+  readonly reportId: string;
+  constructor(message: string, reportId: string) {
+    super(message);
+    this.name = 'NcmecFinishFailedError';
+    this.reportId = reportId;
   }
 }
 
@@ -156,7 +166,7 @@ export async function submitNcmecReport(
   const fetchTimeout = AbortSignal.timeout(25_000);
 
   // Step 1: Submit the report and receive a reportId.
-  const submitXml = buildSubmitXml(espId, input);
+  const submitXml = buildSubmitXml(credentials, input);
   const submitResponse = await fetch(`${baseUrl}/submit`, {
     method: 'POST',
     headers: { Authorization: authHeader, 'Content-Type': 'text/xml; charset=utf-8' },
@@ -180,19 +190,23 @@ export async function submitNcmecReport(
   const reportId = match[1].trim();
 
   // Step 2: Finalize the report. Without /finish, NCMEC deletes it after 24 hours.
-  // We have the reportId at this point. A /finish failure is logged with the reportId so
-  // an operator can manually finalize; the caller should NOT roll back.
-  const finishXml = buildFinishXml(reportId);
+  // /finish takes a form parameter 'id' (application/x-www-form-urlencoded), not XML.
+  // NcmecFinishFailedError carries the reportId so the caller can persist it for manual
+  // recovery within NCMEC's 24-hour window; the caller must NOT roll back.
+  const finishBody = new URLSearchParams({ id: reportId }).toString();
   const finishResponse = await fetch(`${baseUrl}/finish`, {
     method: 'POST',
-    headers: { Authorization: authHeader, 'Content-Type': 'text/xml; charset=utf-8' },
-    body: finishXml,
+    headers: { Authorization: authHeader, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: finishBody,
     signal: fetchTimeout,
   });
 
   if (!finishResponse.ok) {
     const text = await finishResponse.text();
-    throw new Error(`NCMEC /finish error ${finishResponse.status} for reportId ${reportId}: ${text.slice(0, 300)}`);
+    throw new NcmecFinishFailedError(
+      `NCMEC /finish error ${finishResponse.status} for reportId ${reportId}: ${text.slice(0, 300)}`,
+      reportId
+    );
   }
 
   return { reportId };

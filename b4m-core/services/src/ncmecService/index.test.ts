@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { submitNcmecReport, NcmecRejectedError } from './index';
+import { submitNcmecReport, NcmecRejectedError, NcmecFinishFailedError } from './index';
 
 const TEST_CREDS = {
   espId: 'esp-test-id',
   apiKey: 'test-api-key',
+  espEmail: 'esp-contact@example.com',
   useSandbox: true,
 };
 
@@ -85,12 +86,13 @@ describe('submitNcmecReport', () => {
     expect(headers.Authorization).toBe(expected);
   });
 
-  it('calls /finish with the reportId after a successful /submit', async () => {
+  it('calls /finish with the reportId as a form parameter (application/x-www-form-urlencoded)', async () => {
     await submitNcmecReport(TEST_CREDS, BASE_INPUT);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     const [finishUrl, finishOpts] = fetchSpy.mock.calls[1] as [string, RequestInit];
     expect(finishUrl).toContain('/finish');
-    expect(finishOpts.body as string).toContain('RPT-001');
+    expect((finishOpts.headers as Record<string, string>)['Content-Type']).toBe('application/x-www-form-urlencoded');
+    expect(finishOpts.body as string).toBe('id=RPT-001');
   });
 
   it('returns the reportId from /submit after /finish succeeds', async () => {
@@ -121,16 +123,16 @@ describe('submitNcmecReport', () => {
     expect(err.message).toContain('NCMEC /submit response missing reportId');
   });
 
-  it('throws plain Error (not NcmecRejectedError) when /finish returns a non-2xx status', async () => {
+  it('throws NcmecFinishFailedError (not NcmecRejectedError) when /finish returns a non-2xx status', async () => {
     fetchSpy.mockReset()
       .mockResolvedValueOnce({ ok: true, text: async () => '<response><reportId>RPT-FAIL</reportId></response>' })
       .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Internal Error' });
     const err = await submitNcmecReport(TEST_CREDS, BASE_INPUT).catch(e => e);
-    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(NcmecFinishFailedError);
     expect(err).not.toBeInstanceOf(NcmecRejectedError);
     expect(err.message).toContain('NCMEC /finish error 500');
-    // reportId is in the message so callers can log it for manual recovery.
-    expect(err.message).toContain('RPT-FAIL');
+    // reportId is on the error so callers can persist it for manual recovery.
+    expect(err.reportId).toBe('RPT-FAIL');
   });
 
   it('XML-escapes userId in the report body', async () => {
@@ -156,12 +158,17 @@ describe('submitNcmecReport', () => {
     expect(xml).toContain('file-789');
   });
 
-  it('uses <report> as the root element and puts the user in <personOrUserReported>', async () => {
+  it('uses <report> as the root element, <reportingPerson>/<email> for the ESP, and <espIdentifier> for the suspect', async () => {
     await submitNcmecReport(TEST_CREDS, BASE_INPUT);
     const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
     const xml = opts.body as string;
     expect(xml).toMatch(/<report>/);
     expect(xml).toContain('<personOrUserReported>');
+    expect(xml).toContain('<espIdentifier>');
+    expect(xml).not.toContain('<espUserId>');
+    expect(xml).toContain('<reportingPerson>');
+    expect(xml).toContain('<email>esp-contact@example.com</email>');
+    expect(xml).not.toContain('<reportingEsp>');
     expect(xml).not.toContain('<cybertiplineReport>');
   });
 });

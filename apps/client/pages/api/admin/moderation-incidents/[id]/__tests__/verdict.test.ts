@@ -6,6 +6,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockClaimForNcmecSubmission = vi.fn();
 const mockFindById = vi.fn();
 const mockUpdateReviewStatus = vi.fn();
+const mockResolveConfirmedCsam = vi.fn();
+const mockSetNcmecReportId = vi.fn();
 const mockSubmitNcmecReport = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
@@ -13,6 +15,8 @@ vi.mock('@bike4mind/database', () => ({
     claimForNcmecSubmission: (...args: unknown[]) => mockClaimForNcmecSubmission(...args),
     findById: (...args: unknown[]) => mockFindById(...args),
     updateReviewStatus: (...args: unknown[]) => mockUpdateReviewStatus(...args),
+    resolveConfirmedCsam: (...args: unknown[]) => mockResolveConfirmedCsam(...args),
+    setNcmecReportId: (...args: unknown[]) => mockSetNcmecReportId(...args),
   },
 }));
 
@@ -23,17 +27,33 @@ vi.mock('@bike4mind/services', () => {
       this.name = 'NcmecRejectedError';
     }
   }
+  class NcmecFinishFailedError extends Error {
+    readonly reportId: string;
+    constructor(message: string, reportId: string) {
+      super(message);
+      this.name = 'NcmecFinishFailedError';
+      this.reportId = reportId;
+    }
+  }
   return {
     ncmecService: {
       submitNcmecReport: (...args: unknown[]) => mockSubmitNcmecReport(...args),
       NcmecRejectedError,
+      NcmecFinishFailedError,
     },
   };
 });
 
-// SST Resource -- no secrets configured in tests; credentials are resolved by resolveNcmecCredentials
-// and passed into submitNcmecReport. The service mock does not use them.
-vi.mock('sst', () => ({ Resource: {} }));
+// SST Resource -- credentials are configured so the pre-claim check passes in most tests.
+// Tests that want to exercise the 503 path override this mock locally.
+vi.mock('sst', () => ({
+  Resource: {
+    NCMEC_ESP_ID: { value: 'esp-test-id' },
+    NCMEC_API_KEY: { value: 'test-api-key' },
+    NCMEC_ESP_EMAIL: { value: 'esp@example.com' },
+    NCMEC_USE_SANDBOX: { value: 'true' },
+  },
+}));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
@@ -77,8 +97,9 @@ const CLAIMED_INCIDENT = {
   reviewStatus: 'confirmed_csam',
 };
 
-// ncmecService.NcmecRejectedError is the mocked class -- use it to construct typed errors.
+// ncmecService error classes from the mock -- use them to construct typed errors in tests.
 const NcmecRejectedError = ncmecService.NcmecRejectedError as unknown as new (msg: string) => Error;
+const NcmecFinishFailedError = ncmecService.NcmecFinishFailedError as unknown as new (msg: string, reportId: string) => Error & { reportId: string };
 
 // ---- Tests ----
 
@@ -173,6 +194,43 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(409);
     });
 
+    // ---------------------------------------------------------------- confirmed_csam -- /finish failed
+    it('outcome 4 - NcmecFinishFailedError: persists reportId and returns 502 without rollback', async () => {
+      mockClaimForNcmecSubmission.mockResolvedValue(CLAIMED_INCIDENT);
+      mockSubmitNcmecReport.mockRejectedValue(new NcmecFinishFailedError('NCMEC /finish error 500', 'RPT-FINISH-FAIL'));
+      mockSetNcmecReportId.mockResolvedValue(undefined);
+
+      const req = makeReq({ verdict: 'confirmed_csam' });
+      const res = makeRes();
+      await runHandler(req, res);
+
+      // reportId persisted for manual recovery.
+      expect(mockSetNcmecReportId).toHaveBeenCalledWith('inc-1', 'RPT-FINISH-FAIL');
+      // No rollback on /finish failure.
+      expect(mockUpdateReviewStatus).not.toHaveBeenCalledWith('inc-1', 'pending_review');
+      expect(res.status).toHaveBeenCalledWith(502);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
+      expect(body.error).toContain('confirmed_csam');
+    });
+
+    // ---------------------------------------------------------------- confirmed_csam -- pre-flight: credentials
+    it('returns 503 when NCMEC credentials are not configured; incident is never claimed', async () => {
+      // Mutate the shared mock object so resolveNcmecCredentials sees 'not-configured'.
+      const { Resource } = await import('sst');
+      const r = Resource as unknown as Record<string, { value: string }>;
+      const savedEspId = r.NCMEC_ESP_ID?.value;
+      r.NCMEC_ESP_ID = { value: 'not-configured' };
+      try {
+        const res = makeRes();
+        await runHandler(makeReq({ verdict: 'confirmed_csam' }), res);
+        // Incident must never be claimed -- pre-claim guard fires first.
+        expect(mockClaimForNcmecSubmission).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(503);
+      } finally {
+        r.NCMEC_ESP_ID = { value: savedEspId };
+      }
+    });
+
     it('logs the reportId before the DB write so it is recoverable if the write fails', async () => {
       mockClaimForNcmecSubmission.mockResolvedValue(CLAIMED_INCIDENT);
       mockSubmitNcmecReport.mockResolvedValue({ reportId: 'RPT-LOG-TEST' });
@@ -218,6 +276,52 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
       const res = makeRes();
       await runHandler(makeReq({ verdict: 'false_positive' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+    });
+  });
+
+  // ------------------------------------------------------------------ mark_reported (recovery)
+  describe('verdict: mark_reported', () => {
+    it('moves confirmed_csam to reported with the supplied ncmecReportId', async () => {
+      mockResolveConfirmedCsam.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'reported', ncmecReportId: 'RPT-MANUAL' });
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'mark_reported', ncmecReportId: 'RPT-MANUAL' }), res);
+
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', { status: 'reported', ncmecReportId: 'RPT-MANUAL' });
+      expect(res.status).toHaveBeenCalledWith(200);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { ok: boolean; ncmecReportId: string };
+      expect(body.ncmecReportId).toBe('RPT-MANUAL');
+    });
+
+    it('returns 409 when the incident is not in confirmed_csam', async () => {
+      mockResolveConfirmedCsam.mockResolvedValue(null);
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'mark_reported', ncmecReportId: 'RPT-MANUAL' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+    });
+  });
+
+  // ------------------------------------------------------------------ requeue (recovery)
+  describe('verdict: requeue', () => {
+    it('moves confirmed_csam back to pending_review', async () => {
+      mockResolveConfirmedCsam.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'pending_review' });
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'requeue' }), res);
+
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', { status: 'pending_review' });
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('returns 409 when the incident is not in confirmed_csam', async () => {
+      mockResolveConfirmedCsam.mockResolvedValue(null);
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'requeue' }), res);
 
       expect(res.status).toHaveBeenCalledWith(409);
     });

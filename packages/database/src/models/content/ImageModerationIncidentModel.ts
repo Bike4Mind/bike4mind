@@ -148,6 +148,39 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       { new: true }
     );
   }
+
+  /**
+   * Admin recovery action for incidents stuck in 'confirmed_csam' after an unknown NCMEC
+   * outcome. Transitions only from 'confirmed_csam'. Returns null if the incident is not
+   * in that state (wrong state, not found, or concurrent resolution).
+   *
+   *   { status: 'reported', ncmecReportId }  -- operator confirmed the tip was received
+   *   { status: 'pending_review' }           -- operator confirmed nothing was filed; requeue
+   */
+  async resolveConfirmedCsam(
+    id: string,
+    target: { status: 'reported'; ncmecReportId: string } | { status: 'pending_review' }
+  ): Promise<IImageModerationIncidentDocument | null> {
+    const update: Record<string, unknown> = { reviewStatus: target.status };
+    if (target.status === 'reported') update.ncmecReportId = target.ncmecReportId;
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: 'confirmed_csam' },
+      { $set: update },
+      { new: true }
+    );
+  }
+
+  /**
+   * Persist a known reportId on a confirmed_csam incident without changing reviewStatus.
+   * Called when /finish fails after a successful /submit: the reportId is known and should
+   * be stored so an admin can use 'mark_reported' to finalize within NCMEC's 24-hour window.
+   */
+  async setNcmecReportId(id: string, ncmecReportId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: id, reviewStatus: 'confirmed_csam' },
+      { $set: { ncmecReportId } }
+    );
+  }
 }
 
 export const imageModerationIncidentRepository = new ImageModerationIncidentRepository(ImageModerationIncident);
