@@ -21,6 +21,7 @@ import {
 } from '@bike4mind/database';
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
+import { assertAccountStateUsable } from '@server/cli/auth';
 import { Subscription } from '@server/models/Subscription';
 import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
@@ -103,6 +104,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   } = parsedRequest;
 
   const user = await verifyWsAccessToken(accessToken);
+  // Account state changes do not bump tokenVersion, so apply the same gate as the CLI and API-key
+  // paths. Here rather than in verifyWsAccessToken so unsubscribe, which only removes access, stays open.
+  assertAccountStateUsable(user);
   const userAbility = ability(user);
 
   // 'scope' limits the scope of the query, to only things you're allowed to see.

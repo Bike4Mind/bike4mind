@@ -4,7 +4,6 @@ import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/service
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { assertAccountStateUsable } from '@server/cli/auth';
 import { NotFoundError, UnauthorizedError } from '@server/utils/errors';
 import jwt from 'jsonwebtoken';
 
@@ -48,9 +47,6 @@ export async function verifyWsAccessToken(accessToken: string | undefined) {
   if (!isTokenVersionCurrent(decoded.tokenVersion, user.tokenVersion)) {
     throw new UnauthorizedError('Session expired');
   }
-
-  // Account state changes do not bump tokenVersion, so apply the same gate as the CLI and API-key paths.
-  assertAccountStateUsable(user);
 
   return user;
 }

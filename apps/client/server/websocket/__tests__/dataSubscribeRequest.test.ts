@@ -65,6 +65,11 @@ vi.mock('@casl/mongoose', () => ({
   accessibleBy: vi.fn().mockReturnValue({ ofType: vi.fn().mockReturnValue({}) }),
 }));
 
+const mockAssertAccountStateUsable = vi.fn();
+vi.mock('@server/cli/auth', () => ({
+  assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
+}));
+
 vi.mock('@server/models/Subscription', () => ({
   Subscription: {},
 }));
@@ -243,6 +248,27 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     expect(noopLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Dropping inclusion fields'), {
       fields: { reply: 1 },
     });
+  });
+});
+
+describe('dataSubscribeRequest WS handler - account state', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
+  });
+
+  it('rejects a subscribe from a blocked account before resolving or persisting the subscription', async () => {
+    mockAssertAccountStateUsable.mockImplementationOnce(() => {
+      throw new Error('User not found or banned');
+    });
+
+    await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toThrow('User not found or banned');
+    expect(mockAssertAccountStateUsable).toHaveBeenCalledWith({ id: 'caller-1', tokenVersion: undefined });
+    expect(mockSessionFind).not.toHaveBeenCalled();
+    expect(mockQuerySubscriptionFindOneAndUpdate).not.toHaveBeenCalled();
   });
 });
 
