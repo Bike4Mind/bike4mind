@@ -5,13 +5,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockSend, mockGetOperationsModel, mockOpenAI, mockGetApiKey, mockAssertCredits } = vi.hoisted(() => ({
-  mockSend: vi.fn(),
-  mockGetOperationsModel: vi.fn(),
-  mockOpenAI: vi.fn(),
-  mockGetApiKey: vi.fn(),
-  mockAssertCredits: vi.fn(),
-}));
+const { mockSend, mockGetOperationsModel, mockOpenAI, mockGetApiKey, mockAssertCredits, mockPresign } = vi.hoisted(
+  () => ({
+    mockSend: vi.fn(),
+    mockGetOperationsModel: vi.fn(),
+    mockOpenAI: vi.fn(),
+    mockGetApiKey: vi.fn(),
+    mockAssertCredits: vi.fn(),
+    mockPresign: vi.fn(),
+  })
+);
 
 vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: class {
@@ -23,6 +26,9 @@ vi.mock('@aws-sdk/client-s3', () => ({
   DeleteObjectCommand: class {
     kind = 'delete';
   },
+}));
+vi.mock('@aws-sdk/s3-presigned-post', () => ({
+  createPresignedPost: (...a: unknown[]) => mockPresign(...a),
 }));
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'test-bucket' } } }));
 vi.mock('@client/services/operationsModelService', () => ({
@@ -54,6 +60,7 @@ vi.mock('@bike4mind/services', async orig => {
 
 const { createTranscribeUpload, transcribeUpload, TranscribeRequestError } = await import('./transcribe');
 const { BadRequestError } = await import('@server/utils/errors');
+const { speechToTextService } = await import('@bike4mind/services');
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 const mapped = new Error('mapped');
@@ -69,6 +76,7 @@ beforeEach(() => {
   mockGetOperationsModel.mockResolvedValue({ speechModelInfo: { backend: 'openai' } });
   mockGetApiKey.mockResolvedValue('sk-test');
   mockAssertCredits.mockResolvedValue(undefined);
+  mockPresign.mockResolvedValue({ url: 'https://s3.example/upload', fields: {} });
 });
 
 const head = (ContentType: string, ContentLength: number) =>
@@ -89,6 +97,11 @@ describe('transcribeUpload rejection kinds', () => {
     ],
     ['a video upload', 'unsupported_type', () => head('video/mp4', 1000)],
     ['an empty upload', 'size_out_of_range', () => head('audio/mpeg', 0)],
+    [
+      'an oversized upload',
+      'size_out_of_range',
+      () => head('audio/mpeg', speechToTextService.MAX_TRANSCRIBE_BYTES + 1),
+    ],
     ['no speech model', 'not_configured', () => mockGetOperationsModel.mockResolvedValue({})],
     ['no provider key', 'not_configured', () => mockGetApiKey.mockResolvedValue(undefined)],
     [
@@ -123,6 +136,7 @@ describe('createTranscribeUpload', () => {
     await expect(
       createTranscribeUpload({ userId: 'u1', mimeType: 'audio/mpeg', fileSize: 1000 })
     ).rejects.toMatchObject({ kind: 'insufficient_credits' });
+    expect(mockPresign).not.toHaveBeenCalled();
   });
 });
 
