@@ -1,6 +1,6 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
-import { INCIDENT_REVIEW_STATUSES } from '@bike4mind/common';
+import { INCIDENT_REPORT_CHANNELS, INCIDENT_REVIEW_STATUSES } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
@@ -43,6 +43,8 @@ const ImageModerationIncidentSchema = new Schema(
     reviewStatus: { type: String, enum: INCIDENT_REVIEW_STATUSES, required: false },
     // Populated when reviewStatus === 'reported'. The CyberTipline report ID returned by NCMEC.
     ncmecReportId: { type: String, required: false },
+    reportChannel: { type: String, enum: INCIDENT_REPORT_CHANNELS, required: false },
+    reportedBy: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -126,6 +128,29 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     return this.model.findOneAndUpdate(
       { _id: id, reviewStatus: { $in: ['pending_review', null] } },
       { $set: { reviewStatus: 'confirmed_csam' } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Record a CyberTip an admin filed by hand on the NCMEC web form. Transitions directly from
+   * absent/pending_review to 'reported' in one atomic write, so it races cleanly with
+   * claimForNcmecSubmission: whichever lands first wins and the other gets null.
+   */
+  async recordManualReport(
+    id: string,
+    report: { ncmecReportId: string; reportedBy: string }
+  ): Promise<IImageModerationIncidentDocument | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: { $in: ['pending_review', null] } },
+      {
+        $set: {
+          reviewStatus: 'reported',
+          ncmecReportId: report.ncmecReportId,
+          reportChannel: 'manual',
+          reportedBy: report.reportedBy,
+        },
+      },
       { new: true }
     );
   }

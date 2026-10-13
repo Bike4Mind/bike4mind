@@ -10,6 +10,11 @@ import { z } from 'zod';
 export const INCIDENT_REVIEW_STATUSES = ['pending_review', 'confirmed_csam', 'false_positive', 'reported'] as const;
 export type IncidentReviewStatus = (typeof INCIDENT_REVIEW_STATUSES)[number];
 
+// How a 'reported' incident reached NCMEC: 'manual' = filed by an admin on the CyberTipline
+// web form and recorded via the record_manual_report verdict. Absent = submitted via the API.
+export const INCIDENT_REPORT_CHANNELS = ['manual'] as const;
+export type IncidentReportChannel = (typeof INCIDENT_REPORT_CHANNELS)[number];
+
 export const ModerationLabelHitSchema = z.object({
   name: z.string(),
   parentName: z.string(),
@@ -37,6 +42,9 @@ export const ImageModerationIncidentSchema = z.object({
   // Populated when reviewStatus transitions to 'reported'. The CyberTipline report identifier
   // returned by NCMEC; retained as the audit trail that reporting occurred.
   ncmecReportId: z.string().optional(),
+  reportChannel: z.enum(INCIDENT_REPORT_CHANNELS).optional(),
+  // Admin user id that recorded a manual report.
+  reportedBy: z.string().optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

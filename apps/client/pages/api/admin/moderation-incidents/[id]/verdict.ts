@@ -38,6 +38,9 @@ function isNcmecConfigured(creds: ReturnType<typeof resolveNcmecCredentials>): b
  * Normal verdicts (incident in pending_review/absent):
  *   confirmed_csam  -> submit an NCMEC CyberTip and mark the incident 'reported'.
  *   false_positive  -> mark the incident 'false_positive' (no NCMEC submission).
+ *   record_manual_report -> the admin filed the CyberTip by hand on the NCMEC web form; mark
+ *                      the incident 'reported' with that report id. Needs no NCMEC API
+ *                      credentials, so it works before ESP API access is provisioned.
  *
  * Recovery verdicts (incident stuck in confirmed_csam after unknown NCMEC outcome; only
  * claims older than STALE_CONFIRMED_CSAM_MS are resolvable, so a live submission is safe):
@@ -59,6 +62,7 @@ const bodySchema = z.union([
   z.object({ verdict: z.literal('mark_reported'), ncmecReportId: z.string().min(1) }),
   z.object({ verdict: z.literal('requeue') }),
   z.object({ verdict: z.literal('retry_finish') }),
+  z.object({ verdict: z.literal('record_manual_report'), ncmecReportId: z.string().trim().min(1).max(64) }),
 ]);
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req: Request, res) => {
@@ -145,6 +149,28 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       req.logger.warn(`[NCMEC] retry_finish: /finish succeeded but DB update found no matching document (concurrent resolution?) for incident ${incidentId}`);
     }
     return res.status(200).json({ ok: true, ncmecReportId: incident.ncmecReportId });
+  }
+
+  if (body.verdict === 'record_manual_report') {
+    const updated = await imageModerationIncidentRepository.recordManualReport(incidentId, {
+      ncmecReportId: body.ncmecReportId,
+      reportedBy: req.user.id,
+    });
+    if (!updated) {
+      const incident = await imageModerationIncidentRepository.findById(incidentId);
+      if (!incident) return res.status(404).json({ error: 'Incident not found' });
+      if (incident.reviewStatus === 'confirmed_csam') {
+        return res.status(409).json({
+          error:
+            'Incident has an API submission in flight or with an unknown outcome -- use mark_reported once it is stale',
+        });
+      }
+      return res.status(409).json({ error: `Incident is already ${incident.reviewStatus}` });
+    }
+    req.logger.info(
+      `[NCMEC] incident ${incidentId} recorded as manually reported, reportId=${body.ncmecReportId}, by admin=${req.user.id}`
+    );
+    return res.status(200).json({ ok: true, ncmecReportId: body.ncmecReportId });
   }
 
   if (body.verdict === 'confirmed_csam') {

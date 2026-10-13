@@ -67,6 +67,8 @@ Detection -> block (FabFile.moderationStatus = 'blocked')
           -> Human review: POST /api/admin/moderation-incidents/:id/verdict
                confirmed_csam  -> NCMEC CyberTip submitted -> reviewStatus = 'reported'
                false_positive  -> reviewStatus = 'false_positive' (no NCMEC submission)
+               record_manual_report -> filed by hand on the CyberTipline web form
+                                       -> reviewStatus = 'reported', reportChannel = 'manual'
 ```
 
 The triage queue returns incidents with `reviewStatus` absent or `'pending_review'`, oldest
@@ -116,6 +118,16 @@ than an explicit `'false'` uses the test host, so a missing value cannot post to
   | `mark_reported` | Operator confirmed with NCMEC that the tip was received; supply `ncmecReportId`. |
   | `requeue` | Operator confirmed with NCMEC that no tip was filed; moves back to `pending_review`. |
   | `retry_finish` | `/finish` failed but reportId is stored; re-calls `/finish` within NCMEC's 24-hour window. |
+
+**Manual reporting (web form):** the statute requires the report, not the API. Until ESP API
+credentials are provisioned (the `confirmed_csam` verdict returns 503 without them), or
+whenever the API is unavailable, an admin files the CyberTip by hand on the CyberTipline web
+form and records it with `{ verdict: "record_manual_report", ncmecReportId }`. This moves the
+incident from `pending_review`/absent straight to `'reported'` in one atomic write, stores
+`reportChannel: 'manual'` and the admin's user id in `reportedBy`, and needs no NCMEC
+credentials. It does not act on a `confirmed_csam` claim: if an API submission is in flight
+or has an unknown outcome, resolve it with `mark_reported` instead. Incidents without
+`reportChannel` were reported through the API.
 
 **Before going live:** validate the exact XML schema, element names, and endpoint paths with
 your NCMEC ESP representative. Run a full end-to-end test against the NCMEC test host
