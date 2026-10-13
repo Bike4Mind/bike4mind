@@ -48,7 +48,16 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
     if (!claimed) return res.json({ moderationStatus: 'pending' });
 
     try {
-      const result = await scanUploadedObject({ fabFile, objectKey: fabFile.filePath, logger: req.logger });
+      // One retry: when this call wins the claim the S3 event is not redelivered, so a failed scan
+      // would otherwise wait for the daily sweep while the caller falls back to its slow timeout.
+      const scan = () => scanUploadedObject({ fabFile, objectKey: fabFile.filePath!, logger: req.logger });
+      const result = await scan().catch(error => {
+        req.logger.warn('On-demand moderation scan failed; retrying once', {
+          fabFileId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return scan();
+      });
       // The byte-sniffed type rides in the guarded write: the S3 handler persists it through its own
       // save, but it will have lost the claim and skipped the scan by now.
       const landed = await writeModerationVerdict(fabFile._id, claimedAt, {
