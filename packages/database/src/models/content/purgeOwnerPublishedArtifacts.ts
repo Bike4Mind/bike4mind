@@ -1,8 +1,8 @@
 import type { PublishScopeTier, PublishSourceKind, PublishVisibility } from '@bike4mind/common';
-import { Types } from 'mongoose';
+import { Types, type FilterQuery } from 'mongoose';
 import { User } from '../auth/UserModel';
 import { Annotation } from './AnnotationModel';
-import { PublishedArtifact } from './PublishedArtifactModel';
+import { PublishedArtifact, type IPublishedArtifactDocument } from './PublishedArtifactModel';
 import { PublishedArtifactReport } from './PublishedArtifactReportModel';
 import { PublishedArtifactViewAuditModel } from './PublishedArtifactViewAuditModel';
 
@@ -106,8 +106,6 @@ export async function purgeOwnerPublishedArtifacts(
   ownerId: string,
   { deletedBy }: { deletedBy: string }
 ): Promise<PurgeOwnerPublishedArtifactsResult> {
-  const now = new Date();
-
   const transferred = await findTransferableOrgArtifacts(ownerId);
   for (const artifact of transferred) {
     await PublishedArtifact.updateOne(
@@ -116,9 +114,22 @@ export async function purgeOwnerPublishedArtifacts(
     );
   }
 
-  const publicIds = await PublishedArtifact.distinct<string>('publicId', { ownerId });
+  return { ...(await purgeMatchingPublishedArtifacts({ ownerId }, { deletedBy })), transferred };
+}
+
+/**
+ * Soft-delete the artifacts matching `filter` the same way purgeOwnerPublishedArtifacts does
+ * (children first, then the live rows). The child sweep runs over every matching artifact, live or
+ * not, so a re-run after a partial failure finishes the job.
+ */
+async function purgeMatchingPublishedArtifacts(
+  filter: FilterQuery<IPublishedArtifactDocument>,
+  { deletedBy }: { deletedBy: string }
+): Promise<Omit<PurgeOwnerPublishedArtifactsResult, 'transferred'>> {
+  const now = new Date();
+  const publicIds = await PublishedArtifact.distinct<string>('publicId', filter);
   if (publicIds.length === 0) {
-    return { artifacts: [], transferred, annotations: 0, reports: 0, viewAudits: 0 };
+    return { artifacts: [], annotations: 0, reports: 0, viewAudits: 0 };
   }
 
   const [annotations, reports, viewAudits] = await Promise.all([
@@ -130,7 +141,7 @@ export async function purgeOwnerPublishedArtifacts(
     PublishedArtifactViewAuditModel.deleteMany({ publicId: { $in: publicIds } }),
   ]);
 
-  const live = await PublishedArtifact.find({ ownerId, deletedAt: null })
+  const live = await PublishedArtifact.find({ $and: [filter, { deletedAt: null }] })
     .select('_id publicId tier scopeId slug visibility source.kind')
     .lean<(PurgedPublishedArtifact & { _id: Types.ObjectId })[]>();
   if (live.length > 0) {
@@ -149,9 +160,32 @@ export async function purgeOwnerPublishedArtifacts(
       visibility,
       source: { kind: source.kind },
     })),
-    transferred,
     annotations: annotations.modifiedCount,
     reports: reports.modifiedCount,
     viewAudits: viewAudits.deletedCount,
   };
+}
+
+/** The sources a delete-all removed: notebook ids for published replies, file ids for published files. */
+export type PublishedArtifactSources =
+  { kind: 'reply'; sessionIds: string[] } | { kind: 'fabfile'; fabFileIds: string[] };
+
+/**
+ * Take down the artifacts `ownerId` published from the given notebooks or files, for when the user
+ * deletes the source rather than the account. Only artifacts `ownerId` owns are touched: someone
+ * else's page built from a shared source is theirs to keep. Same cleanup as
+ * purgeOwnerPublishedArtifacts, minus the org-page handover (the owner is still around).
+ */
+export async function purgeOwnerPublishedArtifactsBySource(
+  ownerId: string,
+  sources: PublishedArtifactSources,
+  { deletedBy }: { deletedBy: string }
+): Promise<Omit<PurgeOwnerPublishedArtifactsResult, 'transferred'>> {
+  const ids = sources.kind === 'reply' ? sources.sessionIds : sources.fabFileIds;
+  if (ids.length === 0) return { artifacts: [], annotations: 0, reports: 0, viewAudits: 0 };
+  const sourceField = sources.kind === 'reply' ? 'source.sessionId' : 'source.fabFileId';
+  return purgeMatchingPublishedArtifacts(
+    { ownerId, 'source.kind': sources.kind, [sourceField]: { $in: ids } },
+    { deletedBy }
+  );
 }
