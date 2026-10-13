@@ -68,7 +68,7 @@ For each of the 4 slots, you can set:
 
 **Compare Model Families:**
 - Slot 1: Claude Sonnet 5.5
-- Slot 2: GPT-5.6
+- Slot 2: GPT-5.6 Sol
 - Slot 3: Gemini 3.1 Pro
 - Slot 4: Llama 4 Maverick
 
