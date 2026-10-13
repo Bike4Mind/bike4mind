@@ -44,10 +44,11 @@ export async function findMissingUserIds(ids: string[]): Promise<string[]> {
 }
 
 /**
- * The live org-tier artifacts of `ownerId` that a teammate revised last and that should outlive
- * the owner's account: a revise keeps the original ownerId and only moves `lastPublishedBy`
- * (apps/client/pages/api/publish/artifact/finalize.ts), so without this the org's page would go
- * down with whoever first published it. Only a last publisher that still exists AND is still a
+ * The live org-tier artifacts of `ownerId` that someone else published last (an admin republish
+ * keeps the original ownerId and only moves `lastPublishedBy`, see
+ * apps/client/pages/api/publish/artifact/finalize.ts) and that should outlive the owner's
+ * account, so the org's page does not go down with whoever first published it. Only a last
+ * publisher that still exists AND is still a
  * member of the artifact's organization qualifies: `ownerId` grants full management of the page
  * (visibility, share links, delete) with no further membership check, so handing it to someone
  * who has since left the org would give an outsider control of the org's page.

@@ -109,7 +109,7 @@ const handler = baseApi().post(async (req, res) => {
   })
     .select('ownerId')
     .lean<{ ownerId: string } | null>();
-  if (existing && !mayRepublishSlug(existing, body.tier, publishUser)) {
+  if (existing && !mayRepublishSlug(existing.ownerId, publishUser)) {
     return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
   }
 
