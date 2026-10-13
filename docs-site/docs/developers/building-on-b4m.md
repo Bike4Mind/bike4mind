@@ -298,6 +298,25 @@ The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": 
 
 Branch on `code`, never on `message`, which is prose and can change. (The JSON, non-streaming B4M APIs report the credit condition the same way this endpoint does before the stream: HTTP 422 with `errorCode: "insufficient_credits"`.)
 
+### Short replies from reasoning models
+
+A reasoning model spends tokens thinking before it writes the visible reply, and those thinking tokens count against `max_tokens`. With a small budget the model can use all of it on reasoning and the stream ends with no visible text.
+
+For a short streamed reply, set a small `maxTokens` and turn thinking off with `reasoningEffort: "none"`:
+
+```json
+{
+  "model": "claude-sonnet-5",
+  "messages": [{ "role": "user", "content": "Summarize this in one sentence: ..." }],
+  "stream": true,
+  "options": { "maxTokens": 800, "reasoningEffort": "none" }
+}
+```
+
+Otherwise, omit `max_tokens` on reasoning models and let B4M size the ceiling.
+
+On a model that cannot turn thinking off, `none` falls back to the lowest effort, so the model still reasons a little and a very small `maxTokens` can still come back short. Adapters that do not support the field ignore it. See the `reasoningEffort` field of the completions request in the API reference (`https://<your-b4m-host>/api/v1/docs`, spec at `/api/v1/openapi.json`) for the allowed values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) and the per-adapter behavior.
+
 ## 7. Read the user's state
 
 Request `me:read` at the exchange (`scope: "ai:generate me:read"`) and call `GET https://<your-b4m-host>/api/v1/me`:
