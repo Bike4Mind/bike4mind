@@ -12,6 +12,10 @@ import {
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
 import type { Request, Response } from 'express';
+import { setTimeout as sleep } from 'node:timers/promises';
+
+// Rekognition's own client loop has already retried without backoff by the time a scan throws.
+const SCAN_RETRY_DELAY_MS = 400;
 
 /**
  * On-demand moderation scan for a file the caller has just uploaded.
@@ -34,7 +38,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
     if (!fabFile || fabFile.userId !== req.user.id) {
       return res.status(404).json({ error: 'File not found' });
     }
-    if (!fabFile.filePath) {
+    const objectKey = fabFile.filePath;
+    if (!objectKey) {
       return res.status(400).json({ error: 'File has no storage path' });
     }
 
@@ -42,22 +47,29 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       return res.json({ moderationStatus: fabFile.moderationStatus });
     }
 
-    const claimedAt = new Date();
+    let claimedAt = new Date();
     const claimed = await claimModerationScan(fabFile._id, claimedAt);
     // Lost the claim: the S3 event (or an earlier call) owns the verdict and will land it.
     if (!claimed) return res.json({ moderationStatus: 'pending' });
 
     try {
-      // One retry: when this call wins the claim the S3 event is not redelivered, so a failed scan
-      // would otherwise wait for the daily sweep while the caller falls back to its slow timeout.
-      const scan = () => scanUploadedObject({ fabFile, objectKey: fabFile.filePath!, logger: req.logger });
-      const result = await scan().catch(error => {
+      const scan = () => scanUploadedObject({ fabFile, objectKey, logger: req.logger });
+      let result: Awaited<ReturnType<typeof scan>>;
+      try {
+        result = await scan();
+      } catch (error) {
         req.logger.warn('On-demand moderation scan failed; retrying once', {
           fabFileId,
           error: error instanceof Error ? error.message : String(error),
         });
-        return scan();
-      });
+        // Hand the claim back across the backoff instead of holding it, so an S3 event arriving in
+        // the gap can claim and scan the file rather than being dropped on a lost claim.
+        await releaseModerationClaim(fabFile._id, claimedAt);
+        await sleep(SCAN_RETRY_DELAY_MS);
+        claimedAt = new Date();
+        if (!(await claimModerationScan(fabFile._id, claimedAt))) return res.json({ moderationStatus: 'pending' });
+        result = await scan();
+      }
       // The byte-sniffed type rides in the guarded write: the S3 handler persists it through its own
       // save, but it will have lost the claim and skipped the scan by now.
       const landed = await writeModerationVerdict(fabFile._id, claimedAt, {

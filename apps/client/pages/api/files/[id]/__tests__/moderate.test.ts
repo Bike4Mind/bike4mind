@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   scan: vi.fn(),
   writeVerdict: vi.fn(),
   sendToClient: vi.fn(),
+  sleep: vi.fn(),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -18,6 +19,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return { post: (handler: unknown) => handler };
   },
 }));
+vi.mock('node:timers/promises', () => ({ setTimeout: h.sleep }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@bike4mind/database', () => ({ FabFile: { findById: h.findById, updateOne: h.updateOne } }));
@@ -74,6 +76,7 @@ describe('POST /api/files/[id]/moderate', () => {
     h.release.mockResolvedValue(undefined);
     h.updateOne.mockResolvedValue(undefined);
     h.sendToClient.mockResolvedValue(undefined);
+    h.sleep.mockResolvedValue(undefined);
   });
 
   it('requires a files write scope so unscoped API keys cannot drive scans', () => {
@@ -144,15 +147,31 @@ describe('POST /api/files/[id]/moderate', () => {
     expect(res.body).toEqual({ moderationStatus: 'pending' });
   });
 
-  it('retries a transient scan failure once and lands the verdict when the retry succeeds', async () => {
+  it('releases the claim across the backoff and lands the retry under a fresh claim', async () => {
     h.scan.mockRejectedValueOnce(new Error('Rekognition throttled'));
     const res = makeRes();
     await handler(makeReq(), res);
 
+    const [firstStamp, retryStamp] = h.claim.mock.calls.map(([, claimedAt]) => claimedAt);
     expect(h.scan).toHaveBeenCalledTimes(2);
-    expect(h.release).not.toHaveBeenCalled();
-    expect(h.writeVerdict).toHaveBeenCalledWith('oid1', expect.any(Date), { moderationStatus: 'clean' });
+    expect(h.release).toHaveBeenCalledTimes(1);
+    expect(h.release).toHaveBeenCalledWith('oid1', firstStamp);
+    expect(h.release.mock.invocationCallOrder[0]).toBeLessThan(h.sleep.mock.invocationCallOrder[0]);
+    expect(h.sleep.mock.invocationCallOrder[0]).toBeLessThan(h.claim.mock.invocationCallOrder[1]);
+    expect(h.writeVerdict).toHaveBeenCalledWith('oid1', retryStamp, { moderationStatus: 'clean' });
     expect(res.body).toEqual({ moderationStatus: 'clean' });
+  });
+
+  it('reports pending without a second scan when the S3 event takes the claim during the backoff', async () => {
+    h.scan.mockRejectedValueOnce(new Error('Rekognition throttled'));
+    h.claim.mockResolvedValueOnce({ id: 'ff1' }).mockResolvedValueOnce(null);
+    const res = makeRes();
+    await handler(makeReq(), res);
+
+    expect(h.scan).toHaveBeenCalledTimes(1);
+    expect(h.release).toHaveBeenCalledTimes(1);
+    expect(h.writeVerdict).not.toHaveBeenCalled();
+    expect(res.body).toEqual({ moderationStatus: 'pending' });
   });
 
   it('hands the claim back and reports pending, never blocked, when the retry also fails', async () => {
@@ -160,9 +179,11 @@ describe('POST /api/files/[id]/moderate', () => {
     const res = makeRes();
     await handler(makeReq(), res);
 
+    const retryStamp = h.claim.mock.calls[1][1];
     expect(h.scan).toHaveBeenCalledTimes(2);
     expect(h.writeVerdict).not.toHaveBeenCalled();
-    expect(h.release).toHaveBeenCalledWith('oid1', expect.any(Date));
+    expect(h.release).toHaveBeenCalledTimes(2);
+    expect(h.release).toHaveBeenLastCalledWith('oid1', retryStamp);
     expect(res.body).toEqual({ moderationStatus: 'pending' });
   });
 
