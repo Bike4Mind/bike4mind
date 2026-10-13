@@ -134,6 +134,17 @@ describe('publishResolvedConsent', () => {
     }
   });
 
+  it.each(['granted', 'denied', 'unset'] as const)('writes %s with the Secure attribute', value => {
+    const setSpy = vi.spyOn(document, 'cookie', 'set');
+    try {
+      publishResolvedConsent(value);
+      const written = setSpy.mock.calls.map(([v]) => v as string).find(v => v.startsWith(`${APP_DECISION_COOKIE}=`));
+      expect(written).toContain('; Secure');
+    } finally {
+      setSpy.mockRestore();
+    }
+  });
+
   it('leaves the marketing site and region cookies alone', () => {
     setCookie(`${DECISION_COOKIE}=denied`);
     setCookie(`${REGION_COOKIE}=eu`);

@@ -58,11 +58,11 @@ const APP_DECISION_TTL_SECONDS = 90 * 24 * 60 * 60;
 export function publishResolvedConsent(value: ConsentState): void {
   if (typeof document === 'undefined') return;
   if (value === 'unset') {
-    document.cookie = `${APP_DECISION_COOKIE}=; path=/; SameSite=Lax; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    document.cookie = `${APP_DECISION_COOKIE}=; path=/; SameSite=Lax; Secure; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
     return;
   }
   const expires = new Date(Date.now() + APP_DECISION_TTL_SECONDS * 1000).toUTCString();
-  document.cookie = `${APP_DECISION_COOKIE}=${value}; path=/; SameSite=Lax; expires=${expires}`;
+  document.cookie = `${APP_DECISION_COOKIE}=${value}; path=/; SameSite=Lax; Secure; expires=${expires}`;
 }
 
 /** Where this origin records the visitor's own decision. */

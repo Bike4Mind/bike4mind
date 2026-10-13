@@ -840,4 +840,55 @@ describe('CookieConsentBanner', () => {
       expect(pageViews()).toHaveLength(0);
     });
   });
+
+  describe('tracking cookies and MailerLite', () => {
+    const mailerLiteScript = () => document.querySelector('script[src="/scripts/ml.js"]');
+    const trackingCookies = () =>
+      document.cookie
+        .split('; ')
+        .map(c => c.split('=')[0])
+        .filter(n => ['_fbp', '_rdt_uuid', '_rdt_em', '_ga'].includes(n) || n.startsWith('_ga_'));
+
+    beforeEach(() => {
+      document.getElementById('mailerlite')?.remove();
+    });
+
+    it('expires the ad and analytics cookies on decline', () => {
+      for (const name of ['_fbp', '_rdt_uuid', '_rdt_em', '_ga', '_ga_ABC123']) document.cookie = `${name}=x; path=/`;
+      expect(trackingCookies()).toHaveLength(5);
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(trackingCookies()).toEqual([]);
+    });
+
+    it('loads the MailerLite script only after consent is granted', () => {
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      expect(mailerLiteScript()).toBeNull();
+
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(mailerLiteScript()).not.toBeNull();
+    });
+
+    it('does not load the MailerLite script when consent is denied', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(mailerLiteScript()).toBeNull();
+    });
+  });
 });
