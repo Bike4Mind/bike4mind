@@ -237,10 +237,8 @@ describe('TavernWorldModel', () => {
   describe('applyEdits — history cap', () => {
     // Seeds history directly instead of 500 applyEdits round-trips; the fold arithmetic itself is
     // covered in foldHistoryEntry.test.ts, so this only proves applyEdits wires it with the real cap.
-    // Seeds editHistory only, leaving `edits` empty - so every `reverse` here is gid:null, which
-    // applyEdits would only produce on a first write. That is fine for the cap tests (pure array
-    // arithmetic, indifferent to entry contents); reverse-against-existing-tiles is covered by
-    // 'should record previous gid in reverse entries'.
+    // `edits` stays empty, so every seeded `reverse` is gid:null; reverse-against-existing-tiles is
+    // covered by 'should record previous gid in reverse entries'.
     async function seedHistory(count: number, worldId = 'user-1') {
       const entries = Array.from({ length: count }, (_, i) => ({
         batchId: `seed-${i}`,
