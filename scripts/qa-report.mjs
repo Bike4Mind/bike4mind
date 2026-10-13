@@ -241,9 +241,14 @@ export const LATENCY_GATE_FALLBACK = gateTest(
   'Latency gate failed; the Aggregate step summary in CI names the cell.'
 );
 
-/** `breach` is the workflow's verdict and wins over the per-cell rule if the two ever disagree. */
+/**
+ * `breach` is the workflow's verdict and wins over the per-cell rule if the two ever disagree.
+ * Passed gate tests need Playwright counts: on a run that reported nothing they would turn
+ * infra-error into passed, since latency JSON is written per prompt and survives a crash.
+ */
 export function applyLatencyGate(parsed, gateTests, breach) {
-  const tests = breach ? [...gateTests] : gateTests.filter(t => t.status === 'passed');
+  const playwrightRan = parsed.counts.ran > 0;
+  const tests = gateTests.filter(t => (t.status === 'failed' ? breach : playwrightRan));
   if (breach && !tests.some(t => t.status === 'failed')) tests.unshift({ ...LATENCY_GATE_FALLBACK });
   const failed = tests.filter(t => t.status === 'failed').length;
   parsed.tests.unshift(...tests);

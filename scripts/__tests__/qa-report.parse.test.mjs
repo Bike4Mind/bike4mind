@@ -219,4 +219,17 @@ describe('latency gate', () => {
     expect(parsed.tests.map(t => t.status)).toEqual(['passed']);
     expect(parsed.counts).toMatchObject({ passed: 3, failed: 0, ran: 3, total: 3 });
   });
+
+  it('adds no passed gate test to a run Playwright never reported on', () => {
+    const empty = () => ({ tests: [], counts: { ...counts(), passed: 0, ran: 0, total: 0 } });
+    const clean = empty();
+    applyLatencyGate(clean, [under], false);
+    expect(clean.tests).toEqual([]);
+    expect(clean.counts.ran).toBe(0);
+
+    const breached = empty();
+    applyLatencyGate(breached, [over, under], true);
+    expect(breached.tests.map(t => t.status)).toEqual(['failed']);
+    expect(breached.counts).toMatchObject({ failed: 1, ran: 1 });
+  });
 });

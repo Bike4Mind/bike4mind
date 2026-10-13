@@ -303,4 +303,47 @@ describe('main', () => {
     await main(args, ENV, { fetch: unset.fetch, sleep: noSleep, log: makeLog() });
     expect(runBody(unset.calls).tests.some(t => t.test_key.startsWith('latency-gate'))).toBe(false);
   });
+
+  it('posts a within-budget cell as a passed gate test when the workflow reports no breach', async () => {
+    const report = JSON.parse(await fs.readFile(path.join(here, 'fixtures/pw-results.json'), 'utf8'));
+    report.stats.unexpected = 0;
+    await fs.mkdir(path.join(dir, 'dl', 'cell-a', 'playwright-report'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'playwright-report/spec-pw-results.json'),
+      JSON.stringify(report)
+    );
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'ai-latency-short-answers-results.json'),
+      JSON.stringify({ model: 'model-a', thresholdSec: 5, averageResponseTimeSec: 3 })
+    );
+    const args = ['--results-dir', path.join(dir, 'dl'), '--latency-dir', path.join(dir, 'dl')];
+
+    const unset = fakeFetch();
+    await main(args, ENV, { fetch: unset.fetch, sleep: noSleep, log: makeLog() });
+    const baseline = runBody(unset.calls).counts;
+
+    const clean = fakeFetch();
+    await main(args, { ...ENV, QA_LATENCY_BREACH: 'false' }, { fetch: clean.fetch, sleep: noSleep, log: makeLog() });
+    const body = runBody(clean.calls);
+    expect(body.tests).toContainEqual(
+      expect.objectContaining({ test_key: 'latency-gate::ai-latency-short-answers [model-a]', status: 'passed' })
+    );
+    expect(body.counts.passed).toBe(baseline.passed + 1);
+    expect(body.counts.ran).toBe(baseline.ran + 1);
+  });
+
+  it('keeps a run with latency data but no Playwright results at ran 0', async () => {
+    await fs.mkdir(path.join(dir, 'dl', 'cell-a'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'ai-latency-short-answers-results.json'),
+      JSON.stringify({ model: 'model-a', thresholdSec: 5, averageResponseTimeSec: 2 })
+    );
+    const { fetch, calls } = fakeFetch();
+    await main(
+      ['--results-dir', path.join(dir, 'dl'), '--latency-dir', path.join(dir, 'dl')],
+      { ...ENV, QA_LATENCY_BREACH: 'false' },
+      { fetch, sleep: noSleep, log: makeLog() }
+    );
+    expect(runBody(calls).counts.ran).toBe(0);
+  });
 });
