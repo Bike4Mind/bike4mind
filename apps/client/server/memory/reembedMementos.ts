@@ -261,10 +261,10 @@ export async function migrateLedgerVectorsForPrincipal(
 
     try {
       let vector: number[] | null = null;
-      // Missing from `vectors` only if it vanished between reads: falls through to a re-embed, as an
-      // empty decrypt does.
+      // Only truncation candidates are in `vectors`. One missing from it vanished between reads and
+      // falls through to a re-embed, as an empty decrypt does.
       const stored = vectors.get(event.hash);
-      if (hasVector && event.embeddingModel === MEMENTO_EMBEDDING_MODEL && stored) {
+      if (stored) {
         const full = decryptVector(dek, {
           cipher: stored.embeddingCipher!,
           iv: stored.embeddingIv!,
