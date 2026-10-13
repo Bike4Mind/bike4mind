@@ -516,7 +516,9 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
   it('keeps the switch from shrinking beside the long helper text on a narrow viewport', () => {
     renderModal();
     expect(getComputedStyle(screen.getByTestId('publish-share-discoverable-switch')).flexShrink).toBe('0');
-    expect(getComputedStyle(screen.getByTestId('publish-share-discoverable-text')).minWidth).toBe('0px');
+    const textColumn = getComputedStyle(screen.getByTestId('publish-share-discoverable-text'));
+    expect(textColumn.flexGrow).toBe('1');
+    expect(textColumn.minWidth).toBe('0px');
   });
 
   it('tells the user a public link stays out of search engines by default', () => {

@@ -61,7 +61,10 @@ export function DiscoverableToggle({
     >
       {/* flex: 1 + minWidth: 0 here and flexShrink: 0 on the Switch stop the long helper from squeezing the
           switch on narrow screens. Keep in sync with the discoverable row in PublishShareModal. */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, minWidth: 0 }}>
+      <Box
+        sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, minWidth: 0 }}
+        data-testid={`${testIdPrefix}-text`}
+      >
         <TravelExploreIcon fontSize="small" />
         <Box>
           <FormLabel sx={{ mb: 0 }}>List in search engines</FormLabel>
