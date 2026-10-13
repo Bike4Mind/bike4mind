@@ -87,7 +87,7 @@ test.describe('Tavern - Scene, Collision & Pathfinding', () => {
       await test.step('verify entity arrived near target', async () => {
         const finalPos = await tavernPage.getEntityPosition(entityId);
         expect(finalPos).not.toBeNull();
-        // Allow 2-tile tolerance (closestReachable may be used if exact target blocked)
+        // Tolerance absorbs sub-tile position rounding; the target is walkable and reachable.
         const dx = Math.abs(finalPos!.x - target.col);
         const dy = Math.abs(finalPos!.y - target.row);
         expect(Math.max(dx, dy)).toBeLessThanOrEqual(2);
@@ -104,22 +104,25 @@ test.describe('Tavern - Scene, Collision & Pathfinding', () => {
       await tavernPage.openDevDrawer();
     });
 
-    await test.step('toggle collision overlay on', async () => {
-      await tavernPage.setDebugOverlay('showCollisionOverlay', true);
-      expect(await tavernPage.getDebugOverlay('showCollisionOverlay')).toBe(true);
-    });
+    try {
+      await test.step('toggle collision overlay on', async () => {
+        await tavernPage.setDebugOverlay('showCollisionOverlay', true);
+        expect(await tavernPage.getDebugOverlay('showCollisionOverlay')).toBe(true);
+      });
 
-    await test.step('toggle path overlay on', async () => {
-      await tavernPage.setDebugOverlay('showPathOverlay', true);
-      expect(await tavernPage.getDebugOverlay('showPathOverlay')).toBe(true);
-    });
-
-    await test.step('toggle overlays back off', async () => {
-      await tavernPage.setDebugOverlay('showCollisionOverlay', false);
-      await tavernPage.setDebugOverlay('showPathOverlay', false);
-      expect(await tavernPage.getDebugOverlay('showCollisionOverlay')).toBe(false);
-      expect(await tavernPage.getDebugOverlay('showPathOverlay')).toBe(false);
-    });
+      await test.step('toggle path overlay on', async () => {
+        await tavernPage.setDebugOverlay('showPathOverlay', true);
+        expect(await tavernPage.getDebugOverlay('showPathOverlay')).toBe(true);
+      });
+    } finally {
+      // Runs even if a toggle above failed, so a broken run does not leave the overlays on.
+      await test.step('toggle overlays back off', async () => {
+        await tavernPage.setDebugOverlay('showCollisionOverlay', false);
+        await tavernPage.setDebugOverlay('showPathOverlay', false);
+        expect(await tavernPage.getDebugOverlay('showCollisionOverlay')).toBe(false);
+        expect(await tavernPage.getDebugOverlay('showPathOverlay')).toBe(false);
+      });
+    }
 
     await test.step('close dev drawer', async () => {
       await tavernPage.closeDevDrawer();
