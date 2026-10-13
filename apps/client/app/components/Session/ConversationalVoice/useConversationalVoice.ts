@@ -367,6 +367,11 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     conversation = null;
     activeSessionId = null;
     set({ phase: 'ended', mode: null });
+    // Start the settle before tearing the SDK down: endSession() can be slow, and
+    // a start() racing this end() would otherwise reserve the session's next hold
+    // before this one settles, which could clear that new hold (see
+    // reconcileVoiceSession). The await below still lets this end() finish it.
+    const reconcile = reconcileVoiceSession(sid);
     if (conv) {
       try {
         await conv.endSession();
@@ -374,6 +379,6 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
         // already torn down
       }
     }
-    await reconcileVoiceSession(sid);
+    await reconcile;
   },
 }));

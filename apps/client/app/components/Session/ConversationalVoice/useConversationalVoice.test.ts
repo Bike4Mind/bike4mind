@@ -255,6 +255,69 @@ describe('useConversationalVoice — auto-reconnect', () => {
     ]);
   });
 
+  it('settles the hold before a start() that races end() reserves again', async () => {
+    let resolveEndSession!: () => void;
+    endSessionMock.mockReturnValueOnce(new Promise<void>(resolve => (resolveEndSession = resolve)));
+    let resolveEnd!: () => void;
+    const endPending = new Promise<void>(resolve => (resolveEnd = resolve));
+    const order: string[] = [];
+    apiPost.mockImplementation((url: string) => {
+      order.push(url);
+      if (url === '/api/voice/v2/sessions') return Promise.resolve({ data: BOOTSTRAP });
+      return endPending.then(() => {
+        order.push('end-settled');
+        return { data: {} };
+      });
+    });
+
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    onConnect();
+
+    // end() must fire the settle before it awaits the SDK teardown, or a start()
+    // during teardown would reserve the session's next hold while this one is
+    // still settling (and that settle could then clear the new hold).
+    const ending = useConversationalVoiceStore.getState().end();
+    await flush();
+    expect(endCalls()).toHaveLength(1);
+
+    const restart = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await flush();
+    resolveEndSession();
+    await flush();
+    resolveEnd();
+    await Promise.all([ending, restart]);
+
+    expect(order).toEqual([
+      '/api/voice/v2/sessions',
+      '/api/voice/v2/sessions/s1/end',
+      'end-settled',
+      '/api/voice/v2/sessions',
+    ]);
+  });
+
+  it('does not reserve a new hold when the start is superseded while waiting on a refund', async () => {
+    let resolveEnd!: () => void;
+    const endPending = new Promise<void>(resolve => (resolveEnd = resolve));
+    startSessionMock.mockRejectedValueOnce(new Error('boom'));
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions' ? Promise.resolve({ data: BOOTSTRAP }) : endPending.then(() => ({ data: {} }))
+    );
+
+    const failed = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await flush();
+    expect(endCalls()).toHaveLength(1);
+
+    // Retry blocks awaiting the in-flight refund; end() while it waits supersedes it.
+    const retry = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await flush();
+    await useConversationalVoiceStore.getState().end();
+    resolveEnd();
+    await Promise.all([failed, retry]);
+
+    expect(sessionPosts()).toHaveLength(1);
+    expect(startSessionMock).toHaveBeenCalledTimes(1);
+  });
+
   it('still surfaces the start error when the refund call itself fails', async () => {
     startSessionMock.mockRejectedValueOnce(new Error('boom'));
     apiPost.mockImplementation((url: string) =>
