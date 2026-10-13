@@ -1,6 +1,7 @@
 import { IInviteDocument, InviteType, IProjectDocument } from '@bike4mind/common';
 import { useDeleteInvite, useGetProjectInvites } from '@client/app/hooks/data/invites';
 import { useLeaveProject } from '@client/app/hooks/data/projects';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetUsers, useUserRevokeSharing } from '@client/app/hooks/data/user';
 import type { ISharerInviteView } from '@client/app/utils/invitesAPICalls';
 import { Box, CircularProgress, Stack, Typography, IconButton, Tooltip } from '@mui/joy';
@@ -18,6 +19,11 @@ import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import LogoutIcon from '@mui/icons-material/Logout';
 
+// Chat in a project bills the member who sends (or the organization they pick), never the project
+// owner - see payerNoteText in components/Session/CreditPayerNote.tsx.
+export const PROJECT_MEMBERS_BILLING_NOTE =
+  'Each member pays for their own answers in this project, from their balance or their selected organization, not the project owner.';
+
 // An entry the viewer did not type comes back as a user id named in recipientUsers (or a masked
 // address), so show the name where there is one.
 const pendingRecipientLabel = (invite: ISharerInviteView) => {
@@ -29,6 +35,7 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const confirm = useConfirmation();
+  const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const getProjectInvites = useGetProjectInvites(
     { projectId: project.id, limit: 10, page: 1, statuses: 'pending' },
     { enabled: !!project.id && project.userId === ownerId }
@@ -204,6 +211,15 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
           </Tooltip>
         )}
       </Box>
+      {enforceCredits && (
+        <Typography
+          data-testid="project-members-billing-note"
+          level="body-xs"
+          sx={{ color: 'text.tertiary', mx: '20px', mt: '-8px' }}
+        >
+          {PROJECT_MEMBERS_BILLING_NOTE}
+        </Typography>
+      )}
       <Stack flexGrow={1} sx={{ overflow: 'auto' }} gap="10px" ml="20px" pr="16px" className="project-members-list">
         {getUsers.isPending ? (
           <Box
