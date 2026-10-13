@@ -34,8 +34,9 @@ export const getPredefinedTags = (): readonly string[] => {
 
 /**
  * Tag marking an open-registration (no-invite) user whose free-credit grant is deferred until
- * they verify their email (anti-spam - a throwaway inbox never gets credits). Set at registration,
- * removed by `/api/email/verify` once a real inbox is proven. Shared between the registration
+ * they verify their email (anti-spam - a throwaway inbox never gets credits). Set at registration
+ * (and on a new self-serve OAuth account), removed by userService.releasePendingFreeCredits once a
+ * real inbox is proven - see IUser.pendingCreditGrant for the release paths. Shared between the registration
  * service, the verify endpoint, and the client (to show "verify to unlock your credits").
  */
 export const PENDING_FREE_CREDITS_TAG = 'pending-free-credits';

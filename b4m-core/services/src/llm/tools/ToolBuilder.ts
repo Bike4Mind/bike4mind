@@ -109,6 +109,8 @@ export interface ToolBuilderConfig {
   db: IChatCompletionServiceOptions['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
+  authOrigin: ToolContext['authOrigin'];
   /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
   apiKeyId?: ToolContext['apiKeyId'];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
@@ -872,6 +874,7 @@ export class ToolBuilder {
         sessionIncludeLibraryFiles: this.deps.sessionIncludeLibraryFiles,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         organizationId: organization?.id,
+        authOrigin: this.deps.authOrigin,
         apiKeyId: this.deps.apiKeyId,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,

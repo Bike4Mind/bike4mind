@@ -3,6 +3,8 @@ export * from './updateLogoutTime';
 export * from './update';
 export * from './adminUpdate';
 export * from './register';
+export * from './freeCredits';
+export * from './disposableEmail';
 export * from './recordPolicyAcceptance';
 export * from './adminDelete';
 export * from './revokeSessions';

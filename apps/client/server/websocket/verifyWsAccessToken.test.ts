@@ -15,9 +15,19 @@ vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { verifyToken: (...args: unknown[]) => mockVerifyToken(...args) },
 }));
 
+vi.mock('@bike4mind/services', () => ({
+  isTokenTypeAcceptable: (tokenType: unknown, expected: string) => tokenType === undefined || tokenType === expected,
+  isTokenVersionCurrent: (payloadVersion?: number, userVersion?: number) =>
+    (payloadVersion ?? 0) === (userVersion ?? 0),
+}));
+
 const mockFindById = vi.fn();
+const mockAssertAccountStateUsable = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: { findById: (...args: unknown[]) => mockFindById(...args) },
+}));
+vi.mock('@server/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
 }));
 
 vi.mock('@server/utils/errors', () => ({
@@ -35,6 +45,7 @@ describe('verifyWsAccessToken', () => {
     mockIsWithinGraceWindow.mockReturnValue(false);
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access' });
     mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3 });
+    mockAssertAccountStateUsable.mockReturnValue(undefined);
   });
 
   it('returns the user for a current access token', async () => {
@@ -62,6 +73,21 @@ describe('verifyWsAccessToken', () => {
 
     await expect(verifyWsAccessToken('token-123')).rejects.toThrow('OAuth access tokens are not accepted');
     expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('rejects an mfaPending token before touching the user', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', mfaPending: true });
+
+    await expect(verifyWsAccessToken('token-123')).rejects.toThrow('MFA verification required');
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blocked account', async () => {
+    mockAssertAccountStateUsable.mockImplementation(() => {
+      throw new Error('blocked');
+    });
+
+    await expect(verifyWsAccessToken('token-123')).rejects.toThrow('blocked');
   });
 
   it('accepts a legacy token carrying no typ and no tokenVersion against a default-version user', async () => {

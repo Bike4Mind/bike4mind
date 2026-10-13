@@ -5,24 +5,16 @@ import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
-  organizationRepository,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { userService, creditService, organizationService } from '@bike4mind/services';
-import { CreditHolderType, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
+import { userService } from '@bike4mind/services';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@server/utils/analyticsLog';
 import { emitFunnelEvent } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
-import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
-import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
-import {
-  notifySeatCeilingRaised,
-  notifyPartnerSignupBlockedAtCapacity,
-} from '@server/organizations/notifySeatCeilingRaised';
-import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
+import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
 import { z } from 'zod';
 
 const VerifyEmailRequestSchema = z.object({
@@ -92,181 +84,51 @@ const handler = baseApi({ auth: false })
       // grant can be retried by an admin/maintenance flow without re-issuing a new email token.
       // Summed across both grants below for the credits_granted funnel event.
       let creditsGranted = 0;
-      if (userBeforeVerify?.tags?.includes(PENDING_FREE_CREDITS_TAG)) {
-        try {
-          // An invite-resolved pending amount travels on the user doc and wins;
-          // the defaultFreeCredits setting remains the open-registration fallback.
-          let amount = userBeforeVerify.pendingCreditGrant ?? null;
-          if (amount === null) {
-            const setting = await adminSettingsRepository.findBySettingName('defaultFreeCredits');
-            const parsed = settingsMap.defaultFreeCredits.schema.safeParse(setting?.settingValue);
-            amount = parsed.success ? parsed.data : 0;
-          }
-          if (amount > 0) {
-            await creditService.addCredits(
-              {
-                ownerId: userBeforeVerify.id,
-                ownerType: CreditHolderType.User,
-                credits: amount,
-                type: 'generic_add',
-                transactionId: `verify-grant:${userBeforeVerify.id}`,
-                reason: 'deferred registration credit grant (email verified)',
-              },
-              {
-                db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-                creditHolderMethods: userRepository,
-              }
-            );
-            creditsGranted += amount;
-            req.logger.info(`Granted ${amount} deferred free credits to verified user ${userBeforeVerify.id}`);
-          } else {
-            req.logger.info(`Cleared pending-free-credits tag for user ${userBeforeVerify.id} (nothing to grant)`);
-          }
-          await userRepository.update({
-            id: userBeforeVerify.id,
-            tags: userBeforeVerify.tags.filter(t => t !== PENDING_FREE_CREDITS_TAG),
-            pendingCreditGrant: null,
-          });
-        } catch (grantError) {
-          req.logger.error(
-            `Email verified for user ${userBeforeVerify.id} but credit grant/tag-removal failed; ` +
-              `user is verified but still tagged pending-free-credits — needs manual retry`,
-            grantError
-          );
-          // Deliberately swallow: verification succeeded, the user's email IS now verified,
-          // and re-throwing would show them "Verification Failed" despite the success.
-        }
-      }
-
-      // Resolve the now-verified email's domain grant ONCE - both the signup-credit grant
-      // (Phase 2b) and the cache-invalidation gate (below) need the keys, and Phase 2b needs
-      // the credit amount. Passing `true` is accurate: verifyEmailToken just succeeded and
-      // doesn't touch `email`, so userBeforeVerify.email IS the now-verified address.
-      //
-      // Source precedence (issue #293): a DB-backed PartnerSignupRule wins; the env registry
-      // (`entitlementsForEmail` / `signupCreditsForKeys`) is the migration fallback for a
-      // domain not yet in the collection. `matched` lets a DB rule intentionally grant access
-      // with 0 bonus credits without falling through to the env amount.
-      let domainGrantKeys = new Set<string>();
-      let signupCredits = 0;
-      // Only a DB-backed PartnerSignupRule can confer org membership (the env registry has
-      // no org concept), so this stays null unless a rule matched with an organizationId.
-      let partnerOrganizationId: string | null = null;
       if (userBeforeVerify) {
-        const partnerGrant = await partnerSignupGrantForEmail(userBeforeVerify.email, true);
-        if (partnerGrant.matched) {
-          domainGrantKeys = partnerGrant.entitlements;
-          signupCredits = partnerGrant.signupCredits;
-          partnerOrganizationId = partnerGrant.organizationId;
-        } else {
-          domainGrantKeys = entitlementsForEmail(userBeforeVerify.email, true);
-          signupCredits = signupCreditsForKeys(domainGrantKeys);
+        const release = await userService.releasePendingFreeCredits(userBeforeVerify, {
+          db: {
+            adminSettings: adminSettingsRepository,
+            creditTransactions: creditTransactionRepository,
+            creditLots: creditLotRepository,
+            users: userRepository,
+          },
+          reason: 'deferred registration credit grant (email verified)',
+          logger: req.logger,
+        });
+        if (release.released) {
+          try {
+            await userRepository.update({ id: userBeforeVerify.id, ...release.patch });
+            creditsGranted += release.creditsGranted;
+            req.logger.info(
+              release.creditsGranted > 0
+                ? `Granted ${release.creditsGranted} deferred free credits to verified user ${userBeforeVerify.id}`
+                : `Cleared pending-free-credits tag for user ${userBeforeVerify.id} (nothing to grant)`
+            );
+          } catch (updateError) {
+            req.logger.error(
+              `Email verified for user ${userBeforeVerify.id} but pending-free-credits tag removal failed; ` +
+                `user is verified but still tagged pending-free-credits - needs manual retry`,
+              updateError
+            );
+            // Deliberately swallow: verification succeeded, the user's email IS now verified,
+            // and re-throwing would show them "Verification Failed" despite the success.
+          }
         }
       }
 
-      // Phase 2b: one-time domain-grant signup credits. Fires whenever the now-verified
-      // email confers a domain grant (e.g. a partner-domain or internal-staff address), INDEPENDENT
-      // of the pending-free-credits tag - so invited domain users get it too, not just
-      // open-registration signups. ADDITIVE on top of the flat grant above (distinct
-      // transactionId), and idempotent via the stable `domain-grant-credits:${userId}` id so
-      // a re-verify / handler retry can't double-grant. Own try/catch so a failure here (or in
-      // the flat grant above) can't skip the other.
-      if (userBeforeVerify) {
-        try {
-          if (signupCredits > 0) {
-            await creditService.addCredits(
-              {
-                ownerId: userBeforeVerify.id,
-                ownerType: CreditHolderType.User,
-                credits: signupCredits,
-                type: 'generic_add',
-                transactionId: `domain-grant-credits:${userBeforeVerify.id}`,
-                reason: 'domain-grant signup credits',
-              },
-              {
-                db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-                creditHolderMethods: userRepository,
-              }
-            );
-            creditsGranted += signupCredits;
-            req.logger.info(
-              `Granted ${signupCredits} one-time domain-grant signup credits to verified user ${userBeforeVerify.id}`
-            );
-          }
-        } catch (grantError) {
-          req.logger.error(
-            `Email verified for user ${userBeforeVerify.id} but domain-grant signup-credit grant failed; ` +
-              `idempotent transactionId domain-grant-credits:${userBeforeVerify.id} makes a retry safe`,
-            grantError
-          );
-          // Deliberately swallow: verification succeeded; re-throwing would show the user
-          // "Verification Failed" despite the success. The stable transactionId lets an
-          // admin/maintenance flow retry the grant without re-issuing an email token.
-        }
-      }
-
-      // Phase 2c: auto-add to the partner rule's organization. A DB rule may point a
-      // verified domain at an org; membership is derive-on-write (unlike entitlements),
-      // so it happens here, right after verification proves the email. applyPartnerRuleMembership
-      // re-reads the now-verified user, is idempotent, and never removes anyone. Own try/catch
-      // so a failure can't skip the audit below or 500 an already-successful verification.
-      if (userBeforeVerify && partnerOrganizationId) {
-        try {
-          const result = await organizationService.applyPartnerRuleMembership(
-            { userId: userBeforeVerify.id, organizationId: partnerOrganizationId },
-            {
-              db: {
-                users: userRepository,
-                organizations: organizationRepository,
-                adminSettings: adminSettingsRepository,
-              },
-              logger: req.logger,
-            }
-          );
-          if (result.added) {
-            req.logger.info(
-              `Partner-rule org membership: added verified user ${userBeforeVerify.id} to org ${partnerOrganizationId}`
-            );
-            if (result.reason === 'added-seat-raised') {
-              // Membership + raise already committed; the alert/audit is best-effort and never throws.
-              await notifySeatCeilingRaised(
-                {
-                  organizationId: partnerOrganizationId,
-                  userId: userBeforeVerify.id,
-                  previousSeats: result.previousSeats,
-                  newSeats: result.newSeats,
-                  trigger: 'email-verification',
-                },
-                req.logger
-              );
-            }
-          } else if (result.reason === 'at-capacity') {
-            // Org at capacity with no auto-raise: a Stripe-billed org (ceiling not raised out of band)
-            // or a non-Stripe org already at MAX_SEATS (the raise is clamped there, #1424). Alert an
-            // admin to add seats and admit this stranded partner user. Best-effort, never throws.
-            await notifyPartnerSignupBlockedAtCapacity(
-              {
-                organizationId: partnerOrganizationId,
-                userId: userBeforeVerify.id,
-                seats: result.seats,
-                trigger: 'email-verification',
-              },
-              req.logger
-            );
-          } else if (result.reason === 'org-missing') {
-            // Surfaces a misconfiguration (dangling org ref) without failing verification.
-            req.logger.warn(
-              `Partner-rule org membership not applied for user ${userBeforeVerify.id} ` +
-                `(org ${partnerOrganizationId}): ${result.reason}`
-            );
-          }
-        } catch (membershipError) {
-          req.logger.error(
-            `Email verified for user ${userBeforeVerify.id} but partner-rule org auto-add failed ` +
-              `(org ${partnerOrganizationId}); membership is idempotent so a retry is safe`,
-            membershipError
-          );
-        }
+      // Phase 2b: the verified domain's signup grant - one-time domain credits (ADDITIVE on top
+      // of the flat grant above, distinct transactionId), partner-rule org membership, and the
+      // entitlement cache wake-up. Fires INDEPENDENT of the pending-free-credits tag, so invited
+      // domain users get it too. verifyEmailToken doesn't touch `email`, so userBeforeVerify.email
+      // IS the now-verified address. Never throws (see applySignupDomainGrant).
+      if (userBeforeVerify?.email) {
+        const domainGrant = await applySignupDomainGrant({
+          userId: userBeforeVerify.id,
+          email: userBeforeVerify.email,
+          trigger: 'email-verification',
+          logger: req.logger,
+        });
+        creditsGranted += domainGrant.creditsGranted;
       }
 
       // Audit + analytics for the success path.
@@ -303,13 +165,6 @@ const handler = baseApi({ auth: false })
             metadata: { amount: creditsGranted, source: 'signup', method: 'link' },
           });
         }
-      }
-
-      // Wake the client entitlement gate when the now-verified email confers a
-      // domain grant (ACCESS_MODEL §3.1 - derive-on-read DOMAIN_GRANTS, e.g. a
-      // partner-domain address). Reuses the keys resolved once above.
-      if (userBeforeVerify && domainGrantKeys.size > 0) {
-        await pushEntitlementInvalidation(userBeforeVerify.id, req.logger);
       }
 
       return res.json({ message: 'Email verified successfully' });

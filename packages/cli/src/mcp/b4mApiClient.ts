@@ -24,6 +24,8 @@ import {
 
 export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
 
+const STOP_REPLY_TIMEOUT_MS = 10 * 1000;
+
 /**
  * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
  * notebook the caller owns, so write paths refuse anything that is not an ObjectId before any request.
@@ -285,6 +287,16 @@ export class B4mApiClient {
 
   async getQuest(questId: string): Promise<QuestResponse> {
     return this.client.get<QuestResponse>(`/api/quests/${encodeURIComponent(questId)}`);
+  }
+
+  /** Stop one generating turn. A server that predates `questId` stops the notebook's latest turn. */
+  async stopReply(notebookId: string, questId: string): Promise<unknown> {
+    // Sent while the MCP client's cancel is in flight, so it gets a short bound, not the 10-minute default.
+    return this.client.post(
+      `${notebookPath(notebookId)}/chat/stop-reply`,
+      { questId },
+      { timeout: STOP_REPLY_TIMEOUT_MS }
+    );
   }
 
   async searchKnowledgeBase(args: { query: string; limit: number; minSimilarity?: number }): Promise<SessionScore[]> {

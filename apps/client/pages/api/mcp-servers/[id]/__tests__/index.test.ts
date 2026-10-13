@@ -25,9 +25,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@bike4mind/database/ai', () => ({
-  McpServer: { findById: (...a: unknown[]) => mockFindById(...a), findOneAndUpdate: (...a: unknown[]) => mockFindOneAndUpdate(...a) },
+  McpServer: {
+    findById: (...a: unknown[]) => mockFindById(...a),
+    findOneAndUpdate: (...a: unknown[]) => mockFindOneAndUpdate(...a),
+  },
 }));
 vi.mock('@bike4mind/mcp', () => ({}));
+// The EnableMCPServer gate itself is pinned by mcpServerFlagGate.test.ts.
+vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({ NotFoundError: class extends Error {} }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({

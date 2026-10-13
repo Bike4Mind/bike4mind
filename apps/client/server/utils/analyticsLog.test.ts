@@ -43,6 +43,17 @@ describe('logEventSafe', () => {
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(UserApiKeyEvents.REVOKED), boom);
   });
 
+  it('names the caller-supplied context in the failure line without logging the payload', async () => {
+    incrementUserCounter.mockRejectedValueOnce(new Error('counter write failed'));
+    const logger = { error: vi.fn() };
+
+    await logEventSafe(event, undefined, logger, 'API key key-1');
+
+    const [message] = logger.error.mock.calls[0];
+    expect(message).toContain(`${UserApiKeyEvents.REVOKED} for API key key-1;`);
+    expect(message).not.toContain(event.metadata.name);
+  });
+
   it('falls back to console.error so a failure is never silently dropped', async () => {
     incrementUserCounter.mockRejectedValueOnce(new Error('counter write failed'));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});

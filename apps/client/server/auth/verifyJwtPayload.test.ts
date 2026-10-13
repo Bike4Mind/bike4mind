@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  */
 
 const mockFindById = vi.hoisted(() => vi.fn());
+const mockAssertAccountStateUsable = vi.hoisted(() => vi.fn());
 
 vi.mock('@bike4mind/database', () => ({ User: { findById: mockFindById } }));
 vi.mock('@bike4mind/services', () => ({
@@ -15,12 +16,14 @@ vi.mock('@bike4mind/services', () => ({
     (payloadVersion ?? 0) === (userVersion ?? 0),
   isTokenTypeAcceptable: (tokenType: unknown, expected: string) => tokenType === undefined || tokenType === expected,
 }));
+vi.mock('./assertAccountStateUsable', () => ({ assertAccountStateUsable: mockAssertAccountStateUsable }));
 
 import { verifyJwtPayload } from './verifyJwtPayload';
 
 describe('verifyJwtPayload', () => {
   beforeEach(() => {
     mockFindById.mockReset();
+    mockAssertAccountStateUsable.mockReset();
   });
 
   it('propagates impersonatedBy onto the authenticated user', async () => {
@@ -75,6 +78,20 @@ describe('verifyJwtPayload', () => {
 
     await verifyJwtPayload({ id: 'system-1', tokenVersion: 0 }, done);
 
+    expect(done).toHaveBeenCalledWith(null, false);
+  });
+
+  it('rejects a blocked account', async () => {
+    const user = { id: 'user-1', tokenVersion: 0, isSystem: false };
+    mockFindById.mockResolvedValue(user);
+    mockAssertAccountStateUsable.mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    const done = vi.fn();
+
+    await verifyJwtPayload({ id: 'user-1', tokenVersion: 0 }, done);
+
+    expect(mockAssertAccountStateUsable).toHaveBeenCalledWith(user);
     expect(done).toHaveBeenCalledWith(null, false);
   });
 

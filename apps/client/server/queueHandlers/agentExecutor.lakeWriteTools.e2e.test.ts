@@ -57,13 +57,12 @@ describe('agentExecutor toolDeps wiring', () => {
     expect(source.match(/quests: questRepository,/g)).toHaveLength(2);
   });
 
-  it('forwards the run API key to both toolDeps and to every child it spawns', () => {
-    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*apiKeyId: execution\.apiKeyId,/);
-    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*apiKeyId: child\.apiKeyId,/);
-    expect(source).toMatch(
-      /const baseFields = \{[^}]*\.\.\.\(execution\.apiKeyId && \{ apiKeyId: execution\.apiKeyId \}\),/
-    );
-    expect(source).toMatch(/nodeDefaults: \{[^}]*apiKeyId: execution\.apiKeyId,/);
+  // executionTurnAuth carries both authOrigin and the key id (see its tests in turnAuth.test.ts).
+  it('forwards the run turn auth to both toolDeps and to every child it spawns', () => {
+    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*\.\.\.executionTurnAuth\(execution\),/);
+    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*\.\.\.executionTurnAuth\(child\),/);
+    expect(source).toMatch(/const baseFields = \{[^}]*\.\.\.executionTurnAuth\(execution\),/);
+    expect(source).toMatch(/nodeDefaults: \{[^}]*\.\.\.executionTurnAuth\(execution\),/);
   });
 
   it('carries the scope denials to every child row and the child MCP denylist', () => {
@@ -140,6 +139,7 @@ const lakeTools = (user: IUserDocument, organizationId?: string, apiKeyId?: stri
     userId: user.id,
     user,
     organizationId,
+    authOrigin: apiKeyId ? 'apiKey' : 'session',
     apiKeyId,
     storage: storage as never,
     db: {
