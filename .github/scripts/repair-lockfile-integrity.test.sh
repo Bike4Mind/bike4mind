@@ -30,7 +30,9 @@ XLSX_URL='https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz'
 XLSX_HASHED="    resolution: {integrity: sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA==, tarball: $XLSX_URL}"
 AMP_URL='https://example.com/get?pkg=a&v=1.tgz'
 AMP_HASHED="    resolution: {integrity: sha512-AMP==, tarball: $AMP_URL}"
-GIT_LINE='    resolution: {gitHosted: true, tarball: https://codeload.github.com/o/r/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684}'
+GIT_URL='https://codeload.github.com/o/r/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684'
+GIT_HASHED="    resolution: {integrity: sha512-GIT==, tarball: $GIT_URL}"
+GIT_LINE="    resolution: {gitHosted: true, tarball: $GIT_URL}"
 
 # Usage: lockfile <file> <resolution-line...>
 lockfile() {
@@ -49,7 +51,7 @@ lockfile() {
   } >"$f"
 }
 
-lockfile "$WORK/base.yaml" "$XLSX_HASHED" "$AMP_HASHED" "$GIT_LINE"
+lockfile "$WORK/base.yaml" "$XLSX_HASHED" "$AMP_HASHED" "$GIT_LINE" "$GIT_HASHED"
 
 # --- (a) bare xlsx line restored byte-identical to base ---
 lockfile "$WORK/a.yaml" "    resolution: {tarball: $XLSX_URL}" "$GIT_LINE"
@@ -96,6 +98,48 @@ if bash "$REPAIR" "$WORK/e.yaml" "$WORK/base.yaml" && cmp -s "$WORK/e.yaml" "$WO
   ok "URL with & is restored intact"
 else
   fail "URL with & is restored intact" "$(diff "$WORK/e.want" "$WORK/e.yaml")"
+fi
+
+# --- (f) two unknown URLs: both reported, both left bare ---
+M1_URL='https://cdn.example.com/m1.tgz'
+M2_URL='https://cdn.example.com/m2.tgz'
+lockfile "$WORK/f.yaml" "    resolution: {tarball: $M1_URL}" "    resolution: {tarball: $M2_URL}"
+cp "$WORK/f.yaml" "$WORK/f.want"
+stderr=$(bash "$REPAIR" "$WORK/f.yaml" "$WORK/base.yaml" 2>&1 >/dev/null)
+rc=$?
+want_err=$(printf '%s\n%s' "$M1_URL" "$M2_URL")
+if [ "$rc" -eq 1 ] && [ "$stderr" = "$want_err" ] && cmp -s "$WORK/f.yaml" "$WORK/f.want"; then
+  ok "two unknown URLs are both reported and left bare"
+else
+  fail "two unknown URLs are both reported and left bare" "rc=$rc stderr=$stderr" "$(diff "$WORK/f.want" "$WORK/f.yaml")"
+fi
+
+# --- (g) the same bare URL twice: every occurrence is restored ---
+lockfile "$WORK/g.yaml" "    resolution: {tarball: $XLSX_URL}" "    resolution: {tarball: $XLSX_URL}"
+lockfile "$WORK/g.want" "$XLSX_HASHED" "$XLSX_HASHED"
+if bash "$REPAIR" "$WORK/g.yaml" "$WORK/base.yaml" && cmp -s "$WORK/g.yaml" "$WORK/g.want"; then
+  ok "a repeated bare URL is restored on every line"
+else
+  fail "a repeated bare URL is restored on every line" "$(diff "$WORK/g.want" "$WORK/g.yaml")"
+fi
+
+# --- (h) gitHosted line whose URL has a hashed base entry: still untouched ---
+lockfile "$WORK/h.yaml" "$GIT_LINE"
+cp "$WORK/h.yaml" "$WORK/h.want"
+if bash "$REPAIR" "$WORK/h.yaml" "$WORK/base.yaml" && cmp -s "$WORK/h.yaml" "$WORK/h.want"; then
+  ok "gitHosted entry stays untouched even with a matching hashed base entry"
+else
+  fail "gitHosted entry stays untouched even with a matching hashed base entry" "$(diff "$WORK/h.want" "$WORK/h.yaml")"
+fi
+
+# --- (i) empty PR lockfile is a bad input, not a clean one ---
+: >"$WORK/i.yaml"
+stderr=$(bash "$REPAIR" "$WORK/i.yaml" "$WORK/base.yaml" 2>&1 >/dev/null)
+rc=$?
+if [ "$rc" -eq 2 ]; then
+  ok "empty PR lockfile is rejected"
+else
+  fail "empty PR lockfile is rejected" "rc=$rc stderr=$stderr"
 fi
 
 echo
