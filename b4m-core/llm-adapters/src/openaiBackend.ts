@@ -442,8 +442,10 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          272_000: { input: 4.0 / 1_000_000, output: 20.0 / 1_000_000 }, // <=272k: $4.00 / 1M in, $20.00 / 1M out
-          1_050_000: { input: 8.0 / 1_000_000, output: 30.0 / 1_000_000 }, // >272k: $8.00 / 1M in, $30.00 / 1M out
+          // Regular list price. OpenAI runs a promotional $4 / $20 ($8 / $30 long context) through at
+          // least 2026-11-21; it is deliberately not carried so the seed does not go stale when it ends.
+          272_000: { input: 5.0 / 1_000_000, output: 30.0 / 1_000_000 }, // <=272k: $5.00 / 1M in, $30.00 / 1M out
+          1_050_000: { input: 10.0 / 1_000_000, output: 45.0 / 1_000_000 }, // >272k: $10.00 / 1M in, $45.00 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
