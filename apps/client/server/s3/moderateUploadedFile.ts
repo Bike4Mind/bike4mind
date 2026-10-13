@@ -125,9 +125,6 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
   } = args;
 
   if (!enabled) return { moderationStatus: 'clean' };
-  // Self-host installs have no AWS Rekognition credentials; skip the scan rather than
-  // failing closed on every upload. Mirrors the same guard in imageModerationGate.ts.
-  if (process.env.B4M_SELF_HOST === 'true') return { moderationStatus: 'clean' };
 
   // Anti-spoof: sniff the real type from magic numbers rather than trusting
   // the declared mimeType. `file-type` returns undefined for formats with no reliable magic

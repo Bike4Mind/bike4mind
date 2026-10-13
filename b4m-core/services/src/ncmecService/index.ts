@@ -4,34 +4,46 @@
  * Submits a CyberTip to NCMEC when a human admin confirms a detected incident is CSAM.
  * Only the admin verdict route calls this; the detection/block path does not.
  *
- * Credentials come from SST secrets (NCMEC_ESP_ID, NCMEC_API_KEY). A missing or
- * 'not-configured' credential throws immediately so the caller can surface the gap
- * without a silent no-op.
+ * Credentials (espId, apiKey) and the sandbox flag are resolved by the caller from SST
+ * Resource (Resource.NCMEC_ESP_ID.value, etc.) and passed in as arguments. This keeps the
+ * service free of SST imports and allows the test suite to supply config directly.
  *
- * Sandbox vs. production is controlled by NCMEC_USE_SANDBOX:
- *   - 'true'  -> extapipre.cybertipline.org (sandbox; safe for testing)
- *   - unset or anything else -> extapi.cybertipline.org (production)
+ * Sandbox vs. production: anything other than an explicit useSandbox=false uses the test
+ * host, so a misconfigured or missing value cannot post to production.
  *
  * Self-host installs skip reporting (same pattern as imageModerationGate.ts) because
  * self-host operators are not registered ESPs and have no NCMEC credentials.
  *
- * IMPORTANT: Before going live, verify the exact endpoint path and XML schema with your
- * NCMEC ESP representative. The XML format below follows the publicly documented
- * CyberTipline ESP API v3 structure but must be validated against the schema NCMEC
- * provides to registered ESPs.
+ * IMPORTANT: The XML schema and field values below are based on the publicly documented
+ * CyberTipline ESP API at report.cybertip.org/ispws/documentation/. Validate the exact
+ * schema, element names, and required fields with your NCMEC ESP representative before
+ * go-live. In particular, confirm the /finish endpoint path and the reporter vs.
+ * personOrUserReported element placement, as these affect who NCMEC treats as the suspect.
  */
 
-// Publicly documented NCMEC CyberTipline ESP API endpoints.
-const NCMEC_SANDBOX_URL = 'https://extapipre.cybertipline.org';
-const NCMEC_PRODUCTION_URL = 'https://extapi.cybertipline.org';
+// NCMEC CyberTipline ESP API (report.cybertip.org/ispws/documentation/).
+const NCMEC_PRODUCTION_URL = 'https://report.cybertip.org/ispws';
+const NCMEC_TEST_URL = 'https://exttest.cybertip.org/ispws';
 
-// NCMEC incident type for child sexual abuse material (possession, manufacture, distribution).
-const NCMEC_CSAM_INCIDENT_TYPE = 74;
+// NCMEC incident type string for CSAM (possession, manufacture, and distribution).
+const NCMEC_CSAM_INCIDENT_TYPE = 'Child Pornography (possession, manufacture, and distribution)';
+
+export interface NcmecCredentials {
+  /** ESP ID issued by NCMEC to the registered Electronic Service Provider. */
+  espId: string;
+  /** API key (password component of HTTP Basic auth). */
+  apiKey: string;
+  /**
+   * When false (explicit), use the production host. Any other value (true, missing) uses
+   * the test host, so misconfigured deployments cannot post to production.
+   */
+  useSandbox: boolean;
+}
 
 export interface NcmecReportInput {
   /** Internal incident ID (imageModerationIncident._id) for audit correlation. */
   incidentId: string;
-  /** The platform user ID whose content was blocked. */
+  /** The platform user ID whose content was blocked. NCMEC treats this as the suspect. */
   userId: string;
   /** ISO timestamp of when the incident was detected. */
   detectedAt: Date;
@@ -56,77 +68,101 @@ function xmlEscape(s: string): string {
     .replace(/'/g, '&apos;');
 }
 
-function buildReportXml(espId: string, input: NcmecReportInput): string {
+function buildSubmitXml(espId: string, input: NcmecReportInput): string {
   // Rekognition stores confidence in the 0-100 range (not 0-1); format directly.
   const labelsSummary = input.labels
     .map(l => `${xmlEscape(l.name)} (${l.confidence.toFixed(1)}%)`)
     .join(', ');
 
-  // XML per NCMEC CyberTipline ESP API v3 specification.
+  // XML per NCMEC CyberTipline ESP API (report.cybertip.org/ispws/documentation/).
+  // <reporter> identifies the reporting ESP; <personOrUserReported> is the suspect.
   // Verify this schema with your NCMEC ESP representative before production use.
   return `<?xml version="1.0" encoding="UTF-8"?>
-<cybertiplineReport>
-  <reportingEsp>
-    <espId>${xmlEscape(espId)}</espId>
-  </reportingEsp>
+<report>
   <incidentSummary>
-    <incidentType>${NCMEC_CSAM_INCIDENT_TYPE}</incidentType>
+    <incidentType>${xmlEscape(NCMEC_CSAM_INCIDENT_TYPE)}</incidentType>
     <incidentDateTime>${input.detectedAt.toISOString()}</incidentDateTime>
   </incidentSummary>
   <reporter>
-    <reportingPerson>
-      <espUserId>${xmlEscape(input.userId)}</espUserId>
-    </reportingPerson>
+    <reportingEsp>
+      <espId>${xmlEscape(espId)}</espId>
+    </reportingEsp>
   </reporter>
+  <personOrUserReported>
+    <espUserId>${xmlEscape(input.userId)}</espUserId>
+  </personOrUserReported>
   <additionalInfo>
     <text>Internal incident ID: ${xmlEscape(input.incidentId)}. Detected labels: ${labelsSummary}.${input.fabFileId ? ` File ID: ${xmlEscape(input.fabFileId)}.` : ''}</text>
   </additionalInfo>
-</cybertiplineReport>`;
+</report>`;
+}
+
+function buildFinishXml(reportId: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<finishReport>
+  <reportId>${xmlEscape(reportId)}</reportId>
+</finishReport>`;
 }
 
 /**
  * Submit a confirmed CSAM incident to the NCMEC CyberTipline.
  *
- * Returns the `reportId` that NCMEC assigns; the caller must persist this on the
- * incident and flip `reviewStatus` to 'reported'. Throws on any API or credential error.
+ * Flow: POST /submit (get reportId) -> POST /finish (finalize).
+ * NCMEC deletes unfinished reports 24 hours after /submit; /finish must succeed before
+ * the incident is marked 'reported'.
+ *
+ * Returns the `reportId` that NCMEC assigns. Throws on any API or credential error.
  */
-export async function submitNcmecReport(input: NcmecReportInput): Promise<NcmecReportResult> {
+export async function submitNcmecReport(
+  credentials: NcmecCredentials,
+  input: NcmecReportInput
+): Promise<NcmecReportResult> {
   if (process.env.B4M_SELF_HOST === 'true') {
     throw new Error('NCMEC reporting is not available on self-host installs');
   }
 
-  const espId = process.env.NCMEC_ESP_ID;
-  const apiKey = process.env.NCMEC_API_KEY;
+  const { espId, apiKey, useSandbox } = credentials;
 
   if (!espId || espId === 'not-configured' || !apiKey || apiKey === 'not-configured') {
     throw new Error('NCMEC credentials not configured (NCMEC_ESP_ID, NCMEC_API_KEY must be set via SST secrets)');
   }
 
-  const useSandbox = process.env.NCMEC_USE_SANDBOX === 'true';
-  const baseUrl = useSandbox ? NCMEC_SANDBOX_URL : NCMEC_PRODUCTION_URL;
-
-  const xml = buildReportXml(espId, input);
+  const baseUrl = useSandbox !== false ? NCMEC_TEST_URL : NCMEC_PRODUCTION_URL;
   const credential = Buffer.from(`${espId}:${apiKey}`).toString('base64');
+  const authHeader = `Basic ${credential}`;
 
-  const formData = new FormData();
-  formData.append('report', new Blob([xml], { type: 'text/xml' }), 'report.xml');
-
-  const response = await fetch(`${baseUrl}/cybertiplinewebservices/v3/report`, {
+  // Step 1: Submit the report and receive a reportId.
+  const submitXml = buildSubmitXml(espId, input);
+  const submitResponse = await fetch(`${baseUrl}/submit`, {
     method: 'POST',
-    headers: { Authorization: `Basic ${credential}` },
-    body: formData,
+    headers: { Authorization: authHeader, 'Content-Type': 'text/xml; charset=utf-8' },
+    body: submitXml,
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`NCMEC API error ${response.status}: ${text.slice(0, 300)}`);
+  if (!submitResponse.ok) {
+    const text = await submitResponse.text();
+    throw new Error(`NCMEC /submit error ${submitResponse.status}: ${text.slice(0, 300)}`);
   }
 
-  const responseText = await response.text();
-  const match = /<reportId>([^<]+)<\/reportId>/.exec(responseText);
+  const submitText = await submitResponse.text();
+  const match = /<reportId>([^<]+)<\/reportId>/.exec(submitText);
   if (!match) {
-    throw new Error(`NCMEC response missing reportId: ${responseText.slice(0, 300)}`);
+    throw new Error(`NCMEC /submit response missing reportId: ${submitText.slice(0, 300)}`);
+  }
+  const reportId = match[1].trim();
+
+  // Step 2: Finalize the report. Without /finish, NCMEC deletes it after 24 hours.
+  const finishXml = buildFinishXml(reportId);
+  const finishResponse = await fetch(`${baseUrl}/finish`, {
+    method: 'POST',
+    headers: { Authorization: authHeader, 'Content-Type': 'text/xml; charset=utf-8' },
+    body: finishXml,
+  });
+
+  if (!finishResponse.ok) {
+    const text = await finishResponse.text();
+    throw new Error(`NCMEC /finish error ${finishResponse.status} for reportId ${reportId}: ${text.slice(0, 300)}`);
   }
 
-  return { reportId: match[1].trim() };
+  return { reportId };
 }

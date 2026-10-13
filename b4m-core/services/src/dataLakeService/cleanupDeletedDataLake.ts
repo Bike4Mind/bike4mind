@@ -300,21 +300,23 @@ export const cleanupDeletedDataLake = async (
           await storage.delete(currentKey);
         }
       }
-      if (deleteFileAndChunks) {
-        await deleteFileAndChunks(id);
-      } else {
-        // Legal-hold errors are permanent; re-throwing would DLQ-loop forever. Skip and log.
-        // All other errors are treated as transient and re-thrown for DLQ retry (see comment above).
-        try {
+      // Legal-hold errors are permanent; re-throwing would DLQ-loop forever. Skip and log.
+      // The catch wraps both branches: the production worker injects deleteFileAndChunks
+      // (see dataLakeCleanup.ts), and that path also throws on a blocked file.
+      // All other errors are treated as transient and re-thrown for DLQ retry (see comment above).
+      try {
+        if (deleteFileAndChunks) {
+          await deleteFileAndChunks(id);
+        } else {
           await db.fabFiles.hardDeleteOneById(id);
-        } catch (err) {
-          if ((err as Error).message?.includes('legal hold')) {
-            logger?.warn('[dataLake] skipping blocked file in sweep (legal hold)', { fabFileId: id });
-            return;
-          }
-          throw err;
+          await db.fabFileChunks.deleteManyByFabFileId(id);
         }
-        await db.fabFileChunks.deleteManyByFabFileId(id);
+      } catch (err) {
+        if ((err as Error).message?.includes('legal hold')) {
+          logger?.warn('[dataLake] skipping blocked file in sweep (legal hold)', { fabFileId: id });
+          return;
+        }
+        throw err;
       }
     },
     async slice => {

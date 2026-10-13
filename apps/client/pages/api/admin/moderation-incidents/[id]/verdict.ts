@@ -1,10 +1,23 @@
 import { z } from 'zod';
 import { Request } from 'express';
+import { Resource } from 'sst';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { imageModerationIncidentRepository } from '@bike4mind/database';
 import { ncmecService } from '@bike4mind/services';
 import { ForbiddenError } from '@server/utils/errors';
+
+// Resolve NCMEC credentials from SST Resource (linked secrets expose Resource.X.value, not
+// process.env.X). Fall back to process.env for local dev and self-host. useSandbox defaults
+// to true so a missing or misconfigured value cannot post to production.
+function resolveNcmecCredentials() {
+  const espId = (Resource as Record<string, { value?: string }>).NCMEC_ESP_ID?.value ?? process.env.NCMEC_ESP_ID ?? '';
+  const apiKey = (Resource as Record<string, { value?: string }>).NCMEC_API_KEY?.value ?? process.env.NCMEC_API_KEY ?? '';
+  const sandboxRaw = (Resource as Record<string, { value?: string }>).NCMEC_USE_SANDBOX?.value ?? process.env.NCMEC_USE_SANDBOX;
+  // Fail safe: anything other than an explicit 'false' uses the test host.
+  const useSandbox = sandboxRaw !== 'false';
+  return { espId, apiKey, useSandbox };
+}
 
 /**
  * Admin verdict for an image-moderation incident. Two outcomes:
@@ -51,7 +64,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
     let ncmecReportId: string;
     try {
-      const result = await ncmecService.submitNcmecReport({
+      const result = await ncmecService.submitNcmecReport(resolveNcmecCredentials(), {
         incidentId,
         userId: claimed.userId,
         detectedAt: claimed.createdAt,

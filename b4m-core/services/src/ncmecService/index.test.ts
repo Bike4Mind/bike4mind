@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { submitNcmecReport } from './index';
 
+const TEST_CREDS = {
+  espId: 'esp-test-id',
+  apiKey: 'test-api-key',
+  useSandbox: true,
+};
+
 // Rekognition stores confidence in the 0-100 range (not 0-1).
 const BASE_INPUT = {
   incidentId: 'inc-123',
@@ -12,18 +18,20 @@ const BASE_INPUT = {
 describe('submitNcmecReport', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
   const savedEnv: Record<string, string | undefined> = {};
-  const TRACKED = ['B4M_SELF_HOST', 'NCMEC_ESP_ID', 'NCMEC_API_KEY', 'NCMEC_USE_SANDBOX'] as const;
+  const TRACKED = ['B4M_SELF_HOST'] as const;
 
   beforeEach(() => {
     for (const k of TRACKED) savedEnv[k] = process.env[k];
-
-    fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
-
     process.env.B4M_SELF_HOST = 'false';
-    process.env.NCMEC_ESP_ID = 'esp-test-id';
-    process.env.NCMEC_API_KEY = 'test-api-key';
-    process.env.NCMEC_USE_SANDBOX = 'true';
+
+    // Return success for both /submit and /finish by default.
+    fetchSpy = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => '<response><reportId>RPT-001</reportId></response>',
+      })
+      .mockResolvedValueOnce({ ok: true, text: async () => '<finishResponse><status>ok</status></finishResponse>' });
+    vi.stubGlobal('fetch', fetchSpy);
   });
 
   afterEach(() => {
@@ -34,109 +42,116 @@ describe('submitNcmecReport', () => {
     }
   });
 
-  const okResponse = (reportId = 'RPT-001') => ({
-    ok: true,
-    text: async () => `<response><reportId>${reportId}</reportId></response>`,
-  });
-
   it('throws immediately on self-host installs', async () => {
     process.env.B4M_SELF_HOST = 'true';
-    await expect(submitNcmecReport(BASE_INPUT)).rejects.toThrow('not available on self-host');
+    await expect(submitNcmecReport(TEST_CREDS, BASE_INPUT)).rejects.toThrow('not available on self-host');
   });
 
-  it('throws when NCMEC_ESP_ID is not-configured', async () => {
-    process.env.NCMEC_ESP_ID = 'not-configured';
-    await expect(submitNcmecReport(BASE_INPUT)).rejects.toThrow('NCMEC credentials not configured');
+  it('throws when espId is not-configured', async () => {
+    await expect(submitNcmecReport({ ...TEST_CREDS, espId: 'not-configured' }, BASE_INPUT))
+      .rejects.toThrow('NCMEC credentials not configured');
   });
 
-  it('throws when NCMEC_API_KEY is not-configured', async () => {
-    process.env.NCMEC_API_KEY = 'not-configured';
-    await expect(submitNcmecReport(BASE_INPUT)).rejects.toThrow('NCMEC credentials not configured');
+  it('throws when apiKey is not-configured', async () => {
+    await expect(submitNcmecReport({ ...TEST_CREDS, apiKey: 'not-configured' }, BASE_INPUT))
+      .rejects.toThrow('NCMEC credentials not configured');
   });
 
-  it('throws when NCMEC_ESP_ID is absent', async () => {
-    delete process.env.NCMEC_ESP_ID;
-    await expect(submitNcmecReport(BASE_INPUT)).rejects.toThrow('NCMEC credentials not configured');
+  it('throws when espId is empty', async () => {
+    await expect(submitNcmecReport({ ...TEST_CREDS, espId: '' }, BASE_INPUT))
+      .rejects.toThrow('NCMEC credentials not configured');
   });
 
-  it('POSTs to the sandbox URL when NCMEC_USE_SANDBOX=true', async () => {
-    fetchSpy.mockResolvedValue(okResponse());
-    await submitNcmecReport(BASE_INPUT);
-
-    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain('extapipre.cybertipline.org');
+  it('POSTs /submit to the test host when useSandbox=true', async () => {
+    await submitNcmecReport(TEST_CREDS, BASE_INPUT);
+    const [submitUrl] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(submitUrl).toContain('exttest.cybertip.org');
+    expect(submitUrl).toContain('/submit');
   });
 
-  it('POSTs to the production URL when NCMEC_USE_SANDBOX is not true', async () => {
-    process.env.NCMEC_USE_SANDBOX = 'false';
-    fetchSpy.mockResolvedValue(okResponse('RPT-PROD'));
-    await submitNcmecReport(BASE_INPUT);
-
-    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain('extapi.cybertipline.org');
-    expect(url).not.toContain('extapipre');
+  it('POSTs /submit to the production host only when useSandbox=false (explicit)', async () => {
+    await submitNcmecReport({ ...TEST_CREDS, useSandbox: false }, BASE_INPUT);
+    const [submitUrl] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(submitUrl).toContain('report.cybertip.org');
+    expect(submitUrl).not.toContain('exttest');
   });
 
-  it('sends Basic auth derived from espId and apiKey', async () => {
-    fetchSpy.mockResolvedValue(okResponse());
-    await submitNcmecReport(BASE_INPUT);
-
+  it('sends Content-Type text/xml and Basic auth on /submit', async () => {
+    await submitNcmecReport(TEST_CREDS, BASE_INPUT);
     const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const headers = opts.headers as Record<string, string>;
+    expect(headers['Content-Type']).toBe('text/xml; charset=utf-8');
     const expected = `Basic ${Buffer.from('esp-test-id:test-api-key').toString('base64')}`;
-    expect((opts.headers as Record<string, string>).Authorization).toBe(expected);
+    expect(headers.Authorization).toBe(expected);
   });
 
-  it('returns the reportId parsed from the XML response', async () => {
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      text: async () => '<response><reportId>  RPT-TRIM-ME  </reportId></response>',
-    });
-    const result = await submitNcmecReport(BASE_INPUT);
-    expect(result.reportId).toBe('RPT-TRIM-ME');
+  it('calls /finish with the reportId after a successful /submit', async () => {
+    await submitNcmecReport(TEST_CREDS, BASE_INPUT);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const [finishUrl, finishOpts] = fetchSpy.mock.calls[1] as [string, RequestInit];
+    expect(finishUrl).toContain('/finish');
+    expect(finishOpts.body as string).toContain('RPT-001');
   });
 
-  it('throws when the response is not ok', async () => {
-    fetchSpy.mockResolvedValue({ ok: false, status: 401, text: async () => 'Unauthorized' });
-    await expect(submitNcmecReport(BASE_INPUT)).rejects.toThrow('NCMEC API error 401');
+  it('returns the reportId from /submit after /finish succeeds', async () => {
+    const result = await submitNcmecReport(TEST_CREDS, BASE_INPUT);
+    expect(result.reportId).toBe('RPT-001');
   });
 
-  it('throws when the response XML is missing reportId', async () => {
-    fetchSpy.mockResolvedValue({ ok: true, text: async () => '<response><status>ok</status></response>' });
-    await expect(submitNcmecReport(BASE_INPUT)).rejects.toThrow('NCMEC response missing reportId');
+  it('trims whitespace from the parsed reportId', async () => {
+    fetchSpy.mockReset()
+      .mockResolvedValueOnce({ ok: true, text: async () => '<response><reportId>  RPT-TRIM  </reportId></response>' })
+      .mockResolvedValueOnce({ ok: true, text: async () => '' });
+    const result = await submitNcmecReport(TEST_CREDS, BASE_INPUT);
+    expect(result.reportId).toBe('RPT-TRIM');
   });
 
-  it('XML-escapes userId to prevent injection', async () => {
-    fetchSpy.mockResolvedValue(okResponse('RPT-XSS'));
-    await submitNcmecReport({ ...BASE_INPUT, userId: '<evil>&"' });
+  it('throws when /submit returns a non-2xx status', async () => {
+    fetchSpy.mockReset().mockResolvedValueOnce({ ok: false, status: 401, text: async () => 'Unauthorized' });
+    await expect(submitNcmecReport(TEST_CREDS, BASE_INPUT)).rejects.toThrow('NCMEC /submit error 401');
+  });
 
+  it('throws when /submit response XML is missing reportId', async () => {
+    fetchSpy.mockReset().mockResolvedValueOnce({ ok: true, text: async () => '<response><status>ok</status></response>' });
+    await expect(submitNcmecReport(TEST_CREDS, BASE_INPUT)).rejects.toThrow('NCMEC /submit response missing reportId');
+  });
+
+  it('throws when /finish returns a non-2xx status', async () => {
+    fetchSpy.mockReset()
+      .mockResolvedValueOnce({ ok: true, text: async () => '<response><reportId>RPT-FAIL</reportId></response>' })
+      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Internal Error' });
+    await expect(submitNcmecReport(TEST_CREDS, BASE_INPUT)).rejects.toThrow('NCMEC /finish error 500');
+  });
+
+  it('XML-escapes userId in the report body', async () => {
+    await submitNcmecReport(TEST_CREDS, { ...BASE_INPUT, userId: '<evil>&"' });
     const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    const formData = opts.body as FormData;
-    const blob = formData.get('report') as Blob;
-    const xml = await blob.text();
+    const xml = opts.body as string;
     expect(xml).toContain('&lt;evil&gt;&amp;&quot;');
     expect(xml).not.toContain('<evil>');
   });
 
-  it('includes fabFileId in the additionalInfo when provided', async () => {
-    fetchSpy.mockResolvedValue(okResponse('RPT-FILE'));
-    await submitNcmecReport({ ...BASE_INPUT, fabFileId: 'file-789' });
-
+  it('formats confidence as a 0-100 value (not 0-1) in the report XML', async () => {
+    await submitNcmecReport(TEST_CREDS, BASE_INPUT); // BASE_INPUT has confidence: 98.0
     const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    const formData = opts.body as FormData;
-    const blob = formData.get('report') as Blob;
-    const xml = await blob.text();
+    const xml = opts.body as string;
+    expect(xml).toContain('98.0%');
+    expect(xml).not.toContain('9800.0%');
+  });
+
+  it('includes fabFileId in the additionalInfo when provided', async () => {
+    await submitNcmecReport(TEST_CREDS, { ...BASE_INPUT, fabFileId: 'file-789' });
+    const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const xml = opts.body as string;
     expect(xml).toContain('file-789');
   });
 
-  it('formats confidence as a 0-100 value (not 0-1) in the report XML', async () => {
-    fetchSpy.mockResolvedValue(okResponse('RPT-CONF'));
-    await submitNcmecReport(BASE_INPUT); // BASE_INPUT has confidence: 98.0
-
+  it('uses <report> as the root element and puts the user in <personOrUserReported>', async () => {
+    await submitNcmecReport(TEST_CREDS, BASE_INPUT);
     const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    const formData = opts.body as FormData;
-    const blob = formData.get('report') as Blob;
-    const xml = await blob.text();
-    expect(xml).toContain('98.0%');
-    expect(xml).not.toContain('9800.0%');
+    const xml = opts.body as string;
+    expect(xml).toMatch(/<report>/);
+    expect(xml).toContain('<personOrUserReported>');
+    expect(xml).not.toContain('<cybertiplineReport>');
   });
 });
