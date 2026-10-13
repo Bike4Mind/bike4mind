@@ -315,7 +315,7 @@ describe('OpenAI cached-input rates', () => {
     [ChatModels.GPT5_6_LUNA, 272_000, 0.2, 1.2],
     [ChatModels.GPT5_6_LUNA, 1_050_000, 0.4, 1.8],
   ])(
-    'prices %s at the published %i-token band ($%d in / $%d out per 1M, cache read on the 0.1x default)',
+    'prices %s at the published %i-token band ($%s in / $%s out per 1M, cache read on the 0.1x default)',
     async (id, band, inPerM, outPerM) => {
       const model = await modelById(id);
       const tier = model.pricing[band];
