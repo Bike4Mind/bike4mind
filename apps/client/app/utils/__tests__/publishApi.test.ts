@@ -206,6 +206,47 @@ describe('publishArtifactBundle', () => {
     expect(result).toEqual(RESULT);
   });
 
+  it.each([
+    [
+      'a 403 without the owner code',
+      () =>
+        Object.assign(new Error('forbidden'), {
+          isAxiosError: true,
+          response: { status: 403, data: { error: 'nope' } },
+        }),
+    ],
+    ['a network error', () => new Error('Network Error')],
+  ])('does not retry a derived slug on %s', async (_label, makeErr) => {
+    wirePublishPosts();
+    apiPost.mockImplementationOnce(() => Promise.reject(makeErr()));
+    await expect(
+      publishArtifactBundle({
+        artifactId: 'artifact_abcdef123456',
+        type: 'react',
+        content: 'export default () => null;',
+        title: 'Chronosphere',
+        userId: 'u1',
+      })
+    ).rejects.toThrow();
+    expect(apiPost.mock.calls.filter(c => c[0] === '/api/publish/artifact/upload-url')).toHaveLength(1);
+  });
+
+  it('does not finalize when the retried slug is also refused', async () => {
+    wirePublishPosts();
+    apiPost.mockImplementationOnce(() => Promise.reject(slugOwnedByOther()));
+    apiPost.mockImplementationOnce(() => Promise.reject(slugOwnedByOther()));
+    await expect(
+      publishArtifactBundle({
+        artifactId: 'artifact_abcdef123456',
+        type: 'react',
+        content: 'export default () => null;',
+        title: 'Chronosphere',
+        userId: 'u1',
+      })
+    ).rejects.toMatchObject({ response: { status: 403 } });
+    expect(apiPost.mock.calls.filter(c => c[0] === '/api/publish/artifact/finalize')).toHaveLength(0);
+  });
+
   it('surfaces the refusal for a PINNED slug instead of publishing a different page', async () => {
     wirePublishPosts();
     apiPost.mockImplementationOnce(() => Promise.reject(slugOwnedByOther()));

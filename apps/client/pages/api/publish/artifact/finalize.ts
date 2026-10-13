@@ -268,7 +268,7 @@ const handler = baseApi().post(async (req, res) => {
       accessGate?: unknown;
     } | null>();
 
-  if (previous && !mayRepublishSlug(previous.ownerId, publishUser)) {
+  if (previous && !mayRepublishSlug(previous, manifest.tier, publishUser)) {
     return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
   }
 

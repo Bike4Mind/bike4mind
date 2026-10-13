@@ -118,6 +118,22 @@ describe('finalize - republish ownership', () => {
     expect(mockUpload).not.toHaveBeenCalled();
   });
 
+  it('lets an org member republish an org page, keeping the owner so the page can still be handed over', async () => {
+    mockFindOne.mockResolvedValue(existing);
+    setDraft(manifest({ tier: 'organization', scopeId: 'org1', createdBy: 'member2' }), '<h1>x</h1>');
+    const { res, promise } = run({ draftId: DRAFT_ID }, 'member2');
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const [filter, update] = mockFindOneAndUpdate.mock.calls[0] as [
+      Record<string, unknown>,
+      { $set: Record<string, unknown> },
+    ];
+    expect(filter.ownerId).toBe('owner1');
+    expect(update.$set.ownerId).toBe('owner1');
+    expect(update.$set.lastPublishedBy).toBe('member2');
+  });
+
   it('lets the owner republish an existing slug (200)', async () => {
     mockFindOne.mockResolvedValue(existing);
     setDraft(manifest({}), '<h1>x</h1>');
@@ -163,6 +179,15 @@ describe('finalize - republish ownership', () => {
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData().code).toBe('slug_owned_by_other');
   });
+
+  it('does not report an owner change for a database failure', async () => {
+    mockFindOneAndUpdate.mockReturnValue(Promise.reject(new Error('boom')));
+    setDraft(manifest({}), '<h1>x</h1>');
+    const { res, promise } = run({ draftId: DRAFT_ID });
+
+    await expect(promise).rejects.toThrow('boom');
+    expect(res._getStatusCode()).not.toBe(409);
+  });
 });
 
 describe('upload-url - republish ownership', () => {
@@ -182,6 +207,19 @@ describe('upload-url - republish ownership', () => {
     expect(res._getStatusCode()).toBe(403);
     expect(res._getJSONData().code).toBe('slug_owned_by_other');
     expect(mockUpload).not.toHaveBeenCalled();
+  });
+
+  it('lets an org member get a draft for an existing org page', async () => {
+    mockFindOne.mockResolvedValue(existing);
+    const { res, promise } = post(
+      uploadUrlHandler,
+      { ...uploadBody, tier: 'organization', scopeId: 'org1' },
+      'member2',
+      false
+    );
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('issues a draft to the owner and to an admin', async () => {
