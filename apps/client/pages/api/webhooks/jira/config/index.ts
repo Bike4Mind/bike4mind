@@ -225,7 +225,7 @@ const handler = baseApi()
 
       // 403, not 401: the client treats 401 as an expired session and signs the user out
       if (!canManageConfig(existingConfig, user)) {
-        throw new ForbiddenError('Only the creator can update this webhook configuration');
+        throw new ForbiddenError('Only the creator or an admin can update this webhook configuration');
       }
 
       const { events, enabled, rotateSecret } = req.body || {};
@@ -331,7 +331,7 @@ const handler = baseApi()
 
       // 403, not 401: see PUT
       if (!canManageConfig(webhookConfig, user)) {
-        throw new ForbiddenError('Only the creator can delete this webhook configuration');
+        throw new ForbiddenError('Only the creator or an admin can delete this webhook configuration');
       }
 
       // Cascade delete all subscriptions

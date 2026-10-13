@@ -177,6 +177,14 @@ const JiraNotificationsForm: FC = () => {
             priorityFilter: getSelectedPriorities(),
           },
         });
+      } else if (config) {
+        await createSubscription.mutateAsync({
+          webhookConfigId: config.id,
+          slackTarget: buildSlackTarget(),
+          projectFilter: getParsedProjects(),
+          priorityFilter: getSelectedPriorities(),
+          name: 'Slack notifications',
+        });
       }
 
       isDirty.current = false;
@@ -184,7 +192,7 @@ const JiraNotificationsForm: FC = () => {
     } catch {
       // Errors are handled by the mutation hooks (toast)
     }
-  }, [slackChannelId, projectFilter, priorityPrefs, existingSub, updateSubscription]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slackChannelId, projectFilter, priorityPrefs, existingSub, config, updateSubscription, createSubscription]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDisable = useCallback(async () => {
     try {
@@ -434,6 +442,12 @@ const JiraNotificationsForm: FC = () => {
               </Grid>
             </Grid>
           </Box>
+
+          {!isEnabled && !canManageConfig && (
+            <Alert color="neutral" variant="soft" size="sm" data-testid="jira-notifications-off-alert">
+              Notifications are turned off for this site.
+            </Alert>
+          )}
 
           {/* Actions */}
           <Box sx={{ display: 'flex', gap: 1 }}>
