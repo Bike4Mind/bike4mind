@@ -100,7 +100,7 @@ describe('SubscriptionModal - Team tab', () => {
   beforeEach(() => {
     subscriptions = [];
     teamPriceActive = true;
-    settingValues = {};
+    settingValues = { enableTeamPlan: true };
   });
 
   it('opens the Business tab, so Team is on offer here as well as from Teams > Create Team', async () => {
@@ -118,6 +118,38 @@ describe('SubscriptionModal - Team tab', () => {
     expect(screen.queryByTestId('subscription-modal-team-unavailable')).not.toBeInTheDocument();
   });
 
+  it('disables the Business tab with a visible, accessible reason when enableTeamPlan is off', async () => {
+    settingValues = { enableTeamPlan: false };
+    renderModal();
+
+    const tab = screen.getByRole('tab', { name: 'subscription_modal.business' });
+    expect(tab).toHaveAttribute('aria-disabled', 'true');
+
+    // The wrapper takes focus (a disabled tab cannot) and describes itself with the reason.
+    const wrapper = screen.getByTestId('subscription-modal-business-tab-wrapper');
+    expect(wrapper).toHaveAttribute('tabindex', '0');
+    const reasonId = wrapper.getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId as string)).toHaveTextContent('Team plans are coming back soon');
+
+    await userEvent.setup({ delay: null }).hover(wrapper);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Team plans are coming back soon');
+
+    // The Team card is not reachable.
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+  });
+
+  it('leaves the Business tab enabled and unexplained when enableTeamPlan is on', () => {
+    renderModal();
+
+    expect(screen.getByRole('tab', { name: 'subscription_modal.business' })).not.toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    expect(screen.getByTestId('subscription-modal-business-tab-wrapper')).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText('Team plans are coming back soon')).not.toBeInTheDocument();
+  });
+
   it('says why Team cannot be bought when its Stripe price is not live, instead of hiding the tab', async () => {
     teamPriceActive = false;
     renderModal();
@@ -130,7 +162,7 @@ describe('SubscriptionModal - Team tab', () => {
   });
 
   it('quotes seats, price and pool size from the admin team plan settings', async () => {
-    settingValues = { teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
+    settingValues = { enableTeamPlan: true, teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
     renderModal();
 
     await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
@@ -148,7 +180,7 @@ describe('SubscriptionModal', () => {
   beforeEach(() => {
     subscriptions = [];
     teamPriceActive = true;
-    settingValues = {};
+    settingValues = { enableTeamPlan: true };
     cancelMutate.mockReset();
     subscribeMutate.mockReset();
     changeMutate.mockReset();

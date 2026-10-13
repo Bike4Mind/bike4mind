@@ -2,6 +2,7 @@ import { useCreateTeamModal } from '@client/app/components/organizations/CreateT
 import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
 import {
   isCancellableSubscriptionStatus,
   isDelinquentSubscriptionStatus,
@@ -9,7 +10,7 @@ import {
   resolveSubscriptionSource,
   SubscriptionSource,
 } from '@client/lib/subscriptions/types';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
 import {
@@ -24,10 +25,11 @@ import {
   tabClasses,
   TabList,
   Tabs,
+  Tooltip,
   Typography,
   useTheme,
 } from '@mui/joy';
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import SubscribeButton from '../Credits/SubscribeButton';
 import ManageSubscriptionButton from './ManageSubscriptionButton';
@@ -97,6 +99,8 @@ const SubscriptionModalContent = () => {
     [subscriptions.data]
   );
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
+  const teamPlanAvailable = useTeamPlanAvailable();
+  const teamTabReasonId = useId();
   const priceMap = useMemo(() => {
     return plans.data?.reduce(
       (acc, plan) => {
@@ -210,12 +214,42 @@ const SubscriptionModalContent = () => {
               {t('subscription_modal.personal')}
             </Tab>
 
-            {/* Always selectable: Team is sold from Teams > Create Team whenever its Stripe price is
-                live, so this tab tells the same story (price, or why it is unavailable) instead of
-                hiding the offer behind a separate switch. */}
-            <Tab disableIndicator value={SubscriptionModalTabs.Business} data-testid="subscription-modal-business-tab">
-              {t('subscription_modal.business')}
-            </Tab>
+            {/* Selectable whenever enableTeamPlan is on, and then tells the story of the Stripe price (or why
+                it is unavailable). Off, the tab stays visible but disabled with a stated reason; the span
+                keeps hover and keyboard focus working, which a disabled tab does not receive. */}
+            <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
+              <span
+                tabIndex={teamPlanAvailable ? undefined : 0}
+                style={{ display: 'inline-flex' }}
+                aria-describedby={teamPlanAvailable ? undefined : teamTabReasonId}
+                data-testid="subscription-modal-business-tab-wrapper"
+              >
+                <Tab
+                  disableIndicator
+                  value={SubscriptionModalTabs.Business}
+                  disabled={!teamPlanAvailable}
+                  data-testid="subscription-modal-business-tab"
+                >
+                  {t('subscription_modal.business')}
+                </Tab>
+                {!teamPlanAvailable && (
+                  <Box
+                    component="span"
+                    id={teamTabReasonId}
+                    sx={{
+                      position: 'absolute',
+                      width: 1,
+                      height: 1,
+                      overflow: 'hidden',
+                      clip: 'rect(0 0 0 0)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {TEAM_PLAN_UNAVAILABLE_MESSAGE}
+                  </Box>
+                )}
+              </span>
+            </Tooltip>
           </TabList>
         </Tabs>
       </Box>

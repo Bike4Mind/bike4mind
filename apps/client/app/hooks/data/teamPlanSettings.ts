@@ -16,6 +16,15 @@ export function useTeamSeatLimits(): Pick<TeamPlanSettings, 'minSeats' | 'maxSea
   }, [teamPlanMinSeats, teamPlanMaxSeats]);
 }
 
+/**
+ * Whether NEW Team purchases are open (`enableTeamPlan`). The single client-side gate for every Team
+ * checkout entry point; the server enforces the same flag in pages/api/organizations/subscriptions/subscribe.ts.
+ * Strictly `=== true` so an unloaded or malformed value fails closed.
+ */
+export function useTeamPlanAvailable(): boolean {
+  return useGetSettingsValue('enableTeamPlan') === true;
+}
+
 /** Team-plan credits granted per seat. Admin-only: the setting is not readable by other users. */
 export function useTeamCreditsPerSeat(): number {
   const raw = useGetSettingsValue('teamPlanCreditsPerSeat');

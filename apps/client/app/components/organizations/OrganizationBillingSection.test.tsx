@@ -26,6 +26,7 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
   useTeamSeatLimits: () => ({ minSeats: 4, maxSeats: 100 }),
+  useTeamPlanAvailable: () => true,
 }));
 vi.mock('@client/app/hooks/data/stripe', () => ({
   useStripePortal: () => ({ mutate: vi.fn(), isPending: false }),

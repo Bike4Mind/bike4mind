@@ -31,8 +31,10 @@ vi.mock('@client/app/hooks/data/stripe', () => ({
 }));
 
 const seatLimits = vi.hoisted(() => ({ current: { minSeats: 3, maxSeats: 7 } }));
+const teamPlan = vi.hoisted(() => ({ available: true }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
   useTeamSeatLimits: () => seatLimits.current,
+  useTeamPlanAvailable: () => teamPlan.available,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -43,6 +45,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 describe('CreateTeamModal', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
+    teamPlan.available = true;
     plansState = defaultPlans();
     useCreateTeamModal.setState({ isOpen: true });
   });
@@ -142,6 +145,36 @@ describe('CreateTeamModal', () => {
     expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
     expect(screen.queryByTestId('create-team-price-value')).toBeNull();
     expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+  });
+
+  it('shows no unavailable message and allows checkout when enableTeamPlan is on', async () => {
+    renderModal();
+
+    expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
+    await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+    expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(false);
+  });
+
+  it('says Team plans are coming back soon and disables Create Team when enableTeamPlan is off', async () => {
+    teamPlan.available = false;
+    renderModal();
+
+    expect(screen.getByTestId('create-team-unavailable').textContent).toBe('Team plans are coming back soon');
+    // Even with a valid name and live price, the button stays disabled and nothing is submitted.
+    await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+    const submit = screen.getByTestId('create-team-submit-btn');
+    expect(submit.hasAttribute('disabled')).toBe(true);
+    submit.click();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('keeps the missing-price error alongside the unavailable message', () => {
+    teamPlan.available = false;
+    plansState = { data: [{ id: 'price_some_other_plan', unit_amount: 3000 }], isLoading: false, isError: false };
+    renderModal();
+
+    expect(screen.getByTestId('create-team-unavailable')).toBeTruthy();
+    expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
   });
 
   it('does not sit on a loading skeleton forever when the plans query is disabled', () => {

@@ -1,6 +1,6 @@
 import { useSubscribeTeamPlan, useCreateTeamDev } from '@client/app/hooks/data/subscriptions';
-import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { useTeamPlanAvailable, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import {
@@ -41,6 +41,7 @@ const CreateTeamModal = () => {
   // later; clamp on read so the stepper, the total and the checkout quantity match what the API accepts.
   const [requestedTeamSize, setTeamSize] = useState(minSeats);
   const teamSize = Math.min(Math.max(requestedTeamSize, minSeats), maxSeats);
+  const teamPlanClosed = !useTeamPlanAvailable();
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const createTeamDev = useCreateTeamDev();
   const plans = useGetSubscriptionPlans();
@@ -71,7 +72,7 @@ const CreateTeamModal = () => {
   };
 
   const handleSubmit = async () => {
-    if (submittingRef.current) return;
+    if (submittingRef.current || teamPlanClosed) return;
     submittingRef.current = true;
     try {
       if (isDevelopment) {
@@ -180,12 +181,18 @@ const CreateTeamModal = () => {
           </Box>
         </FormControl>
 
+        {teamPlanClosed && (
+          <Typography level="body-sm" color="warning" data-testid="create-team-unavailable">
+            {TEAM_PLAN_UNAVAILABLE_MESSAGE}
+          </Typography>
+        )}
+
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }} className="create-team-actions">
           <Button variant="outlined" color="neutral" onClick={handleClose} className="create-team-cancel-button">
             Cancel
           </Button>
           <Button
-            disabled={!teamName.trim() || teamSize < minSeats || isLoading || hasError}
+            disabled={!teamName.trim() || teamSize < minSeats || isLoading || hasError || teamPlanClosed}
             onClick={handleSubmit}
             loading={isSubmitting}
             className="create-team-submit-button"

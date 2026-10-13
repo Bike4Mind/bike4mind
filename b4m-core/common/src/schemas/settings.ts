@@ -3180,6 +3180,8 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  // Single gate for NEW Team purchases: enforced client-side by useTeamPlanAvailable (hooks/data/teamPlanSettings.ts)
+  // and server-side by pages/api/organizations/subscriptions/subscribe.ts.
   enableTeamPlan: makeBooleanSetting({
     key: 'enableTeamPlan',
     userReadable: true,
