@@ -303,6 +303,26 @@ describe('OpenAI cached-input rates', () => {
     expect(cost).toBeCloseTo((400 * 2.5 + 1600 * 1.25) / 1_000_000, 12);
   });
 
+  // Standard-tier rates from OpenAI's pricing page, checked 2026-10-13. Both context
+  // bands are pinned; the cached rate is exactly 0.1x input in each, so no override.
+  it.each([
+    [ChatModels.GPT5_6_SOL, 272_000, 4, 20],
+    [ChatModels.GPT5_6_SOL, 1_050_000, 8, 30],
+    [ChatModels.GPT5_6_TERRA, 272_000, 2, 12],
+    [ChatModels.GPT5_6_TERRA, 1_050_000, 4, 18],
+    [ChatModels.GPT5_6_LUNA, 272_000, 0.2, 1.2],
+    [ChatModels.GPT5_6_LUNA, 1_050_000, 0.4, 1.8],
+  ])(
+    'prices %s at the published %i-token band ($%d in / $%d out per 1M, cache read on the 0.1x default)',
+    async (id, band, inPerM, outPerM) => {
+      const model = await modelById(id);
+      const tier = model.pricing[band];
+      expect(tier.input).toBeCloseTo(inPerM / 1_000_000, 12);
+      expect(tier.output).toBeCloseTo(outPerM / 1_000_000, 12);
+      expect(tier.cache_read).toBeUndefined();
+    }
+  );
+
   it("leaves the GPT-5 family on the 0.1x default, matching OpenAI's published rate", async () => {
     const model = await modelById(ChatModels.GPT5_5);
     const tier = model.pricing[Math.max(...Object.keys(model.pricing).map(Number))];
