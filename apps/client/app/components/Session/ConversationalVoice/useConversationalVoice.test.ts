@@ -30,6 +30,11 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 
 import { useConversationalVoiceStore } from './useConversationalVoice';
 
+const stopTrack = vi.fn();
+const getUserMediaMock = vi.fn();
+const setMediaDevices = (value: unknown) =>
+  Object.defineProperty(navigator, 'mediaDevices', { value, configurable: true, writable: true });
+
 const BOOTSTRAP = {
   session: { id: 's1', name: 'Voice' },
   reasoningModelId: 'model-x',
@@ -52,6 +57,10 @@ describe('useConversationalVoice — auto-reconnect', () => {
     capturedOptions = null;
     startSessionMock.mockClear();
     endSessionMock.mockClear();
+    stopTrack.mockClear();
+    getUserMediaMock.mockReset();
+    getUserMediaMock.mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] });
+    setMediaDevices({ getUserMedia: getUserMediaMock });
     apiPost.mockReset();
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/voice/v2/sessions') return Promise.resolve({ data: BOOTSTRAP });
@@ -124,5 +133,60 @@ describe('useConversationalVoice — auto-reconnect', () => {
     drop();
     expect(useConversationalVoiceStore.getState().phase).toBe('ended');
     expect(endCalls().length).toBeGreaterThanOrEqual(1);
+  });
+
+  const sessionPosts = () => apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions');
+
+  it('releases the mic probe and proceeds on the happy path', async () => {
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    expect(getUserMediaMock).toHaveBeenCalledWith({ audio: true });
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(sessionPosts()).toHaveLength(1);
+    expect(startSessionMock).toHaveBeenCalledTimes(1);
+    expect(endCalls()).toHaveLength(0);
+  });
+
+  it('does not create a session when the microphone is blocked', async () => {
+    getUserMediaMock.mockRejectedValue(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    const state = useConversationalVoiceStore.getState();
+    expect(state.phase).toBe('error');
+    expect(state.errorMessage).toContain('Microphone access was blocked');
+    expect(state.errorMessage).toContain('No credits were used.');
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(startSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('does not create a session when no microphone is found', async () => {
+    getUserMediaMock.mockRejectedValue(Object.assign(new Error('none'), { name: 'NotFoundError' }));
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    expect(useConversationalVoiceStore.getState().errorMessage).toContain('No microphone available');
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('does not create a session when mediaDevices is unavailable', async () => {
+    setMediaDevices(undefined);
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    const state = useConversationalVoiceStore.getState();
+    expect(state.phase).toBe('error');
+    expect(state.errorMessage).toContain('No microphone available');
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('refunds the hold when startSession throws after the session was created', async () => {
+    startSessionMock.mockRejectedValueOnce(Object.assign(new Error('boom'), { name: 'NotReadableError' }));
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    expect(useConversationalVoiceStore.getState().phase).toBe('error');
+    expect(endCalls()).toEqual([['/api/voice/v2/sessions/s1/end', {}]]);
+  });
+
+  it('still surfaces the start error when the refund call itself fails', async () => {
+    startSessionMock.mockRejectedValueOnce(new Error('boom'));
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions' ? Promise.resolve({ data: BOOTSTRAP }) : Promise.reject(new Error('net'))
+    );
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    expect(useConversationalVoiceStore.getState().phase).toBe('error');
+    expect(useConversationalVoiceStore.getState().errorMessage).toContain('boom');
   });
 });

@@ -124,6 +124,24 @@ function formatConnectError(err: unknown): string {
   return `Failed to open voice connection: ${err instanceof Error ? err.message : String(err)}`;
 }
 
+// Check the mic BEFORE /sessions, which reserves credits server-side. Returns a
+// user-facing message when no usable microphone is available, else null.
+async function checkMicrophone(): Promise<string | null> {
+  const getUserMedia = typeof navigator !== 'undefined' ? navigator.mediaDevices?.getUserMedia : undefined;
+  if (!getUserMedia) return 'No microphone available. No credits were used.';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(track => track.stop());
+    return null;
+  } catch (err) {
+    const name = (err as { name?: string })?.name;
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      return 'Microphone access was blocked. Allow it in your browser settings and try again. No credits were used.';
+    }
+    return 'No microphone available. No credits were used.';
+  }
+}
+
 type VoiceSet = (partial: Partial<ConversationalVoiceState>) => void;
 
 // The bits of the original start() request needed to re-establish the transport
@@ -283,8 +301,12 @@ async function establishConnection(
       scheduleReconnect(set, myGen, ctx);
       return;
     }
+    // The server already holds credits for this session; hand them back since
+    // the call never started. Not reached when end() superseded us (it reconciles).
+    const sid = activeSessionId;
     activeSessionId = null;
     set({ phase: 'error', errorMessage: formatConnectError(err) });
+    await reconcileVoiceSession(sid);
   }
 }
 
@@ -301,6 +323,12 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     reconnectAttempts = 0;
     const myGen = ++startGen;
     set({ phase: 'requesting-session', errorMessage: null, mode: null, lastUserMessage: null });
+    const micError = await checkMicrophone();
+    if (myGen !== startGen) return; // end() or a newer start() superseded us
+    if (micError) {
+      set({ phase: 'error', errorMessage: micError });
+      return;
+    }
     await establishConnection(set, myGen, { sessionId, reasoningModelId, onSessionResolved }, false);
   },
 
