@@ -61,7 +61,7 @@ describe('buildOpenApiDocument', () => {
     expect(completions.requestBody.content['application/json'].schema).toEqual(ref('createCompletionRequest'));
     expect(tools.requestBody.content['application/json'].schema).toEqual(ref('executeToolRequest'));
     // 4xx references the shared error envelope; tools 500 returns the full result body.
-    expect(completions.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    expect(completions.responses['400'].content['application/json'].schema).toEqual(ref('createCompletionResponse400'));
     expect(tools.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     expect(tools.responses['200'].content['application/json'].schema).toEqual(ref('executeToolResponse200'));
     expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('executeToolResponse500'));
@@ -118,7 +118,8 @@ describe('buildOpenApiDocument', () => {
 
   it('documents every pre-stream completions failure as a JSON error with a real status', () => {
     const json = (status: string) => completions.responses[status].content['application/json'].schema;
-    expect(json('400')).toEqual(ref('ErrorResponse'));
+    expect(json('400')).toEqual(ref('createCompletionResponse400'));
+    expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual(['unknown_model']);
     expect(json('413')).toEqual(ref('ErrorResponse'));
     expect(json('422')).toEqual(ref('createCompletionResponse422'));
     expect(doc.components.schemas.createCompletionResponse422.properties.errorCode).toBeDefined();

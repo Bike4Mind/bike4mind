@@ -22,6 +22,7 @@ import {
   BadRequestError,
   HTTPError,
   type CompletionSource,
+  type ApiErrorCode,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -376,17 +377,23 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   });
 
   if (!llm) {
-    const message = `Failed to create LLM backend for model: ${model}`;
-    if (!catalogued) throw new BadRequestError(message);
+    const unknownModel = new BadRequestError(
+      `Unknown model '${params.model}'. List the models this key can call with GET /api/v1/models.`,
+      { errorCode: 'unknown_model' satisfies ApiErrorCode }
+    );
+    if (!catalogued) throw unknownModel;
     const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {
       logger?.error?.('[cliCompletions] provider check failed; answering 503', { model, cause });
       return false;
     });
-    if (!providerConfigured) throw new HTTPError(503, message, { errorCode: 'provider_not_configured' });
+    if (!providerConfigured)
+      throw new HTTPError(503, `Failed to create LLM backend for model: ${model}`, {
+        errorCode: 'provider_not_configured',
+      });
     // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status
     // would loop clients forever. Static listings cannot time out, so absence here is not transient.
     logger?.warn?.('[cliCompletions] catalogued model unavailable on a configured provider', { model });
-    throw new BadRequestError(message);
+    throw unknownModel;
   }
 
   llm.currentModel = model;

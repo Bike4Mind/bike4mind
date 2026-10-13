@@ -330,6 +330,11 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
 });
 
+/** 400 for a `model` the caller cannot use; `errorCode` is absent on the other 400s (e.g. malformed JSON). */
+export const UnknownModelErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal('unknown_model' satisfies ApiErrorCode).optional(),
+});
+
 /**
  * Error envelope for the 403 apiKeyAuth (apps/client/server/middlewares/apiKeyAuth.ts)
  * throws when an API key lacks a route's scopes. It names what the ROUTE requires,

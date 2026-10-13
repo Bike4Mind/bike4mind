@@ -30,6 +30,8 @@ export const API_ERROR_CODES = [
   'provider_not_configured',
   /** The provider REFUSED the key we sent. */
   'provider_rejected',
+  /** The `model` is not one this caller can use; remediation is choosing an id from GET /api/v1/models. */
+  'unknown_model',
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',

@@ -3,7 +3,12 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
 // (the barrel drags in @bike4mind/hearth, unbuilt in the CI openapi job).
 import { CompletionRequestSchema, CompletionStreamEventSchema } from '../../schemas/cliCompletions';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema, ProviderNotConfiguredErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  ProviderNotConfiguredErrorSchema,
+  UnknownModelErrorSchema,
+} from '../../schemas/chat';
 
 /**
  * Contract for POST /api/ai/v1/completions - the public streaming completions
@@ -33,7 +38,7 @@ export const createCompletionContract = defineEndpoint({
     '`source`) form and are translated to whatever the target model speaks. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
-    'a real HTTP status, before any stream opens: malformed JSON or an unknown or retired `model` `400`, a bad ' +
+    'a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad ' +
     'credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB ' +
     '`413`, a body that fails schema validation `422`, insufficient credits `422` with ' +
     '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model ' +
@@ -66,7 +71,12 @@ export const createCompletionContract = defineEndpoint({
         stopReason: 'end_turn',
       },
     },
-    400: { description: 'Malformed JSON body, or a `model` outside the catalog.', schema: ApiErrorSchema },
+    400: {
+      description:
+        'Malformed or otherwise invalid request (no `errorCode`), or a `model` this key cannot call (`errorCode: "unknown_model"`): ' +
+        'not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`.',
+      schema: UnknownModelErrorSchema,
+    },
     413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },
     422: {
       description:

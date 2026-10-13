@@ -85,7 +85,7 @@ export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
  * canonical `options.<field>` location before downstream consumption.
  */
 export const CompletionRequestSchema = z.object({
-  model: z.string(),
+  model: z.string().max(256),
   messages: z.array(CompletionMessageSchema),
   response_format: ResponseFormatSchema.optional(),
   stream: z.boolean().optional(),
