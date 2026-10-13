@@ -4,20 +4,20 @@
     "language": {
       "type": "choice",
       "choice": "de",
+      "confidence": 1,
       "probabilities": {
-        "ja": 0.01,
-        "fr": 0.03,
-        "es": 0.02,
-        "en": 0.05,
-        "it": 0.01,
-        "de": 0.86,
-        "pt": 0.02
-      },
-      "confidence": 0.84
+        "en": 0,
+        "de": 1,
+        "fr": 0,
+        "es": 0,
+        "it": 0,
+        "pt": 0,
+        "ja": 0
+      }
     }
   },
   "usage": {
-    "input_tokens": 88,
-    "output_tokens": 44
+    "input_tokens": 327,
+    "output_tokens": 66
   }
 }

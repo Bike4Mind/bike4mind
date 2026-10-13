@@ -1,6 +1,6 @@
 {
   "detail": {
-    "error_type": "invalid_request",
-    "message": "questions.q.type: Input should be 'noul', 'choice' or 'score'"
+    "error_type": "api_usage_error",
+    "message": "Invalid request."
   }
 }

@@ -1,6 +1,3 @@
 {
-  "detail": {
-    "error_type": "invalid_request",
-    "message": "questions.q.criteria: at most 255 choices"
-  }
+  "detail": "Too many choices. Must have at most 255 choices."
 }

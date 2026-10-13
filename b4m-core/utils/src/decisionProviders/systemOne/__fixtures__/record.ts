@@ -18,6 +18,7 @@ import type { DecisionProviderRequest } from '../../types';
 import { assertNoSecret } from '../../../videoProviders/veo/__fixtures__/scrub';
 import {
   SystemOneDecisionProvider,
+  UNKNOWN_MODEL_PREFIX,
   readSystemOneErrorMessage,
   toSystemOneRequestBody,
 } from '../SystemOneDecisionProvider';
@@ -68,7 +69,7 @@ const decision = (
 
 type Scenario =
   | { name: string; kind: 'success'; request: DecisionProviderRequest }
-  | { name: string; kind: 'raw'; body: unknown; status: number | readonly number[]; apiKey?: string };
+  | { name: string; kind: 'raw'; body: unknown; status: number; apiKey?: string; messagePrefix?: string };
 
 // `success` scenarios go through the adapter's own request mapping and, under --check, the adapter's parsing.
 // `raw` scenarios post a body the adapter cannot produce (or a different key) and pin only the status and envelope.
@@ -159,8 +160,9 @@ const SCENARIOS: readonly Scenario[] = [
   {
     name: 'err_unknown_model',
     kind: 'raw',
-    // Not yet observed live: the adapter maps 404 to `upstream` and 400 to `invalid_request`.
-    status: [400, 404],
+    // The adapter keys its `upstream` mapping on this wording, so a rewording is drift.
+    status: 400,
+    messagePrefix: UNKNOWN_MODEL_PREFIX,
     body: { ...toSystemOneRequestBody(decision([URGENT])), model: 'jev-0.0.0' },
   },
 ];
@@ -186,8 +188,7 @@ const call = async (scenario: Scenario): Promise<{ status: number; body: unknown
   }
 };
 
-const acceptedStatuses = (scenario: Scenario): readonly number[] =>
-  scenario.kind === 'raw' ? [scenario.status].flat() : [200];
+const expectedStatus = (scenario: Scenario): number => (scenario.kind === 'raw' ? scenario.status : 200);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
@@ -198,11 +199,15 @@ const hasKnownErrorEnvelope = (status: number, body: unknown): boolean =>
 const check = async (scenario: Scenario): Promise<string[]> => {
   const drift: string[] = [];
   const { status, body } = await call(scenario);
-  if (!acceptedStatuses(scenario).includes(status)) {
-    drift.push(`${scenario.name}: expected HTTP ${acceptedStatuses(scenario).join(' or ')}, got ${status}`);
+  if (status !== expectedStatus(scenario)) {
+    drift.push(`${scenario.name}: expected HTTP ${expectedStatus(scenario)}, got ${status}`);
   }
   if (status !== 200 && !hasKnownErrorEnvelope(status, body)) {
     drift.push(`${scenario.name}: HTTP ${status} body fits no known error envelope: ${JSON.stringify(body)}`);
+  }
+  const message = readSystemOneErrorMessage(body);
+  if (scenario.kind === 'raw' && scenario.messagePrefix && !message?.startsWith(scenario.messagePrefix)) {
+    drift.push(`${scenario.name}: error message no longer starts with "${scenario.messagePrefix}": ${message}`);
   }
   if (scenario.kind === 'success') {
     try {
@@ -231,8 +236,8 @@ const record = async (scenarios: readonly Scenario[]) => {
   for (const scenario of scenarios) {
     const { status, body } = await call(scenario);
     // A body recorded under an unexpected status would silently replay as the wrong scenario.
-    if (!acceptedStatuses(scenario).includes(status)) {
-      throw new Error(`${scenario.name}: expected HTTP ${acceptedStatuses(scenario).join(' or ')}, got ${status}`);
+    if (status !== expectedStatus(scenario)) {
+      throw new Error(`${scenario.name}: expected HTTP ${expectedStatus(scenario)}, got ${status}`);
     }
     const serialized = `${JSON.stringify(body, null, 2)}\n`;
     assertNoSecret(serialized, apiKey);

@@ -3,11 +3,11 @@
   "answers": {
     "is_urgent": {
       "type": "noul",
-      "noul": 0.71
+      "noul": 0.28
     }
   },
   "usage": {
-    "input_tokens": 49,
-    "output_tokens": 21
+    "input_tokens": 291,
+    "output_tokens": 23
   }
 }

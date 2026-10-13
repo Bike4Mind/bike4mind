@@ -35,6 +35,8 @@ const SystemOneErrorSchema = z.looseObject({
   detail: z.union([z.string(), z.looseObject({ message: z.string() })]),
 });
 
+export const UNKNOWN_MODEL_PREFIX = 'Unknown model';
+
 /** The vendor's own wording from either 400 envelope, or undefined when the body fits neither. */
 export const readSystemOneErrorMessage = (body: unknown): string | undefined => {
   const parsed = SystemOneErrorSchema.safeParse(body);
@@ -121,10 +123,13 @@ const toProviderError = (response: Response, body: unknown): DecisionProviderErr
   const details = { status, retryAfterMs: parseRetryAfterMs(response.headers), raw: body };
   const kind = classifyStatus(status);
   if (kind !== 'client_error') return new DecisionProviderError(kind, `TypeSafe returned ${status}`, details);
-  // The vendor's wording describes its own wire format, not our caller's request, so it stays in `raw`. A 404 is an
-  // unknown model: catalog drift on our side, not something the caller can fix.
-  if (status === 404) return new DecisionProviderError('upstream', 'TypeSafe could not find the model', details);
   const message = readSystemOneErrorMessage(body);
+  // Jev reports an unknown model as a plain 400. Validation only admits catalog ids, so that is catalog drift on our
+  // side, not something the caller can fix. The nightly contract probe pins this wording.
+  if (message?.startsWith(UNKNOWN_MODEL_PREFIX)) {
+    return new DecisionProviderError('upstream', 'TypeSafe does not recognize the model', details);
+  }
+  // The vendor's wording describes its own wire format, not our caller's request, so it stays in `raw`.
   return new DecisionProviderError('invalid_request', 'The decision provider rejected the request.', {
     ...details,
     raw: { message, body },

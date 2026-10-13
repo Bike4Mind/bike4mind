@@ -4,16 +4,16 @@
     "team": {
       "type": "choice",
       "choice": "billing",
+      "confidence": 0.98,
       "probabilities": {
-        "sales": 0.02,
-        "billing": 0.91,
-        "technical": 0.07
-      },
-      "confidence": 0.87
+        "billing": 0.99,
+        "technical": 0.01,
+        "sales": 0
+      }
     }
   },
   "usage": {
-    "input_tokens": 52,
-    "output_tokens": 31
+    "input_tokens": 316,
+    "output_tokens": 38
   }
 }

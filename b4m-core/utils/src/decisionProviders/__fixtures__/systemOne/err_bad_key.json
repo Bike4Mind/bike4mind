@@ -1,3 +1,6 @@
 {
-  "detail": "Invalid API key"
+  "detail": {
+    "error_type": "authentication_error",
+    "message": "Cannot authenticate with the server. Please check your API key and try again."
+  }
 }

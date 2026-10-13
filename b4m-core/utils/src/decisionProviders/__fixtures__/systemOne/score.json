@@ -3,22 +3,22 @@
   "answers": {
     "frustration": {
       "type": "score",
-      "score": 1.73,
+      "score": 1.01,
+      "confidence": 0.95,
       "legend": {
         "0": "calm",
         "1": "frustrated",
         "2": "angry"
       },
       "probabilities": {
-        "2": 0.78,
-        "0": 0.05,
-        "1": 0.17
-      },
-      "confidence": 0.6
+        "0": 0.01,
+        "1": 0.97,
+        "2": 0.02
+      }
     }
   },
   "usage": {
-    "input_tokens": 57,
-    "output_tokens": 38
+    "input_tokens": 308,
+    "output_tokens": 19
   }
 }

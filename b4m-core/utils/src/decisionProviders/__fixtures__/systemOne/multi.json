@@ -3,36 +3,36 @@
   "answers": {
     "is_urgent": {
       "type": "noul",
-      "noul": 0.93
+      "noul": 0.37
     },
     "team": {
       "type": "choice",
       "choice": "billing",
+      "confidence": 0.98,
       "probabilities": {
-        "sales": 0.02,
-        "billing": 0.91,
-        "technical": 0.07
-      },
-      "confidence": 0.87
+        "billing": 0.99,
+        "technical": 0.01,
+        "sales": 0
+      }
     },
     "frustration": {
       "type": "score",
-      "score": 1.73,
+      "score": 1.02,
+      "confidence": 0.95,
       "legend": {
         "0": "calm",
         "1": "frustrated",
         "2": "angry"
       },
       "probabilities": {
-        "2": 0.78,
-        "0": 0.05,
-        "1": 0.17
-      },
-      "confidence": 0.6
+        "0": 0.01,
+        "1": 0.97,
+        "2": 0.02
+      }
     }
   },
   "usage": {
-    "input_tokens": 130,
-    "output_tokens": 52
+    "input_tokens": 371,
+    "output_tokens": 73
   }
 }

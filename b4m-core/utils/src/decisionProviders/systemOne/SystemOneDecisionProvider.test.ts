@@ -126,8 +126,8 @@ describeDecisionProviderConformance('TypeSafe', {
       arm: respondWithFixture('err_too_many_choices'),
     },
     {
-      label: 'an unknown model',
-      kind: statusOf('err_unknown_model') === 404 ? 'upstream' : 'invalid_request',
+      label: 'an unknown model (catalog drift)',
+      kind: 'upstream',
       request: request([predicate('p')]),
       arm: respondWithFixture('err_unknown_model'),
     },
@@ -227,20 +227,22 @@ describe('SystemOneDecisionProvider wire mapping', () => {
 
   it('re-orders choice probabilities to the request order and ignores the vendor confidence', async () => {
     respondWithFixture('choice_many')();
-    const decision = await new SystemOneDecisionProvider().decide(request([LANGUAGE]), ctx());
+    // The recording came back in request order, so ask in reverse to make the two orders differ.
+    const reversed = choice('language', ['ja', 'pt', 'it', 'es', 'fr', 'de', 'en']);
+    const decision = await new SystemOneDecisionProvider().decide(request([reversed]), ctx());
     const [answer] = decision.answers;
     expect(answer.type).toBe('choice');
     if (answer.type !== 'choice') return;
-    expect(Object.keys(answer.probabilities)).toEqual(['en', 'de', 'fr', 'es', 'it', 'pt', 'ja']);
-    expect(answer.probabilities.de).toBe(0.86);
-    expect(answer.probabilities.en).toBe(0.05);
+    expect(Object.keys(answer.probabilities)).toEqual(['ja', 'pt', 'it', 'es', 'fr', 'de', 'en']);
+    expect(answer.probabilities.de).toBe(1);
+    expect(answer.probabilities.en).toBe(0);
     expect(answer).not.toHaveProperty('confidence');
   });
 
   it('turns score probabilities keyed by level index into a level-ordered distribution', async () => {
     respondWithFixture('score')();
     const decision = await new SystemOneDecisionProvider().decide(request([FRUSTRATION]), ctx());
-    expect(decision.answers[0]).toEqual({ type: 'score', probabilities: { 0: 0.05, 1: 0.17, 2: 0.78 } });
+    expect(decision.answers[0]).toEqual({ type: 'score', probabilities: { 0: 0.01, 1: 0.97, 2: 0.02 } });
   });
 
   it('returns the versioned model and the vendor usage as-is', async () => {
@@ -249,7 +251,7 @@ describe('SystemOneDecisionProvider wire mapping', () => {
       request([TEAM], 'Help, payouts failing.', 'jev-latest'),
       ctx()
     );
-    expect(decision).toMatchObject({ model: 'jev-1.13.0', usage: { inputTokens: 52, outputTokens: 31 } });
+    expect(decision).toMatchObject({ model: 'jev-1.13.0', usage: { inputTokens: 316, outputTokens: 38 } });
   });
 
   it('posts to a custom base URL', async () => {
@@ -289,7 +291,7 @@ describe('SystemOneDecisionProvider wire mapping', () => {
 
   it('accepts a single-level score body without judging it; level counts are enforced upstream of the adapter', async () => {
     respondWithFixture('err_one_level')();
-    const decision = await new SystemOneDecisionProvider().decide(request([score('severity', ['only'])]), ctx());
+    const decision = await new SystemOneDecisionProvider().decide(request([score('q', ['only'])]), ctx());
     expect(decision.answers[0]).toEqual({ type: 'score', probabilities: { 0: 1 } });
   });
 

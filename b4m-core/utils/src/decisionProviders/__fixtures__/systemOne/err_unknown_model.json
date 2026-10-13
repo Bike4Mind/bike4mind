@@ -1,6 +1,6 @@
 {
   "detail": {
-    "error_type": "invalid_request",
-    "message": "Unknown model: jev-0"
+    "error_type": "api_usage_error",
+    "message": "Unknown model: jev-0.0.0"
   }
 }
