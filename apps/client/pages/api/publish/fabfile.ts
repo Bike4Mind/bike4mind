@@ -14,6 +14,7 @@ import {
   checkScopePermission,
   checkPublishQuota,
   invalidatePublishCdn,
+  restrictDuplicatePublications,
   toCacheTarget,
   type PublishUser,
 } from '@server/services/publish';
@@ -233,8 +234,10 @@ const handler = baseApi().post(async (req, res) => {
 
   // A page that was public may be CDN-cached; purge it so a downgrade stops serving at once.
   if (existing?.visibility === 'public' || saved.visibility === 'public') {
-    void invalidatePublishCdn(toCacheTarget(saved), req.logger);
+    await invalidatePublishCdn(toCacheTarget(saved), req.logger);
   }
+  // Records minted before one-per-owner+source can still be serving this fabfile; narrow them too.
+  await restrictDuplicatePublications(saved, req.logger);
 
   req.logger.info(`[PUBLISH] fabfile ${body.fabFileId} → /p/f/${saved.publicId}`);
 

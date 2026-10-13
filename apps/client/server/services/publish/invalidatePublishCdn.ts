@@ -48,8 +48,10 @@ export function toCacheTarget(a: {
  *  matches by path across all host variants, so listing `/uc/...` clears it regardless
  *  of whether the cache policy keys on Host. */
 export function publishCachePaths(t: PublishCacheTarget): string[] {
-  if (t.sourceKind === 'reply') return [`/p/r/${t.publicId}`];
-  if (t.sourceKind === 'fabfile') return [`/p/f/${t.publicId}`];
+  // Replies and files are cached under query variants too (`?format=raw` - the full text - and the
+  // `?a={i}` embedded-artifact frames), so they need the same bare-wildcard belt as bundles below.
+  if (t.sourceKind === 'reply') return [`/p/r/${t.publicId}`, `/p/r/${t.publicId}*`];
+  if (t.sourceKind === 'fabfile') return [`/p/f/${t.publicId}`, `/p/f/${t.publicId}*`];
   const base = buildPublishUrlPath(t.tier, t.scopeId, t.slug); // /p/{prefix}/{scopeId}/{slug}
   const ucBase = base.replace(/^\/p\b/, '/uc'); // isolated-origin path (mirrors the serve handler)
   // `${base}*` (no slash) in addition to `${base}/*`: a slash-wildcard matches further path

@@ -32,16 +32,16 @@ beforeEach(() => {
 });
 
 describe('publishCachePaths', () => {
-  it('maps a reply to its short path', () => {
+  it('maps a reply to its short path plus its query variants (?format=raw, ?a=)', () => {
     expect(
       publishCachePaths({ publicId: 'abc', tier: 'user', scopeId: 'u1', slug: 'r-abc', sourceKind: 'reply' })
-    ).toEqual(['/p/r/abc']);
+    ).toEqual(['/p/r/abc', '/p/r/abc*']);
   });
 
-  it('maps a fabfile to its short path', () => {
+  it('maps a fabfile to its short path plus its query variants', () => {
     expect(
       publishCachePaths({ publicId: 'xyz', tier: 'user', scopeId: 'u1', slug: 'f-xyz', sourceKind: 'fabfile' })
-    ).toEqual(['/p/f/xyz']);
+    ).toEqual(['/p/f/xyz', '/p/f/xyz*']);
   });
 
   it('maps a bundle to its index + asset glob on BOTH the /p and /uc (isolated) origins', () => {

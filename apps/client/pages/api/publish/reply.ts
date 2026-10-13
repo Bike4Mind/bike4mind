@@ -14,6 +14,7 @@ import {
   checkScopePermission,
   checkPublishQuota,
   invalidatePublishCdn,
+  restrictDuplicatePublications,
   toCacheTarget,
   type PublishUser,
 } from '@server/services/publish';
@@ -208,8 +209,10 @@ const handler = baseApi().post(async (req, res) => {
   // The serve route lets a CDN cache open-public pages, so a page that WAS public must be purged
   // or a downgrade to Private/Team keeps serving the cached public copy until its TTL runs out.
   if (existing?.visibility === 'public' || saved.visibility === 'public') {
-    void invalidatePublishCdn(toCacheTarget(saved), req.logger);
+    await invalidatePublishCdn(toCacheTarget(saved), req.logger);
   }
+  // Records minted before one-per-owner+source can still be serving this reply; narrow them too.
+  await restrictDuplicatePublications(saved, req.logger);
 
   req.logger.info(`[PUBLISH] reply session=${body.sessionId} msg=${body.messageId} → /p/r/${saved.publicId}`);
 

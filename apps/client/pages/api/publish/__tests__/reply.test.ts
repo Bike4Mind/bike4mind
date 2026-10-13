@@ -9,6 +9,7 @@ const dbMocks = vi.hoisted(() => ({
   publishedFindOneLean: vi.fn(),
   publishedFindOne: vi.fn(),
   invalidatePublishCdn: vi.fn(),
+  restrictDuplicatePublications: vi.fn(),
   findOneAndUpdate: vi.fn(),
 }));
 
@@ -36,6 +37,7 @@ vi.mock('@server/services/publish', () => ({
   checkScopePermission: () => ({ ok: true }),
   checkPublishQuota: () => ({ ok: true }),
   invalidatePublishCdn: dbMocks.invalidatePublishCdn,
+  restrictDuplicatePublications: dbMocks.restrictDuplicatePublications,
   toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
 }));
 
@@ -247,6 +249,14 @@ describe('POST /api/publish/reply - re-publish updates the owner record in place
   it('purges the CDN when a public page is downgraded, so the public copy stops serving', async () => {
     await run({ id: OWNER }, { visibility: 'private' });
     expect(dbMocks.invalidatePublishCdn).toHaveBeenCalledWith({ publicId: 'live123' }, expect.anything());
+  });
+
+  it('narrows any older duplicate of the same reply to the saved record', async () => {
+    await run({ id: OWNER }, { visibility: 'private' });
+    expect(dbMocks.restrictDuplicatePublications).toHaveBeenCalledWith(
+      expect.objectContaining({ publicId: 'live123', visibility: 'private' }),
+      expect.anything()
+    );
   });
 
   it('does not purge when nothing public was or is being served', async () => {
