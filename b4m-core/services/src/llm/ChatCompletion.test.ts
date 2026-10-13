@@ -66,6 +66,14 @@ import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
+import { FlaggedContentError, BedrockGuardrailsService, OpenaiModerationsService } from '@bike4mind/utils';
+import { applyModerationHit } from '../userService/moderationPolicy';
+
+vi.mock('../userService/moderationPolicy', () => ({
+  applyModerationHit: vi.fn().mockResolvedValue({ hitsInWindow: 1, status: 'active' }),
+  MODERATION_POLICY: {},
+  moderationThrottleKey: vi.fn(),
+}));
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -127,6 +135,10 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   OpenaiModerationsService: vi.fn().mockImplementation(function () {
     return { checkPrompt: vi.fn() };
   }),
+  BedrockGuardrailsService: vi.fn().mockImplementation(function () {
+    return { checkPrompt: vi.fn() };
+  }),
+  FlaggedContentError: (await importOriginal<typeof import('@bike4mind/utils')>()).FlaggedContentError,
   ClientMessageSender: vi.fn().mockImplementation(function () {
     return {
       send: vi.fn(),
@@ -8041,5 +8053,164 @@ describe('resolveDeniedTools', () => {
 
   it('is undefined when neither source denies anything', () => {
     expect(resolveDeniedTools([], [])).toBeUndefined();
+  });
+});
+
+describe('prompt moderation', () => {
+  // These tests exercise the moderation path in ChatCompletionProcess.process() by
+  // controlling three knobs: ModerationEnabled (via getDefaultSettingValue spy),
+  // apiKeyTable.openai (via getEffectiveLLMApiKeys mock), and BedrockGuardrailId
+  // (via getSettingsValue mock). The underlying service constructors are already
+  // stubbed in the top-level vi.mock('@bike4mind/utils') block.
+
+  let service: ChatCompletionProcess;
+  let mockLogger: any;
+
+  const baseOptions = {
+    session: { userId: 'user1', sessionId: 'sess1', organizationId: null },
+    questId: 'q1',
+    user: { id: 'user1' },
+  };
+
+  function wireModMocks({ openaiKey, guardrailId }: { openaiKey: string | null; guardrailId: string | null }) {
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (t: string[]) => Promise<void>) => {
+          await cb(['Hi!']);
+        }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: 'gpt-4',
+    } as any);
+    mockedGetAvailableModels.mockResolvedValue([
+      {
+        id: 'gpt-4',
+        type: 'text',
+        name: 'GPT-4',
+        backend: 'openai',
+        max_tokens: 100,
+        contextWindow: 1000,
+        can_stream: false,
+        pricing: {},
+        supportsImageVariation: false,
+      },
+    ] as any);
+    mockedBuildAndSortMessages.mockResolvedValue({
+      messages: [{ role: 'user', content: 'Hello' }],
+      messageTruncation: null,
+    } as any);
+    mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+    mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+    mockedGetEffectiveLLMApiKeys.mockResolvedValue({ openai: openaiKey } as any);
+    mockedGetSettingsValue.mockImplementation(((key: string) => {
+      if (key === 'BedrockGuardrailId') return guardrailId ?? '';
+      if (key === 'BedrockGuardrailVersion') return 'DRAFT';
+      return undefined;
+    }) as any);
+  }
+
+  beforeEach(() => {
+    vi.mocked(applyModerationHit).mockResolvedValue({ hitsInWindow: 1, status: 'active' } as any);
+    vi.mocked(BedrockGuardrailsService).mockImplementation(function (this: any) {
+      this.checkPrompt = vi.fn();
+    } as any);
+    vi.mocked(OpenaiModerationsService).mockImplementation(function (this: any) {
+      this.checkPrompt = vi.fn();
+    } as any);
+
+    const db = {
+      quests: {
+        findById: vi.fn().mockResolvedValue({ id: 'q1', status: 'running', sessionId: 'sess1', callback: undefined }),
+        settleIfUnfinished: vi.fn(),
+        updateOne: vi.fn(),
+      },
+      sessions: { findById: vi.fn().mockResolvedValue({ userId: 'user1', sessionId: 'sess1', organizationId: null }) },
+      users: { findById: vi.fn().mockResolvedValue({ id: 'user1' }), updateOne: vi.fn() },
+      adminSettings: { getSettingsMap: vi.fn().mockResolvedValue({}), getSettingsValue: vi.fn() },
+      projects: { findById: vi.fn() },
+    };
+    mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    service = new ChatCompletionProcess(baseOptions as any);
+    service.db = db as any;
+    (service as any).statusManager = { sendStatusUpdate: vi.fn() };
+    vi.spyOn(service, 'sendStatusUpdate').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'buildOptimizedFeatures').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'loadAdminSettingsAsync').mockResolvedValue({});
+    vi.spyOn(service as any, 'fabFilesToMessages').mockResolvedValue({ promptMessages: [], convertedFabFiles: [] });
+  });
+
+  afterEach(() => {
+    mockedGetSettingsValue.mockReset();
+    mockedGetEffectiveLLMApiKeys.mockReset();
+  });
+
+  const startParams = {
+    sessionId: 'sess1',
+    questId: 'q1',
+    message: 'Hello',
+    model: 'gpt-4',
+    tools: [],
+    projectId: undefined,
+    organizationId: undefined,
+  };
+
+  it('calls OpenaiModerationsService when an OpenAI key is available', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
+      key === 'ModerationEnabled' ? true : false
+    );
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(OpenaiModerationsService).toHaveBeenCalledWith('demo-key', expect.anything());
+    const instance = vi.mocked(OpenaiModerationsService).mock.instances[0] as any;
+    expect(instance.checkPrompt).toHaveBeenCalledWith('Hello');
+    expect(BedrockGuardrailsService).not.toHaveBeenCalled();
+  });
+
+  it('calls BedrockGuardrailsService when no OpenAI key but guardrail is configured', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
+    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
+      key === 'ModerationEnabled' ? true : false
+    );
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(BedrockGuardrailsService).toHaveBeenCalledWith('my-guardrail', 'DRAFT', expect.anything());
+    const instance = vi.mocked(BedrockGuardrailsService).mock.instances[0] as any;
+    expect(instance.checkPrompt).toHaveBeenCalledWith('Hello');
+    expect(OpenaiModerationsService).not.toHaveBeenCalled();
+  });
+
+  it('skips moderation when no OpenAI key and no guardrail configured', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
+      key === 'ModerationEnabled' ? true : false
+    );
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(OpenaiModerationsService).not.toHaveBeenCalled();
+    expect(BedrockGuardrailsService).not.toHaveBeenCalled();
+  });
+
+  it('records a moderation hit with source bedrock when Bedrock Guardrails blocks a prompt', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
+    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
+      key === 'ModerationEnabled' ? true : false
+    );
+    vi.mocked(BedrockGuardrailsService).mockImplementation(function (this: any) {
+      this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', ['violence']));
+    } as any);
+
+    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
+      FlaggedContentError
+    );
+
+    expect(applyModerationHit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hit: expect.objectContaining({ source: 'bedrock', categories: ['violence'] }),
+      })
+    );
   });
 });

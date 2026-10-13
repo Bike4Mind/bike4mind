@@ -63,6 +63,7 @@ import {
   ForbiddenError,
   TooManyRequestsError,
   OpenaiModerationsService,
+  BedrockGuardrailsService,
   FlaggedContentError,
   processFabFilesServer,
   processUrlsFromPrompt,
@@ -2484,11 +2485,44 @@ export class ChatCompletionProcess {
             }ms`
           );
         } else {
-          logger.info(
-            `⏱️ [${
-              Date.now() - processStartTime
-            }ms] Skipping OpenAI moderation - no OpenAI key available for model ${model}`
-          );
+          const guardrailId = getSettingsValue('BedrockGuardrailId', defaultAdminSettings);
+          if (guardrailId) {
+            const guardrailVersion = getSettingsValue('BedrockGuardrailVersion', defaultAdminSettings) || 'DRAFT';
+            try {
+              await new BedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
+            } catch (moderationError) {
+              if (moderationError instanceof FlaggedContentError) {
+                try {
+                  const decision = await applyModerationHit({
+                    users: this.db.users,
+                    userId: this.user.id,
+                    hit: { at: new Date(), categories: moderationError.categories, source: 'bedrock', questId },
+                  });
+                  logger.warn(
+                    `🚦 [Moderation] User ${this.user.id} flagged by Bedrock Guardrails (${moderationError.categories.join(', ')}); ` +
+                      `${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
+                  );
+                } catch (recordError) {
+                  logger.error(
+                    `🚦 [Moderation] Failed to record Bedrock moderation hit for user ${this.user.id}:`,
+                    recordError
+                  );
+                }
+              }
+              throw moderationError;
+            }
+            logger.info(
+              `⏱️ [${Date.now() - processStartTime}ms] Bedrock Guardrails check completed in ${
+                Date.now() - moderationStartTime
+              }ms`
+            );
+          } else {
+            logger.info(
+              `⏱️ [${
+                Date.now() - processStartTime
+              }ms] Skipping moderation - configure openaiDemoKey or BedrockGuardrailId to cover keyless users`
+            );
+          }
         }
       }
 
