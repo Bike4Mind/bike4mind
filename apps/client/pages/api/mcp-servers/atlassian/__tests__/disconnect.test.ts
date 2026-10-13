@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   findByAtlassianCloudId: vi.fn(),
   deleteConfig: vi.fn(),
   deleteSubs: vi.fn(),
+  findOwnSub: vi.fn(),
+  deleteSub: vi.fn(),
   findOneAndDelete: vi.fn(),
 }));
 
@@ -25,7 +27,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findById, update: h.update },
   jiraWebhookConfigRepository: { findByAtlassianCloudId: h.findByAtlassianCloudId, delete: h.deleteConfig },
-  jiraWebhookSubscriptionRepository: { deleteByWebhookConfig: h.deleteSubs },
+  jiraWebhookSubscriptionRepository: {
+    deleteByWebhookConfig: h.deleteSubs,
+    findByUserAndConfig: h.findOwnSub,
+    delete: h.deleteSub,
+  },
 }));
 vi.mock('@bike4mind/database/ai', () => ({ McpServer: { findOneAndDelete: h.findOneAndDelete } }));
 vi.mock('@bike4mind/common', () => ({ McpServerName: { Atlassian: 'atlassian' } }));
@@ -47,21 +53,27 @@ describe('DELETE /api/mcp-servers/atlassian/disconnect', () => {
     h.findById.mockResolvedValue({ atlassianConnect: { resources: [{ id: 'cloud-1' }] } });
     h.findByAtlassianCloudId.mockResolvedValue({ id: 'jcfg-1', createdBy: 'user-1' });
     h.deleteSubs.mockResolvedValue(2);
+    h.findOwnSub.mockImplementation(async (userId: string) => ({ id: `sub-${userId}` }));
   });
 
-  it('removes a shared webhook config only for its creator or an admin, and always removes the own connection', async () => {
+  it('cascades the shared webhook config only for its creator and removes only the caller own subscription otherwise', async () => {
     await h.handlers.delete({ user: { id: 'user-2' } }, makeRes());
     expect(h.deleteConfig).not.toHaveBeenCalled();
     expect(h.deleteSubs).not.toHaveBeenCalled();
+    expect(h.deleteSub).toHaveBeenCalledTimes(1);
+    expect(h.deleteSub).toHaveBeenCalledWith('sub-user-2');
     expect(h.update).toHaveBeenCalledWith({ id: 'user-2', atlassianConnect: null });
 
+    h.deleteSub.mockClear();
+    await h.handlers.delete({ user: { id: 'admin-1', isAdmin: true } }, makeRes());
+    expect(h.deleteConfig).not.toHaveBeenCalled();
+    expect(h.deleteSub).toHaveBeenCalledWith('sub-admin-1');
+
+    h.deleteSub.mockClear();
     await h.handlers.delete({ user: { id: 'user-1' } }, makeRes());
     expect(h.deleteSubs).toHaveBeenCalledWith('jcfg-1');
     expect(h.deleteConfig).toHaveBeenCalledWith('jcfg-1');
+    expect(h.deleteSub).not.toHaveBeenCalled();
     expect(h.update).toHaveBeenLastCalledWith({ id: 'user-1', atlassianConnect: null });
-
-    h.deleteConfig.mockClear();
-    await h.handlers.delete({ user: { id: 'admin-1', isAdmin: true } }, makeRes());
-    expect(h.deleteConfig).toHaveBeenCalledWith('jcfg-1');
   });
 });
