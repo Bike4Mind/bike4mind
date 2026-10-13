@@ -294,3 +294,21 @@ describe('apply_patch rows', () => {
     expect(groupToolCalls([several])[0].diffstat).toEqual({ added: 5, removed: 1 });
   });
 });
+
+describe('browser_scroll rows', () => {
+  it('reads as where the page was scrolled to, from the label the tool wrote', () => {
+    const scrolled = call('1', 'browser_scroll', { direction: 'down' });
+    expect(toolRowLabel({ ...scrolled, label: 'Scrolled down' })).toBe('Scrolled down');
+    expect(toolRowLabel(call('2', 'browser_scroll', { text: 'Pricing' }))).toBe('Scrolled to Pricing');
+  });
+
+  it('does not claim a scroll that failed', () => {
+    expect(toolRowLabel(call('1', 'browser_scroll', { text: 'Pricing' }, 'error'))).toBe('Failed to scroll to Pricing');
+    expect(toolRowLabel(call('2', 'browser_scroll', { ref: '12' }, 'error'))).toBe('Failed to scroll the page');
+  });
+
+  it('counts a run of scrolls', () => {
+    const [group] = groupToolCalls([call('1', 'browser_scroll'), call('2', 'browser_scroll')]);
+    expect(group.label).toBe('Scrolled 2 times');
+  });
+});

@@ -45,6 +45,7 @@ describe('ChatService agent browser', () => {
       truncated: false,
     }),
     click: async () => 'Add',
+    scroll: async () => 'Add',
     fill: async () => 'filled',
     press: async () => undefined,
     screenshot: async () => Buffer.from([137, 80, 78, 71]),

@@ -1,4 +1,5 @@
 import { isLocalUrl, normalizeUrl } from '@shared/browserUrl';
+import type { ScrollTarget } from '../browser/pageScripts';
 import type { ApprovalPrompt, BrowserContext, BrowserPage, ToolContext, ToolDefinition } from './types';
 import { capOutput, requireString } from './types';
 
@@ -136,9 +137,9 @@ function eventsSection(page: BrowserPage): string {
   return `\n\nSince the last step:${skipped > 0 ? ` (${skipped} earlier omitted)` : ''}\n${shown.map(line => `- ${line}`).join('\n')}`;
 }
 
-async function describePage(page: BrowserPage, maxChars: number, lead: string): Promise<string> {
+async function describePage(page: BrowserPage, maxChars: number, lead: string, inView = false): Promise<string> {
   await page.settle(SETTLE_MS);
-  const snap = await page.snapshot(maxChars);
+  const snap = inView ? await page.snapshot(maxChars, true) : await page.snapshot(maxChars);
   const header = `${lead}\nPage: ${snap.title || '(untitled)'} - ${snap.url}`;
   const note = snap.truncated
     ? '\n[Snapshot cut at the size limit. Use browser_evaluate to read a specific part of the page.]'
@@ -288,6 +289,76 @@ export const browserPress: ToolDefinition = {
   },
 };
 
+const SCROLL_DIRECTIONS = ['up', 'down', 'top', 'bottom'] as const;
+type ScrollDirection = (typeof SCROLL_DIRECTIONS)[number];
+
+function scrollTarget(input: Record<string, unknown>): ScrollTarget {
+  const ref = typeof input.ref === 'string' ? input.ref.trim().replace(/^\[|\]$/g, '') : '';
+  const text = typeof input.text === 'string' ? input.text.trim() : '';
+  const direction = typeof input.direction === 'string' ? input.direction.trim().toLowerCase() : '';
+  if ([ref, text, direction].filter(Boolean).length !== 1) {
+    throw new Error('Pass exactly one of "ref", "text" or "direction".');
+  }
+  if (ref) return { ref };
+  if (text) return { text };
+  if (!SCROLL_DIRECTIONS.includes(direction as ScrollDirection)) {
+    throw new Error(`"direction" must be one of ${SCROLL_DIRECTIONS.join(', ')}.`);
+  }
+  const target: ScrollTarget = { direction: direction as ScrollDirection };
+  if (input.amount === undefined || input.amount === null) return target;
+  const amount = Number(input.amount);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('"amount" must be a positive number.');
+  return input.unit === 'pixels' ? { ...target, pixels: Math.round(amount) } : { ...target, pages: amount };
+}
+
+export const browserScroll: ToolDefinition = {
+  schema: {
+    name: 'browser_scroll',
+    description:
+      'Scroll the open page and return a snapshot of what is now in view. Pass exactly one of: ref ' +
+      '(an element from the latest snapshot, brought to the middle of the view), text (the first ' +
+      'visible element containing it), or direction. A direction scrolls the page, or the panel ' +
+      'under the middle of the view when the app scrolls an inner panel instead. Use this rather ' +
+      'than browser_evaluate to scroll.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'The element ref from the latest snapshot, e.g. "12".' },
+        text: { type: 'string', description: 'Text to find on the page, case-insensitive.' },
+        direction: { type: 'string', enum: [...SCROLL_DIRECTIONS], description: 'Which way to scroll.' },
+        amount: {
+          type: 'number',
+          description: 'How far to scroll up or down, in units. Defaults to about one screen.',
+        },
+        unit: { type: 'string', enum: ['pages', 'pixels'], description: 'The unit of amount. Defaults to pages.' },
+      },
+    },
+  },
+  ...gatedAction('Scroll'),
+  async run(input, context) {
+    const target = scrollTarget(input);
+    return onPage(context, async page => {
+      if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
+      const outcome = await page.scroll(target);
+      let lead: string;
+      if ('ref' in target) {
+        context.report?.label(`Scrolled to ${outcome}`);
+        lead = `Scrolled [${target.ref}] ${outcome} into view.`;
+      } else if ('text' in target) {
+        context.report?.label(`Scrolled to ${target.text}`);
+        lead = `Scrolled to the first element containing ${JSON.stringify(target.text)}: ${outcome}.`;
+      } else {
+        const { direction } = target;
+        context.report?.label(
+          direction === 'top' || direction === 'bottom' ? `Scrolled to the ${direction}` : `Scrolled ${direction}`
+        );
+        lead = outcome;
+      }
+      return describePage(page, ACTION_SNAPSHOT_CHARS, `${lead} What is in view now:`, true);
+    });
+  },
+};
+
 export const browserBack: ToolDefinition = {
   schema: {
     name: 'browser_back',
@@ -330,13 +401,26 @@ export const browserScreenshot: ToolDefinition = {
   },
 };
 
+const NULL_DEREFERENCE = /Cannot (read|set) propert(y|ies) of (null|undefined)/;
+
+/** The usual cause is a querySelector that matched nothing; say so, keeping the page's own message. */
+function withNullHint(error: unknown): unknown {
+  if (!(error instanceof Error) || !NULL_DEREFERENCE.test(error.message)) return error;
+  return new Error(
+    `${error.message}\nHint: a selector probably matched nothing. Use optional chaining (el?.prop), or take ` +
+      'browser_snapshot refs and use browser_click / browser_scroll instead.'
+  );
+}
+
 export const browserEvaluate: ToolDefinition = {
   schema: {
     name: 'browser_evaluate',
     description:
       'Run a JavaScript expression in the open page and return its JSON result, e.g. ' +
-      "document.querySelector('h1').innerText or await fetch('/api/me').then(r => r.json()). " +
-      "Runs with the page's own cookies and origin, so it can call the app's API as the signed-in user.",
+      "document.querySelector('h1')?.innerText or await fetch('/api/me').then(r => r.json()). " +
+      "Runs with the page's own cookies and origin, so it can call the app's API as the signed-in user. " +
+      'Use it to read data and call APIs; to interact, use browser_click, browser_type and browser_scroll ' +
+      'with refs from the snapshot.',
     parameters: {
       type: 'object',
       properties: { expression: { type: 'string', description: 'An expression; await is allowed.' } },
@@ -348,7 +432,9 @@ export const browserEvaluate: ToolDefinition = {
     const expression = requireString(input, 'expression');
     return onPage(context, async page => {
       if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
-      const value = await page.evaluate(expression);
+      const value = await page.evaluate(expression).catch((error: unknown) => {
+        throw withNullHint(error);
+      });
       const rendered = value === undefined ? 'undefined' : JSON.stringify(value, null, 1);
       return capOutput(`${rendered ?? String(value)}${eventsSection(page)}`);
     });
@@ -361,6 +447,7 @@ export const BROWSER_TOOLS: readonly ToolDefinition[] = [
   browserClick,
   browserType,
   browserPress,
+  browserScroll,
   browserBack,
   browserScreenshot,
   browserEvaluate,

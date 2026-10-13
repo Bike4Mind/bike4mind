@@ -13,6 +13,7 @@ import type {
   SpawnRefusal,
 } from '@shared/chat';
 
+import type { ScrollTarget } from '../browser/pageScripts';
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
 
@@ -142,8 +143,14 @@ export interface BrowserPage {
   /** Stop whatever the page is loading, as the toolbar's stop button would. */
   stop(): void;
   back(): Promise<void>;
-  snapshot(maxChars: number): Promise<{ url: string; title: string; text: string; truncated: boolean }>;
+  /** With `inView`, only what intersects the viewport. */
+  snapshot(
+    maxChars: number,
+    inView?: boolean
+  ): Promise<{ url: string; title: string; text: string; truncated: boolean }>;
   click(ref: string): Promise<string>;
+  /** Scroll and describe what moved; an element target resolves to its visible name. */
+  scroll(target: ScrollTarget): Promise<string>;
   fill(ref: string, text: string): Promise<string>;
   /** A named key such as Enter, Tab, Escape or ArrowDown, sent as real input to the focused element. */
   press(key: string): Promise<void>;

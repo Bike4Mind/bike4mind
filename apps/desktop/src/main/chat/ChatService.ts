@@ -3998,16 +3998,17 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
 }
 
 const BROWSER_GUIDANCE: readonly string[] = [
-  'You also have a browser (browser_navigate, browser_click, browser_type, browser_screenshot and',
-  'the rest): a real Chromium window with its own cookies. Open a page whenever the answer is on',
-  'one - documentation, a changelog, a site the user is asking about - instead of going from',
-  'memory. To test a web app, use it the way a user would - sign in, go through the flow, check',
-  'what the page shows - rather than predicting its behaviour from the code. Each action returns',
-  'the new page snapshot with [ref] numbers and any console errors or failed requests, so do not',
-  'call browser_snapshot after it.',
+  'You also have a browser (browser_navigate, browser_click, browser_type, browser_scroll,',
+  'browser_screenshot and the rest): a real Chromium window with its own cookies. Open a page',
+  'whenever the answer is on one - documentation, a changelog, a site the user is asking about -',
+  'instead of going from memory. To test a web app, use it the way a user would - sign in, go',
+  'through the flow, check what the page shows - rather than predicting its behaviour from the',
+  'code. Each action returns the new page snapshot with [ref] numbers and any console errors or',
+  'failed requests, so do not call browser_snapshot after it.',
   'Take a browser_screenshot at the states worth showing; the user sees it in the conversation.',
   'browser_evaluate runs JavaScript in the page with its cookies, for reading state or calling',
-  'the app API as the signed-in user.',
+  'the app API as the signed-in user. Do not interact through it: scroll, click and type with',
+  'browser_scroll, browser_click and browser_type, using refs from the snapshot.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [

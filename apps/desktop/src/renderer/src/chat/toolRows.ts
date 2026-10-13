@@ -288,6 +288,14 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Read ${n} web pages`,
     active: 'Reading a web page...',
   },
+  browser_scroll: {
+    did: 'Scrolled to',
+    didAlone: 'Scrolled the page',
+    to: 'scroll to',
+    toAlone: 'scroll the page',
+    many: n => `Scrolled ${n} times`,
+    active: 'Scrolling...',
+  },
   generate_video: {
     didAlone: 'Started a video',
     toAlone: 'generate a video',

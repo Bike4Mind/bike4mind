@@ -57,6 +57,7 @@ describe('ChatService interrupting a running tool', () => {
     back: async () => undefined,
     snapshot: async () => ({ url: 'http://localhost:3080/app', title: 'App', text: 'late page', truncated: false }),
     click: async () => 'Add',
+    scroll: async () => 'Add',
     fill: async () => 'filled',
     press: async () => undefined,
     screenshot: async () => Buffer.from([137, 80, 78, 71]),

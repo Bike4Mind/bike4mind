@@ -5,6 +5,7 @@ import {
   browserEvaluate,
   browserNavigate,
   browserScreenshot,
+  browserScroll,
   browserSnapshot,
   browserType,
   isLocalUrl,
@@ -23,6 +24,7 @@ function fakePage(start = ''): BrowserPage & { url: string; events: string[] } {
     back: vi.fn(async () => undefined),
     snapshot: vi.fn(async () => ({ url: page.url, title: 'Home', text: '[1] button "Add"', truncated: false })),
     click: vi.fn(async () => 'Add'),
+    scroll: vi.fn(async () => 'Pricing plans'),
     fill: vi.fn(async () => 'filled "x"'),
     press: vi.fn(async () => undefined),
     screenshot: vi.fn(async () => Buffer.from('png')),
@@ -210,6 +212,91 @@ describe('browser tools', () => {
   it('returns an evaluated value as JSON', async () => {
     const page = fakePage('http://localhost:3080/app');
     expect(await browserEvaluate.run({ expression: 'x' }, contextFor(page).context)).toBe('{\n "level": 2\n}');
+  });
+
+  describe('browser_scroll', () => {
+    it('brings a ref into view and shows only what is in view now', async () => {
+      const page = fakePage('http://localhost:3080/app');
+      const result = await browserScroll.run({ ref: '[12]' }, contextFor(page).context);
+      expect(page.scroll).toHaveBeenCalledWith({ ref: '12' });
+      expect(page.snapshot).toHaveBeenCalledWith(expect.any(Number), true);
+      expect(result).toMatch(/^Scrolled \[12\] Pricing plans into view\. What is in view now:\nPage: Home/);
+    });
+
+    it('finds an element by its text', async () => {
+      const page = fakePage('http://localhost:3080/app');
+      const labels: string[] = [];
+      const { context } = contextFor(page);
+      const result = await browserScroll.run(
+        { text: 'Pricing' },
+        { ...context, report: { ...context.report!, label: text => labels.push(text) } }
+      );
+      expect(page.scroll).toHaveBeenCalledWith({ text: 'Pricing' });
+      expect(result).toContain('Scrolled to the first element containing "Pricing": Pricing plans.');
+      expect(labels).toEqual(['Scrolled to Pricing']);
+    });
+
+    it('scrolls by direction, a page by default or the amount asked for', async () => {
+      const page = fakePage('http://localhost:3080/app');
+      vi.mocked(page.scroll).mockResolvedValue('Scrolled down 720px in the page (now 720px of 4000px).');
+      const { context } = contextFor(page);
+
+      const result = await browserScroll.run({ direction: 'down' }, context);
+      expect(page.scroll).toHaveBeenLastCalledWith({ direction: 'down' });
+      expect(result).toMatch(/^Scrolled down 720px in the page \(now 720px of 4000px\)\. What is in view now:/);
+
+      await browserScroll.run({ direction: 'Up', amount: 300, unit: 'pixels' }, context);
+      expect(page.scroll).toHaveBeenLastCalledWith({ direction: 'up', pixels: 300 });
+      await browserScroll.run({ direction: 'down', amount: 2.5 }, context);
+      expect(page.scroll).toHaveBeenLastCalledWith({ direction: 'down', pages: 2.5 });
+    });
+
+    it('passes on a target that matched nothing as a plain error, without a snapshot', async () => {
+      const page = fakePage('http://localhost:3080/app');
+      vi.mocked(page.scroll).mockRejectedValue(
+        new Error('No element matched ref 99; take a browser_snapshot for current refs.')
+      );
+      await expect(browserScroll.run({ ref: '99' }, contextFor(page).context)).rejects.toThrow(
+        /^No element matched ref 99; take a browser_snapshot for current refs\.$/
+      );
+      expect(page.snapshot).not.toHaveBeenCalled();
+    });
+
+    it('wants exactly one target and a sane amount', async () => {
+      const { context } = contextFor(fakePage('http://localhost:3080/app'));
+      await expect(browserScroll.run({}, context)).rejects.toThrow(/exactly one of/);
+      await expect(browserScroll.run({ ref: '1', direction: 'down' }, context)).rejects.toThrow(/exactly one of/);
+      await expect(browserScroll.run({ direction: 'sideways' }, context)).rejects.toThrow(/must be one of/);
+      await expect(browserScroll.run({ direction: 'down', amount: -1 }, context)).rejects.toThrow(/positive/);
+    });
+
+    it('is gated like a click', async () => {
+      const remote = contextFor(fakePage('https://shop.example.com/'));
+      expect(await browserScroll.needsApproval!({ direction: 'down' }, remote.context)).toBe(true);
+      const local = contextFor(fakePage('http://localhost:3080/app'));
+      expect(await browserScroll.needsApproval!({ direction: 'down' }, local.context)).toBe(false);
+    });
+  });
+
+  it('adds a hint to a script that read a property of nothing, keeping the page message', async () => {
+    const page = fakePage('http://localhost:3080/app');
+    vi.mocked(page.evaluate).mockRejectedValue(
+      new TypeError("Cannot read properties of null (reading 'scrollIntoView')")
+    );
+    const run = browserEvaluate.run(
+      { expression: "document.querySelector('#x').scrollIntoView()" },
+      contextFor(page).context
+    );
+    await expect(run).rejects.toThrow(
+      /^Cannot read properties of null \(reading 'scrollIntoView'\)\nHint: a selector probably matched nothing\..*optional chaining.*browser_scroll/s
+    );
+  });
+
+  it('passes other script errors on unchanged', async () => {
+    const page = fakePage('http://localhost:3080/app');
+    const failure = new ReferenceError('foo is not defined');
+    vi.mocked(page.evaluate).mockRejectedValue(failure);
+    await expect(browserEvaluate.run({ expression: 'foo' }, contextFor(page).context)).rejects.toBe(failure);
   });
 
   it('refuses when the session has no browser', async () => {

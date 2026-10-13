@@ -13,7 +13,16 @@ import type { BrowserGoAction, BrowserPaneBounds, BrowserPaneState } from '@shar
 import { markAgentBrowserWindow } from '../../windows';
 import type { BrowserContext, BrowserPage, BrowserProvider } from '../tools/types';
 import { CookieImporter } from './cookies/CookieImporter';
-import { CLICK_REF, FILL_REF, pageCall, SNAPSHOT_PAGE, type ElementOutcome, type SnapshotResult } from './pageScripts';
+import {
+  CLICK_REF,
+  FILL_REF,
+  pageCall,
+  SCROLL_PAGE,
+  SNAPSHOT_PAGE,
+  type ElementOutcome,
+  type ScrollTarget,
+  type SnapshotResult,
+} from './pageScripts';
 
 /**
  * One cookie jar for every conversation's browser, kept apart from anything the user browses:
@@ -306,8 +315,14 @@ class ElectronPage implements BrowserPage {
     history.goBack();
   }
 
-  async snapshot(maxChars: number): Promise<SnapshotResult> {
-    return this.script<SnapshotResult>(pageCall(SNAPSHOT_PAGE, maxChars), 'Reading the page');
+  async snapshot(maxChars: number, inView = false): Promise<SnapshotResult> {
+    return this.script<SnapshotResult>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
+  }
+
+  async scroll(target: ScrollTarget): Promise<string> {
+    const outcome = await this.script<ElementOutcome>(pageCall(SCROLL_PAGE, target), 'Scrolling');
+    if (!outcome.ok) throw new Error(outcome.error);
+    return outcome.description;
   }
 
   async click(ref: string): Promise<string> {

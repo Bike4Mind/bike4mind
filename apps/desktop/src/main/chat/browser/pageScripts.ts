@@ -22,25 +22,13 @@ export function pageCall(source: string, ...args: unknown[]): string {
   return `(${source})(...${JSON.stringify(args)})`;
 }
 
-/**
- * (maxChars) => SnapshotResult. A text outline of the page: headings, dialogs, text and every
- * interactive element with a ref - roughly an accessibility tree, in a form a model reads cheaply.
- */
-export const SNAPSHOT_PAGE = String.raw`function (maxChars) {
-  var ATTR = 'data-b4m-ref';
-  var INTERACTIVE = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],' +
-    '[role=tab],[role=menuitem],[role=option],[role=switch],[role=combobox],[contenteditable=""],[contenteditable=true]';
-  var SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, HEAD: 1 };
-  var lines = [];
-  var size = 0;
-  var truncated = false;
-  var next = 1;
-  var isJsdom = navigator.userAgent.indexOf('jsdom') !== -1;
-  document.querySelectorAll('[' + ATTR + ']').forEach(function (el) {
-    var value = Number(el.getAttribute(ATTR));
-    if (value >= next) next = value + 1;
-  });
+/** What browser_scroll asks for: exactly one of an element ref, a piece of text, or a direction. */
+export type ScrollTarget =
+  { ref: string } | { text: string } | { direction: 'up' | 'down' | 'top' | 'bottom'; pixels?: number; pages?: number };
 
+/** Declarations shared by the scripts below, spliced into each one's body. */
+const PAGE_HELPERS = String.raw`
+  var isJsdom = navigator.userAgent.indexOf('jsdom') !== -1;
   function clean(value) { return (value || '').replace(/\s+/g, ' ').trim(); }
   function visible(el) {
     if (el.closest('[hidden],[aria-hidden=true]')) return false;
@@ -49,6 +37,35 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars) {
     if (isJsdom) return true;
     var rect = el.getBoundingClientRect();
     return rect.width > 0 || rect.height > 0 || style.display === 'contents';
+  }`;
+
+/**
+ * (maxChars, inView?) => SnapshotResult. A text outline of the page: headings, dialogs, text and
+ * every interactive element with a ref - roughly an accessibility tree, in a form a model reads
+ * cheaply. With inView, only what intersects the viewport, so a scroll shows what it brought
+ * into view even on a page whose full outline would be cut off long before it.
+ */
+export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
+  ${PAGE_HELPERS}
+  var ATTR = 'data-b4m-ref';
+  var INTERACTIVE = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],' +
+    '[role=tab],[role=menuitem],[role=option],[role=switch],[role=combobox],[contenteditable=""],[contenteditable=true]';
+  var SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, HEAD: 1 };
+  var lines = [];
+  var size = 0;
+  var truncated = false;
+  var next = 1;
+  document.querySelectorAll('[' + ATTR + ']').forEach(function (el) {
+    var value = Number(el.getAttribute(ATTR));
+    if (value >= next) next = value + 1;
+  });
+
+  // Checked on the lines a snapshot prints rather than on containers, whose children can
+  // overflow into view from a box that is itself off screen.
+  function shown(el) {
+    if (!inView) return true;
+    var rect = el.getBoundingClientRect();
+    return rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
   }
   function push(depth, line) {
     if (truncated) return;
@@ -111,13 +128,14 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars) {
     if (truncated) return;
     if (node.nodeType === 3) {
       var text = clean(node.textContent);
-      if (text) push(depth, text.slice(0, 300));
+      if (text && shown(node.parentElement)) push(depth, text.slice(0, 300));
       return;
     }
     if (node.nodeType !== 1 || SKIP[node.tagName.toUpperCase()]) return;
     if (!visible(node)) return;
     var i;
     if (node.matches(INTERACTIVE)) {
+      if (!shown(node)) return;
       var ref = node.getAttribute(ATTR);
       if (!ref) { ref = String(next++); node.setAttribute(ATTR, ref); }
       push(depth, '[' + ref + '] ' + describe(node));
@@ -130,15 +148,18 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars) {
       return;
     }
     var heading = /^H([1-6])$/.exec(node.tagName);
-    if (heading) { push(depth, '#'.repeat(Number(heading[1])) + ' ' + clean(node.textContent)); return; }
+    if (heading) {
+      if (shown(node)) push(depth, '#'.repeat(Number(heading[1])) + ' ' + clean(node.textContent));
+      return;
+    }
     if (node.tagName === 'IMG') {
       var alt = clean(node.getAttribute('alt'));
-      if (alt) push(depth, 'image ' + JSON.stringify(alt));
+      if (alt && shown(node)) push(depth, 'image ' + JSON.stringify(alt));
       return;
     }
     var role = node.getAttribute('role');
     var landmark = role === 'dialog' || role === 'alertdialog' || role === 'alert' || role === 'status' || node.tagName === 'DIALOG';
-    if (landmark) push(depth, '<' + (role || 'dialog') + '>');
+    if (landmark && shown(node)) push(depth, '<' + (role || 'dialog') + '>');
     for (i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i], landmark ? depth + 1 : depth);
   }
 
@@ -200,4 +221,122 @@ export const FILL_REF = String.raw`function (ref, text) {
     return { ok: true, description: 'filled an editable region' };
   }
   return { ok: false, error: 'Ref ' + ref + ' is a ' + el.tagName.toLowerCase() + ', which does not take text.' };
+}`;
+
+/**
+ * (target: ScrollTarget) => ElementOutcome.
+ *
+ * An element is brought to the middle of the view with scrollIntoView, which also scrolls every
+ * inner container it sits in. A direction scrolls the nearest container under the middle of the
+ * view that can still move that way, the way a wheel's scroll chains outwards - so an app that
+ * scrolls a panel rather than the document still scrolls. 'instant' because a page's own
+ * `scroll-behavior: smooth` would otherwise still be animating when the snapshot is read.
+ */
+export const SCROLL_PAGE = String.raw`function (target) {
+  ${PAGE_HELPERS}
+  var AGAIN = '; take a browser_snapshot for current refs.';
+
+  function nameOf(el) {
+    var name = clean(el.innerText || el.textContent || el.getAttribute('aria-label') || '');
+    return name.slice(0, 80) || el.tagName.toLowerCase();
+  }
+  function bringIntoView(el) {
+    el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    return { ok: true, description: nameOf(el) };
+  }
+  // One pass over the visible text, joined, so a match split across inline tags - as in
+  // "<b>Total</b> due" - is found too; the element is the one holding all of the match.
+  function findText(want) {
+    var root = document.body || document.documentElement;
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    var joined = '';
+    var starts = [];
+    var nodes = [];
+    var lastParent = null;
+    var parentShown = false;
+    for (var node = walker.nextNode(); node; node = walker.nextNode()) {
+      var parent = node.parentElement;
+      if (!parent) continue;
+      if (parent !== lastParent) {
+        lastParent = parent;
+        parentShown = !parent.closest('script,style,noscript,template') && visible(parent);
+      }
+      if (!parentShown) continue;
+      var piece = node.textContent.replace(/\s+/g, ' ').toLowerCase();
+      if (piece.charAt(0) === ' ' && (joined === '' || joined.charAt(joined.length - 1) === ' ')) piece = piece.slice(1);
+      if (!piece) continue;
+      starts.push(joined.length);
+      nodes.push(node);
+      joined += piece;
+    }
+    var at = joined.indexOf(want);
+    if (!want || at === -1) return null;
+    function nodeAt(offset) {
+      var i = 0;
+      while (i + 1 < starts.length && starts[i + 1] <= offset) i++;
+      return nodes[i];
+    }
+    var last = nodeAt(at + want.length - 1);
+    var el = nodeAt(at).parentElement;
+    while (!el.contains(last)) el = el.parentElement;
+    return el;
+  }
+
+  if (target.ref !== undefined) {
+    var byRef = document.querySelector('[data-b4m-ref="' + target.ref + '"]');
+    if (!byRef) return { ok: false, error: 'No element matched ref ' + target.ref + AGAIN };
+    return bringIntoView(byRef);
+  }
+  if (target.text !== undefined) {
+    var byText = findText(clean(target.text).toLowerCase());
+    if (!byText) return { ok: false, error: 'No visible element matched text ' + JSON.stringify(target.text) + AGAIN };
+    return bringIntoView(byText);
+  }
+
+  var direction = target.direction;
+  var forward = direction === 'down' || direction === 'bottom';
+  var page = document.scrollingElement || document.documentElement;
+  function range(el) { return el.scrollHeight - el.clientHeight; }
+  function scrolls(el) {
+    if (range(el) <= 1) return false;
+    if (el === page) return true;
+    var overflow = window.getComputedStyle(el).overflowY;
+    return overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay';
+  }
+  function canMove(el) { return forward ? el.scrollTop < range(el) - 1 : el.scrollTop > 0; }
+
+  var chain = [];
+  var middle = document.elementFromPoint ? document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2) : null;
+  for (var at = middle; at && at !== page; at = at.parentElement) if (scrolls(at)) chain.push(at);
+  if (scrolls(page)) chain.push(page);
+  if (chain.length === 0) {
+    // Nothing scrolls under the middle of the view, as when an overlay covers it: the largest
+    // scrolling panel on the page is the likeliest main content.
+    var largest = null;
+    var area = 0;
+    document.querySelectorAll('body *').forEach(function (el) {
+      if (!scrolls(el) || !visible(el)) return;
+      var size = el.clientWidth * el.clientHeight;
+      if (size > area) { largest = el; area = size; }
+    });
+    if (largest) chain.push(largest);
+  }
+  if (chain.length === 0) return { ok: false, error: 'Nothing on this page scrolls: all of it is already in view.' };
+
+  var scroller = chain.find(canMove) || chain[0];
+  var where = scroller === page ? 'the page' : 'the scrollable ' + scroller.tagName.toLowerCase() +
+    (scroller.getAttribute('aria-label') ? ' ' + JSON.stringify(clean(scroller.getAttribute('aria-label'))) : '');
+  var edge = forward ? 'bottom' : 'top';
+  if (!canMove(scroller)) return { ok: true, description: 'Already at the ' + edge + ' of ' + where + '; nothing moved.' };
+
+  var before = scroller.scrollTop;
+  var step = target.pixels || Math.round((target.pages || 1) * scroller.clientHeight * 0.9);
+  var to = direction === 'top' ? 0 : direction === 'bottom' ? range(scroller) :
+    Math.max(0, Math.min(range(scroller), before + (forward ? step : -step)));
+  if (scroller.scrollTo) scroller.scrollTo({ top: to, behavior: 'instant' }); else scroller.scrollTop = to;
+  var moved = Math.round(Math.abs(scroller.scrollTop - before));
+  var position = ' (now ' + Math.round(scroller.scrollTop) + 'px of ' + Math.round(range(scroller)) + 'px)';
+  var lead = direction === 'top' || direction === 'bottom' ? 'Scrolled to the ' + edge + ' of ' + where :
+    'Scrolled ' + direction + ' ' + moved + 'px in ' + where;
+  return { ok: true, description: lead + position + '.' };
 }`;
