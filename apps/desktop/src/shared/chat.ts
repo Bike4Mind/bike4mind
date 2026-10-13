@@ -1419,6 +1419,11 @@ export interface ChatSpawnSuggestion {
   /** The prefilled branch name for a worktree start. */
   branch: string;
   status: 'pending' | 'started' | 'dismissed';
+  /**
+   * `title` was cut from the prompt rather than given, so a start that keeps it leaves the
+   * child to be named by the title generator instead of locking in the truncation.
+   */
+  derivedTitle?: boolean;
   revision: number;
   createdAt: string;
   started?: ChatSpawnSuggestionStart;

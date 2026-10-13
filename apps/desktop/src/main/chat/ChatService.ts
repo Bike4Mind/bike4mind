@@ -2712,6 +2712,7 @@ export class ChatService {
           // Short because the model has to type it back to revise the card.
           id: randomUUID().slice(0, 8),
           title: task.title ?? deriveTitle(task.prompt),
+          ...(task.title ? {} : { derivedTitle: true }),
           prompt: task.prompt,
           ...(task.summary ? { summary: task.summary } : {}),
           base: await spawnBaseFor(project),
@@ -2730,8 +2731,9 @@ export class ChatService {
         revise(id, target => {
           const title = changes.title ?? target.title;
           const prompt = changes.prompt ?? target.prompt;
+          const { derivedTitle: _derived, ...rest } = target;
           return {
-            ...target,
+            ...(changes.title ? rest : target),
             title,
             prompt,
             ...(changes.summary ? { summary: changes.summary } : {}),
@@ -2772,7 +2774,8 @@ export class ChatService {
       const placement: SpawnPlacement =
         request.placement === 'worktree' ? { kind: 'worktree', branch, base: suggestion.base } : { kind: 'local' };
 
-      const outcome = await this.spawnSession(parent, prompt, title, placement);
+      const named = suggestion.derivedTitle && title === suggestion.title ? undefined : title;
+      const outcome = await this.spawnSession(parent, prompt, named, placement);
       if (!outcome.ok) return { ok: false, error: outcome.message };
 
       let started: ChatSpawnSuggestion | null = null;

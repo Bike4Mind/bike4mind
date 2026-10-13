@@ -291,6 +291,25 @@ describe('ChatService spawn suggestions', () => {
     expect((await store.list()).filter(session => session.origin)).toHaveLength(1);
   });
 
+  it('leaves an untitled suggestion child to the title generator rather than locking the prompt in', async () => {
+    const parent = await codeSession();
+    await service.send(parent.id, 'delegate');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    callTool(streams[0], 's1', 'session_spawn', { prompt: 'a long task description with no title given' });
+    const suggestion = await awaitSuggestion(parent.id, entry => entry.status === 'pending');
+    expect(suggestion.derivedTitle).toBe(true);
+
+    const result = await service.startSpawnSuggestion({
+      sessionId: parent.id,
+      suggestionId: suggestion.id,
+      placement: 'local',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect((await store.get(result.suggestion.started?.sessionId as string))?.titleLocked).toBeUndefined();
+  });
+
   it('drops pending suggestions when the conversation is archived', async () => {
     const { parent } = await suggestedBy('remove the unused imports');
     await service.setSessionArchived(parent.id, true);
