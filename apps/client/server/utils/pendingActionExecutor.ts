@@ -1,6 +1,8 @@
 import { Logger } from '@bike4mind/observability';
 import { IUserDocument, isImageServeable } from '@bike4mind/common';
-import { Quest } from '@bike4mind/database';
+import { Quest, Session } from '@bike4mind/database';
+import { isValidObjectId } from '@server/utils/objectId';
+import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
 import { GitHubResource, JiraResource, ConfluenceResource, TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
@@ -23,10 +25,32 @@ export async function claimPendingAction(questId: string, pendingActionTs: numbe
   return claimed !== null;
 }
 
+/**
+ * Whether `userId` is the person whose request produced the quest's pending action. A Confirm/Cancel
+ * button posted in a shared Slack channel is clickable by anyone there, so the click handler must
+ * check this before acting. The requester is the turn's actor (promptMeta.session.userId), which can
+ * differ from the session owner when a turn is routed into someone else's shared notebook; a quest
+ * written before promptMeta existed falls back to the session owner. The web executor
+ * (pages/api/mcp/confirm.ts) always checks the session owner, so the two surfaces differ for a turn
+ * routed into a shared notebook.
+ */
+export async function isPendingActionRequester(questId: string, userId: string): Promise<boolean> {
+  if (!isValidObjectId(questId)) return false;
+  const quest = await Quest.findById(questId).select('sessionId promptMeta.session.userId');
+  if (!quest) return false;
+  const requesterId = quest.promptMeta?.session?.userId;
+  if (requesterId) return requesterId === userId;
+  if (!isValidObjectId(quest.sessionId)) return false;
+  const session = await Session.findById(quest.sessionId).select('userId');
+  return session?.userId?.toString() === userId;
+}
+
 export interface PendingActionResult {
   success: boolean;
   message: string;
 }
+
+export const MCP_DISABLED_MESSAGE = 'MCP integrations are turned off by your administrator.';
 
 /**
  * Execute a pending action stored on a Quest.
@@ -41,6 +65,11 @@ export async function executePendingAction(
   logger: Logger,
   expectedTs?: number
 ): Promise<PendingActionResult> {
+  // The flag gates tool loading, but an action created before an admin turned it off is still on the quest.
+  if (!(await isFeatureEnabled('EnableMCPServer'))) {
+    return { success: false, message: MCP_DISABLED_MESSAGE };
+  }
+
   const questWithPending = await Quest.findById(questId);
 
   if (!questWithPending?.pendingAction) {
@@ -368,6 +397,11 @@ function buildSuccessMessage(
     msg += `📎 Attachment uploaded to page ${pageId}`;
     if (filename) msg += `\n"${filename}"`;
     if (sizeFormatted) msg += ` (${sizeFormatted})`;
+  } else if (pendingAction.tool === 'jira_bulk_create_issues') {
+    const created = Number(resultData?.created) || 0;
+    const failed = Number(resultData?.failed) || 0;
+    msg += `Created ${created} of ${created + failed} Jira issues`;
+    if (failed > 0) msg += `; ${failed} failed`;
   } else {
     msg += 'Action completed';
     if (title) msg += `\n"${title}"`;

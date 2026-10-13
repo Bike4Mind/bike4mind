@@ -138,8 +138,16 @@ export function registerJiraIssueTools(server: McpServer) {
         .describe(
           'Array of issues to create (1-50 issues). For subtasks, include parentKey in each issue object pointing to the parent issue.'
         ),
+      ...confirmationParams,
     },
-    async ({ issues }) => {
+    async ({ issues, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        return createPreviewResponse('Preview: Jira Issues to be Created', { count: issues.length, issues }, 'issues', {
+          tool: JIRA_BULK_CREATE_ISSUES,
+          params: { issues },
+        });
+      }
+
       try {
         const result = await getJiraApi().bulkCreateIssues({ issues });
 
@@ -187,8 +195,18 @@ export function registerJiraIssueTools(server: McpServer) {
             ),
         })
         .describe('Labels to modify with action (ADD/REMOVE/SET).'),
+      ...confirmationParams,
     },
-    async ({ issueIdsOrKeys, labels }) => {
+    async ({ issueIdsOrKeys, labels, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        return createPreviewResponse(
+          'Preview: Jira Bulk Label Update',
+          { count: issueIdsOrKeys.length, issues: issueIdsOrKeys, labels },
+          'update',
+          { tool: JIRA_BULK_UPDATE_ISSUES, params: { issueIdsOrKeys, labels } }
+        );
+      }
+
       try {
         const result = await getJiraApi().bulkUpdateIssues({ issueIdsOrKeys, labels });
 

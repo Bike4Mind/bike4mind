@@ -8,6 +8,7 @@ export {
   type ScopePermissionInput,
   type ScopePermissionResult,
 } from './checkScopePermission';
+export { mayRepublishSlug, SLUG_OWNED_BY_OTHER } from './slugOwnership';
 export { buildPublishS3KeyPrefix, buildPublishUrlPath } from './paths';
 export {
   checkPublishQuota,

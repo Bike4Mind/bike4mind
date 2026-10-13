@@ -254,6 +254,25 @@ export async function migrateLedgerVectorsForPrincipal(
         break;
       }
       if (opts.dryRun) {
+        // Probe credential availability so dry-run noProviderKey/embedderUnavailable counts
+        // match what an execute run would report. The build resolves DB-held keys only --
+        // no provider call is made. The same service/unavailable/buildAttempts state machine
+        // is reused so the probe only fires once per principal.
+        if (!vector && !service && !unavailable) {
+          try {
+            service = await createMementoEmbeddingService(ownerUserId);
+          } catch (err) {
+            buildAttempts += 1;
+            stats.embedderError = err instanceof Error ? err.message : String(err);
+            stats.errors.push(`owner ${ownerUserId}: ${stats.embedderError}`);
+            if (err instanceof MissingEmbeddingCredentialError) unavailable = 'noProviderKey';
+            else if (buildAttempts >= MAX_EMBEDDER_BUILD_ATTEMPTS) unavailable = 'embedderUnavailable';
+          }
+        }
+        if (!vector && !service) {
+          stats[unavailable ?? 'embedderUnavailable'] += 1;
+          continue;
+        }
         stats[arm] += 1;
         if (!vector) stats.providerCalls += 1;
         continue;

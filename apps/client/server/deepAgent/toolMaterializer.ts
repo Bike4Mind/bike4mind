@@ -120,6 +120,8 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
       model: config.model,
       precomputed: { adminSettingsEnforceCredits: false, models },
       apiKeyTable: apiKeyTable as ApiKeyTable,
+      // Deep agents wake on their own schedule; no request authenticated the turn.
+      authOrigin: 'internal',
     };
 
     // No-op callbacks: deep agents are headless (no websocket/quest doc to

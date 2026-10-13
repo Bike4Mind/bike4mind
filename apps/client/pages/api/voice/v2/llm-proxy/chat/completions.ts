@@ -161,6 +161,7 @@ async function runFullPipeline(
   const quest = await invokeService.invoke({
     body: invokeBody,
     userId: sessionCtx.userId,
+    authOrigin: sessionCtx.authOrigin,
     apiKeyId: sessionCtx.apiKeyId,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
@@ -173,8 +174,9 @@ async function runFullPipeline(
       ...invokeBody,
       questId: quest.id,
       userId: sessionCtx.userId,
-      // From the verified token, never the request body. process() reads the tool context's key
-      // from this body only, so without it a key-minted call reaches tools as a signed-in session.
+      // From the verified token, never the request body. process() reads the tool context's auth
+      // from this body only.
+      authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
       embeddingModel,
       queryComplexity: 'simple',

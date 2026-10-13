@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 import CreateTeamModal, { useCreateTeamModal } from './CreateTeamModal';
 
 const mutateAsync = vi.fn();
@@ -31,8 +32,10 @@ vi.mock('@client/app/hooks/data/stripe', () => ({
 }));
 
 const seatLimits = vi.hoisted(() => ({ current: { minSeats: 3, maxSeats: 7 } }));
+const teamPlan = vi.hoisted(() => ({ available: true }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
   useTeamSeatLimits: () => seatLimits.current,
+  useTeamPlanAvailable: () => teamPlan.available,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -40,9 +43,12 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
+const sizeValue = () => (screen.getByTestId('create-team-size-value') as HTMLInputElement).value;
+
 describe('CreateTeamModal', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
+    teamPlan.available = true;
     plansState = defaultPlans();
     useCreateTeamModal.setState({ isOpen: true });
   });
@@ -68,7 +74,7 @@ describe('CreateTeamModal', () => {
           <CreateTeamModal />
         </TestWrapper>
       );
-      expect(screen.getByText('3')).toBeTruthy();
+      expect(sizeValue()).toBe('3');
 
       // Settings arrive with a higher floor than the default the modal was mounted with.
       seatLimits.current = { minSeats: 5, maxSeats: 7 };
@@ -77,7 +83,7 @@ describe('CreateTeamModal', () => {
           <CreateTeamModal />
         </TestWrapper>
       );
-      expect(screen.getByText('5')).toBeTruthy();
+      expect(sizeValue()).toBe('5');
 
       // ...and a ceiling below the current pick.
       seatLimits.current = { minSeats: 2, maxSeats: 2 };
@@ -86,7 +92,7 @@ describe('CreateTeamModal', () => {
           <CreateTeamModal />
         </TestWrapper>
       );
-      expect(screen.getByText('2')).toBeTruthy();
+      expect(sizeValue()).toBe('2');
       expect(screen.getByText(/Total Price: \$20\/month/)).toBeTruthy();
     });
   });
@@ -130,7 +136,7 @@ describe('CreateTeamModal', () => {
     renderModal();
 
     // Read the size back rather than assuming the seat floor, which the admin settings can move.
-    const seats = Number(screen.getByTestId('create-team-size-value').textContent);
+    const seats = Number(sizeValue());
     expect(seats).toBeGreaterThan(0);
     expect(screen.getByTestId('create-team-price-value').textContent).toBe(`Total Price: $${seats * 10}/month`);
   });
@@ -142,6 +148,69 @@ describe('CreateTeamModal', () => {
     expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
     expect(screen.queryByTestId('create-team-price-value')).toBeNull();
     expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+  });
+
+  it('shows no unavailable message and allows checkout when enableTeamPlan is on', async () => {
+    renderModal();
+
+    expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
+    await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+    expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(false);
+  });
+
+  it('says Team plans are not available and disables Create Team when enableTeamPlan is off', async () => {
+    teamPlan.available = false;
+    renderModal();
+
+    expect(screen.getByTestId('create-team-unavailable').textContent).toBe('Team plans are not available right now.');
+    expect(screen.getByTestId('create-team-size-value').hasAttribute('disabled')).toBe(true);
+    // Even with a valid name and live price, the button stays disabled and nothing is submitted.
+    await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+    const submit = screen.getByTestId('create-team-submit-btn');
+    expect(submit.hasAttribute('disabled')).toBe(true);
+    submit.click();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('exempts the development create path from the Team plan gate', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.resetModules();
+    const devCreate = vi.fn().mockResolvedValue({});
+    vi.doMock('@client/app/hooks/data/subscriptions', () => ({
+      useSubscribeTeamPlan: () => ({ mutateAsync: (...args: unknown[]) => mutateAsync(...args), isPending: false }),
+      useCreateTeamDev: () => ({ mutateAsync: devCreate, isPending: false }),
+    }));
+    try {
+      teamPlan.available = false;
+      const { default: DevModal, useCreateTeamModal: useDevModal } = await import('./CreateTeamModal');
+      useDevModal.setState({ isOpen: true });
+      render(
+        <TestWrapper>
+          <DevModal />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
+      expect(screen.getByTestId('create-team-size-value').hasAttribute('disabled')).toBe(false);
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      await user.click(screen.getByTestId('create-team-submit-btn'));
+
+      await waitFor(() => expect(devCreate).toHaveBeenCalledTimes(1));
+      expect(mutateAsync).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('@client/app/hooks/data/subscriptions');
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps the missing-price error alongside the unavailable message', () => {
+    teamPlan.available = false;
+    plansState = { data: [{ id: 'price_some_other_plan', unit_amount: 3000 }], isLoading: false, isError: false };
+    renderModal();
+
+    expect(screen.getByTestId('create-team-unavailable')).toBeTruthy();
+    expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
   });
 
   it('does not sit on a loading skeleton forever when the plans query is disabled', () => {
@@ -165,5 +234,96 @@ describe('CreateTeamModal', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     process.off('unhandledRejection', unhandled);
     expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('links custom billing to the sales contact in a new tab', () => {
+    renderModal();
+    const link = screen.getByTestId('create-team-contact-sales-link') as HTMLAnchorElement;
+
+    expect(link.textContent).toBe('Contact us');
+    expect(link.getAttribute('href')).toBe(ExternalLinks.support);
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  describe('typing the seat count', () => {
+    afterEach(() => {
+      seatLimits.current = { minSeats: 3, maxSeats: 7 };
+    });
+
+    const typeSize = async (value: string) => {
+      const user = userEvent.setup({ delay: null });
+      const input = screen.getByTestId('create-team-size-value');
+      await user.clear(input);
+      if (value) await user.type(input, value);
+      return { user, input };
+    };
+
+    it('accepts a typed seat count and prices it', async () => {
+      seatLimits.current = { minSeats: 3, maxSeats: 50 };
+      renderModal();
+      const { user } = await typeSize('25');
+
+      expect(sizeValue()).toBe('25');
+      expect(screen.getByTestId('create-team-price-value').textContent).toBe('Total Price: $250/month');
+
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      await user.click(screen.getByTestId('create-team-submit-btn'));
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ quantity: 25 })));
+    });
+
+    it.each([
+      ['above the maximum', '99'],
+      ['below the minimum', '1'],
+    ])('flags a value %s and keeps Create Team disabled, even after blur', async (_name, text) => {
+      renderModal();
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      await typeSize(text);
+
+      expect(screen.getByTestId('create-team-size-value-error').textContent).toBe('Must be between 3 and 7');
+      expect(screen.queryByText(/Team size must be between/)).toBeNull();
+      expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+
+      await user.tab();
+      expect(sizeValue()).toBe(text);
+      expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+    });
+
+    it('does not submit an out-of-range size while the field is still focused', async () => {
+      renderModal();
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      await typeSize('99');
+      fireEvent.click(screen.getByTestId('create-team-submit-btn'));
+
+      expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('keeps the total on the last valid size while the draft is invalid', async () => {
+      renderModal();
+      await typeSize('99');
+
+      expect(screen.getByTestId('create-team-price-value').textContent).toBe('Total Price: $30/month');
+    });
+
+    it('rounds a fractional value to an integer on blur', async () => {
+      renderModal();
+      const { user } = await typeSize('5.4');
+      await user.tab();
+
+      expect(sizeValue()).toBe('5');
+    });
+
+    it('disables Create Team while the field is empty', async () => {
+      renderModal();
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(false);
+
+      await typeSize('');
+      expect(sizeValue()).toBe('');
+      expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+    });
   });
 });

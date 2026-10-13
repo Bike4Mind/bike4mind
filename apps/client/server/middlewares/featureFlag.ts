@@ -17,6 +17,18 @@ export function isSettingEnabled(rawValue: unknown): boolean {
 }
 
 /**
+ * Whether an admin feature flag is on, falling back to the setting's default when unset.
+ * For a check that cannot be route-wide middleware (one method of a multi-method route, a Slack
+ * handler); a read error propagates, so callers fail closed.
+ */
+export async function isFeatureEnabled(featureName: SettingKey): Promise<boolean> {
+  // Cached read (short TTL) rather than a per-request findOne. Every gated route
+  // pays this on each call, so the uncached round-trip added up once flags went wide.
+  const settingValue = await getSettingByName(featureName, { adminSettings: adminSettingsRepository });
+  return isSettingEnabled(settingValue ?? settingsMap[featureName]?.defaultValue);
+}
+
+/**
  * Middleware to enforce server-side feature flag checks.
  * Prevents users from bypassing client-side feature checks via direct API calls.
  *
@@ -27,14 +39,7 @@ export const requireFeatureEnabled =
   (featureName: SettingKey): RequestHandler =>
   async (req, res, next) => {
     try {
-      // Cached read (short TTL) rather than a per-request findOne. Every gated route
-      // pays this on each call, so the uncached round-trip added up once flags went wide.
-      const settingValue = await getSettingByName(featureName, { adminSettings: adminSettingsRepository });
-
-      const defaultValue = settingsMap[featureName]?.defaultValue;
-      const isEnabled = isSettingEnabled(settingValue ?? defaultValue);
-
-      if (!isEnabled) {
+      if (!(await isFeatureEnabled(featureName))) {
         return res.status(403).json({
           error: 'Feature not available',
           code: 'FEATURE_DISABLED',

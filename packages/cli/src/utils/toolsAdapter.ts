@@ -1126,6 +1126,9 @@ export async function generateCliTools(
       apiKeys: null,
       adminSettings: mockAdminSettings,
     },
+    // The signed-in user, running tools on their own machine. Spelled out because this object is
+    // `any`, so typecheck cannot require it (see ToolContext.authOrigin).
+    authOrigin: 'session',
   };
 
   // B4M tools enabled for CLI (subset of shared tools)
