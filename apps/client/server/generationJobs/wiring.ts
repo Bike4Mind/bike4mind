@@ -1,10 +1,12 @@
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
+  BadRequestError,
   isImageServeable,
   isPlaceholderApiKey,
   type IGenerationJobDocument,
   type IGenerationJobUpdatedAction,
+  type MusicProviderId,
   type VideoProviderId,
 } from '@bike4mind/common';
 import {
@@ -23,13 +25,26 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
+import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
 import {
   callerOwnsGeneratedImage,
   createVideoJobHandler,
   type CreateVideoJobDeps,
   type VideoJobDeps,
 } from '@bike4mind/services/videoJobs';
-import { ClientMessageSender, getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import {
+  checkStorageLimit,
+  ClientMessageSender,
+  getSettingsByNames,
+  getSettingsMap,
+  getSettingsValue,
+} from '@bike4mind/utils';
+import {
+  createMusicProviderRegistry,
+  LyriaMusicProvider,
+  TestMusicProvider,
+  type MusicProvider,
+} from '@bike4mind/utils/musicProviders';
 import {
   createVideoProviderRegistry,
   GeminiOmniVideoProvider,
@@ -83,6 +98,27 @@ export const selectProviderKey = (
   }
 };
 
+/** As selectProviderKey, for the music providers. */
+export const selectMusicProviderKey = (
+  providerId: MusicProviderId,
+  keys: Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>
+): string | null | undefined => {
+  switch (providerId) {
+    case 'test':
+      return 'test-key';
+    case 'gemini-lyria':
+      return keys.gemini;
+    // getEffectiveLLMApiKeys carries no ElevenLabs key (it is read through getEffectiveApiKey), and no
+    // ElevenLabs music adapter is registered yet; that adapter wires its key here.
+    case 'elevenlabs':
+      return null;
+    default: {
+      const unhandled: never = providerId;
+      throw new Error(`no API key mapping for music provider '${String(unhandled)}'`);
+    }
+  }
+};
+
 export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedAction => {
   const { output } = job.payload;
   return {
@@ -113,6 +149,14 @@ export const buildProviders = (): VideoProvider[] => {
   return providers;
 };
 
+// Lyria is registered everywhere; a caller can use it only with a resolvable Gemini key.
+export const buildMusicProviders = (): MusicProvider[] => {
+  const providers: MusicProvider[] = [new LyriaMusicProvider()];
+  // Set only on non-production stages by infra (TEST_VIDEO_PROVIDER_ENVIRONMENT); never registered in production.
+  if (process.env.ENABLE_TEST_MUSIC_PROVIDER === 'true') providers.push(new TestMusicProvider());
+  return providers;
+};
+
 // Direct links (worker, sweep cron) win; API Lambdas only carry the sourceQueueUrls Linkable. sst's Resource
 // proxy throws on an unlinked key, hence the try.
 const resolveGenerationJobQueueUrl = (): string => {
@@ -139,13 +183,17 @@ export const enqueueGenerationJob = async (jobId: string, delaySeconds: number):
   await sendToQueue(resolveGenerationJobQueueUrl(), { jobId }, delaySeconds);
 };
 
-const resolveApiKey: VideoJobDeps['resolveApiKey'] = async (providerId, userId) => {
-  const keys = await apiKeyService.getEffectiveLLMApiKeys(userId, {
+const effectiveKeys = (userId: string) =>
+  apiKeyService.getEffectiveLLMApiKeys(userId, {
     db: { adminSettings: adminSettingsRepository, apiKeys: apiKeyRepository },
     getSettingsByNames,
   });
-  return usableApiKey(selectProviderKey(providerId, keys));
-};
+
+const resolveApiKey: VideoJobDeps['resolveApiKey'] = async (providerId, userId) =>
+  usableApiKey(selectProviderKey(providerId, await effectiveKeys(userId)));
+
+const resolveMusicApiKey: MusicJobDeps['resolveApiKey'] = async (providerId, userId) =>
+  usableApiKey(selectMusicProviderKey(providerId, await effectiveKeys(userId)));
 
 // Owner-only on purpose for both kinds: the image becomes provider input, and a shared image is not the
 // requester's to send out.
@@ -185,7 +233,7 @@ const loadInputGeneratedImage = async (userId: string, key: string) => {
   return { bytes, mimeType };
 };
 
-export const saveToFiles: VideoJobDeps['saveToFiles'] = params => saveGeneratedAssetToFiles(params, logger);
+export const saveToFiles: MusicJobDeps['saveToFiles'] = params => saveGeneratedAssetToFiles(params, logger);
 
 const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {
   await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType }, signal);
@@ -198,6 +246,60 @@ const getSettings: VideoJobDeps['getSettings'] = async () => {
     enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
     videoGeneration: getSettingsValue('videoGeneration', settings),
   };
+};
+
+const getMusicSettings: MusicJobDeps['getSettings'] = async () => {
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  return {
+    enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
+    musicGeneration: getSettingsValue('musicGeneration', settings),
+  };
+};
+
+// The same per-user quota createFabFile enforces on the save (saveGeneratedAsset passes no organization).
+export const hasStorageFor: CreateMusicJobDeps['hasStorageFor'] = async (userId, bytes) => {
+  const user = await userRepository.findById(userId);
+  if (!user) return false;
+  try {
+    await checkStorageLimit(user, bytes);
+    return true;
+  } catch (error) {
+    if (error instanceof BadRequestError) return false;
+    throw error;
+  }
+};
+
+const recordMusicUsage: MusicJobDeps['recordUsage'] = async ({
+  job,
+  creditsCharged,
+  costUsd,
+  durationSeconds,
+  status,
+}) => {
+  try {
+    await usageEventRepository.record({
+      requestId: job.questId ?? job.id,
+      userId: job.requestedBy,
+      ownerId: job.ownerId,
+      ownerType: job.ownerType,
+      ...(job.payload.sessionId !== undefined && { sessionId: job.payload.sessionId }),
+      feature: 'music_generation',
+      provider: job.payload.providerId,
+      model: job.payload.request.model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      units: durationSeconds,
+      costUsd,
+      creditsCharged,
+      status,
+      latencyMs: Date.now() - (job.createdAt?.getTime() ?? Date.now()),
+    });
+  } catch (error) {
+    // Analytics only, never billing: a lost row must not fail the job.
+    logger.warn('failed to record music usage event', { jobId: job.id, error });
+  }
 };
 
 const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, costUsd, durationSeconds, status }) => {
@@ -259,11 +361,39 @@ export const getCreateVideoJobDeps = (): CreateVideoJobDeps => ({
   engine: getGenerationJobEngine(),
 });
 
+let musicJobDeps: MusicJobDeps | undefined;
+export const getMusicJobDeps = (): MusicJobDeps => {
+  musicJobDeps ??= {
+    repository: generationJobRepository,
+    providers: createMusicProviderRegistry(buildMusicProviders()),
+    getSettings: getMusicSettings,
+    resolveApiKey: resolveMusicApiKey,
+    saveToFiles,
+    saveToGeneratedBucket,
+    credits: {
+      users: userRepository,
+      organizations: organizationRepository,
+      creditTransactions: creditTransactionRepository,
+    },
+    enqueue: enqueueGenerationJob,
+    recordUsage: recordMusicUsage,
+    now: () => new Date(),
+    logger,
+  };
+  return musicJobDeps;
+};
+
+export const getCreateMusicJobDeps = (): CreateMusicJobDeps => ({
+  ...getMusicJobDeps(),
+  engine: getGenerationJobEngine(),
+  hasStorageFor,
+});
+
 let generationJobEngine: GenerationJobEngine | undefined;
 export const getGenerationJobEngine = (): GenerationJobEngine => {
   generationJobEngine ??= new GenerationJobEngine({
     repository: generationJobRepository,
-    handlers: [createVideoJobHandler(getVideoJobDeps())],
+    handlers: [createVideoJobHandler(getVideoJobDeps()), createMusicJobHandler(getMusicJobDeps())],
     enqueue: enqueueGenerationJob,
     notify,
     now: () => new Date(),

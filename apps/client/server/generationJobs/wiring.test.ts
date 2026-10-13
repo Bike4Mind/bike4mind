@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IGenerationJobDocument, VideoProviderId } from '@bike4mind/common';
+import type { IGenerationJobDocument, MusicProviderId, VideoProviderId } from '@bike4mind/common';
 
 const { queueLink, getSourceQueueUrl, sendToQueue } = vi.hoisted(() => ({
   queueLink: { mode: 'direct' as 'direct' | 'throws' },
@@ -32,11 +32,15 @@ vi.mock('@bike4mind/auth', async importOriginal => {
 });
 vi.mock('@server/utils/sqs', () => ({ sendToQueue }));
 
+import { createMusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import {
+  buildMusicProviders,
   buildProviders,
   enqueueGenerationJob,
+  getMusicJobDeps,
   getVideoJobDeps,
+  selectMusicProviderKey,
   selectProviderKey,
   toJobUpdate,
   usableApiKey,
@@ -106,6 +110,30 @@ describe('provider key selection', () => {
   });
 });
 
+describe('music provider key selection', () => {
+  it('gives the test provider a fixed key', () => {
+    expect(selectMusicProviderKey('test', {} as never)).toBe('test-key');
+  });
+
+  it('maps gemini-lyria to the Gemini key, so placeholder and expiry checks apply unchanged', () => {
+    expect(selectMusicProviderKey('gemini-lyria', { gemini: 'g-key' } as never)).toBe('g-key');
+    expect(usableApiKey(selectMusicProviderKey('gemini-lyria', { gemini: null } as never))).toBeNull();
+    expect(usableApiKey(selectMusicProviderKey('gemini-lyria', { gemini: 'expired' } as never))).toBeNull();
+  });
+
+  it('has no ElevenLabs key until its music adapter lands', () => {
+    expect(selectMusicProviderKey('elevenlabs', { gemini: 'g-key' } as never)).toBeNull();
+  });
+
+  it('throws for a provider id with no mapping', () => {
+    expect(() => selectMusicProviderKey('unmapped' as MusicProviderId, {} as never)).toThrow(/no API key mapping/);
+  });
+
+  it('resolves the test provider key through the deps', async () => {
+    expect(await getMusicJobDeps().resolveApiKey('test', 'user1')).toBe('test-key');
+  });
+});
+
 describe('toJobUpdate', () => {
   it('never exposes internal fields', () => {
     const update = toJobUpdate(baseJob);
@@ -131,6 +159,21 @@ describe('toJobUpdate', () => {
       payload: { ...baseJob.payload, output: { contentType: 'video/mp4', durationSeconds: 4 } },
     } as IGenerationJobDocument);
     expect(withoutFile.job.output).toEqual({ contentType: 'video/mp4', durationSeconds: 4 });
+  });
+
+  it('maps a music job output without its lyrics', () => {
+    const update = toJobUpdate({
+      ...baseJob,
+      kind: 'music',
+      state: 'succeeded',
+      payload: {
+        providerId: 'test',
+        request: { model: 'test-music' },
+        output: { contentType: 'audio/mpeg', durationSeconds: 5, fileId: 'f1', lyrics: 'la la' },
+      },
+    } as IGenerationJobDocument);
+    expect(update.job).toMatchObject({ kind: 'music', output: { fileId: 'f1', contentType: 'audio/mpeg' } });
+    expect(JSON.stringify(update)).not.toContain('la la');
   });
 
   it('carries progress and the error code and message', () => {
@@ -190,5 +233,25 @@ describe('buildProviders', () => {
   it('builds a registry the catalog-owner check accepts', () => {
     process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
     expect(() => createVideoProviderRegistry(buildProviders())).not.toThrow();
+  });
+});
+
+describe('buildMusicProviders', () => {
+  afterEach(() => {
+    delete process.env.ENABLE_TEST_MUSIC_PROVIDER;
+  });
+
+  it('registers Lyria unconditionally', () => {
+    expect(buildMusicProviders().map(provider => provider.id)).toEqual(['gemini-lyria']);
+  });
+
+  it('adds the test provider only when enabled', () => {
+    process.env.ENABLE_TEST_MUSIC_PROVIDER = 'true';
+    expect(buildMusicProviders().map(provider => provider.id)).toEqual(['gemini-lyria', 'test']);
+  });
+
+  it('builds a registry the catalog-owner check accepts', () => {
+    process.env.ENABLE_TEST_MUSIC_PROVIDER = 'true';
+    expect(() => createMusicProviderRegistry(buildMusicProviders())).not.toThrow();
   });
 });
