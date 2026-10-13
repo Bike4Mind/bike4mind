@@ -127,6 +127,32 @@ describe('settleVoiceHold', () => {
     expect(logInfo).not.toHaveBeenCalled();
   });
 
+  it('restores an ended call with its last activity at the end, so the retry bills up to it', async () => {
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+    const connected = { ...HOLD, voiceConnectedAt: at(5), voiceLastActivityAt: at(50) };
+
+    await expect(settleVoiceHold(connected, at(80), 'end')).rejects.toThrow('db blip');
+    expect(restoreVoiceHold).toHaveBeenCalledWith(
+      's1',
+      600,
+      STARTED,
+      expect.objectContaining({ voiceConnectedAt: at(5), voiceLastActivityAt: at(80) })
+    );
+  });
+
+  it('never moves a later recorded activity back to the end time on restore', async () => {
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+    const connected = { ...HOLD, voiceConnectedAt: at(5), voiceLastActivityAt: at(90) };
+
+    await expect(settleVoiceHold(connected, at(80), 'end')).rejects.toThrow('db blip');
+    expect(restoreVoiceHold).toHaveBeenCalledWith(
+      's1',
+      600,
+      STARTED,
+      expect.objectContaining({ voiceLastActivityAt: at(90) })
+    );
+  });
+
   it('logs the lost refund when a newer hold blocks restoring this one', async () => {
     incrementCredits.mockRejectedValue(new Error('db blip'));
     restoreVoiceHold.mockResolvedValue(false);
