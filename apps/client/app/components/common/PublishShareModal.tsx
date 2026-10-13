@@ -340,6 +340,9 @@ export function PublishShareModal({
       });
     return () => {
       active = false;
+      // Closing mid-lookup must not leave the create button held for the next open, which may
+      // come from a surface with no lookup at all (one hook instance serves many surfaces).
+      setResolving(false);
     };
   }, [open, resolvePublished]);
 

@@ -703,19 +703,17 @@ describe('PublishShareModal - reopening an already-published reply', () => {
   const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
 
   const renderReopened = (resolvePublished: () => Promise<PublishResult | null>) => {
-    apiGet
-      .mockReset()
-      .mockImplementation((url: string) =>
-        Promise.resolve(
-          url.endsWith('/share-token')
-            ? { data: { shareToken: null } }
-            : {
-                data: {
-                  artifact: { visibility: 'public', accessGate: null, commentPolicy: 'none', discoverable: false },
-                },
-              }
-        )
-      );
+    apiGet.mockReset().mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: null } }
+          : {
+              data: {
+                artifact: { visibility: 'public', accessGate: null, commentPolicy: 'none', discoverable: false },
+              },
+            }
+      )
+    );
     apiPatch.mockClear().mockResolvedValue({ data: {} });
     const publish = vi.fn();
     render(
@@ -757,6 +755,34 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     settle(null);
     await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
     expect(screen.queryByTestId('publish-share-url')).toBeNull();
+  });
+
+  it('closing mid-lookup does not hold the create button on the next open without a lookup', async () => {
+    const publish = vi.fn();
+    const { rerender } = render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="An answer"
+          resolvePublished={() => new Promise<PublishResult | null>(() => {})}
+        />
+      </Wrapper>
+    );
+    expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(true);
+    rerender(
+      <Wrapper>
+        <PublishShareModal open={false} onClose={() => {}} publish={publish} title="An answer" />
+      </Wrapper>
+    );
+    rerender(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="An artifact" />
+      </Wrapper>
+    );
+    await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByTestId('publish-share-intro').textContent).not.toContain('Checking');
   });
 });
 
