@@ -219,7 +219,7 @@ describe('useConversationalVoice — auto-reconnect', () => {
     startSessionMock.mockRejectedValueOnce(new Error('boom'));
     await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
     expect(useConversationalVoiceStore.getState().phase).toBe('error');
-    expect(endCalls()).toEqual([['/api/voice/v2/sessions/s1/end', {}]]);
+    expect(endCalls()).toEqual([['/api/voice/v2/sessions/s1/end', {}, { timeout: 10_000 }]]);
   });
 
   it('waits for an in-flight refund before reserving a new hold', async () => {

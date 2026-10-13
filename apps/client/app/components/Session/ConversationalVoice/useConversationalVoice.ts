@@ -73,6 +73,12 @@ const RECONNECT_BACKOFF_MS = [1000, 2000, 4000];
 let reconnectAttempts = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Bound the hold-settle POST so a hung request cannot wedge the retry that waits
+// on it (see reconcileVoiceSession). The settle is a couple of DB writes; the
+// endpoint is idempotent, so a timeout that races the server's own settle is safe
+// - the stale-hold sweep is the backstop.
+const VOICE_SETTLE_TIMEOUT_MS = 10_000;
+
 function clearReconnectTimer(): void {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
@@ -93,7 +99,7 @@ async function reconcileVoiceSession(sessionId: string | null): Promise<void> {
   if (!sessionId) return;
   const run = (async () => {
     try {
-      await api.post(`/api/voice/v2/sessions/${sessionId}/end`, {});
+      await api.post(`/api/voice/v2/sessions/${sessionId}/end`, {}, { timeout: VOICE_SETTLE_TIMEOUT_MS });
     } catch {
       // ignore - reservation reconciliation is not user-blocking
     }
