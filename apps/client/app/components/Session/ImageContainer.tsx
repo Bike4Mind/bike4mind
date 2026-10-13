@@ -3,6 +3,7 @@ import { CreateFabFileRequestInputType } from '@bike4mind/common';
 import {
   createFabFileOnServerWithUpload,
   copyGeneratedImageToFabFile,
+  deleteFileUtility,
   moderateFabFileNow,
 } from '@client/app/utils/filesAPICalls';
 import {
@@ -215,6 +216,8 @@ const ImageContainer: FC<ImageContainerProps> = ({
       // The edit is dispatched right away and the mask must be 'clean' by then; scan it now instead
       // of racing the S3 event. 'pending' still dispatches: the server gate waits and decides.
       if ((await moderateFabFileNow(maskFabFile.id)) === 'blocked') {
+        // No dispatch means the server's mask cleanup never runs, so drop the mask here.
+        await deleteFileUtility(maskFabFile.id);
         toast.error('The edit mask was blocked by moderation. Please try again.');
         return;
       }
