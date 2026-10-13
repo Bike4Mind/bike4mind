@@ -421,6 +421,9 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     const isOpen = readyState === ReadyState.OPEN;
     if (isOpen && !wasOpenRef.current && hasOpenedRef.current) {
       refetchAfterLostFrames(queryClient);
+      // InboxProvider's `invites` resubscribe skips the server replay once it has rescoped
+      // (InboxContext.tsx), so the reconnect replay can no longer be relied on to catch invites up.
+      void queryClient.invalidateQueries({ queryKey: ['invites'] });
     }
     if (isOpen) hasOpenedRef.current = true;
     wasOpenRef.current = isOpen;

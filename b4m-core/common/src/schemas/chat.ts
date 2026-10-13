@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ApiErrorCode } from '../apiErrorCodes';
+import { UNKNOWN_MODEL_ERROR_CODE, type ApiErrorCode } from '../apiErrorCodes';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).
@@ -328,6 +328,11 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
 /** 503 when this deployment has no usable key for a provider the request needs (data-lake search, voice). */
 export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
+});
+
+/** 400 for a `model` the caller cannot use; `errorCode` is absent on the other 400s (e.g. malformed JSON). */
+export const UnknownModelErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(UNKNOWN_MODEL_ERROR_CODE).optional(),
 });
 
 /**

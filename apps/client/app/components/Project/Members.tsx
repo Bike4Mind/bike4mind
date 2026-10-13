@@ -1,4 +1,4 @@
-import { IInviteDocument, InviteType, IProjectDocument } from '@bike4mind/common';
+import { InviteType, IProjectDocument } from '@bike4mind/common';
 import { useDeleteInvite, useGetProjectInvites } from '@client/app/hooks/data/invites';
 import { useLeaveProject } from '@client/app/hooks/data/projects';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import { updateAllQueryData, useSubscribeCollection } from '@client/app/utils/react-query';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useCoalescedInvalidate } from '@client/app/hooks/useCoalescedInvalidate';
+import { useInviteEvents } from '@client/app/contexts/InboxContext';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import LogoutIcon from '@mui/icons-material/Logout';
 
@@ -39,13 +40,13 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const getProjectInvites = useGetProjectInvites(
     { projectId: project.id, limit: 10, page: 1, statuses: 'pending' },
-    { enabled: !!project.id && project.userId === ownerId }
+    { enabled: !!project.id && project.userId === ownerId, refetchOnMount: 'always' }
   );
   const queryClient = useQueryClient();
   const getUserKey = useMemo(() => ['users', 'projects', project.id, search], [project.id, search]);
   const getUsers = useGetUsers(
     { projectId: project.id, limit: 10, page: 1, publicView: true, search },
-    { enabled: !!project.id, queryKey: getUserKey }
+    { enabled: !!project.id, queryKey: getUserKey, refetchOnMount: 'always' }
   );
   const { mutate: revokeAccess } = useUserRevokeSharing({
     onSuccess: () => {
@@ -94,16 +95,16 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
 
   const coalescedInvalidateInvites = useCoalescedInvalidate(['invites', 'projects', project.id]);
 
-  // Any invite event (including a subscribe's replay burst) schedules one coalesced refetch.
-  useSubscribeCollection(
-    'invites',
-    useMemo(() => (project?.id ? { documentId: project.id, type: InviteType.Project } : null), [project.id]),
-    useCallback<SubscriptionCallbackFunction<IInviteDocument>>(() => {
-      // Refetch rather than write the event's document: the subscription withholds `recipients`
-      // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
+  // Listens to InboxProvider's single `invites` subscription instead of opening a second one.
+  // Refetch rather than write the event's document: the subscription withholds `recipients`
+  // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
+  useInviteEvents(
+    (_type, data) => {
+      if (data?.documentId !== project.id || data?.type !== InviteType.Project) return;
       coalescedInvalidateInvites();
       debouncedInvalidateUsers();
-    }, [coalescedInvalidateInvites, debouncedInvalidateUsers])
+    },
+    { projectId: project.id }
   );
 
   // Update the users list whenever the project changes
@@ -210,11 +211,7 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
           )}
         </Box>
         {enforceCredits && (
-          <Typography
-            data-testid="project-members-billing-note"
-            level="body-xs"
-            sx={{ color: 'text.tertiary' }}
-          >
+          <Typography data-testid="project-members-billing-note" level="body-xs" sx={{ color: 'text.tertiary' }}>
             {PROJECT_MEMBERS_BILLING_NOTE}
           </Typography>
         )}

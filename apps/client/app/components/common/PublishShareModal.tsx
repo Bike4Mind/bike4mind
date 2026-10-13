@@ -764,7 +764,12 @@ export function PublishShareModal({
             orientation="horizontal"
             sx={{ mb: 2, justifyContent: 'space-between', alignItems: 'center', gap: 1 }}
           >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {/* flex: 1 + minWidth: 0 here and flexShrink: 0 on the Switch stop the long helper from squeezing
+                the switch on narrow screens. Keep in sync with DiscoverableToggle. */}
+            <Box
+              sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, minWidth: 0 }}
+              data-testid="publish-share-discoverable-text"
+            >
               <TravelExploreIcon fontSize="small" />
               <Box>
                 <FormLabel sx={{ mb: 0 }}>Show in search results</FormLabel>
@@ -780,6 +785,8 @@ export function PublishShareModal({
             <Switch
               checked={discoverableOn}
               disabled={busy}
+              sx={{ flexShrink: 0 }}
+              data-testid="publish-share-discoverable-switch"
               onChange={e => void onToggleDiscoverable(e.target.checked)}
               // On the INPUT slot, not the root: Joy spreads bare props to the root span,
               // where a test can't read `.checked`.
