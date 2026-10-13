@@ -699,9 +699,19 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   async recordVoiceActivity(sessionId: string, at: Date, holdStartedAt?: Date | null) {
     // Keyed on the hold's start when the signal names it, so a call still running elsewhere can
     // never mark a newer hold on the same session connected.
-    const openHold = { _id: sessionId, voiceSessionStartedAt: holdStartedAt ?? { $ne: null } };
-    await this.sessionModel.updateOne({ ...openHold, voiceConnectedAt: null }, { $set: { voiceConnectedAt: at } });
-    await this.sessionModel.updateOne(openHold, { $max: { voiceLastActivityAt: at } });
+    // One pipeline update: the first signal sets voiceConnectedAt, and $max never moves activity back.
+    const { matchedCount } = await this.sessionModel.updateOne(
+      { _id: sessionId, voiceSessionStartedAt: holdStartedAt ?? { $ne: null } },
+      [
+        {
+          $set: {
+            voiceConnectedAt: { $ifNull: ['$voiceConnectedAt', at] },
+            voiceLastActivityAt: { $max: ['$voiceLastActivityAt', at] },
+          },
+        },
+      ]
+    );
+    return matchedCount === 1;
   }
 
   async claimVoiceHold(sessionId: string, startedAt: Date) {

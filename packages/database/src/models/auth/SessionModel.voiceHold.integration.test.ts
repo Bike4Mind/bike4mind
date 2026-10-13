@@ -146,6 +146,19 @@ describe('sessionRepository voice holds', () => {
     expect(await Session.findById(id).lean()).toMatchObject({ voiceConnectedAt: at, voiceLastActivityAt: at });
   });
 
+  it('reports whether it matched an open hold with the named start', async () => {
+    const startedAt = minutesAgo(10);
+    const id = await seed('call', 100, startedAt);
+
+    expect(await sessionRepository.recordVoiceActivity(id, minutesAgo(9), startedAt)).toBe(true);
+    expect(await sessionRepository.recordVoiceActivity(id, minutesAgo(8))).toBe(true);
+    expect(await sessionRepository.recordVoiceActivity(id, minutesAgo(8), minutesAgo(20))).toBe(false);
+
+    await sessionRepository.claimVoiceHold(id, startedAt);
+    expect(await sessionRepository.recordVoiceActivity(id, minutesAgo(1), startedAt)).toBe(false);
+    expect(await sessionRepository.recordVoiceActivity(id, minutesAgo(1))).toBe(false);
+  });
+
   it('records no activity without an open hold, and a claim clears the markers', async () => {
     const startedAt = minutesAgo(10);
     const id = await seed('call', 100, startedAt);
