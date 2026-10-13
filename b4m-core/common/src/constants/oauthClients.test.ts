@@ -3,6 +3,7 @@ import {
   LEGACY_DEVICE_CLIENT_ID,
   OAUTH_DEVICE_CLIENT_IDS,
   clientIdFromAuthorizeRedirect,
+  isOAuthClientIdShape,
   oauthClientDisplayName,
   oauthClientSourceSlug,
 } from './oauthClients';
@@ -69,6 +70,8 @@ describe('clientIdFromAuthorizeRedirect', () => {
     ['empty client_id', '/oauth/authorize?client_id='],
     ['no client_id', '/oauth/authorize?response_type=code'],
     ['overlong client_id', `/oauth/authorize?client_id=${'a'.repeat(129)}`],
+    ['encoded CR/LF in client_id', '/oauth/authorize?client_id=b4m_x_0a1b2c3d%0D%0Aforged'],
+    ['encoded space in client_id', '/oauth/authorize?client_id=a%20b'],
     ['empty string', ''],
   ])('rejects %s', (_label, value) => {
     expect(clientIdFromAuthorizeRedirect(value)).toBeUndefined();
@@ -76,5 +79,15 @@ describe('clientIdFromAuthorizeRedirect', () => {
 
   it.each([null, undefined, 42, {}, ['/oauth/authorize?client_id=x']])('rejects non-string %p', value => {
     expect(clientIdFromAuthorizeRedirect(value)).toBeUndefined();
+  });
+});
+
+describe('isOAuthClientIdShape', () => {
+  it.each(['b4m-cli', 'b4m_acme_0a1b2c3d', 'a.b:c-d', 'a'.repeat(128)])('accepts %s', value => {
+    expect(isOAuthClientIdShape(value)).toBe(true);
+  });
+
+  it.each(['', 'a'.repeat(129), 'b4m_x\r\nforged', 'a b', 'a/b', null, 42])('rejects %p', value => {
+    expect(isOAuthClientIdShape(value)).toBe(false);
   });
 });

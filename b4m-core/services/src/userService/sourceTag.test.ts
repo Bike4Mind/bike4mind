@@ -26,9 +26,12 @@ describe('resolveOAuthSourceTag', () => {
     await expect(resolveOAuthSourceTag('b4m_nope_0a1b2c3d', lookupReturning(null))).resolves.toBeNull();
   });
 
-  it.each([undefined, null, '', 42, {}, ['b4m_acme_0a1b2c3d']])('returns null without a lookup for %p', async value => {
-    const lookup = lookupReturning({ clientId: 'b4m_acme_0a1b2c3d', isActive: true });
-    await expect(resolveOAuthSourceTag(value, lookup)).resolves.toBeNull();
-    expect(lookup.findByClientId).not.toHaveBeenCalled();
-  });
+  it.each([undefined, null, '', 42, {}, ['b4m_acme_0a1b2c3d'], 'b4m_acme_0a1b2c3d\nforged'])(
+    'returns null without a lookup for %p',
+    async value => {
+      const lookup = lookupReturning({ clientId: 'b4m_acme_0a1b2c3d', isActive: true });
+      await expect(resolveOAuthSourceTag(value, lookup)).resolves.toBeNull();
+      expect(lookup.findByClientId).not.toHaveBeenCalled();
+    }
+  );
 });

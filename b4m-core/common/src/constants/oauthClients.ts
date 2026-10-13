@@ -35,7 +35,15 @@ export function oauthClientDisplayName(clientId: string): string {
 }
 
 const MAX_SOURCE_SLUG_LENGTH = 64;
-const MAX_AUTHORIZE_CLIENT_ID_LENGTH = 128;
+const OAUTH_CLIENT_ID_SHAPE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * Whether a caller-supplied value can be an OAuth client id. Ids are logged on the
+ * attribution path, so anything outside this charset (CR/LF included) is refused outright.
+ */
+export function isOAuthClientIdShape(value: unknown): value is string {
+  return typeof value === 'string' && OAUTH_CLIENT_ID_SHAPE.test(value);
+}
 
 /**
  * The attribution slug for a registered OAuth client, used as the `source:<slug>` user tag.
@@ -71,6 +79,5 @@ export function clientIdFromAuthorizeRedirect(redirectTo: unknown): string | und
   const ids = url.searchParams.getAll('client_id');
   if (ids.length !== 1) return undefined;
   const [id] = ids;
-  if (!id || id.length > MAX_AUTHORIZE_CLIENT_ID_LENGTH) return undefined;
-  return id;
+  return isOAuthClientIdShape(id) ? id : undefined;
 }

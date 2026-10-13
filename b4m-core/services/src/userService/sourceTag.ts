@@ -1,5 +1,7 @@
-import { oauthClientSourceSlug } from '@bike4mind/common';
+import { isOAuthClientIdShape, oauthClientSourceSlug } from '@bike4mind/common';
 
+// Attribution only, and self-assertable: any new account can name any active client at signup.
+// Never key access (entitlements, requiredUserTag, model or tool gates) on a source: tag.
 export const OAUTH_SOURCE_TAG_PREFIX = 'source:';
 
 /** Narrow client lookup, so this package stays free of @bike4mind/database. */
@@ -16,7 +18,7 @@ export async function resolveOAuthSourceTag(
   clientId: unknown,
   lookup: OAuthSourceClientLookup
 ): Promise<string | null> {
-  if (typeof clientId !== 'string' || clientId.length === 0) return null;
+  if (!isOAuthClientIdShape(clientId)) return null;
   const client = await lookup.findByClientId(clientId);
   if (!client || client.isActive !== true) return null;
   const slug = oauthClientSourceSlug(client.clientId);

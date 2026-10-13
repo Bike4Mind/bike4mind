@@ -139,7 +139,7 @@ const OAuthAuthorizePage = () => {
     if (status !== 'idle' || didRun.current) return;
     didRun.current = true;
     requestCode();
-  }, [accessToken, status, paramsValid]);
+  }, [accessToken, status, paramsValid, screen_hint]);
 
   if (!paramsValid) {
     return (

@@ -4,6 +4,7 @@ import {
   HTTPError,
   InternalServerError,
   UnprocessableEntityError,
+  isOAuthClientIdShape,
   redactUserSecretsForSelf,
 } from '@bike4mind/common';
 import {
@@ -57,13 +58,10 @@ interface PendingTokenPayload {
 }
 
 const MAX_PENDING_OTC_ATTEMPTS = 5;
-const MAX_SOURCE_CLIENT_ID_LENGTH = 128;
 
 // Attribution only: a malformed value is dropped rather than rejected so it can never fail a signup.
 function parseSourceClientId(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 && value.length <= MAX_SOURCE_CLIENT_ID_LENGTH
-    ? value
-    : undefined;
+  return isOAuthClientIdShape(value) ? value : undefined;
 }
 
 const handler = baseApi({ auth: false })

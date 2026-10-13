@@ -42,7 +42,7 @@ vi.mock('@server/auth/oktaOidcClient', () => ({
 
 const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/utils/auth/oauthSourceTag', () => ({
-  stampOAuthSourceTag: (...a: any[]) => mockStampSourceTag(...a),
+  stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
 }));
 
 // State token verification.
