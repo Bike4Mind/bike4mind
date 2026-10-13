@@ -71,7 +71,7 @@ export const createTranscriptionContract = defineEndpoint({
   description:
     'Transcribes an upload minted by `POST /api/v1/transcriptions/uploads` and returns the text. Call it ' +
     'within 5 minutes of minting the upload. Credits are charged by file size. The uploaded audio is ' +
-    'deleted when the call ends, whether it succeeds or fails, so each upload can be transcribed once.\n\n' +
+    'deleted when the call returns, whether it succeeds or fails, so each upload can be transcribed once.\n\n' +
     '**Limit:** this call is synchronous. The request times out after about 60 seconds, while the AWS ' +
     'speech backend can take up to about 5 minutes on long audio, so a long recording can fail with a ' +
     'gateway timeout (`504`) instead of returning text. A timed-out upload may not be deleted right away ' +

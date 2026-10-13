@@ -160,7 +160,12 @@ export const updateArtifactContract = defineEndpoint({
   requestExample: UPDATE_EXAMPLE,
   emitsRateLimitHeaders: true,
   responses: {
-    200: { description: 'The updated artifact and its current content.', schema: ArtifactResourceSchema },
+    200: {
+      description:
+        'The updated artifact and its current content. `content` is `null` for a caller who may edit but ' +
+        'not read the artifact, unless the request sent content.',
+      schema: ArtifactResourceSchema,
+    },
     403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: {
       description:
