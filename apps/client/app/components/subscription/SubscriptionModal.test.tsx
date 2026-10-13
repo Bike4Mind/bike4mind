@@ -165,6 +165,10 @@ describe('SubscriptionModal - Team tab', () => {
 
     expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeInTheDocument();
+
+    // ...and the user can still pick Business once the gate is back on.
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
   });
 
   it('leaves the Business tab enabled and unexplained when enableTeamPlan is on', () => {
