@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   failFirstDeleteOn: undefined as string | undefined,
   ops: [] as string[],
   emptySources: [] as string[],
+  cursorEmptySources: [] as string[],
   failRollbackBulkWrite: false,
   markerWrites: [] as unknown[][],
   findFilters: [] as { name: string; filter: unknown }[],
@@ -25,16 +26,20 @@ vi.mock('mongodb', () => {
       (isTarget && state.emptyTarget) || (!isTarget && state.emptySources.includes(name))
         ? []
         : [{ _id: `${name}-doc` }];
+    // countDocuments and the copy cursor are separate reads: a source can report rows and then
+    // yield none (rows deleted in between).
+    const cursorEmpty = !isTarget && state.cursorEmptySources.includes(name);
     return {
       findOne: vi.fn(async () => state.marker),
-      countDocuments: vi.fn(async () => docs.length),
+      countDocuments: vi.fn(async () => (cursorEmpty ? 1 : docs.length)),
       find: vi.fn((filter?: unknown) => {
         if (!isTarget) state.findFilters.push({ name, filter });
+        const yielded = cursorEmpty ? [] : docs;
         return {
           async *[Symbol.asyncIterator]() {
-            yield* docs;
+            yield* yielded;
           },
-          toArray: async () => docs,
+          toArray: async () => yielded,
         };
       }),
       insertMany: vi.fn(async (docs: unknown[]) => {
@@ -88,6 +93,7 @@ describe('dataSyncerHandler', () => {
     state.failFirstDeleteOn = undefined;
     state.ops = [];
     state.emptySources = [];
+    state.cursorEmptySources = [];
     state.failRollbackBulkWrite = false;
     state.markerWrites = [];
     state.findFilters = [];
@@ -186,10 +192,11 @@ describe('dataSyncerHandler', () => {
   it('writes the sync marker after a full copy', async () => {
     process.env.SEED_STAGE_NAME = 'pr123';
 
-    await invoke();
+    const result = await invoke();
 
     expect(state.markerWrites).toHaveLength(1);
     expect(state.markerWrites[0][0]).toEqual({ key: 'staging-config-sync' });
+    expect(result?.message).not.toContain('empty in source');
   });
 
   it('writes the marker when only some source collections are empty and does not re-copy on the next deploy', async () => {
@@ -215,16 +222,38 @@ describe('dataSyncerHandler', () => {
     expect(result?.message).toBe('Skipped staging sync: source empty for all collections; will retry next deploy');
   });
 
+  it('withholds the marker when the sources report rows but copy none', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.cursorEmptySources = ['adminsettings', 'rapidreplymappings'];
+
+    const result = await invoke();
+
+    expect(state.markerWrites).toHaveLength(0);
+    expect(result?.message).toContain('no documents copied; will retry next deploy');
+  });
+
   it('surfaces both the copy failure and the rollback failure', async () => {
     process.env.SEED_STAGE_NAME = 'pr123';
     state.failInsertInto = 'rapidreplymappings';
     state.failRollbackBulkWrite = true;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const result = await invoke();
+    try {
+      const result = await invoke();
 
-    expect(result?.message).toContain('insert into rapidreplymappings failed');
-    expect(result?.message).toContain('rollback of rapidreplymappings failed');
-    expect(state.markerWrites).toHaveLength(0);
+      expect(result?.message).toContain('insert into rapidreplymappings failed');
+      expect(result?.message).toContain('rollback of rapidreplymappings failed');
+      expect(state.markerWrites).toHaveLength(0);
+      // The combined error keeps the original failure as its cause, so the log shows both.
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Error syncing preview settings from staging:',
+        expect.objectContaining({
+          cause: expect.objectContaining({ message: 'insert into rapidreplymappings failed' }),
+        })
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('excludes encrypted settings from the adminsettings source query', async () => {
