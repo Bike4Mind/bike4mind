@@ -9,8 +9,9 @@ import {
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveUserArtifactGate } from '@server/utils/artifactGate';
-import { assertArtifactSourceRefsAccessible } from '@server/utils/assertArtifactSourceRefsAccessible';
-import { artifactSourceRefDeps } from '@server/artifacts/artifactAccess';
+import { createArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
+import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import type { Request } from 'express';
 import { z } from 'zod';
 import qs from 'qs';
 
@@ -128,26 +129,14 @@ const handler = baseApi()
 
       const validatedData = CreateArtifactSchema.parse(req.body);
 
+      validatedData.organizationId = await resolveActiveOrg(req as Request, validatedData.organizationId);
+
       if (isAiAuthoredCreate(validatedData.metadata) && !(await areUserArtifactsEnabled(user))) {
         return res.status(403).json({ error: 'Artifacts are disabled for this user' });
       }
 
-      // The refs below are written verbatim onto the new artifact, so a caller must be entitled to
-      // any it supplies - otherwise it could claim another user's session/quest/artifact as its
-      // source. Sessions are shareable and stamping a session is a write into its graph, so the bar
-      // is update access (owner or update-shared), matching the collaborator-in-a-shared-session
-      // flow; artifacts are not shareable, so parent stays owner-only.
-      await assertArtifactSourceRefsAccessible(
-        userId,
-        {
-          sessionId: validatedData.sessionId,
-          sourceQuestId: validatedData.sourceQuestId,
-          parentArtifactId: validatedData.parentArtifactId,
-        },
-        artifactSourceRefDeps(req.user!)
-      );
-
       const result = await artifactService.create(userId, validatedData, {
+        assertSourceRefsAccessible: createArtifactSourceRefsGuard(user),
         db: {
           artifacts: artifactRepository as any,
           artifactContents: artifactContentRepository as any,
