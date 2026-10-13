@@ -114,7 +114,9 @@ describe('SubscriptionModal - Team tab', () => {
     // 4 seats x $30 from the mocked Stripe price, not a hardcoded figure.
     expect(screen.getByText(/\$120\.00/)).toBeInTheDocument();
     expect(screen.getByText('$30.00 per seat per month, 4-seat minimum')).toBeInTheDocument();
-    expect(screen.getByText('Priority support')).toBeInTheDocument();
+    expect(screen.getByText('Priority support in a dedicated channel')).toBeInTheDocument();
+    expect(screen.queryByText('Dedicated support channel')).not.toBeInTheDocument();
+    expect(screen.queryByText('Priority support')).not.toBeInTheDocument();
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
     expect(screen.queryByTestId('subscription-modal-team-unavailable')).not.toBeInTheDocument();
   });

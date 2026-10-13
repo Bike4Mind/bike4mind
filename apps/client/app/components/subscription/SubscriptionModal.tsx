@@ -316,8 +316,7 @@ const SubscriptionModalContent = () => {
                 'Automated tagging & organization',
                 'Usage analytics across all models',
                 'Advanced security controls',
-                'Dedicated support channel',
-                'Priority support',
+                'Priority support in a dedicated channel',
               ]}
               actionButton={
                 <Stack gap={1}>
