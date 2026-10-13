@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   readyState: 1,
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  organizationId: null as string | null,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post } }));
@@ -19,6 +20,9 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ readyState: h.readyState, subscribeToAction: vi.fn() }),
 }));
 vi.mock('sonner', () => ({ toast: { success: h.toastSuccess, error: h.toastError } }));
+vi.mock('@client/app/contexts/LLMContext', () => ({
+  useLLM: { getState: () => ({ organizationId: h.organizationId }) },
+}));
 
 import { listOf, rangeModel, readyOutput, videoJob } from './__test__/videoGenerationFixtures';
 import type { VideoGenerationList } from './videoGenerationCache';
@@ -51,6 +55,7 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 beforeEach(() => {
   vi.clearAllMocks();
   h.readyState = 1;
+  h.organizationId = null;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 });
 
@@ -268,11 +273,21 @@ describe('useCreateVideoGeneration', () => {
     await act(async () => {
       await result.current.mutateAsync(body);
     });
-    expect(h.post).toHaveBeenCalledWith('/api/v1/video-generations', body);
+    expect(h.post).toHaveBeenCalledWith('/api/v1/video-generations', { ...body, organization_id: null });
     const list = queryClient.getQueryData<VideoGenerationList>(videoGenerationKeys.list);
     expect(list?.pages[0].data.map(job => job.id)).toEqual(['new', 'old']);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'] });
     expect(h.toastSuccess).toHaveBeenCalled();
+  });
+
+  it('bills the org selected in the account switcher at submit time', async () => {
+    h.post.mockResolvedValue({ data: videoJob({ id: 'new', state: 'pending' }) });
+    const { result } = renderHook(() => useCreateVideoGeneration(), { wrapper });
+    h.organizationId = 'org-1';
+    await act(async () => {
+      await result.current.mutateAsync(body);
+    });
+    expect(h.post).toHaveBeenCalledWith('/api/v1/video-generations', { ...body, organization_id: 'org-1' });
   });
 
   it('toasts the message for the refusal code, not the server text', async () => {

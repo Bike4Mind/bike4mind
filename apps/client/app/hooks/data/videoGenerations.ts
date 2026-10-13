@@ -3,6 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { toast } from 'sonner';
 import type { CreateVideoGenerationBody, VideoGeneration, VideoModel } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { useLLM } from '@client/app/contexts/LLMContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { CREDITS_BALANCE_KEY } from './credits';
 import {
@@ -119,8 +120,15 @@ export function useVideoGeneration(jobId: string) {
 export function useCreateVideoGeneration() {
   const queryClient = useQueryClient();
   return useMutation({
+    // Bills the account-switcher selection the same way chat and image generation do (null = personal), read at
+    // submit so a switch after render is honoured. The server rejects an org the caller is not a member of.
     mutationFn: async (body: CreateVideoGenerationBody) =>
-      (await api.post<VideoGeneration>('/api/v1/video-generations', body)).data,
+      (
+        await api.post<VideoGeneration>('/api/v1/video-generations', {
+          ...body,
+          organization_id: useLLM.getState().organizationId,
+        })
+      ).data,
     onSuccess: job => {
       prependVideoGeneration(queryClient, job);
       void queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY });
