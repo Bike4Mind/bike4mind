@@ -613,8 +613,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         thinkingStyle: 'adaptive',
+        // Global endpoint; cache hits are 0.05x input on Sonnet 5.5, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 3 / 1_000_000, output: 15 / 1_000_000 },
+          1_000_000: { input: 2 / 1_000_000, output: 10 / 1_000_000, cache_read: 0.1 / 1_000_000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -727,8 +728,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         thinkingStyle: 'adaptive',
+        // Global endpoint; cache hits are 0.025x input on Fable 5.1, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 10 / 1_000_000, output: 50 / 1_000_000 },
+          1_000_000: { input: 10 / 1_000_000, output: 50 / 1_000_000, cache_read: 0.25 / 1_000_000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
