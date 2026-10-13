@@ -159,6 +159,21 @@ describe('sessionRepository voice holds', () => {
     expect(await sessionRepository.recordVoiceActivity(id, minutesAgo(1))).toBe(false);
   });
 
+  it('marks only a realtime hold when asked for realtimeOnly', async () => {
+    const elevenLabs = await seed('elevenlabs', 100, minutesAgo(10));
+    const realtime = await seed('realtime', 100, minutesAgo(10), 0);
+    const at = minutesAgo(1);
+
+    expect(await sessionRepository.recordVoiceActivity(elevenLabs, at, null, { realtimeOnly: true })).toBe(false);
+    expect(await sessionRepository.recordVoiceActivity(realtime, at, null, { realtimeOnly: true })).toBe(true);
+
+    expect(await Session.findById(elevenLabs).lean()).toMatchObject({
+      voiceConnectedAt: null,
+      voiceLastActivityAt: null,
+    });
+    expect(await Session.findById(realtime).lean()).toMatchObject({ voiceConnectedAt: at, voiceLastActivityAt: at });
+  });
+
   it('records no activity without an open hold, and a claim clears the markers', async () => {
     const startedAt = minutesAgo(10);
     const id = await seed('call', 100, startedAt);
