@@ -880,6 +880,17 @@ describe('CookieConsentBanner', () => {
       expect(mailerLiteScript()).not.toBeNull();
     });
 
+    it('loads the MailerLite script in the auto-granted region with no stored decision', () => {
+      setRegion('row');
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(mailerLiteScript()).not.toBeNull();
+    });
+
     it('does not load the MailerLite script when consent is denied', () => {
       localStorageMock.setItem('cookie_consent', 'denied');
       render(

@@ -55,14 +55,20 @@ const APP_DECISION_TTL_SECONDS = 90 * 24 * 60 * 60;
  * returns through a top-level cross-site GET from the IdP, and Strict is withheld on precisely
  * that navigation. Under Strict this cookie would be missing on the one request it exists for.
  */
+/** Secure only on https: a Secure write from a plain-http origin is dropped, which would also
+ * leave an earlier non-Secure copy of the cookie impossible to overwrite. */
+function secureAttr(): string {
+  return window.location.protocol === 'https:' ? '; Secure' : '';
+}
+
 export function publishResolvedConsent(value: ConsentState): void {
   if (typeof document === 'undefined') return;
   if (value === 'unset') {
-    document.cookie = `${APP_DECISION_COOKIE}=; path=/; SameSite=Lax; Secure; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    document.cookie = `${APP_DECISION_COOKIE}=; path=/; SameSite=Lax${secureAttr()}; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
     return;
   }
   const expires = new Date(Date.now() + APP_DECISION_TTL_SECONDS * 1000).toUTCString();
-  document.cookie = `${APP_DECISION_COOKIE}=${value}; path=/; SameSite=Lax; Secure; expires=${expires}`;
+  document.cookie = `${APP_DECISION_COOKIE}=${value}; path=/; SameSite=Lax${secureAttr()}; expires=${expires}`;
 }
 
 /** Where this origin records the visitor's own decision. */

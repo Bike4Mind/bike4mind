@@ -1,13 +1,20 @@
 const EXPIRED = 'expires=Thu, 01 Jan 1970 00:00:00 GMT';
-const FIXED_NAMES = ['_fbp', '_rdt_uuid', '_rdt_em', '_ga'];
+const FIXED_NAMES = ['_fbp', '_fbc', '_rdt_uuid', '_rdt_em', '_rdt_cid', '_ga', '_gcl_au'];
+
+/** Two-label suffixes shared between unrelated sites; browsers ignore cookies set on them. */
+const SHARED_SUFFIXES = new Set(['cloudfront.net', 'vercel.app', 'amazonaws.com', 'netlify.app', 'herokuapp.com']);
 
 /** Candidate Domain= values: the host itself and each parent down to two labels, since the
  * pixels pin their cookies to the apex and a cookie only expires under the domain that set it. */
-function cookieDomains(hostname: string): string[] {
+export function cookieDomains(hostname: string): string[] {
   if (!hostname || hostname === 'localhost' || /^[\d.]+$/.test(hostname) || hostname.includes(':')) return [];
   const labels = hostname.split('.');
   const domains: string[] = [];
-  for (let i = 0; i <= labels.length - 2; i++) domains.push(labels.slice(i).join('.'));
+  for (let i = 0; i <= labels.length - 2; i++) {
+    const domain = labels.slice(i).join('.');
+    if (i > 0 && SHARED_SUFFIXES.has(domain)) break;
+    domains.push(domain);
+  }
   return domains;
 }
 
