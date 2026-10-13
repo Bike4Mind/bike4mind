@@ -133,6 +133,54 @@ describe('deleteFabFile', () => {
       expect(mockAdapter.storage.delete).not.toHaveBeenCalled();
     });
 
+    it('deletes every distinct version key, then the current filePath last', async () => {
+      const v = (version: number, filePath: string) => ({
+        version,
+        filePath,
+        fileSize: 1,
+        mimeType: 'x',
+        createdAt: new Date(0),
+      });
+      const edited = {
+        ...mockFabFile,
+        filePath: 'files/u/f/v3_report.docx',
+        versions: [
+          v(1, 'uploads/report.docx'),
+          v(2, 'files/u/f/v2_report.docx'),
+          v(2, 'files/u/f/v2_report.docx'),
+          v(3, 'files/u/f/v3_report.docx'),
+          v(4, ''),
+        ],
+      };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(edited);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(edited);
+      mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.storage.delete.mock.calls.map(([key]) => key)).toEqual([
+        'uploads/report.docx',
+        'files/u/f/v2_report.docx',
+        'files/u/f/v3_report.docx',
+      ]);
+      expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(edited, 1024);
+    });
+
+    it('still deletes version keys when the file has no filePath', async () => {
+      const noCurrent = {
+        ...mockFabFile,
+        filePath: undefined,
+        fileSize: 0,
+        versions: [{ version: 1, filePath: 'uploads/a.docx', fileSize: 1, mimeType: 'x', createdAt: new Date(0) }],
+      };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(noCurrent);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(noCurrent);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.storage.delete.mock.calls.map(([key]) => key)).toEqual(['uploads/a.docx']);
+    });
+
     it('should unlink file from associated sessions', async () => {
       mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
       mockAdapter.db.fabFiles.update.mockResolvedValue(mockFabFile);
