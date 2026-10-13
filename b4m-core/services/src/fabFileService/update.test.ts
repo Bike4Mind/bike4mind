@@ -565,9 +565,9 @@ describe('updateFabFile (narrowed write pins)', () => {
 
       await run();
 
-      const [, set] = mockAdapters.db.fabFiles.commitContentRewrite.mock.calls[0];
-      expect(set.filePath).toMatch(/\.txt$/);
-      expect(mockAdapters.storage.upload).toHaveBeenCalledWith(set.filePath, 'new body', expect.anything());
+      const { filePath } = dbUpdate.mock.calls[0][0];
+      expect(filePath).toMatch(/\.txt$/);
+      expect(mockAdapters.storage.upload).toHaveBeenCalledWith(filePath, 'new body', expect.anything());
     });
 
     it('charges the owner, not an update-share editor, and refuses growth past the owner quota', async () => {

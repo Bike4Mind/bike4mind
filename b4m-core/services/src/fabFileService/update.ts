@@ -145,10 +145,7 @@ export const updateFabFile = async (
     }
     contentChanges.fileSize = fileSize;
     if (!fabFile.filePath) contentChanges.filePath = filePath;
-    await commitContentRewrite(
-      { fabFileId: fabFile.id, newSize: fileSize, uploadStartedAt, set: fabFile.filePath ? {} : { filePath } },
-      db
-    );
+    await commitContentRewrite({ fabFileId: fabFile.id, newSize: fileSize, uploadStartedAt }, db);
 
     contentChanges.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
     contentChanges.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);
