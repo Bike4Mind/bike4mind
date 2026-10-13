@@ -140,6 +140,7 @@ const NotebookHeader = () => {
 
             {/* New Note Button */}
             <IconButton
+              aria-label={t('newChat', 'New chat')}
               className="notebook-header-new-note-button"
               onClick={() => {
                 setOpenSideNav(false);
