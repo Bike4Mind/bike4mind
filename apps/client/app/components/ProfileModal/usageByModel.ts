@@ -11,18 +11,26 @@ const BEDROCK_VENDOR_PREFIX =
  */
 export const usageModelKey = (id: string): string => normalizeModelsDevKey(id).replace(BEDROCK_VENDOR_PREFIX, '');
 
-/** Usage credits summed per model, labelled with the picker's display name when the id is known. */
+/**
+ * Usage credits summed per model, labelled with the picker's display name when the id is known.
+ * A key that two differently named models normalize to (`claude-3-5-sonnet-20240620-v1:0` and its
+ * `-20241022-v2:0` successor) is not one model, so its rows are labelled by exact id instead.
+ */
 export function aggregateUsageByModel(
   transactions: readonly { metadata?: Record<string, unknown>; model?: unknown; credits: number }[],
   models: readonly ModelInfo[]
 ): Record<string, number> {
-  const nameByKey = new Map<string, string>();
-  // First-party names win over the Bedrock rows, whose names carry the hosting detail.
-  for (const model of [...models].sort(
-    (a, b) => Number(a.backend === ModelBackend.Bedrock) - Number(b.backend === ModelBackend.Bedrock)
-  )) {
+  const nameById = new Map<string, string>();
+  // Per key, distinct names (case-insensitive) by tier. First-party names win over the Bedrock
+  // rows, whose names carry the hosting detail.
+  const namesByKey = new Map<string, { firstParty: Map<string, string>; bedrock: Map<string, string> }>();
+  for (const model of models) {
+    if (!nameById.has(model.id)) nameById.set(model.id, model.name);
     const key = usageModelKey(model.id);
-    if (!nameByKey.has(key)) nameByKey.set(key, model.name);
+    const names = namesByKey.get(key) ?? { firstParty: new Map(), bedrock: new Map() };
+    const tier = model.backend === ModelBackend.Bedrock ? names.bedrock : names.firstParty;
+    if (!tier.has(model.name.toLowerCase())) tier.set(model.name.toLowerCase(), model.name);
+    namesByKey.set(key, names);
   }
 
   const labelByKey = new Map<string, string>();
@@ -30,8 +38,15 @@ export function aggregateUsageByModel(
   for (const transaction of transactions) {
     const rawId = resolveModelName(transaction);
     const key = usageModelKey(rawId);
-    const label = labelByKey.get(key) ?? nameByKey.get(key) ?? rawId;
-    labelByKey.set(key, label);
+    const tiers = namesByKey.get(key);
+    const names = tiers && [...(tiers.firstParty.size > 0 ? tiers.firstParty : tiers.bedrock).values()];
+    let label: string;
+    if (names && names.length > 1) {
+      label = nameById.get(rawId) ?? rawId;
+    } else {
+      label = labelByKey.get(key) ?? names?.[0] ?? rawId;
+      labelByKey.set(key, label);
+    }
     usage[label] = (usage[label] ?? 0) + Math.abs(transaction.credits);
   }
   return usage;
