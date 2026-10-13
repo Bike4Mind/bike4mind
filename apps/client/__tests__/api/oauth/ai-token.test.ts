@@ -57,6 +57,8 @@ vi.mock('@bike4mind/database/auth', () => ({
 
 const mockCreateUserApiKey = vi.fn();
 const mockRevokeUserApiKey = vi.fn();
+// The service barrel is mocked to avoid its full dependency graph, so the TTL is
+// mirrored here rather than imported; the services suite pins MAX_EXCHANGE_KEY_TTL_MS.
 vi.mock('@bike4mind/services', () => ({
   API_KEY_USER_CAP_ERROR_CODE: 'api_key_user_cap',
   userApiKeyService: {
