@@ -168,7 +168,7 @@ async function handleFileEmail(
       ? `Shared File: ${fileNames[0]}`
       : `${fileNames.length} Shared Files${brand ? ` from ${brand}` : ''}`;
 
-  const filesList = fileNames.map(name => `<li>${name}</li>`).join('\n');
+  const filesList = fileNames.map(name => `<li>${escapeHtml(name)}</li>`).join('\n');
 
   const emailBody = `
     <!DOCTYPE html>
@@ -445,7 +445,7 @@ async function handleNotebookEmail(
       ? `Curated Notebook: ${sessionNames[0]}`
       : `${sessionNames.length} Curated Notebooks${brand ? ` from ${brand}` : ''}`;
 
-  const sessionsList = sessionNames.map(name => `<li>${name}</li>`).join('\n');
+  const sessionsList = sessionNames.map(name => `<li>${escapeHtml(name)}</li>`).join('\n');
 
   const emailBody = `
     <!DOCTYPE html>

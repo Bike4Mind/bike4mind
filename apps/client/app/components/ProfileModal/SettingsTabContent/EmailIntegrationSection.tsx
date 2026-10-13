@@ -56,7 +56,10 @@ const EmailIntegrationSection = () => {
     },
     onError: error => {
       console.error('Failed to update email settings:', error);
-      toast.error('Failed to update email settings');
+      toast.error(
+        (error as { response?: { data?: { error?: string } } }).response?.data?.error ||
+          'Failed to update email settings'
+      );
     },
   });
 

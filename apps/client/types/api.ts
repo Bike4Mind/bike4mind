@@ -187,7 +187,7 @@ const BaseEmailRequestSchema = z.object({
     .array(z.email())
     .min(1, 'At least one recipient email is required')
     .max(MAX_EMAIL_RECIPIENTS, `Maximum ${MAX_EMAIL_RECIPIENTS} recipients per email`),
-  message: z.string().optional(),
+  message: z.string().max(5000).optional(),
 });
 
 // sessionIds/fileIds below are loose by design, not an oversight - see the comment above

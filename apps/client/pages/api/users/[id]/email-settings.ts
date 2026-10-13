@@ -33,7 +33,19 @@ export const RESERVED_EMAIL_LOCAL_PARTS: ReadonlySet<string> = new Set([
   'info',
   'help',
   'mailer-daemon',
+  'contact',
+  'privacy',
+  'legal',
+  'marketing',
+  'sales',
+  'mail',
+  'dmarc',
+  'www',
+  'ftp',
 ]);
+
+export const isReservedPlatformEmail = (email: string): boolean =>
+  RESERVED_EMAIL_LOCAL_PARTS.has(email.split('@')[0].toLowerCase());
 
 export const EmailSettingsSchema = z.object({
   platformEmailAddress: z
@@ -41,9 +53,6 @@ export const EmailSettingsSchema = z.object({
     .toLowerCase()
     .refine(email => !PLATFORM_EMAIL_SUFFIX || email.endsWith(PLATFORM_EMAIL_SUFFIX), {
       error: `Platform email must end with ${PLATFORM_EMAIL_SUFFIX}`,
-    })
-    .refine(email => !RESERVED_EMAIL_LOCAL_PARTS.has(email.split('@')[0]), {
-      error: 'Platform email local part is reserved',
     })
     .optional(),
   authorizedEmailAddresses: z.array(z.email().toLowerCase()).optional(),
@@ -65,6 +74,13 @@ const handler = baseApi()
 
         // If platform email is being set, check if it's already taken
         if (emailSettings.platformEmailAddress) {
+          if (isReservedPlatformEmail(emailSettings.platformEmailAddress)) {
+            const current = await User.findById(userId).select('platformEmailAddress');
+            if (current?.platformEmailAddress?.toLowerCase() !== emailSettings.platformEmailAddress) {
+              return res.status(400).json({ error: 'Platform email local part is reserved' });
+            }
+          }
+
           const existingUser = await User.findOne({
             platformEmailAddress: emailSettings.platformEmailAddress,
             _id: { $ne: userId },
