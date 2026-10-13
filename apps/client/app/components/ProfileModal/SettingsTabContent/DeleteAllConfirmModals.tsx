@@ -30,7 +30,8 @@ export function DeleteAllNotebooksConfirm({ onCancel, onConfirm, pending }: Dele
         'This cannot be undone.'
       }
       forwardButtonText="Delete all notebooks"
-      onGoBackward={onCancel}
+      // The request cannot be aborted, so Cancel is inert while it runs rather than implying it stops it.
+      onGoBackward={() => !pending && onCancel()}
       onGoForward={onConfirm}
       disabledConfirm={pending}
     />
@@ -55,7 +56,7 @@ export function DeleteAllKnowledgeFilesConfirm({ onCancel, onConfirm, pending }:
         'list. Pages you published from a file stay online. This cannot be undone.'
       }
       forwardButtonText="Delete all knowledge files"
-      onGoBackward={onCancel}
+      onGoBackward={() => !pending && onCancel()}
       onGoForward={onConfirm}
       disabledConfirm={pending}
     />

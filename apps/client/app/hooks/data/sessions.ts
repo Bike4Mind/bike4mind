@@ -74,8 +74,12 @@ export function useDeleteAllSessions(options: { onSuccess?: () => void } = {}) {
 /** Number of notebooks the caller owns: the same set DELETE /api/sessions removes. */
 export function useOwnSessionCount() {
   return useQuery({
-    queryKey: ['sessions', 'count'],
+    // Deliberately NOT under ['sessions']: updateAllQueryData walks every ['sessions', ...] entry
+    // and assumes a list shape, so a cached number there throws on the next session write.
+    // gcTime 0 so each open of the confirm refetches instead of showing a stale count.
+    queryKey: ['own-session-count'],
     queryFn: async () => (await api.get<{ count: number }>('/api/sessions/count')).data.count,
+    gcTime: 0,
     refetchOnWindowFocus: false,
   });
 }

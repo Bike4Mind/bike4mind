@@ -57,6 +57,13 @@ describe('DeleteAllNotebooksConfirm', () => {
     expect(p.onCancel).toHaveBeenCalledTimes(1);
     expect(p.onConfirm).toHaveBeenCalledTimes(1);
   });
+
+  it('makes cancel inert while the delete is pending', () => {
+    const p = props();
+    wrap(<DeleteAllNotebooksConfirm {...p} pending />);
+    fireEvent.click(screen.getByTestId('confirm-modal-cancel-btn'));
+    expect(p.onCancel).not.toHaveBeenCalled();
+  });
 });
 
 describe('DeleteAllKnowledgeFilesConfirm', () => {
@@ -81,8 +88,11 @@ describe('DeleteAllKnowledgeFilesConfirm', () => {
     expect(text).toContain('cannot be undone');
   });
 
-  it('disables confirm while the delete is pending', () => {
-    wrap(<DeleteAllKnowledgeFilesConfirm {...props()} pending />);
+  it('disables confirm and makes cancel inert while the delete is pending', () => {
+    const p = props();
+    wrap(<DeleteAllKnowledgeFilesConfirm {...p} pending />);
     expect((screen.getByTestId('confirm-modal-confirm-btn') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('confirm-modal-cancel-btn'));
+    expect(p.onCancel).not.toHaveBeenCalled();
   });
 });

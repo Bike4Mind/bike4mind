@@ -108,13 +108,13 @@ const GeneralSettingsTab = () => {
 
   const deleteAllSessions = useDeleteAllSessions({
     onSuccess: async () => {
-      toggleDeleteAllSessionsModal();
+      toggleDeleteAllSessionsModal(false);
       toast.success('All notebooks deleted');
     },
   });
   const deleteAllFiles = useDeleteAllFiles({
     onSuccess: async () => {
-      toggleDeleteAllFilesModal();
+      toggleDeleteAllFilesModal(false);
       toast.success('All knowledge files deleted');
     },
   });

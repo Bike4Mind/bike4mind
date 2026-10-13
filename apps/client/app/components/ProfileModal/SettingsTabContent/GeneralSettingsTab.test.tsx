@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import GeneralSettingsTab from './GeneralSettingsTab';
@@ -9,6 +9,7 @@ const mutation = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false };
 // Separate handles so a test can tell which delete fired; a shared mock cannot.
 const deleteSessionsMutation = { mutate: vi.fn(), isPending: false };
 const deleteFilesMutation = { mutate: vi.fn(), isPending: false };
+const deleteOptions: { sessions?: { onSuccess?: () => unknown }; files?: { onSuccess?: () => unknown } } = {};
 
 vi.mock('@tanstack/react-router', () => ({ useSearch: () => ({}), useNavigate: () => vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -27,11 +28,17 @@ vi.mock('@client/app/hooks/data/mfa', () => ({
   useCancelMFASetup: () => mutation,
 }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
-  useDeleteAllFiles: () => deleteFilesMutation,
+  useDeleteAllFiles: (options: { onSuccess?: () => unknown }) => {
+    deleteOptions.files = options;
+    return deleteFilesMutation;
+  },
   useGetFabFiles: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/hooks/data/sessions', () => ({
-  useDeleteAllSessions: () => deleteSessionsMutation,
+  useDeleteAllSessions: (options: { onSuccess?: () => unknown }) => {
+    deleteOptions.sessions = options;
+    return deleteSessionsMutation;
+  },
   useOwnSessionCount: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/hooks/useDownload', () => ({ useDownload: () => mutation }));
@@ -99,5 +106,19 @@ describe('GeneralSettingsTab danger zone', () => {
     fireEvent.click(screen.getByTestId('confirm-modal-confirm-btn'));
     expect(deleteFilesMutation.mutate).toHaveBeenCalledTimes(1);
     expect(deleteSessionsMutation.mutate).not.toHaveBeenCalled();
+  });
+
+  it('a delete that succeeds after its dialog was closed does not reopen it', async () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('settings-delete-all-notebooks-btn'));
+    fireEvent.click(screen.getByTestId('confirm-modal-cancel-btn'));
+    fireEvent.click(screen.getByTestId('settings-delete-all-files-btn'));
+    fireEvent.click(screen.getByTestId('confirm-modal-cancel-btn'));
+    await act(async () => {
+      await deleteOptions.sessions?.onSuccess?.();
+      await deleteOptions.files?.onSuccess?.();
+    });
+    expect(screen.queryByTestId('delete-all-notebooks-confirm')).toBeNull();
+    expect(screen.queryByTestId('delete-all-files-confirm')).toBeNull();
   });
 });
