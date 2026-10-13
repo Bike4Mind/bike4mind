@@ -14,6 +14,7 @@ describe('deleteFabFile', () => {
     fileName: 'test-file.txt',
     filePath: 'uploads/test-file.txt',
     fileSize: 1024,
+    storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     users: [],
   };
 
@@ -121,6 +122,24 @@ describe('deleteFabFile', () => {
       await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
 
       expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(mockFabFile, 1024);
+    });
+
+    // A row deleted before its upload's ObjectCreated event ever charged it: refunding its claimed
+    // size would push the counter below what recalc reports.
+    it('hands onDeleteComplete 0 for a never-charged pending row', async () => {
+      const pending = {
+        ...mockFabFile,
+        storageChargedAt: undefined,
+        status: 'pending' as const,
+        createdAt: new Date(),
+      };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(pending);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(pending);
+      mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(pending, 0);
     });
 
     it('should skip S3 deletion when file has no filePath', async () => {

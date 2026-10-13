@@ -6,8 +6,17 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { FabFile, Session, User, withTransaction } from '@bike4mind/database';
-import { notebookImportService } from '@bike4mind/services';
+import {
+  FabFile,
+  fabFileChunkRepository,
+  fabFileRepository,
+  Session,
+  sessionRepository,
+  User,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
+import { fabFilesService, notebookImportService } from '@bike4mind/services';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
 import { chargeStampedKnowledgeStorage, claimStorageCharge, stampImportedKnowledgeRows } from './storageCharge';
 
@@ -185,5 +194,41 @@ describe('notebook import storage charge', () => {
     ]);
 
     expect(await chargeStampedKnowledgeStorage(USER, ['knowledge/x'], new Date())).toBe(0);
+  });
+});
+
+// A presigned upload's row exists `pending` with its claimed size before ObjectCreated charges it;
+// deleting it in that window used to refund bytes never charged, leaving the counter below recalc.
+describe('delete before the ObjectCreated event', () => {
+  const deleteAndRefund = (id: string) =>
+    fabFilesService.deleteFabFile(USER, { id }, {
+      db: {
+        fabFiles: fabFileRepository,
+        users: userRepository,
+        sessions: sessionRepository,
+        fabFileChunks: fabFileChunkRepository,
+      },
+      storage: { delete: async () => {} },
+      onDeleteComplete: async (_fabFile, size) => {
+        if (size > 0) await userRepository.incrementCurrentStorage(USER, -size);
+      },
+    } as never);
+
+  it('keeps the counter equal to the recalc truth', async () => {
+    const charged = { fileName: 'c', mimeType: 'text/plain', fileSize: 5, filePath: 'knowledge/c', type: 'FILE' };
+    const [stamped, pending] = await FabFile.create([
+      { ...charged, userId: USER, status: 'complete', storageChargedAt: new Date() },
+      { ...charged, userId: USER, fileName: 'p', filePath: 'knowledge/p', fileSize: 400, status: 'pending' },
+    ]);
+    await User.collection.insertOne({ _id: USER_ID, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 5 });
+    expect(await fabFileRepository.sumFileSizeByUserId(USER)).toBe(5);
+
+    await deleteAndRefund(pending._id.toString());
+    expect(await storedSize()).toBe(5);
+    expect(await fabFileRepository.sumFileSizeByUserId(USER)).toBe(5);
+
+    await deleteAndRefund(stamped._id.toString());
+    expect(await storedSize()).toBe(0);
+    expect(await fabFileRepository.sumFileSizeByUserId(USER)).toBe(0);
   });
 });

@@ -3071,8 +3071,20 @@ describe('unarchiveDataLake - dedup pass (live re-upload wins)', () => {
   // of the counted set.
   it("debits each discarded duplicate's own owner, grouped by owner", async () => {
     const archived = [
-      { id: 'a1', contentHash: 'h1', userId: 'creator', fileSize: 100 },
-      { id: 'a2', contentHash: 'h2', userId: 'contributor', fileSize: 50 },
+      {
+        id: 'a1',
+        contentHash: 'h1',
+        userId: 'creator',
+        fileSize: 100,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
+      {
+        id: 'a2',
+        contentHash: 'h2',
+        userId: 'contributor',
+        fileSize: 50,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
     ];
     const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
     const fabFiles = {

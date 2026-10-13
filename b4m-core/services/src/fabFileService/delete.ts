@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import {
+  chargedBytes,
   IDataLakeRepository,
   IFabFileChunkRepository,
   IFabFileDocument,
@@ -61,6 +62,7 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
   storage: {
     delete: (path: string) => Promise<unknown>;
   };
+  /** `sizeToDeduct` is the charged bytes (`chargedBytes`), not the raw `fileSize`; 0 when never charged. */
   onDeleteComplete?: (fabFile: IFabFileDocument, sizeToDeduct: number) => Promise<void>;
   /**
    * Self-host OpenSearch only (undefined elsewhere) - without this, a deleted file's chunks
@@ -140,9 +142,7 @@ export const deleteFabFile = async (
     if (ownedFile.filePath) {
       Logger.globalInstance.log(`[deleteFabFile] Deleting S3 object — path: ${ownedFile.filePath}`);
       storagePathsToDelete.push(ownedFile.filePath);
-      if (typeof ownedFile.fileSize === 'number') {
-        sizeToDeduct += ownedFile.fileSize;
-      }
+      sizeToDeduct += chargedBytes(ownedFile);
     }
 
     // Resolve BEFORE the Mongo chunks are deleted below - the chunk rows are the only place this
@@ -171,7 +171,7 @@ export const deleteFabFile = async (
       await storage.delete(path);
     }
 
-    // sizeToDeduct is always a positive number, representing the amount to deduct from the user's storage
+    // sizeToDeduct is the bytes this row was charged (see chargedBytes), so 0 for a never-charged row
     if (onDeleteComplete) {
       await onDeleteComplete(ownedFile, sizeToDeduct);
     }

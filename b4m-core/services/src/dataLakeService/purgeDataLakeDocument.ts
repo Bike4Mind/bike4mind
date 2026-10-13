@@ -1,3 +1,4 @@
+import { chargedBytes } from '@bike4mind/common';
 import type {
   DataLakeDocumentPurgeReceipt,
   IAdminSettingsRepository,
@@ -425,7 +426,8 @@ export const purgeDataLakeDocument = async (
     // Gated on this call having removed the row, not merely on the object delete succeeding:
     // deleting an already-absent key succeeds, so a concurrent second purge would otherwise refund
     // the same bytes twice and ratchet the owner's quota down with only an admin recalculate to undo it.
-    fileSize: deletedByThisCall && typeof file.fileSize === 'number' ? file.fileSize : 0,
+    // Charged bytes, not the raw size: a never-charged row refunds nothing (see chargedBytes).
+    fileSize: deletedByThisCall ? chargedBytes(file) : 0,
     tagNames,
   });
 

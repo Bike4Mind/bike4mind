@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import { KnowledgeType } from '@bike4mind/common';
+import { chargedBytes, KnowledgeType, STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { FabFile, fabFileRepository } from './FabFileModel';
 
@@ -18,14 +18,17 @@ beforeEach(async () => {
   await FabFile.deleteMany({});
 });
 
-const makeFile = (userId: string, fileName: string, fileSize?: number) =>
+const makeFile = (userId: string, fileName: string, fileSize?: number, fields: Record<string, unknown> = {}) =>
   FabFile.create({
     userId,
     fileName,
     mimeType: 'text/plain',
     type: KnowledgeType.FILE,
     filePath: fileName,
+    status: 'complete',
+    storageChargedAt: new Date(),
     ...(fileSize === undefined ? {} : { fileSize }),
+    ...fields,
   });
 
 // Drives recalculateUserStorage: sums fileSize in the DB so the admin repair action
@@ -61,6 +64,27 @@ describe('FabFileRepository.sumFileSizeByUserId', () => {
     await makeFile('someone-else', 'theirs.txt', 500);
     const total = await fabFileRepository.sumFileSizeByUserId(userId);
     expect(total).toBe(100);
+  });
+
+  // Must count exactly the rows isStorageCharged counts, so recalc agrees with every refund site.
+  it('counts only charged rows: stamped (any status) or legacy pre-cutoff complete', async () => {
+    const before = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000);
+    await makeFile(userId, 'stamped-complete.txt', 1);
+    await makeFile(userId, 'stamped-pending.txt', 2, { status: 'pending' });
+    await makeFile(userId, 'pending.txt', 4, { status: 'pending', storageChargedAt: null });
+    await makeFile(userId, 'post-cutoff-unstamped.txt', 8, { storageChargedAt: null });
+    const legacy = await makeFile(userId, 'legacy.txt', 16, { storageChargedAt: null });
+    await FabFile.collection.updateOne({ _id: legacy._id }, { $set: { createdAt: before } });
+    const legacyPending = await makeFile(userId, 'legacy-pending.txt', 32, {
+      storageChargedAt: null,
+      status: 'pending',
+    });
+    await FabFile.collection.updateOne({ _id: legacyPending._id }, { $set: { createdAt: before } });
+
+    const total = await fabFileRepository.sumFileSizeByUserId(userId);
+    expect(total).toBe(1 + 2 + 16);
+    const rows = await FabFile.find({ userId }).lean();
+    expect(rows.reduce((sum, row) => sum + chargedBytes(row), 0)).toBe(total);
   });
 
   it('returns 0 for a user with no files', async () => {

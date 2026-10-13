@@ -42,6 +42,7 @@ const makeFile = async (
     filePath: overrides.fileName,
     fileSize: 100,
     status: 'complete',
+    storageChargedAt: new Date(),
     ...overrides,
   });
 
@@ -1162,6 +1163,22 @@ describe('FabFile data lake lifecycle membership', () => {
       // Same real-values check as the delete side - this is what a caller credits the owner by.
       const prefixOwned = restored.find(f => f.id === rows.prefixOwned._id.toString());
       expect(prefixOwned).toMatchObject({ userId: CREATOR, fileSize: 100 });
+    });
+
+    it('carries 0 bytes for a member that was never charged, both ways', async () => {
+      const pending = await makeFile({
+        fileName: 'pending.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        status: 'pending',
+        storageChargedAt: null,
+      });
+      const id = pending._id.toString();
+
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope);
+      expect(swept.find(f => f.id === id)).toMatchObject({ fileSize: 0 });
+      const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
+      expect(restored.find(f => f.id === id)).toMatchObject({ fileSize: 0 });
     });
 
     it('honours excludeIds so a discarded duplicate stays deleted', async () => {
