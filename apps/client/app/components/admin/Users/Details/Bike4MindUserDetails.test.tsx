@@ -78,4 +78,21 @@ describe('Bike4MindUserDetails - storage usage', () => {
     expect(progress).toHaveAttribute('aria-valuenow', '92');
     expect(progress.className).toContain('MuiLinearProgress-colorDanger');
   });
+
+  it.each([
+    [740_000_000, 'Primary'],
+    [750_000_000, 'Warning'],
+    [899_000_000, 'Warning'],
+    [900_000_000, 'Danger'],
+  ])('colours %i bytes of a 1000 MB limit as %s', (currentStorageSize, color) => {
+    renderDetails({ user: { ...(user as object), storageLimit: 1000, currentStorageSize } as never });
+    expect(screen.getByTestId('admin-user-storage-progress').className).toContain(`MuiLinearProgress-color${color}`);
+  });
+
+  it.each([0, 500_000_000])('reads a zero limit as full with %i bytes used, since every upload is refused', used => {
+    renderDetails({ user: { ...(user as object), storageLimit: 0, currentStorageSize: used } as never });
+    const progress = screen.getByTestId('admin-user-storage-progress');
+    expect(progress).toHaveAttribute('aria-valuenow', '100');
+    expect(progress.className).toContain('MuiLinearProgress-colorDanger');
+  });
 });

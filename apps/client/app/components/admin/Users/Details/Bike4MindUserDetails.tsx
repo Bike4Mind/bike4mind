@@ -26,7 +26,11 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
   ({ user, editedFields, onFieldChange, userKey, creditReason = '', onCreditReasonChange }) => {
     const [isRecalculating, setIsRecalculating] = useState(false);
     const queryClient = useQueryClient();
-    const storagePercent = computeStoragePercent(user.currentStorageSize, user.storageLimit);
+    // A zero limit refuses every upload, so read it as full rather than computeStoragePercent's 0.
+    const storagePercent =
+      storageLimitToBytes(user.storageLimit) > 0
+        ? computeStoragePercent(user.currentStorageSize, user.storageLimit)
+        : 100;
 
     const handleSubscribedDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const newDate = e.target.value;
