@@ -11,6 +11,7 @@
 # Exit 0: every bare entry was restored (or there were none).
 # Exit 1: some URL has no hashed entry in the base lockfile; each one is printed
 #         to stderr and left bare for a human to resolve.
+# Exit 2: bad usage, or a missing/empty lockfile on either side.
 #
 # Usage: repair-lockfile-integrity.sh <pr-lockfile> <base-lockfile>
 
@@ -23,8 +24,9 @@ fi
 pr=$1
 base=$2
 
-# An empty base would make awk read the PR lockfile as the base (NR == FNR).
-if [ ! -s "$base" ] || [ ! -f "$pr" ]; then
+# An empty base would make awk read the PR lockfile as the base (NR == FNR);
+# an empty PR lockfile is a broken input, not a clean one.
+if [ ! -s "$base" ] || [ ! -s "$pr" ]; then
   echo "missing or empty lockfile: $pr / $base" >&2
   exit 2
 fi
