@@ -133,6 +133,7 @@
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/mcp": "workspace:*",
     "@bike4mind/observability": "workspace:*",
+    "@bike4mind/sdk": "workspace:*",
     "@bike4mind/services": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",

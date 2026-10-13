@@ -18,8 +18,8 @@ export function isProviderKeyFailure(data: unknown): boolean {
 }
 
 /**
- * An arraybuffer-typed request (the generated-audio calls) gets its error body as raw
- * bytes, and the refresh interceptor sees it before any caller can decode it.
+ * An arraybuffer-typed request (every @bike4mind/sdk call, through ApiClient.fetch) gets its
+ * error body as raw bytes, and the refresh interceptor sees it before any caller can decode it.
  */
 function decodeBinaryBody(data: unknown): unknown {
   const bytes =
