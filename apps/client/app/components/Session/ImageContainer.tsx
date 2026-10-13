@@ -213,8 +213,11 @@ const ImageContainer: FC<ImageContainerProps> = ({
       // Save as FabFile
       const maskFabFile = await createFabFileOnServerWithUpload(formData, file);
       // The edit is dispatched right away and the mask must be 'clean' by then; scan it now instead
-      // of racing the S3 event.
-      await moderateFabFileNow(maskFabFile.id);
+      // of racing the S3 event. 'pending' still dispatches: the server gate waits and decides.
+      if ((await moderateFabFileNow(maskFabFile.id)) === 'blocked') {
+        toast.error('The edit mask was blocked by moderation. Please try again.');
+        return;
+      }
       await onSendMessage({ fabFileIds: [maskFabFile.id], prompt }, { isImageEdit: true, image: sourceImageUrl });
       setEditing(false);
     } catch (error) {
