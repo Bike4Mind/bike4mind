@@ -172,7 +172,8 @@ describe('creditPurchaseReconciliation cron', () => {
       expect(message).toContain('pi_1 (transaction recorded but balance never credited)');
       expect(message).toContain('admin credit adjustment');
       expect(message).toContain('clears this alert on the next run');
-      expect(message).toContain('credit the full amount for each');
+      expect(message).toContain('clears every balance-never-credited line');
+      expect(message).toContain('not just the listed ones');
       expect(message).not.toContain('No purchase transaction:');
       expect(mockEmitMetric).toHaveBeenCalledWith(
         'Lumina5/CreditPurchases',
