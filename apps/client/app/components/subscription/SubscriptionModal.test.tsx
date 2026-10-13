@@ -186,6 +186,9 @@ describe('SubscriptionModal', () => {
   it('lists only Professional features a user can find in the app', () => {
     renderModal();
 
+    // Anchor: a real Professional bullet must render, or every absence check below
+    // passes vacuously on an empty card.
+    expect(screen.getByText('Single API for all models')).toBeInTheDocument();
     expect(screen.queryByText(/Phi-4/)).not.toBeInTheDocument();
     expect(screen.queryByText(/prompt engineering tools/)).not.toBeInTheDocument();
     expect(screen.queryByText(/cost optimization/)).not.toBeInTheDocument();
