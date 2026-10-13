@@ -7,8 +7,8 @@ import { ChatModels, getTextModelCreditsPer1M, type ModelInfo } from '@bike4mind
 export const TYPICAL_ANSWER_INPUT_TOKENS = 4_000;
 export const TYPICAL_ANSWER_OUTPUT_TOKENS = 1_000;
 
-// Mid-tier (Sonnet-class) reference models, most preferred first. The first one present and priced
-// in the user's catalog is the one the estimate names.
+// Mid-tier (Sonnet-class) reference models, most preferred first. The first one present, enabled and
+// priced in the user's catalog is the one the estimate names.
 export const ESTIMATE_REFERENCE_MODEL_IDS: readonly string[] = [
   ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
@@ -31,7 +31,7 @@ export function typicalAnswerCredits(model: ModelInfo): number | null {
 /** The mid-tier model the estimate is quoted on, with its per-answer cost; null when none is priced. */
 export function pickAnswerCostReference(models: readonly ModelInfo[]): AnswerCostReference | null {
   for (const id of ESTIMATE_REFERENCE_MODEL_IDS) {
-    const model = models.find(m => m.id === id);
+    const model = models.find(m => m.id === id && !m.disabled);
     const creditsPerAnswer = model ? typicalAnswerCredits(model) : null;
     if (model && creditsPerAnswer) return { modelName: model.name, creditsPerAnswer };
   }
