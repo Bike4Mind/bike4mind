@@ -5,3 +5,4 @@ export * from './registry';
 export * from './retry';
 export { TestDecisionProvider, TEST_DECISION_MARKERS } from './test/TestDecisionProvider';
 export { OpenAiDecisionProvider } from './openaiDecisions/OpenAiDecisionProvider';
+export { SystemOneDecisionProvider } from './systemOne/SystemOneDecisionProvider';
