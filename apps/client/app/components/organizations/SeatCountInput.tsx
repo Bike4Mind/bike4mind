@@ -38,21 +38,20 @@ const SeatCountInput = ({
 }: SeatCountInputProps) => {
   // Raw text while editing, so it can be empty or out of range; null shows the last valid value.
   const [draft, setDraft] = useState<string | null>(null);
-  const [lastValue, setLastValue] = useState(value);
+  const [prevValue, setPrevValue] = useState(value);
+  const clamp = (n: number) => Math.min(Math.max(n, min), max);
   const parsedDraft = draft === null ? null : Math.round(Number.parseFloat(draft));
   const isInvalid = parsedDraft !== null && !(Number.isFinite(parsedDraft) && parsedDraft >= min && parsedDraft <= max);
   // The number the field stands for, clamped. The stepper works from it so its disabled state matches
   // the value on screen even while a draft sits out of range.
-  const displayed =
-    parsedDraft !== null && Number.isFinite(parsedDraft) ? Math.min(Math.max(parsedDraft, min), max) : value;
+  const displayed = parsedDraft !== null && Number.isFinite(parsedDraft) ? clamp(parsedDraft) : value;
   const label = ariaLabel.toLowerCase();
 
-  // A parent reset while a valid draft is held (e.g. a refetch) should win: drop the draft so the
-  // field shows the value submit will use. Adjusting state during render is how React reconciles a
-  // controlled input with a changed prop without an extra commit.
-  if (value !== lastValue) {
-    setLastValue(value);
-    if (parsedDraft !== null && !isInvalid && parsedDraft !== value) setDraft(null);
+  // A changed parent value overrides a held valid draft, unless the new range clamping the old value
+  // moved it, in which case the range effect re-reports the draft instead of dropping it.
+  if (value !== prevValue) {
+    setPrevValue(value);
+    if (parsedDraft !== null && !isInvalid && parsedDraft !== value && value !== clamp(prevValue)) setDraft(null);
   }
 
   useEffect(() => {
@@ -75,7 +74,7 @@ const SeatCountInput = ({
 
   const step = (delta: number) => {
     setDraft(null);
-    onChange(Math.min(Math.max(displayed + delta, min), max));
+    onChange(clamp(displayed + delta));
   };
 
   return (
