@@ -28,6 +28,7 @@ vi.mock('@server/services/purgeDeletedUserData', () => ({
   purgeDeletedUserData: (...a: unknown[]) => mockPurge(...a),
 }));
 
+import { USER_SECRET_FIELDS } from '@bike4mind/common';
 import handler from '../delete';
 
 type DeleteAdapters = { db: { users: { delete: (id: string) => Promise<unknown> } } };
@@ -58,7 +59,7 @@ describe('DELETE /api/users/[id]/delete', () => {
 
     expect(mockRepoDelete).toHaveBeenCalledWith('u1');
     expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ deletedBy: 'admin1' }));
-    expect(res._getJSONData()).toEqual({ id: 'u1' });
+    expect(res._getJSONData()).toMatchObject({ id: 'u1' });
   });
 
   it('still purges when a notification throws after the delete committed', async () => {
@@ -81,5 +82,17 @@ describe('DELETE /api/users/[id]/delete', () => {
     await expect(call).rejects.toThrow('not authorized');
     expect(mockRepoDelete).not.toHaveBeenCalled();
     expect(mockPurge).not.toHaveBeenCalled();
+  });
+
+  it('returns the serialized user shape without secret fields', async () => {
+    const secrets = Object.fromEntries(USER_SECRET_FIELDS.map(f => [f, 'x']));
+    mockAdminDeleteUser.mockResolvedValue({ id: 'u1', name: 'N', email: 'n@example.com', ...secrets });
+
+    const { res, call } = await run();
+    await call;
+
+    const body = res._getJSONData();
+    expect(body).toMatchObject({ id: 'u1', name: 'N' });
+    for (const f of USER_SECRET_FIELDS) expect(body).not.toHaveProperty(f);
   });
 });

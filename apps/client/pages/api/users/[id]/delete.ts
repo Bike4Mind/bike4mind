@@ -5,6 +5,7 @@ import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
+import { toSafeUser } from '@bike4mind/common';
 import { purgeDeletedUserData } from '@server/services/purgeDeletedUserData';
 
 const handler = baseApi().delete(
@@ -62,7 +63,7 @@ const handler = baseApi().delete(
       }
     }
 
-    return res.json(deletedUser);
+    return res.json(toSafeUser(deletedUser));
   })
 );
 

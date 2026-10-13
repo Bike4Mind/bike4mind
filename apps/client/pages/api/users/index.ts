@@ -20,6 +20,7 @@ import {
   PUBLIC_USER_LIST_PROJECTION,
   PUBLIC_USER_SORT_FIELDS,
 } from '@client/app/utils/adminUserProjection';
+import { toSafeOrganizationSubdocument } from '@server/utils/toSafeOrganizationSubdocument';
 import { findSharedWorkspaceUserIds } from '@server/users/sharedWorkspaceUserIds';
 import { findPendingProjectInviteeIds } from '@server/users/pendingProjectInviteeIds';
 import * as z from 'zod';
@@ -67,6 +68,10 @@ const querySchema = z.object({
     .transform(val => val === 'true'),
 });
 
+function withSafeOrganization(user: Record<string, unknown>, viewer: { userId: string; isAdmin: boolean }) {
+  return { ...user, organizationId: toSafeOrganizationSubdocument(user.organizationId, viewer) };
+}
+
 const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
   try {
     const {
@@ -89,6 +94,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // non-admins require a minimum search term to prevent blind pagination over all
     // users, downloadAll is admin-only, and the page size is hard-capped.
     const isAdmin = !!req.user?.isAdmin;
+    const viewer = { userId: String(req.user?.id), isAdmin };
     const isPicker = publicView && !isAdmin;
     if (isPicker) {
       // projectId-scoped requests show members of one specific project rather than the whole
@@ -383,11 +389,11 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
       return res.json({
         users: users.map((user: IUserObject) => {
-          const hydrated = User.hydrate(user);
+          const serialized = withSafeOrganization(User.hydrate(user).toJSON(), viewer);
           // pendingInvite is not a User path, so it is added after hydrate rather than through it.
           return pendingInviteeIds
-            ? { ...hydrated.toJSON(), pendingInvite: pendingInviteeIds.has(String(user._id)) }
-            : hydrated;
+            ? { ...serialized, pendingInvite: pendingInviteeIds.has(String(user._id)) }
+            : serialized;
         }),
         ...pagination,
       });
@@ -398,7 +404,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       await User.populate(results, { path: 'organizationId' });
 
       return res.json({
-        users: results.map((user: IUserObject) => User.hydrate(user)),
+        users: results.map((user: IUserObject) => withSafeOrganization(User.hydrate(user).toJSON(), viewer)),
         totalUsers: results.length,
       });
     }
