@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   countActiveVoiceSessions: vi.fn(),
   sessionUpdate: vi.fn(),
   claimVoiceHold: vi.fn(),
+  restoreVoiceHold: vi.fn(),
   findByIdAndUserId: vi.fn(),
   incrementCredits: vi.fn(),
   getSession: vi.fn(),
@@ -113,6 +114,7 @@ vi.mock('@bike4mind/database', async orig => {
       update: (...a: unknown[]) => mocks.sessionUpdate(...a),
       findByIdAndUserId: (...a: unknown[]) => mocks.findByIdAndUserId(...a),
       claimVoiceHold: (...a: unknown[]) => mocks.claimVoiceHold(...a),
+      restoreVoiceHold: (...a: unknown[]) => mocks.restoreVoiceHold(...a),
     },
     userRepository: {
       ...(actual.userRepository as object),
@@ -580,6 +582,29 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     // About half the hold: connected for half the longest call.
     expect(refunded).toBeGreaterThan(RESERVED_CREDITS * 0.45);
     expect(refunded).toBeLessThan(RESERVED_CREDITS * 0.55);
+  });
+
+  it('restores the hold with its last activity when the refund fails, so a retry still bills the call', async () => {
+    const startedAt = new Date(Date.now() - 300_000);
+    const connectedAt = new Date(Date.now() - 240_000);
+    const lastActivityAt = new Date(Date.now() - 10_000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+      voiceConnectedAt: connectedAt,
+      voiceLastActivityAt: lastActivityAt,
+    });
+    mocks.incrementCredits.mockRejectedValue(new Error('db blip'));
+    mocks.restoreVoiceHold.mockResolvedValue(true);
+    const { res, run } = fireEnd();
+    await run();
+    expect(res._getStatusCode()).toBe(500);
+    expect(mocks.restoreVoiceHold).toHaveBeenCalledWith(SESSION_ID, RESERVED_CREDITS, startedAt, {
+      voiceConnectedAt: connectedAt,
+      voiceLastActivityAt: lastActivityAt,
+      voiceBilledCredits: null,
+    });
   });
 
   it('refunds nothing when a concurrent end or the stale hold sweep settled the hold first', async () => {
