@@ -10,8 +10,9 @@ import {
 import { convertCodeBlocksToArtifacts as oldCoreConvert } from './legacyArtifactParser/core';
 
 // Old-vs-new parity harness for the artifact detection merge. The legacy copies are frozen
-// at the pre-merge commit; the "new" side is the live code. Order of artifacts is compared
-// separately from this file, so results are sorted here.
+// at the pre-merge commit; the "new" side is the live code. Results are sorted because the
+// merged pass orders artifacts by position, where the old flow listed explicit tags first; that
+// order is pinned in persistAgentArtifacts.test.ts.
 
 type Result = ReturnType<typeof newFallback>;
 
@@ -197,7 +198,7 @@ function collectMismatches(
 }
 
 /**
- * Malformed markup: a fence count that does not pair up, a fence marker glued mid-line, an
+ * Malformed markup: a fence count that does not pair up, a fence closer glued to the text before it, an
  * unclosed `<artifact`, or an unclosed tool-output region. The old flow converted the text left
  * after stripping artifact tags, so on these an unclosed fence could swallow a stripped tag and
  * yield a react/html artifact with a half-tag in its body; the merged pass protects artifact
@@ -208,21 +209,20 @@ function isMalformed(input: string): boolean {
   const bareTildeLines = input.match(/^~~~\s*$/gm)?.length ?? 0;
   return (
     (input.match(/```/g)?.length ?? 0) % 2 === 1 ||
-    /[^\n]```/.test(input) ||
+    /\S```[ \t]*$/m.test(input) ||
     (input.match(/<artifact[\s>]/g)?.length ?? 0) !== (input.match(/<\/artifact>/g)?.length ?? 0) ||
     toolOutputOpeners > bareTildeLines
   );
 }
 
-// The exemption must stay a small tail; a change that breaks many malformed inputs is still a regression.
-const MAX_ACCEPTED_MALFORMED_DELTA = 0.01;
+// Pinned, not capped: any new malformed-input delta (or a fixed one) changes the count and has to
+// be looked at. Every accepted delta is an old-flow bug or a half-tag the old flow leaked; see the PR.
+const ACCEPTED_MALFORMED_DELTAS = { H1: 15, H2: 11, H3: 0 };
 
-function expectParity(label: string, inputs: string[], mismatches: Mismatch[]): void {
+function expectParity(label: keyof typeof ACCEPTED_MALFORMED_DELTAS, mismatches: Mismatch[]): void {
   const wellFormed = mismatches.filter(m => !isMalformed(m.input));
   expect(wellFormed.length, describeMismatches(label, wellFormed)).toBe(0);
-  expect(mismatches.length / inputs.length, describeMismatches(label, mismatches)).toBeLessThanOrEqual(
-    MAX_ACCEPTED_MALFORMED_DELTA
-  );
+  expect(mismatches.length, describeMismatches(label, mismatches)).toBe(ACCEPTED_MALFORMED_DELTAS[label]);
 }
 
 function describeMismatches(label: string, mismatches: Mismatch[]): string {
@@ -245,7 +245,7 @@ describe(`artifact detection parity (seed ${SEED}, N=${N})`, () => {
       x => newFallback(newCoreConvert(x)),
       x => oldFallback(oldCoreConvert(x))
     );
-    expectParity('H1', inputs, mismatches);
+    expectParity('H1', mismatches);
   });
 
   it('H2 stored legacy chat replies render unchanged', () => {
@@ -254,7 +254,7 @@ describe(`artifact detection parity (seed ${SEED}, N=${N})`, () => {
       x => newFallback(oldCoreConvert(x)),
       x => oldFallback(oldCoreConvert(x))
     );
-    expectParity('H2', inputs, mismatches);
+    expectParity('H2', mismatches);
   });
 
   // Agent replies are stored raw and chat replies are stored converted; both render through
@@ -266,6 +266,6 @@ describe(`artifact detection parity (seed ${SEED}, N=${N})`, () => {
       x => newFallback(newCoreConvert(x)),
       { withOperation: true }
     );
-    expectParity('H3', inputs, mismatches);
+    expectParity('H3', mismatches);
   });
 });

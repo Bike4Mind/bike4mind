@@ -237,6 +237,7 @@ describe('parseArtifactsWithFallback', () => {
 
     const { artifacts } = parseArtifactsWithFallback(input);
     expect(artifacts.filter(a => a.type === 'mermaid')).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({ identifier: 'flow', title: 'Flow', content: flow });
   });
 
   it('parses an artifact with single-quoted attribute values', () => {

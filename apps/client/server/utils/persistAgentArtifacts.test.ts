@@ -166,6 +166,18 @@ describe('buildAgentArtifactPayloads', () => {
 
     expect(payloads.map(p => p.type).sort()).toEqual(['mermaid', 'react']);
   });
+
+  it('numbers a mixed explicit-plus-fenced reply in one parse order, not explicit tags first', () => {
+    // The old flow listed explicit tags, then promoted fences (foo_0, mermaid_1 here). One parse
+    // over the converted reply replaced that, so the `_{index}` suffix of a mixed reply written
+    // before this change is reminted on a re-persist.
+    const payloads = build([reactArtifact('foo'), '```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```'].join('\n\n'));
+
+    expect(payloads.map(p => p.id)).toEqual([
+      `artifact_mermaid_mermaid-flowchart_${QUEST_CREATED_AT_MS}_0`,
+      `artifact_react_foo_${QUEST_CREATED_AT_MS}_1`,
+    ]);
+  });
 });
 
 describe('persistAgentArtifacts', () => {

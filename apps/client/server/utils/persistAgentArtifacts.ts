@@ -213,9 +213,8 @@ function defaultDeps(): PersistAgentArtifactsDeps {
  * identifiers, so the ids differ and both writes land. `questId` is the only
  * value stable across both, so it is what gates the whole run.
  *
- * The per-id existence check stays as a second line - it covers ids the parser
- * cannot make deterministic (`convertToolOutputsToArtifacts` embeds `Date.now()`
- * in the identifier of tool-output recharts/mermaid) within a single write.
+ * The per-id existence check stays as a second line - it skips rows that a
+ * partial earlier write already created.
  */
 export async function persistAgentArtifacts(args: {
   replyText: string;
