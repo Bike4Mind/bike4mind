@@ -9,13 +9,14 @@ import { redAlpha, red, brandAlpha } from '@client/app/utils/themes/colors';
 import { useQueryClient } from '@tanstack/react-query';
 import { debounce } from 'lodash';
 import { useNavigate } from '@tanstack/react-router';
-import { FC, useCallback, useMemo, useState } from 'react';
+import { FC, useCallback, useEffect, useMemo, useState } from 'react';
 import AddMembersModal from './AddMembersModal';
 import UserCard from './UserCard';
 import { SubscriptionCallbackFunction } from '@client/app/hooks/useCollection';
 import { toast } from 'sonner';
 import { updateAllQueryData, useSubscribeCollection } from '@client/app/utils/react-query';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
+import { useCoalescedInvalidate } from '@client/app/hooks/useCoalescedInvalidate';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import LogoutIcon from '@mui/icons-material/Logout';
 
@@ -77,6 +78,8 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
     []
   );
 
+  useEffect(() => () => debouncedSearch.cancel(), [debouncedSearch]);
+
   const filteredPendingInvites = useMemo(() => {
     if (!search) return pendingInvites;
 
@@ -87,25 +90,20 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
     return debounce(() => queryClient.invalidateQueries({ queryKey: getUserKey }), 500);
   }, [queryClient, getUserKey]);
 
-  // Subscribe to the invites collection to invalidate the query whenever a new invite is received.
+  useEffect(() => () => debouncedInvalidateUsers.cancel(), [debouncedInvalidateUsers]);
+
+  const coalescedInvalidateInvites = useCoalescedInvalidate(['invites', 'projects', project.id]);
+
+  // Any invite event (including a subscribe's replay burst) schedules one coalesced refetch.
   useSubscribeCollection(
     'invites',
     useMemo(() => (project?.id ? { documentId: project.id, type: InviteType.Project } : null), [project.id]),
-    useCallback<SubscriptionCallbackFunction<IInviteDocument>>(
-      type => {
-        // Refetch rather than write the event's document: the subscription withholds `recipients`
-        // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
-        switch (type) {
-          case 'insert':
-          case 'update':
-          case 'delete':
-            queryClient.invalidateQueries({ queryKey: ['invites', 'projects', project.id] });
-            debouncedInvalidateUsers();
-            break;
-        }
-      },
-      [debouncedInvalidateUsers, project.id, queryClient]
-    )
+    useCallback<SubscriptionCallbackFunction<IInviteDocument>>(() => {
+      // Refetch rather than write the event's document: the subscription withholds `recipients`
+      // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
+      coalescedInvalidateInvites();
+      debouncedInvalidateUsers();
+    }, [coalescedInvalidateInvites, debouncedInvalidateUsers])
   );
 
   // Update the users list whenever the project changes
@@ -114,14 +112,14 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
     useMemo(() => (project?.id ? { id: project.id } : null), [project.id]),
     useCallback<SubscriptionCallbackFunction<IProjectDocument>>(
       (type, data) => {
-        // Only invalidate if it's a new document that's not already in our cache
+        // Every update: write it through to the cached projects, then refresh the dependent members and invites.
         if (type === 'update') {
           updateAllQueryData(queryClient, 'projects', 'write', data);
           debouncedInvalidateUsers();
-          queryClient.invalidateQueries({ queryKey: ['invites', 'projects', project.id] });
+          coalescedInvalidateInvites();
         }
       },
-      [debouncedInvalidateUsers, project.id, queryClient]
+      [coalescedInvalidateInvites, debouncedInvalidateUsers, queryClient]
     )
   );
 

@@ -180,6 +180,16 @@
         "default": "./dist/videoProviders/index.cjs"
       }
     },
+    "./musicProviders": {
+      "import": {
+        "types": "./dist/musicProviders/index.d.mts",
+        "default": "./dist/musicProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/musicProviders/index.d.cts",
+        "default": "./dist/musicProviders/index.cjs"
+      }
+    },
     "./security": {
       "import": {
         "types": "./dist/security/index.d.mts",
