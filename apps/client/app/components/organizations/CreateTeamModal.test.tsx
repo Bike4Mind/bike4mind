@@ -172,6 +172,60 @@ describe('CreateTeamModal', () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
+  describe('in development', () => {
+    const devCreate = vi.fn();
+
+    const renderDevModal = async () => {
+      vi.stubEnv('NODE_ENV', 'development');
+      vi.resetModules();
+      devCreate.mockReset().mockResolvedValue({});
+      vi.doMock('@client/app/hooks/data/subscriptions', () => ({
+        useSubscribeTeamPlan: () => ({ mutateAsync: (...args: unknown[]) => mutateAsync(...args), isPending: false }),
+        useCreateTeamDev: () => ({ mutateAsync: devCreate, isPending: false }),
+      }));
+      const { default: DevModal, useCreateTeamModal: useDevModal } = await import('./CreateTeamModal');
+      useDevModal.setState({ isOpen: true });
+      render(
+        <TestWrapper>
+          <DevModal />
+        </TestWrapper>
+      );
+    };
+
+    afterEach(() => {
+      vi.doUnmock('@client/app/hooks/data/subscriptions');
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('applies the Team plan gate to the dev create path when enableTeamPlan is off', async () => {
+      teamPlan.available = false;
+      await renderDevModal();
+
+      expect(screen.getByTestId('create-team-unavailable').textContent).toBe('Team plans are not available right now.');
+      await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      const submit = screen.getByTestId('create-team-submit-btn');
+      expect(submit.hasAttribute('disabled')).toBe(true);
+      submit.click();
+      expect(devCreate).not.toHaveBeenCalled();
+      expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('creates the team through the dev endpoint, not Stripe, when enableTeamPlan is on', async () => {
+      await renderDevModal();
+
+      expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      const seats = Number(screen.getByTestId('create-team-size-value').textContent);
+      await user.click(screen.getByTestId('create-team-submit-btn'));
+
+      await waitFor(() => expect(devCreate).toHaveBeenCalledTimes(1));
+      expect(devCreate).toHaveBeenCalledWith({ name: 'Rocket Squad', seats });
+      expect(mutateAsync).not.toHaveBeenCalled();
+    });
+  });
+
   it('keeps the missing-price error alongside the unavailable message', () => {
     teamPlan.available = false;
     plansState = { data: [{ id: 'price_some_other_plan', unit_amount: 3000 }], isLoading: false, isError: false };

@@ -42,7 +42,6 @@ const CreateTeamModal = () => {
   const teamSize = Math.min(Math.max(Math.round(requestedTeamSize), minSeats), maxSeats);
   const [isTeamSizeInvalid, setIsTeamSizeInvalid] = useState(false);
   const teamPlanAvailable = useTeamPlanAvailable();
-  // The dev endpoint never touches Stripe (and throws outside development), so the flag only gates the Stripe path.
   const teamPlanClosed = !teamPlanAvailable;
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const createTeamDev = useCreateTeamDev();
