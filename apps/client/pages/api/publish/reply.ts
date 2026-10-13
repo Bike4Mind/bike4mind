@@ -1,8 +1,22 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { randomUUID } from 'node:crypto';
 import { Quest, PublishedArtifact, Session } from '@bike4mind/database';
-import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
-import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
+import {
+  PublishReplyRequestSchema,
+  type PublishResult,
+  type PublishScopeTier,
+  type PublishVisibility,
+  type CitableSource,
+  visibleReplyText,
+} from '@bike4mind/common';
+import {
+  resolveVisibility,
+  checkScopePermission,
+  checkPublishQuota,
+  invalidatePublishCdn,
+  toCacheTarget,
+  type PublishUser,
+} from '@server/services/publish';
 import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
 import {
   REPLY_TITLE_MAX,
@@ -15,7 +29,8 @@ import {
  * POST /api/publish/reply - publish a single assistant reply as a public viewer
  * page. Unlike bundles, replies skip the upload->S3->finalize dance: we snapshot
  * the reply markdown into the record (renderedBody) and serve it server-side at
- * /p/r/{publicId}. Re-publishing the same message returns the existing publicId.
+ * /p/r/{publicId}. Re-publishing the same message updates the owner's existing record in place
+ * (same publicId), including its scope and visibility.
  */
 
 function publicId(): string {
@@ -126,17 +141,27 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
 
-  // Reuse an existing publication of the same message IN THE SAME SCOPE if
-  // present. Scoping by tier+scopeId avoids minting a duplicate publicId when
-  // the same reply is published into a different scope (which must be a new row).
+  // One publication per owner+reply, whatever scope it was first published into: re-publishing
+  // (including a Team <-> Private switch) rewrites that record in place, so the /p/r link the
+  // owner already handed out is the one the new visibility applies to. Scoping by tier+scopeId
+  // instead minted a second record and left the first one live. Owner-scoped so an admin
+  // publishing someone else's reply never rewrites the owner's record.
   const existing = await PublishedArtifact.findOne({
-    tier,
-    scopeId,
+    ownerId: userId,
     'source.kind': 'reply',
     'source.sessionId': body.sessionId,
     'source.messageId': body.messageId,
     deletedAt: null,
-  }).lean<{ publicId: string; slug: string } | null>();
+  })
+    .sort({ publishedAt: -1 })
+    .lean<{
+      _id: unknown;
+      publicId: string;
+      slug: string;
+      tier: PublishScopeTier;
+      scopeId: string;
+      visibility: PublishVisibility;
+    } | null>();
 
   const id = existing?.publicId ?? publicId();
   const slug = existing?.slug ?? `r-${id}`;
@@ -148,7 +173,7 @@ const handler = baseApi().post(async (req, res) => {
     orgScopeId: tier === 'organization' ? scopeId : null,
     isAdmin: req.user.isAdmin,
     incoming: { bytes: Buffer.byteLength(markdown), fileCount: 0 },
-    replacing: existing ? { tier, scopeId, slug } : null,
+    replacing: existing ? { tier: existing.tier, scopeId: existing.scopeId, slug } : null,
   });
   if (!quota.ok) {
     return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
@@ -158,10 +183,12 @@ const handler = baseApi().post(async (req, res) => {
   const now = new Date();
 
   const saved = await PublishedArtifact.findOneAndUpdate(
-    { tier, scopeId, slug, deletedAt: null },
+    existing ? { _id: existing._id, ownerId: userId, deletedAt: null } : { tier, scopeId, slug, deletedAt: null },
     {
       $set: {
         publicId: id,
+        tier,
+        scopeId,
         title,
         visibility: viz.visibility,
         lastPublishedBy: userId,
@@ -177,6 +204,12 @@ const handler = baseApi().post(async (req, res) => {
     },
     { upsert: true, new: true }
   );
+
+  // The serve route lets a CDN cache open-public pages, so a page that WAS public must be purged
+  // or a downgrade to Private/Team keeps serving the cached public copy until its TTL runs out.
+  if (existing?.visibility === 'public' || saved.visibility === 'public') {
+    void invalidatePublishCdn(toCacheTarget(saved), req.logger);
+  }
 
   req.logger.info(`[PUBLISH] reply session=${body.sessionId} msg=${body.messageId} → /p/r/${saved.publicId}`);
 

@@ -6,15 +6,24 @@ import {
   SupportedFabFileMimeTypes,
   isImageServeable,
   type PublishResult,
+  type PublishScopeTier,
+  type PublishVisibility,
 } from '@bike4mind/common';
-import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
+import {
+  resolveVisibility,
+  checkScopePermission,
+  checkPublishQuota,
+  invalidatePublishCdn,
+  toCacheTarget,
+  type PublishUser,
+} from '@server/services/publish';
 import { getFilesStorage } from '@server/utils/storage';
 
 /**
  * POST /api/publish/fabfile - publish a FabFile as a public viewer page at
  * /p/f/{publicId}. Snapshots the file's text body into the record so the serve
  * handler can render it without exposing the private FabFile. Re-publishing the
- * same file returns the existing publicId.
+ * same file updates the owner's existing record in place (same publicId).
  */
 
 function publicId(): string {
@@ -154,15 +163,23 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
 
-  // Scope the reuse lookup to tier+scopeId so re-publishing the same file into a
-  // different scope creates a new row (new publicId) rather than colliding.
+  // One publication per owner+file, rewritten in place on re-publish (scope and visibility
+  // included) - see reply.ts, which follows the same rule.
   const existing = await PublishedArtifact.findOne({
-    tier,
-    scopeId,
+    ownerId: userId,
     'source.kind': 'fabfile',
     'source.fabFileId': body.fabFileId,
     deletedAt: null,
-  }).lean<{ publicId: string; slug: string } | null>();
+  })
+    .sort({ publishedAt: -1 })
+    .lean<{
+      _id: unknown;
+      publicId: string;
+      slug: string;
+      tier: PublishScopeTier;
+      scopeId: string;
+      visibility: PublishVisibility;
+    } | null>();
 
   const id = existing?.publicId ?? publicId();
   const slug = existing?.slug ?? `f-${id}`;
@@ -183,7 +200,7 @@ const handler = baseApi().post(async (req, res) => {
     orgScopeId: tier === 'organization' ? scopeId : null,
     isAdmin: req.user.isAdmin,
     incoming: { bytes: Buffer.byteLength(body_), fileCount: 0 },
-    replacing: existing ? { tier, scopeId, slug } : null,
+    replacing: existing ? { tier: existing.tier, scopeId: existing.scopeId, slug } : null,
   });
   if (!quota.ok) {
     return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
@@ -193,10 +210,12 @@ const handler = baseApi().post(async (req, res) => {
   const now = new Date();
 
   const saved = await PublishedArtifact.findOneAndUpdate(
-    { tier, scopeId, slug, deletedAt: null },
+    existing ? { _id: existing._id, ownerId: userId, deletedAt: null } : { tier, scopeId, slug, deletedAt: null },
     {
       $set: {
         publicId: id,
+        tier,
+        scopeId,
         title,
         visibility: viz.visibility,
         lastPublishedBy: userId,
@@ -211,6 +230,11 @@ const handler = baseApi().post(async (req, res) => {
     },
     { upsert: true, new: true }
   );
+
+  // A page that was public may be CDN-cached; purge it so a downgrade stops serving at once.
+  if (existing?.visibility === 'public' || saved.visibility === 'public') {
+    void invalidatePublishCdn(toCacheTarget(saved), req.logger);
+  }
 
   req.logger.info(`[PUBLISH] fabfile ${body.fabFileId} → /p/f/${saved.publicId}`);
 

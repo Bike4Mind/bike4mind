@@ -689,3 +689,97 @@ describe('PublishShareModal - plain-language copy', () => {
     expect(document.body.textContent).not.toContain('passcode');
   });
 });
+
+describe('PublishShareModal - reopening an already-published reply', () => {
+  const live: PublishResult = {
+    publicId: 'live-1',
+    url: '/p/r/live-1',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 'r-live-1',
+    visibility: 'public',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+
+  const renderReopened = (resolvePublished: () => Promise<PublishResult | null>) => {
+    apiGet
+      .mockReset()
+      .mockImplementation((url: string) =>
+        Promise.resolve(
+          url.endsWith('/share-token')
+            ? { data: { shareToken: null } }
+            : {
+                data: {
+                  artifact: { visibility: 'public', accessGate: null, commentPolicy: 'none', discoverable: false },
+                },
+              }
+        )
+      );
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    const publish = vi.fn();
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="An answer"
+          resolvePublished={resolvePublished}
+        />
+      </Wrapper>
+    );
+    return publish;
+  };
+
+  it('opens on the existing link and its current visibility, not a blank form', async () => {
+    renderReopened(() => Promise.resolve(live));
+    const url = (await screen.findByTestId('publish-share-url')) as HTMLInputElement;
+    expect(url.value).toContain('/p/r/live-1');
+    expect(radio('public')?.checked).toBe(true);
+    expect(screen.getByTestId('publish-share-intro').textContent).not.toContain('Nothing is published');
+  });
+
+  it('choosing Private PATCHes the existing record instead of publishing again', async () => {
+    const publish = renderReopened(() => Promise.resolve(live));
+    await screen.findByTestId('publish-share-url');
+    fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/live-1', { visibility: 'private' })
+    );
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('holds the create button until the lookup settles, then falls back to the publish form', async () => {
+    let settle: (v: PublishResult | null) => void = () => {};
+    renderReopened(() => new Promise(r => (settle = r)));
+    expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(true);
+    settle(null);
+    await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByTestId('publish-share-url')).toBeNull();
+  });
+});
+
+describe('PublishShareModal - the two links are described accurately', () => {
+  it('does not imply the main share link needs an account', async () => {
+    apiPost.mockClear();
+    const publish = vi.fn().mockResolvedValue({
+      publicId: 'pub-2',
+      url: '/p/r/pub-2',
+      tier: 'user',
+      scopeId: 'u1',
+      slug: 'r-pub-2',
+      visibility: 'public',
+      publishedAt: '2026-01-01T00:00:00.000Z',
+    } satisfies PublishResult);
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="An answer" defaultVisibility="public" />
+      </Wrapper>
+    );
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    const section = await screen.findByTestId('publish-share-token-section');
+    expect(section.textContent).not.toContain('without an account');
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('even while it is Private');
+  });
+});

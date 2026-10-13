@@ -44,6 +44,8 @@ import {
   updatePublishedDiscoverable,
   updatePublishedAccessGate,
   getPublishedEmbedState,
+  getPublishedManageState,
+  getShareTokenState,
   type PublishAccessGateInput,
   type PublishMode,
   type ArtifactPublishOpts,
@@ -81,6 +83,13 @@ export interface PublishShareModalProps {
     /** Whether the prior publication opted into search-engine indexing. */
     discoverable?: boolean;
   } | null>;
+  /**
+   * Optional lookup, run on open, for a source that has at most one publication (a chat reply).
+   * When it resolves to one, the dialog opens straight onto that live page - its link and its
+   * current visibility, gate and comment state - so a Private pick changes the link the owner
+   * already handed out. Without it a reopened reply showed a blank "nothing is published" form.
+   */
+  resolvePublished?: () => Promise<PublishResult | null>;
   /**
    * When set, offers a "Team" (organization) visibility choice, publishing an org-scoped
    * page visible to org members. Supplied only when the caller is in an org ("Team") account
@@ -176,6 +185,7 @@ export function PublishShareModal({
   markdown,
   defaultVisibility = 'public',
   resolveExisting,
+  resolvePublished,
   orgOption,
   incompleteWarning,
 }: PublishShareModalProps) {
@@ -213,6 +223,10 @@ export function PublishShareModal({
   const [embedGated, setEmbedGated] = useState(false);
   // Explicit acknowledgement of `incompleteWarning`; gates the publish button.
   const [incompleteAck, setIncompleteAck] = useState(false);
+  // `resolvePublished` is in flight: hold the create button so a click can't race the lookup.
+  const [resolving, setResolving] = useState(false);
+  // The dialog opened onto a publication that already existed (see `resolvePublished`).
+  const [reopened, setReopened] = useState(false);
 
   // Reset to the choose phase each time the dialog is opened fresh.
   useEffect(() => {
@@ -232,6 +246,7 @@ export function PublishShareModal({
       setGateTouched(false);
       setEmbedGated(false);
       setIncompleteAck(false);
+      setReopened(false);
     }
   }, [open, defaultVisibility]);
 
@@ -290,6 +305,43 @@ export function PublishShareModal({
       active = false;
     };
   }, [open, resolveExisting]);
+
+  // Reopen onto an existing publication. Its live state is read from the record itself (not the
+  // lookup row) so the controls show what is actually being served, gate included.
+  useEffect(() => {
+    if (!open || !resolvePublished) return;
+    let active = true;
+    setResolving(true);
+    void resolvePublished()
+      .then(async found => {
+        if (!active || !found) return;
+        const [state, links] = await Promise.all([
+          getPublishedManageState(found.publicId).catch(() => null),
+          getShareTokenState(found.publicId).catch(() => null),
+        ]);
+        if (!active) return;
+        const live = state?.visibility ?? found.visibility;
+        setResult({ ...found, visibility: live });
+        setVisibility(live);
+        setReopened(true);
+        if (state) {
+          setCommentsOn(state.commentPolicy === 'open' || state.commentPolicy === 'restricted');
+          setDiscoverableOn(state.discoverable);
+          setGateKind(state.accessGate?.kind ?? 'none');
+          if (state.accessGate?.kind === 'domain') setGateDomainsText(state.accessGate.allowedDomains.join(', '));
+        }
+        if (links?.shareToken) setShareToken(links.shareToken);
+      })
+      .catch(() => {
+        /* lookup failure -> the plain publish form; the server still updates in place */
+      })
+      .finally(() => {
+        if (active) setResolving(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, resolvePublished]);
 
   const phase: 'choose' | 'shared' = result ? 'shared' : 'choose';
   const url = result ? toShareUrl(result) : '';
@@ -551,12 +603,16 @@ export function PublishShareModal({
       >
         <ModalClose />
         <Typography level="title-lg" sx={{ mb: 0.5 }}>
-          {phase === 'shared' ? 'Shared & ready' : 'Share'}
+          {phase === 'shared' ? (reopened ? 'Already shared' : 'Shared & ready') : 'Share'}
         </Typography>
-        <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
+        <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }} data-testid="publish-share-intro">
           {phase === 'shared'
-            ? 'Send the link, or change who can see it below.'
-            : 'Choose who can see this, then create the link. Nothing is published until you do.'}
+            ? reopened
+              ? 'This is already published. Change who can see it below - choosing Private stops this link from working for anyone else.'
+              : 'Send the link, or change who can see it below.'
+            : resolving
+              ? 'Checking whether this is already shared...'
+              : 'Choose who can see this, then create the link. Nothing is published until you do.'}
         </Typography>
 
         {phase === 'choose' && existing && (
@@ -839,7 +895,7 @@ export function PublishShareModal({
           <Button
             onClick={() => void handleCreate()}
             loading={busy}
-            disabled={!!incompleteWarning && !incompleteAck}
+            disabled={resolving || (!!incompleteWarning && !incompleteAck)}
             startDecorator={<PublicIcon />}
             data-testid="publish-share-create"
           >
@@ -873,10 +929,14 @@ export function PublishShareModal({
             >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
                 <LinkIcon fontSize="small" />
-                <FormLabel sx={{ mb: 0 }}>Link that works without an account</FormLabel>
+                <FormLabel sx={{ mb: 0 }}>Separate link you can turn off</FormLabel>
               </Box>
-              <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }}>
-                Anyone with this link can open it without signing in. Making a new link stops the old ones from working.
+              {/* Both links open without signing in while the page is public. What sets this one apart
+                  is that it keeps working at ANY visibility (serve checkShareGrant) and can be revoked or
+                  replaced on its own - say that, not "works without an account". */}
+              <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }} data-testid="publish-share-token-hint">
+                A second link that opens this page without signing in, even while it is Private. Turn it off or replace
+                it at any time without changing the link above.
               </Typography>
               {shareToken ? (
                 <>
@@ -889,7 +949,7 @@ export function PublishShareModal({
                       }}
                       sx={{ flex: 1, fontFamily: 'monospace', fontSize: '13px' }}
                     />
-                    <Tooltip title="Copy link that works without an account">
+                    <Tooltip title="Copy separate link">
                       <IconButton
                         variant="outlined"
                         color="neutral"
@@ -909,7 +969,7 @@ export function PublishShareModal({
                       onClick={() => void onRegenerateShareToken()}
                       data-testid="publish-share-token-regenerate"
                     >
-                      Make a new link
+                      Replace link
                     </Button>
                     <Button
                       size="sm"
@@ -919,11 +979,11 @@ export function PublishShareModal({
                       onClick={() => void onRevokeShareToken()}
                       data-testid="publish-share-token-revoke"
                     >
-                      Revoke
+                      Turn off
                     </Button>
                   </Box>
                   <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
-                    Anyone with this link can view without signing in.
+                    Anyone with this link can view, even while the page is Private.
                   </Typography>
                 </>
               ) : (
@@ -936,7 +996,7 @@ export function PublishShareModal({
                   onClick={() => void onCreateShareToken()}
                   data-testid="publish-share-token-create"
                 >
-                  Create link that works without an account
+                  Create separate link
                 </Button>
               )}
             </Box>

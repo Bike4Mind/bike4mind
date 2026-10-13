@@ -149,6 +149,24 @@ describe('GET /api/publish/artifacts — ?sourceArtifactId gating', () => {
     expect(buildListVisibilityFilter).not.toHaveBeenCalled();
   });
 
+  it('?sourceMessageId is owner-scoped to the caller reply publication only', async () => {
+    await run({ sourceMessageId: 'msg_x' });
+    const match = matchStage();
+    expect(match).toMatchObject({
+      deletedAt: null,
+      ownerId: USER,
+      'source.kind': 'reply',
+      'source.messageId': 'msg_x',
+    });
+    expect(match.$and).toBeUndefined();
+    expect(buildListVisibilityFilter).not.toHaveBeenCalled();
+  });
+
+  it('ignores a non-string sourceMessageId (NoSQL-injection guard)', async () => {
+    await run({ sourceMessageId: { $ne: null } });
+    expect(matchStage()['source.messageId']).toBeUndefined();
+  });
+
   it('takes precedence over ?mine=true', async () => {
     await run({ sourceArtifactId: 'artifact_x', mine: 'true' });
     const match = matchStage();

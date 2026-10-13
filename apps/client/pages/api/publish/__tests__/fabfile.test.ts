@@ -6,6 +6,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mocks = vi.hoisted(() => ({
   fileLean: vi.fn(),
   publishedFindOneLean: vi.fn(),
+  publishedFindOne: vi.fn(),
+  invalidatePublishCdn: vi.fn(),
   findOneAndUpdate: vi.fn(),
   download: vi.fn(),
 }));
@@ -21,14 +23,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/database', () => ({
   FabFile: { findById: () => ({ select: () => ({ lean: mocks.fileLean }) }) },
   PublishedArtifact: {
-    findOne: () => ({ lean: mocks.publishedFindOneLean }),
+    findOne: (filter: unknown) => {
+      mocks.publishedFindOne(filter);
+      return { sort: () => ({ lean: mocks.publishedFindOneLean }) };
+    },
     findOneAndUpdate: mocks.findOneAndUpdate,
   },
 }));
 vi.mock('@server/services/publish', () => ({
-  resolveVisibility: () => ({ ok: true, visibility: 'public' }),
+  resolveVisibility: (_tier: string, visibility?: string) => ({ ok: true, visibility: visibility ?? 'public' }),
   checkScopePermission: () => ({ ok: true }),
   checkPublishQuota: () => ({ ok: true }),
+  invalidatePublishCdn: mocks.invalidatePublishCdn,
+  toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
 }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ download: mocks.download }),
@@ -192,5 +199,36 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
     const res = await run(makeReq());
     expect(res.statusCode).toBe(403);
     expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/publish/fabfile - re-publish updates the owner record in place', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.fileLean.mockResolvedValue({ userId: OWNER, moderationStatus: 'clean', mimeType: 'text/plain', text: 'hi' });
+    mocks.publishedFindOneLean.mockResolvedValue({
+      _id: 'row1',
+      publicId: 'live1',
+      slug: 'f-live1',
+      tier: 'user',
+      scopeId: OWNER,
+      visibility: 'public',
+    });
+    mocks.findOneAndUpdate.mockImplementation(async (_f: unknown, update: { $set: Record<string, unknown> }) => ({
+      ...update.$set,
+      source: { kind: 'fabfile' },
+    }));
+  });
+
+  it('switching to Private rewrites the existing owner-scoped record and purges the CDN', async () => {
+    const req = makeReq();
+    req.body.visibility = 'private';
+    const res = await run(req);
+    expect(res.statusCode).toBe(200);
+    expect(mocks.publishedFindOne).toHaveBeenCalledWith(expect.objectContaining({ ownerId: OWNER }));
+    const [filter, update] = mocks.findOneAndUpdate.mock.calls[0] as [unknown, { $set: Record<string, unknown> }];
+    expect(filter).toEqual({ _id: 'row1', ownerId: OWNER, deletedAt: null });
+    expect(update.$set).toMatchObject({ publicId: 'live1', visibility: 'private' });
+    expect(mocks.invalidatePublishCdn).toHaveBeenCalledWith({ publicId: 'live1' }, expect.anything());
   });
 });

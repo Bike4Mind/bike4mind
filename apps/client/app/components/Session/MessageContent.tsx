@@ -76,7 +76,7 @@ import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
-import { replyPublisher } from '@client/app/utils/publishApi';
+import { findPublishedByReply, replyPublisher } from '@client/app/utils/publishApi';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import PushPinIcon from '@mui/icons-material/PushPin';
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
@@ -640,9 +640,11 @@ const MessageContent: React.FC<ContentProps> = memo(
 
     const handleShareReply = useCallback(() => {
       if (!messageData.id || !sessionId) return;
+      const replyId = messageData.id;
       const markdown = extractedReplies[0] || messageData.reply || undefined;
       void publishAndShareReply({
         publish: replyPublisher({ sessionId, messageId: messageData.id, orgId: teamOrg?.id }),
+        resolvePublished: () => findPublishedByReply(replyId),
         ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
         title: messageData.prompt?.slice(0, 80) || (APP_NAME ? `Shared from ${APP_NAME}` : 'Shared reply'),
         markdown,
