@@ -7,6 +7,9 @@
  *
  * Dry run by default; pass --apply to write. --max <n> overrides the admin setting.
  *
+ * Edit routes read the setting through a 5-minute cache. After lowering it, wait 5 minutes before
+ * --apply, and never pass a --max below it: either lets an in-flight edit re-persist trimmed versions.
+ *
  * Usage (inside an SST shell so the Mongo URI and bucket resolve):
  *   npx sst shell --stage <stage> pnpm --filter @bike4mind/scripts trim:ai-edit-versions
  *   npx sst shell --stage <stage> pnpm --filter @bike4mind/scripts trim:ai-edit-versions --apply
