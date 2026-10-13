@@ -69,11 +69,15 @@ const toSystemOneQuestion = (question: DecisionQuestion): SystemOneQuestion => {
   }
 };
 
-// A lone json part is the state itself; anything else is a list of strings (json parts serialized).
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// Jev documents state as a string, a JSON object, or an array of text values. Only a lone json object is sent as the
+// state itself; any other json value (array, number, ...) would not be valid, so it travels serialized in the list.
 const toState = (input: ResolvedDecisionInput): unknown => {
   if (typeof input === 'string') return input;
   const [only] = input;
-  if (input.length === 1 && only.type === 'json') return only.json;
+  if (input.length === 1 && only.type === 'json' && isPlainObject(only.json)) return only.json;
   return input.map(part => {
     if (part.type === 'text') return part.text;
     if (part.type === 'json') return JSON.stringify(part.json);
@@ -129,6 +133,10 @@ const toProviderError = (response: Response, body: unknown): DecisionProviderErr
   if (message?.startsWith(UNKNOWN_MODEL_PREFIX)) {
     return new DecisionProviderError('upstream', 'TypeSafe does not recognize the model', details);
   }
+  // Other 4xx mean a misrouted base URL or a vendor change, not a caller error.
+  if (status !== 400 && status !== 422) {
+    return new DecisionProviderError('upstream', `TypeSafe returned ${status}`, details);
+  }
   // The vendor's wording describes its own wire format, not our caller's request, so it stays in `raw`.
   return new DecisionProviderError('invalid_request', 'The decision provider rejected the request.', {
     ...details,
@@ -158,7 +166,17 @@ export class SystemOneDecisionProvider implements DecisionProvider {
       ctx.signal
     );
     const body = await readJson(response);
-    if (!response.ok) throw toProviderError(response, body);
+    if (!response.ok) {
+      const error = toProviderError(response, body);
+      if (error.kind === 'invalid_request' || error.kind === 'upstream') {
+        // Server-side only: the vendor message never reaches the caller and the request body is never logged.
+        ctx.logger.warn('systemone_request_rejected', {
+          status: response.status,
+          message: readSystemOneErrorMessage(body),
+        });
+      }
+      throw error;
+    }
 
     const parsed = SystemOneResponseSchema.safeParse(body);
     if (!parsed.success) throw upstreamMismatch(parsed.error.message);

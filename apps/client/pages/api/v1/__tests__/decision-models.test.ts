@@ -12,13 +12,32 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   },
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+const { registeredModels } = vi.hoisted(() => ({ registeredModels: { value: ['gpt-6-luna'] as string[] } }));
 vi.mock('@server/decisions/providers', () => ({
-  getDecisionProviderRegistry: () => ({ models: () => ['gpt-6-luna'] }),
+  getDecisionProviderRegistry: () => ({ models: () => registeredModels.value }),
 }));
 
 import handler from '../decision-models';
 
+const listModels = async () => {
+  const { req, res } = createMocks({ method: 'GET' });
+  await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+  return ListDecisionModelsResponseSchema.parse(res._getJSONData());
+};
+
 describe('GET /api/v1/decision-models', () => {
+  it('exposes the jev-latest alias target and that it takes no images', async () => {
+    registeredModels.value = ['jev-latest'];
+    const [model] = (await listModels()).models;
+    expect(model).toMatchObject({
+      id: 'jev-latest',
+      provider: 'typesafe',
+      alias_of: 'jev-1.13.0',
+      supports_images: false,
+    });
+    registeredModels.value = ['gpt-6-luna'];
+  });
+
   it('lists only the registered models, in the public wire shape', async () => {
     const { req, res } = createMocks({ method: 'GET' });
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);

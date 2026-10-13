@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { z } from 'zod';
@@ -7,7 +7,7 @@ import type { DecisionQuestion } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { describeDecisionProviderConformance } from '../conformance';
 import type { DecisionProviderRequest } from '../types';
-import { SystemOneDecisionProvider } from './SystemOneDecisionProvider';
+import { SystemOneDecisionProvider, readSystemOneErrorMessage } from './SystemOneDecisionProvider';
 
 const URL_SYSTEMONE = 'https://api.typesafe.ai/v1/systemone';
 
@@ -200,7 +200,7 @@ describe('SystemOneDecisionProvider wire mapping', () => {
 
   it.each([
     ['a lone json part as the state itself', [{ type: 'json' as const, json: { plan: 'pro' } }], { plan: 'pro' }],
-    ['a lone json array as the state itself', [{ type: 'json' as const, json: [1, 2] }], [1, 2]],
+    ['a lone json array as a one-item string array', [{ type: 'json' as const, json: [1, 2] }], ['[1,2]']],
     [
       'several parts as strings, json serialized',
       [
@@ -214,6 +214,14 @@ describe('SystemOneDecisionProvider wire mapping', () => {
     const posted = capture('noul');
     await new SystemOneDecisionProvider().decide(request([predicate('is_urgent')], input), ctx());
     expect(posted[0].body.state).toEqual(expectedState);
+  });
+
+  it('keeps a lone json object native and serializes a lone json array', async () => {
+    const posted = capture('noul');
+    const provider = new SystemOneDecisionProvider();
+    await provider.decide(request([predicate('is_urgent')], [{ type: 'json', json: { plan: 'pro' } }]), ctx());
+    await provider.decide(request([predicate('is_urgent')], [{ type: 'json', json: ['a', 'b'] }]), ctx());
+    expect(posted.map(({ body }) => body.state)).toEqual([{ plan: 'pro' }, ['["a","b"]']]);
   });
 
   it('rejects an image part as an invalid request without calling the vendor', async () => {
@@ -288,6 +296,30 @@ describe('SystemOneDecisionProvider wire mapping', () => {
       expect((error as { details: { raw: { message: string } } }).details.raw.message).toMatch(/\S/);
     }
   );
+
+  it.each([404, 405, 409, 413])('maps a %i to upstream, not a caller error', async status => {
+    respond({ detail: 'Not Found' }, status)();
+    await expect(new SystemOneDecisionProvider().decide(request([predicate('p')]), ctx())).rejects.toMatchObject({
+      kind: 'upstream',
+      message: `TypeSafe returned ${status}`,
+      details: { status },
+    });
+  });
+
+  it('logs the vendor message server-side for a rejected request', async () => {
+    respondWithFixture('err_bad_type')();
+    const logger = new Logger();
+    const warn = vi.spyOn(logger, 'warn');
+    await expect(
+      new SystemOneDecisionProvider().decide(request([predicate('p')]), { ...ctx(), logger })
+    ).rejects.toMatchObject({ kind: 'invalid_request' });
+    const expected = readSystemOneErrorMessage(fixture('err_bad_type'));
+    expect(expected).toMatch(/\S/);
+    expect(warn).toHaveBeenCalledWith(
+      'systemone_request_rejected',
+      expect.objectContaining({ status: 400, message: expected })
+    );
+  });
 
   it('accepts a single-level score body without judging it; level counts are enforced upstream of the adapter', async () => {
     respondWithFixture('err_one_level')();

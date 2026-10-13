@@ -13,7 +13,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Logger } from '@bike4mind/observability';
-import type { DecisionQuestion } from '@bike4mind/common';
+import { DECISION_MODEL_CATALOG, type DecisionQuestion } from '@bike4mind/common';
 import type { DecisionProviderRequest } from '../../types';
 import { assertNoSecret } from '../../../videoProviders/veo/__fixtures__/scrub';
 import {
@@ -223,6 +223,23 @@ const check = async (scenario: Scenario): Promise<string[]> => {
   return drift;
 };
 
+// `jev-latest` is an alias; when the vendor moves it the catalog's aliasOf (and the pricing that rides on it) is stale.
+const checkAlias = async (): Promise<string[]> => {
+  const expected = DECISION_MODEL_CATALOG['jev-latest'].aliasOf;
+  try {
+    const { model } = await new SystemOneDecisionProvider(BASE_URL).decide(
+      { model: 'jev-latest', input: TICKET, questions: [URGENT] },
+      { apiKey, logger: new Logger(), signal: AbortSignal.timeout(30_000) }
+    );
+    if (model === expected) return [];
+    return [
+      `jev-latest resolved to ${model}, catalog aliasOf is ${expected}: the alias moved, review aliasOf and pricing`,
+    ];
+  } catch (error) {
+    return [`jev-latest alias check failed against the live API: ${String(error)}`];
+  }
+};
+
 const readStatuses = (): Record<string, unknown> => {
   try {
     return JSON.parse(readFileSync(STATUSES_FILE, 'utf8')) as Record<string, unknown>;
@@ -261,7 +278,10 @@ const main = async () => {
     await record(selected);
     return;
   }
-  const drift = (await Promise.all(selected.map(check))).flat();
+  // Sequential: the vendor's rate limits are dynamic, and a burst would surface as false drift.
+  const drift: string[] = [];
+  for (const scenario of selected) drift.push(...(await check(scenario)));
+  drift.push(...(await checkAlias()));
   if (drift.length > 0) {
     process.stderr.write(`TypeSafe contract drift detected:\n${drift.map(line => `  - ${line}`).join('\n')}\n`);
     process.exit(1);

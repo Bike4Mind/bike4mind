@@ -45,19 +45,21 @@ export const DECISION_MODEL_CATALOG: Record<DecisionModelId, DecisionModelCapabi
     pricing: { usdPerMillionInputTokens: 0.1, usdPerMillionOutputTokens: 0 },
   },
   // Text only. Rate from docs.typesafe.ai/models.md: $42 per billion input tokens, output free.
+  // Jev caps state plus the longest question at 32k tokens (docs.typesafe.ai/models.md); the 64k ceiling never binds.
   'jev-1.13.0': {
     provider: 'typesafe',
     protocol: 'systemOne',
     displayName: 'Jev 1.13',
-    limits: { ...PLATFORM_CAPS, maxImages: 0, maxInputTokens: 64_000, maxImageDimension: 0 },
+    limits: { ...PLATFORM_CAPS, maxImages: 0, maxInputTokens: 32_000, maxImageDimension: 0 },
     pricing: { usdPerMillionInputTokens: 0.042, usdPerMillionOutputTokens: 0 },
   },
+  // Same 32k cap as the pinned version it aliases.
   'jev-latest': {
     provider: 'typesafe',
     protocol: 'systemOne',
     displayName: 'Jev (latest)',
     aliasOf: 'jev-1.13.0',
-    limits: { ...PLATFORM_CAPS, maxImages: 0, maxInputTokens: 64_000, maxImageDimension: 0 },
+    limits: { ...PLATFORM_CAPS, maxImages: 0, maxInputTokens: 32_000, maxImageDimension: 0 },
     pricing: { usdPerMillionInputTokens: 0.042, usdPerMillionOutputTokens: 0 },
   },
 };
