@@ -9,13 +9,19 @@ describe('buildDecisionProviders', () => {
     expect(buildDecisionProviders({}).map(provider => provider.id)).toEqual(['openaiDecisions', 'systemOne']);
   });
 
-  it('accepts a valid SYSTEMONE_BASE_URL', () => {
-    expect(() => buildDecisionProviders({ SYSTEMONE_BASE_URL: 'https://laya.example.com/' })).not.toThrow();
+  it.each(['https://laya.example.com/', 'http://localhost:8080'])('accepts a valid SYSTEMONE_BASE_URL %s', value => {
+    expect(() => buildDecisionProviders({ SYSTEMONE_BASE_URL: value })).not.toThrow();
   });
 
-  it('drops only the systemOne adapter, with an error log, when SYSTEMONE_BASE_URL is set but not a URL', () => {
+  it.each([
+    'laya.example.com',
+    'localhost:8080',
+    'laya.example.com:8000',
+    'ftp://laya.example.com',
+    'https://laya.example.com/?a=b',
+  ])('drops only the systemOne adapter, with an error log, when SYSTEMONE_BASE_URL is %s', value => {
     const logger = { error: vi.fn() } as unknown as Logger;
-    const providers = buildDecisionProviders({ SYSTEMONE_BASE_URL: 'laya.example.com' }, logger);
+    const providers = buildDecisionProviders({ SYSTEMONE_BASE_URL: value }, logger);
     expect(providers.map(provider => provider.id)).toEqual(['openaiDecisions']);
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('SYSTEMONE_BASE_URL'));
   });

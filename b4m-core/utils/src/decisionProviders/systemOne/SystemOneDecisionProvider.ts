@@ -169,10 +169,10 @@ export class SystemOneDecisionProvider implements DecisionProvider {
     if (!response.ok) {
       const error = toProviderError(response, body);
       if (error.kind === 'invalid_request' || error.kind === 'upstream') {
-        // Server-side only: the vendor message never reaches the caller and the request body is never logged.
+        // Server-side only. The vendor message is not logged because it echoes caller question and choice names.
         ctx.logger.warn('systemone_request_rejected', {
           status: response.status,
-          message: readSystemOneErrorMessage(body),
+          unknownModel: readSystemOneErrorMessage(body)?.startsWith(UNKNOWN_MODEL_PREFIX) ?? false,
         });
       }
       throw error;

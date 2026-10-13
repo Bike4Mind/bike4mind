@@ -16,7 +16,20 @@ import { usableApiKey } from '@server/generationJobs/wiring';
 
 type EffectiveKeys = Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>;
 
-const SystemOneBaseUrlSchema = z.string().url();
+const SystemOneBaseUrlSchema = z
+  .string()
+  .url()
+  .refine(value => {
+    // refine also runs when .url() has already failed, so the string may not parse.
+    const url = URL.canParse(value) ? new URL(value) : null;
+    return (
+      url !== null &&
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      url.host !== '' &&
+      url.search === '' &&
+      url.hash === ''
+    );
+  });
 
 /** TypeSafe's hosted API unless SYSTEMONE_BASE_URL points at a self-hosted deployment. */
 const systemOneProviders = (env: NodeJS.ProcessEnv, logger: Logger): DecisionProvider[] => {

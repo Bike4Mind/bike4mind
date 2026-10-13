@@ -306,7 +306,7 @@ describe('SystemOneDecisionProvider wire mapping', () => {
     });
   });
 
-  it('logs the vendor message server-side for a rejected request', async () => {
+  it('logs the status but not the vendor message for a rejected request', async () => {
     respondWithFixture('err_bad_type')();
     const logger = new Logger();
     const warn = vi.spyOn(logger, 'warn');
@@ -317,8 +317,9 @@ describe('SystemOneDecisionProvider wire mapping', () => {
     expect(expected).toMatch(/\S/);
     expect(warn).toHaveBeenCalledWith(
       'systemone_request_rejected',
-      expect.objectContaining({ status: 400, message: expected })
+      expect.objectContaining({ status: 400, unknownModel: false })
     );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(expected);
   });
 
   it('accepts a single-level score body without judging it; level counts are enforced upstream of the adapter', async () => {
