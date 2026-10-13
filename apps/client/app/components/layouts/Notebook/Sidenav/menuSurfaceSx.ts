@@ -239,7 +239,7 @@ export const menuRowSx = (theme: Theme, danger = false) => {
     borderRadius: MENU_ROW_RADIUS,
     cursor: 'pointer',
     color: danger ? theme.palette.danger[500] : theme.palette.sidenav?.navItemText,
-    // Joy icons - and the Credits Bike4MindIcon, which fills with var(--Icon-color) - read
+    // Joy icons - and the Credits CreditIcon, which reads with var(--Icon-color) - read
     // --Icon-color, not `color`. Tint them brand light-blue @50% (text.tertiary).
     '--Icon-color': danger ? theme.palette.danger[500] : theme.palette.text.tertiary,
     transition: 'background 0.15s',
