@@ -136,6 +136,38 @@ describe('useConversationalVoice — auto-reconnect', () => {
     expect(endCalls()).toHaveLength(1);
   });
 
+  it('sends /end and lets a new call start when the transport close never settles', async () => {
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    onConnect();
+    endSessionMock.mockReturnValueOnce(new Promise(() => {}));
+
+    void useConversationalVoiceStore.getState().end();
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(endCalls()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(endCalls()).toHaveLength(1);
+
+    void useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions')).toHaveLength(2);
+  });
+
+  it('lets a new call start when an earlier /end never answers', async () => {
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    onConnect();
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions' ? Promise.resolve({ data: BOOTSTRAP }) : new Promise(() => {})
+    );
+    onDisconnect({ reason: 'agent', context: new CloseEvent('close') });
+
+    void useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions')).toHaveLength(2);
+    apiPost.mockImplementation(() => Promise.resolve({ data: {} }));
+  });
+
   it('settles the hold when every reconnect bootstrap fails', async () => {
     await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
     onConnect();

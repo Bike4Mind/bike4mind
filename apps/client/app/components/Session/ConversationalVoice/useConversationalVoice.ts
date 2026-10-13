@@ -86,10 +86,25 @@ function settleDeferredHolds(): void {
 // before bootstrapping. allSettled keeps a failed /end from stalling later ones.
 let pendingSettles: Promise<unknown> = Promise.resolve();
 
+// Caps how long the chain waits on one link (ms). The `api` client has no request timeout and the
+// SDK's endSession() can hang; an unbounded link would block every later start() until reload. The
+// underlying work keeps running in the background past the cap.
+const SETTLE_CHAIN_LINK_TIMEOUT_MS = 5_000;
+
+function boundForChain(work: Promise<unknown>): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, SETTLE_CHAIN_LINK_TIMEOUT_MS);
+  });
+  return Promise.race([work, cap]).finally(() => clearTimeout(timer));
+}
+
 function queueSettle(...ids: (string | null)[]): Promise<unknown> {
   const toSettle = ids.filter((id): id is string => id !== null);
   if (toSettle.length > 0) {
-    pendingSettles = pendingSettles.then(() => Promise.allSettled(toSettle.map(id => reconcileVoiceSession(id))));
+    pendingSettles = pendingSettles.then(() =>
+      Promise.allSettled(toSettle.map(id => boundForChain(reconcileVoiceSession(id))))
+    );
   }
   return pendingSettles;
 }
@@ -461,7 +476,7 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     activeSessionId = null;
     set({ phase: 'ended', mode: null });
     // Chained synchronously so a restart issued before the transport closes still waits for this /end.
-    const closed = conv ? conv.endSession().catch(() => {}) : Promise.resolve();
+    const closed = conv ? boundForChain(conv.endSession().catch(() => {})) : Promise.resolve();
     pendingSettles = pendingSettles.then(() => closed);
     await queueSettle(sid);
   },
