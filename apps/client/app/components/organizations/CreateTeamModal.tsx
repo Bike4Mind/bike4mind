@@ -121,7 +121,7 @@ const CreateTeamModal = () => {
         </FormControl>
 
         <FormControl>
-          <FormLabel className="create-team-form-label">Team Size</FormLabel>
+          <FormLabel className="create-team-form-label">People on the plan</FormLabel>
           <SeatCountInput
             value={teamSize}
             min={minSeats}
@@ -135,7 +135,8 @@ const CreateTeamModal = () => {
           />
           {!isTeamSizeInvalid && (
             <Typography level="body-xs" sx={{ mt: 0.5 }} className="create-team-size-note">
-              Team size must be between {minSeats} and {maxSeats} members
+              One flat price covers up to {minSeats} people, so a smaller team pays the same, and everyone shares one
+              credit pool. Add room for more, up to {maxSeats}, at the per-person price.
             </Typography>
           )}
           <Box sx={{ mt: 1 }} className="create-team-price-container">

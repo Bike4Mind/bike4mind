@@ -17,8 +17,8 @@ Open the account menu in the sidebar and choose **Teams**. The page lists every 
 
 1. On the Teams page, click **Create Team**.
 2. In the **Create New Team** dialog, type a **Team Name**.
-3. Under **Team Size**, use the minus and plus buttons to pick the number of seats. A note under the picker states the allowed range, for example "Team size must be between 4 and 100 members". The range is set by Bike4Mind and can change, so go by the note in the dialog.
-4. Read the **Total Price** line, which shows the monthly total for the seats you picked.
+3. Under **People on the plan**, use the minus and plus buttons to pick how many people the plan covers. It starts at the number one flat price covers (4 today), so a team of two or three leaves it there and pays the same. Go higher only to make room for more people. The note under the picker states the range, which Bike4Mind sets and can change.
+4. Read the **Total Price** line, which shows the monthly total for the number you picked.
 5. Click **Create Team**. You are sent to a secure checkout to pay for the subscription.
 
 If the dialog says that Team pricing is unavailable, the price could not be loaded. Nothing is charged; try again later.
@@ -26,7 +26,7 @@ If the dialog says that Team pricing is unavailable, the price could not be load
 ### What the plan includes
 
 - **Price:** the price per seat is loaded live from the payment provider, so it is not written here. The dialog shows the monthly total for your chosen number of seats, and the Billing tab shows the price per seat per month.
-- **People included:** one seat is one person on the Team, and the owner counts as a seat. A Team of 4 seats has the owner plus up to 3 other people.
+- **People included:** the flat price covers up to 4 people, and you don't have to fill them: a pair or a trio pays the same. Each seat is room for one person, and the owner counts as one. A Team of 4 seats has the owner plus up to 3 other people; add seats to make room for more.
 - **Credit pool:** each seat adds a set amount of credits to the Team's shared pool when you subscribe and at each renewal. When you add seats in the middle of a billing period, the new seats add a prorated share of that amount. The standard amount is 50,000 credits per seat, but it is a Bike4Mind setting and can change. The Team's card on the Teams page shows the credits currently in the pool.
 - **Who pays for the plan:** the Team owner, through the subscription.
 
