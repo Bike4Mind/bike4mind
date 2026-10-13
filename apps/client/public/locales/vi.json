@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Đăng ký",
-    "description": "Truy cập mọi mô hình AI lớn qua một giao diện thống nhất. Chạy các mô hình nâng cao như Deepseek R1 một cách riêng tư.",
+    "description": "Truy cập mọi mô hình AI lớn qua một giao diện thống nhất.",
     "no_free_tier": "KHÔNG CÓ CẤP MIỄN PHÍ - TẬP TRUNG VÀO CÁC CHUYÊN GIA.",
     "credits_rollover": "Tín dụng không sử dụng sẽ chuyển sang tháng tiếp theo trong 3 tháng.",
     "monthly_billing": "Thanh toán hàng tháng",

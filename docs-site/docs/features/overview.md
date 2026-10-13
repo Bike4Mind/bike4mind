@@ -12,8 +12,8 @@ Bike4Mind is an AI-powered knowledge management platform that combines cutting-e
 ## 🤖 AI & Language Models
 
 ### Multi-Model Support
-- **Text Models**: GPT-4o, GPT-4, Claude 3.5, Gemini, DeepSeek, LLaMA, and more
-- **Image Models**: FLUX Pro/Ultra, DALL-E 3, Stable Diffusion variants
+- **Text Models**: GPT-6, GPT-5.6, Claude Opus/Sonnet/Haiku 5.5, Gemini 3.x, Grok, DeepSeek, Kimi, Llama, and more (60+ models)
+- **Image Models**: GPT-Image-2, Nano Banana, FLUX 1.1 Pro Ultra, FLUX Kontext
 - **Custom Model Integration**: Support for Ollama and local models
 - **Model Switching**: Seamlessly switch between models mid-conversation
 

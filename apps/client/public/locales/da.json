@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Abonnement",
-    "description": "Få adgang til hver større AI-model gennem én samlet grænseflade. Kør avancerede modeller som Deepseek R1 privat.",
+    "description": "Få adgang til hver større AI-model gennem én samlet grænseflade.",
     "no_free_tier": "INGEN GRATIS PLAN - FOKUSERET PÅ PROFESSIONELLE.",
     "credits_rollover": "Ubrugte kreditter overføres i 3 måneder.",
     "monthly_billing": "Månedlig fakturering",

@@ -13,7 +13,7 @@ const mockGetEffectiveApiKey = vi.fn();
 const mockCreateSession = vi.fn();
 const mockGetSession = vi.fn();
 const mockClaimVoiceHold = vi.fn();
-const mockFindTurns = vi.fn();
+const mockOpenVoiceHold = vi.fn();
 
 vi.mock('axios', () => ({
   default: {
@@ -30,13 +30,12 @@ vi.mock('@bike4mind/database', () => ({
     countActiveVoiceSessionsByUserId: async () => 0,
     update: vi.fn(),
     claimVoiceHold: (...a: unknown[]) => mockClaimVoiceHold(...a),
+    openVoiceHold: (...a: unknown[]) => mockOpenVoiceHold(...a),
   },
   projectRepository: {},
   fabFileRepository: {},
   userRepository: { incrementCredits: (...a: unknown[]) => mockIncrementCredits(...a) },
-  questRepository: {
-    findAllBySessionIdAndGreaterThanOrEqualToTimestamp: (...a: unknown[]) => mockFindTurns(...a),
-  },
+  questRepository: {},
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -63,7 +62,7 @@ vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: () => '
 import voiceSessionsHandler from '@pages/api/ai/voice-sessions';
 import errorHandler from '@server/middlewares/errorHandler';
 import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
-import { sessionRepository } from '@bike4mind/database';
+import { VOICE_HOLD_LOSER_REFUND_FAILED_LOG } from '@server/voice/settleVoiceHold';
 
 /** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
 async function callRoute(body: Record<string, unknown> = {}) {
@@ -86,7 +85,7 @@ beforeEach(() => {
   mockGetEffectiveApiKey.mockResolvedValue('sk-test');
   mockCreateSession.mockResolvedValue({ id: 'session-1' });
   mockPost.mockResolvedValue({ data: { value: 'ek-test' } });
-  mockFindTurns.mockResolvedValue([]);
+  mockOpenVoiceHold.mockResolvedValue(true);
   // The web server is a Lambda: console.error lines carry the ERROR prefix the log monitor alerts on,
   // so the handled-failure paths must stay off it as well as off req.logger.error.
   consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -203,6 +202,55 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
     expect(mockIncrementCredits).not.toHaveBeenCalled();
   });
 
+  it('settles an ElevenLabs hold and reserves afresh on a reconnect, never reusing it', async () => {
+    const { voiceBilledCredits: _marker, ...elevenLabsHold } = openHoldSession;
+    mockGetSession.mockResolvedValueOnce(elevenLabsHold);
+    mockClaimVoiceHold.mockResolvedValueOnce({ billedCredits: null });
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockClaimVoiceHold).toHaveBeenCalledWith('session-1', priorStartedAt);
+    expect(mockIncrementCredits.mock.calls.at(-1)?.[1]).toBeLessThan(0);
+    expect(mockOpenVoiceHold).toHaveBeenCalledWith(
+      'session-1',
+      priorStartedAt,
+      expect.objectContaining({ voiceReservedCredits: expect.any(Number), realtime: true })
+    );
+  });
+
+  it('refunds the reserve and answers 409 when a concurrent bootstrap wrote its hold first', async () => {
+    mockGetSession.mockResolvedValueOnce(openHoldSession);
+    mockClaimVoiceHold.mockResolvedValueOnce(null);
+    mockOpenVoiceHold.mockResolvedValueOnce(false);
+
+    const { res } = await callRoute({ sessionId: 'session-1' });
+
+    expect(res._getStatusCode()).toBe(409);
+    const [debit, refund] = mockIncrementCredits.mock.calls;
+    expect(debit[1]).toBeLessThan(0);
+    expect(refund).toEqual(['user-1', -debit[1]]);
+    expect(mockIncrementCredits).toHaveBeenCalledTimes(2);
+  });
+
+  it('still answers 409 and logs the owed refund when the loser refund throws', async () => {
+    mockGetSession.mockResolvedValueOnce(openHoldSession);
+    mockClaimVoiceHold.mockResolvedValueOnce(null);
+    mockOpenVoiceHold.mockResolvedValueOnce(false);
+    mockIncrementCredits.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('db down'));
+
+    const { res, logger } = await callRoute({ sessionId: 'session-1' });
+
+    expect(res._getStatusCode()).toBe(409);
+    const [debit] = mockIncrementCredits.mock.calls;
+    expect(logger.error).toHaveBeenCalledWith(VOICE_HOLD_LOSER_REFUND_FAILED_LOG, {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      refund: -debit[1],
+      err: { message: 'db down', name: 'Error' },
+    });
+  });
+
   // The billed-credits marker is how the stale-hold sweep and settlePriorVoiceHold tell a realtime
   // hold from an ElevenLabs one; without it a live call would be swept on the short window.
   it('opens the new hold with the realtime billed-credits marker', async () => {
@@ -211,8 +259,10 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
 
     await callRoute({ sessionId: 'session-1' });
 
-    expect(vi.mocked(sessionRepository.update)).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'session-1', voiceBilledCredits: 0 })
+    expect(mockOpenVoiceHold).toHaveBeenCalledWith(
+      'session-1',
+      priorStartedAt,
+      expect.objectContaining({ voiceReservedCredits: expect.any(Number), realtime: true })
     );
   });
 });

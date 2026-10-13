@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Langganan",
-    "description": "Akses setiap model AI besar melalui satu antarmuka yang terpadu. Jalankan model lanjutan seperti Deepseek R1 secara pribadi.",
+    "description": "Akses setiap model AI besar melalui satu antarmuka yang terpadu.",
     "no_free_tier": "TIDAK ADA TINGKAT GRATIS - FOKUS PADA PROFESIONAL.",
     "credits_rollover": "Kredit yang tidak terpakai dapat digunakan selama 3 bulan.",
     "monthly_billing": "Tagihan Bulanan",

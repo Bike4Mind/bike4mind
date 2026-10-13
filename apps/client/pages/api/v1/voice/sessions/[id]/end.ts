@@ -1,6 +1,6 @@
 /**
  * POST /api/v1/voice/sessions/{id}/end - reconcile the up-front voice credit reservation down to
- * the call's actual duration and refund the difference. Called when the call ends (user hangs up
+ * the call's connected time and refund the difference. Called when the call ends (user hangs up
  * or ElevenLabs disconnects). Idempotent: a duplicate call after the hold is cleared is a no-op.
  * Also served at the legacy `/api/voice/v2/sessions/{id}/end` (re-exported there), which the SPA
  * calls. Auth mode, the `ai:generate` scope and the path param come from `endVoiceSessionContract`.
@@ -38,22 +38,27 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
     return res.status(200).json({ refunded: 0, alreadyReconciled: true });
   }
 
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000));
   const settlement = await settleVoiceHold(
-    { id: session.id, userId: req.user.id, voiceReservedCredits: reserved, voiceSessionStartedAt: startedAt },
-    elapsedSeconds
+    {
+      id: session.id,
+      userId: req.user.id,
+      voiceReservedCredits: reserved,
+      voiceSessionStartedAt: startedAt,
+      voiceConnectedAt: session.voiceConnectedAt ?? null,
+      // Carried for the restore if the refund fails; settleVoiceHold advances it to the end time.
+      voiceLastActivityAt: session.voiceLastActivityAt ?? null,
+    },
+    // Ending the call is itself the call's last activity.
+    new Date(),
+    'end'
   );
   // A concurrent end or the stale-hold sweep settled it first.
   if (!settlement.settled) {
     return res.status(200).json({ refunded: 0, alreadyReconciled: true });
   }
-  const { owed, refund } = settlement;
 
-  req.logger.info(
-    { sessionId: session.id, elapsedSeconds, reserved, owed, refund },
-    '[voice-v2/sessions/end] reconciled voice credits'
-  );
-  return res.status(200).json({ refunded: refund, elapsedSeconds });
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000));
+  return res.status(200).json({ refunded: settlement.refundedCredits, elapsedSeconds });
 });
 
 export default handler;
